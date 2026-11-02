@@ -48,8 +48,9 @@ jobs:
       # Consumers install a commit as
       # https://pkg.pr.new/TanStack/oracles/@tanstack/oracles@<sha>
       # --compact needs the package on npm, so it is added after the first
-      # npm release.
-      - run: pnpm dlx pkg-pr-new@0.0.92 publish --pnpm './packages/*'
+      # npm release. pkg.pr.new authenticates through its GitHub App, not an
+      # npm token, so npm trusted publishing does not apply.
+      - run: pnpm dlx pkg-pr-new@0.0.92 publish --pnpm './packages/*' # zizmor: ignore[use-trusted-publishing]
   zizmor:
     name: zizmor
     runs-on: ubuntu-latest
