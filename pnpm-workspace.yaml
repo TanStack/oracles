@@ -1,0 +1,7 @@
+packages:
+  - packages/**
+
+# Packages whose install scripts never run; their prebuilt binaries suffice.
+allowBuilds:
+  esbuild: false
+  unrs-resolver: false

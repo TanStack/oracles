@@ -1,0 +1,58 @@
+{
+  "name": "@tanstack/oracles",
+  "version": "0.0.0",
+  "description": "Oracle-based testing: laws, generated histories, independent models, and gap reports",
+  "author": "Kyle Mathews",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TanStack/oracles.git",
+    "directory": "packages/oracles"
+  },
+  "homepage": "https://github.com/TanStack/oracles",
+  "keywords": [
+    "testing",
+    "property-based-testing",
+    "oracle",
+    "model-based-testing",
+    "fast-check",
+    "vitest"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "dist/cjs/index.cjs",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.cts",
+        "default": "./dist/cjs/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch",
+    "lint": "eslint . --fix",
+    "test": "vitest --run",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "fast-check": "^4.0.0",
+    "vitest": "^4.1.0"
+  },
+  "devDependencies": {
+    "fast-check": "^4.10.2",
+    "vitest": "^4.1.12"
+  }
+}
