@@ -15,7 +15,7 @@
     "test": "pnpm --filter \"./packages/**\" test",
     "lint": "pnpm --filter \"./packages/**\" lint",
     "lint:check": "pnpm --filter \"./packages/**\" lint --fix=false",
-    "typecheck": "pnpm --filter \"./packages/**\" typecheck",
+    "typecheck": "tsc --noEmit -p tsconfig.json && pnpm --filter \"./packages/**\" typecheck",
     "format": "prettier --ignore-unknown '**/*' --write",
     "format:check": "prettier --ignore-unknown '**/*' --check",
     "changeset": "changeset",

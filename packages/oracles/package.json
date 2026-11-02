@@ -54,5 +54,8 @@
   "devDependencies": {
     "fast-check": "^4.10.2",
     "vitest": "^4.1.12"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

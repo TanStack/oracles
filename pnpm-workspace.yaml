@@ -1,6 +1,11 @@
 packages:
   - packages/**
 
+# Supply-chain settings, as in TanStack DB: reject a dependency release that
+# lost its trusted-publishing evidence, and git or tarball subdependencies.
+blockExoticSubdeps: true
+trustPolicy: 'no-downgrade'
+
 # Packages whose install scripts never run; their prebuilt binaries suffice.
 allowBuilds:
   esbuild: false
