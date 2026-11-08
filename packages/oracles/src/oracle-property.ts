@@ -612,7 +612,7 @@ function enumeratedTest<THistory, TExpected, TPlan>(
             options,
             verdict,
             history,
-            rerunByName(`${options.id} ${name}`),
+            rerunByName(options.id, name),
           )
       },
     }
@@ -1098,10 +1098,14 @@ function failure<THistory>(
   return error
 }
 
-/** A Vitest `-t` argument that matches exactly this test name. */
-function rerunByName(name: string): string {
-  const pattern = name.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
-  return `-t ${JSON.stringify(`^${pattern}$`)}`
+/**
+ * A Vitest `-t` argument that matches exactly the test `name` in the suite
+ * `suite`. Vitest 4 matches `-t` against the suite and test names joined by a
+ * space, Vitest 5 joined by ` > `, so the pattern accepts either between them.
+ */
+function rerunByName(suite: string, name: string): string {
+  const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
+  return `-t ${JSON.stringify(`^${escape(suite)}(?: | > )${escape(name)}$`)}`
 }
 
 function generatedTests<THistory, TExpected, TPlan>(
@@ -1287,7 +1291,7 @@ function generatedTests<THistory, TExpected, TPlan>(
           options,
           verdict,
           fixed.history,
-          rerunByName(`${id} fixed history: ${fixed.name}`),
+          rerunByName(id, `fixed history: ${fixed.name}`),
         )
       const missing = (fixed.enters ?? []).filter(
         (state) => !reached.has(state),

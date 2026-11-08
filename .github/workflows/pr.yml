@@ -30,12 +30,30 @@ jobs:
       - run: pnpm run format:check
       - run: pnpm run typecheck
       - run: pnpm run test
+      # The oracleProperty self-oracle spawns real Vitest runs, so the
+      # default test run leaves it out; it runs here on its own.
+      - run: pnpm --filter @tanstack/oracles run test:oracle-framework
       - run: pnpm run test:publint
       - run: pnpm run test:sherif
+  test-vitest-5:
+    name: Test on Vitest 5
+    # The package's vitest peer range includes 5; this job is the evidence.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Tools
+        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
+      - run: pnpm --filter @tanstack/oracles add --save-dev vitest@^5.0.5
+      - run: pnpm --filter @tanstack/oracles exec vitest --version
+      - run: pnpm --filter @tanstack/oracles run test
+      - run: pnpm --filter @tanstack/oracles run test:oracle-framework
   preview:
     name: Publish preview
     # Only a commit that passes every check gets an installable preview.
-    needs: test
+    needs: [test, test-vitest-5]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
