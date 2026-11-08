@@ -286,7 +286,9 @@ export function withinTurns(
  * engine completes one store's operations in order. At each step the schedule
  * releases the oldest task of queue `choices[step] % queues`, counting the
  * queues that have a pending task in the order they first did, and the oldest
- * task overall once the choices run out. A history that holds the choices replays exactly, shrinks
+ * task overall once the choices run out. A choice is a nonnegative integer:
+ * any other number names no queue, so `scheduleFrom` throws when it is called
+ * with one. A history that holds the choices replays exactly, shrinks
  * like any array, can be a fixed or constructed history, and prints as JSON; a
  * `fc.scheduler()` value does none of these (it is consumed as it runs, its
  * clones do not reproduce, and it is never a member of its own language).
@@ -307,6 +309,13 @@ export interface DataScheduler {
 }
 
 export function scheduleFrom(choices: ReadonlyArray<number>): DataScheduler {
+  const misfit = choices.find(
+    (choice) => !Number.isInteger(choice) || choice < 0,
+  )
+  if (misfit !== undefined)
+    throw new Error(
+      `scheduleFrom: choice ${misfit} names no queue; a choice is a nonnegative integer`,
+    )
   const pending: Array<{ label: string; queue: string; release: () => void }> =
     []
   const released: Array<string> = []
