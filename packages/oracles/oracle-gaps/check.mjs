@@ -243,6 +243,19 @@ export async function openSession(pkg) {
   )
   // Each process uses its own harness files, so a cold run beside the daemon
   // cannot remove the daemon's.
+  // Vitest's CLI sets these before it loads a config, and a config may read
+  // them; createVitest does not.
+  process.env.TEST = `true`
+  process.env.VITEST = `true`
+  process.env.NODE_ENV ??= `test`
+  // The config file Vitest itself would load: a vitest.config file first.
+  const config = [`vitest`, `vite`]
+    .flatMap((name) =>
+      [`ts`, `mts`, `cts`, `js`, `mjs`, `cjs`].map(
+        (extension) => `${name}.config.${extension}`,
+      ),
+    )
+    .find((file) => existsSync(join(pkg, file)))
   const harness = join(pkg, `.oracle-gaps-${process.pid}.capture-setup.mjs`)
   copyFileSync(join(here, `capture-setup.mjs`), harness)
   // One wrapper config per context. Each serves its own context's patched
@@ -259,8 +272,9 @@ export async function openSession(pkg) {
         wrapper,
         `import { realpathSync } from 'node:fs'
 import { mergeConfig } from 'vitest/config'
-import base from './vite.config.ts'
-export default mergeConfig(base, {
+${config ? `import base from './${config}'` : `const base = {}`}
+// Vitest accepts a config object or a function that returns one.
+export default async (env) => mergeConfig(typeof base === 'function' ? await base(env) : base, {
   plugins: [{
     name: 'oracle-gaps-schemata',
     enforce: 'pre',

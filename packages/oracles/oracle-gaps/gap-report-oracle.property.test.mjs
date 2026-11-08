@@ -239,7 +239,12 @@ const cleanEnv = () =>
   Object.fromEntries(
     Object.entries(process.env).filter(
       ([name]) =>
-        !name.startsWith(`VITEST`) && !name.startsWith(`${ENV_PREFIX}_`),
+        !name.startsWith(`VITEST`) &&
+        !name.startsWith(`${ENV_PREFIX}_`) &&
+        // The variables Vitest sets in this process, which a shell that
+        // runs the CLI does not have.
+        name !== `TEST` &&
+        name !== `NODE_ENV`,
     ),
   )
 
@@ -690,6 +695,16 @@ async function driver(plan, observe) {
     // A mutant that changed no value was judged from the unmutated runs.
     if (cli.evidence?.unchanged > 0)
       states.add(`a mutant that changes no value judged without a run`)
+    // The runner loaded the package's own config, in the form it has: a
+    // kill shows that its tests ran.
+    if (cli.mutants.some((m) => m.outcome === `killed`)) {
+      if (plan.config === `async`)
+        states.add(`a config exported as an async function ran`)
+      if (plan.configFile === `vitest.config.ts`)
+        states.add(`a config in vitest.config.ts ran`)
+      if (plan.configEnv)
+        states.add(`a config that reads Vitest's environment ran`)
+    }
     if (plan.ordinary && cli.mutants.some((m) => m.ordinaryOutcome))
       states.add(`ordinary tests run when asked`)
     if (!plan.ordinary && plan.tests.some((t) => t.file === `c`))
@@ -1145,6 +1160,9 @@ const required = [
   `a hang in one owner and a kill in another killed`,
   `a hang in one owner and a survivor in another timed out`,
   `a batch cut off by a hang reran the rest`,
+  `a config exported as an async function ran`,
+  `a config in vitest.config.ts ran`,
+  `a config that reads Vitest's environment ran`,
   ...incrementalStates,
 ]
 const faults = [`badEntry`, `missingSource`, `nonLiteral`, `brokenOwner`]
@@ -1163,7 +1181,7 @@ oracleProperty({
   law: {
     statement: `The gap report enumerates the promised operator mutants, leaves out exactly the probe-only code, discovers every oracle that owns a function's call tree and refuses broken ownership, judges each mutant only by its owners' tests on their registered routes and counts only law verdicts on reproducible routes as kills, which outrank a run that never ends, anchors each mutant by its function and normalized statement, lists every gap and unowned mutant once with consistent counts, keeps keys stable under unrelated edits, and reports through its daemon what a cold run reports at every state of a sequence of edits.`,
     authority: `The maintainer's decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), not in this package's records, including that a kill by reach agreement alone is a gap and that an incremental run through the daemon equals a cold one (v19.3); the project's oracle guide on quiet exclusions; the oracle rubric's outcome kinds (ORC-006); the CLI's documented operator list in schemata.mjs.`,
-    limits: `Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 6 s full limit, and a slow run only as one witness that waits 3 s before it judges; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors, loops, multi-line conditions, arrow or nested functions, two functions on one line, getters and setters, or await, new, and void statements; two source files of one package, with no re-exports, namespace imports, or calls into another package; no --only, --sample, or --diff-base; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9's edits leave out files read through fs, other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks.`,
+    limits: `Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 6 s full limit, and a slow run only as one witness that waits 3 s before it judges; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors, loops, multi-line conditions, arrow or nested functions, two functions on one line, getters and setters, or await, new, and void statements; two source files of one package, with no re-exports, namespace imports, or calls into another package; no --only, --sample, or --diff-base; package configs only in vite.config.ts, vitest.config.ts, or vite.config.mjs, as an object or a sync or async function, with no projects and no plugins of their own; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9's edits leave out files read through fs, other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks.`,
     owner: `packages/oracles/oracle-gaps`,
   },
   histories: {
@@ -1187,6 +1205,10 @@ oracleProperty({
           stability: `insertGuard`,
           steps: null,
           ordinary: true,
+          // react-db's form: an async function, in the file Vitest reads first.
+          config: `async`,
+          configFile: `vitest.config.ts`,
+          configEnv: true,
         }),
       },
       {

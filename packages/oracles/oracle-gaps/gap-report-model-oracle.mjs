@@ -261,6 +261,20 @@ const histories = fc.record({
   // A second authored mutant, on the next statement, so that two patched
   // sources are judged in the same run and neither may see the other's.
   secondAuthored: fc.boolean(),
+  // The package's Vitest config: its file, and whether it exports an object
+  // or a function (sync or async) that returns one. Vitest accepts each, so
+  // the runner must too.
+  config: fc.constantFrom(`object`, `object`, `function`, `async`),
+  // A config may read the environment Vitest's CLI sets before it loads
+  // one (VITEST, TEST, and NODE_ENV), as svelte-db's picks its resolve
+  // conditions by VITEST. This one finds its tests only under it.
+  configEnv: fc.boolean(),
+  configFile: fc.constantFrom(
+    `vite.config.ts`,
+    `vite.config.ts`,
+    `vitest.config.ts`,
+    `vite.config.mjs`,
+  ),
   steps: fc.oneof(
     { weight: 5, arbitrary: fc.constant(null) },
     {
@@ -1296,6 +1310,9 @@ function resolveHistory(history) {
     stability: history.stability,
     steps: history.steps ?? [],
     ordinary: history.ordinary === true,
+    config: history.config ?? `object`,
+    configFile: history.configFile ?? `vite.config.ts`,
+    configEnv: history.configEnv === true,
     history,
     source,
     librarySource,
@@ -2347,7 +2364,13 @@ const initialState = (plan) => ({
 function fixtureFiles(plan, state = initialState(plan)) {
   const files = {
     'package.json': `{ "name": "gap-fixture", "private": true, "type": "module", "dependencies": { "state-dep": "*" } }\n`,
-    'vite.config.ts': `import { defineConfig } from 'vitest/config'\nexport default defineConfig({ test: { include: ['tests/**/*.test.ts'] } })\n`,
+    [plan.configFile]: `import { defineConfig } from 'vitest/config'\nexport default defineConfig(${
+      { object: ``, function: `() => (`, async: `async () => (` }[plan.config]
+    }{ test: { include: ${
+      plan.configEnv
+        ? `process.env.VITEST === 'true' && process.env.TEST === 'true' && process.env.NODE_ENV === 'test' ? ['tests/**/*.test.ts'] : []`
+        : `['tests/**/*.test.ts']`
+    } } }${plan.config === `object` ? `` : `)`})\n`,
     [SOURCE]: state.prepend
       ? edited({ ...plan, stability: `prepend` })
       : plan.source,
