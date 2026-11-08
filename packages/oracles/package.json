@@ -52,7 +52,8 @@
     "!oracle-gaps/**/*.property.test.mjs",
     "!oracle-gaps/gap-report-model-oracle.mjs",
     "!oracle-gaps/vitest.config.mjs",
-    "!oracle-gaps/node_modules/**"
+    "!oracle-gaps/node_modules/**",
+    "!oracle-gaps/.scratch-*/**"
   ],
   "scripts": {
     "build": "vite build",
