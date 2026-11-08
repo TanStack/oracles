@@ -1008,17 +1008,17 @@ function calibrationTests<THistory, TExpected, TPlan>(
         for (const { name, history } of candidates()) {
           const plan = planOf(options, history)
           if (`corrupt` in calibration) {
-            const { observations, driverError, probes } = await recordGuarded(
-              options.driver,
-              plan,
-            )
+            const { observations, driverError, probes, spin } =
+              await recordGuarded(options.driver, plan)
             const corrupted = calibration.corrupt(observations, plan)
             if (corrupted === undefined) continue
             // A calibration is meaningful only where the true trace passes, so
-            // a candidate whose clean trace fails, or whose driver throws, is
-            // skipped; that history fails in its own test.
+            // a candidate whose clean trace fails, whose driver throws, or
+            // whose clock spins is skipped; that history fails in its own
+            // test.
             if (
               driverError ||
+              spin ||
               judge(options, plan, observations, undefined, probes).verdict
                 .kind !== `pass`
             )
@@ -1040,6 +1040,7 @@ function calibrationTests<THistory, TExpected, TPlan>(
           const clean = await recordGuarded(options.driver, plan)
           if (
             clean.driverError ||
+            clean.spin ||
             judge(options, plan, clean.observations, undefined, clean.probes)
               .verdict.kind !== `pass`
           )

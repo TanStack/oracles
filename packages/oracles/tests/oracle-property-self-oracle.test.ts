@@ -1713,6 +1713,17 @@ oracleProperty({
         [`calibration-skipped-candidate`, `calibration-applied`],
         generatedDraft({ fixed: [at([3]), at([0])], calibrations: [`right`] }),
       ),
+      // A spin fails its history, so its trace is no clean candidate, though
+      // every observation in it passes the check.
+      fixedHistory(
+        `a calibration skips a candidate whose clock spins`,
+        [`calibration-skipped-candidate`, `calibration-applied`],
+        generatedDraft({
+          clock: true,
+          fixed: [at([7]), at([0])],
+          calibrations: [`right`, `driver`],
+        }),
+      ),
       fixedHistory(
         `calibrations need the named law`,
         [`calibration-applied`, `calibration-rejected`],
