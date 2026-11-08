@@ -41,8 +41,15 @@ import {
 import type { Observation } from '../src/oracle-property'
 
 type Task = { queue: `storage` | `provider` | `timer`; rejects: boolean }
-type History = { tasks: Array<Task>; choices: Array<number> }
+// A choice list may hold what an untyped caller passes: `undefined`, or a
+// hole in a sparse array.
+type History = { tasks: Array<Task>; choices: Array<number | undefined> }
 
+const listOf = (choice: fc.Arbitrary<number | undefined>) =>
+  fc.oneof(
+    { arbitrary: fc.array(choice, { maxLength: 6 }), weight: 9 },
+    { arbitrary: fc.sparseArray(choice, { maxLength: 6 }), weight: 1 },
+  )
 const history: fc.Arbitrary<History> = fc.record({
   tasks: fc.array(
     fc.record({
@@ -55,7 +62,7 @@ const history: fc.Arbitrary<History> = fc.record({
     }),
     { minLength: 2, maxLength: 5 },
   ),
-  choices: fc.array(
+  choices: listOf(
     fc.oneof(
       { arbitrary: fc.nat(5), weight: 24 },
       { arbitrary: fc.integer({ min: -5, max: -1 }), weight: 1 },
@@ -66,21 +73,22 @@ const history: fc.Arbitrary<History> = fc.record({
         weight: 1,
       },
       {
-        arbitrary: fc.constantFrom(Number.NaN, Infinity, -Infinity),
+        arbitrary: fc.constantFrom(Number.NaN, Infinity, -Infinity, undefined),
         weight: 1,
       },
     ),
-    { maxLength: 6 },
   ),
 })
 
-const namesAQueue = (choice: number) => Number.isInteger(choice) && choice >= 0
+const namesAQueue = (choice: number | undefined) =>
+  Number.isInteger(choice) && choice! >= 0
 const rejectedChoice = `a choice that names no queue`
 const releasedInOrder = `a schedule that releases every task`
 
 // The rule, stated over task indexes; `rejected` when a choice names no queue.
 function releaseOrder({ tasks, choices }: History): Array<number> | `rejected` {
-  if (!choices.every(namesAQueue)) return `rejected`
+  // Array.from reads a hole as undefined, which names no queue.
+  if (!Array.from(choices).every(namesAQueue)) return `rejected`
   const pending = tasks.map((_, index) => index)
   const order: Array<number> = []
   for (let step = 0; pending.length > 0; step++) {
@@ -103,7 +111,8 @@ async function driveSchedule(
 ) {
   let schedule: ReturnType<typeof scheduleFrom>
   try {
-    schedule = scheduleFrom(choices)
+    // As an untyped caller passes them.
+    schedule = scheduleFrom(choices as Array<number>)
   } catch {
     observe(`schedule`, `rejected`)
     return
@@ -221,6 +230,18 @@ oracleProperty({
             { queue: `storage`, rejects: false },
           ],
           choices: [-1],
+        },
+        enters: [rejectedChoice],
+      },
+      {
+        name: `a hole names no queue`,
+        history: {
+          tasks: [
+            { queue: `storage`, rejects: false },
+            { queue: `provider`, rejects: false },
+          ],
+          // eslint-disable-next-line no-sparse-arrays
+          choices: [, 0],
         },
         enters: [rejectedChoice],
       },

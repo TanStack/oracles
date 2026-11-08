@@ -247,8 +247,10 @@ export function forwardCut<TState>(
  * `withinTurns(promise, turns)`: it resolves `true` as soon as the promise
  * settles, or `false` once `turns` event-loop turns pass without it settling.
  * A promise that had already settled when `withinTurns` was called settled
- * in time, even with zero turns. The bound counts turns, not milliseconds, so a loaded
- * machine cannot turn a slow but legal settlement into a timeout. It cannot
+ * in time, even with zero turns. `turns` is a nonnegative integer; any other
+ * number counts no turns, so `withinTurns` throws when called with one. The
+ * bound counts turns, not milliseconds, so a loaded machine cannot turn a
+ * slow but legal settlement into a timeout. It cannot
  * wait for work that production schedules on a delayed timer; a driver for
  * such work controls that timer.
  */
@@ -268,6 +270,10 @@ export function withinTurns(
   promise: Promise<unknown>,
   turns: number,
 ): Promise<boolean> {
+  if (!Number.isInteger(turns) || turns < 0)
+    throw new Error(
+      `withinTurns: ${turns} turns counts no turns; a number of turns is a nonnegative integer`,
+    )
   // An object, so the loop reads the flag that the callbacks set.
   const state = { settled: false }
   const done = promise.then(
@@ -317,12 +323,13 @@ export interface DataScheduler {
 }
 
 export function scheduleFrom(choices: ReadonlyArray<number>): DataScheduler {
-  const misfit = choices.find(
+  // findIndex visits a hole as undefined, which names no queue too.
+  const misfit = choices.findIndex(
     (choice) => !Number.isInteger(choice) || choice < 0,
   )
-  if (misfit !== undefined)
+  if (misfit >= 0)
     throw new Error(
-      `scheduleFrom: choice ${misfit} names no queue; a choice is a nonnegative integer`,
+      `scheduleFrom: choice ${String(choices[misfit])} names no queue; a choice is a nonnegative integer`,
     )
   const pending: Array<{ label: string; queue: string; release: () => void }> =
     []
