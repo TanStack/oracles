@@ -16,9 +16,10 @@
  *   failing history violates L, whatever values the history holds (a bigint,
  *   a Map, NaN, or -0 too). Within one history a driver error decides
  *   first, then a law violation, then a constructed history that misses its state; a driver error
- *   after a recorded violation becomes that violation's cause. A model that
- *   cannot read the trace a driver error cut short leaves the driver error to
- *   decide.
+ *   after a recorded violation becomes that violation's cause. A model must
+ *   accept any prefix of a trace: one that throws on a trace a driver error or
+ *   a clock spin cut short fails the history with an `OracleModelError` that
+ *   names the model (maintainer decision, 2026-11-08).
  * - `shrink`: a campaign's reported failure keeps the kind and law of its first
  *   failure, and its counterexample still has them.
  * - `membership`: a fixed history, or the history a constructed history builds, outside the language fails.
@@ -53,8 +54,8 @@
  *   that history under law `bounded clock` at checkpoint `clock`, ranked as
  *   a driver error is: a violation recorded before the spin still decides,
  *   and a driver error after it does not (maintainer decision, 2026-11-06).
- *   A model that cannot read the trace cut at the spin leaves the spin to
- *   decide.
+ *   A model that throws on the trace cut at the spin is a model error, as
+ *   above.
  * - `timeout`: a property's `timeout` limits every test it registers.
  * - `replay`: replaying a failing campaign's seed and path runs only that
  *   property's random campaign, starts from the counterexample itself, and
@@ -93,7 +94,9 @@
  * property. The model learns an unlabelled enumerated history's test name
  * from the log, so it checks that names are distinct, not their text. A slow
  * spec's late probe calls and routes are not counted exactly: its driver runs
- * on after its test times out. The gap report's observation hook,
+ * on after its test times out. That shrinking keeps a model error apart
+ * from a setup error has no witness: no shrink in this language turns one
+ * into the other. The gap report's observation hook,
  * `forwardCut`, and `differs` have no law here; `withinTurns` has its own
  * oracle. Only generated sources bind a probe, and only
  * `saw-0`. A late probe is judged by whether the run reports it, not by which
@@ -417,6 +420,7 @@ type Kind =
   | `calibration-wrong-law`
   | `calibration-none`
   | `timeout`
+  | `model-not-total`
 type Outcome = {
   kind: Kind
   law?: `three` | `four` | `reach agreement` | `bounded clock`
@@ -446,8 +450,8 @@ const constructedMember = (prefix: SyntheticHistory) =>
 // fails under law `bounded clock` at checkpoint `clock`, ranked as a driver
 // error is, by where it happens. A violation recorded before it still decides;
 // a driver error after it does not. A strict model throws on a trace that a
-// stop cut short, before the history's last item; the stop then decides, as
-// if nothing before it had been recorded.
+// stop cut short, before the history's last item: a model that is not
+// prefix-total, which fails the history as a model error.
 const clockOutcome: Outcome = {
   kind: `violation`,
   law: `bounded clock`,
@@ -461,7 +465,7 @@ function verdictOf(
   const stops = (item: number) => item === 6 || (clock && item === 7)
   const stopAt = history.findIndex(stops)
   if (strict && stopAt >= 0 && stopAt < history.length - 1)
-    return history[stopAt] === 6 ? { kind: `setup` } : clockOutcome
+    return { kind: `model-not-total` }
   for (const [at, item] of history.entries()) {
     if (item === 3 || item === 4) {
       const stop = history.slice(at + 1).find(stops)
@@ -783,7 +787,7 @@ function predictSpec(
   const replays = names.filter(
     (name) =>
       isCampaign(name) &&
-      [`violation`, `setup`, `constructed-reach`].includes(
+      [`violation`, `setup`, `constructed-reach`, `model-not-total`].includes(
         tests.get(name)!.kind,
       ),
   )
@@ -884,6 +888,7 @@ const frameworkStates = [
   `seedless-route`,
   `error-history`,
   `fresh-closure`,
+  `model-not-total`,
 ] as const
 
 function frameworkReach(
@@ -907,6 +912,7 @@ function frameworkReach(
         reached.add(`campaign-setup-failure`)
       if (outcome.cause) reached.add(`cause-attached`)
       if (outcome.kind === `timeout`) reached.add(`timeout`)
+      if (outcome.kind === `model-not-total`) reached.add(`model-not-total`)
       if (name === `random seed`) reached.add(`random-campaign`)
       if (outcome.kind === `determinism`) reached.add(`determinism-caught`)
       if (outcome.law === agreementLaw) reached.add(`agreement-violation`)
@@ -1134,31 +1140,33 @@ function classify(error: ReportedError | undefined): Failure {
       ? (`driver` as const)
       : undefined
   const kind: Kind | `other` =
-    inner.name === `OracleViolation`
-      ? `violation`
-      : /timed out in \d+ms/.test(text) || /timed out in \d+ms/.test(outer)
-        ? `timeout`
-        : text.includes(`is not a history the arbitrary can generate`)
-          ? `fixed-membership`
-          : text.includes(`built a history the arbitrary cannot generate`)
-            ? `constructed-membership`
-            : text.includes(`did not enter`) &&
-                text.includes(`: fixed history "`)
-              ? `fixed-reach`
+    inner.name === `OracleModelError`
+      ? `model-not-total`
+      : inner.name === `OracleViolation`
+        ? `violation`
+        : /timed out in \d+ms/.test(text) || /timed out in \d+ms/.test(outer)
+          ? `timeout`
+          : text.includes(`is not a history the arbitrary can generate`)
+            ? `fixed-membership`
+            : text.includes(`built a history the arbitrary cannot generate`)
+              ? `constructed-membership`
               : text.includes(`did not enter`) &&
-                  text.includes(`: constructed history "`)
-                ? `constructed-reach`
-                : text.includes(`two runs of`)
-                  ? `determinism`
-                  : text.includes(`but the check passed it`)
-                    ? `calibration-passed`
-                    : text.includes(`but the check reported law`)
-                      ? `calibration-wrong-law`
-                      : text.includes(`found no history`)
-                        ? `calibration-none`
-                        : text.includes(`synthetic driver failed`)
-                          ? `setup`
-                          : `other`
+                  text.includes(`: fixed history "`)
+                ? `fixed-reach`
+                : text.includes(`did not enter`) &&
+                    text.includes(`: constructed history "`)
+                  ? `constructed-reach`
+                  : text.includes(`two runs of`)
+                    ? `determinism`
+                    : text.includes(`but the check passed it`)
+                      ? `calibration-passed`
+                      : text.includes(`but the check reported law`)
+                        ? `calibration-wrong-law`
+                        : text.includes(`found no history`)
+                          ? `calibration-none`
+                          : text.includes(`synthetic driver failed`)
+                            ? `setup`
+                            : `other`
   return {
     kind,
     ...(law ? { law } : {}),
@@ -1440,11 +1448,13 @@ const lawOfTest = (name: string) =>
 const lawOfKind = (kind: string, name: string) =>
   kind === `timeout`
     ? `timeout`
-    : kind.endsWith(`membership`)
-      ? `membership`
-      : kind.endsWith(`reach`)
-        ? `reach`
-        : lawOfTest(name)
+    : kind === `model-not-total`
+      ? `verdict`
+      : kind.endsWith(`membership`)
+        ? `membership`
+        : kind.endsWith(`reach`)
+          ? `reach`
+          : lawOfTest(name)
 
 function checkSuite(
   plan: Plan,
@@ -2047,9 +2057,27 @@ oracleProperty({
         generatedDraft({ nested: true, fixed: [at([3])] }),
       ),
       fixedHistory(
-        `a model that cannot read the trace cut at a spin fails under bounded clock`,
-        [`strict-model-cut-short`, `clock-violation`],
+        `a model that throws on a trace a spin cut short is a model error`,
+        [`strict-model-cut-short`, `model-not-total`],
         generatedDraft({ clock: true, strictModel: true, fixed: [at([7, 1])] }),
+      ),
+      // A violation recorded before the driver error is not hidden as a
+      // setup error: the model that cannot read the rest is named.
+      fixedHistory(
+        `a model that throws on a trace a driver error cut short is a model error`,
+        [`strict-model-cut-short`, `model-not-total`],
+        generatedDraft({ strictModel: true, fixed: [at([3, 6, 1])] }),
+      ),
+      // A campaign reports a model error as one, and its replay reproduces
+      // it. (fast-check removes only leading items here, so no shrink of a
+      // model error reaches a plain driver error.)
+      fixedHistory(
+        `a campaign reports and replays a model error`,
+        [`model-not-total`, `replay-probe`],
+        generatedDraft({
+          strictModel: true,
+          constructed: [{ prefix: [3, 6, 1], enters: [] }],
+        }),
       ),
       fixedHistory(
         `a probe called after a throwing driver's history ended is an error`,

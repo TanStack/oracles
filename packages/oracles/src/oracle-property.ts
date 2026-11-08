@@ -33,7 +33,11 @@
  *   trace recorded before it already violates the law: then the violation is
  *   the failure, with the error as its cause, so a later crash cannot hide an
  *   earlier wrong observation. A check therefore judges the recorded
- *   checkpoints first and the trace's completeness last.
+ *   checkpoints first and the trace's completeness last, and a model must
+ *   accept any prefix of a trace: a driver error or a controlled-clock spin
+ *   cuts a trace short, and a model that throws on the cut trace fails the
+ *   history with an `OracleModelError` that names the model, a framework
+ *   error that shrinks as its own kind (maintainer decision, 2026-11-08).
  * - `check` compares the observations with the model and returns a verdict.
  *   Only the check can report a violation of the law. A violation that gives
  *   the `actual` and `expected` values gets the test runner's usual diff;
@@ -395,6 +399,15 @@ export class OracleViolation extends Error {
   actual?: unknown
   expected?: unknown
   showDiff?: boolean
+}
+
+/**
+ * A model threw on a trace that a driver error or a controlled-clock spin cut
+ * short. Models must accept any prefix of a trace, so this is the model's
+ * defect, not the driver's, and not a verdict about production.
+ */
+class OracleModelError extends Error {
+  override name = `OracleModelError`
 }
 
 /**
@@ -923,8 +936,9 @@ async function runOne<THistory, TExpected, TPlan>(
     )
     let judged: { verdict: Verdict; reached: Set<string> }
     try {
-      judged = judge(options, plan, cut, undefined, probes)
-    } catch {
+      judged = judge(options, plan, cut, undefined, probes, `a clock spin`)
+    } catch (error) {
+      if (error instanceof OracleModelError) throw error
       return { verdict: clock, reached: new Set() }
     }
     const { verdict, reached } = judged
@@ -998,12 +1012,23 @@ function judge<THistory, TExpected, TPlan>(
   observations: ReadonlyArray<Observation>,
   driverError?: { error: unknown },
   probes: ProbeRecord = { reached: new Set(), entered: new Set() },
+  // What cut the trace short, when something other than a driver error did.
+  cutBy?: string,
 ): { verdict: Verdict; reached: Set<string> } {
   let expected: TExpected
   let verdict: Verdict
   let predicted: Readonly<Record<string, boolean>> = {}
   try {
     expected = options.model(plan, observations)
+  } catch (error) {
+    const cut = driverError ? `a driver error` : cutBy
+    if (cut === undefined) throw error
+    throw new OracleModelError(
+      `${options.id}: the model threw on a trace that ${cut} cut short after ${observations.length} observations. A model must accept any prefix of a trace.`,
+      { cause: error },
+    )
+  }
+  try {
     verdict = options.check(plan, observations, expected)
     predicted = options.predict?.(plan) ?? {}
   } catch (error) {
@@ -1251,7 +1276,8 @@ function generatedTests<THistory, TExpected, TPlan>(
       try {
         outcome = await runOne(options, history)
       } catch (error) {
-        if (keeps(`setup`)) throw error
+        if (keeps(error instanceof OracleModelError ? `model` : `setup`))
+          throw error
         return
       }
       const { verdict, reached } = outcome
