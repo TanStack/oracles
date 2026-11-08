@@ -1,5 +1,12 @@
-import { oracleEnvName, setOracleEnvPrefix } from './oracle-environment.js'
+import {
+  defaultOracleSettings,
+  installOracleSettings,
+  oracleDefaultsRead,
+  oracleEnvName,
+  oracleSettings,
+} from './oracle-environment.js'
 import { oracleReplayReporter } from './oracle-replay-witness.js'
+import type { OracleSettings } from './oracle-environment.js'
 
 type OracleEnvironment = Record<string, string | undefined>
 
@@ -39,19 +46,6 @@ export interface OracleConfigurationOptions {
   retiredVariables?: Iterable<string>
 }
 
-// The current configuration, replaced as a whole by `configureOracles`.
-type OracleSettings = {
-  prefix: string
-  registry: ReadonlySet<string> | undefined
-  retired: ReadonlyArray<string>
-}
-const defaults: OracleSettings = {
-  prefix: `ORACLE`,
-  registry: undefined,
-  retired: [],
-}
-let settings = defaults
-
 export type OracleReplayConfig = {
   campaignSeed: number | undefined
   replayPath: string | undefined
@@ -63,18 +57,9 @@ export type OracleReplayConfig = {
 // Nothing is read at import, so a stray variable under the default prefix
 // (SQL*Plus sets `ORACLE_PATH`) cannot break a project with its own prefix.
 let configuredReplay: (OracleReplayConfig & { multiplier: number }) | undefined
-// Whether `configureOracles` has run, and whether an oracle read the default
-// configuration before it did: a first configuration that changes the
-// defaults after that would leave the earlier reads wrong, so it fails.
-let configured = false
-let readDefaults = false
 
 function replayConfig(): OracleReplayConfig & { multiplier: number } {
-  if (configuredReplay === undefined) {
-    if (!configured) readDefaults = true
-    configuredReplay = readRunConfig(process.env, settings)
-  }
-  return configuredReplay
+  return (configuredReplay ??= readRunConfig(process.env, oracleSettings()))
 }
 
 /**
@@ -84,8 +69,10 @@ function replayConfig(): OracleReplayConfig & { multiplier: number } {
  * oracles at import fails at import. Everything is checked before anything
  * changes: a call that throws leaves the previous configuration in place. A
  * project calls it before its oracles read their configuration; a first call
- * that changes the defaults after an oracle read them throws. A later call
- * replaces the configuration.
+ * that changes the defaults after an oracle read them throws. Every read
+ * counts: a replay selection, a registry check (an `oracleProperty`
+ * registration makes one), and a variable name. A later call replaces the
+ * configuration.
  */
 export function configureOracles({
   envPrefix = `ORACLE`,
@@ -105,20 +92,18 @@ export function configureOracles({
   }
   const replay = readRunConfig(process.env, candidate)
   const changesDefaults =
-    candidate.prefix !== defaults.prefix ||
+    candidate.prefix !== defaultOracleSettings.prefix ||
     candidate.registry !== undefined ||
     candidate.retired.length > 0
-  if (!configured && readDefaults && changesDefaults) {
+  if (oracleDefaultsRead() && changesDefaults) {
     throw new Error(
       `configureOracles must run before oracles read their configuration: ` +
-        `an oracle already read the defaults (prefix ${defaults.prefix}). ` +
+        `an oracle already read the defaults (prefix ${defaultOracleSettings.prefix}). ` +
         `Call it before importing the modules that define oracles.`,
     )
   }
-  settings = candidate
-  setOracleEnvPrefix(candidate.prefix)
+  installOracleSettings(candidate)
   configuredReplay = replay
-  configured = true
 }
 
 export function validateOraclePropertyRegistry(
@@ -135,7 +120,7 @@ export function validateOraclePropertyRegistry(
 }
 
 export function assertRegisteredOracleProperty(property: string): void {
-  assertRegisteredIn(settings, property)
+  assertRegisteredIn(oracleSettings(), property)
 }
 
 function assertRegisteredIn(within: OracleSettings, property: string): void {
@@ -147,8 +132,7 @@ function assertRegisteredIn(within: OracleSettings, property: string): void {
 export function readOracleRunConfig(
   environment: OracleEnvironment = process.env,
 ): OracleReplayConfig & { multiplier: number } {
-  if (environment === process.env && !configured) readDefaults = true
-  return readRunConfig(environment, settings)
+  return readRunConfig(environment, oracleSettings())
 }
 
 function readRunConfig(

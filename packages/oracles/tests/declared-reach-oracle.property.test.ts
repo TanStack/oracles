@@ -17,7 +17,9 @@
  *   full budget. A path replay, which runs one recorded history, skips it in
  *   every reach of that process, also in a property that the replay does not
  *   name: a reach need not carry its property's name, so it cannot tell whose
- *   replay runs. An explicit `replaying` option overrides the environment.
+ *   replay runs. The reach reads the replay selection that the configuration
+ *   read (`configureOracles`, or the first use), as every other replay
+ *   condition does. An explicit `replaying` option overrides it.
  * - A property can run fixed examples first in every run. It declares their
  *   number as `fixedHistories: n` and begins each example's history with
  *   `beginHistory({ fixed: true })`. The check then also fails for each state
@@ -43,8 +45,9 @@
  * optional `replaying` override, the options, the states reached before the
  * first history, each history with its fixed mark and the states it enters,
  * the campaign runner's fixed seed, and an optional invalid campaign
- * environment. The drivers run `createOracleReach`, `runOracleCampaign`, and
- * `oracleRandomParameters` under that run kind's environment, and
+ * environment. The drivers run `createOracleReach` under a configuration
+ * read in that run kind's environment, `runOracleCampaign` and
+ * `oracleRandomParameters` under that environment, and
  * `oraclePropertyOptions` under the process's own. Each check compares one
  * whole observation with the model.
  */
@@ -53,6 +56,7 @@ import { afterAll, expect, vi } from 'vitest'
 import { createOracleReach } from '../src/oracle-reach.js'
 import { runOracleCampaign } from '../src/oracle-campaign.js'
 import {
+  configureOracles,
   oraclePropertyOptions,
   oracleRandomParameters,
 } from '../src/oracle-config.js'
@@ -271,14 +275,22 @@ const replayNames = [`ORACLE_SEED`, `ORACLE_PATH`, `ORACLE_PROPERTY`]
 async function observeLedger(ledger: Ledger): Promise<Verdict> {
   let reach: ReturnType<typeof createOracleReach<string>>
   try {
-    reach = await withEnvironment(replayNames, runEnvironment(ledger.run), () =>
-      createOracleReach(`ledger`, ledger.states, {
-        minimum: ledger.minimum,
-        fixedHistories: ledger.fixedHistories,
-        ...(ledger.replaying === undefined
-          ? {}
-          : { replaying: ledger.replaying }),
-      }),
+    // The configuration reads the replay environment once, so the ledger's
+    // run kind is configured, not only set, and the process's own selection
+    // is configured again afterward.
+    reach = await withEnvironment(
+      replayNames,
+      runEnvironment(ledger.run),
+      () => {
+        configureOracles()
+        return createOracleReach(`ledger`, ledger.states, {
+          minimum: ledger.minimum,
+          fixedHistories: ledger.fixedHistories,
+          ...(ledger.replaying === undefined
+            ? {}
+            : { replaying: ledger.replaying }),
+        })
+      },
     )
   } catch {
     return {
@@ -287,6 +299,8 @@ async function observeLedger(ledger: Ledger): Promise<Verdict> {
       counts: new Map(),
       failure: undefined,
     }
+  } finally {
+    configureOracles()
   }
   const rejected: Array<Rejection> = []
   const attempt = (state: string) => {

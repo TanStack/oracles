@@ -1,0 +1,339 @@
+/**
+ * # One configuration decides every oracle read
+ *
+ * `configureOracles` sets the environment prefix and the property registry
+ * for the process, and reads the replay environment under them. Its contract,
+ * from `oracle-config.ts`:
+ *
+ * - Every later read uses that configuration: replay selection, the registry
+ *   check, and the variable names that carry the prefix.
+ * - The replay environment is read once, by `configureOracles`, or, in a
+ *   project that never configures, on first use. A change to the environment
+ *   after that does not change the replay selection. So a test that stands
+ *   aside during a path replay (`oracleReplayRequested`) and a declared reach
+ *   that skips its check during one (`createOracleReach`) always agree.
+ * - A project configures before its oracles read their configuration. A
+ *   first `configureOracles` that changes the defaults after an oracle read
+ *   them throws, because the earlier read already used the defaults; a read
+ *   is any of the reads above, including a registry check. A later call
+ *   replaces the configuration.
+ *
+ * History: up to six steps on a fresh copy of the modules. A step configures
+ * (prefix `ORACLE` or `ACME`, with or without the registry `[a.b]`), changes
+ * the environment (a path replay of `a.b` and the calibration variable under
+ * one prefix, or none), or reads: whether a path replay is requested, whether
+ * a declared reach skips its check, whether `a.b` or `typo.id` is registered
+ * (directly and through `oracleRandomParameters`), and whether a calibration
+ * witness for `a.b` runs. The model keeps the configuration, the replay
+ * selection it read, and whether a read came before the first configuration,
+ * and owes each step's result. The driver records each step's result, or
+ * that it threw. The check compares them step by step.
+ *
+ * Limits: one property id in the registry; replay selections that are valid
+ * under their prefix; retired variables, run multipliers, and malformed
+ * environments are owned by `config.test.ts`; the calibration variable is
+ * read when the witness registers, which the model states as it is.
+ */
+import fc from 'fast-check'
+import { vi } from 'vitest'
+import { differs, oracleProperty, pass } from '../src/index.js'
+import type { Observation } from '../src/index.js'
+
+type Prefix = `ORACLE` | `ACME`
+type Reader =
+  | `replay requested`
+  | `reach skips its check`
+  | `a.b registered`
+  | `typo.id registered`
+  | `typo.id random parameters`
+  | `calibration witness runs`
+type Step =
+  | { do: `configure`; prefix: Prefix; registry: boolean }
+  | { do: `environment`; replay: Prefix | `none` }
+  | { do: `read`; reader: Reader }
+type History = Array<Step>
+
+const prefixes = [`ORACLE`, `ACME`] as const
+const anyStep: fc.Arbitrary<Step> = fc.oneof(
+  fc.record({
+    do: fc.constant(`configure` as const),
+    prefix: fc.constantFrom(...prefixes),
+    registry: fc.boolean(),
+  }),
+  fc.record({
+    do: fc.constant(`environment` as const),
+    replay: fc.constantFrom(...prefixes, `none` as const),
+  }),
+  fc.record({
+    do: fc.constant(`read` as const),
+    reader: fc.constantFrom<Reader>(
+      `replay requested`,
+      `reach skips its check`,
+      `a.b registered`,
+      `typo.id registered`,
+      `typo.id random parameters`,
+      `calibration witness runs`,
+    ),
+  }),
+)
+const history = fc.array(anyStep, { minLength: 1, maxLength: 6 })
+
+// ---------------------------------------------------------------------------
+// Model
+// ---------------------------------------------------------------------------
+//
+// `environment` is the prefix whose replay variables are set now; `replay`
+// is the prefix whose replay the configuration read, once. A replay under a
+// prefix is seen only by a configuration with that prefix.
+
+type Result = boolean | `threw`
+
+function owedResults(steps: History): Array<Result> {
+  let prefix: Prefix = `ORACLE`
+  let registry = false
+  let configured = false
+  let readBefore = false
+  let environment: Prefix | `none` = `none`
+  let replay: boolean | undefined
+  const replaySelected = () => (replay ??= environment === prefix)
+  return steps.map((step): Result => {
+    if (step.do === `environment`) {
+      environment = step.replay
+      return true
+    }
+    if (step.do === `configure`) {
+      const changesDefaults = step.prefix !== `ORACLE` || step.registry
+      if (!configured && readBefore && changesDefaults) return `threw`
+      prefix = step.prefix
+      registry = step.registry
+      configured = true
+      replay = environment === prefix
+      return true
+    }
+    if (!configured) readBefore = true
+    switch (step.reader) {
+      case `replay requested`:
+      case `reach skips its check`:
+        return replaySelected()
+      case `a.b registered`:
+        return true
+      case `typo.id registered`:
+      case `typo.id random parameters`:
+        return !registry
+      case `calibration witness runs`:
+        // It stands aside during a path replay unless the calibration
+        // variable, under the configured prefix, names its fault.
+        return !replaySelected() || environment === prefix
+    }
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Production driver
+// ---------------------------------------------------------------------------
+//
+// Each history gets fresh modules, so no configuration carries over, and an
+// environment with no replay or calibration variable under either prefix.
+
+const variables = prefixes.flatMap((prefix) =>
+  [`SEED`, `PATH`, `PROPERTY`, `CALIBRATION`].map(
+    (name) => `${prefix}_${name}`,
+  ),
+)
+
+async function driveConfiguration(
+  steps: History,
+  observe: (checkpoint: string, value: unknown) => void,
+) {
+  const saved = Object.fromEntries(
+    variables.map((name) => [name, process.env[name]]),
+  )
+  const setEnvironment = (replay: Prefix | `none`) => {
+    for (const name of variables) delete process.env[name]
+    if (replay === `none`) return
+    process.env[`${replay}_SEED`] = `1`
+    process.env[`${replay}_PATH`] = `0`
+    process.env[`${replay}_PROPERTY`] = `a.b`
+    process.env[`${replay}_CALIBRATION`] = `fault`
+  }
+  const info = vi.spyOn(console, `info`).mockImplementation(() => {})
+  try {
+    setEnvironment(`none`)
+    vi.resetModules()
+    const config = await import(`../src/oracle-config.js`)
+    const { createOracleReach } = await import(`../src/oracle-reach.js`)
+    const registration = { skip: `skipped` }
+    const read: Record<Reader, () => boolean> = {
+      'replay requested': () => config.oracleReplayRequested(),
+      'reach skips its check': () => {
+        // A reach whose one state no history entered fails its check unless
+        // it skips it.
+        const reach = createOracleReach(`a.b`, [`state`])
+        try {
+          reach.assertReached()
+          return true
+        } catch {
+          return false
+        }
+      },
+      'a.b registered': () =>
+        accepts(() => config.assertRegisteredOracleProperty(`a.b`)),
+      'typo.id registered': () =>
+        accepts(() => config.assertRegisteredOracleProperty(`typo.id`)),
+      'typo.id random parameters': () =>
+        accepts(() => config.oracleRandomParameters(1, undefined, `typo.id`)),
+      'calibration witness runs': () =>
+        config.oracleCalibrationTest(registration, `a.b`, `fault`) ===
+        registration,
+    }
+    for (const [index, current] of steps.entries()) {
+      let result: Result
+      if (current.do === `environment`) {
+        setEnvironment(current.replay)
+        result = true
+      } else if (current.do === `configure`) {
+        result = accepts(() =>
+          config.configureOracles({
+            envPrefix: current.prefix,
+            ...(current.registry ? { registry: [`a.b`] } : {}),
+          }),
+        )
+          ? true
+          : `threw`
+      } else result = read[current.reader]()
+      observe(`step ${index}`, result)
+    }
+  } finally {
+    info.mockRestore()
+    for (const name of variables)
+      if (saved[name] === undefined) delete process.env[name]
+      else process.env[name] = saved[name]
+  }
+}
+
+function accepts(run: () => unknown): boolean {
+  try {
+    run()
+    return true
+  } catch {
+    return false
+  }
+}
+
+function checkConfiguration(
+  steps: History,
+  trace: ReadonlyArray<Observation>,
+  owed: Array<Result>,
+) {
+  for (const [index, result] of owed.entries()) {
+    const seen = trace.find(({ checkpoint }) => checkpoint === `step ${index}`)
+    const law =
+      steps[index]!.do === `configure` ? `configure first` : `one configuration`
+    const verdict = differs(`step ${index}`, law, seen?.value, result)
+    if (verdict) return verdict
+  }
+  return pass
+}
+
+// The states where these laws matter, each built by a constructed history.
+const lateConfiguration = `a configuration after a registry read`
+const environmentAfterConfiguration = `an environment change after configuration`
+const prefixedCalibration = `a calibration witness under another prefix`
+
+oracleProperty({
+  id: `self-oracle.configuration`,
+  law: {
+    statement: `Every oracle read uses the one configuration in force, the replay environment is read once under it, and a first configureOracles that changes the defaults after any read throws.`,
+    authority: `the configureOracles contract in packages/oracles/src/oracle-config.ts (read once at configuration or first use; configure before oracles read)`,
+    limits: `One registered id; valid replay selections; retired variables, multipliers, and malformed environments are left to config.test.ts.`,
+    owner: `oracleProperty framework`,
+  },
+  histories: {
+    arbitrary: history,
+    runs: 100,
+    fixedSeeds: [20261108],
+    states: [
+      lateConfiguration,
+      environmentAfterConfiguration,
+      prefixedCalibration,
+    ],
+    fixed: [
+      // A registry check at module load once passed against the empty
+      // default registry, and the configuration that followed was accepted.
+      {
+        name: `a registry check before configuration`,
+        history: [
+          { do: `read`, reader: `typo.id random parameters` },
+          { do: `configure`, prefix: `ORACLE`, registry: true },
+        ],
+        enters: [lateConfiguration],
+      },
+      // A declared reach once read the live environment while replay
+      // selection kept the configured one, so they disagreed.
+      {
+        name: `a replay set after configuration`,
+        history: [
+          { do: `configure`, prefix: `ORACLE`, registry: false },
+          { do: `environment`, replay: `ORACLE` },
+          { do: `read`, reader: `replay requested` },
+          { do: `read`, reader: `reach skips its check` },
+        ],
+        enters: [environmentAfterConfiguration],
+      },
+    ],
+    constructed: [
+      {
+        name: lateConfiguration,
+        enters: [lateConfiguration],
+        build: (generated) => [
+          { do: `read`, reader: `typo.id random parameters` },
+          { do: `configure`, prefix: `ORACLE`, registry: true },
+          ...generated.slice(0, 4),
+        ],
+      },
+      {
+        name: environmentAfterConfiguration,
+        enters: [environmentAfterConfiguration],
+        build: (generated) => [
+          { do: `configure`, prefix: `ORACLE`, registry: false },
+          { do: `environment`, replay: `ORACLE` },
+          { do: `read`, reader: `reach skips its check` },
+          ...generated.slice(0, 3),
+        ],
+      },
+      {
+        name: prefixedCalibration,
+        enters: [prefixedCalibration],
+        build: (generated) => [
+          { do: `environment`, replay: `ACME` },
+          { do: `configure`, prefix: `ACME`, registry: true },
+          { do: `read`, reader: `calibration witness runs` },
+          ...generated.slice(0, 3),
+        ],
+      },
+    ],
+  },
+  model: owedResults,
+  reached: (steps, _trace, owed) => {
+    const reached: Array<string> = []
+    let configured: Prefix | undefined
+    let registryRead = false
+    for (const [index, step] of steps.entries()) {
+      if (step.do === `read`) {
+        if (configured === undefined && step.reader.startsWith(`typo.id`))
+          registryRead = true
+        if (step.reader === `calibration witness runs` && configured === `ACME`)
+          reached.push(prefixedCalibration)
+      }
+      if (step.do === `environment` && configured !== undefined)
+        reached.push(environmentAfterConfiguration)
+      if (step.do !== `configure`) continue
+      if (configured === undefined && registryRead && step.registry)
+        reached.push(lateConfiguration)
+      if (owed[index] !== `threw`) configured = step.prefix
+    }
+    return reached
+  },
+  driver: driveConfiguration,
+  check: checkConfiguration,
+})
