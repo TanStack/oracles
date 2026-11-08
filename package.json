@@ -27,6 +27,7 @@
     "@changesets/cli": "^2.29.8",
     "@svitejs/changesets-changelog-github-compact": "^1.2.0",
     "@tanstack/eslint-config": "0.3.4",
+    "@tanstack/eslint-plugin-oracles": "workspace:*",
     "@tanstack/vite-config": "0.4.3",
     "@types/node": "^25.2.2",
     "eslint": "^9.39.2",
