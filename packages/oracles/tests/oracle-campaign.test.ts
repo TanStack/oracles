@@ -29,7 +29,15 @@ it(`replays the requested seed and path without demanding unrelated states`, asy
     parameters.push(value)
     reach.beginHistory()
   })
-  expect(parameters).toEqual([{ seed: 0, path: `2:0`, numRuns: 1 }])
+  // A replay's seed is declared fixed (oracle-route.ts).
+  expect(parameters).toEqual([
+    {
+      seed: 0,
+      path: `2:0`,
+      numRuns: 1,
+      [Symbol.for(`@tanstack/oracles/fixed-seed`)]: 0,
+    },
+  ])
 })
 
 it(`keeps reach enforcement independent of the configured replay selector`, async () => {

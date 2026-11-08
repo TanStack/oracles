@@ -417,24 +417,32 @@ function campaignLedger(ledger: Ledger): Ledger {
 // The campaign model: two campaigns without a prefix seed, one campaign named
 // `replay` with one. Each campaign has a minimum of one and no fixed
 // histories, checks reach unless a path replays it, and reports its seed and counts
-// even when reach fails. The first failing campaign ends the run.
+// even when reach fails. The first failing campaign ends the run. A fixed
+// campaign's seed and a replay's seed are declared fixed, under the registered
+// symbol of oracle-route.ts; a drawn seed is not.
+const fixedSeed: unique symbol = Symbol.for(`@tanstack/oracles/fixed-seed`)
 function expectedCampaign(ledger: Ledger): CampaignObservation {
   if (ledger.campaignFault !== undefined) {
     return { parameters: [], lines: [], failure: `invalid environment` }
   }
   const run = campaignRun(ledger.run)
   const campaigns: ReadonlyArray<
-    readonly [string, { seed?: number; path?: string; numRuns?: number }]
+    readonly [
+      string,
+      { seed?: number; path?: string; numRuns?: number; [fixedSeed]?: number },
+    ]
   > =
     run === `ordinary`
       ? [
-          [`fixed`, { seed: ledger.fixedSeed }],
+          [`fixed`, { seed: ledger.fixedSeed, [fixedSeed]: ledger.fixedSeed }],
           [`random`, { seed: expect.any(Number) }],
         ]
       : [
           [
             `replay`,
-            run === `seed` ? { seed: 1 } : { seed: 1, path: `0`, numRuns: 1 },
+            run === `seed`
+              ? { seed: 1, [fixedSeed]: 1 }
+              : { seed: 1, path: `0`, numRuns: 1, [fixedSeed]: 1 },
           ],
         ]
   const replayed = campaignLedger(ledger)

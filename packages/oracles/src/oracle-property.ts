@@ -42,7 +42,8 @@
  * Each history is one test, named by `label`, or, without one, by the
  * history's stable text: its JSON when JSON carries it exactly, and otherwise
  * Node's inspection of it, which keeps NaN, -0, undefined, bigints, Maps,
- * Sets, symbol keys, and class names apart. A violation fails it with an
+ * Sets, symbol keys, and class names apart, and shows an Error by its name
+ * and message without its stack, so a name is the same on every machine. A violation fails it with an
  * `OracleViolation` that names the property, the law, the checkpoint, the
  * difference, the history in that text, and the command that reruns that history: a `-t` pattern
  * that matches the test's full name, its enclosing suites' names included,
@@ -116,7 +117,10 @@
  * - **Determinism.** A `determinism` test runs some histories twice and
  *   requires the same trace: every fixed and constructed history of a generated
  *   source and three generated histories, or up to eight evenly spaced
- *   enumerated histories, compared exactly, as `differs` compares. A trace
+ *   enumerated histories. Observations are data: two runs are compared by
+ *   their stable text, so `-0` and `0`, key order, and Map and Set order
+ *   count, as a check that iterates them can see, and a function counts by
+ *   its name, so a fresh closure is the same data. A trace
  *   that differs between runs of one history breaks replay, shrinking, and the gap
  *   report's comparison, so a driver records relations (before and after,
  *   same or different id) rather than clock readings or random ids.
@@ -157,7 +161,7 @@ import {
   withOracleFixedHistories,
 } from './oracle-config.js'
 import { oracleEnvName } from './oracle-environment.js'
-import { oracleRoute, oracleRouteOf } from './oracle-route.js'
+import { oracleFixedSeed, oracleRoute, oracleRouteOf } from './oracle-route.js'
 import type { OracleRoute } from './oracle-route.js'
 
 /** A law and where it comes from. */
@@ -780,6 +784,7 @@ function planOf<THistory, TExpected, TPlan>(
 // Node's inspection of it, which keeps NaN, -0, undefined, bigints, Maps,
 // Sets, symbol keys, and class names apart and never reads as JSON.
 function stableText(value: unknown): string {
+  value = withoutStacks(value)
   try {
     // undefined, a function, or a symbol prints as nothing.
     const text = JSON.stringify(value) as string | undefined
@@ -794,6 +799,55 @@ function stableText(value: unknown): string {
     maxStringLength: Infinity,
     breakLength: Infinity,
   })
+}
+
+/** An Error as its name and message: its stack names files and lines. */
+class ErrorText {
+  constructor(
+    readonly name: string,
+    readonly message: string,
+  ) {}
+}
+
+// A copy of a value in which each Error, in arrays, plain objects, Maps, and
+// Sets, is its name and message. Other values are kept as they are.
+function withoutStacks(
+  value: unknown,
+  seen = new Map<object, unknown>(),
+): unknown {
+  if (value instanceof Error) return new ErrorText(value.name, value.message)
+  if (typeof value !== `object` || value === null) return value
+  if (seen.has(value)) return seen.get(value)
+  if (Array.isArray(value)) {
+    const copy: Array<unknown> = new Array(value.length)
+    seen.set(value, copy)
+    value.forEach((item, index) => (copy[index] = withoutStacks(item, seen)))
+    return copy
+  }
+  if (value instanceof Map) {
+    const copy = new Map()
+    seen.set(value, copy)
+    for (const [key, item] of value)
+      copy.set(withoutStacks(key, seen), withoutStacks(item, seen))
+    return copy
+  }
+  if (value instanceof Set) {
+    const copy = new Set()
+    seen.set(value, copy)
+    for (const item of value) copy.add(withoutStacks(item, seen))
+    return copy
+  }
+  const prototype: unknown = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) return value
+  const copy = Object.create(prototype) as Record<PropertyKey, unknown>
+  seen.set(value, copy)
+  for (const key of Reflect.ownKeys(value))
+    if (Object.prototype.propertyIsEnumerable.call(value, key))
+      copy[key] = withoutStacks(
+        (value as Record<PropertyKey, unknown>)[key],
+        seen,
+      )
+  return copy
 }
 
 function determinismTest<THistory, TExpected, TPlan>(
@@ -814,8 +868,8 @@ function determinismTest<THistory, TExpected, TPlan>(
         const length = Math.max(first.length, second.length)
         for (let index = 0; index < length; index += 1) {
           const [a, b] = [first[index], second[index]]
-          if (isDeepStrictEqual(a, b)) continue
           const [textA, textB] = [stableText(a), stableText(b)]
+          if (textA === textB) continue
           const error = new Error(
             [
               `${options.id}: two runs of "${name}" recorded different traces at observation ${index}${a ? ` ("${a.checkpoint}")` : ``}.`,
@@ -1274,13 +1328,15 @@ function generatedTests<THistory, TExpected, TPlan>(
     name: `fixed seed ${seed}`,
     route: `fixed seed`,
     replays: [],
-    run: () =>
-      runCampaign(`fixed seed ${seed}`, seed, (examples) =>
-        withOracleFixedHistories(
-          { numRuns: oracleRuns(source.runs), seed },
-          examples,
-        ),
-      ),
+    run: () => {
+      const parameters = oracleFixedSeed(seed, {
+        numRuns: oracleRuns(source.runs),
+      })
+      oracleRoute(oracleRouteOf(parameters))
+      return runCampaign(`fixed seed ${seed}`, seed, (examples) =>
+        withOracleFixedHistories(parameters, examples),
+      )
+    },
   }))
   // The random campaign picks its seed itself, so a replay of that seed
   // rebuilds the same constructed histories, which the replay path counts.
@@ -1291,8 +1347,8 @@ function generatedTests<THistory, TExpected, TPlan>(
     run: () => {
       // One call selects and logs the seed; a replay reads that log line.
       const parameters = oraclePropertyOptions(source.runs, id)
-      // A path replay runs one recorded history, and a seed from the
-      // replay environment reseeds the campaign.
+      // A path replay runs one recorded history, a seed from the replay
+      // environment reseeds the campaign, and a drawn seed is random.
       oracleRoute(oracleRouteOf(parameters))
       return runCampaign(`random seed`, parameters.seed!, (examples) =>
         withOracleFixedHistories(parameters, examples),

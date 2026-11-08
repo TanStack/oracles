@@ -41,7 +41,8 @@
  * itself, as `{ items, tag: 1n }` (a bigint, which JSON cannot print), or as
  * `new Map([["items", items]])` (which JSON prints as `{}`), or, `lossy`,
  * as the array with each 1 held as `NaN` and each 2 as `-0` (which JSON
- * prints as `null` and `0`). The arbitrary,
+ * prints as `null` and `0`), or, `error`, as `{ items, failure }` with an
+ * Error, whose stack names this machine's paths. The arbitrary,
  * constructed and fixed histories, and every part use that form; the log
  * records the items. An enumerated spec labels its histories as
  * `items a | b`, or, with `labelStyle` `shell`, adds a shell's special
@@ -50,7 +51,10 @@
  * `strictModel` spec's model throws when the trace holds fewer items than
  * the history, as a model that indexes the trace would. A `zeroNoise` spec
  * records, last, `-0` and `0` on alternate runs: values that JSON text cannot
- * tell apart but an exact comparison can. The fixture records
+ * tell apart but an exact comparison can. An `orderNoise` spec records, last,
+ * an object whose keys come in a different order on alternate runs, which a
+ * check that iterates it can tell apart. A `freshClosure` spec records, last,
+ * a new function named `tool` on every run: the same data each time. The fixture records
  * the route registered through `__oracleRoute` when each history runs, in
  * the log beside it.
  *
@@ -132,13 +136,17 @@ export type SyntheticSpec = {
   /** Runs every history on a controlled clock, where a 7 spins it. */
   clock?: boolean
   /** How the property holds a history's items; the array itself when absent. */
-  form?: `bigint` | `map` | `lossy`
+  form?: `bigint` | `map` | `lossy` | `error`
   /** An enumerated label with shell characters, or no label at all. */
   labelStyle?: `shell` | `default`
   /** Registers the property inside `describe(outerSuite)`. */
   nested?: boolean
   /** Records -0 and 0 on alternate runs, last. */
   zeroNoise?: boolean
+  /** Records an object whose key order alternates between runs, last. */
+  orderNoise?: boolean
+  /** Records a fresh function named `tool` on every run, last. */
+  freshClosure?: boolean
   /** A model that throws on a trace with fewer items than the history. */
   strictModel?: boolean
 }
@@ -159,6 +167,7 @@ const controlledClock = () => useOracleClock({ maxTimers: 100 })
 const syntheticProbe = `synthetic#saw-0`
 let nonce = 0
 let zeroes = 0
+let orders = 0
 let noise = 0
 // The route registered for the running test, as the gap report reads it.
 let route: string | undefined
@@ -180,7 +189,9 @@ const formOf =
         ? new Map([[`items`, items]])
         : spec.form === `lossy`
           ? items.map((item) => (item === 1 ? NaN : item === 2 ? -0 : item))
-          : items
+          : spec.form === `error`
+            ? { items, failure: new Error(`synthetic failure`) }
+            : items
 const itemsOf =
   (spec: SyntheticSpec) =>
   (history: Formed): SyntheticHistory => {
@@ -194,6 +205,12 @@ const itemsOf =
       if (history instanceof Map && Array.isArray(history.get(`items`)))
         return history.get(`items`) as SyntheticHistory
       throw new Error(`not a map-form history`)
+    }
+    if (spec.form === `error`) {
+      const formed = history as { items?: unknown; failure?: unknown } | null
+      if (formed?.failure instanceof Error && Array.isArray(formed.items))
+        return formed.items as SyntheticHistory
+      throw new Error(`not an error-form history`)
     }
     if (spec.form === `lossy`) {
       const held = history as ReadonlyArray<number>
@@ -304,6 +321,12 @@ function syntheticDriver(spec: SyntheticSpec, mutant = false) {
     // Last, so a comparison of only the first observations misses it.
     if (spec.nondeterministic) observe(`nonce`, nonce++)
     if (spec.zeroNoise) observe(`nonce`, zeroes++ % 2 === 0 ? -0 : 0)
+    if (spec.orderNoise)
+      observe(`nonce`, orders++ % 2 === 0 ? { a: 1, b: 2 } : { b: 2, a: 1 })
+    if (spec.freshClosure) {
+      const tool = () => undefined
+      observe(`nonce`, { tool })
+    }
   }
 }
 

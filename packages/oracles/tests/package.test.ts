@@ -33,6 +33,7 @@ describe(`@tanstack/oracles`, () => {
         `oracleReplaySkips`,
         `oracleReplayReporter`,
         `oracleReplayTest`,
+        `oracleFixedSeed`,
         `oracleRoute`,
         `oracleRouteOf`,
         `oracleRuns`,
@@ -66,11 +67,17 @@ describe(`@tanstack/oracles`, () => {
   // and registers its routes through this entry.
   it(`exports declareOracle and the route helpers from the browser-safe declaration entry`, () => {
     expect(Object.keys(declaration).sort()).toEqual(
-      [`declareOracle`, `oracleRoute`, `oracleRouteOf`].sort(),
+      [
+        `declareOracle`,
+        `oracleFixedSeed`,
+        `oracleRoute`,
+        `oracleRouteOf`,
+      ].sort(),
     )
     expect(declaration.declareOracle).toBe(oracles.declareOracle)
     expect(declaration.oracleRoute).toBe(oracles.oracleRoute)
     expect(declaration.oracleRouteOf).toBe(oracles.oracleRouteOf)
+    expect(declaration.oracleFixedSeed).toBe(oracles.oracleFixedSeed)
   })
 
   // Each build of the CommonJS output, including each rebuild in watch mode,

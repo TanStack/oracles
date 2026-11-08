@@ -1,6 +1,6 @@
 import { oracleCampaignSeed } from './oracle-config.js'
 import { createOracleReach } from './oracle-reach.js'
-import { oracleRoute } from './oracle-route.js'
+import { oracleFixedSeed, oracleRoute, oracleRouteOf } from './oracle-route.js'
 
 /**
  * Run the same oracle with separate fixed/random reach ledgers. The callback
@@ -37,17 +37,24 @@ export async function runOracleCampaign<TState extends string>(
   )
     throw new Error(`${prefix}_PATH requires a seed and numeric shrink path`)
 
-  const campaigns =
+  // A fixed seed and a replay's seed are declared fixed; the random
+  // campaign's seed is drawn below.
+  const campaigns: Array<{
+    name: string
+    parameters: { seed?: number; path?: string; numRuns?: number }
+  }> =
     seed === undefined
       ? [
-          { name: `fixed`, parameters: { seed: fixedSeed } },
+          { name: `fixed`, parameters: oracleFixedSeed(fixedSeed) },
           { name: `random`, parameters: {} },
         ]
       : [
           {
             name: `replay`,
-            parameters:
-              path === undefined ? { seed } : { seed, path, numRuns: 1 },
+            parameters: oracleFixedSeed(
+              seed,
+              path === undefined ? {} : { path, numRuns: 1 },
+            ),
           },
         ]
   for (const campaign of campaigns) {
@@ -59,16 +66,8 @@ export async function runOracleCampaign<TState extends string>(
       seed: oracleCampaignSeed(campaign.parameters.seed, prefix),
     }
     // The gap report counts a kill only on a reproducible route, so each
-    // campaign registers its own (oracle-route.ts): a path replay runs one
-    // recorded history, a seed-only replay and the fixed campaign a fixed
-    // seed, and the random campaign a seed it draws.
-    oracleRoute(
-      path !== undefined
-        ? `fixed history`
-        : campaign.name === `random`
-          ? `random seed`
-          : `fixed seed`,
-    )
+    // campaign registers its own, by the one classifier (oracle-route.ts).
+    oracleRoute(oracleRouteOf(parameters))
     try {
       await run(reach, parameters)
       reach.assertReached()

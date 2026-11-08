@@ -1,5 +1,5 @@
 /**
- * # A test's route describes the campaign that runs
+ * # A test's route never claims more than its campaign has
  *
  * The gap report counts a mutant's kill only on a reproducible route, so each
  * test registers the route of the campaign it runs through
@@ -7,39 +7,46 @@
  * one vocabulary, `OracleRoute` in `oracle-route.ts`, which every runner and
  * `oracleRoute` use:
  *
- * - `fixed seed`: a campaign whose seed is fixed in code, or comes from the
- *   replay environment without a path (a reseeded campaign);
+ * - `fixed seed`: a campaign whose seed was declared fixed: in code, with
+ *   `oracleFixedSeed`, or by a seed-only replay that reseeds a campaign;
  * - `fixed history`: one written or recorded history, a path replay included;
  * - `case`: an enumerated history;
- * - `random seed`: a campaign whose seed the framework drew;
+ * - `random seed`: any other campaign;
  * - `calibration`: a check of the property itself (a calibration, a probe
  *   calibration, the determinism test).
  *
  * The law: the route registered when a campaign runs describes that campaign
  * in this vocabulary, whatever order the test calls the framework's helpers
- * in, and every runner attributes the same campaign the same way.
+ * in, and never claims more reproducibility than the campaign has. Where the
+ * framework cannot know that a seed is fixed, it says `random seed`, which
+ * undercounts kills but never counts a kill it cannot reproduce (coordinator
+ * decision for TanStack/oracles#1, 2026-11-08, findings R1c-1 and R1c-2).
  *
- * - `runOracleCampaign` registers each of its campaigns' routes before it
- *   calls the campaign: its fixed-seed campaign `fixed seed`, its random one
- *   `random seed`, a seed-only replay `fixed seed`, and a path replay
- *   `fixed history`. (`oracleProperty` registers its tests' routes by the same
- *   rule; the self-oracle's `route` law owns those, because they run under
- *   Vitest.)
- * - Building options registers nothing: `oraclePropertyOptions` and
- *   `oracleRandomParameters` return parameters that a caller may still
- *   change, such as a seed it fixes.
- * - `oracleRouteOf(parameters)` names the route of a campaign that runs with
- *   those parameters, by the rule above, so a test that runs its own campaign
- *   registers `oracleRoute(oracleRouteOf(parameters))` with the parameters it
- *   finally passes. A seed the test fixed itself is `fixed seed`.
+ * - One classifier, `oracleRouteOf(parameters)`, names the route of a
+ *   campaign that runs with given fast-check parameters: `fixed history`
+ *   with a path; `fixed seed` when the parameters still carry the framework's
+ *   declaration of their seed; `random seed` otherwise. The declaration
+ *   survives a spread, and only a spread: a seed set by hand, options rebuilt
+ *   field by field, a JSON round trip, or a structured clone lose it.
+ * - `runOracleCampaign` builds each campaign's parameters with the same
+ *   declarations and registers `oracleRoute(oracleRouteOf(parameters))`; a
+ *   campaign that registers the route of the parameters the runner gave it
+ *   gets the same answer. (`oracleProperty` does the same; the self-oracle's
+ *   `route` law owns its routes, because they run under Vitest.)
+ * - Building options registers nothing; options built under a seed-only or
+ *   path replay declare their seed.
  *
  * History: either a test's own campaign or a `runOracleCampaign` call whose
- * campaigns make the same calls (register a named route, build property
- * options, build random parameters, fix the seed of the options built, or
- * register the route of the options built), under an environment with no
- * replay, a seed-only replay, or a path replay of the test's property. The
- * model owes, from the history alone, the route in force when each campaign
- * would run. The driver records the route at that point.
+ * campaigns make the same calls (register a named route; build property
+ * options or random parameters; set the seed by hand; declare it fixed with
+ * `oracleFixedSeed`; rebuild the options field by field; round-trip them
+ * through JSON or `structuredClone`; register the route of the options; or,
+ * in a runner, register the route of the runner's parameters), under an
+ * environment with no replay, a seed-only replay, or a path replay of the
+ * test's property. The model tracks, from the history alone, where each
+ * seed came from and whether its declaration survived, and owes the route in
+ * force when each campaign would run. The driver records the route at that
+ * point.
  *
  * Limits: a named route a caller registers is taken as its claim.
  */
@@ -50,10 +57,18 @@ import type { Observation, OracleRoute } from '../src/index.js'
 
 type Call =
   | { call: `route`; route: OracleRoute }
-  | { call: `property options` }
-  | { call: `random parameters` }
-  | { call: `fix seed` }
-  | { call: `route of options` }
+  | {
+      call:
+        | `property options`
+        | `random parameters`
+        | `set seed`
+        | `declare fixed seed`
+        | `rebuild`
+        | `json`
+        | `clone`
+        | `route of options`
+        | `route of runner parameters`
+    }
 type Replay = `none` | `seed` | `path`
 type History = {
   runner: `own` | `runOracleCampaign`
@@ -70,63 +85,85 @@ const routes: ReadonlyArray<OracleRoute> = [
 ]
 const call: fc.Arbitrary<Call> = fc.oneof(
   fc.record({
-    call: fc.constant(`route`),
+    call: fc.constant(`route` as const),
     route: fc.constantFrom(...routes),
   }),
-  fc.record({ call: fc.constant(`property options`) }),
-  fc.record({ call: fc.constant(`random parameters`) }),
-  fc.record({ call: fc.constant(`fix seed`) }),
-  fc.record({ call: fc.constant(`route of options`) }),
+  fc.record({
+    call: fc.constantFrom(
+      `property options` as const,
+      `random parameters` as const,
+      `set seed` as const,
+      `declare fixed seed` as const,
+      `rebuild` as const,
+      `json` as const,
+      `clone` as const,
+      `route of options` as const,
+      `route of runner parameters` as const,
+    ),
+  }),
 )
 const history: fc.Arbitrary<History> = fc.record({
-  runner: fc.constantFrom(`own`, `runOracleCampaign`),
+  runner: fc.constantFrom(`own` as const, `runOracleCampaign` as const),
   replay: fc.constantFrom<Replay>(`none`, `seed`, `path`),
-  calls: fc.array(call, { maxLength: 4 }),
+  calls: fc.array(call, { maxLength: 5 }),
 })
 
 // ---------------------------------------------------------------------------
 // Model
 // ---------------------------------------------------------------------------
 //
-// The options a test built describe a campaign by where its seed came from:
-// none yet (fast-check would draw one), drawn by the framework, from the
-// replay environment, or fixed by the test; and whether a path replays one
-// history. The route of that campaign follows the vocabulary above.
+// Options are described by whether their seed is known to be fixed (declared
+// by the framework, and the declaration kept) and whether a path replays one
+// history. A path survives every step here; a declaration only a spread.
 
-type Options = {
-  seed: `none` | `drawn` | `environment` | `fixed`
-  path: boolean
-}
-const routeOfOptions = ({ seed, path }: Options): OracleRoute =>
-  path
-    ? `fixed history`
-    : seed === `none` || seed === `drawn`
-      ? `random seed`
-      : `fixed seed`
+type Options = { known: boolean; path: boolean }
+const routeOfOptions = ({ known, path }: Options): OracleRoute =>
+  path ? `fixed history` : known ? `fixed seed` : `random seed`
 
 function owedRoutes({ runner, replay, calls }: History): Array<string | null> {
-  // Each campaign starts from its runner's route; the test's calls follow.
-  const after = (start: string | null) => {
+  const after = (start: string | null, runnerOptions?: Options) => {
     let route = start
-    let options: Options = { seed: `none`, path: false }
-    for (const made of calls) {
-      if (made.call === `route`) route = made.route
-      else if (made.call === `fix seed`) options = { ...options, seed: `fixed` }
-      else if (made.call === `route of options`) route = routeOfOptions(options)
-      else
-        options = {
-          seed: replay === `none` ? `drawn` : `environment`,
-          path: replay === `path`,
-        }
-    }
+    // No options yet: fast-check would draw the seed.
+    let options: Options = { known: false, path: false }
+    for (const made of calls)
+      switch (made.call) {
+        case `route`:
+          route = made.route
+          break
+        case `property options`:
+        case `random parameters`:
+          // A replay's seed comes from the environment and is declared; a
+          // drawn one is not.
+          options = { known: replay !== `none`, path: replay === `path` }
+          break
+        case `set seed`:
+        case `rebuild`:
+        case `json`:
+        case `clone`:
+          options = { ...options, known: false }
+          break
+        case `declare fixed seed`:
+          options = { ...options, known: true }
+          break
+        case `route of options`:
+          route = routeOfOptions(options)
+          break
+        case `route of runner parameters`:
+          if (runnerOptions) route = routeOfOptions(runnerOptions)
+      }
     return route
   }
   if (runner === `own`) return [after(null)]
-  const campaigns: Array<OracleRoute> =
+  // The runner's campaigns: a fixed seed in code and a drawn one, or one
+  // replay of either kind.
+  const campaigns: Array<Options> =
     replay === `none`
-      ? [`fixed seed`, `random seed`]
-      : [replay === `path` ? `fixed history` : `fixed seed`]
-  return campaigns.map(after)
+      ? [
+          { known: true, path: false },
+          { known: false, path: false },
+        ]
+      : [{ known: true, path: replay === `path` }]
+  return campaigns.map((options) => after(routeOfOptions(options), options))
 }
 
 // ---------------------------------------------------------------------------
@@ -142,6 +179,8 @@ const variables = [
   `${campaignPrefix}_SEED`,
   `${campaignPrefix}_PATH`,
 ]
+
+type Parameters = { numRuns?: number; seed?: number; path?: string }
 
 async function driveRoutes(
   { runner, replay, calls }: History,
@@ -174,20 +213,50 @@ async function driveRoutes(
     vi.resetModules()
     const config = await import(`../src/oracle-config.js`)
     const { runOracleCampaign } = await import(`../src/oracle-campaign.js`)
-    const make = () => {
-      let options: { seed?: number; path?: string } = {}
+    const make = (runnerParameters?: Parameters) => {
+      let options: Parameters = {}
       for (const made of calls)
-        if (made.call === `route`) config.oracleRoute(made.route)
-        else if (made.call === `property options`)
-          options = config.oraclePropertyOptions(10, property)
-        else if (made.call === `random parameters`)
-          options = config.oracleRandomParameters(
-            10,
-            config.readOracleRunConfig(),
-            property,
-          )
-        else if (made.call === `fix seed`) options = { ...options, seed: 42 }
-        else config.oracleRoute(config.oracleRouteOf(options))
+        switch (made.call) {
+          case `route`:
+            config.oracleRoute(made.route)
+            break
+          case `property options`:
+            options = config.oraclePropertyOptions(10, property)
+            break
+          case `random parameters`:
+            options = config.oracleRandomParameters(
+              10,
+              config.readOracleRunConfig(),
+              property,
+            )
+            break
+          // A seed other than any declared one, so an override is visible.
+          case `set seed`:
+            options = { ...options, seed: 43 }
+            break
+          case `declare fixed seed`:
+            options = config.oracleFixedSeed(42, options)
+            break
+          case `rebuild`:
+            options = {
+              numRuns: options.numRuns,
+              seed: options.seed,
+              ...(options.path === undefined ? {} : { path: options.path }),
+            }
+            break
+          case `json`:
+            options = JSON.parse(JSON.stringify(options)) as Parameters
+            break
+          case `clone`:
+            options = structuredClone(options)
+            break
+          case `route of options`:
+            config.oracleRoute(config.oracleRouteOf(options))
+            break
+          case `route of runner parameters`:
+            if (runnerParameters)
+              config.oracleRoute(config.oracleRouteOf(runnerParameters))
+        }
     }
     if (runner === `own`) {
       make()
@@ -195,8 +264,8 @@ async function driveRoutes(
       return
     }
     let campaign = 0
-    await runOracleCampaign(campaignPrefix, [], () => {
-      make()
+    await runOracleCampaign(campaignPrefix, [], (_reach, parameters) => {
+      make(parameters)
       observe(`campaign ${campaign++}`, route)
     })
   } finally {
@@ -218,23 +287,44 @@ function checkRoutes(
 }
 
 const builtAfterRoute = `options built after the test registered its route`
-const builtInRunner = `options built inside a runner's campaign`
-const routeOfFixedSeed = `the route of options whose seed the test fixed`
+const lostDeclaration = `a declaration lost before the route of options`
+const declaredFixedSeed = `the route of a seed declared fixed`
+const runnerParameters = `the route of the runner's parameters`
 const runnerReplay = `a runner's replay`
+
+// Where a declaration of a known-fixed seed is lost before the options'
+// route is registered.
+const losesDeclaration = (calls: ReadonlyArray<Call>) => {
+  let known = false
+  let lost = false
+  for (const made of calls) {
+    if (made.call === `declare fixed seed`) [known, lost] = [true, false]
+    if ([`set seed`, `rebuild`, `json`, `clone`].includes(made.call))
+      if (known) [known, lost] = [false, true]
+    if (made.call === `route of options` && lost) return true
+  }
+  return false
+}
 
 oracleProperty<History, Array<string | null>>({
   id: `self-oracle.route`,
   law: {
-    statement: `The route registered when a campaign runs describes that campaign in the one route vocabulary: the runner's own, the route of the options it runs with, or the last one the test named; building options registers none, and every runner attributes a seed-only and a path replay alike.`,
-    authority: `the gap report's route contract (OracleRoute in packages/oracles/src/oracle-route.ts); coordinator decisions for TanStack/oracles#1, 2026-11-08 (findings F2, R1b-4, R1b-7, R1b-8)`,
+    statement: `The route registered when a campaign runs describes that campaign in the one route vocabulary and never claims more reproducibility than it has: fixed seed only for a seed the framework declared fixed and the parameters still carry, fixed history only with a path, random seed otherwise; one classifier serves every runner and test.`,
+    authority: `the gap report's route contract (OracleRoute in packages/oracles/src/oracle-route.ts); coordinator decisions for TanStack/oracles#1, 2026-11-08 (findings F2, R1b-4, R1b-7, R1b-8, R1c-1, R1c-2, R1c-9)`,
     limits: `A named route a caller registers is taken as its claim; oracleProperty's own routes are owned by the self-oracle's route law.`,
     owner: `oracleProperty framework`,
   },
   histories: {
     arbitrary: history,
-    runs: 100,
+    runs: 150,
     fixedSeeds: [20261108],
-    states: [builtAfterRoute, builtInRunner, routeOfFixedSeed, runnerReplay],
+    states: [
+      builtAfterRoute,
+      lostDeclaration,
+      declaredFixedSeed,
+      runnerParameters,
+      runnerReplay,
+    ],
     fixed: [
       // A fixed-seed campaign that built random options, then registered its
       // route, then built options again for a second assertion.
@@ -250,29 +340,74 @@ oracleProperty<History, Array<string | null>>({
         },
         enters: [builtAfterRoute],
       },
-      // runOracleCampaign attributed a path replay to `fixed seed`, and
-      // oracleProperty to `fixed history`.
+      // runOracleCampaign attributed a path replay to `fixed seed`.
       {
         name: `a runner's path replay is a fixed history`,
-        history: {
-          runner: `runOracleCampaign`,
-          replay: `path`,
-          calls: [],
-        },
+        history: { runner: `runOracleCampaign`, replay: `path`, calls: [] },
         enters: [runnerReplay],
       },
+      // runOracleCampaign drew its random campaign's seed without marking
+      // it, so the route of its parameters claimed `fixed seed`.
       {
-        name: `options with a seed the test fixed`,
+        name: `the route of a seed the runner drew`,
+        history: {
+          runner: `runOracleCampaign`,
+          replay: `none`,
+          calls: [{ call: `route of runner parameters` }],
+        },
+        enters: [runnerParameters],
+      },
+      // A seed the framework drew lost its mark in a JSON round trip and
+      // read as fixed; a seed set by hand read as fixed too.
+      {
+        name: `options round-tripped through JSON`,
         history: {
           runner: `own`,
           replay: `none`,
           calls: [
             { call: `property options` },
-            { call: `fix seed` },
+            { call: `json` },
             { call: `route of options` },
           ],
         },
-        enters: [routeOfFixedSeed],
+      },
+      {
+        name: `a seed set by hand`,
+        history: {
+          runner: `own`,
+          replay: `none`,
+          calls: [
+            { call: `property options` },
+            { call: `set seed` },
+            { call: `route of options` },
+          ],
+        },
+      },
+      {
+        name: `a declared seed overridden by hand`,
+        history: {
+          runner: `own`,
+          replay: `none`,
+          calls: [
+            { call: `declare fixed seed` },
+            { call: `set seed` },
+            { call: `route of options` },
+          ],
+        },
+        enters: [lostDeclaration],
+      },
+      {
+        name: `a declared seed cloned before its route`,
+        history: {
+          runner: `own`,
+          replay: `none`,
+          calls: [
+            { call: `declare fixed seed` },
+            { call: `clone` },
+            { call: `route of options` },
+          ],
+        },
+        enters: [lostDeclaration],
       },
     ],
     constructed: [
@@ -290,24 +425,48 @@ oracleProperty<History, Array<string | null>>({
         }),
       },
       {
-        name: builtInRunner,
-        enters: [builtInRunner],
+        name: lostDeclaration,
+        enters: [lostDeclaration],
         build: (generated): History => ({
           ...generated,
-          runner: `runOracleCampaign`,
-          calls: [{ call: `property options` }, ...generated.calls.slice(0, 3)],
+          calls: [
+            { call: `property options` },
+            { call: `declare fixed seed` },
+            ...generated.calls
+              .slice(0, 1)
+              .filter((made) => made.call !== `declare fixed seed`),
+            // Each way of losing a declaration, by the generated history.
+            {
+              call: ([`set seed`, `rebuild`, `json`, `clone`] as const)[
+                generated.calls.length % 4
+              ]!,
+            },
+            { call: `route of options` },
+          ],
         }),
       },
       {
-        name: routeOfFixedSeed,
-        enters: [routeOfFixedSeed],
+        name: declaredFixedSeed,
+        enters: [declaredFixedSeed],
         build: (generated): History => ({
           ...generated,
           calls: [
             { call: `random parameters` },
-            { call: `fix seed` },
+            { call: `declare fixed seed` },
             { call: `route of options` },
-            ...generated.calls.slice(0, 1),
+            ...generated.calls.slice(0, 2),
+          ],
+        }),
+      },
+      {
+        name: runnerParameters,
+        enters: [runnerParameters],
+        build: (generated): History => ({
+          ...generated,
+          runner: `runOracleCampaign`,
+          calls: [
+            ...generated.calls.slice(0, 2),
+            { call: `route of runner parameters` },
           ],
         }),
       },
@@ -329,21 +488,22 @@ oracleProperty<History, Array<string | null>>({
       (made) =>
         made.call === `property options` || made.call === `random parameters`,
     )
-    const firstBuild = builds.indexOf(true)
-    const fixedAt = calls.findIndex((made) => made.call === `fix seed`)
+    const declaredAt = calls.findIndex(
+      (made) => made.call === `declare fixed seed`,
+    )
     return [
       ...(runner === `own` &&
       firstRoute >= 0 &&
       builds.some((built, at) => built && at > firstRoute)
         ? [builtAfterRoute]
         : []),
-      ...(runner === `runOracleCampaign` && firstBuild >= 0
-        ? [builtInRunner]
+      ...(losesDeclaration(calls) ? [lostDeclaration] : []),
+      ...(declaredAt >= 0 && calls[declaredAt + 1]?.call === `route of options`
+        ? [declaredFixedSeed]
         : []),
-      ...(firstBuild >= 0 &&
-      fixedAt > firstBuild &&
-      calls.some((made, at) => made.call === `route of options` && at > fixedAt)
-        ? [routeOfFixedSeed]
+      ...(runner === `runOracleCampaign` &&
+      calls.some((made) => made.call === `route of runner parameters`)
+        ? [runnerParameters]
         : []),
       ...(runner === `runOracleCampaign` && replay !== `none`
         ? [runnerReplay]

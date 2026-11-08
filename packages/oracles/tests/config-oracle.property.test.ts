@@ -15,7 +15,9 @@
  *   next `configureOracles`. So a test that stands aside during a path
  *   replay (`oracleReplayRequested`), a declared reach that skips its check
  *   during one (`createOracleReach`), `readOracleRunConfig()`, and a
- *   calibration witness always agree.
+ *   calibration witness, and the replay witness always agree. The object
+ *   `readOracleRunConfig()` returns is the caller's: changing it changes no
+ *   later read.
  * - A project configures before its oracles read their configuration. A
  *   first `configureOracles` that changes the defaults after an oracle read
  *   them throws, because the earlier read already used the defaults; a read
@@ -27,8 +29,10 @@
  * the environment (a path replay of `a.b` under one prefix or none, and the
  * calibration variable naming the fault under one prefix or none), or reads:
  * whether a path replay is requested, whether a declared reach skips its
- * check, whether `readOracleRunConfig()` reports a path and whether
- * `oracleRandomParameters` given it replays, whether `a.b` or `typo.id` is
+ * check, whether `readOracleRunConfig()` reports a path, whether
+ * `oracleRandomParameters` given it replays, whether a replay witness
+ * attaches, whether a replay is still requested after the caller mutates the
+ * object `readOracleRunConfig()` returned, whether `a.b` or `typo.id` is
  * registered (directly and through `oracleRandomParameters`), and whether a
  * calibration witness for `a.b` runs. The model keeps the configuration, the replay
  * selection it read, and whether a read came before the first configuration,
@@ -57,6 +61,8 @@ type Reader =
   | `calibration witness runs`
   | `run config replays`
   | `a.b random parameters replay`
+  | `replay witness attaches`
+  | `replay after mutating run config`
 type Step =
   | { do: `configure`; prefix: Prefix; registry: boolean }
   | {
@@ -90,6 +96,8 @@ const anyStep: fc.Arbitrary<Step> = fc.oneof(
       `calibration witness runs`,
       `run config replays`,
       `a.b random parameters replay`,
+      `replay witness attaches`,
+      `replay after mutating run config`,
     ),
   }),
 )
@@ -131,10 +139,14 @@ function owedResults(steps: History): Array<Result> {
     }
     if (!configured) readBefore = true
     switch (step.reader) {
+      // The witness channel is set with the replay, and a returned run
+      // configuration is the caller's copy, so these all read the selection.
       case `replay requested`:
       case `reach skips its check`:
       case `run config replays`:
       case `a.b random parameters replay`:
+      case `replay witness attaches`:
+      case `replay after mutating run config`:
         return replaySelected()
       case `a.b registered`:
         return true
@@ -157,7 +169,7 @@ function owedResults(steps: History): Array<Result> {
 // environment with no replay or calibration variable under either prefix.
 
 const variables = prefixes.flatMap((prefix) =>
-  [`SEED`, `PATH`, `PROPERTY`, `CALIBRATION`].map(
+  [`SEED`, `PATH`, `PROPERTY`, `CALIBRATION`, `REPLAY_WITNESS`].map(
     (name) => `${prefix}_${name}`,
   ),
 )
@@ -180,6 +192,8 @@ async function driveConfiguration(
     process.env[`${replay}_SEED`] = `1`
     process.env[`${replay}_PATH`] = `0`
     process.env[`${replay}_PROPERTY`] = `a.b`
+    // The reporter is only built, never run, so nothing is written here.
+    process.env[`${replay}_REPLAY_WITNESS`] = `unused-witness-channel`
   }
   const info = vi.spyOn(console, `info`).mockImplementation(() => {})
   try {
@@ -187,6 +201,7 @@ async function driveConfiguration(
     vi.resetModules()
     const config = await import(`../src/oracle-config.js`)
     const { createOracleReach } = await import(`../src/oracle-reach.js`)
+    const witness = await import(`../src/oracle-replay-witness.js`)
     const registration = { skip: `skipped` }
     const read: Record<Reader, () => boolean> = {
       'replay requested': () => config.oracleReplayRequested(),
@@ -212,6 +227,17 @@ async function driveConfiguration(
         registration,
       'run config replays': () =>
         config.readOracleRunConfig().replayPath !== undefined,
+      'replay witness attaches': () =>
+        Object.keys(witness.oracleReplayReporter(`a.b`, 1, `0`)).length > 0,
+      'replay after mutating run config': () => {
+        const run = config.readOracleRunConfig() as { replayPath?: string }
+        try {
+          run.replayPath = undefined
+        } catch {
+          // A frozen copy refuses the change.
+        }
+        return config.oracleReplayRequested()
+      },
       'a.b random parameters replay': () =>
         config.oracleRandomParameters(1, config.readOracleRunConfig(), `a.b`)
           .path !== undefined,
@@ -309,6 +335,25 @@ oracleProperty({
           { do: `read`, reader: `a.b random parameters replay` },
         ],
         enters: [environmentAfterConfiguration],
+      },
+      {
+        name: `a replay witness after the environment changed`,
+        history: [
+          { do: `environment`, replay: `ORACLE`, calibration: `none` },
+          { do: `configure`, prefix: `ORACLE`, registry: false },
+          { do: `environment`, replay: `none`, calibration: `none` },
+          { do: `read`, reader: `a.b random parameters replay` },
+          { do: `read`, reader: `replay witness attaches` },
+        ],
+        enters: [environmentAfterConfiguration],
+      },
+      {
+        name: `a mutated run configuration`,
+        history: [
+          { do: `environment`, replay: `ORACLE`, calibration: `none` },
+          { do: `configure`, prefix: `ORACLE`, registry: false },
+          { do: `read`, reader: `replay after mutating run config` },
+        ],
       },
       {
         name: `a calibration variable set after configuration`,

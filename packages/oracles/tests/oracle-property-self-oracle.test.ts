@@ -30,7 +30,9 @@
  *   mutant driver) fails with the named law.
  * - `determinism`: the determinism test runs every fixed and constructed history
  *   and three generated ones, and fails for a driver whose trace changes,
- *   compared exactly (`-0` is not `0`).
+ *   compared as data, by stable text: `-0` is not `0`, and key order and
+ *   Map and Set order count, which a check that iterates them can see; a
+ *   function counts by its name, so a fresh closure is the same data.
  * - `agreement`: for a probe-bound state, a history whose `predict` says it
  *   enters the state while the history does not enter it, or does not enter
  *   it while the history does, violates law `reach agreement` at checkpoint
@@ -57,13 +59,17 @@
  * - `replay`: replaying a failing campaign's seed and path runs only that
  *   property's random campaign, starts from the counterexample itself, and
  *   reproduces it.
+ * - `names`: no test name holds this machine's paths, so names are the same
+ *   on every machine (an Error in a history is named by its name and
+ *   message, not its stack).
  * - `rerun`: a violation's printed rerun command, pasted into a POSIX shell,
  *   runs exactly that test, also when its name holds a shell's special
  *   characters and when the property sits inside another suite.
  * - `route`: each history runs under the route, in the one vocabulary of
  *   `oracle-route.ts`, of the campaign that runs it: a fixed-seed campaign
  *   `fixed seed`; the random campaign `random seed`, or `fixed seed` when a
- *   seed-only replay reseeds it (as every child run here does), or `fixed
+ *   seed-only replay reseeds it (as the main child runs here do; a seedless
+ *   child run, without `ORACLE_SEED`, shows `random seed`), or `fixed
  *   history` in a path replay; a fixed history `fixed history`; an enumerated
  *   history `case`; calibrations, probe calibrations, and the determinism test
  *   `calibration` (TanStack/oracles#1 coordinator decisions, 2026-11-08: a
@@ -149,13 +155,17 @@ type Draft = {
   noisyProbe: boolean
   predictMode: `match` | `missing` | `extra`
   clock: boolean
-  form: `plain` | `bigint` | `map` | `lossy`
+  form: `plain` | `bigint` | `map` | `lossy` | `error`
   zeroNoise: boolean
+  orderNoise: boolean
+  freshClosure: boolean
   labelStyle: `plain` | `shell` | `default`
   nested: boolean
   strictModel: boolean
 }
-type Suite = { drafts: Array<Draft> }
+// `seedless`: one more child run, without `ORACLE_SEED`, records the routes
+// of each random campaign as an ordinary run draws its seed.
+type Suite = { drafts: Array<Draft>; seedless: boolean }
 
 // Outside the synthetic language: an item 5, or four items.
 const outside = fc.oneof(
@@ -269,6 +279,7 @@ const draft: fc.Arbitrary<Draft> = fc.record({
         `bigint` as const,
         `map` as const,
         `lossy` as const,
+        `error` as const,
       ),
     },
   ),
@@ -284,6 +295,14 @@ const draft: fc.Arbitrary<Draft> = fc.record({
     { weight: 9, arbitrary: fc.constant(false) },
     { weight: 1, arbitrary: fc.constant(true) },
   ),
+  orderNoise: fc.oneof(
+    { weight: 9, arbitrary: fc.constant(false) },
+    { weight: 1, arbitrary: fc.constant(true) },
+  ),
+  freshClosure: fc.oneof(
+    { weight: 9, arbitrary: fc.constant(false) },
+    { weight: 1, arbitrary: fc.constant(true) },
+  ),
   nested: fc.oneof(
     { weight: 4, arbitrary: fc.constant(false) },
     { weight: 1, arbitrary: fc.constant(true) },
@@ -295,6 +314,10 @@ const draft: fc.Arbitrary<Draft> = fc.record({
 })
 const suite: fc.Arbitrary<Suite> = fc.record({
   drafts: fc.array(draft, { minLength: 1, maxLength: 2 }),
+  seedless: fc.oneof(
+    { weight: 5, arbitrary: fc.constant(false) },
+    { weight: 1, arbitrary: fc.constant(true) },
+  ),
 })
 
 // ---------------------------------------------------------------------------
@@ -307,10 +330,11 @@ const suite: fc.Arbitrary<Suite> = fc.record({
 // constructed history that names an undeclared state). An enumerated draft has no
 // constructed or fixed histories.
 
-type Plan = { specs: Array<SyntheticSpec> }
+type Plan = { specs: Array<SyntheticSpec>; seedless: boolean }
 
-function resolveSuite({ drafts }: Suite): Plan {
+function resolveSuite({ drafts, seedless }: Suite): Plan {
   return {
+    seedless,
     specs: drafts.map((d, index) => {
       const generated = d.source.kind === `generated`
       const constructed = generated
@@ -352,6 +376,8 @@ function resolveSuite({ drafts }: Suite): Plan {
         ...(d.clock ? { clock: true } : {}),
         ...(d.form !== `plain` ? { form: d.form } : {}),
         ...(d.zeroNoise ? { zeroNoise: true } : {}),
+        ...(d.orderNoise ? { orderNoise: true } : {}),
+        ...(d.freshClosure ? { freshClosure: true } : {}),
         ...(!generated && d.labelStyle !== `plain`
           ? { labelStyle: d.labelStyle }
           : {}),
@@ -655,7 +681,8 @@ function predictSpec(
     const varies =
       spec.nondeterministic ||
       spec.noisyProbe === true ||
-      spec.zeroNoise === true
+      spec.zeroNoise === true ||
+      spec.orderNoise === true
     for (const history of histories) {
       if (history.includes(6)) return { kind: `setup` }
       if (varies) return { kind: `determinism` }
@@ -854,6 +881,9 @@ const frameworkStates = [
   `late-probe-after-driver-error`,
   `replayed-route`,
   `lossy-history`,
+  `seedless-route`,
+  `error-history`,
+  `fresh-closure`,
 ] as const
 
 function frameworkReach(
@@ -926,7 +956,9 @@ function frameworkReach(
       reached.add(`unlabelled-enumerated`)
       if (spec.form === `map`) reached.add(`map-history`)
       if (spec.form === `lossy`) reached.add(`lossy-history`)
+      if (spec.form === `error`) reached.add(`error-history`)
     }
+    if (spec.freshClosure) reached.add(`fresh-closure`)
     if (
       spec.strictModel &&
       logged.some(({ history }) => {
@@ -976,6 +1008,14 @@ function frameworkReach(
       reached.add(`over-reported-reach`)
   if (trace.some(({ checkpoint }) => checkpoint === `replay`))
     reached.add(`replay-probe`)
+  const seedless = trace.find(({ checkpoint }) => checkpoint === `seedless`)
+  if (
+    seedless &&
+    Object.values(seedless.value as Record<string, Array<unknown>>).some(
+      (routes) => routes.length > 0,
+    )
+  )
+    reached.add(`seedless-route`)
   if (trace.some(({ checkpoint }) => checkpoint === `rerun`))
     reached.add(`rerun-probe`)
   return reached
@@ -1142,6 +1182,8 @@ function runVitest(
   // Shell text appended to the command, which then runs in /bin/sh, as a
   // pasted rerun command does.
   shellTail?: string,
+  // Without a seed, the random campaigns draw theirs, as in an ordinary run.
+  seeded = true,
 ): Report {
   const report = join(directory, `report-${runCount++}.json`)
   // The child reads the default `ORACLE` variables, so none of the parent's
@@ -1173,7 +1215,7 @@ function runVitest(
       cwd: packageDirectory,
       env: {
         ...childEnv,
-        ORACLE_SEED: `20251103`,
+        ...(seeded ? { ORACLE_SEED: `20251103` } : {}),
         ...env,
         SELF_ORACLE_REPORT: report,
       },
@@ -1291,6 +1333,34 @@ async function driveSuite(
       }
     }
     observe(`run`, run)
+    if (plan.seedless) {
+      const seedlessLog = join(directory, `seedless-${runCount}.jsonl`)
+      runVitest(
+        directory,
+        files,
+        { SELF_ORACLE_LOG: seedlessLog },
+        undefined,
+        false,
+      )
+      const logged = readLog(seedlessLog)
+      // The routes each random campaign ran under: the same whatever seed it
+      // drew, so this observation repeats.
+      observe(
+        `seedless`,
+        Object.fromEntries(
+          plan.specs.map((spec) => [
+            spec.id,
+            [
+              ...new Set(
+                logged
+                  .filter((entry) => entry.test === `${spec.id} > random seed`)
+                  .map((entry) => entry.route),
+              ),
+            ].sort(),
+          ]),
+        ),
+      )
+    }
     for (const spec of plan.specs) {
       for (const campaign of run.files[spec.id]!.tests) {
         if (!isCampaign(campaign.name) || campaign.failure?.path === undefined)
@@ -1385,7 +1455,9 @@ function checkSuite(
     SuiteRun | undefined
   if (!run) return violation(`run`, `the driver recorded no run`, `trace`)
   const probes = trace
-    .filter(({ checkpoint }) => checkpoint !== `run`)
+    .filter(
+      ({ checkpoint }) => checkpoint === `replay` || checkpoint === `rerun`,
+    )
     .map(({ checkpoint, value }) => ({
       checkpoint,
       probe: value as ProbeRun,
@@ -1404,6 +1476,15 @@ function checkSuite(
     }
     if (!seen.loaded)
       return violation(`run`, `${spec.id} failed to load`, `registration`)
+    const placed = seen.tests.find((test) =>
+      test.name.includes(packageDirectory),
+    )
+    if (placed)
+      return violation(
+        `run`,
+        `${spec.id} named a test with this machine's path: ${JSON.stringify(placed.name.slice(0, 300))}`,
+        `names`,
+      )
     const names = [...owed.tests.keys()].sort()
     const seenNames = seen.tests.map((test) => test.name).sort()
     if (JSON.stringify(names) !== JSON.stringify(seenNames))
@@ -1517,6 +1598,28 @@ function checkSuite(
         `rerun`,
       )
   }
+  // In a run without a seed, every history of a random campaign runs under
+  // `random seed`, and a loaded campaign whose constructed histories are
+  // members runs at least one.
+  const seedless = trace.find(({ checkpoint }) => checkpoint === `seedless`)
+    ?.value as Record<string, Array<string | null>> | undefined
+  if (seedless)
+    for (const spec of plan.specs) {
+      const owedRoutes =
+        expected.get(spec.id)!.loads &&
+        spec.source.kind === `generated` &&
+        !spec.slow &&
+        spec.constructed.every(({ prefix }) => constructedMember(prefix))
+          ? [`random seed`]
+          : []
+      if (JSON.stringify(seedless[spec.id]) !== JSON.stringify(owedRoutes))
+        return violation(
+          `seedless`,
+          `${spec.id}: an ordinary run's random campaign ran under ${JSON.stringify(seedless[spec.id])}, owed ${JSON.stringify(owedRoutes)}`,
+          `route`,
+          { actual: seedless[spec.id], expected: owedRoutes },
+        )
+    }
   // Each late probe call surfaces as an unhandled error of the run.
   const late = run.unhandled.filter((message) =>
     message.includes(`was called after its history ended`),
@@ -1621,6 +1724,8 @@ const generatedDraft = (overrides: Partial<Draft>): Draft => ({
   clock: false,
   form: `plain`,
   zeroNoise: false,
+  orderNoise: false,
+  freshClosure: false,
   labelStyle: `plain`,
   nested: false,
   strictModel: false,
@@ -1630,7 +1735,12 @@ const fixedHistory = (
   name: string,
   enters: Array<(typeof frameworkStates)[number]>,
   ...drafts: Array<Draft>
-) => ({ name, enters, history: { drafts } })
+) => ({ name, enters, history: { drafts, seedless: false } })
+const seedlessHistory = (
+  name: string,
+  enters: Array<(typeof frameworkStates)[number]>,
+  ...drafts: Array<Draft>
+) => ({ name, enters, history: { drafts, seedless: true } })
 const at = (history: SyntheticHistory) => ({ history, enters: null })
 
 oracleProperty({
@@ -1894,6 +2004,29 @@ oracleProperty({
           ...generatedDraft({ form: `lossy`, labelStyle: `default` }),
           source: { kind: `enumerated`, histories: [[0], [2], [1]] },
         },
+      ),
+      seedlessHistory(
+        `an ordinary run's random campaign runs under random seed`,
+        [`seedless-route`],
+        generatedDraft({}),
+      ),
+      fixedHistory(
+        `an unlabelled history holding an Error is named without its stack`,
+        [`unlabelled-enumerated`, `error-history`],
+        {
+          ...generatedDraft({ form: `error`, labelStyle: `default` }),
+          source: { kind: `enumerated`, histories: [[0], [1]] },
+        },
+      ),
+      fixedHistory(
+        `the determinism test tells key orders apart`,
+        [`determinism-caught`],
+        generatedDraft({ orderNoise: true, fixed: [at([0])] }),
+      ),
+      fixedHistory(
+        `the determinism test accepts a fresh closure`,
+        [`fresh-closure`],
+        generatedDraft({ freshClosure: true, fixed: [at([0])] }),
       ),
       fixedHistory(
         `the determinism test tells -0 from 0`,

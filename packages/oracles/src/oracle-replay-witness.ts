@@ -1,6 +1,6 @@
 import { appendFileSync } from 'node:fs'
 import { asyncDefaultReportMessage, defaultReportMessage } from 'fast-check'
-import { oracleEnvName } from './oracle-environment.js'
+import { replayConfig } from './oracle-environment.js'
 import type { RunDetails } from 'fast-check'
 
 export type OracleReplayWitness = {
@@ -16,12 +16,13 @@ function witnessChannel(
   seed: number,
   path: string | undefined,
 ): string | undefined {
-  const channel = process.env[oracleEnvName(`REPLAY_WITNESS`)]
-  return channel !== undefined &&
-    property === process.env[oracleEnvName(`PROPERTY`)] &&
-    seed === Number(process.env[oracleEnvName(`SEED`)]) &&
-    path === process.env[oracleEnvName(`PATH`)]
-    ? channel
+  // The replay the configuration read, as every replay condition reads it.
+  const { witness, replayProperty, campaignSeed, replayPath } = replayConfig()
+  return witness !== undefined &&
+    property === replayProperty &&
+    seed === campaignSeed &&
+    path === replayPath
+    ? witness
     : undefined
 }
 
@@ -106,7 +107,7 @@ export function oracleReplayReporter(
   // fast-check accepts an async reporter only for an async property. When a
   // synchronous property rejects it, the guarded runner retries in the
   // synchronous mode, which uses fast-check's synchronous formatter.
-  if (process.env[oracleEnvName(`REPLAY_WITNESS_MODE`)] === `sync`) {
+  if (replayConfig().witnessMode === `sync`) {
     return {
       reporter: (details) => {
         record(details)
