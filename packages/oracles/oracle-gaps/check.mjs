@@ -1765,7 +1765,7 @@ function identityOf(options, authored, testFiles, oracleCount) {
   hash.update(JSON.stringify({ ...decisive, only: [...(options.only ?? [])] }))
   return {
     id: hash.digest(`hex`).slice(0, 12),
-    inputs: `${options.sources.length} source files, ${oracleCount} oracle files, ${testFiles.length - oracleCount} ordinary test files, ${authored.length} authored mutants, seed ${options.seed ?? `(none)`}${options.only || options.sample !== undefined ? `; a partial run (--only or --sample)` : ``}`,
+    inputs: `${options.sources.length} source files, ${oracleCount} oracle files, ${testFiles.length - oracleCount} ordinary test files, ${authored.length} authored mutants, seed ${options.seed ?? `(none)`}, pool ${options.pool}${options.only || options.sample !== undefined ? `; a partial run (--only or --sample)` : ``}`,
   }
 }
 

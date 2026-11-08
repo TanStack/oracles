@@ -1,8 +1,8 @@
 // The CLI's arguments, shared by the CLI (index.mjs) and the daemon
 // (daemon.mjs), which parses each request's arguments the same way.
-import { realpathSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { availableParallelism } from 'node:os'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 
 const flags = new Set([`daemon`, `stop-daemon`, `ordinary`])
 /**
@@ -59,8 +59,27 @@ export function parseArgs(argv, cwd = process.cwd()) {
     firstLimit: Number(args[`first-limit`] ?? 2000),
     // Vitest's worker pool. Threads start much faster than child processes;
     // a package whose tests need process isolation runs with `forks`.
-    pool: args.pool ?? `threads`,
+    pool: args.pool ?? defaultPool(pkg),
     // A directory of authored mutants (see loadAuthored).
     mutants: args.mutants ? resolve(cwd, args.mutants) : undefined,
   }
+}
+
+/**
+ * Threads, unless a direct dependency of the package is a native addon (a
+ * `binding.gyp` beside its manifest, as better-sqlite3 has): an addon can
+ * crash the whole process from a worker thread, which takes the CLI with
+ * it, so such a package runs its tests in child processes.
+ */
+function defaultPool(pkg) {
+  const manifest = JSON.parse(readFileSync(join(pkg, `package.json`), `utf8`))
+  const names = Object.keys({
+    ...manifest.dependencies,
+    ...manifest.devDependencies,
+  })
+  return names.some((name) =>
+    existsSync(join(pkg, `node_modules`, name, `binding.gyp`)),
+  )
+    ? `forks`
+    : `threads`
 }

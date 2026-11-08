@@ -269,6 +269,9 @@ const histories = fc.record({
   // one (VITEST, TEST, and NODE_ENV), as svelte-db's picks its resolve
   // conditions by VITEST. This one finds its tests only under it.
   configEnv: fc.boolean(),
+  // The workspace dependency may be a native addon (a `binding.gyp` beside
+  // its manifest), as better-sqlite3 is.
+  nativeDep: fc.constantFrom(false, false, false, true),
   configFile: fc.constantFrom(
     `vite.config.ts`,
     `vite.config.ts`,
@@ -1313,6 +1316,7 @@ function resolveHistory(history) {
     config: history.config ?? `object`,
     configFile: history.configFile ?? `vite.config.ts`,
     configEnv: history.configEnv === true,
+    nativeDep: history.nativeDep === true,
     history,
     source,
     librarySource,
@@ -2097,6 +2101,9 @@ function model(plan) {
   ].sort((a, b) => (a.key < b.key ? -1 : 1))
   const gaps = entries.map((e) => e.key)
   return {
+    // A native addon can crash the whole process from a worker thread, so a
+    // package that depends on one runs its tests in child processes.
+    pool: plan.nativeDep ? `forks` : `threads`,
     mutants,
     authored,
     authoredAll,
@@ -2382,6 +2389,9 @@ function fixtureFiles(plan, state = initialState(plan)) {
     // as a duplicate-instance check does in a browser window:
     // each copy must load it as a fresh worker would.
     'deps/state-dep/index.js': `const marker = Symbol.for('state-dep/loaded')\nif (globalThis[marker]) throw new Error('state-dep loaded twice in one realm')\nglobalThis[marker] = true\nconst log = []\nexport function note(entry) {\n  log.push(entry)\n}\nexport function seen() {\n  return [...log]\n}\n`,
+    ...(plan.nativeDep
+      ? { 'deps/state-dep/binding.gyp': `{ "targets": [] }\n` }
+      : {}),
     'tests/c.test.ts': ordinaryTestFile(plan),
     // A copy that a check which died left behind (the runner names its
     // copies `.oracle-gaps-<pid>-<n>-<file>`). It is no test file: a check

@@ -704,6 +704,8 @@ async function driver(plan, observe) {
         states.add(`a config in vitest.config.ts ran`)
       if (plan.configEnv)
         states.add(`a config that reads Vitest's environment ran`)
+      if (plan.nativeDep)
+        states.add(`a package with a native addon ran in child processes`)
     }
     if (plan.ordinary && cli.mutants.some((m) => m.ordinaryOutcome))
       states.add(`ordinary tests run when asked`)
@@ -804,6 +806,12 @@ function check(plan, observations, expected) {
     return violation(
       `cli`,
       `the CLI did not complete (exit ${cli.exit}): ${cli.stderr ?? `no results`}`,
+      `completion`,
+    )
+  if (!`${cli.report?.run?.inputs}`.includes(`pool ${expected.pool}`))
+    return violation(
+      `cli`,
+      `the run did not use the ${expected.pool} pool: ${cli.report?.run?.inputs}`,
       `completion`,
     )
   const seen = new Map()
@@ -1163,6 +1171,7 @@ const required = [
   `a config exported as an async function ran`,
   `a config in vitest.config.ts ran`,
   `a config that reads Vitest's environment ran`,
+  `a package with a native addon ran in child processes`,
   ...incrementalStates,
 ]
 const faults = [`badEntry`, `missingSource`, `nonLiteral`, `brokenOwner`]
@@ -1209,6 +1218,7 @@ oracleProperty({
           config: `async`,
           configFile: `vitest.config.ts`,
           configEnv: true,
+          nativeDep: true,
         }),
       },
       {
