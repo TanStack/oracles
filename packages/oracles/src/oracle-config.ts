@@ -1,5 +1,6 @@
 import {
   assertRegisteredIn,
+  changesReadSelection,
   defaultOracleSettings,
   installOracleSettings,
   oracleDefaultsRead,
@@ -67,7 +68,9 @@ export interface OracleConfigurationOptions {
  * project calls it before its oracles read their configuration; a first call
  * that changes the defaults after an oracle read them throws. Every read
  * counts: a replay selection, a registry check (an `oracleProperty`
- * registration makes one), and a variable name. A later call replaces the
+ * registration makes one), and a variable name. Once an oracle read the
+ * replay selection, a call that would change it throws (maintainer decision,
+ * 2026-11-08); a later call that keeps it replaces the rest of the
  * configuration.
  */
 export function configureOracles({
@@ -96,6 +99,12 @@ export function configureOracles({
       `configureOracles must run before oracles read their configuration: ` +
         `an oracle already read the defaults (prefix ${defaultOracleSettings.prefix}). ` +
         `Call it before importing the modules that define oracles.`,
+    )
+  }
+  if (changesReadSelection(replay)) {
+    throw new Error(
+      `configureOracles would change the replay selection that oracles already read; ` +
+        `tests stood aside, or ran, by that selection. Configure once, before any oracle runs.`,
     )
   }
   installOracleSettings(candidate, replay)

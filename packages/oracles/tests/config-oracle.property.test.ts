@@ -11,8 +11,12 @@
  *   variable) is read when the configuration is set, by each
  *   `configureOracles` call, or, in a project that never configures, on
  *   first use; reads in between do not read it again. A change to the
- *   environment after that does not change what any read reports until the
- *   next `configureOracles`. So a test that stands aside during a path
+ *   environment after that does not change what any read reports.
+ * - Once anything has read the replay selection, a `configureOracles` call
+ *   that would change it throws and changes nothing: tests already stood
+ *   aside, or did not, by the selection they read (maintainer decision,
+ *   2026-11-08, finding R1b-1). A later call that keeps the selection
+ *   replaces the rest of the configuration. So a test that stands aside during a path
  *   replay (`oracleReplayRequested`), a declared reach that skips its check
  *   during one (`createOracleReach`), `readOracleRunConfig()`, and a
  *   calibration witness, and the replay witness always agree. The object
@@ -21,8 +25,7 @@
  * - A project configures before its oracles read their configuration. A
  *   first `configureOracles` that changes the defaults after an oracle read
  *   them throws, because the earlier read already used the defaults; a read
- *   is any of the reads above, including a registry check. A later call
- *   replaces the configuration.
+ *   is any of the reads above, including a registry check.
  *
  * History: up to six steps on a fresh copy of the modules. A step configures
  * (prefix `ORACLE` or `ACME`, with or without the registry `[a.b]`), changes
@@ -41,10 +44,7 @@
  *
  * Limits: one property id in the registry; replay selections that are valid
  * under their prefix; retired variables, run multipliers, and malformed
- * environments are owned by `config.test.ts`. Whether a later
- * `configureOracles` may change a replay selection that reads already used
- * is a design question this oracle does not settle: it states the current
- * contract, "a later call replaces the configuration".
+ * environments are owned by `config.test.ts`.
  */
 import fc from 'fast-check'
 import { vi } from 'vitest'
@@ -121,8 +121,12 @@ function owedResults(steps: History): Array<Result> {
   type Environment = { replay: Prefix | `none`; calibration: Prefix | `none` }
   let environment: Environment = { replay: `none`, calibration: `none` }
   let read: Environment | undefined
+  let selectionRead = false
   const readEnvironment = () => (read ??= environment)
-  const replaySelected = () => readEnvironment().replay === prefix
+  const replaySelected = () => {
+    selectionRead = true
+    return readEnvironment().replay === prefix
+  }
   return steps.map((step): Result => {
     if (step.do === `environment`) {
       environment = { replay: step.replay, calibration: step.calibration }
@@ -131,6 +135,12 @@ function owedResults(steps: History): Array<Result> {
     if (step.do === `configure`) {
       const changesDefaults = step.prefix !== `ORACLE` || step.registry
       if (!configured && readBefore && changesDefaults) return `threw`
+      // The selection this configuration would read, against the one read.
+      if (
+        selectionRead &&
+        (environment.replay === step.prefix) !== (read!.replay === prefix)
+      )
+        return `threw`
       prefix = step.prefix
       registry = step.registry
       configured = true
@@ -295,8 +305,9 @@ function checkConfiguration(
 const lateConfiguration = `a configuration after a registry read`
 const environmentAfterConfiguration = `an environment change after configuration`
 const prefixedCalibration = `a calibration witness under another prefix`
+const selectionChange = `a configuration that would change a read selection`
 
-oracleProperty({
+oracleProperty<History, Array<Result>>({
   id: `self-oracle.configuration`,
   law: {
     statement: `Every oracle read uses the one configuration in force, the replay environment is read once under it, and a first configureOracles that changes the defaults after any read throws.`,
@@ -312,6 +323,7 @@ oracleProperty({
       lateConfiguration,
       environmentAfterConfiguration,
       prefixedCalibration,
+      selectionChange,
     ],
     fixed: [
       // A registry check at module load once passed against the empty
@@ -347,6 +359,17 @@ oracleProperty({
         ],
         enters: [environmentAfterConfiguration],
       },
+      // A reconfiguration after tests read the selection once replaced it.
+      {
+        name: `a reconfiguration that would change a read selection`,
+        history: [
+          { do: `read`, reader: `replay requested` },
+          { do: `environment`, replay: `ORACLE`, calibration: `none` },
+          { do: `configure`, prefix: `ORACLE`, registry: false },
+          { do: `read`, reader: `reach skips its check` },
+        ],
+        enters: [selectionChange],
+      },
       {
         name: `a mutated run configuration`,
         history: [
@@ -377,6 +400,16 @@ oracleProperty({
       },
     ],
     constructed: [
+      {
+        name: selectionChange,
+        enters: [selectionChange],
+        build: (generated): History => [
+          { do: `read`, reader: `replay requested` },
+          { do: `environment`, replay: `ORACLE`, calibration: `none` },
+          { do: `configure`, prefix: `ORACLE`, registry: false },
+          ...generated.slice(0, 3),
+        ],
+      },
       {
         name: lateConfiguration,
         enters: [lateConfiguration],
@@ -413,7 +446,31 @@ oracleProperty({
     const reached: Array<string> = []
     let configured: Prefix | undefined
     let registryRead = false
+    // The selection a read saw, and the one a configuration would read.
+    let replayIn: Prefix | `none` = `none`
+    let prefix: Prefix = `ORACLE`
+    let seen: boolean | undefined
     for (const [index, step] of steps.entries()) {
+      if (step.do === `environment`) replayIn = step.replay
+      if (
+        step.do === `read` &&
+        ![
+          `a.b registered`,
+          `typo.id registered`,
+          `typo.id random parameters`,
+        ].includes(step.reader)
+      )
+        seen ??= replayIn === prefix
+      if (
+        step.do === `configure` &&
+        seen !== undefined &&
+        (replayIn === step.prefix) !== seen
+      )
+        reached.push(selectionChange)
+      if (step.do === `configure` && owed[index] !== `threw`) {
+        prefix = step.prefix
+        if (seen !== undefined) seen = replayIn === prefix
+      }
       if (step.do === `read`) {
         if (configured === undefined && step.reader.startsWith(`typo.id`))
           registryRead = true

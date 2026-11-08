@@ -70,6 +70,9 @@ export type OracleReplayConfig = {
 // Nothing is read at import, so a stray variable under the default prefix
 // (SQL*Plus sets `ORACLE_PATH`) cannot break a project with its own prefix.
 let configuredReplay: RunConfig | undefined
+// Whether an oracle read the replay environment: after that, a configuration
+// that would change the replay selection throws.
+let replayRead = false
 
 // The replay environment as read: the replay selection, the run multiplier,
 // the calibration variable, which selects a mutant during a replay, and the
@@ -83,7 +86,19 @@ export type RunConfig = OracleReplayConfig & {
 
 /** The replay environment the configuration read, read now if none did. */
 export function replayConfig(): RunConfig {
+  replayRead = true
   return (configuredReplay ??= readRunConfig(process.env, oracleSettings()))
+}
+
+/** Whether `next` selects another replay than the one an oracle read. */
+export function changesReadSelection(next: OracleReplayConfig): boolean {
+  if (!replayRead || configuredReplay === undefined) return false
+  const read = configuredReplay
+  return (
+    read.campaignSeed !== next.campaignSeed ||
+    read.replayPath !== next.replayPath ||
+    read.replayProperty !== next.replayProperty
+  )
 }
 
 export function assertRegisteredIn(

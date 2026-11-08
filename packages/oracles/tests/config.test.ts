@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   assertRegisteredOracleProperty,
   configureOracles,
-  oracleReplayRequested,
   readOracleRunConfig,
 } from '../src/index'
 
@@ -38,14 +37,31 @@ describe(`configureOracles`, () => {
     )
   })
 
-  it(`follows the configured prefix for replay selection`, () => {
+  it(`follows the configured prefix for replay selection`, async () => {
     vi.stubEnv(`ACME_ORACLE_SEED`, `1`)
     vi.stubEnv(`ACME_ORACLE_PATH`, `0`)
     vi.stubEnv(`ACME_ORACLE_PROPERTY`, `a.b`)
-    configureOracles({ envPrefix: `ACME_ORACLE` })
-    expect(oracleReplayRequested()).toBe(true)
-    configureOracles({ envPrefix: `OTHER_ORACLE` })
-    expect(oracleReplayRequested()).toBe(false)
+    vi.resetModules()
+    const fresh = await import(`../src/index`)
+    fresh.configureOracles({ envPrefix: `OTHER_ORACLE` })
+    fresh.configureOracles({ envPrefix: `ACME_ORACLE` })
+    expect(fresh.oracleReplayRequested()).toBe(true)
+  })
+
+  // Tests already stood aside, or did not, by the selection they read
+  // (maintainer decision, 2026-11-08).
+  it(`refuses a configuration that would change a replay selection already read`, async () => {
+    vi.stubEnv(`ACME_ORACLE_SEED`, `1`)
+    vi.stubEnv(`ACME_ORACLE_PATH`, `0`)
+    vi.stubEnv(`ACME_ORACLE_PROPERTY`, `a.b`)
+    vi.resetModules()
+    const fresh = await import(`../src/index`)
+    fresh.configureOracles({ envPrefix: `ACME_ORACLE` })
+    expect(fresh.oracleReplayRequested()).toBe(true)
+    expect(() => fresh.configureOracles({ envPrefix: `OTHER_ORACLE` })).toThrow(
+      `would change the replay selection`,
+    )
+    expect(fresh.oracleReplayRequested()).toBe(true)
   })
 
   it(`accepts any property id without a registry`, () => {

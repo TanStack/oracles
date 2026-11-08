@@ -45,8 +45,8 @@
  * optional `replaying` override, the options, the states reached before the
  * first history, each history with its fixed mark and the states it enters,
  * the campaign runner's fixed seed, and an optional invalid campaign
- * environment. The drivers run `createOracleReach` under a configuration
- * read in that run kind's environment, `runOracleCampaign` and
+ * environment. The drivers run `createOracleReach` on a fresh copy of the
+ * modules in that run kind's environment, `runOracleCampaign` and
  * `oracleRandomParameters` under that environment, and
  * `oraclePropertyOptions` under the process's own. Each check compares one
  * whole observation with the model.
@@ -56,7 +56,6 @@ import { afterAll, expect, vi } from 'vitest'
 import { createOracleReach } from '../src/oracle-reach.js'
 import { runOracleCampaign } from '../src/oracle-campaign.js'
 import {
-  configureOracles,
   oraclePropertyOptions,
   oracleRandomParameters,
 } from '../src/oracle-config.js'
@@ -275,15 +274,16 @@ const replayNames = [`ORACLE_SEED`, `ORACLE_PATH`, `ORACLE_PROPERTY`]
 async function observeLedger(ledger: Ledger): Promise<Verdict> {
   let reach: ReturnType<typeof createOracleReach<string>>
   try {
-    // The configuration reads the replay environment once, so the ledger's
-    // run kind is configured, not only set, and the process's own selection
-    // is configured again afterward.
+    // A process reads its replay selection once, and may not change it after
+    // a read, so each ledger's run kind gets a fresh copy of the modules that
+    // reads it from that environment, as a process of that kind would.
     reach = await withEnvironment(
       replayNames,
       runEnvironment(ledger.run),
-      () => {
-        configureOracles()
-        return createOracleReach(`ledger`, ledger.states, {
+      async () => {
+        vi.resetModules()
+        const fresh = await import(`../src/oracle-reach.js`)
+        return fresh.createOracleReach(`ledger`, ledger.states, {
           minimum: ledger.minimum,
           fixedHistories: ledger.fixedHistories,
           ...(ledger.replaying === undefined
@@ -299,8 +299,6 @@ async function observeLedger(ledger: Ledger): Promise<Verdict> {
       counts: new Map(),
       failure: undefined,
     }
-  } finally {
-    configureOracles()
   }
   const rejected: Array<Rejection> = []
   const attempt = (state: string) => {
