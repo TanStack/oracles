@@ -241,8 +241,9 @@ export function forwardCut<TState>(
  * Logical time for drivers. A driver that
  * must not hang when production never settles a promise waits with
  * `withinTurns(promise, turns)`: it resolves `true` as soon as the promise
- * settles, at the same microtask an `await` would, or `false` after `turns`
- * event-loop turns. The bound counts turns, not milliseconds, so a loaded
+ * settles, or `false` once `turns` event-loop turns pass without it settling.
+ * A promise that had already settled when `withinTurns` was called settled
+ * in time, even with zero turns. The bound counts turns, not milliseconds, so a loaded
  * machine cannot turn a slow but legal settlement into a timeout. It cannot
  * wait for work that production schedules on a delayed timer; a driver for
  * such work controls that timer.
@@ -272,7 +273,10 @@ export function withinTurns(
   const expiry = (async () => {
     for (let turn = 0; turn < turns && !state.settled; turn += 1)
       await nextTurn()
-    return false
+    // The settlement callbacks of a promise that settled by the deadline,
+    // or before the call, run before this one.
+    await undefined
+    return state.settled
   })()
   return Promise.race([done, expiry])
 }
