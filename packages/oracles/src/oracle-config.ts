@@ -31,8 +31,18 @@ export interface OracleConfigurationOptions {
   retiredVariables?: Iterable<string>
 }
 
-let registry: ReadonlySet<string> | undefined
-let retiredVariables: ReadonlyArray<string> = []
+// The current configuration, replaced as a whole by `configureOracles`.
+type OracleSettings = {
+  prefix: string
+  registry: ReadonlySet<string> | undefined
+  retired: ReadonlyArray<string>
+}
+const defaults: OracleSettings = {
+  prefix: `ORACLE`,
+  registry: undefined,
+  retired: [],
+}
+let settings = defaults
 
 export type OracleReplayConfig = {
   campaignSeed: number | undefined
@@ -40,18 +50,34 @@ export type OracleReplayConfig = {
   replayProperty: string | undefined
 }
 
-// The replay environment under the default configuration, read when this
-// module loads, so a malformed environment fails at import. A variable
-// initializer rather than a bare call: `sideEffects` is false, so a bundler
-// may drop a bare call, but it keeps a variable that the exports read.
-let configuredReplay: OracleReplayConfig & { multiplier: number } =
-  readOracleRunConfig()
+// The replay environment under the current configuration: read by
+// `configureOracles`, or, in a project that never configures, on first use.
+// Nothing is read at import, so a stray variable under the default prefix
+// (SQL*Plus sets `ORACLE_PATH`) cannot break a project with its own prefix.
+let configuredReplay: (OracleReplayConfig & { multiplier: number }) | undefined
+// Whether `configureOracles` has run, and whether an oracle read the default
+// configuration before it did: a first configuration that changes the
+// defaults after that would leave the earlier reads wrong, so it fails.
+let configured = false
+let readDefaults = false
+
+function replayConfig(): OracleReplayConfig & { multiplier: number } {
+  if (configuredReplay === undefined) {
+    if (!configured) readDefaults = true
+    configuredReplay = readRunConfig(process.env, settings)
+  }
+  return configuredReplay
+}
 
 /**
  * Sets the environment prefix, the property registry, and the retired
- * variables for this process, then reads the replay environment under them. A
+ * variables for this process, and reads the replay environment under them. A
  * malformed replay environment throws here, so a project that configures its
- * oracles at import fails at import. A second call replaces the first.
+ * oracles at import fails at import. Everything is checked before anything
+ * changes: a call that throws leaves the previous configuration in place. A
+ * project calls it before its oracles read their configuration; a first call
+ * that changes the defaults after an oracle read them throws. A later call
+ * replaces the configuration.
  */
 export function configureOracles({
   envPrefix = `ORACLE`,
@@ -61,16 +87,30 @@ export function configureOracles({
   if (envPrefix === ``) {
     throw new Error(`configureOracles: envPrefix must be non-empty`)
   }
-  // Validate the registry before any state changes, so a bad one leaves the
-  // previous configuration in place.
-  const ids =
-    propertyIds === undefined
-      ? undefined
-      : validateOraclePropertyRegistry([...propertyIds])
-  setOracleEnvPrefix(envPrefix)
-  registry = ids
-  retiredVariables = [...retired]
-  configuredReplay = readOracleRunConfig()
+  const candidate: OracleSettings = {
+    prefix: envPrefix,
+    registry:
+      propertyIds === undefined
+        ? undefined
+        : validateOraclePropertyRegistry([...propertyIds]),
+    retired: [...retired],
+  }
+  const replay = readRunConfig(process.env, candidate)
+  const changesDefaults =
+    candidate.prefix !== defaults.prefix ||
+    candidate.registry !== undefined ||
+    candidate.retired.length > 0
+  if (!configured && readDefaults && changesDefaults) {
+    throw new Error(
+      `configureOracles must run before oracles read their configuration: ` +
+        `an oracle already read the defaults (prefix ${defaults.prefix}). ` +
+        `Call it before importing the modules that define oracles.`,
+    )
+  }
+  settings = candidate
+  setOracleEnvPrefix(candidate.prefix)
+  configuredReplay = replay
+  configured = true
 }
 
 export function validateOraclePropertyRegistry(
@@ -87,7 +127,11 @@ export function validateOraclePropertyRegistry(
 }
 
 export function assertRegisteredOracleProperty(property: string): void {
-  if (registry !== undefined && !registry.has(property)) {
+  assertRegisteredIn(settings, property)
+}
+
+function assertRegisteredIn(within: OracleSettings, property: string): void {
+  if (within.registry !== undefined && !within.registry.has(property)) {
     throw new Error(`unknown oracle property: ${property}`)
   }
 }
@@ -95,11 +139,20 @@ export function assertRegisteredOracleProperty(property: string): void {
 export function readOracleRunConfig(
   environment: OracleEnvironment = process.env,
 ): OracleReplayConfig & { multiplier: number } {
-  const seedName = oracleEnvName(`SEED`)
-  const pathName = oracleEnvName(`PATH`)
-  const propertyName = oracleEnvName(`PROPERTY`)
-  const multiplierName = oracleEnvName(`RUNS_MULTIPLIER`)
-  const retired = retiredVariables.filter(
+  if (environment === process.env && !configured) readDefaults = true
+  return readRunConfig(environment, settings)
+}
+
+function readRunConfig(
+  environment: OracleEnvironment,
+  within: OracleSettings,
+): OracleReplayConfig & { multiplier: number } {
+  const name = (setting: string) => `${within.prefix}_${setting}`
+  const seedName = name(`SEED`)
+  const pathName = name(`PATH`)
+  const propertyName = name(`PROPERTY`)
+  const multiplierName = name(`RUNS_MULTIPLIER`)
+  const retired = within.retired.filter(
     (variable) => environment[variable] !== undefined,
   )
   if (retired.length > 0) {
@@ -164,7 +217,7 @@ export function readOracleRunConfig(
   if (replayProperty === undefined || replayProperty.trim() === ``) {
     throw new Error(`${pathName} requires ${propertyName}`)
   }
-  assertRegisteredOracleProperty(replayProperty)
+  assertRegisteredIn(within, replayProperty)
   return { multiplier, campaignSeed, replayPath, replayProperty }
 }
 
@@ -301,7 +354,7 @@ export function withOracleExamples<
 
 /** Whether a path replay is selected. */
 export function oracleReplayRequested(): boolean {
-  return configuredReplay.replayPath !== undefined
+  return replayConfig().replayPath !== undefined
 }
 
 /**
@@ -313,9 +366,9 @@ export function oracleReplaySkips(
 ): boolean {
   for (const property of properties) assertRegisteredOracleProperty(property)
   return (
-    configuredReplay.replayPath !== undefined &&
-    (configuredReplay.replayProperty === undefined ||
-      !properties.includes(configuredReplay.replayProperty))
+    replayConfig().replayPath !== undefined &&
+    (replayConfig().replayProperty === undefined ||
+      !properties.includes(replayConfig().replayProperty!))
   )
 }
 
@@ -374,7 +427,7 @@ export function oracleRoute(
 
 /** Keeps ordinary CI bounded while allowing long randomized oracle campaigns. */
 export function oracleRuns(baseRuns: number): number {
-  return baseRuns * configuredReplay.multiplier
+  return baseRuns * replayConfig().multiplier
 }
 
 /**
@@ -399,7 +452,7 @@ export function oraclePropertyOptions<TExample>(
 ): OracleRunParameters & { examples?: Array<TExample> } {
   return randomParameters(
     oracleRuns(baseRuns),
-    configuredReplay,
+    replayConfig(),
     property,
     examples,
   )

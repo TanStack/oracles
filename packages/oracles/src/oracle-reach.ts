@@ -16,9 +16,10 @@ import { readOracleRunConfig } from './oracle-config.js'
  * than `minimum` histories entered. A history counts once per state, however
  * often it enters it.
  *
- * A property that runs fixed examples first, through `oraclePropertyOptions`'
- * `examples`, passes their number as `fixedHistories` and begins each
- * example's history with `beginHistory({ fixed: true })`. The check then also
+ * A property that runs fixed histories first, through fast-check's `examples`
+ * option (`oraclePropertyOptions`' `examples`), passes their number as
+ * `fixedHistories` and begins each fixed history with
+ * `beginHistory({ fixed: true })`. The check then also
  * fails for every declared state that no fixed history entered: that state's
  * reach would depend on the seed. Fixedness belongs to the history, so other
  * tests may share the reach. Shrinking can run an example again, so a
@@ -62,7 +63,7 @@ export function createOracleReach<TState extends string>(
   const replaying =
     replayOverride ?? readOracleRunConfig().replayPath !== undefined
   return {
-    /** Starts one generated history, a fixed example's when `fixed`. */
+    /** Starts one generated history, or a fixed history's when `fixed`. */
     beginHistory({ fixed = false }: { fixed?: boolean } = {}): void {
       if (fixed) fixedBegun += 1
       currentFixed = fixed

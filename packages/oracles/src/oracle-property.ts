@@ -9,6 +9,10 @@
  * Cleanup stays with the driver: a driver releases what it created before it
  * returns or throws, so the framework never holds a production resource.
  *
+ * The `ORC-` numbers below name rules of the oracle rubric that this framework
+ * came from, TanStack DB's
+ * https://github.com/TanStack/db/blob/main/docs/contributing/oracle-rubric.md.
+ *
  * The parts keep their jobs separate (oracle rubric, ORC-003):
  *
  * - `law` states the promise, its authority, its limits, and its owner in the
@@ -494,6 +498,9 @@ const probeWindows = new AsyncLocalStorage<ProbeWindow>()
 // Outside any history, such as in an ordinary test, a probe does nothing. A
 // call that arrives after its history's driver settled throws where it
 // arrives: the driver did not await work that production started.
+// Installed when this module loads, so a production probe always finds it.
+// The package marks itself side-effect free: a consumer that imports anything
+// from the main entry evaluates this module, which is what the probe needs.
 globalThis.__oracleProbe = (name, condition) => {
   const window = probeWindows.getStore()
   if (!window) return

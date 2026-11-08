@@ -99,6 +99,39 @@ describe(`configureOracles`, () => {
     expect(readOracleRunConfig({ ACME_ORACLE_SEED: `4` }).campaignSeed).toBe(4)
   })
 
+  it(`ignores a stray default-prefix variable in a project with its own prefix`, async () => {
+    // SQL*Plus sets ORACLE_PATH; it must not break loading the package.
+    vi.stubEnv(`ORACLE_PATH`, `/opt/sql`)
+    vi.resetModules()
+    const fresh = await import(`../src/index`)
+    expect(() =>
+      fresh.configureOracles({ envPrefix: `ACME_ORACLE` }),
+    ).not.toThrow()
+    expect(fresh.oracleRuns(2)).toBe(2)
+  })
+
+  it(`keeps the whole previous configuration when the replay environment is rejected`, () => {
+    configureOracles({ envPrefix: `ACME_ORACLE`, registry: [`a.b`] })
+    vi.stubEnv(`OTHER_ORACLE_SEED`, `not-a-number`)
+    expect(() =>
+      configureOracles({ envPrefix: `OTHER_ORACLE`, registry: [`c.d`] }),
+    ).toThrow(`OTHER_ORACLE_SEED must be an integer`)
+    expect(readOracleRunConfig({ ACME_ORACLE_SEED: `4` }).campaignSeed).toBe(4)
+    expect(() => assertRegisteredOracleProperty(`a.b`)).not.toThrow()
+    expect(() => assertRegisteredOracleProperty(`c.d`)).toThrow(
+      `unknown oracle property: c.d`,
+    )
+  })
+
+  it(`fails a first configuration that comes after oracles read the defaults`, async () => {
+    vi.resetModules()
+    const fresh = await import(`../src/index`)
+    fresh.oracleRuns(1)
+    expect(() => fresh.configureOracles({ envPrefix: `ACME_ORACLE` })).toThrow(
+      `configureOracles must run before`,
+    )
+  })
+
   it(`rejects an empty prefix`, () => {
     expect(() => configureOracles({ envPrefix: `` })).toThrow(
       `envPrefix must be non-empty`,

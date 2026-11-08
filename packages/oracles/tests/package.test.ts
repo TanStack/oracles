@@ -45,6 +45,16 @@ describe(`@tanstack/oracles`, () => {
     )
   })
 
+  it(`offers the main entry as ES modules only`, async () => {
+    // The main entry imports Vitest, which refuses require(), so a CommonJS
+    // condition would only advertise a build that cannot load.
+    const { default: manifest } = await import(`../package.json`, {
+      with: { type: `json` },
+    })
+    expect(Object.keys(manifest.exports[`.`])).toEqual([`import`])
+    expect(manifest.main).toBe(manifest.module)
+  })
+
   it(`exports only declareOracle from the browser-safe declaration entry`, () => {
     expect(Object.keys(declaration)).toEqual([`declareOracle`])
     expect(declaration.declareOracle).toBe(oracles.declareOracle)

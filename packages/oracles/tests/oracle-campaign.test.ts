@@ -32,8 +32,13 @@ it(`replays the requested seed and path without demanding unrelated states`, asy
   expect(parameters).toEqual([{ seed: 0, path: `2:0`, numRuns: 1 }])
 })
 
-it(`keeps reach enforcement independent of another package's replay selector`, async () => {
-  vi.stubEnv(`OTHER_ORACLE_SEED`, `1`)
+it(`keeps reach enforcement independent of the configured replay selector`, async () => {
+  // A path replay under the configured prefix turns reach checks off for the
+  // configured project's own properties; a campaign under its own prefix still
+  // checks reach.
+  vi.stubEnv(`ORACLE_SEED`, `1`)
+  vi.stubEnv(`ORACLE_PATH`, `0`)
+  vi.stubEnv(`ORACLE_PROPERTY`, `elsewhere.property`)
   await expect(
     runOracleCampaign(`TEST_ORACLE`, [`required`], (reach) => {
       reach.beginHistory()
