@@ -60,7 +60,9 @@
 //     [--sample <n>]          (a fixed-seed sample of n mutants per source;
 //                              the report marks the run as partial)
 //     [--contexts <n>]        (warm contexts, one worker each; default
-//                              the machine's parallelism minus 2, at most 8)
+//                              the machine's parallelism minus 2, at most 16)
+//     [--pool threads|forks]  (Vitest's pool; default threads, or forks when
+//                              a direct dependency is a native addon)
 //   oracle-gaps --stop-daemon --package <dir>
 import { realpathSync } from 'node:fs'
 import { parseArgs } from './args.mjs'
