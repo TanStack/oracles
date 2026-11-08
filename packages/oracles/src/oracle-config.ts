@@ -275,17 +275,9 @@ function randomParameters<TExample>(
           replayProperty: undefined,
         }
   const selectedSeed = oracleCampaignSeed(campaignSeed, property)
-  // These are a random campaign's parameters; a path replay runs one
-  // recorded history. The gap report reads the route only from a test that
-  // builds its parameters while it runs, so a campaign whose parameters are
-  // built when its file loads keeps an unknown route.
-  globalThis.__oracleRoute?.(
-    property !== undefined &&
-      replayPath !== undefined &&
-      replayProperty === property
-      ? `fixed history`
-      : `random seed`,
-  )
+  // Building parameters registers no route: a caller may still change them,
+  // such as a seed it sets for a fixed-seed campaign. The campaign's runner
+  // registers the route of what runs (`oracleRoute`).
   const parameters: OracleRunParameters =
     campaignSeed === undefined
       ? { numRuns, seed: selectedSeed }
@@ -406,9 +398,12 @@ export function oracleCalibrationTest<TRegistration extends { skip: unknown }>(
 /**
  * Registers the running test's route for the gap report, which counts a
  * verdict as a kill only on a reproducible route: a fixed seed, a fixed
- * history, or an enumerated case. A test that builds its fast-check options
- * when its file loads cannot register them there, so it calls this inside
- * the test: first, or, for a random campaign, in its predicate.
+ * history, or an enumerated case. `oracleProperty` and `runOracleCampaign`
+ * register their campaigns' routes themselves. A test that runs its own
+ * fast-check campaign calls this inside the test, before the campaign runs,
+ * with the route of the campaign that runs: building options with
+ * `oraclePropertyOptions` or `oracleRandomParameters` registers none, so the
+ * order of the calls does not matter.
  */
 export function oracleRoute(
   route:

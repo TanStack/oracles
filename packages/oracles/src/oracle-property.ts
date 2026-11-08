@@ -1284,6 +1284,9 @@ function generatedTests<THistory, TExpected, TPlan>(
     run: () => {
       // One call selects and logs the seed; a replay reads that log line.
       const parameters = oraclePropertyOptions(source.runs, id)
+      // A path replay runs one recorded history, not a random campaign.
+      if (parameters.path !== undefined)
+        globalThis.__oracleRoute?.(`fixed history`)
       return runCampaign(`random seed`, parameters.seed!, (examples) =>
         withOracleFixedHistories(parameters, examples),
       )
