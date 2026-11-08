@@ -42,9 +42,17 @@
     },
     "./package.json": "./package.json"
   },
+  "bin": {
+    "oracle-gaps": "./oracle-gaps/index.mjs"
+  },
   "files": [
     "dist",
-    "src"
+    "src",
+    "oracle-gaps",
+    "!oracle-gaps/**/*.property.test.mjs",
+    "!oracle-gaps/gap-report-model-oracle.mjs",
+    "!oracle-gaps/vitest.config.mjs",
+    "!oracle-gaps/node_modules/**"
   ],
   "scripts": {
     "build": "vite build",
@@ -52,15 +60,24 @@
     "lint": "eslint . --fix",
     "test": "vitest --run",
     "test:oracle-framework": "vitest --run --config vitest.oracle-framework.config.mjs",
+    "test:oracle-gaps": "vitest --run --config oracle-gaps/vitest.config.mjs",
+    "test:oracle-gaps:fast": "vitest --run --config oracle-gaps/vitest.config.mjs gap-report-static gap-report-classify",
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
     "fast-check": "^4.0.0",
+    "typescript": ">=5.0.0",
     "vitest": "^4.1.0 || ^5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "typescript": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@fast-check/vitest": "^0.5.0",
     "fast-check": "^4.10.2",
+    "typescript": "^5.9.2",
     "vitest": "^4.1.12"
   },
   "engines": {
