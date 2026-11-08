@@ -2,7 +2,7 @@
 // (daemon.mjs), which parses each request's arguments the same way.
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { availableParallelism } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 
 const flags = new Set([`daemon`, `stop-daemon`, `ordinary`])
 /**
@@ -40,7 +40,12 @@ export function parseArgs(argv, cwd = process.cwd()) {
     contexts: Number(
       args.contexts ?? Math.min(16, Math.max(2, availableParallelism() - 2)),
     ),
-    sources: args.source.split(`,`),
+    // Each source as the package names it, so every spelling of a path
+    // (`./src/x.ts`, `src/../src/x.ts`) names the same file in owns
+    // entries, keys, and the report.
+    sources: args.source
+      .split(`,`)
+      .map((source) => relative(pkg, resolve(pkg, source))),
     seed: args.seed,
     diffBase: args[`diff-base`],
     out: resolve(cwd, args.out ?? `/tmp/oracle-gaps`),

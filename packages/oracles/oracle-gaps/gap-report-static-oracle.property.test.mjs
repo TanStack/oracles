@@ -18,6 +18,12 @@
  *   missing file, and an owns list that is not a literal each refuse, naming
  *   the cause. An owner whose tests fail is a runtime refusal, so here it
  *   must not refuse.
+ * - **Rune placement.** Instrumenting a source does not change whether it
+ *   compiles. In a Svelte module, every rune call stays where Svelte allows
+ *   it: `$state` and `$derived` (and `.raw`, `.by`) as a variable's
+ *   initializer, `$effect` (and `.pre`) as a statement. The judge is
+ *   Svelte's placement rule (the compiler's `state_invalid_placement` and
+ *   `effect_invalid_placement` errors), restated over the instrumented text.
  * - **Enumeration.** The mutant set is the model's: each site by its source,
  *   function, line, operator, and order on the line.
  * - **Probe-only code.** Each mutant is marked as probe code exactly when the
@@ -34,10 +40,28 @@
  * the checker's pure core, beside its process shell) and the maintainer's
  * budget of a few seconds for an incremental test run (2026-11-05).
  *
+ * Each `--source` path comes from the history in one of its spellings
+ * (`src/x.ts`, `./src/x.ts`, `src/../src/x.ts`) through the CLI's own
+ * argument parser, and the model names every source by its path in the
+ * package whatever the spelling. Beside the end-to-end grammar, the witness
+ * module here also holds functions that share a name in one file (a class
+ * method and an object-literal method named alike, two nested helpers named
+ * alike), a getter and setter pair, and a class-field arrow, and the
+ * history may hold a Svelte module of rune statements (`src/state.svelte.ts`)
+ * and a library call to a function named `$derived`, which outside Svelte is
+ * an ordinary name.
+ *
  * Limits: the grammar and model are the end-to-end oracle's
  * (gap-report-model-oracle.mjs), with its limits. Whether a mutant is
  * killed, and anything else that needs a test run, is the end-to-end
- * oracle's.
+ * oracle's. No test calls the same-named functions, accessors, or field
+ * arrows, so their outcomes beyond ownership are not judged. The rune
+ * judge restates Svelte's rule; the Svelte compiler itself is not installed
+ * here, so a rune placement the rule does not name (`$props`, `$bindable`,
+ * `$inspect`, a class field's rune, a rune in a `.svelte` component) is not
+ * generated. An owns entry that names two functions of one name owns both,
+ * but only the getter and setter pair is generated as such an entry's
+ * target. An authored mutant's `source` field is used as written.
  */
 import { mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -48,6 +72,7 @@ import { oracleProperty, pass, violation } from '../src/oracle-property.ts'
 import { analyze, isRunnerCopy } from './analysis.mjs'
 import {
   LIB,
+  RUNES,
   SOURCE,
   edited,
   fixtureFiles,
@@ -57,9 +82,11 @@ import {
   ownersOf,
   probeHelpers,
   resolveHistory,
+  sourceArgument,
   writeFixture,
   written,
 } from './gap-report-model-oracle.mjs'
+import { parseArgs } from './args.mjs'
 import { assignKeys } from './report.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -70,17 +97,23 @@ const ts = createRequire(join(here, `../package.json`))(`typescript`)
 // The driver writes the fixture as the end-to-end driver does, lists the
 // test files the fixture's Vitest config includes (`tests/**/*.test.ts`)
 // less the runner copies, as the CLI's discovery does (`isRunnerCopy`; the
-// end-to-end oracle checks that discovery), and calls `analyze` and
-// `assignKeys`. It records a refusal's message, or
-// each mutant's site, probe mark, ownership, and key. For a stability
-// history it rewrites the source and records the same again.
-function analyzeFixture(dir, files) {
+// end-to-end oracle checks that discovery), reads the source files from a
+// `--source` argument in the history's spelling as the CLI does
+// (`parseArgs`), and calls `analyze` and `assignKeys`. It records a
+// refusal's message, or each mutant's site, probe mark, ownership, and key,
+// and the instrumented text of the Svelte module, if there is one. For a
+// stability history it rewrites the source and records the same again.
+function analyzeFixture(dir, files, plan) {
   writeFixture(dir, files)
   const tests = readdirSync(join(dir, `tests`))
     .filter((name) => name.endsWith(`.test.ts`) && !isRunnerCopy(name))
     .map((name) => join(dir, `tests`, name))
   try {
-    const { mutants, owned } = analyze(ts, dir, [SOURCE, LIB], tests)
+    const { sources } = parseArgs(
+      [`--package`, dir, `--source`, sourceArgument(plan)],
+      dir,
+    )
+    const { mutants, owned, instrumented } = analyze(ts, dir, sources, tests)
     assignKeys(mutants)
     return {
       mutants: mutants.map((m) => ({
@@ -89,9 +122,12 @@ function analyzeFixture(dir, files) {
         line: m.line,
         operator: m.operator,
         probe: m.probeGuard === true,
-        owned: owned.of(m.source, m.function).size > 0,
+        owned: owned.at(m.source, m.line).owners.size > 0,
         key: m.key,
       })),
+      runes: plan.runesSource
+        ? instrumented.get(realpathSync(join(dir, RUNES)))
+        : undefined,
     }
   } catch (error) {
     return { refusal: String(error?.message ?? error) }
@@ -110,12 +146,27 @@ const ownedStates = {
   'W6.step': `a class passed as a value brings its methods`,
   w_overloaded: `overloaded function owned`,
 }
+// Functions that share a name, accessors, and a class-field arrow, by the
+// model's own id, which the driver finds from the mutant's line. Each says
+// whether its mutants must be owned to reach the state.
+const namedStates = {
+  'W8.run': [true, `a class method beside a same-named literal method owned`],
+  'W8.other>run': [
+    false,
+    `a literal method named like a class method kept apart`,
+  ],
+  'w_nest0>next': [true, `a nested helper owned through its caller`],
+  'w_nest1>next': [false, `a same-named nested helper kept apart`],
+  'W9.status#get': [true, `a getter owned through a property read`],
+  'W9.status#set': [true, `a setter owned through a property read`],
+  'W9.handle': [true, `a class-field arrow owned through this`],
+}
 
 async function driver(plan, observe) {
   const dir = realpathSync(mkdtempSync(join(here, `.scratch-`)))
   try {
     const files = fixtureFiles(plan)
-    const before = analyzeFixture(dir, files)
+    const before = analyzeFixture(dir, files, plan)
     observe(`static`, before)
     const states = new Set()
     if (before.refusal) states.add(`refused ${plan.fault}`)
@@ -142,19 +193,32 @@ async function driver(plan, observe) {
         m.owned
       )
         states.add(`owned by a whole-file entry`)
-      const kind = plan.functions
-        .flatMap((fn) => fn.body.map((s) => [`${fn.file}:${s.line}`, s.kind]))
-        .find(([at]) => at === `${m.source}:${m.line}`)?.[1]
+      const [fnId, kind] =
+        plan.functions
+          .flatMap((fn) =>
+            fn.body.map((s) => [`${fn.file}:${s.line}`, fn.id, s.kind]),
+          )
+          .find(([at]) => at === `${m.source}:${m.line}`)
+          ?.slice(1) ?? []
+      const named = namedStates[fnId]
+      if (named && named[0] === m.owned) states.add(named[1])
+      if (kind === `dollar`) states.add(`a $-named call outside Svelte judged`)
       if (kind === `oldProbe`) states.add(`old probe form judged`)
       if (kind === `mixed` && m.operator === `if-true`)
         states.add(`production beside a probe`)
       if (kind === `elseIf` && m.operator === `if-true`)
         states.add(`production else judged`)
     }
+    if (!before.refusal) {
+      if (plan.sourceSpelling === `dot`) states.add(`a source spelled with ./`)
+      if (plan.sourceSpelling === `redundant`)
+        states.add(`a source spelled through a redundant segment`)
+      if (plan.runesSource) states.add(`a Svelte module instrumented`)
+    }
     if (plan.stability !== `none` && !before.refusal) {
       observe(
         `stability`,
-        analyzeFixture(dir, { ...files, [SOURCE]: edited(plan) }),
+        analyzeFixture(dir, { ...files, [SOURCE]: edited(plan) }, plan),
       )
       states.add(`stability rerun`)
     }
@@ -179,6 +243,42 @@ const withOrdinals = (mutants) => {
     seen.set(at, ordinal + 1)
     return { ...m, ordinal }
   })
+}
+
+// Svelte's placement rule for runes, the judge of the instrumented Svelte
+// module: `$state` and `$derived` (and `.raw`, `.by`) only as a variable's
+// initializer, `$effect` (and `.pre`) only as a statement. The compiler
+// refuses any other place (`state_invalid_placement`,
+// `effect_invalid_placement`), so a module whose instrumented text breaks
+// the rule no longer compiles. Returns the rune calls and the misplaced
+// ones, by their text.
+function runePlacement(code) {
+  const file = ts.createSourceFile(
+    `state.svelte.ts`,
+    code,
+    ts.ScriptTarget.Latest,
+    true,
+  )
+  const calls = []
+  const misplaced = []
+  const visit = (node) => {
+    if (ts.isCallExpression(node)) {
+      const callee = node.expression.getText(file)
+      const initializer = /^\$(state|derived)(\.(raw|by))?$/.test(callee)
+      const statement = /^\$effect(\.pre)?$/.test(callee)
+      if (initializer || statement) {
+        calls.push(callee)
+        const placed = initializer
+          ? ts.isVariableDeclaration(node.parent) &&
+            node.parent.initializer === node
+          : ts.isExpressionStatement(node.parent)
+        if (!placed) misplaced.push(node.getText(file).slice(0, 80))
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+  return { calls, misplaced }
 }
 
 function check(plan, observations, expected) {
@@ -207,6 +307,19 @@ function check(plan, observations, expected) {
       `the analysis refused: ${got.refusal}`,
       `refusal`,
     )
+  if (plan.runesSource) {
+    // Every rune statement of the module holds exactly one rune call.
+    const owed = plan.functions
+      .filter((fn) => fn.file === RUNES)
+      .flatMap((fn) => fn.body).length
+    const { calls, misplaced } = runePlacement(got.runes ?? ``)
+    if (calls.length !== owed || misplaced.length > 0)
+      return violation(
+        `static`,
+        `the instrumented Svelte module ${misplaced.length > 0 ? `moves a rune from its place: ${misplaced[0]}` : `has ${calls.length} rune calls, owed ${owed}`}`,
+        `rune placement`,
+      )
+  }
   const owedMutants =
     plan.fault === `brokenOwner`
       ? model({ ...plan, fault: `none` }).mutants
@@ -288,6 +401,14 @@ const corrupt = (checkpoint, change) => (trace) => {
 }
 const calibrations = [
   {
+    name: `a rune is moved from its place`,
+    law: `rune placement`,
+    corrupt: corrupt(`static`, (v) => {
+      if (!v.runes?.includes(`= $`)) return false
+      v.runes = v.runes.replace(`= $`, `= void 0 || $`)
+    }),
+  },
+  {
     name: `a mutant is dropped`,
     law: `enumeration`,
     corrupt: corrupt(`static`, (v) => void v.mutants.shift()),
@@ -338,6 +459,11 @@ const calibrations = [
 const faults = [`badEntry`, `missingSource`, `nonLiteral`]
 const required = [
   ...Object.values(ownedStates),
+  ...Object.values(namedStates).map(([, state]) => state),
+  `a $-named call outside Svelte judged`,
+  `a Svelte module instrumented`,
+  `a source spelled with ./`,
+  `a source spelled through a redundant segment`,
   `derived probe helper`,
   `derived probe helper chain`,
   `mixed helper judged`,
@@ -355,9 +481,9 @@ const required = [
 oracleProperty({
   id: `oracle-gaps.report-static`,
   law: {
-    statement: `The gap report's static half enumerates the promised operator mutants, marks exactly the probe-only code, refuses broken owns declarations, gives each function the owners whose call trees contain it, anchors each mutant's key, and keeps keys, probe marks, and ownership stable under unrelated edits.`,
-    authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the frozen design's plan for an oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05).`,
-    limits: `The grammar and model of oracle-gaps.report, with its limits. Outcomes that need test runs, and the failing-owner refusal, belong to oracle-gaps.report.`,
+    statement: `The gap report's static half keeps every Svelte rune where Svelte allows it, enumerates the promised operator mutants, marks exactly the probe-only code, refuses broken owns declarations, gives each function the owners whose call trees contain it, anchors each mutant's key, and keeps keys, probe marks, and ownership stable under unrelated edits.`,
+    authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the frozen design's plan for an oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); for rune placement, Svelte 5's placement rule for runes (state_invalid_placement, effect_invalid_placement) and the maintainer's report of svelte-db's useLiveQuery.svelte.ts failing to compile under instrumentation (2026-11-08).`,
+    limits: `The grammar and model of oracle-gaps.report, with its limits. Outcomes that need test runs, and the failing-owner refusal, belong to oracle-gaps.report. Same-named functions, accessors, and field arrows are judged for ownership only; runes only as $state, $state.raw, $derived, $derived.by, $effect, and $effect.pre in a .svelte.ts module, judged by a restatement of Svelte's placement rule rather than the compiler.`,
     owner: `packages/oracles/oracle-gaps`,
   },
   histories: {
@@ -372,6 +498,7 @@ oracleProperty({
           (s) =>
             ![
               `owned by a whole-file entry`,
+              `a source spelled through a redundant segment`,
               ...faults.map((f) => `refused ${f}`),
             ].includes(s),
         ),
@@ -382,11 +509,30 @@ oracleProperty({
           fault: `none`,
           stability: `insertGuard`,
           steps: null,
+          sourceSpelling: `dot`,
+          // A library function that calls the library's `$derived`.
+          library: [[{ kind: `dollar` }], ...generated.library].slice(0, 2),
+          // Every rune form, in a Svelte module.
+          runes: [
+            [
+              { kind: `runeState`, op: `>`, k: 4 },
+              { kind: `runeStateRaw` },
+              { kind: `runeDerived` },
+              { kind: `runeDerivedBy` },
+            ],
+            [
+              { kind: `runeEffect`, rune: `$effect` },
+              { kind: `runeEffect`, rune: `$effect.pre` },
+            ],
+          ],
         }),
       },
       {
         name: `a whole-file owner`,
-        enters: [`owned by a whole-file entry`],
+        enters: [
+          `owned by a whole-file entry`,
+          `a source spelled through a redundant segment`,
+        ],
         build: (generated) => ({
           ...generated,
           functions: [
@@ -402,6 +548,7 @@ oracleProperty({
           fault: `none`,
           stability: `none`,
           steps: null,
+          sourceSpelling: `redundant`,
         }),
       },
       ...faults.map((fault) => ({

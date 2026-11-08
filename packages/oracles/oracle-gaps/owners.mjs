@@ -15,12 +15,17 @@
 // outside the package, such as another package or the standard library, is
 // not followed (maintainer decisions of 2026-11-05).
 //
-// A function is a function declaration, a method (named `Class.method`), a
-// constructor (named `Class.constructor`), or a function assigned to a name; a mutant belongs to the innermost one whose
-// lines hold it. A function's owners are the oracle files whose trees contain
-// it. A gap is judged across all of them: a mutant is killed when any owner
-// kills it, and a function with no owner is reported as `unowned`, a warning
-// rather than a gap.
+// A function is a function declaration, a method, accessor, or field
+// function of a class (named `Class.member`), a constructor (named
+// `Class.constructor`), or any other function with a name: a function
+// assigned to a variable, or a method, accessor, or function property of an
+// object literal (named by its property). A mutant belongs to the innermost
+// one whose lines hold it. Two functions may share a name, as a getter and
+// its setter do, or two nested helpers; each is still its own function, and
+// owns entry that names them owns them all. A function's owners are the
+// oracle files whose trees contain it. A gap is judged across all of them: a
+// mutant is killed when any owner kills it, and a function with no owner is
+// reported as `unowned`, a warning rather than a gap.
 import { relative, resolve } from 'node:path'
 
 /**
@@ -64,36 +69,47 @@ export function readOwns(ts, path, text) {
   return result
 }
 
-/** The named functions of one source file, with their nodes and line spans. */
+/**
+ * The functions of one source file, in document order, each with its name,
+ * its node, the class it is a member of (if any), and its line span.
+ */
 export function functionsIn(ts, file) {
   const lineOf = (pos) => file.getLineAndCharacterOfPosition(pos).line + 1
-  const functions = new Map()
-  const visit = (node, cls) => {
-    const owner =
-      ts.isClassDeclaration(node) && node.name ? node.name.text : cls
-    const name =
-      ts.isFunctionDeclaration(node) && node.name && node.body
-        ? node.name.text
-        : ts.isMethodDeclaration(node) && node.name && node.body
-          ? `${owner ?? `<class>`}.${node.name.getText(file)}`
-          : ts.isConstructorDeclaration(node) && node.body
-            ? `${owner ?? `<class>`}.constructor`
-            : ts.isVariableDeclaration(node) &&
-                ts.isIdentifier(node.name) &&
-                node.initializer &&
-                (ts.isArrowFunction(node.initializer) ||
-                  ts.isFunctionExpression(node.initializer))
-              ? node.name.text
-              : undefined
-    if (name !== undefined)
-      functions.set(name, {
-        node: ts.isVariableDeclaration(node) ? node.initializer : node,
+  const functions = []
+  const isFunction = (node) =>
+    node !== undefined &&
+    (ts.isArrowFunction(node) || ts.isFunctionExpression(node))
+  const visit = (node) => {
+    const cls =
+      node.parent && ts.isClassLike(node.parent) ? node.parent : undefined
+    const named = (text) =>
+      cls ? `${cls.name?.text ?? `<class>`}.${text}` : text
+    const hasBody =
+      (ts.isFunctionDeclaration(node) ||
+        ts.isMethodDeclaration(node) ||
+        ts.isGetAccessorDeclaration(node) ||
+        ts.isSetAccessorDeclaration(node) ||
+        ts.isConstructorDeclaration(node)) &&
+      node.body !== undefined
+    // A function written as the value of a name: a variable, a class field,
+    // or an object literal's property.
+    const valued =
+      (ts.isVariableDeclaration(node) ||
+        ts.isPropertyDeclaration(node) ||
+        ts.isPropertyAssignment(node)) &&
+      isFunction(node.initializer) &&
+      (ts.isIdentifier(node.name) || ts.isPrivateIdentifier(node.name))
+    if ((hasBody || valued) && (node.name || ts.isConstructorDeclaration(node)))
+      functions.push({
+        name: named(node.name ? node.name.getText(file) : `constructor`),
+        node: valued ? node.initializer : node,
+        cls,
         start: lineOf(node.getStart(file)),
         end: lineOf(node.end),
       })
-    ts.forEachChild(node, (child) => visit(child, owner))
+    ts.forEachChild(node, visit)
   }
-  visit(file, undefined)
+  visit(file)
   return functions
 }
 
@@ -114,32 +130,26 @@ export function ownership(ts, program, pkg, oracles) {
   const functionsOf = (source) => {
     if (!indexed.has(source)) {
       const file = program.getSourceFile(resolve(pkg, source))
-      indexed.set(source, file ? functionsIn(ts, file) : undefined)
+      indexed.set(source, file ? functionsIn(ts, file) : [])
     }
     return indexed.get(source)
   }
   // The package functions a declaration names: itself, or, for a class used
-  // as a value, all its methods. `new C()` names only C's constructor; C's
-  // methods are owned where the tree refers to them.
+  // as a value, all its members. `new C()` names only C's constructor; C's
+  // members are owned where the tree refers to them.
   const targetsOf = (declaration, constructed) => {
     const file = declaration.getSourceFile()
     if (!inPackage(file.fileName)) return []
-    const source = relative(pkg, file.fileName)
-    const functions = functionsOf(source)
-    if (ts.isClassDeclaration(declaration) && declaration.name) {
-      const prefix = `${declaration.name.text}.`
-      if (constructed)
-        return functions.has(`${prefix}constructor`)
-          ? [{ source, fn: `${prefix}constructor` }]
-          : []
-      return [...functions.keys()]
-        .filter((name) => name.startsWith(prefix))
-        .map((fn) => ({ source, fn }))
-    }
-    for (const [fn, entry] of functions)
-      if (entry.node === declaration || entry.node === declaration.initializer)
-        return [{ source, fn }]
-    return []
+    const functions = functionsOf(relative(pkg, file.fileName))
+    if (ts.isClassDeclaration(declaration) && declaration.name)
+      return functions.filter(
+        (fn) =>
+          fn.cls === declaration &&
+          (!constructed || ts.isConstructorDeclaration(fn.node)),
+      )
+    return functions.filter(
+      (fn) => fn.node === declaration || fn.node === declaration.initializer,
+    )
   }
   // Every package function, method, or class an owned body refers to.
   const referencesOf = (node) => {
@@ -159,49 +169,50 @@ export function ownership(ts, program, pkg, oracles) {
     if (node.body) visit(node.body)
     return found
   }
+  // Owners by function, and a whole file's owners by its source.
   const owners = new Map()
-  const add = (source, fn, oracle) => {
-    const key = `${source}#${fn}`
+  const add = (key, oracle) =>
     owners.set(key, new Set([...(owners.get(key) ?? []), oracle]))
-  }
   for (const [oracle, entries] of oracles)
     for (const entry of entries) {
       const [source, entryFunction] = entry.split(`#`)
       if (entryFunction === undefined) {
-        add(source, `*`, oracle)
+        add(source, oracle)
         continue
       }
       const seen = new Set()
-      const walk = (at) => {
-        const key = `${at.source}#${at.fn}`
-        if (seen.has(key)) return
-        seen.add(key)
-        add(at.source, at.fn, oracle)
-        const entryNode = functionsOf(at.source)?.get(at.fn)?.node
-        if (entryNode) for (const next of referencesOf(entryNode)) walk(next)
+      const walk = (fn) => {
+        if (seen.has(fn)) return
+        seen.add(fn)
+        add(fn, oracle)
+        for (const next of referencesOf(fn.node)) walk(next)
       }
-      if (functionsOf(source)?.has(entryFunction))
-        walk({ source, fn: entryFunction })
+      for (const fn of functionsOf(source))
+        if (fn.name === entryFunction) walk(fn)
     }
   return {
-    has: (source, fn) => functionsOf(source)?.has(fn) === true,
-    // A whole-file entry owns every function in the file.
-    of: (source, fn) =>
-      new Set([
-        ...(owners.get(`${source}#${fn}`) ?? []),
-        ...(owners.get(`${source}#*`) ?? []),
-      ]),
-    /** The innermost function that contains a line. */
-    functionAt: (source, line) => {
+    has: (source, name) => functionsOf(source).some((fn) => fn.name === name),
+    /**
+     * The innermost function that holds a line, by its name (`<module>` for
+     * none), and its owners. A whole-file entry owns every function in the
+     * file.
+     */
+    at: (source, line) => {
       let best
-      for (const [name, span] of functionsOf(source) ?? [])
+      for (const fn of functionsOf(source))
         if (
-          span.start <= line &&
-          line <= span.end &&
-          (!best || span.start >= best.start)
+          fn.start <= line &&
+          line <= fn.end &&
+          (!best || fn.start >= best.start)
         )
-          best = { name, start: span.start }
-      return best?.name ?? `<module>`
+          best = fn
+      return {
+        name: best?.name ?? `<module>`,
+        owners: new Set([
+          ...(owners.get(best) ?? []),
+          ...(owners.get(source) ?? []),
+        ]),
+      }
     },
   }
 }

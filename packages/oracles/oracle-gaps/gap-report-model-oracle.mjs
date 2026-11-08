@@ -27,6 +27,8 @@ export const ENV_PREFIX = `ORACLE`
 const SOURCE = `src/sut.ts`
 // A second source in the same package, which the first imports from.
 const LIB = `src/lib.ts`
+// A Svelte module, which only the static half reads: no test loads it.
+const RUNES = `src/state.svelte.ts`
 // How long a slow test waits, in real milliseconds: past the 1 s first
 // budget that the driver passes (`--first-limit`), within the 6 s full limit
 // (`--hang-limit`).
@@ -133,6 +135,26 @@ const libStatement = fc.oneof(
     not: fc.boolean(),
     quote,
   }),
+  // A call to the library's own function `$derived`. Outside a Svelte
+  // module (`.svelte.ts`) a name that starts with `$` is an ordinary name,
+  // so its call is a mutation site like any other.
+  fc.record({ kind: fc.constant(`dollar`) }),
+)
+// A statement of a Svelte module (`src/state.svelte.ts`): a rune call in
+// the place Svelte requires for it. `$state` and `$derived` (and `.raw`,
+// `.by`) must be a variable's initializer and `$effect` (and `.pre`) a
+// statement, or the Svelte compiler refuses the module
+// (`state_invalid_placement`, `effect_invalid_placement`). Each rune's
+// argument holds ordinary code that may be mutated.
+const runeStatement = fc.oneof(
+  fc.record({ kind: fc.constant(`runeState`), op: comparison, k: constant }),
+  fc.record({ kind: fc.constant(`runeStateRaw`) }),
+  fc.record({ kind: fc.constant(`runeDerived`) }),
+  fc.record({ kind: fc.constant(`runeDerivedBy`) }),
+  fc.record({
+    kind: fc.constant(`runeEffect`),
+    rune: fc.constantFrom(`$effect`, `$effect.pre`),
+  }),
 )
 const routes = [
   `fixed seed`,
@@ -222,6 +244,15 @@ const histories = fc.record({
   libraryOwners: fc.array(fc.constantFrom(`a`, `b`, `none`, `none`), {
     maxLength: 2,
   }),
+  // The Svelte module's functions, which no oracle owns and no test loads:
+  // only their mutants and their instrumented text are judged.
+  runes: fc.array(fc.array(runeStatement, { minLength: 1, maxLength: 4 }), {
+    maxLength: 2,
+  }),
+  // How `--source` spells each path: as the package names it, with a
+  // leading `./`, or through a redundant segment. Each names the same file,
+  // and the report names it by its path in the package.
+  sourceSpelling: fc.constantFrom(`plain`, `plain`, `dot`, `redundant`),
   wholeFile: fc.constantFrom(`none`, `none`, `none`, `a`, `b`),
   template: fc.boolean(),
   tests: fc.array(testCase, { minLength: 1, maxLength: 5 }),
@@ -587,6 +618,91 @@ const witness = [
   { id: `W7.run`, owners: [], body: [{ kind: `pushTag` }], tests: [] },
   { id: `W6.run`, owners: [], body: [push], tests: [] },
   { id: `W6.step`, owners: [], body: [push], tests: [] },
+  // Functions that share a name in one file are still distinct functions.
+  // `W8.other` returns an object literal whose method is named like the
+  // class method `W8.run`; it is `run`, a function of its own, owned only
+  // through what refers to it. `w_nest0` and `w_nest1` each define a nested
+  // helper named `next`. The model knows each by its own id and reports it
+  // by its name (`name`).
+  { id: `W8.run`, owners: [`a`], body: [push], tests: [] },
+  {
+    id: `W8.other`,
+    owners: [],
+    body: [{ kind: `inner`, to: `W8.other>run` }],
+    tests: [],
+  },
+  {
+    id: `W8.other>run`,
+    name: `run`,
+    container: `nested`,
+    form: `method`,
+    owners: [],
+    body: [push],
+    tests: [],
+  },
+  {
+    id: `w_nest0`,
+    owners: [`a`],
+    body: [{ kind: `inner`, to: `w_nest0>next` }],
+    tests: [],
+  },
+  {
+    id: `w_nest0>next`,
+    name: `next`,
+    container: `nested`,
+    form: `arrow`,
+    owners: [],
+    body: [push],
+    tests: [],
+  },
+  {
+    id: `w_nest1`,
+    owners: [],
+    body: [{ kind: `inner`, to: `w_nest1>next` }],
+    tests: [],
+  },
+  {
+    id: `w_nest1>next`,
+    name: `next`,
+    container: `nested`,
+    form: `arrow`,
+    owners: [],
+    body: [push],
+    tests: [],
+  },
+  // Accessors and a class-field arrow are functions too. `W9.run` reads the
+  // property `status`, which refers to its getter and its setter (one name,
+  // two functions), and calls the field arrow `handle` through `this`.
+  {
+    id: `W9.run`,
+    owners: [`a`],
+    body: [{ kind: `pushStatus` }, { kind: `call`, to: `W9.handle` }],
+    tests: [],
+  },
+  {
+    id: `W9.status#get`,
+    name: `W9.status`,
+    signature: `get status(): string`,
+    field: `tags: Array<string> = []`,
+    owners: [],
+    body: [{ kind: `getterReturn` }],
+    tests: [],
+  },
+  {
+    id: `W9.status#set`,
+    name: `W9.status`,
+    signature: `set status(value: string)`,
+    owners: [],
+    body: [{ kind: `setterPush` }],
+    tests: [],
+  },
+  {
+    id: `W9.handle`,
+    signature: `handle = (x: number, out: Array<string>): void =>`,
+    owners: [],
+    body: [push],
+    tests: [],
+  },
   // An assertion judges, and a second campaign catches what the first misses.
   {
     id: `w_assert`,
@@ -1019,6 +1135,26 @@ function renderStatement(stmt, callText) {
         `if (${condText(stmt)}) report(${probe});`,
         `else ${pushText(stmt)}`,
       ]
+    case `pushStatus`:
+      return [`out.push(this.status);`]
+    case `getterReturn`:
+      return [`return String(true);`]
+    case `setterPush`:
+      return [`this.tags.push(value);`]
+    case `dollar`:
+      return [`out.push($derived(x));`]
+    case `dollarReturn`:
+      return [`return String(x);`]
+    case `runeState`:
+      return [`let v${stmt.label} = $state(x ${stmt.op} ${stmt.k});`]
+    case `runeStateRaw`:
+      return [`let v${stmt.label} = $state.raw(String(x));`]
+    case `runeDerived`:
+      return [`const v${stmt.label} = $derived(x + 1);`]
+    case `runeDerivedBy`:
+      return [`const v${stmt.label} = $derived.by(() => String(x));`]
+    case `runeEffect`:
+      return [`${stmt.rune}(() => {`, `  ${pushText(stmt)}`, `});`]
     case `primeCall`:
       return [`this.prime();`]
     case `setTag`:
@@ -1134,15 +1270,44 @@ function resolveHistory(history) {
             }
           : { kind: `push`, quote: `'` },
     )
+  // The library's `$derived`, which a `dollar` statement calls.
+  const dollar = library.some((fn) =>
+    fn.body.some((stmt) => stmt.kind === `dollar`),
+  )
+    ? [
+        {
+          id: `$derived`,
+          file: LIB,
+          container: `free`,
+          signature: `$derived(x: number): string`,
+          library: true,
+          owners: [],
+          body: [{ kind: `dollarReturn` }],
+          tests: [],
+        },
+      ]
+    : []
+  // The Svelte module's functions.
+  const runes = (history.runes ?? []).map((body, index) => ({
+    id: `r${index}`,
+    file: RUNES,
+    container: `free`,
+    owners: [],
+    body,
+    tests: [],
+  }))
   const functions = [
     ...generated,
     ...library,
+    ...dollar,
+    ...runes,
     ...(history.witness
       ? witness
           .filter((w) => history.witness === true || captureWitness.has(w.id))
           .map((w) => ({
             ...w,
-            container: w.id.includes(`.`) ? w.id.split(`.`)[0] : `free`,
+            container:
+              w.container ?? (w.id.includes(`.`) ? w.id.split(`.`)[0] : `free`),
             generated: false,
           }))
       : []),
@@ -1188,31 +1353,57 @@ function resolveHistory(history) {
     `import { ${imported.join(`, `)} } from './lib'; import { note, seen } from 'state-dep'`,
     ...preamble,
   ]
+  // A body's statements, each on its own lines. A nested function (an
+  // `inner` statement) is defined where it is called: an arrow assigned to
+  // its name, or a method of an object literal.
+  const emitBody = (body, indent) => {
+    for (const stmt of body) {
+      if (stmt.kind === `inner`) {
+        const inner = byId.get(stmt.to)
+        if (inner.form === `arrow`) {
+          lines.push(`${indent}const ${inner.name} = (): void => {`)
+          emitBody(inner.body, `${indent}  `)
+          lines.push(`${indent}};`)
+        } else {
+          lines.push(
+            `${indent}const peer = {`,
+            `${indent}  ${inner.name}(): void {`,
+          )
+          emitBody(inner.body, `${indent}    `)
+          lines.push(`${indent}  },`, `${indent}};`)
+        }
+        stmt.lines = [
+          inner.form === `arrow` ? `${inner.name}();` : `peer.${inner.name}();`,
+        ]
+      } else
+        stmt.lines = renderStatement(
+          stmt,
+          referenceKinds.has(stmt.kind) ? callText(stmt) : undefined,
+        )
+      stmt.line = lines.length + 1
+      for (const line of stmt.lines) lines.push(`${indent}${line}`)
+    }
+  }
   const emit = (fn, indent) => {
     const name = fn.container === `free` ? fn.id : fn.id.split(`.`)[1]
     if (fn.overload)
       lines.push(
         `${indent}export function ${name}(x: number, out: Array<string>): void`,
       )
+    const signature =
+      fn.signature ?? `${name}(x: number, out: Array<string>): void`
     lines.push(
       fn.container === `free`
-        ? `${indent}export function ${name}(x: number, out: Array<string>): void {`
-        : `${indent}${fn.signature ?? `${name}(x: number, out: Array<string>): void`} {`,
+        ? `${indent}export function ${signature} {`
+        : `${indent}${signature} {`,
     )
-    for (const stmt of fn.body) {
-      stmt.line = lines.length + 1
-      stmt.lines = renderStatement(
-        stmt,
-        referenceKinds.has(stmt.kind) ? callText(stmt) : undefined,
-      )
-      for (const line of stmt.lines) lines.push(`${indent}  ${line}`)
-    }
+    emitBody(fn.body, `${indent}  `)
     lines.push(`${indent}}`)
   }
   for (const fn of functions)
     if (fn.container === `free` && fn.file === SOURCE) emit(fn, ``)
   for (const cls of [...new Set(functions.map((f) => f.container))].filter(
-    (c) => c !== `free`,
+    (c) => c !== `free` && c !== `nested`,
   )) {
     lines.push(`export class ${cls} {`)
     // A field holds each class that a method here calls through a field.
@@ -1237,14 +1428,17 @@ function resolveHistory(history) {
     lines.push(`w_load(0, loaded);`)
   }
   const source = `${lines.join(`\n`)}\n`
-  // The library is laid out the same way, in its own file.
-  {
-    const mainLines = lines.splice(0)
-    for (const fn of functions) if (fn.file === LIB) emit(fn, ``)
-    libLines.push(...lines.splice(0))
-    lines.push(...mainLines)
-  }
+  // The library and the Svelte module are laid out the same way, each in
+  // its own file.
+  const mainLines = lines.splice(0)
+  for (const fn of functions) if (fn.file === LIB) emit(fn, ``)
+  libLines.push(...lines.splice(0))
+  for (const fn of functions) if (fn.file === RUNES) emit(fn, ``)
+  const runesLines = lines.splice(0)
+  lines.push(...mainLines)
   const librarySource = `${libLines.join(`\n`)}\nexport {}\n`
+  const runesSource =
+    runes.length > 0 ? `${runesLines.join(`\n`)}\nexport {}\n` : undefined
 
   const generatedIds = generated.map((fn) => fn.id)
   const tests = [
@@ -1322,11 +1516,27 @@ function resolveHistory(history) {
     configEnv: history.configEnv === true,
     nativeDep: history.nativeDep === true,
     setupGlobal: history.setupGlobal === true,
+    sourceSpelling: history.sourceSpelling ?? `plain`,
+    // The source files the CLI is asked to check.
+    sources: [SOURCE, LIB, ...(runesSource ? [RUNES] : [])],
     history,
     source,
     librarySource,
+    runesSource,
   }
 }
+
+/** The `--source` argument: each source path in the plan's spelling. */
+const sourceArgument = (plan) =>
+  plan.sources
+    .map((path) =>
+      plan.sourceSpelling === `dot`
+        ? `./${path}`
+        : plan.sourceSpelling === `redundant`
+          ? path.replace(`src/`, `src/../src/`)
+          : path,
+    )
+    .join(`,`)
 
 // ## Model
 //
@@ -1424,11 +1634,15 @@ function sitesOf(plan) {
   const { helpers, probeOnly } = probeHelpers(plan)
   const sites = []
   const fileOf = new Map(plan.functions.map((fn) => [fn.id, fn.file]))
+  // A site names its function as law 1 does; `fnId` is the model's own,
+  // which tells apart two functions of one name.
+  const nameOf = new Map(plan.functions.map((fn) => [fn.id, fn.name ?? fn.id]))
   const add = (fn, line, operator, text, extra = {}) =>
     sites.push({
       id: sites.length,
       file: fileOf.get(fn) ?? SOURCE,
-      function: fn,
+      function: nameOf.get(fn) ?? fn,
+      fnId: fn,
       line,
       operator,
       text: tokens(text),
@@ -1490,8 +1704,31 @@ function sitesOf(plan) {
         if (stmt.not) at(`drop-not`, `not`, stmt.line, whole)
         at(`binary-swap`, `swap`, stmt.line, whole)
       }
-      if (stmt.kind === `push` || stmt.kind === `pushTag`)
+      if ([`push`, `pushTag`, `pushStatus`, `setterPush`].includes(stmt.kind))
         at(`delete-call`, `push`, stmt.line, whole)
+      // A call of a nested function where it is defined.
+      if (stmt.kind === `inner`) at(`delete-call`, `call`, stmt.line, whole)
+      if (stmt.kind === `getterReturn`) {
+        at(`value-undefined`, `string`, stmt.line, whole)
+        at(`bool-flip`, `flag`, stmt.line, whole)
+      }
+      // `$derived` is an ordinary name outside a Svelte module.
+      if (stmt.kind === `dollar`) {
+        at(`delete-call`, `push`, stmt.line, whole)
+        at(`value-undefined`, `value`, stmt.line, whole)
+      }
+      if (stmt.kind === `dollarReturn`)
+        at(`value-undefined`, `string`, stmt.line, whole)
+      // A rune call stays where Svelte requires it, so it is no site of its
+      // own (its value is not replaced, nor its statement skipped); the code
+      // in its argument is.
+      if (stmt.kind === `runeState`) at(`binary-swap`, `swap`, stmt.line, whole)
+      if (stmt.kind === `runeStateRaw` || stmt.kind === `runeDerivedBy`)
+        at(`value-undefined`, `string`, stmt.line, whole)
+      if (stmt.kind === `runeDerived`)
+        at(`arithmetic-swap`, `arith`, stmt.line, whole)
+      if (stmt.kind === `runeEffect`)
+        at(`delete-call`, `push`, stmt.line + 1, pushText(stmt))
       if (stmt.kind === `flag`) {
         at(`delete-call`, `push`, stmt.line, whole)
         at(`value-undefined`, `string`, stmt.line, whole)
@@ -1638,7 +1875,14 @@ function ownersOf(plan) {
                     ? [`reportAndPush`]
                     : stmt.kind === `oldProbe`
                       ? [`devBuild`]
-                      : [],
+                      : stmt.kind === `inner`
+                        ? [stmt.to]
+                        : stmt.kind === `dollar`
+                          ? [`$derived`]
+                          : // A property read refers to both its accessors.
+                            stmt.kind === `pushStatus`
+                            ? [`W9.status#get`, `W9.status#set`]
+                            : [],
       ),
     ]),
   )
@@ -1654,7 +1898,7 @@ function ownersOf(plan) {
     for (const file of fn.owners) visit(fn.id, file)
   // A whole-file entry names the main source, so it owns only its functions.
   const inLibrary = new Set(
-    plan.functions.filter((fn) => fn.file === LIB).map((fn) => fn.id),
+    plan.functions.filter((fn) => fn.file !== SOURCE).map((fn) => fn.id),
   )
   return (id) =>
     new Set([
@@ -1834,6 +2078,22 @@ function interpret(plan, fnId, x, sites, active) {
         reached.add(site.id)
         if (!isActive(site)) trace.push(object.tag)
       }
+      // `out.push($derived(x))`, where `$derived` returns `String(x)`.
+      if (stmt.kind === `dollar`) {
+        const call = siteOf(stmt, `push`)
+        reached.add(call.id)
+        if (!isActive(call)) {
+          const value = siteOf(stmt, `value`)
+          reached.add(value.id)
+          if (isActive(value)) trace.push(undefined)
+          else {
+            const [inner] = plan.functions.find((f) => f.id === `$derived`).body
+            const string = siteOf(inner, `string`)
+            reached.add(string.id)
+            trace.push(isActive(string) ? undefined : String(x))
+          }
+        }
+      }
       if (stmt.kind === `setTag`) object.tag = `b`
       if (stmt.kind === `primeCall`) {
         const site = siteOf(stmt, `call`)
@@ -2006,11 +2266,11 @@ function model(plan) {
       ? interpret(plan, `w_load`, 0, sites)
       : undefined
   const ranAtLoad = (site) =>
-    site.function === `<module>` ||
-    (site.function === `w_load` && loadRun?.reached.has(site.id) === true)
+    site.fnId === `<module>` ||
+    (site.fnId === `w_load` && loadRun?.reached.has(site.id) === true)
   const kindOf = (site) => {
-    if (owners(site.function).size === 0) return `unowned`
-    const tests = ownerTests(site.function)
+    if (owners(site.fnId).size === 0) return `unowned`
+    const tests = ownerTests(site.fnId)
     const reached = new Set()
     const taken = new Map()
     for (const t of tests)
@@ -2070,6 +2330,7 @@ function model(plan) {
       key: site.key,
       source: site.file,
       function: site.function,
+      fnId: site.fnId,
       line: site.line,
       operator: site.operator,
       ordinal: site.ordinal,
@@ -2387,6 +2648,7 @@ function fixtureFiles(plan, state = initialState(plan)) {
       ? edited({ ...plan, stability: `prepend` })
       : plan.source,
     [LIB]: plan.librarySource,
+    ...(plan.runesSource ? { [RUNES]: plan.runesSource } : {}),
     'tests/strict.ts': `export const strict = ${state.strict}\n`,
     // A workspace dependency with module state, linked through node_modules.
     'deps/state-dep/package.json': `{ "name": "state-dep", "private": true, "type": "module", "exports": "./index.js" }\n`,
@@ -2604,6 +2866,8 @@ export {
   readSummary,
   SOURCE,
   LIB,
+  RUNES,
+  sourceArgument,
   ORACLE_FILES,
   METHOD_NAMES,
   comparison,

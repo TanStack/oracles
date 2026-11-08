@@ -18,8 +18,13 @@
  *    `value-undefined` for a call whose value is used (not a callee or the
  *    object of a property or element access), `loop-false` for the
  *    condition of a `for`, `while`, or `do` loop, and `delete-call` for a
- *    call statement. Each names its function
- *    (`name`, or `Class.method` for a method) and its line.
+ *    call statement. Each names its function and its line: a class's
+ *    method, accessor, or field function by `Class.member`, any other
+ *    function by its own name (an object literal's method by its property),
+ *    and code in no function by `<module>`. Two functions may share a name
+ *    and are still two functions. In a Svelte module (`.svelte.ts`) a rune
+ *    call that Svelte allows in one place only is no site of its own, so
+ *    instrumentation does not move it.
  * 2. **Probe-only code.** A mutant is left out as probe code exactly when its
  *    site is probe-only code: a probe statement in the decided form,
  *    `process.env.NODE_ENV !== 'production' && globalThis.__oracleProbe?.(name,
@@ -154,8 +159,9 @@
  * witness, a test that waits 3 s before it judges. Not generated: a busy
  * loop, a slow run past the full limit that would still end, a hang in an
  * ordinary or nondeterministic test, setup errors, multi-line
- * conditions, arrow functions and functions passed as values, nested
- * functions, two functions on one line, getters and setters,
+ * conditions, nested functions, object-literal methods, accessors, and
+ * class-field arrows in code that a test calls (the static oracle judges
+ * their ownership), two functions on one line,
  * `await`, `new`, and `void` statements, `--only`, `--sample`, and
  * `--diff-base`, re-exports, namespace imports, and calls into another
  * package (a package's tree stops at its boundary, by the maintainer's
@@ -218,6 +224,7 @@ import {
   writeFixture,
   applyEdit,
   readSummary,
+  sourceArgument,
   ENV_PREFIX,
 } from './gap-report-model-oracle.mjs'
 
@@ -256,7 +263,13 @@ const cleanEnv = () =>
 function runCli(
   dir,
   files,
-  { seed = 1, daemon = false, cli = here, ordinary = false } = {},
+  {
+    seed = 1,
+    daemon = false,
+    cli = here,
+    ordinary = false,
+    sources = `${SOURCE},${LIB}`,
+  } = {},
 ) {
   writeFixture(dir, files)
   const out = join(dir, daemon ? `out-daemon` : `out`)
@@ -271,7 +284,7 @@ function runCli(
     `--package`,
     path(dir),
     `--source`,
-    `${SOURCE},${LIB}`,
+    sources,
     `--seed`,
     String(seed),
     `--env-prefix`,
@@ -408,7 +421,12 @@ function incremental(dir, plan, cli, observe, states) {
     )
     const files = fixtureFiles(resolveHistory(state.history), state)
     const key = fingerprint(files, state)
-    const how = { seed: state.seed, cli: copy, ordinary: plan.ordinary }
+    const how = {
+      seed: state.seed,
+      cli: copy,
+      ordinary: plan.ordinary,
+      sources: sourceArgument(plan),
+    }
     if (!cold.has(key)) cold.set(key, runCli(dir, files, how))
     const coldRun = cold.get(key)
     const daemon = runCli(dir, files, { ...how, daemon: true })
@@ -490,7 +508,8 @@ async function driver(plan, observe) {
   const dir = mkdtempSync(join(here, `.scratch-`))
   try {
     const files = fixtureFiles(plan)
-    const cli = runCli(dir, files, { ordinary: plan.ordinary })
+    const how = { ordinary: plan.ordinary, sources: sourceArgument(plan) }
+    const cli = runCli(dir, files, how)
     // How many units were computed or reused says how the result was
     // produced, not what it is, so it is not observed.
     observe(`cli`, { ...cli, evidence: undefined })
@@ -715,7 +734,7 @@ async function driver(plan, observe) {
       states.add(`ordinary tests left out by default`)
     if (plan.stability !== `none` && cli.exit === 0) {
       const moved = { ...files, [SOURCE]: edited(plan) }
-      observe(`stability`, runCli(dir, moved, { ordinary: plan.ordinary }))
+      observe(`stability`, runCli(dir, moved, how))
       states.add(`stability rerun`)
     }
     if (plan.steps.length > 0) incremental(dir, plan, cli, observe, states)
@@ -1193,7 +1212,7 @@ oracleProperty({
   law: {
     statement: `The gap report enumerates the promised operator mutants, leaves out exactly the probe-only code, discovers every oracle that owns a function's call tree and refuses broken ownership, judges each mutant only by its owners' tests on their registered routes and counts only law verdicts on reproducible routes as kills, which outrank a run that never ends, anchors each mutant by its function and normalized statement, lists every gap and unowned mutant once with consistent counts, keeps keys stable under unrelated edits, and reports through its daemon what a cold run reports at every state of a sequence of edits.`,
     authority: `The maintainer's decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), not in this package's records, including that a kill by reach agreement alone is a gap and that an incremental run through the daemon equals a cold one (v19.3); the project's oracle guide on quiet exclusions; the oracle rubric's outcome kinds (ORC-006); the CLI's documented operator list in schemata.mjs.`,
-    limits: `Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 6 s full limit, and a slow run only as one witness that waits 3 s before it judges; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors, loops, multi-line conditions, arrow or nested functions, two functions on one line, getters and setters, or await, new, and void statements; two source files of one package, with no re-exports, namespace imports, or calls into another package; no --only, --sample, or --diff-base; package configs only in vite.config.ts, vitest.config.ts, or vite.config.mjs, as an object or a sync or async function, with no projects and no plugins of their own; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9's edits leave out files read through fs, other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks.`,
+    limits: `Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 6 s full limit, and a slow run only as one witness that waits 3 s before it judges; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; no --only, --sample, or --diff-base; package configs only in vite.config.ts, vitest.config.ts, or vite.config.mjs, as an object or a sync or async function, with no projects and no plugins of their own; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9's edits leave out files read through fs, other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks.`,
     owner: `packages/oracles/oracle-gaps`,
   },
   histories: {

@@ -24,6 +24,14 @@
 //   `false` (a `for` with no condition, `for...of`, and `for...in` have none).
 // - `delete-call`: skip a call statement (`switch || call()`).
 //
+// In a Svelte module (`.svelte.ts` or `.svelte.js`), a rune call that Svelte
+// allows in one place only (`$state`, `$derived`, `$effect`, `$props`,
+// `$bindable`, `$inspect`, and their `.raw`, `.by`, `.pre`, `.id`, and
+// `.trace` forms) is no site for `value-undefined` or `delete-call`: either
+// would move the rune out of its place, and the module would no longer
+// compile (`state_invalid_placement`). The code in its arguments is mutated
+// as usual. Elsewhere a `$` name is an ordinary name.
+//
 // Comparisons and `!` go through helpers that evaluate each operand once.
 // `&&`, `||`, and `??` must keep short-circuiting, so both variants are
 // written out and the switch picks one. Every replacement starts with an
@@ -80,8 +88,14 @@ function anchorOf(ts, file, node) {
 // because one switch serves them all. A mutant names no function: the runner
 // names it by the function declaration whose lines hold it (owners.mjs), so
 // keys and ownership read one source.
+const placedRune =
+  /^\$(state(\.raw)?|derived(\.by)?|effect(\.pre)?|props(\.id)?|bindable|inspect(\.trace)?)$/
+
 export function instrument(ts, path, text, source, offset = 0) {
   const file = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true)
+  const svelte = /\.svelte\.[cm]?[jt]s$/.test(path)
+  const isRune = (call) =>
+    svelte && placedRune.test(call.expression.getText(file))
   const lineOf = (pos) => file.getLineAndCharacterOfPosition(pos).line + 1
   const arithmetic = new Set([
     ts.SyntaxKind.PlusToken,
@@ -290,7 +304,8 @@ export function instrument(ts, path, text, source, offset = 0) {
         node.parent.expression === node
       ) &&
       node.expression.kind !== ts.SyntaxKind.SuperKeyword &&
-      node.expression.kind !== ts.SyntaxKind.ImportKeyword
+      node.expression.kind !== ts.SyntaxKind.ImportKeyword &&
+      !isRune(node)
     )
       ids.value = add(node, `value-undefined`, node.getText(file), `undefined`)
     // The loop's condition: a `for`'s may be absent.
@@ -311,7 +326,11 @@ export function instrument(ts, path, text, source, offset = 0) {
       ids.ifTrue = add(node.expression, `if-true`, condition, `true`)
       ids.ifFalse = add(node.expression, `if-false`, condition, `false`)
     }
-    if (ts.isExpressionStatement(node) && ts.isCallExpression(node.expression))
+    if (
+      ts.isExpressionStatement(node) &&
+      ts.isCallExpression(node.expression) &&
+      !isRune(node.expression)
+    )
       ids.call = add(node, `delete-call`, node.getText(file), `;`)
 
     const children = []

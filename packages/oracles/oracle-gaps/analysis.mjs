@@ -110,9 +110,9 @@ export function analyze(ts, pkg, sources, testFiles) {
           `${relative(file)}: owns entry ${entry} names no function in ${source}`,
         )
     }
-  // Each mutant belongs to the function whose lines hold it; keys and
-  // ownership both read this one name.
+  // Each mutant belongs to the innermost function whose lines hold it; its
+  // key reads that function's name, and its owners are that function's.
   for (const mutant of mutants)
-    mutant.function = owned.functionAt(mutant.source, mutant.line)
+    mutant.function = owned.at(mutant.source, mutant.line).name
   return { instrumented, mutants, declarations, owned }
 }
