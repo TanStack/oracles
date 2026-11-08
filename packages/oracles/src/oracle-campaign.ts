@@ -1,5 +1,5 @@
-import { oracleCampaignSeed } from './oracle-config'
-import { createOracleReach } from './oracle-reach'
+import { oracleCampaignSeed } from './oracle-config.js'
+import { createOracleReach } from './oracle-reach.js'
 
 /**
  * Run the same oracle with separate fixed/random reach ledgers. The callback

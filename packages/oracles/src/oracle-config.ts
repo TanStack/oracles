@@ -1,8 +1,6 @@
 import { oracleEnvName, setOracleEnvPrefix } from './oracle-environment.js'
 import { oracleReplayReporter } from './oracle-replay-witness.js'
 
-export { recordOracleReplay } from './oracle-replay-witness.js'
-
 type OracleEnvironment = Record<string, string | undefined>
 
 /**
@@ -14,8 +12,8 @@ export interface OracleConfigurationOptions {
   /**
    * The prefix of every oracle environment variable: `${envPrefix}_SEED`,
    * `${envPrefix}_PATH`, `${envPrefix}_PROPERTY`,
-   * `${envPrefix}_RUNS_MULTIPLIER`, `${envPrefix}_CALIBRATION`, and
-   * `${envPrefix}_REPLAY_WITNESS`. A project with its own prefix keeps its
+   * `${envPrefix}_RUNS_MULTIPLIER`, `${envPrefix}_CALIBRATION`,
+   * `${envPrefix}_REPLAY_WITNESS`, and `${envPrefix}_REPLAY_WITNESS_MODE`. A project with its own prefix keeps its
    * variable names by passing it here.
    */
   envPrefix?: string
@@ -359,8 +357,6 @@ export function oracleCalibrationTest<TRegistration extends { skip: unknown }>(
       process.env[oracleEnvName(`CALIBRATION`)] !== fault)
   return standsAside ? (registration.skip as TRegistration) : registration
 }
-
-export { declareOracle } from './oracle-declaration.js'
 
 /**
  * Registers the running test's route for the gap report, which counts a

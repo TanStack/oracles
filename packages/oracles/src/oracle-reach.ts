@@ -20,8 +20,8 @@ import { readOracleRunConfig } from './oracle-config.js'
  * `examples`, passes their number as `fixedHistories` and begins each
  * example's history with `beginHistory({ fixed: true })`. The check then also
  * fails for every declared state that no fixed history entered: that state's
- * reach would depend on the seed (TanStack DB #2287). Fixedness belongs to the history, so
- * other tests may share the reach. Shrinking can run an example again, so a
+ * reach would depend on the seed. Fixedness belongs to the history, so other
+ * tests may share the reach. Shrinking can run an example again, so a
  * fixed history beyond the declared number counts as fixed too. When fewer
  * fixed histories ran than were declared, a failure stopped the run inside the
  * examples, and the check reports only that, without naming states.

@@ -468,12 +468,12 @@ declare global {
     ((checkpoint: string, value: unknown) => void) | undefined
   // Production probes call this in development builds; see `probes`.
   var __oracleProbe: ((name: string, condition: unknown) => void) | undefined
-  // Installed by the gap report's test setup, absent otherwise. It receives
-  // every law violation the framework raises, so a mutant's kill is
-  // classified by the law that rejected it rather than by its message.
   // Installed by the gap report's test setup, absent otherwise. Each
   // registered test reports its route before it runs.
   var __oracleRoute: ((route: string) => void) | undefined
+  // Installed by the gap report's test setup, absent otherwise. It receives
+  // every law violation the framework raises, so a mutant's kill is
+  // classified by the law that rejected it rather than by its message.
   var __oracleVerdict:
     | ((verdict: { property: string; law: string; checkpoint: string }) => void)
     | undefined
