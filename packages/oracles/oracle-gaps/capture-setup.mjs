@@ -99,6 +99,36 @@ const skippedCopy = unit !== undefined && killed.has(unit.mutant)
 const firstGlobals = (globalThis.__oracleGapsGlobals ??= new Set(
   Reflect.ownKeys(globalThis),
 ))
+// A setup file may define a new global without \`configurable\`, which no
+// reset could remove: the next copy's setup would then throw "Cannot
+// redefine property". A new global stays removable, so each copy still
+// starts from the worker's first globals.
+if (!globalThis.__oracleGapsDefine) {
+  globalThis.__oracleGapsDefine = true
+  const removable = (target, key, descriptor) =>
+    target === globalThis && !firstGlobals.has(key)
+      ? { ...descriptor, configurable: true }
+      : descriptor
+  const define = Object.defineProperty
+  const defineAll = Object.defineProperties
+  const reflectDefine = Reflect.defineProperty
+  Object.defineProperty = (target, key, descriptor) =>
+    define(target, key, removable(target, key, descriptor))
+  Object.defineProperties = (target, descriptors) =>
+    target === globalThis
+      ? defineAll(
+          target,
+          Object.fromEntries(
+            Reflect.ownKeys(descriptors).map((key) => [
+              key,
+              removable(target, key, descriptors[key]),
+            ]),
+          ),
+        )
+      : defineAll(target, descriptors)
+  Reflect.defineProperty = (target, key, descriptor) =>
+    reflectDefine(target, key, removable(target, key, descriptor))
+}
 const ownName = (key) =>
   /^(__vitest|__VITEST|__oracle|vitest)/i.test(
     typeof key === `symbol` ? (key.description ?? ``) : key,

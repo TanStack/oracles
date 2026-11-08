@@ -706,6 +706,8 @@ async function driver(plan, observe) {
         states.add(`a config that reads Vitest's environment ran`)
       if (plan.nativeDep)
         states.add(`a package with a native addon ran in child processes`)
+      if (plan.setupGlobal)
+        states.add(`a setup file that defines a fixed global ran in every copy`)
     }
     if (plan.ordinary && cli.mutants.some((m) => m.ordinaryOutcome))
       states.add(`ordinary tests run when asked`)
@@ -1172,6 +1174,7 @@ const required = [
   `a config in vitest.config.ts ran`,
   `a config that reads Vitest's environment ran`,
   `a package with a native addon ran in child processes`,
+  `a setup file that defines a fixed global ran in every copy`,
   ...incrementalStates,
 ]
 const faults = [`badEntry`, `missingSource`, `nonLiteral`, `brokenOwner`]
@@ -1219,6 +1222,7 @@ oracleProperty({
           configFile: `vitest.config.ts`,
           configEnv: true,
           nativeDep: true,
+          setupGlobal: true,
         }),
       },
       {

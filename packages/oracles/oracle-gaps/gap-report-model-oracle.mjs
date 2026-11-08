@@ -269,6 +269,10 @@ const histories = fc.record({
   // one (VITEST, TEST, and NODE_ENV), as svelte-db's picks its resolve
   // conditions by VITEST. This one finds its tests only under it.
   configEnv: fc.boolean(),
+  // The config may name a setup file that defines a new global without
+  // `configurable`, as offline-transactions' defines `indexedDB`. Vitest runs
+  // it once per file in a fresh worker; every copy must see the same.
+  setupGlobal: fc.constantFrom(false, false, false, true),
   // The workspace dependency may be a native addon (a `binding.gyp` beside
   // its manifest), as better-sqlite3 is.
   nativeDep: fc.constantFrom(false, false, false, true),
@@ -1317,6 +1321,7 @@ function resolveHistory(history) {
     configFile: history.configFile ?? `vite.config.ts`,
     configEnv: history.configEnv === true,
     nativeDep: history.nativeDep === true,
+    setupGlobal: history.setupGlobal === true,
     history,
     source,
     librarySource,
@@ -2377,7 +2382,7 @@ function fixtureFiles(plan, state = initialState(plan)) {
       plan.configEnv
         ? `process.env.VITEST === 'true' && process.env.TEST === 'true' && process.env.NODE_ENV === 'test' ? ['tests/**/*.test.ts'] : []`
         : `['tests/**/*.test.ts']`
-    } } }${plan.config === `object` ? `` : `)`})\n`,
+    }${plan.setupGlobal ? `, setupFiles: ['./tests/setup.ts']` : ``} } }${plan.config === `object` ? `` : `)`})\n`,
     [SOURCE]: state.prepend
       ? edited({ ...plan, stability: `prepend` })
       : plan.source,
@@ -2389,6 +2394,11 @@ function fixtureFiles(plan, state = initialState(plan)) {
     // as a duplicate-instance check does in a browser window:
     // each copy must load it as a fresh worker would.
     'deps/state-dep/index.js': `const marker = Symbol.for('state-dep/loaded')\nif (globalThis[marker]) throw new Error('state-dep loaded twice in one realm')\nglobalThis[marker] = true\nconst log = []\nexport function note(entry) {\n  log.push(entry)\n}\nexport function seen() {\n  return [...log]\n}\n`,
+    ...(plan.setupGlobal
+      ? {
+          'tests/setup.ts': `Object.defineProperty(globalThis, 'fixtureStore', { value: { ready: true } })\n`,
+        }
+      : {}),
     ...(plan.nativeDep
       ? { 'deps/state-dep/binding.gyp': `{ "targets": [] }\n` }
       : {}),

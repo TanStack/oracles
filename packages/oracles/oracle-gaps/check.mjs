@@ -274,7 +274,8 @@ export async function openSession(pkg) {
 import { mergeConfig } from 'vitest/config'
 ${config ? `import base from './${config}'` : `const base = {}`}
 // Vitest accepts a config object or a function that returns one.
-export default async (env) => mergeConfig(typeof base === 'function' ? await base(env) : base, {
+export default async (env) => {
+  const merged = mergeConfig(typeof base === 'function' ? await base(env) : base, {
   plugins: [{
     name: 'oracle-gaps-schemata',
     enforce: 'pre',
@@ -292,8 +293,12 @@ export default async (env) => mergeConfig(typeof base === 'function' ? await bas
       } catch { return undefined }
     },
   }],
-  test: { setupFiles: ['./${harness.split(`/`).at(-1)}'] },
-})
+  })
+  // The harness runs before the package's own setup files, so that it sees
+  // the worker's globals before a setup file adds to them.
+  merged.test = { ...merged.test, setupFiles: ['./${harness.split(`/`).at(-1)}', ...[merged.test?.setupFiles ?? []].flat()] }
+  return merged
+}
 `,
       )
       wrappers.set(index, wrapper)
