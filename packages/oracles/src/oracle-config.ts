@@ -15,6 +15,14 @@ export interface OracleConfigurationOptions {
    * `${envPrefix}_RUNS_MULTIPLIER`, `${envPrefix}_CALIBRATION`,
    * `${envPrefix}_REPLAY_WITNESS`, and `${envPrefix}_REPLAY_WITNESS_MODE`. A project with its own prefix keeps its
    * variable names by passing it here.
+   *
+   * Three names stay fixed whatever the prefix, because tooling reads them
+   * across projects rather than a project setting them: `ORACLE_MANIFEST`
+   * (a collect-only run records each registration there), and the
+   * `ORACLE_SEED` and `ORACLE_REACH` tags that campaigns print in their logs.
+   * `runOracleCampaign` names its variables from the prefix its caller
+   * passes, so a package's own campaigns stay apart from the project's
+   * replay selection.
    */
   envPrefix?: string
   /**
