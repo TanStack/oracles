@@ -3,8 +3,8 @@
 // declareOracle), createOracleReach for declared reach, runOracleCampaign for
 // fixed and random campaigns, the configuration functions, failure fidelity,
 // and the controlled clock. A browser or native module that only declares its
-// parts imports `@tanstack/oracles/declaration` instead, which loads none of
-// this entry's Node built-ins.
+// parts and registers its routes imports `@tanstack/oracles/declaration`
+// instead, which loads none of this entry's Node built-ins.
 export * from './oracle-property.js'
 export * from './oracle-reach.js'
 export * from './oracle-campaign.js'

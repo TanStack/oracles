@@ -1,5 +1,6 @@
 import { oracleCampaignSeed } from './oracle-config.js'
 import { createOracleReach } from './oracle-reach.js'
+import { oracleRoute } from './oracle-route.js'
 
 /**
  * Run the same oracle with separate fixed/random reach ledgers. The callback
@@ -58,10 +59,15 @@ export async function runOracleCampaign<TState extends string>(
       seed: oracleCampaignSeed(campaign.parameters.seed, prefix),
     }
     // The gap report counts a kill only on a reproducible route, so each
-    // campaign registers its own: the fixed seed and a recorded replay are
-    // reproducible, and the random campaign draws a new seed in every CI run.
-    globalThis.__oracleRoute?.(
-      campaign.name === `random` ? `random seed` : `fixed seed`,
+    // campaign registers its own (oracle-route.ts): a path replay runs one
+    // recorded history, a seed-only replay and the fixed campaign a fixed
+    // seed, and the random campaign a seed it draws.
+    oracleRoute(
+      path !== undefined
+        ? `fixed history`
+        : campaign.name === `random`
+          ? `random seed`
+          : `fixed seed`,
     )
     try {
       await run(reach, parameters)

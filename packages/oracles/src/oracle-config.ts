@@ -2,11 +2,14 @@ import {
   defaultOracleSettings,
   installOracleSettings,
   oracleDefaultsRead,
-  oracleEnvName,
   oracleSettings,
 } from './oracle-environment.js'
 import { oracleReplayReporter } from './oracle-replay-witness.js'
+import { drawnSeedKey } from './oracle-route.js'
 import type { OracleSettings } from './oracle-environment.js'
+
+export { oracleRoute, oracleRouteOf } from './oracle-route.js'
+export type { OracleRoute } from './oracle-route.js'
 
 type OracleEnvironment = Record<string, string | undefined>
 
@@ -56,9 +59,16 @@ export type OracleReplayConfig = {
 // `configureOracles`, or, in a project that never configures, on first use.
 // Nothing is read at import, so a stray variable under the default prefix
 // (SQL*Plus sets `ORACLE_PATH`) cannot break a project with its own prefix.
-let configuredReplay: (OracleReplayConfig & { multiplier: number }) | undefined
+let configuredReplay: RunConfig | undefined
 
-function replayConfig(): OracleReplayConfig & { multiplier: number } {
+// The replay environment as read: the replay selection, the run multiplier,
+// and the calibration variable, which selects a mutant during a replay.
+type RunConfig = OracleReplayConfig & {
+  multiplier: number
+  calibration: string | undefined
+}
+
+function replayConfig(): RunConfig {
   return (configuredReplay ??= readRunConfig(process.env, oracleSettings()))
 }
 
@@ -129,16 +139,23 @@ function assertRegisteredIn(within: OracleSettings, property: string): void {
   }
 }
 
+/**
+ * The replay selection and run multiplier. Without an environment, the ones
+ * the configuration read, which every replay condition uses; with one, that
+ * environment's, read under the configuration in force.
+ */
 export function readOracleRunConfig(
-  environment: OracleEnvironment = process.env,
+  environment?: OracleEnvironment,
 ): OracleReplayConfig & { multiplier: number } {
-  return readRunConfig(environment, oracleSettings())
+  return environment === undefined
+    ? replayConfig()
+    : readRunConfig(environment, oracleSettings())
 }
 
 function readRunConfig(
   environment: OracleEnvironment,
   within: OracleSettings,
-): OracleReplayConfig & { multiplier: number } {
+): RunConfig {
   const name = (setting: string) => `${within.prefix}_${setting}`
   const seedName = name(`SEED`)
   const pathName = name(`PATH`)
@@ -165,6 +182,7 @@ function readRunConfig(
     throw new Error(`${multiplierName} must be a positive integer`)
   }
 
+  const calibration = environment[name(`CALIBRATION`)]
   const seedValue = environment[seedName]
   const replayPath = environment[pathName]
   const replayProperty = environment[propertyName]
@@ -177,6 +195,7 @@ function readRunConfig(
     }
     return {
       multiplier,
+      calibration,
       campaignSeed: undefined,
       replayPath: undefined,
       replayProperty: undefined,
@@ -193,6 +212,7 @@ function readRunConfig(
     }
     return {
       multiplier,
+      calibration,
       campaignSeed,
       replayPath: undefined,
       replayProperty: undefined,
@@ -210,7 +230,7 @@ function readRunConfig(
     throw new Error(`${pathName} requires ${propertyName}`)
   }
   assertRegisteredIn(within, replayProperty)
-  return { multiplier, campaignSeed, replayPath, replayProperty }
+  return { multiplier, calibration, campaignSeed, replayPath, replayProperty }
 }
 
 /**
@@ -234,6 +254,8 @@ type OracleRunParameters = {
   numRuns: number
   seed?: number
   path?: string
+  /** A seed the builder drew, which `oracleRouteOf` reads. */
+  [drawnSeedKey]?: number
 } & ReturnType<typeof oracleReplayReporter>
 
 // fast-check infers a property's argument types from `examples` too, so only
@@ -276,11 +298,11 @@ function randomParameters<TExample>(
         }
   const selectedSeed = oracleCampaignSeed(campaignSeed, property)
   // Building parameters registers no route: a caller may still change them,
-  // such as a seed it sets for a fixed-seed campaign. The campaign's runner
-  // registers the route of what runs (`oracleRoute`).
+  // such as a seed it sets for a fixed-seed campaign. They record a seed
+  // they drew, so `oracleRouteOf` names the route of what finally runs.
   const parameters: OracleRunParameters =
     campaignSeed === undefined
-      ? { numRuns, seed: selectedSeed }
+      ? { numRuns, seed: selectedSeed, [drawnSeedKey]: selectedSeed }
       : {
           numRuns,
           seed: campaignSeed,
@@ -390,26 +412,8 @@ export function oracleCalibrationTest<TRegistration extends { skip: unknown }>(
 ): TRegistration {
   const standsAside =
     oracleReplaySkips(property) ||
-    (oracleReplayRequested() &&
-      process.env[oracleEnvName(`CALIBRATION`)] !== fault)
+    (oracleReplayRequested() && replayConfig().calibration !== fault)
   return standsAside ? (registration.skip as TRegistration) : registration
-}
-
-/**
- * Registers the running test's route for the gap report, which counts a
- * verdict as a kill only on a reproducible route: a fixed seed, a fixed
- * history, or an enumerated case. `oracleProperty` and `runOracleCampaign`
- * register their campaigns' routes themselves. A test that runs its own
- * fast-check campaign calls this inside the test, before the campaign runs,
- * with the route of the campaign that runs: building options with
- * `oraclePropertyOptions` or `oracleRandomParameters` registers none, so the
- * order of the calls does not matter.
- */
-export function oracleRoute(
-  route:
-    `fixed seed` | `fixed history` | `case` | `random seed` | `calibration`,
-): void {
-  globalThis.__oracleRoute?.(route)
 }
 
 /** Keeps ordinary CI bounded while allowing long randomized oracle campaigns. */

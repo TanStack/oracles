@@ -1,10 +1,12 @@
 import { spawnSync } from 'node:child_process'
-import { createRequire } from 'node:module'
+import { readFileSync } from 'node:fs'
+import { createRequire, isBuiltin } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import * as oracles from '../src/index'
 import * as declaration from '../src/declaration'
+import { commonJsForDeclarationOnly } from '../vite.config'
 
 // The public surface, as a consumer imports it. An added or removed export
 // changes this list on purpose.
@@ -32,6 +34,7 @@ describe(`@tanstack/oracles`, () => {
         `oracleReplayReporter`,
         `oracleReplayTest`,
         `oracleRoute`,
+        `oracleRouteOf`,
         `oracleRuns`,
         `oraclePropertyOptions`,
         `pass`,
@@ -59,9 +62,48 @@ describe(`@tanstack/oracles`, () => {
     expect(manifest.main).toBe(manifest.module)
   })
 
-  it(`exports only declareOracle from the browser-safe declaration entry`, () => {
-    expect(Object.keys(declaration)).toEqual([`declareOracle`])
+  // A module bundled into a browser or a native webview declares its parts
+  // and registers its routes through this entry.
+  it(`exports declareOracle and the route helpers from the browser-safe declaration entry`, () => {
+    expect(Object.keys(declaration).sort()).toEqual(
+      [`declareOracle`, `oracleRoute`, `oracleRouteOf`].sort(),
+    )
     expect(declaration.declareOracle).toBe(oracles.declareOracle)
+    expect(declaration.oracleRoute).toBe(oracles.oracleRoute)
+    expect(declaration.oracleRouteOf).toBe(oracles.oracleRouteOf)
+  })
+
+  // Each build of the CommonJS output, including each rebuild in watch mode,
+  // holds exactly the modules the declaration entry reaches in that build.
+  // Watch mode is not driven here; two builds call the plugin's hook in turn.
+  it(`prunes each CommonJS build by that build's own imports`, () => {
+    const plugin = commonJsForDeclarationOnly()
+    const generate = plugin.generateBundle as (
+      output: { format: string },
+      bundle: Record<string, { type: string; imports?: Array<string> }>,
+    ) => void
+    const chunk = (...imports: Array<string>) => ({ type: `chunk`, imports })
+    const first = {
+      'cjs/declaration.cjs': chunk(`cjs/oracle-declaration.cjs`),
+      'cjs/oracle-declaration.cjs': chunk(),
+      'cjs/index.cjs': chunk(`cjs/oracle-declaration.cjs`),
+    }
+    generate({ format: `cjs` }, first)
+    expect(Object.keys(first).sort()).toEqual([
+      `cjs/declaration.cjs`,
+      `cjs/oracle-declaration.cjs`,
+    ])
+    const second = {
+      'cjs/declaration.cjs': chunk(`cjs/oracle-route.cjs`),
+      'cjs/oracle-route.cjs': chunk(),
+      'cjs/oracle-declaration.cjs': chunk(),
+      'cjs/index.cjs': chunk(),
+    }
+    generate({ format: `cjs` }, second)
+    expect(Object.keys(second).sort()).toEqual([
+      `cjs/declaration.cjs`,
+      `cjs/oracle-route.cjs`,
+    ])
   })
 
   // The tarball is what a consumer installs, so every runtime module in it
@@ -91,6 +133,21 @@ describe(`@tanstack/oracles`, () => {
       { files: Array<{ path: string }> },
     ]
     const packed = files.map(({ path }) => path)
+    // The browser-safe entry's ES module graph imports no Node built-in.
+    const builtins: Array<string> = []
+    const visit = (file: string, seen = new Set<string>()) => {
+      if (seen.has(file)) return
+      seen.add(file)
+      const text = readFileSync(join(packageDirectory, file), `utf8`)
+      for (const [, specifier] of text.matchAll(
+        /(?:from|import)\s*['"]([^'"]+)['"]/g,
+      ))
+        if (specifier!.startsWith(`.`))
+          visit(join(dirname(file), specifier!), seen)
+        else if (isBuiltin(specifier!)) builtins.push(`${file}: ${specifier}`)
+    }
+    visit(`dist/esm/declaration.js`)
+    expect(builtins).toEqual([])
     const { exports } = local(`../package.json`) as { exports: unknown }
     const targets = (
       JSON.stringify(exports).match(/"\.\/dist\/[^"]+"/g) ?? []

@@ -14,7 +14,7 @@ import type { Plugin } from 'vite'
  * reaches, and their declaration files. `tests/package.test.ts` checks the
  * packed result.
  */
-function commonJsForDeclarationOnly(): Plugin {
+export function commonJsForDeclarationOnly(): Plugin {
   const reached = new Set<string>()
   const commonJsDirectory = fileURLToPath(
     new URL(`./dist/cjs`, import.meta.url),
@@ -25,6 +25,8 @@ function commonJsForDeclarationOnly(): Plugin {
     apply: `build`,
     generateBundle(output, bundle) {
       if (output.format !== `cjs`) return
+      // Each build, such as each rebuild in watch mode, starts again.
+      reached.clear()
       const visit = (file: string) => {
         if (reached.has(file)) return
         reached.add(file)

@@ -40,10 +40,11 @@
  *   `differs` builds one from an exact comparison.
  *
  * Each history is one test, named by `label`, or, without one, by the
- * history's stable text, in which bigints, Maps, Sets, and undefined keep
- * their distinctions. A violation fails it with an `OracleViolation` that
- * names the property, the law, the checkpoint, the difference, the history
- * in that text, and the command that reruns that history: a `-t` pattern
+ * history's stable text: its JSON when JSON carries it exactly, and otherwise
+ * Node's inspection of it, which keeps NaN, -0, undefined, bigints, Maps,
+ * Sets, symbol keys, and class names apart. A violation fails it with an
+ * `OracleViolation` that names the property, the law, the checkpoint, the
+ * difference, the history in that text, and the command that reruns that history: a `-t` pattern
  * that matches the test's full name, its enclosing suites' names included,
  * escaped because Vitest reads `-t` as a regular expression, and quoted for a
  * POSIX shell, so it pastes as printed. Every observation is
@@ -115,8 +116,8 @@
  * - **Determinism.** A `determinism` test runs some histories twice and
  *   requires the same trace: every fixed and constructed history of a generated
  *   source and three generated histories, or up to eight evenly spaced
- *   enumerated histories. A trace that
- *   differs between runs of one history breaks replay, shrinking, and the gap
+ *   enumerated histories, compared exactly, as `differs` compares. A trace
+ *   that differs between runs of one history breaks replay, shrinking, and the gap
  *   report's comparison, so a driver records relations (before and after,
  *   same or different id) rather than clock readings or random ids.
  * - **Shrinking keeps the failure.** A violation can name the law it broke.
@@ -145,7 +146,7 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { appendFileSync } from 'node:fs'
-import { isDeepStrictEqual } from 'node:util'
+import { inspect, isDeepStrictEqual } from 'node:util'
 import fc from 'fast-check'
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -156,6 +157,8 @@ import {
   withOracleFixedHistories,
 } from './oracle-config.js'
 import { oracleEnvName } from './oracle-environment.js'
+import { oracleRoute, oracleRouteOf } from './oracle-route.js'
+import type { OracleRoute } from './oracle-route.js'
 
 /** A law and where it comes from. */
 export interface OracleLaw {
@@ -496,9 +499,6 @@ declare global {
     ((checkpoint: string, value: unknown) => void) | undefined
   // Production probes call this in development builds; see `probes`.
   var __oracleProbe: ((name: string, condition: unknown) => void) | undefined
-  // Installed by the gap report's test setup, absent otherwise. Each
-  // registered test reports its route before it runs.
-  var __oracleRoute: ((route: string) => void) | undefined
   // Installed by the gap report's test setup, absent otherwise. It receives
   // every law violation the framework raises, so a mutant's kill is
   // classified by the law that rejected it rather than by its message.
@@ -566,7 +566,7 @@ interface PropertyTest {
    * The test's route, which the gap report reads to tell a reproducible kill
    * from a random-only one or a framework check (`__oracleRoute`).
    */
-  route: string
+  route: OracleRoute
   /** Runs the test; `task` is Vitest's record of it, for its full name. */
   run: (task: NamedTask) => Promise<void>
   /** Path replays this test runs during; empty stands aside during every one. */
@@ -595,7 +595,7 @@ export function oracleProperty<THistory, TExpected, TPlan = THistory>(
       oracleReplayTest(it, ...test.replays)(
         test.name,
         ({ task }) => {
-          globalThis.__oracleRoute?.(test.route)
+          oracleRoute(test.route)
           return test.run(task)
         },
         options.timeout ?? 120_000,
@@ -609,7 +609,7 @@ function enumeratedTests<THistory, TExpected, TPlan>(
 ): Array<PropertyTest> {
   const spacing = Math.max(1, Math.ceil(histories.length / 8))
   const named = histories.map((history) => ({
-    name: options.label?.(history) ?? traceText(history),
+    name: options.label?.(history) ?? stableText(history),
     history,
   }))
   return [
@@ -628,7 +628,7 @@ function enumeratedTest<THistory, TExpected, TPlan>(
 ): PropertyTest {
   return {
     name,
-    route: `enumerated`,
+    route: `case`,
     replays: [],
     run: async (task) => {
       const { verdict } = await runOne(options, history)
@@ -775,17 +775,24 @@ function planOf<THistory, TExpected, TPlan>(
     : (history as unknown as TPlan)
 }
 
-// A stable text for an observation: Maps, Sets, undefined, bigints, and
-// errors keep their distinctions, which JSON alone drops.
-function traceText(value: unknown): string {
-  return JSON.stringify(value, (_key, item: unknown) => {
-    if (item === undefined) return `$undefined`
-    if (typeof item === `bigint`) return `$bigint:${item}`
-    if (item instanceof Map) return { $map: [...item] }
-    if (item instanceof Set) return { $set: [...item] }
-    if (item instanceof Error)
-      return { $error: item.name, message: item.message }
-    return item
+// A stable text for a history or an observation: its JSON when JSON carries
+// it exactly, so a plain history keeps the name JSON gives it, and otherwise
+// Node's inspection of it, which keeps NaN, -0, undefined, bigints, Maps,
+// Sets, symbol keys, and class names apart and never reads as JSON.
+function stableText(value: unknown): string {
+  try {
+    // undefined, a function, or a symbol prints as nothing.
+    const text = JSON.stringify(value) as string | undefined
+    if (text !== undefined && isDeepStrictEqual(JSON.parse(text), value))
+      return text
+  } catch {
+    // JSON cannot print it, such as a bigint.
+  }
+  return inspect(value, {
+    depth: Infinity,
+    maxArrayLength: Infinity,
+    maxStringLength: Infinity,
+    breakLength: Infinity,
   })
 }
 
@@ -795,7 +802,7 @@ function determinismTest<THistory, TExpected, TPlan>(
 ): PropertyTest {
   return {
     name: `determinism`,
-    route: `determinism`,
+    route: `calibration`,
     replays: [],
     run: async () => {
       for (const { name, history } of histories()) {
@@ -807,14 +814,14 @@ function determinismTest<THistory, TExpected, TPlan>(
         const length = Math.max(first.length, second.length)
         for (let index = 0; index < length; index += 1) {
           const [a, b] = [first[index], second[index]]
-          const [textA, textB] = [traceText(a), traceText(b)]
-          if (textA === textB) continue
+          if (isDeepStrictEqual(a, b)) continue
+          const [textA, textB] = [stableText(a), stableText(b)]
           const error = new Error(
             [
               `${options.id}: two runs of "${name}" recorded different traces at observation ${index}${a ? ` ("${a.checkpoint}")` : ``}.`,
               `First run:  ${textA.slice(0, 2000)}`,
               `Second run: ${textB.slice(0, 2000)}`,
-              `History: ${traceText(history)}`,
+              `History: ${stableText(history)}`,
               `A driver records relations, such as before and after or same and different, instead of clock readings or random ids.`,
             ].join(`\n`),
           ) as Error & {
@@ -1008,7 +1015,7 @@ function calibrationTests<THistory, TExpected, TPlan>(
   return [...(options.calibrations ?? []), ...forcedCalibrations].map(
     (calibration) => ({
       name: `calibration: ${calibration.name}`,
-      route: `forced` in calibration ? `probe calibration` : `calibration`,
+      route: `calibration`,
       replays: [],
       run: async () => {
         const seen: Array<string> = []
@@ -1090,7 +1097,7 @@ function failure<THistory>(
       `${id} violated at checkpoint "${verdict.checkpoint}"${verdict.law ? ` (law: ${verdict.law})` : ``}.`,
       `Law: ${law.statement}`,
       `Difference: ${verdict.difference}`,
-      `History: ${traceText(history)}`,
+      `History: ${stableText(history)}`,
       `Authority: ${law.authority}`,
       `Known limits: ${law.limits}`,
       `Rerun: ${rerun}`,
@@ -1284,9 +1291,9 @@ function generatedTests<THistory, TExpected, TPlan>(
     run: () => {
       // One call selects and logs the seed; a replay reads that log line.
       const parameters = oraclePropertyOptions(source.runs, id)
-      // A path replay runs one recorded history, not a random campaign.
-      if (parameters.path !== undefined)
-        globalThis.__oracleRoute?.(`fixed history`)
+      // A path replay runs one recorded history, and a seed from the
+      // replay environment reseeds the campaign.
+      oracleRoute(oracleRouteOf(parameters))
       return runCampaign(`random seed`, parameters.seed!, (examples) =>
         withOracleFixedHistories(parameters, examples),
       )

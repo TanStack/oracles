@@ -13,8 +13,8 @@
  *   oracle property, a required state has no constructed history, or a constructed history names an
  *   undeclared state.
  * - `verdict`: a test fails with a violation of law L exactly when its first
- *   failing history violates L, whatever values the history holds (a bigint
- *   or a Map too). Within one history a driver error decides
+ *   failing history violates L, whatever values the history holds (a bigint,
+ *   a Map, NaN, or -0 too). Within one history a driver error decides
  *   first, then a law violation, then a constructed history that misses its state; a driver error
  *   after a recorded violation becomes that violation's cause. A model that
  *   cannot read the trace a driver error cut short leaves the driver error to
@@ -29,7 +29,8 @@
  *   passes, and passes only when its wrong answer (a corrupted trace or a
  *   mutant driver) fails with the named law.
  * - `determinism`: the determinism test runs every fixed and constructed history
- *   and three generated ones, and fails for a driver whose trace changes.
+ *   and three generated ones, and fails for a driver whose trace changes,
+ *   compared exactly (`-0` is not `0`).
  * - `agreement`: for a probe-bound state, a history whose `predict` says it
  *   enters the state while the history does not enter it, or does not enter
  *   it while the history does, violates law `reach agreement` at checkpoint
@@ -59,12 +60,14 @@
  * - `rerun`: a violation's printed rerun command, pasted into a POSIX shell,
  *   runs exactly that test, also when its name holds a shell's special
  *   characters and when the property sits inside another suite.
- * - `route`: each history runs under the route of the test that runs it
- *   (`fixed seed`, `random seed`, `fixed history`, `calibration`,
- *   `probe calibration`, `determinism`, `enumerated`), and a path replay of a
- *   random campaign runs under `fixed history` (TanStack/oracles#1
- *   coordinator decision, 2026-11-08: a route describes the campaign that
- *   runs).
+ * - `route`: each history runs under the route, in the one vocabulary of
+ *   `oracle-route.ts`, of the campaign that runs it: a fixed-seed campaign
+ *   `fixed seed`; the random campaign `random seed`, or `fixed seed` when a
+ *   seed-only replay reseeds it (as every child run here does), or `fixed
+ *   history` in a path replay; a fixed history `fixed history`; an enumerated
+ *   history `case`; calibrations, probe calibrations, and the determinism test
+ *   `calibration` (TanStack/oracles#1 coordinator decisions, 2026-11-08: a
+ *   route describes the campaign that runs, in one vocabulary).
  * - `seed-log`: a random campaign logs exactly one `ORACLE_SEED` line for its
  *   property, the seed it runs, and no other test logs one; a replay tool
  *   reads that line.
@@ -146,7 +149,8 @@ type Draft = {
   noisyProbe: boolean
   predictMode: `match` | `missing` | `extra`
   clock: boolean
-  form: `plain` | `bigint` | `map`
+  form: `plain` | `bigint` | `map` | `lossy`
+  zeroNoise: boolean
   labelStyle: `plain` | `shell` | `default`
   nested: boolean
   strictModel: boolean
@@ -261,7 +265,11 @@ const draft: fc.Arbitrary<Draft> = fc.record({
     { weight: 6, arbitrary: fc.constant(`plain` as const) },
     {
       weight: 1,
-      arbitrary: fc.constantFrom(`bigint` as const, `map` as const),
+      arbitrary: fc.constantFrom(
+        `bigint` as const,
+        `map` as const,
+        `lossy` as const,
+      ),
     },
   ),
   // An enumerated property's labels.
@@ -271,6 +279,10 @@ const draft: fc.Arbitrary<Draft> = fc.record({
       weight: 1,
       arbitrary: fc.constantFrom(`shell` as const, `default` as const),
     },
+  ),
+  zeroNoise: fc.oneof(
+    { weight: 9, arbitrary: fc.constant(false) },
+    { weight: 1, arbitrary: fc.constant(true) },
   ),
   nested: fc.oneof(
     { weight: 4, arbitrary: fc.constant(false) },
@@ -339,6 +351,7 @@ function resolveSuite({ drafts }: Suite): Plan {
         ...(d.timing === `slow` ? { slow: true, timeout: 100 } : {}),
         ...(d.clock ? { clock: true } : {}),
         ...(d.form !== `plain` ? { form: d.form } : {}),
+        ...(d.zeroNoise ? { zeroNoise: true } : {}),
         ...(!generated && d.labelStyle !== `plain`
           ? { labelStyle: d.labelStyle }
           : {}),
@@ -639,7 +652,10 @@ function predictSpec(
     const histories = ran(`determinism`).filter((_, at) => at % 2 === 0)
     // An unbound probe that enters on every other run changes only the probe
     // records a run keeps, which the determinism test also compares.
-    const varies = spec.nondeterministic || spec.noisyProbe === true
+    const varies =
+      spec.nondeterministic ||
+      spec.noisyProbe === true ||
+      spec.zeroNoise === true
     for (const history of histories) {
       if (history.includes(6)) return { kind: `setup` }
       if (varies) return { kind: `determinism` }
@@ -788,16 +804,16 @@ const lateCalls = (plan: Plan, logged: ReadonlyArray<LogEntry>) => {
   return { min, max }
 }
 
-// The route each test registers for the histories it runs; a path replay
-// of a random campaign runs a recorded history.
+// The route of the campaign each test runs. Every child run sets a
+// seed-only replay (ORACLE_SEED), which reseeds the random campaign; a path
+// replay of it runs one recorded history.
 function owedRoute(name: string, replay = false): string {
   if (name.startsWith(`fixed seed`)) return `fixed seed`
-  if (name === `random seed`) return replay ? `fixed history` : `random seed`
+  if (name === `random seed`) return replay ? `fixed history` : `fixed seed`
   if (name.startsWith(`fixed history:`)) return `fixed history`
-  if (name.startsWith(`calibration: probe `)) return `probe calibration`
-  if (name.startsWith(`calibration:`)) return `calibration`
-  if (name === `determinism`) return `determinism`
-  return `enumerated`
+  if (name.startsWith(`calibration:`) || name === `determinism`)
+    return `calibration`
+  return `case`
 }
 
 // The self-oracle's own reach: states of the framework that its laws are
@@ -837,6 +853,7 @@ const frameworkStates = [
   `strict-model-cut-short`,
   `late-probe-after-driver-error`,
   `replayed-route`,
+  `lossy-history`,
 ] as const
 
 function frameworkReach(
@@ -908,6 +925,7 @@ function frameworkReach(
     if (spec.labelStyle === `default`) {
       reached.add(`unlabelled-enumerated`)
       if (spec.form === `map`) reached.add(`map-history`)
+      if (spec.form === `lossy`) reached.add(`lossy-history`)
     }
     if (
       spec.strictModel &&
@@ -1602,6 +1620,7 @@ const generatedDraft = (overrides: Partial<Draft>): Draft => ({
   predictMode: `match`,
   clock: false,
   form: `plain`,
+  zeroNoise: false,
   labelStyle: `plain`,
   nested: false,
   strictModel: false,
@@ -1867,6 +1886,19 @@ oracleProperty({
           ...generatedDraft({ form: `bigint`, labelStyle: `default` }),
           source: { kind: `enumerated`, histories: [[3, 1], [0]] },
         },
+      ),
+      fixedHistory(
+        `an unlabelled enumerated property names -0 and 0 apart`,
+        [`unlabelled-enumerated`, `lossy-history`],
+        {
+          ...generatedDraft({ form: `lossy`, labelStyle: `default` }),
+          source: { kind: `enumerated`, histories: [[0], [2], [1]] },
+        },
+      ),
+      fixedHistory(
+        `the determinism test tells -0 from 0`,
+        [`determinism-caught`],
+        generatedDraft({ zeroNoise: true, fixed: [at([0])] }),
       ),
       fixedHistory(
         `a rerun command survives a shell`,
