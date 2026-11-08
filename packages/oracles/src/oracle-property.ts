@@ -39,10 +39,14 @@
  *   the `actual` and `expected` values gets the test runner's usual diff;
  *   `differs` builds one from an exact comparison.
  *
- * Each history is one test, named by `label`. A violation fails it with an
- * `OracleViolation` that names the property, the law, the checkpoint, the
- * difference, and the command that reruns that history (the name is escaped,
- * because Vitest reads `-t` as a regular expression). Every observation is
+ * Each history is one test, named by `label`, or, without one, by the
+ * history's stable text, in which bigints, Maps, Sets, and undefined keep
+ * their distinctions. A violation fails it with an `OracleViolation` that
+ * names the property, the law, the checkpoint, the difference, the history
+ * in that text, and the command that reruns that history: a `-t` pattern
+ * that matches the test's full name, its enclosing suites' names included,
+ * escaped because Vitest reads `-t` as a regular expression, and quoted for a
+ * POSIX shell, so it pastes as printed. Every observation is
  * also offered to `globalThis.__oracleObserve` when a harness installs one,
  * so the gap report can tell an output the check does not compare from one
  * that never changed.
@@ -542,6 +546,12 @@ type BoundOptions<THistory, TExpected, TPlan> = OraclePropertyOptions<
 const stateName = (state: DeclaredState) =>
   typeof state === `string` ? state : state.name
 
+/** A Vitest test or suite, as far as its full name needs. */
+interface NamedTask {
+  name: string
+  suite?: NamedTask
+}
+
 /** One test that a property registers. */
 interface PropertyTest {
   name: string
@@ -550,7 +560,8 @@ interface PropertyTest {
    * from a random-only one or a framework check (`__oracleRoute`).
    */
   route: string
-  run: () => Promise<void>
+  /** Runs the test; `task` is Vitest's record of it, for its full name. */
+  run: (task: NamedTask) => Promise<void>
   /** Path replays this test runs during; empty stands aside during every one. */
   replays: ReadonlyArray<string>
 }
@@ -576,9 +587,9 @@ export function oracleProperty<THistory, TExpected, TPlan = THistory>(
     for (const test of tests)
       oracleReplayTest(it, ...test.replays)(
         test.name,
-        () => {
+        ({ task }) => {
           globalThis.__oracleRoute?.(test.route)
-          return test.run()
+          return test.run(task)
         },
         options.timeout ?? 120_000,
       )
@@ -590,45 +601,33 @@ function enumeratedTests<THistory, TExpected, TPlan>(
   histories: ReadonlyArray<THistory>,
 ): Array<PropertyTest> {
   const spacing = Math.max(1, Math.ceil(histories.length / 8))
-  const sampled = histories.filter((_, index) => index % spacing === 0)
+  const named = histories.map((history) => ({
+    name: options.label?.(history) ?? traceText(history),
+    history,
+  }))
   return [
-    ...histories.map((history) => enumeratedTest(options, history)),
-    ...calibrationTests(options, () =>
-      histories.map((history) => ({
-        name: options.label?.(history) ?? JSON.stringify(history),
-        history,
-      })),
-    ),
+    ...named.map(({ name, history }) => enumeratedTest(options, name, history)),
+    ...calibrationTests(options, () => named),
     determinismTest(options, () =>
-      sampled.map((history) => ({
-        name: options.label?.(history) ?? JSON.stringify(history),
-        history,
-      })),
+      named.filter((_, index) => index % spacing === 0),
     ),
   ]
 }
 
 function enumeratedTest<THistory, TExpected, TPlan>(
   options: OraclePropertyOptions<THistory, TExpected, TPlan>,
+  name: string,
   history: THistory,
 ): PropertyTest {
-  {
-    const name = options.label?.(history) ?? JSON.stringify(history)
-    return {
-      name,
-      route: `enumerated`,
-      replays: [],
-      run: async () => {
-        const { verdict } = await runOne(options, history)
-        if (verdict.kind === `violation`)
-          throw failure(
-            options,
-            verdict,
-            history,
-            rerunByName(options.id, name),
-          )
-      },
-    }
+  return {
+    name,
+    route: `enumerated`,
+    replays: [],
+    run: async (task) => {
+      const { verdict } = await runOne(options, history)
+      if (verdict.kind === `violation`)
+        throw failure(options, verdict, history, rerunOf(task))
+    },
   }
 }
 
@@ -729,44 +728,34 @@ export function useOracleClock({
   }
 }
 
-/** Runs only the driver, for a history's recorded trace. */
-async function recordTrace<TPlan>(
+/**
+ * Everything a deterministic driver repeats in one run of a history: its
+ * trace, where a controlled clock passed its bound, and its probe calls. A
+ * driver error ends the determinism test with that error.
+ */
+async function repeatedRecord<TPlan>(
   driver: (
     plan: TPlan,
     observe: (checkpoint: string, value: unknown) => void,
   ) => Promise<void> | void,
   plan: TPlan,
 ): Promise<Array<Observation>> {
-  const observations: Array<Observation> = []
-  const window: ProbeWindow = {
-    reached: new Set(),
-    entered: new Set(),
-    open: true,
-  }
-  historyTrace = observations
-  clockSpin = undefined
-  try {
-    await probeWindows.run(window, () =>
-      driver(plan, (checkpoint, value) => {
-        observations.push({ checkpoint, value })
-      }),
-    )
-  } finally {
-    historyTrace = undefined
-  }
-  window.open = false
-  // Where a controlled clock passed its bound is part of the trace.
-  const spin = takeClockSpin()
-  if (spin) observations.push({ checkpoint: `clock`, value: spin.at })
-  // The probe calls a history makes are part of what a deterministic driver repeats.
-  observations.push({
-    checkpoint: `probes`,
-    value: {
-      reached: [...window.reached].sort(),
-      entered: [...window.entered].sort(),
+  const { observations, driverError, probes, spin } = await recordGuarded(
+    driver,
+    plan,
+  )
+  if (driverError) throw driverError.error
+  return [
+    ...observations,
+    ...(spin ? [{ checkpoint: `clock`, value: spin.at }] : []),
+    {
+      checkpoint: `probes`,
+      value: {
+        reached: [...probes.reached].sort(),
+        entered: [...probes.entered].sort(),
+      },
     },
-  })
-  return observations
+  ]
 }
 
 /** The plan a history resolves to; a history is its own plan by default. */
@@ -805,8 +794,8 @@ function determinismTest<THistory, TExpected, TPlan>(
       for (const { name, history } of histories()) {
         const plan = planOf(options, history)
         const [first, second] = [
-          await recordTrace(options.driver, plan),
-          await recordTrace(options.driver, plan),
+          await repeatedRecord(options.driver, plan),
+          await repeatedRecord(options.driver, plan),
         ]
         const length = Math.max(first.length, second.length)
         for (let index = 0; index < length; index += 1) {
@@ -854,30 +843,27 @@ async function runOne<THistory, TExpected, TPlan>(
     forced,
   )
   // A spin ranks as a driver error does, by where it happens: the trace is
-  // judged up to it, and a driver error after it does not decide.
+  // judged up to it, and a driver error after it does not decide. A trace it
+  // cut short that the model or check cannot read leaves the spin to decide,
+  // as a driver error does.
   if (spin) {
-    const { verdict, reached } = judge(
-      options,
-      plan,
-      observations.slice(0, spin.at),
-      undefined,
-      probes,
+    const cut = observations.slice(0, spin.at)
+    const clock = violation(
+      `clock`,
+      `the controlled clock fired more than ${spin.maxTimers} timers in one history: work that never goes quiet (raise maxTimers if a legal history needs more)`,
+      `bounded clock`,
     )
+    let judged: { verdict: Verdict; reached: Set<string> }
+    try {
+      judged = judge(options, plan, cut, undefined, probes)
+    } catch {
+      return { verdict: clock, reached: new Set() }
+    }
+    const { verdict, reached } = judged
     const recorded =
       verdict.kind === `violation` &&
-      observations
-        .slice(0, spin.at)
-        .some(({ checkpoint }) => checkpoint === verdict.checkpoint)
-    return recorded
-      ? { verdict, reached }
-      : {
-          verdict: violation(
-            `clock`,
-            `the controlled clock fired more than ${spin.maxTimers} timers in one history: work that never goes quiet (raise maxTimers if a legal history needs more)`,
-            `bounded clock`,
-          ),
-          reached,
-        }
+      cut.some(({ checkpoint }) => checkpoint === verdict.checkpoint)
+    return { verdict: recorded ? verdict : clock, reached }
   }
   return judge(options, plan, observations, driverError, probes)
 }
@@ -1096,7 +1082,7 @@ function failure<THistory>(
       `${id} violated at checkpoint "${verdict.checkpoint}"${verdict.law ? ` (law: ${verdict.law})` : ``}.`,
       `Law: ${law.statement}`,
       `Difference: ${verdict.difference}`,
-      `History: ${JSON.stringify(history)}`,
+      `History: ${traceText(history)}`,
       `Authority: ${law.authority}`,
       `Known limits: ${law.limits}`,
       `Rerun: ${rerun}`,
@@ -1112,13 +1098,19 @@ function failure<THistory>(
 }
 
 /**
- * A Vitest `-t` argument that matches exactly the test `name` in the suite
- * `suite`. Vitest 4 matches `-t` against the suite and test names joined by a
- * space, Vitest 5 joined by ` > `, so the pattern accepts either between them.
+ * The command that reruns exactly one test: a Vitest `-t` pattern that
+ * matches its full name, the names of its suites and its own, in a POSIX
+ * shell's single quotes. Vitest 4 matches `-t` against those names joined by
+ * a space, Vitest 5 joined by ` > `, so the pattern accepts either between
+ * them.
  */
-function rerunByName(suite: string, name: string): string {
+function rerunOf(task: NamedTask): string {
+  const names: Array<string> = []
+  for (let at: NamedTask | undefined = task; at; at = at.suite)
+    names.unshift(at.name)
   const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
-  return `-t ${JSON.stringify(`^${escape(suite)}(?: | > )${escape(name)}$`)}`
+  const pattern = `^${names.map(escape).join(`(?: | > )`)}$`
+  return `-t '${pattern.replace(/'/g, `'\\''`)}'`
 }
 
 function generatedTests<THistory, TExpected, TPlan>(
@@ -1296,19 +1288,14 @@ function generatedTests<THistory, TExpected, TPlan>(
     name: `fixed history: ${fixed.name}`,
     route: `fixed history`,
     replays: [],
-    run: async () => {
+    run: async (task) => {
       if (!source.arbitrary.canShrinkWithoutContext(fixed.history))
         throw new Error(
           `${id}: fixed history "${fixed.name}" is not a history the arbitrary can generate. A fixed history must stay inside the generated language, or the property must declare the missing dimension as a limit.`,
         )
       const { verdict, reached } = await runOne(options, fixed.history)
       if (verdict.kind === `violation`)
-        throw failure(
-          options,
-          verdict,
-          fixed.history,
-          rerunByName(id, `fixed history: ${fixed.name}`),
-        )
+        throw failure(options, verdict, fixed.history, rerunOf(task))
       const missing = (fixed.enters ?? []).filter(
         (state) => !reached.has(state),
       )

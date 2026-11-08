@@ -28,11 +28,27 @@
  * history holds a 0 and `false` otherwise, `always` calls it with `true` in
  * every history, `never` calls it with `false` in every history, `unreached`
  * never calls it, and `late` calls it as `agree` does and once more, with
- * `true`, from a timer it does not await. With `overReport`, the spec also reports `saw-0`
+ * `true`, from a timer that it starts as it returns or throws and does not
+ * await, so the call always comes after the history ended. A `late` spec's
+ * file waits after its last test, so the last history's call still lands
+ * inside the run. With `overReport`, the spec also reports `saw-0`
  * as reached in every history, so only the agreement can keep its count
  * right. `predict` is passed when the spec binds a probe, unless
  * `predictMode` is `missing`; with `extra` it is passed although no state is
  * bound.
+ *
+ * A history's `form` is how the property holds its items: as the array
+ * itself, as `{ items, tag: 1n }` (a bigint, which JSON cannot print), or as
+ * `new Map([["items", items]])` (which JSON prints as `{}`). The arbitrary,
+ * constructed and fixed histories, and every part use that form; the log
+ * records the items. An enumerated spec labels its histories as
+ * `items a | b`, or, with `labelStyle` `shell`, adds a shell's special
+ * characters to that label, or, with `default`, passes no label. A `nested`
+ * spec registers its property inside `describe(outerSuite)`. A
+ * `strictModel` spec's model throws when the trace holds fewer items than
+ * the history, as a model that indexes the trace would. The fixture records
+ * the route registered through `__oracleRoute` when each history runs, in
+ * the log beside it.
  *
  * The synthetic ids come from a fixed pool, which this fixture registers with
  * `configureOracles`. The framework's own id, `self-oracle.framework`, is
@@ -41,7 +57,7 @@
  */
 import { appendFileSync } from 'node:fs'
 import fc from 'fast-check'
-import { expect, vi } from 'vitest'
+import { afterAll, beforeEach, describe, expect, vi } from 'vitest'
 import {
   configureOracles,
   oracleProperty,
@@ -65,6 +81,12 @@ configureOracles({
 })
 
 export type SyntheticHistory = ReadonlyArray<number>
+
+/** The suite a `nested` spec registers its property in. */
+export const outerSuite = `outer (nested)`
+
+/** The extra text a `shell` label carries: a shell expands or ends at each. */
+export const shellText = `$HOME \`true\` 'q' "q" \\`
 
 export type SyntheticSpec = {
   id: (typeof syntheticIds)[number]
@@ -105,6 +127,14 @@ export type SyntheticSpec = {
   predictMode?: `missing` | `extra`
   /** Runs every history on a controlled clock, where a 7 spins it. */
   clock?: boolean
+  /** How the property holds a history's items; the array itself when absent. */
+  form?: `bigint` | `map`
+  /** An enumerated label with shell characters, or no label at all. */
+  labelStyle?: `shell` | `default`
+  /** Registers the property inside `describe(outerSuite)`. */
+  nested?: boolean
+  /** A model that throws on a trace with fewer items than the history. */
+  strictModel?: boolean
 }
 
 /** The synthetic language: one to three items, mostly ordinary ones. */
@@ -123,6 +153,41 @@ const controlledClock = () => useOracleClock({ maxTimers: 100 })
 const syntheticProbe = `synthetic#saw-0`
 let nonce = 0
 let noise = 0
+// The route registered for the running test, as the gap report reads it.
+let route: string | undefined
+globalThis.__oracleRoute = (registered) => {
+  route = registered
+}
+beforeEach(() => {
+  route = undefined
+})
+
+/** The property's form of a history, and the items it holds. */
+type Formed = unknown
+const formOf =
+  (spec: SyntheticSpec) =>
+  (items: SyntheticHistory): Formed =>
+    spec.form === `bigint`
+      ? { items, tag: 1n }
+      : spec.form === `map`
+        ? new Map([[`items`, items]])
+        : items
+const itemsOf =
+  (spec: SyntheticSpec) =>
+  (history: Formed): SyntheticHistory => {
+    if (spec.form === `bigint`) {
+      const formed = history as { items?: unknown; tag?: unknown } | null
+      if (formed?.tag === 1n && Array.isArray(formed.items))
+        return formed.items as SyntheticHistory
+      throw new Error(`not a bigint-form history`)
+    }
+    if (spec.form === `map`) {
+      if (history instanceof Map && Array.isArray(history.get(`items`)))
+        return history.get(`items`) as SyntheticHistory
+      throw new Error(`not a map-form history`)
+    }
+    return history as SyntheticHistory
+  }
 
 const enteredStates = (history: SyntheticHistory) =>
   allStates.filter((state) => history.includes(Number(state.slice(4))))
@@ -158,14 +223,15 @@ const probeCondition = (
  */
 function syntheticDriver(spec: SyntheticSpec, mutant = false) {
   return async (
-    history: SyntheticHistory,
+    formed: Formed,
     observe: (checkpoint: string, value: unknown) => void,
   ) => {
+    const history = itemsOf(spec)(formed)
     const log = process.env.SELF_ORACLE_LOG
     if (log)
       appendFileSync(
         log,
-        `${JSON.stringify({ id: spec.id, test: expect.getState().currentTestName ?? ``, history })}\n`,
+        `${JSON.stringify({ id: spec.id, test: expect.getState().currentTestName ?? ``, history, route: route ?? null })}\n`,
       )
     if (spec.slow) await new Promise((resolve) => setTimeout(resolve, 300))
     const condition = probeCondition(spec, history)
@@ -183,18 +249,6 @@ function syntheticDriver(spec: SyntheticSpec, mutant = false) {
             __oracleProbe?: (name: string, condition: unknown) => void
           }
         ).__oracleProbe?.(`synthetic#noise`, noise++ % 2 === 0)
-    // Production work the driver does not await, calling its probe after its history.
-    if (spec.probe === `late` && history.includes(0))
-      setTimeout(
-        () =>
-          process.env.NODE_ENV !== `production` &&
-          (
-            globalThis as {
-              __oracleProbe?: (name: string, condition: unknown) => void
-            }
-          ).__oracleProbe?.(`synthetic#saw-0`, true),
-        0,
-      )
     if (spec.reachVia === `observe`)
       for (const state of reachedStates(spec)(history)) observe(`reach`, state)
     // A real timer first: a clock that an earlier history released must have
@@ -216,6 +270,19 @@ function syntheticDriver(spec: SyntheticSpec, mutant = false) {
       }
     } finally {
       clock?.release()
+      // Production work the driver does not await, calling its probe after
+      // its history, whether the driver returns or throws.
+      if (spec.probe === `late` && history.includes(0))
+        setTimeout(
+          () =>
+            process.env.NODE_ENV !== `production` &&
+            (
+              globalThis as {
+                __oracleProbe?: (name: string, condition: unknown) => void
+              }
+            ).__oracleProbe?.(`synthetic#saw-0`, true),
+          0,
+        )
     }
     // Last, so a comparison of only the first observations misses it.
     if (spec.nondeterministic) observe(`nonce`, nonce++)
@@ -226,6 +293,7 @@ function syntheticCheck(
   history: SyntheticHistory,
   trace: ReadonlyArray<{ checkpoint: string; value: unknown }>,
 ) {
+  // `history` is the items of a history in any form.
   for (const { checkpoint, value } of trace) {
     // Only items carry the law; a nonce is not an item.
     if (!checkpoint.startsWith(`item`)) continue
@@ -244,9 +312,9 @@ function syntheticCheck(
 
 function syntheticCalibrations(
   spec: SyntheticSpec,
-): Array<Calibration<SyntheticHistory, SyntheticHistory>> {
+): Array<Calibration<Formed, Formed>> {
   return spec.calibrations.map(
-    ({ name, kind }): Calibration<SyntheticHistory, SyntheticHistory> => {
+    ({ name, kind }): Calibration<Formed, Formed> => {
       // A mutant driver records a 3 in place of the first item.
       if (kind === `driver`)
         return { name, law: `three`, driver: syntheticDriver(spec, true) }
@@ -270,20 +338,39 @@ function syntheticCalibrations(
 
 export function syntheticProperty(spec: SyntheticSpec): void {
   const id = spec.unregistered ? `self-oracle.unregistered` : spec.id
+  const form = formOf(spec)
+  const items = itemsOf(spec)
   const parts = {
-    model: () => undefined,
+    model: spec.strictModel
+      ? (history: Formed, trace: ReadonlyArray<{ checkpoint: string }>) => {
+          const recorded = trace.filter(({ checkpoint }) =>
+            checkpoint.startsWith(`item`),
+          ).length
+          if (recorded < items(history).length)
+            throw new TypeError(
+              `the strict model read item ${recorded}, which the trace does not hold`,
+            )
+          return undefined
+        }
+      : () => undefined,
     // Without `reached`, the framework counts the driver's `reach` records.
-    ...(spec.reachVia === `reached` ? { reached: reachedStates(spec) } : {}),
+    ...(spec.reachVia === `reached`
+      ? { reached: (history: Formed) => reachedStates(spec)(items(history)) }
+      : {}),
     ...((spec.probe && spec.predictMode !== `missing`) ||
     spec.predictMode === `extra`
       ? {
-          predict: (history: SyntheticHistory) => ({
-            'saw-0': history.includes(0),
+          predict: (history: Formed) => ({
+            'saw-0': items(history).includes(0),
           }),
         }
       : {}),
     driver: syntheticDriver(spec),
     calibrations: syntheticCalibrations(spec),
+    check: (
+      history: Formed,
+      trace: ReadonlyArray<{ checkpoint: string; value: unknown }>,
+    ) => syntheticCheck(items(history), trace),
     ...(spec.timeout !== undefined ? { timeout: spec.timeout } : {}),
   }
   const law = {
@@ -292,45 +379,63 @@ export function syntheticProperty(spec: SyntheticSpec): void {
     limits: `Synthetic; histories of one to three integers.`,
     owner: `oracleProperty framework`,
   }
-  if (spec.source.kind === `enumerated`) {
+  // The last history's late probe call comes after its test; the file waits
+  // for it, so the run still reports it.
+  if (spec.probe === `late`)
+    afterAll(() => new Promise((resolve) => setTimeout(resolve, 50)))
+  const register = () => {
+    if (spec.source.kind === `enumerated`) {
+      oracleProperty({
+        id,
+        law,
+        histories: spec.source.histories.map(form),
+        // A label with `|`, which a rerun command must escape.
+        ...(spec.labelStyle === `default`
+          ? {}
+          : {
+              label: (history: Formed) =>
+                `items ${items(history).join(` | `)}${spec.labelStyle === `shell` ? ` ${shellText}` : ``}`,
+            }),
+        ...parts,
+      })
+      return
+    }
+    // With a probe, `saw-0` is a probe-bound state wherever it is declared.
+    const declare = (state: string) =>
+      spec.probe && state === `saw-0`
+        ? { name: state, probe: syntheticProbe }
+        : state
+    const arbitrary =
+      spec.form === undefined
+        ? (syntheticArbitrary as fc.Arbitrary<Formed>)
+        : syntheticArbitrary.map(form, (value) => items(value))
     oracleProperty({
       id,
       law,
-      histories: spec.source.histories,
-      // A label with `|`, which a rerun command must escape.
-      label: (history) => `items ${history.join(` | `)}`,
+      histories: {
+        arbitrary,
+        states: spec.states.map(declare),
+        measured: allStates
+          .filter((state) => !spec.states.includes(state))
+          .map(declare),
+        runs: spec.source.runs,
+        fixedSeeds: [spec.source.seed],
+        constructed: spec.constructed.map(({ name, prefix, enters }) => ({
+          name,
+          enters,
+          // A constructed history extends a generated history, so its histories
+          // depend on the campaign's seed, as real constructed histories do.
+          build: (generated: Formed) =>
+            form([...prefix, ...items(generated)].slice(0, 3)),
+        })),
+        fixed: spec.fixed.map((fixed) => ({
+          ...fixed,
+          history: form(fixed.history),
+        })),
+      },
       ...parts,
-      check: syntheticCheck,
     })
-    return
   }
-  // With a probe, `saw-0` is a probe-bound state wherever it is declared.
-  const declare = (state: string) =>
-    spec.probe && state === `saw-0`
-      ? { name: state, probe: syntheticProbe }
-      : state
-  oracleProperty({
-    id,
-    law,
-    histories: {
-      arbitrary: syntheticArbitrary,
-      states: spec.states.map(declare),
-      measured: allStates
-        .filter((state) => !spec.states.includes(state))
-        .map(declare),
-      runs: spec.source.runs,
-      fixedSeeds: [spec.source.seed],
-      constructed: spec.constructed.map(({ name, prefix, enters }) => ({
-        name,
-        enters,
-        // A constructed history extends a generated history, so its histories
-        // depend on the campaign's seed, as real constructed histories do.
-        build: (generated: SyntheticHistory) =>
-          [...prefix, ...generated].slice(0, 3),
-      })),
-      fixed: spec.fixed,
-    },
-    ...parts,
-    check: syntheticCheck,
-  })
+  if (spec.nested) describe(outerSuite, register)
+  else register()
 }

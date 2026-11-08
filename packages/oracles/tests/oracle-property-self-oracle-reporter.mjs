@@ -1,7 +1,8 @@
-// A Vitest reporter for the oracleProperty self-oracle. It writes every test's
-// state and errors, with their causes (fast-check attaches a property's error
-// as the cause of its failure), and the console output each test printed, to
-// the file named by SELF_ORACLE_REPORT.
+// A Vitest reporter for the oracleProperty self-oracle. It writes every
+// file's load errors, its suites' included, and every test's state and
+// errors, with their causes (fast-check attaches a property's error as the
+// cause of its failure), and the console output each test printed, to the
+// file named by SELF_ORACLE_REPORT.
 import { writeFileSync } from 'node:fs'
 
 /**
@@ -36,7 +37,14 @@ export default class SelfOracleReporter {
   onTestRunEnd(testModules, unhandledErrors) {
     const files = testModules.map((module) => ({
       file: module.moduleId,
-      errors: (module.errors?.() ?? []).map(serialize),
+      // A suite's collection errors count as the file's: a property
+      // registered inside a describe fails to load there.
+      errors: [
+        ...(module.errors?.() ?? []),
+        ...[...module.children.allSuites()].flatMap(
+          (suite) => suite.errors?.() ?? [],
+        ),
+      ].map(serialize),
       tests: [...module.children.allTests()].map((test) => ({
         name: test.fullName,
         state: test.result().state,

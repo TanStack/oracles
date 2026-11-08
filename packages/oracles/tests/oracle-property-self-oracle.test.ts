@@ -8,13 +8,17 @@
  * predicts. The laws, each judged per test or per probe:
  *
  * - `registration`: a property registers its campaigns, fixed histories, calibrations, and
- *   determinism test, or fails to load when its id is not a registered
+ *   determinism test, and an enumerated property without a `label` gives
+ *   distinct histories distinct test names, or fails to load when its id is not a registered
  *   oracle property, a required state has no constructed history, or a constructed history names an
  *   undeclared state.
  * - `verdict`: a test fails with a violation of law L exactly when its first
- *   failing history violates L. Within one history a driver error decides
+ *   failing history violates L, whatever values the history holds (a bigint
+ *   or a Map too). Within one history a driver error decides
  *   first, then a law violation, then a constructed history that misses its state; a driver error
- *   after a recorded violation becomes that violation's cause.
+ *   after a recorded violation becomes that violation's cause. A model that
+ *   cannot read the trace a driver error cut short leaves the driver error to
+ *   decide.
  * - `shrink`: a campaign's reported failure keeps the kind and law of its first
  *   failure, and its counterexample still has them.
  * - `membership`: a fixed history, or the history a constructed history builds, outside the language fails.
@@ -39,17 +43,28 @@
  *   calibrations, which pass exactly when a candidate whose clean trace passes
  *   disagrees with the forced entry. A probe-bound state without `predict`, or
  *   `predict` without one, fails to load. A call after its history ended is an
- *   unhandled error of the run, and a driver whose probe records differ between
+ *   unhandled error of the run, one for each such call, also after a driver
+ *   that threw, and a driver whose probe records differ between
  *   two runs fails the determinism test.
  * - `clock`: a driver on `useOracleClock` whose clock passes its bound fails
  *   that history under law `bounded clock` at checkpoint `clock`, ranked as
  *   a driver error is: a violation recorded before the spin still decides,
  *   and a driver error after it does not (maintainer decision, 2026-11-06).
+ *   A model that cannot read the trace cut at the spin leaves the spin to
+ *   decide.
  * - `timeout`: a property's `timeout` limits every test it registers.
  * - `replay`: replaying a failing campaign's seed and path runs only that
  *   property's random campaign, starts from the counterexample itself, and
  *   reproduces it.
- * - `rerun`: a violation's printed rerun command runs exactly that test.
+ * - `rerun`: a violation's printed rerun command, pasted into a POSIX shell,
+ *   runs exactly that test, also when its name holds a shell's special
+ *   characters and when the property sits inside another suite.
+ * - `route`: each history runs under the route of the test that runs it
+ *   (`fixed seed`, `random seed`, `fixed history`, `calibration`,
+ *   `probe calibration`, `determinism`, `enumerated`), and a path replay of a
+ *   random campaign runs under `fixed history` (TanStack/oracles#1
+ *   coordinator decision, 2026-11-08: a route describes the campaign that
+ *   runs).
  * - `seed-log`: a random campaign logs exactly one `ORACLE_SEED` line for its
  *   property, the seed it runs, and no other test logs one; a replay tool
  *   reads that line.
@@ -61,13 +76,17 @@
  * that work which never goes quiet on a controlled clock fails its history; and the oracle rubric's replay
  * (ORC-007), calibration (ORC-006), and declared-reach (ORC-015) rules.
  *
- * Limits: synthetic properties with histories of one to three integers, one
- * or two per run. The model learns which histories a test ran from the
+ * Limits: synthetic properties with histories of one to three integers, held
+ * as an array, a bigint-tagged object, or a Map, one or two per run. The model learns which histories a test ran from the
  * synthetic driver's log, and relies on fast-check running a campaign's examples
  * (its constructed histories) first, in order. A replay or rerun probe covers
  * every failing campaign but only the first violating fixed or enumerated history of each
- * property. The gap report's observation hook, `forwardCut`, `withinTurns`,
- * and `differs` have no law here. Only generated sources bind a probe, and only
+ * property. The model learns an unlabelled enumerated history's test name
+ * from the log, so it checks that names are distinct, not their text. A slow
+ * spec's late probe calls and routes are not counted exactly: its driver runs
+ * on after its test times out. The gap report's observation hook,
+ * `forwardCut`, and `differs` have no law here; `withinTurns` has its own
+ * oracle. Only generated sources bind a probe, and only
  * `saw-0`. A late probe is judged by whether the run reports it, not by which
  * test Vitest blames.
  */
@@ -85,6 +104,8 @@ import { fileURLToPath } from 'node:url'
 import fc from 'fast-check'
 import { oracleProperty, pass, violation } from '../src/index.js'
 import {
+  outerSuite,
+  shellText,
   syntheticArbitrary,
   syntheticIds,
 } from './oracle-property-self-oracle-fixture.js'
@@ -125,6 +146,10 @@ type Draft = {
   noisyProbe: boolean
   predictMode: `match` | `missing` | `extra`
   clock: boolean
+  form: `plain` | `bigint` | `map`
+  labelStyle: `plain` | `shell` | `default`
+  nested: boolean
+  strictModel: boolean
 }
 type Suite = { drafts: Array<Draft> }
 
@@ -231,6 +256,30 @@ const draft: fc.Arbitrary<Draft> = fc.record({
     { weight: 3, arbitrary: fc.constant(false) },
     { weight: 1, arbitrary: fc.constant(true) },
   ),
+  // How the property holds a history: values JSON cannot print or tell apart.
+  form: fc.oneof(
+    { weight: 6, arbitrary: fc.constant(`plain` as const) },
+    {
+      weight: 1,
+      arbitrary: fc.constantFrom(`bigint` as const, `map` as const),
+    },
+  ),
+  // An enumerated property's labels.
+  labelStyle: fc.oneof(
+    { weight: 4, arbitrary: fc.constant(`plain` as const) },
+    {
+      weight: 1,
+      arbitrary: fc.constantFrom(`shell` as const, `default` as const),
+    },
+  ),
+  nested: fc.oneof(
+    { weight: 4, arbitrary: fc.constant(false) },
+    { weight: 1, arbitrary: fc.constant(true) },
+  ),
+  strictModel: fc.oneof(
+    { weight: 3, arbitrary: fc.constant(false) },
+    { weight: 1, arbitrary: fc.constant(true) },
+  ),
 })
 const suite: fc.Arbitrary<Suite> = fc.record({
   drafts: fc.array(draft, { minLength: 1, maxLength: 2 }),
@@ -289,6 +338,12 @@ function resolveSuite({ drafts }: Suite): Plan {
         ...(d.predictMode !== `match` ? { predictMode: d.predictMode } : {}),
         ...(d.timing === `slow` ? { slow: true, timeout: 100 } : {}),
         ...(d.clock ? { clock: true } : {}),
+        ...(d.form !== `plain` ? { form: d.form } : {}),
+        ...(!generated && d.labelStyle !== `plain`
+          ? { labelStyle: d.labelStyle }
+          : {}),
+        ...(d.nested ? { nested: true } : {}),
+        ...(d.strictModel ? { strictModel: true } : {}),
         calibrations: d.calibrations.map((kind, at) => ({
           name: `cal-${at}`,
           kind,
@@ -333,7 +388,13 @@ type Outcome = {
   /** For a predicted entry that did not happen: whether the probe was called. */
   diagnosis?: `never-reached` | `false-condition`
 }
-type LogEntry = { id: string; test: string; history: SyntheticHistory }
+type LogEntry = {
+  id: string
+  test: string
+  history: SyntheticHistory
+  /** The route registered for the test when the history ran. */
+  route: string | null
+}
 
 const allowed = (item: number) => [0, 1, 2, 3, 4, 6, 7].includes(item)
 const member = (history: SyntheticHistory) =>
@@ -345,9 +406,23 @@ const constructedMember = (prefix: SyntheticHistory) =>
 // A 7 on a controlled clock spins it: past the clock's bound, the history
 // fails under law `bounded clock` at checkpoint `clock`, ranked as a driver
 // error is, by where it happens. A violation recorded before it still decides;
-// a driver error after it does not.
-function verdictOf(history: SyntheticHistory, clock = false): Outcome {
+// a driver error after it does not. A strict model throws on a trace that a
+// stop cut short, before the history's last item; the stop then decides, as
+// if nothing before it had been recorded.
+const clockOutcome: Outcome = {
+  kind: `violation`,
+  law: `bounded clock`,
+  checkpoint: `clock`,
+}
+function verdictOf(
+  history: SyntheticHistory,
+  clock = false,
+  strict = false,
+): Outcome {
   const stops = (item: number) => item === 6 || (clock && item === 7)
+  const stopAt = history.findIndex(stops)
+  if (strict && stopAt >= 0 && stopAt < history.length - 1)
+    return history[stopAt] === 6 ? { kind: `setup` } : clockOutcome
   for (const [at, item] of history.entries()) {
     if (item === 3 || item === 4) {
       const stop = history.slice(at + 1).find(stops)
@@ -358,8 +433,7 @@ function verdictOf(history: SyntheticHistory, clock = false): Outcome {
       }
     }
     if (item === 6) return { kind: `setup` }
-    if (clock && item === 7)
-      return { kind: `violation`, law: `bounded clock`, checkpoint: `clock` }
+    if (clock && item === 7) return clockOutcome
   }
   return { kind: `pass` }
 }
@@ -411,7 +485,7 @@ function judged(
   history: SyntheticHistory,
   forced?: boolean,
 ): Outcome {
-  const verdict = verdictOf(history, spec.clock === true)
+  const verdict = verdictOf(history, spec.clock === true, spec.strictModel)
   if (verdict.kind !== `pass` || !spec.probe) return verdict
   const predicts = predictsZero(history)
   if (enteredFor(spec, history, forced) === predicts) return verdict
@@ -448,7 +522,28 @@ const forcedCalibrationNames = (spec: SyntheticSpec) =>
           `calibration: probe ${syntheticProbe} ${entered ? `forced entered` : `forced not entered`} (state "saw-0")`,
       )
     : []
-const label = (history: SyntheticHistory) => `items ${history.join(` | `)}`
+// An enumerated history's test name. An unlabelled one is named by the
+// framework; the model learns that name from the log, which records the name
+// of the test that ran each history.
+const frameworkTest = (name: string) =>
+  name === `determinism` || name.startsWith(`calibration:`)
+function enumeratedName(
+  spec: SyntheticSpec,
+  history: SyntheticHistory,
+  logged: ReadonlyArray<LogEntry>,
+): string {
+  if (spec.labelStyle !== `default`)
+    return `items ${history.join(` | `)}${spec.labelStyle === `shell` ? ` ${shellText}` : ``}`
+  const ran = logged.find(
+    (entry) =>
+      entry.id === spec.id &&
+      JSON.stringify(entry.history) === JSON.stringify(history) &&
+      !frameworkTest(entry.test.slice(spec.id.length + 3)),
+  )
+  return ran
+    ? ran.test.slice(spec.id.length + 3)
+    : `(never ran) ${JSON.stringify(history)}`
+}
 const isCampaign = (name: string) =>
   name.startsWith(`fixed seed`) || name === `random seed`
 
@@ -501,7 +596,9 @@ function predictSpec(
   }
   const names =
     spec.source.kind === `enumerated`
-      ? spec.source.histories.map(label)
+      ? spec.source.histories.map((history) =>
+          enumeratedName(spec, history, logged),
+        )
       : [
           `fixed seed ${spec.source.seed}`,
           `random seed`,
@@ -571,7 +668,10 @@ function predictSpec(
   }
   if (spec.source.kind === `enumerated`)
     for (const history of spec.source.histories)
-      tests.set(label(history), verdictOf(history, spec.clock === true))
+      tests.set(
+        enumeratedName(spec, history, logged),
+        verdictOf(history, spec.clock === true, spec.strictModel),
+      )
   else {
     tests.set(names[0]!, campaign(names[0]!))
     tests.set(`random seed`, campaign(`random seed`))
@@ -669,16 +769,36 @@ function suiteModel(
   return new Map(plan.specs.map((spec) => [spec.id, predictSpec(spec, logged)]))
 }
 
-// A late spec calls its probe again, unawaited, after every history holding a
-// 0 that a loaded property ran, and each such firing throws.
-const lateProbeOwed = (plan: Plan, logged: ReadonlyArray<LogEntry>) =>
-  plan.specs.some(
-    (spec) =>
-      spec.probe === `late` &&
-      spec.predictMode !== `missing` &&
-      !spec.unregistered &&
-      logged.some((entry) => entry.id === spec.id && entry.history.includes(0)),
-  )
+// A late spec calls its probe again, unawaited, after every run of a history
+// holding a 0, also when its driver threw, and each such call throws: one
+// unhandled error per run the log records. A slow spec's driver runs on
+// after its test timed out, so its calls may land after the run ended; they
+// count at most once each.
+const lateCalls = (plan: Plan, logged: ReadonlyArray<LogEntry>) => {
+  let min = 0
+  let max = 0
+  for (const spec of plan.specs) {
+    if (spec.probe !== `late`) continue
+    const calls = logged.filter(
+      (entry) => entry.id === spec.id && entry.history.includes(0),
+    ).length
+    max += calls
+    if (!spec.slow) min += calls
+  }
+  return { min, max }
+}
+
+// The route each test registers for the histories it runs; a path replay
+// of a random campaign runs a recorded history.
+function owedRoute(name: string, replay = false): string {
+  if (name.startsWith(`fixed seed`)) return `fixed seed`
+  if (name === `random seed`) return replay ? `fixed history` : `random seed`
+  if (name.startsWith(`fixed history:`)) return `fixed history`
+  if (name.startsWith(`calibration: probe `)) return `probe calibration`
+  if (name.startsWith(`calibration:`)) return `calibration`
+  if (name === `determinism`) return `determinism`
+  return `enumerated`
+}
 
 // The self-oracle's own reach: states of the framework that its laws are
 // about. Each fixed history names the state it witnesses, so every one is reached on
@@ -709,6 +829,14 @@ const frameworkStates = [
   `late-probe-error`,
   `over-reported-reach`,
   `clock-violation`,
+  `bigint-history-violation`,
+  `unlabelled-enumerated`,
+  `map-history`,
+  `shell-label-rerun`,
+  `nested-rerun`,
+  `strict-model-cut-short`,
+  `late-probe-after-driver-error`,
+  `replayed-route`,
 ] as const
 
 function frameworkReach(
@@ -767,7 +895,50 @@ function frameworkReach(
     if (spec.reachVia === `observe` && owed.reach.size > 0)
       reached.add(`observed-reach`)
   }
-  if (lateProbeOwed(plan, run?.log ?? [])) reached.add(`late-probe-error`)
+  if (lateCalls(plan, run?.log ?? []).max > 0) reached.add(`late-probe-error`)
+  for (const spec of plan.specs) {
+    const owed = expected.get(spec.id)!
+    if (!owed.loads) continue
+    const logged = (run?.log ?? []).filter((entry) => entry.id === spec.id)
+    if (
+      spec.form === `bigint` &&
+      [...owed.tests.values()].some((outcome) => outcome.kind === `violation`)
+    )
+      reached.add(`bigint-history-violation`)
+    if (spec.labelStyle === `default`) {
+      reached.add(`unlabelled-enumerated`)
+      if (spec.form === `map`) reached.add(`map-history`)
+    }
+    if (
+      spec.strictModel &&
+      logged.some(({ history }) => {
+        const stopAt = history.findIndex(
+          (item) => item === 6 || (spec.clock === true && item === 7),
+        )
+        return stopAt >= 0 && stopAt < history.length - 1
+      })
+    )
+      reached.add(`strict-model-cut-short`)
+    if (
+      spec.probe === `late` &&
+      logged.some(
+        ({ test, history }) =>
+          test === `${spec.id} > determinism` &&
+          history.includes(0) &&
+          history.includes(6),
+      )
+    )
+      reached.add(`late-probe-after-driver-error`)
+  }
+  for (const { checkpoint, value } of trace) {
+    const probe = value as ProbeRun
+    const spec = plan.specs.find((candidate) => candidate.id === probe.id)
+    if (checkpoint === `rerun` && spec?.labelStyle === `shell`)
+      reached.add(`shell-label-rerun`)
+    if (checkpoint === `rerun` && spec?.nested) reached.add(`nested-rerun`)
+    if (checkpoint === `replay` && (probe.routes?.length ?? 0) > 0)
+      reached.add(`replayed-route`)
+  }
   // A history whose probe is reached without entering the state passes the
   // agreement wherever the model predicts no entry, so the state is reached.
   for (const spec of plan.specs)
@@ -867,6 +1038,8 @@ type ProbeRun = {
   failure?: Failure
   /** Histories the replayed random campaign ran, in order. */
   ran?: Array<SyntheticHistory>
+  /** The routes those histories ran under. */
+  routes?: Array<string | null>
 }
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -888,7 +1061,8 @@ function classify(error: ReportedError | undefined): Failure {
   const seed = /seed: (-?\d+)/.exec(outer)?.[1]
   const path = /path: "([\d:]+)"/.exec(outer)?.[1]
   const counterexample = /Counterexample: (.*)/.exec(outer)?.[1]
-  const rerun = /Rerun: -t ("(?:[^"\\]|\\.)*")/.exec(text)?.[1]
+  // The rerun command as printed, to be pasted into a shell.
+  const rerun = /^Rerun: (-t .*)$/m.exec(text)?.[1]
   const law = /\(law: ([^)]+)\)/.exec(text)?.[1]
   const checkpoint = /violated at checkpoint "([^"]+)"/.exec(text)?.[1]
   const diagnosis = /was never reached/.test(text)
@@ -936,15 +1110,20 @@ function classify(error: ReportedError | undefined): Failure {
     ...(seed !== undefined ? { seed: Number(seed) } : {}),
     ...(path !== undefined ? { path } : {}),
     ...(counterexample !== undefined ? { counterexample } : {}),
-    ...(rerun !== undefined ? { rerun: JSON.parse(rerun) as string } : {}),
+    ...(rerun !== undefined ? { rerun } : {}),
   }
 }
+
+// One shell word.
+const shellWord = (word: string) => `'${word.replace(/'/g, `'\\''`)}'`
 
 function runVitest(
   directory: string,
   files: Array<string>,
   env: Record<string, string>,
-  args: Array<string> = [],
+  // Shell text appended to the command, which then runs in /bin/sh, as a
+  // pasted rerun command does.
+  shellTail?: string,
 ): Report {
   const report = join(directory, `report-${runCount++}.json`)
   // The child reads the default `ORACLE` variables, so none of the parent's
@@ -952,21 +1131,26 @@ function runVitest(
   const childEnv = Object.fromEntries(
     Object.entries(process.env).filter(([key]) => !key.startsWith(`ORACLE_`)),
   )
+  const argv = [
+    vitest,
+    `run`,
+    `--coverage.enabled=false`,
+    `--typecheck.enabled=false`,
+    `--reporter=${join(here, `oracle-property-self-oracle-reporter.mjs`)}`,
+    // Each child scans only its own generated directory. The generated
+    // directory sits outside `tests/`, so the package's default run never
+    // collects a generated spec.
+    `--dir=${directory}`,
+    ...files,
+  ]
   const run = spawnSync(
-    process.execPath,
-    [
-      vitest,
-      `run`,
-      `--coverage.enabled=false`,
-      `--typecheck.enabled=false`,
-      `--reporter=${join(here, `oracle-property-self-oracle-reporter.mjs`)}`,
-      // Each child scans only its own generated directory. The generated
-      // directory sits outside `tests/`, so the package's default run never
-      // collects a generated spec.
-      `--dir=${directory}`,
-      ...args,
-      ...files,
-    ],
+    shellTail === undefined ? process.execPath : `/bin/sh`,
+    shellTail === undefined
+      ? argv
+      : [
+          `-c`,
+          `${[process.execPath, ...argv].map(shellWord).join(` `)} ${shellTail}`,
+        ],
     {
       cwd: packageDirectory,
       env: {
@@ -993,15 +1177,28 @@ function runVitest(
   return { files: reported, stdout: run.stdout, unhandled: unhandled ?? [] }
 }
 
-const short = (id: string, name: string) => name.replace(`${id} > `, ``)
+// A test's name within its property, without a nested spec's outer suite.
+const unnested = (name: string) =>
+  name.startsWith(`${outerSuite} > `) ? name.slice(outerSuite.length + 3) : name
+const short = (id: string, name: string) =>
+  unnested(name).replace(`${id} > `, ``)
 const readLog = (log: string): Array<LogEntry> =>
   existsSync(log)
     ? readFileSync(log, `utf8`)
         .trim()
         .split(`\n`)
         .filter(Boolean)
-        .map((line) => JSON.parse(line) as LogEntry)
+        .map((line) => {
+          const entry = JSON.parse(line) as LogEntry
+          return { ...entry, test: unnested(entry.test) }
+        })
     : []
+// The items of a counterexample that fast-check printed, in any form: the
+// first bracketed list of integers.
+const counterexampleItems = (text: string): SyntheticHistory =>
+  JSON.parse(
+    /\[(?:\d+(?:,\d+)*)?\]/.exec(text)?.[0] ?? `null`,
+  ) as SyntheticHistory
 const statesIn = (report: Report, plan: Plan, files: Array<string>) =>
   plan.specs.flatMap((spec, index) =>
     (report.files.find((file) => file.file === files[index])?.tests ?? []).map(
@@ -1091,6 +1288,9 @@ async function driveSuite(
         const random = replay.files
           .find((file) => file.file === files[index])
           ?.tests.find((test) => test.name.endsWith(`random seed`))
+        const replayed = readLog(replayLog).filter(
+          (entry) => entry.test === `${spec.id} > random seed`,
+        )
         observe(`replay`, {
           id: spec.id,
           target: campaign.name,
@@ -1099,9 +1299,8 @@ async function driveSuite(
           ...(random?.state === `failed`
             ? { failure: classify(random.errors[0]) }
             : {}),
-          ran: readLog(replayLog)
-            .filter((entry) => entry.test === `${spec.id} > random seed`)
-            .map((entry) => entry.history),
+          ran: replayed.map((entry) => entry.history),
+          routes: replayed.map((entry) => entry.route),
         } satisfies ProbeRun)
       }
       const target = run.files[spec.id]!.tests.find(
@@ -1109,10 +1308,12 @@ async function driveSuite(
       )
       if (!target) continue
       const index = plan.specs.indexOf(spec)
-      const rerun = runVitest(directory, [files[index]!], {}, [
-        `-t`,
-        target.failure!.rerun!,
-      ])
+      const rerun = runVitest(
+        directory,
+        [files[index]!],
+        {},
+        target.failure!.rerun,
+      )
       const ran = rerun.files[0]?.tests.find((test) => test.state === `failed`)
       observe(`rerun`, {
         id: spec.id,
@@ -1254,8 +1455,8 @@ function checkSuite(
           )
       }
       if (failure?.counterexample && outcome.law) {
-        const shrunk = JSON.parse(failure.counterexample) as [SyntheticHistory]
-        if (judged(spec, shrunk[0]).law !== outcome.law)
+        const shrunk = counterexampleItems(failure.counterexample)
+        if (judged(spec, shrunk).law !== outcome.law)
           return violation(
             `run`,
             `${spec.id} "${test.name}" reported counterexample ${failure.counterexample}, which does not violate law ${outcome.law}`,
@@ -1298,18 +1499,32 @@ function checkSuite(
         `rerun`,
       )
   }
-  // A late probe surfaces as an unhandled error of the run.
-  const late = run.unhandled.some((message) =>
+  // Each late probe call surfaces as an unhandled error of the run.
+  const late = run.unhandled.filter((message) =>
     message.includes(`was called after its history ended`),
-  )
-  if (late !== lateProbeOwed(plan, run.log))
+  ).length
+  const owedLate = lateCalls(plan, run.log)
+  if (late < owedLate.min || late > owedLate.max)
     return violation(
       `run`,
-      late
-        ? `the run reported a late probe that no late spec owed`
-        : `a late spec called its probe after its history, but the run reported no error`,
+      `the run reported ${late} late probe calls, owed ${owedLate.min === owedLate.max ? owedLate.min : `${owedLate.min} to ${owedLate.max}`}`,
       `agreement`,
+      { actual: late, expected: owedLate },
     )
+  // Every history runs under its test's route.
+  for (const spec of plan.specs) {
+    if (!expected.get(spec.id)!.loads || spec.slow) continue
+    for (const entry of run.log.filter(({ id }) => id === spec.id)) {
+      const name = entry.test.slice(spec.id.length + 3)
+      if (entry.route !== owedRoute(name))
+        return violation(
+          `run`,
+          `${spec.id} "${name}" ran ${JSON.stringify(entry.history)} under route ${JSON.stringify(entry.route)}, owed ${JSON.stringify(owedRoute(name))}`,
+          `route`,
+          { actual: entry.route, expected: owedRoute(name) },
+        )
+    }
+  }
   for (const { checkpoint, probe } of probes) {
     const probed = checkpoint === `replay` ? `random seed` : probe.target
     const others = probe.states.filter(
@@ -1337,6 +1552,14 @@ function checkSuite(
         checkpoint,
       )
     if (checkpoint !== `replay`) continue
+    const replayRoute = owedRoute(`random seed`, true)
+    if (probe.routes?.some((route) => route !== replayRoute))
+      return violation(
+        checkpoint,
+        `${probe.id}: the replay ran under routes ${JSON.stringify(probe.routes)}, owed ${JSON.stringify(replayRoute)}`,
+        `route`,
+        { actual: probe.routes, expected: replayRoute },
+      )
     if (probe.failure.counterexample !== probe.original.counterexample)
       return violation(
         checkpoint,
@@ -1345,9 +1568,7 @@ function checkSuite(
       )
     // fast-check walks the recorded path through the shrink tree without
     // running the property, so a direct replay runs the counterexample first.
-    const counterexample = (
-      JSON.parse(probe.original.counterexample!) as [SyntheticHistory]
-    )[0]
+    const counterexample = counterexampleItems(probe.original.counterexample!)
     if (JSON.stringify(probe.ran?.[0]) !== JSON.stringify(counterexample))
       return violation(
         checkpoint,
@@ -1380,6 +1601,10 @@ const generatedDraft = (overrides: Partial<Draft>): Draft => ({
   noisyProbe: false,
   predictMode: `match`,
   clock: false,
+  form: `plain`,
+  labelStyle: `plain`,
+  nested: false,
+  strictModel: false,
   ...overrides,
 })
 const fixedHistory = (
@@ -1610,6 +1835,50 @@ oracleProperty({
         `a probe called after its history ended is an error`,
         [`late-probe-error`],
         generatedDraft({ probe: `late`, fixed: [at([0])] }),
+      ),
+      fixedHistory(
+        `a violation in a history holding a bigint fails under its law`,
+        [`bigint-history-violation`, `rerun-probe`],
+        generatedDraft({ form: `bigint`, fixed: [at([3])] }),
+      ),
+      fixedHistory(
+        `an unlabelled enumerated property names Map histories apart`,
+        [`unlabelled-enumerated`, `map-history`],
+        {
+          ...generatedDraft({ form: `map`, labelStyle: `default` }),
+          source: { kind: `enumerated`, histories: [[0], [1]] },
+        },
+      ),
+      fixedHistory(
+        `an unlabelled enumerated property of bigint histories loads and fails`,
+        [`unlabelled-enumerated`, `bigint-history-violation`, `rerun-probe`],
+        {
+          ...generatedDraft({ form: `bigint`, labelStyle: `default` }),
+          source: { kind: `enumerated`, histories: [[3, 1], [0]] },
+        },
+      ),
+      fixedHistory(
+        `a rerun command survives a shell`,
+        [`shell-label-rerun`, `rerun-probe`],
+        {
+          ...generatedDraft({ labelStyle: `shell` }),
+          source: { kind: `enumerated`, histories: [[3, 1], [0]] },
+        },
+      ),
+      fixedHistory(
+        `a rerun command finds a property inside another suite`,
+        [`nested-rerun`, `rerun-probe`],
+        generatedDraft({ nested: true, fixed: [at([3])] }),
+      ),
+      fixedHistory(
+        `a model that cannot read the trace cut at a spin fails under bounded clock`,
+        [`strict-model-cut-short`, `clock-violation`],
+        generatedDraft({ clock: true, strictModel: true, fixed: [at([7, 1])] }),
+      ),
+      fixedHistory(
+        `a probe called after a throwing driver's history ended is an error`,
+        [`late-probe-after-driver-error`, `late-probe-error`],
+        generatedDraft({ probe: `late`, fixed: [at([0, 6])] }),
       ),
       fixedHistory(
         `a property timeout limits every test it registers`,
