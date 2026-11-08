@@ -25,19 +25,21 @@ function witnessChannel(
     : undefined
 }
 
-function appendWitness<T>(
-  channel: string,
+function appendWitness(channel: string, witness: OracleReplayWitness): void {
+  appendFileSync(channel, `${JSON.stringify(witness)}\n`)
+}
+
+function runWitness<T>(
   property: string,
   details: RunDetails<T>,
-): void {
-  const witness: OracleReplayWitness = {
+): OracleReplayWitness {
+  return {
     property,
     seed: details.seed,
     path: details.runConfiguration.path,
     numRuns: details.numRuns,
     failed: details.failed,
   }
-  appendFileSync(channel, `${JSON.stringify(witness)}\n`)
 }
 
 /**
@@ -55,7 +57,8 @@ export function recordOracleReplay<T>(
     details.seed,
     details.runConfiguration.path,
   )
-  if (channel !== undefined) appendWitness(channel, property, details)
+  if (channel !== undefined)
+    appendWitness(channel, runWitness(property, details))
 }
 
 /** A completed finite-history comparison has no fast-check RunDetails. */
@@ -65,14 +68,7 @@ export function recordOracleFiniteReplay(
 ): void {
   const channel = witnessChannel(property, seed, path)
   if (channel === undefined) return
-  const witness: OracleReplayWitness = {
-    property,
-    seed,
-    path,
-    numRuns: 1,
-    failed,
-  }
-  appendFileSync(channel, `${JSON.stringify(witness)}\n`)
+  appendWitness(channel, { property, seed, path, numRuns: 1, failed })
 }
 
 /**
@@ -93,7 +89,7 @@ export function oracleReplayReporter(
   const channel = witnessChannel(property, seed, path)
   if (channel === undefined) return {}
   const record = <T>(details: RunDetails<T>) =>
-    appendWitness(channel, property, details)
+    appendWitness(channel, runWitness(property, details))
   const rethrow = <T>(details: RunDetails<T>, message: string | undefined) => {
     // A custom reporter replaces fast-check's throw. Preserve its public
     // formatter and its cause, which fast-check 4 always attaches, including

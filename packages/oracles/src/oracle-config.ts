@@ -323,7 +323,7 @@ function randomParameters<TExample>(
         }
   return examples === undefined
     ? parameters
-    : withOracleExamples(parameters, examples)
+    : withOracleFixedHistories(parameters, examples)
 }
 
 /**
@@ -332,7 +332,7 @@ function randomParameters<TExample>(
  * examples never displace one. A path replay runs one recorded history, which
  * can be an example.
  */
-export function withOracleExamples<
+export function withOracleFixedHistories<
   TParameters extends { numRuns: number; path?: string },
   TExample,
 >(

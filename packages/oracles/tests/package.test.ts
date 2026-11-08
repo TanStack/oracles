@@ -39,7 +39,7 @@ describe(`@tanstack/oracles`, () => {
         `useOracleClock`,
         `validateOraclePropertyRegistry`,
         `violation`,
-        `withOracleExamples`,
+        `withOracleFixedHistories`,
         `withinTurns`,
       ].sort(),
     )

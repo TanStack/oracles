@@ -36,7 +36,6 @@ export async function runOracleCampaign<TState extends string>(
   )
     throw new Error(`${prefix}_PATH requires a seed and numeric shrink path`)
 
-  const recordedReplay = { seed, counterexamplePath: path }
   const campaigns =
     seed === undefined
       ? [
@@ -47,9 +46,7 @@ export async function runOracleCampaign<TState extends string>(
           {
             name: `replay`,
             parameters:
-              path === undefined
-                ? { seed }
-                : { seed, path: recordedReplay.counterexamplePath, numRuns: 1 },
+              path === undefined ? { seed } : { seed, path, numRuns: 1 },
           },
         ]
   for (const campaign of campaigns) {

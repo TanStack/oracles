@@ -149,7 +149,7 @@ import {
   oraclePropertyOptions,
   oracleReplayTest,
   oracleRuns,
-  withOracleExamples,
+  withOracleFixedHistories,
 } from './oracle-config.js'
 import { oracleEnvName } from './oracle-environment.js'
 
@@ -1256,7 +1256,7 @@ function generatedTests<THistory, TExpected, TPlan>(
     replays: [],
     run: () =>
       runCampaign(`fixed seed ${seed}`, seed, (examples) =>
-        withOracleExamples(
+        withOracleFixedHistories(
           { numRuns: oracleRuns(source.runs), seed },
           examples,
         ),
@@ -1272,7 +1272,7 @@ function generatedTests<THistory, TExpected, TPlan>(
       // One call selects and logs the seed; a replay reads that log line.
       const parameters = oraclePropertyOptions(source.runs, id)
       return runCampaign(`random seed`, parameters.seed!, (examples) =>
-        withOracleExamples(parameters, examples),
+        withOracleFixedHistories(parameters, examples),
       )
     },
   }
