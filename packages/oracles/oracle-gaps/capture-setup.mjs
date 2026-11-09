@@ -283,6 +283,10 @@ function spin() {
 // as a change without a second comparison.
 let infected = new Set()
 const backgroundInfected = new Set()
+// The outcomes of the `if`s that ran outside any test, such as at module
+// load: code that runs when a file loads the module reaches every test of
+// that file (maintainer decision, 2026-11-06), so these count as taken there.
+const backgroundOutcomes = new Map()
 const infect = (id) => (inTest ? infected : backgroundInfected).add(id)
 const primitive = (value) =>
   value === null || (typeof value !== `object` && typeof value !== `function`)
@@ -397,11 +401,10 @@ globalThis.__oracleGaps = {
     hit(idTrue)
     hit(idFalse)
     infect(value ? idFalse : idTrue)
-    if (inTest) {
-      const seen = outcomes.get(idTrue) ?? [false, false]
-      seen[value ? 0 : 1] = true
-      outcomes.set(idTrue, seen)
-    }
+    const into = inTest ? outcomes : backgroundOutcomes
+    const seen = into.get(idTrue) ?? [false, false]
+    seen[value ? 0 : 1] = true
+    into.set(idTrue, seen)
     if (active === idTrue) return true
     if (active === idFalse) return false
     return value
@@ -810,7 +813,7 @@ afterAll(() => {
   if (currentFile)
     appendFileSync(
       state.capture,
-      `${JSON.stringify({ key: `${currentFile} > (background)`, background: true, hits: [...background], infected: [...backgroundInfected] })}\n`,
+      `${JSON.stringify({ key: `${currentFile} > (background)`, background: true, hits: [...background], infected: [...backgroundInfected], outcomes: [...backgroundOutcomes] })}\n`,
     )
   // A batch's watchdog reads this row to know that the copy finished; a
   // skipped copy says so, and its run is no evidence.

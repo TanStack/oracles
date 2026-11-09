@@ -180,8 +180,10 @@ export function baselineOf(firstRows, secondRows, oracleFiles) {
   for (const [key, row] of firstRows) {
     for (const id of row.hits)
       reachedBy.set(id, [...(reachedBy.get(id) ?? []), key])
-    if (row.background || !oracleFiles.has(fileOf(key))) continue
-    for (const [id, [truthy, falsy]] of row.outcomes) {
+    // A file's background row holds the outcomes taken outside any test,
+    // as at module load, which reaches every test of the file.
+    if (!oracleFiles.has(fileOf(key))) continue
+    for (const [id, [truthy, falsy]] of row.outcomes ?? []) {
       const byFile = outcomeSeen.get(id) ?? new Map()
       const seen = byFile.get(fileOf(key)) ?? [false, false]
       byFile.set(fileOf(key), [seen[0] || truthy, seen[1] || falsy])
