@@ -158,11 +158,15 @@
  *    once after the CLI's code changed, a check after a native addon was
  *    installed into the dependency tree (the pool follows it), and a
  *    check whose daemon cannot open its session (it reports the cold
- *    run's error), a check whose daemon dies during it (the CLI starts a
- *    fresh one), a check sent to a daemon killed before it reads (the
+ *    run's error), two checks at once on a session whose failure is
+ *    larger than a socket's buffer (each hears all of it), a check whose
+ *    daemon holds it past the CLI's wait for a daemon and then dies (the
+ *    time a daemon holds a check is not waiting, so the CLI starts a fresh
+ *    one), a check sent to a daemon killed before it reads (the
  *    connection resets), a check right after a session's failure was fixed
  *    (a fresh daemon, not the old error), and a check after a prebuilt
- *    addon was added into an existing build/Release each report
+ *    addon was added into an existing build/Release or a scoped one into
+ *    an existing scope directory each report
  *    what the cold run reports; once `--stop-daemon` returns, no daemon
  *    process serves the package.
  * 10. **The runner runs the package as Vitest does.** From any install path
@@ -242,14 +246,21 @@
  * the atomic claim (two daemons serve until the loser sees its lock taken,
  * within 2 s), and a stop that releases the lock before it closes the
  * store (each check has already flushed its evidence); their mutants
- * survive. A reset connection (ECONNRESET) is generated, but macOS
- * reports it as an end of stream, so its read as a dying daemon is fixed by
- * inspection; so is a daemon whose CLI modules fail to load (the CLI
- * imports them first and fails the same way). A package installed into an
- * ancestor node_modules is not generated. So does a restart that ends queued requests unanswered: the
- * CLI reads an unanswered connection as `closing` and retries. A daemon
- * stuck closing (the CLI gives up after 60 s) and a stop that waits for
- * the close are not generated. Cut-off
+ * survive. So does a restart that ends queued requests unanswered: the
+ * CLI reads an unanswered connection as a daemon that died, starts a fresh
+ * one, and gives up only after three deaths in one check. A reset
+ * connection (ECONNRESET) is generated, but macOS reports it as an end of
+ * stream, so its reading as a dead daemon is fixed by inspection. So are a
+ * daemon whose CLI modules fail to load (the CLI imports them first and
+ * fails the same way), two CLIs racing on a failing daemon's error file
+ * (two checks at once on a failing session are generated, not that
+ * interleaving), and a CLI that hears `closing` from the failing daemon it
+ * started. The wait for a daemon is shortened to 3 s only for the check
+ * whose daemon is paused for 4 s; a daemon that hangs while it holds a
+ * check holds the CLI too. A package installed into an ancestor
+ * node_modules is not generated. A daemon stuck closing (the CLI gives up
+ * after its wait) and a stop that waits for the close are not generated.
+ * Cut-off
  * charging is judged only where it changes an outcome: under one budget
  * (`--first-limit` equal to `--hang-limit`), where a misplaced cut is a
  * timeout at once; under two budgets a misplaced cut only costs a
@@ -428,7 +439,7 @@ async function runClisAtOnce(dir, files, hows) {
       const { args, out } = cliArgs(dir, files, how)
       const child = spawn(process.execPath, args, {
         cwd: repo,
-        env: cleanEnv(),
+        env: { ...cleanEnv(), ...how.env },
         stdio: [`ignore`, `ignore`, `pipe`],
       })
       let stderr = ``
@@ -544,6 +555,14 @@ function daemonsOf(dir) {
     .map((line) => Number(line.trim().split(/\s+/)[0]))
 }
 
+// The faults under which a check's session cannot open, cold or through the
+// daemon.
+const sessionFaults = new Set([
+  `noTypescript`,
+  `brokenTypescript`,
+  `brokenVitest`,
+])
+
 async function incremental(dir, plan, cli, copy, observe, states) {
   const reportFile = join(copy, `report.mjs`)
   const reportText = readFileSync(reportFile, `utf8`)
@@ -592,22 +611,21 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       sources: sourceArgument(plan, `${dir}.link`),
       budget: plan.budget,
     }
-    // The daemon's check runs first: a daemon's state must not depend on a
-    // cold run between its checks (a session fixed while requests keep
-    // coming, `fixSession`).
-    const pending = daemonChecks(step, files, how)
     // The first check may be two at once, which must reach one daemon, and
     // so are the two after a crash.
     const twice =
       (step === `start` && plan.concurrentStart) ||
       step === `crashAtOnce` ||
       step === `cliAtOnce`
+    // The daemon's checks run before the cold run: a daemon's state must not
+    // depend on a cold run between its checks (a session fixed while
+    // requests keep coming, `fixSession`).
     const [daemon, ...others] = twice
       ? await runClisAtOnce(dir, files, [
           { ...how, daemon: true },
           { ...how, daemon: true, outName: `out-daemon-2` },
         ])
-      : await pending
+      : await daemonChecks(step, files, how)
     if (!cold.has(key)) cold.set(key, runCli(dir, files, how))
     const coldRun = cold.get(key)
     for (const [i, run] of [daemon, ...others].entries())
@@ -632,6 +650,21 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       })
     if (twice && step === `start`)
       states.add(`two checks started the daemon at once`)
+    // A session that cannot open, heard by two checks at once; one that
+    // fails while the CLI that started its daemon is connected and unread;
+    // and one whose failure, larger than a socket's buffer, a queued
+    // request hears.
+    if (
+      twice &&
+      step === `start` &&
+      sessionFaults.has(plan.fault) &&
+      [daemon, ...others].every((run) => run.refusal !== undefined)
+    )
+      states.add(`two checks at once on a session that cannot open`)
+    if (plan.fault === `brokenTypescript` && daemon.refusal !== undefined)
+      states.add(`a session failure before its daemon read a request`)
+    if (plan.fault === `brokenVitest` && daemon.refusal !== undefined)
+      states.add(`a session failure larger than a socket buffer`)
     const after = {
       crash: `a check after a daemon crash`,
       reboot: `a check after a reboot`,
@@ -684,8 +717,9 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       { cwd: repo, encoding: `utf8`, timeout: 60_000, env: cleanEnv() },
     )
   // One check through the daemon, with what the step does to the daemon
-  // meanwhile: killed once the check has begun (`dieMidCheck`), or stopped
-  // and killed before it reads the request, which resets the connection
+  // meanwhile: paused once the check has begun for longer than the CLI
+  // waits for a daemon, then killed (`dieMidCheck`), or stopped and killed
+  // before it reads the request, which resets the connection
   // (`resetBeforeRead`).
   async function daemonChecks(step, files, how) {
     if (step !== `dieMidCheck` && step !== `resetBeforeRead`)
@@ -694,7 +728,17 @@ async function incremental(dir, plan, cli, copy, observe, states) {
     if (step === `dieMidCheck`) stop()
     const [pid] = daemonsOf(dir)
     if (step === `resetBeforeRead` && pid) process.kill(pid, `SIGSTOP`)
-    const running = runClisAtOnce(dir, files, [{ ...how, daemon: true }])
+    // The time a daemon holds a request is the check's, not time spent
+    // waiting for a daemon, so a CLI that waits 3 s for one still outlasts
+    // a daemon that holds its check for 4 s.
+    const running = runClisAtOnce(dir, files, [
+      {
+        ...how,
+        daemon: true,
+        env: step === `dieMidCheck` ? { ORACLE_GAPS_WAIT_MS: `3000` } : {},
+      },
+    ])
+    let paused = false
     if (step === `resetBeforeRead`) {
       await new Promise((r) => setTimeout(r, 500))
       if (pid) process.kill(pid, `SIGKILL`)
@@ -709,13 +753,19 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       for (let waited = 0; !finished && waited < 60_000; waited += 50) {
         const [running] = daemonsOf(dir)
         if (running && existsSync(started)) {
+          process.kill(running, `SIGSTOP`)
+          await new Promise((r) => setTimeout(r, 4000))
           process.kill(running, `SIGKILL`)
+          paused = !finished
           break
         }
         await new Promise((r) => setTimeout(r, 50))
       }
     }
-    return running
+    const runs = await running
+    if (paused && runs[0].reported)
+      states.add(`a check whose daemon held it past the CLI's wait, then died`)
+    return runs
   }
   // Kills the package's daemons as a crash or a power loss would, leaving
   // what they wrote; returns their process ids.
@@ -1453,6 +1503,7 @@ const incrementalStates = [
     .filter((edit) => !daemonEvents.has(edit) && edit !== `fixSession`)
     .map((edit) => `edit ${edit} changed the cold result`),
   `a check whose daemon died during it`,
+  `a check whose daemon held it past the CLI's wait, then died`,
   `a check whose connection was reset`,
   `a check after a daemon crash`,
   `a check after a reboot`,
@@ -1562,8 +1613,13 @@ const required = [
   `refused projects`,
   `refused outsideSource`,
   `refused noTypescript`,
+  `refused brokenTypescript`,
+  `refused brokenVitest`,
   `edit fixSession changed the cold result`,
   `a check after the session's failure was fixed`,
+  `two checks at once on a session that cannot open`,
+  `a session failure before its daemon read a request`,
+  `a session failure larger than a socket buffer`,
   ...incrementalStates,
 ]
 const faults = [
@@ -1574,6 +1630,8 @@ const faults = [
   `projects`,
   `outsideSource`,
   `noTypescript`,
+  `brokenTypescript`,
+  `brokenVitest`,
 ]
 const separate = [
   `ordinary tests left out by default`,
@@ -1586,6 +1644,9 @@ const separate = [
   ...faults.map((fault) => `refused ${fault}`),
   `edit fixSession changed the cold result`,
   `a check after the session's failure was fixed`,
+  `two checks at once on a session that cannot open`,
+  `a session failure before its daemon read a request`,
+  `a session failure larger than a socket buffer`,
   ...incrementalStates,
 ]
 const witnessed = required.filter((s) => !separate.includes(s))
@@ -1595,7 +1656,7 @@ oracleProperty({
   law: {
     statement: `The gap report enumerates the promised operator mutants, leaves out exactly the probe-only code, discovers every oracle that owns a function's call tree and refuses broken ownership, judges each mutant only by its owners' tests on their registered routes and counts only law verdicts on reproducible routes as kills, which outrank a run that never ends, anchors each mutant by its function and normalized statement, lists every gap and unowned mutant once with consistent counts, keeps keys stable under unrelated edits, reports through one daemon per package what a cold run reports at every state of a sequence of edits, and runs the package as Vitest does from any install path and any --source spelling: one instance of each workspace dependency, no refusal over an unbuildable devDependency, child processes for a native addon anywhere in the tree, a capture that a test's builtin spies cannot see, and a refusal of test.projects.`,
     authority: `The maintainer's decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), not in this package's records, including that a kill by reach agreement alone is a gap and that an incremental run through the daemon equals a cold one (v19.3); the project's oracle guide on quiet exclusions; the oracle rubric's outcome kinds (ORC-006); the CLI's documented operator list in schemata.mjs.`,
-    limits: `Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 6 s full limit, and a slow run only as one witness that waits 3 s before it judges; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; no --only, --sample, or --diff-base; package configs only in vite.config.ts, vitest.config.ts, or vite.config.mjs, as an object or a sync or async function, with no plugins of their own and test.projects only as a refusal; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9's edits leave out files read through fs, other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; cut-off charging judged only under one budget; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages.`,
+    limits: `Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 6 s full limit, and a slow run only as one witness that waits 3 s before it judges; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; no --only, --sample, or --diff-base; package configs only in vite.config.ts, vitest.config.ts, or vite.config.mjs, as an object or a sync or async function, with no plugins of their own and test.projects only as a refusal; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9's edits leave out files read through fs, other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; cut-off charging judged only under one budget; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages; daemon races (two CLIs reading one error file, a CLI hearing closing from the failing daemon it started, a reset connection on macOS) fixed by inspection.`,
     owner: `packages/oracles/oracle-gaps`,
   },
   histories: {
@@ -1777,6 +1838,10 @@ oracleProperty({
             `addAddon`,
             `addRelease`,
             `resetBeforeRead`,
+            // With no addon left, a scoped one is installed into a scope
+            // directory that already exists.
+            `addRelease`,
+            `addScopedAddon`,
           ],
         }),
       },
@@ -1845,14 +1910,28 @@ oracleProperty({
                 `a check after the session's failure was fixed`,
               ]
             : []),
+          ...(fault === `brokenTypescript` || fault === `brokenVitest`
+            ? [`two checks at once on a session that cannot open`]
+            : []),
+          ...(fault === `brokenTypescript`
+            ? [`a session failure before its daemon read a request`]
+            : []),
+          ...(fault === `brokenVitest`
+            ? [`a session failure larger than a socket buffer`]
+            : []),
         ],
-        // A session that cannot open is checked through the daemon too.
+        // A session that cannot open is checked through the daemon too, and
+        // fixed once; a long failure is heard by two checks at once, then by
+        // a fresh daemon's check (fixing it reruns the whole generated
+        // campaign, which noTypescript's history already pays for).
         build: (generated) => ({
           ...generated,
           fault,
           ...(fault === `noTypescript`
-            ? { steps: [`restart`, `fixSession`] }
-            : {}),
+            ? { steps: [`restart`, `fixSession`], concurrentStart: false }
+            : sessionFaults.has(fault)
+              ? { steps: [`restart`], concurrentStart: true }
+              : {}),
         }),
       })),
     ],

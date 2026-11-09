@@ -84,6 +84,18 @@ function send(pkg, message) {
 // No daemon listens on the socket.
 const absent = (error) => [`ENOENT`, `ECONNREFUSED`].includes(error.code)
 const errorFileOf = (pkg) => join(stateDirOf(pkg), `daemon.error`)
+// The error a daemon wrote when it could not load or open its session, if
+// it wrote it at or after `since`. A daemon that opens its session removes
+// the file, so it can vanish at any point here.
+const errorSince = (pkg, since) => {
+  try {
+    if (statSync(errorFileOf(pkg)).mtimeMs >= since)
+      return readFileSync(errorFileOf(pkg), `utf8`)
+  } catch {
+    // No daemon failed, or the file was removed meanwhile.
+  }
+  return undefined
+}
 
 /** Starts a daemon for the package, detached from this process. */
 function startDaemon(pkg) {
@@ -97,32 +109,40 @@ function startDaemon(pkg) {
 
 /**
  * Sends a check to the package's daemon, starting one when none listens.
- * The CLI gets the daemon's reply, or the error of a daemon it started that
- * could not load or open its session, or a fresh daemon in place of one
- * that died; a closing daemon is waited for. Never longer than 60 s.
+ * The CLI gets the daemon's reply, or the error of a daemon that could not
+ * load or open its session since this CLI started one, or a fresh daemon in
+ * place of one that died; a closing daemon is waited for. It waits at most
+ * 60 s for a daemon to answer or start; the time a daemon holds the
+ * request, queued or checking, is the check's and is not counted.
  */
 export async function requestDaemon(pkg, argv) {
   const began = Date.now()
-  // When this CLI last started a daemon; a daemon that answered since then
-  // (closing, restarting, or dying) makes it start the next one itself.
+  let held = 0
+  // When this CLI last started a daemon, and whether it may start another
+  // now: it started none, or a daemon has answered since (closing,
+  // restarting, or dying).
   let startedAt
+  let mayStart = true
   let deaths = 0
   for (;;) {
     let reply
+    const sent = Date.now()
     try {
       reply = await send(pkg, { argv, cwd: process.cwd() })
+      held += Date.now() - sent
     } catch (error) {
       if (!absent(error)) throw error
-      // The daemon this CLI started could not load or open its session.
-      const failed = startedAt !== undefined && readText(errorFileOf(pkg))
-      if (failed && statSync(errorFileOf(pkg)).mtimeMs >= startedAt) {
-        rmSync(errorFileOf(pkg), { force: true })
+      // A daemon could not load or open its session since this CLI started
+      // one: the daemon it started, or one that took its place.
+      const failed =
+        startedAt === undefined ? undefined : errorSince(pkg, startedAt)
+      if (failed !== undefined)
         return { exitCode: 1, stdout: ``, stderr: failed }
-      }
       // A daemon this CLI started has the grace period to listen.
-      if (startedAt === undefined || Date.now() - startedAt > GRACE_MS * 2) {
+      if (mayStart || Date.now() - startedAt > GRACE_MS * 2) {
         startDaemon(pkg)
         startedAt = Date.now()
+        mayStart = false
       }
     }
     if (reply?.died) {
@@ -133,9 +153,11 @@ export async function requestDaemon(pkg, argv) {
         )
     }
     if (reply && !reply.closing && !reply.restart && !reply.died) return reply
-    if (reply) startedAt = undefined
-    if (Date.now() - began > WAIT_MS)
-      throw new Error(`the package's daemon did not answer within 60 s`)
+    if (reply) mayStart = true
+    if (Date.now() - began - held > WAIT_MS)
+      throw new Error(
+        `the package's daemon did not answer within ${WAIT_MS / 1000} s`,
+      )
     await sleep(100)
   }
 }
@@ -155,12 +177,16 @@ export async function stopDaemon(pkg) {
     }
     await sleep(100)
   }
-  throw new Error(`the package's daemon did not finish closing within 60 s`)
+  throw new Error(
+    `the package's daemon did not finish closing within ${WAIT_MS / 1000} s`,
+  )
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-// How long a CLI waits for a daemon to start or to finish closing.
-const WAIT_MS = 60_000
+// How long a CLI waits for a daemon to start or to finish closing; the CLI
+// oracle shortens it (ORACLE_GAPS_WAIT_MS) to outlast it with a paused
+// daemon.
+const WAIT_MS = Number(process.env.ORACLE_GAPS_WAIT_MS ?? 60_000)
 // This daemon's lock token, which no other process can hold.
 const token = `${process.pid}:${randomUUID()}`
 // How long a lock's holder has to listen before the lock counts as left by
@@ -253,8 +279,14 @@ async function serve(pkg) {
     clearTimeout(idle)
     idle = setTimeout(close, ms)
   }
+  // Resolves once the reply has left this process, so a daemon that exits
+  // next cannot cut it short; a reply longer than the socket's buffer is
+  // written over several turns of the event loop.
   const reply = (connection, value) =>
-    connection.end(`${JSON.stringify(value)}\n`)
+    new Promise((resolvePromise) => {
+      connection.once(`close`, resolvePromise)
+      connection.end(`${JSON.stringify(value)}\n`, resolvePromise)
+    })
   const server = createServer((connection) => {
     let request = ``
     connection.on(`data`, (chunk) => {
@@ -299,7 +331,7 @@ async function serve(pkg) {
           stderr.push(`${error?.stack ?? error}\n`)
           exitCode = 1
         }
-        reply(connection, { exitCode, stdout, stderr: stderr.join(``) })
+        await reply(connection, { exitCode, stdout, stderr: stderr.join(``) })
         closeAfter(idleMs)
       })
     })
@@ -316,8 +348,7 @@ async function serve(pkg) {
       rmSync(lock, { force: true })
     }
     server.close()
-    if (connection)
-      await new Promise((r) => connection.end(`${JSON.stringify(value)}\n`, r))
+    if (connection) await reply(connection, value)
     process.exit(0)
   }
   // Listening proves that this daemon holds the lock, so it listens before

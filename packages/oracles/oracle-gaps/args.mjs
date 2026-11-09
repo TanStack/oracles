@@ -188,9 +188,16 @@ function walkPool(pkg) {
 
 /** Where Node finds package `name` from directory `from`, by its real path. */
 function locate(from, name, stamps) {
+  // A scoped package installed into a scope directory that exists changes
+  // only that directory.
+  const scope = name.startsWith(`@`) ? [name.split(`/`)[0]] : []
   for (let dir = from; ; dir = dirname(dir)) {
     // A package installed later into any node_modules looked through.
-    stamps.push([join(dir, `node_modules`), stampOf(join(dir, `node_modules`))])
+    for (const path of [
+      join(dir, `node_modules`),
+      ...scope.map((s) => join(dir, `node_modules`, s)),
+    ])
+      stamps.push([path, stampOf(path)])
     const candidate = join(dir, `node_modules`, name)
     if (existsSync(join(candidate, `package.json`)))
       return realpathSync(candidate)

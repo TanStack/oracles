@@ -9,6 +9,7 @@ import {
   lstatSync,
   mkdirSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   symlinkSync,
   unlinkSync,
@@ -277,6 +278,9 @@ const edits = [
   `resetBeforeRead`,
   `fixSession`,
   `addRelease`,
+  // A scoped package with a prebuilt addon installed into a scope directory
+  // that already exists, so only the scope directory changes.
+  `addScopedAddon`,
 ]
 // The steps that act on the daemon and change no file.
 const daemonEvents = new Set([
@@ -363,6 +367,14 @@ const histories = fc.record({
     // The package resolves no TypeScript, so a check's session cannot
     // open, cold or through the daemon.
     `noTypescript`,
+    // The package's TypeScript throws when it loads, after a moment, with an
+    // error larger than a socket's buffer, as a broken install's long log
+    // would be. It blocks while it loads, so a daemon reads no request
+    // before its session fails.
+    `brokenTypescript`,
+    // The package's Vitest fails the same way, after waiting on I/O, so a
+    // daemon has read its requests when its session fails.
+    `brokenVitest`,
   ),
   stability: fc.constantFrom(
     `none`,
@@ -1841,6 +1853,8 @@ function resolveHistory(history) {
     // A prebuilt addon in the workspace dependency's build/Release
     // (`addRelease`).
     release: history.release === true,
+    // A scoped package with a prebuilt addon (`addScopedAddon`).
+    scopedAddon: history.scopedAddon === true,
     depSubpath: history.depSubpath === true,
     unbuiltDep: history.unbuiltDep === true,
     budget: history.budget ?? `two`,
@@ -2681,7 +2695,9 @@ function refusal(plan) {
   // A config the runner cannot honor refuses the run rather than leave every
   // mutant unreached (maintainer decision, 2026-11-08).
   if (plan.fault === `projects`) return { cause: `test.projects` }
-  if (plan.fault === `noTypescript`) return { cause: `typescript` }
+  if (plan.fault === `noTypescript` || plan.fault === `brokenTypescript`)
+    return { cause: `typescript` }
+  if (plan.fault === `brokenVitest`) return { cause: `vitest` }
   // A failing owner is named with its test's error, so the author can fix it.
   if (plan.fault === `brokenOwner`)
     return {
@@ -2820,7 +2836,10 @@ function model(plan) {
   return {
     // A native addon can crash the whole process from a worker thread, so a
     // package that depends on one runs its tests in child processes.
-    pool: plan.native === `none` && !plan.release ? `threads` : `forks`,
+    pool:
+      plan.native === `none` && !plan.release && !plan.scopedAddon
+        ? `threads`
+        : `forks`,
     mutants,
     authored,
     authoredAll,
@@ -3115,12 +3134,68 @@ function fixtureFiles(plan, state = initialState(plan)) {
       ? `process.env.VITEST === 'true' && process.env.TEST === 'true' && process.env.NODE_ENV === 'test' ? ['tests/**/*.test.ts'] : []`
       : `['tests/**/*.test.ts']`
   }${plan.setupGlobal ? `, setupFiles: ['./tests/setup.ts']` : ``} }`
+  // A history that installs a scoped addon later declares it from the
+  // start, beside a scoped package already installed in its scope.
+  const scoped = plan.steps.includes(`addScopedAddon`)
   const files = {
     'package.json': manifest({
       name: `gap-fixture`,
       dependencies: { 'state-dep': `*` },
-      ...(plan.unbuiltDep ? { devDependencies: { 'unbuilt-dep': `*` } } : {}),
+      ...(plan.unbuiltDep || scoped
+        ? {
+            devDependencies: {
+              ...(plan.unbuiltDep ? { 'unbuilt-dep': `*` } : {}),
+              ...(scoped ? { '@gap/plain': `*`, '@gap/addon': `*` } : {}),
+            },
+          }
+        : {}),
     }),
+    ...(scoped
+      ? {
+          'node_modules/@gap/plain/package.json': manifest({
+            name: `@gap/plain`,
+          }),
+        }
+      : {}),
+    ...(plan.scopedAddon
+      ? {
+          'node_modules/@gap/addon/package.json': manifest({
+            name: `@gap/addon`,
+          }),
+          'node_modules/@gap/addon/addon.node': ``,
+        }
+      : {}),
+    // A TypeScript or a Vitest whose load throws a long error, linked as a
+    // package manager links a package, until `fixSession` links a working
+    // one.
+    ...(plan.fault === `brokenTypescript` && !state.linked
+      ? {
+          'node_modules/typescript': link(`../deps/broken-typescript`),
+          'deps/broken-typescript/package.json': `${JSON.stringify({ name: `typescript`, main: `index.js` })}\n`,
+          'deps/broken-typescript/index.js': [
+            // It takes a moment to fail, as a broken install can, so a CLI
+            // that started the daemon is connected when the session fails.
+            `const until = Date.now() + 1500`,
+            `while (Date.now() < until) {}`,
+            `const log = Array.from({ length: 8000 }, (_, i) => \`  step \${i} of the typescript build failed\`)`,
+            `const error = new Error(\`typescript failed to load: its build is incomplete\\n\${log.join('\\n')}\`)`,
+            `throw error`,
+            ``,
+          ].join(`\n`),
+        }
+      : {}),
+    ...(plan.fault === `brokenVitest` && !state.linked
+      ? {
+          'node_modules/vitest': link(`../deps/broken-vitest`),
+          'deps/broken-vitest/package.json': `${JSON.stringify({ name: `vitest`, type: `module`, exports: { './node': `./node.mjs` } })}\n`,
+          'deps/broken-vitest/node.mjs': [
+            `await new Promise((resolve) => setTimeout(resolve, 1500))`,
+            `const log = Array.from({ length: 8000 }, (_, i) => \`  step \${i} of the vitest build failed\`)`,
+            `throw new Error(\`vitest failed to load: its build is incomplete\\n\${log.join('\\n')}\`)`,
+            ``,
+          ].join(`\n`),
+        }
+      : {}),
     [plan.configFile]: `import { defineConfig } from 'vitest/config'\nexport default defineConfig(${
       { object: ``, function: `() => (`, async: `async () => (` }[plan.config]
     }{ test: ${
@@ -3251,6 +3326,14 @@ function fixtureFiles(plan, state = initialState(plan)) {
  * Removes a file or a symbolic link, never what a link points to: on Linux,
  * `rmSync` follows a link to a directory and refuses it (ERR_FS_EISDIR).
  */
+function linkTarget(path) {
+  try {
+    return readlinkSync(path)
+  } catch {
+    return undefined
+  }
+}
+
 function removePath(path) {
   try {
     if (lstatSync(path).isSymbolicLink()) unlinkSync(path)
@@ -3283,7 +3366,11 @@ function writeFixture(dir, files) {
     if (typeof text === `string`) {
       if (!existsSync(at) || readFileSync(at, `utf8`) !== text)
         writeFileSync(at, text)
-    } else if (!existsSync(at)) symlinkSync(text.link, at, `dir`)
+    } else if (linkTarget(at) !== text.link) {
+      // A link that a later state points elsewhere is replaced.
+      removePath(at)
+      symlinkSync(text.link, at, `dir`)
+    }
   }
   written.set(dir, Object.keys(files))
 }
@@ -3358,6 +3445,8 @@ function applyEdit(state, edit) {
   if (edit === `fixSession`) return { ...state, linked: true }
   if (edit === `addRelease`)
     return { ...state, history: { ...h, release: !h.release } }
+  if (edit === `addScopedAddon`)
+    return { ...state, history: { ...h, scopedAddon: !h.scopedAddon } }
   if (edit === `addAddon`)
     return {
       ...state,
