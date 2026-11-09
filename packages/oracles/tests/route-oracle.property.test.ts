@@ -33,12 +33,15 @@
  *   campaign that registers the route of the parameters the runner gave it
  *   gets the same answer. (`oracleProperty` does the same; the self-oracle's
  *   `route` law owns its routes, because they run under Vitest.)
- * - Building options registers nothing; options built under a seed-only or
- *   path replay declare their seed.
+ * - Building options registers nothing; options built from the replay
+ *   environment under a seed-only or path replay declare their seed, and a
+ *   seed the caller passes in, as a number or a configuration it built, is
+ *   not declared.
  *
  * History: either a test's own campaign or a `runOracleCampaign` call whose
  * campaigns make the same calls (register a named route; build property
- * options or random parameters; set the seed by hand; declare it fixed with
+ * options or random parameters, from the replay environment, from a seed
+ * the caller passes as a number, or from a configuration it builds by hand; set the seed by hand; declare it fixed with
  * `oracleFixedSeed`; rebuild the options field by field; round-trip them
  * through JSON or `structuredClone`; register the route of the options; or,
  * in a runner, register the route of the runner's parameters), under an
@@ -61,6 +64,8 @@ type Call =
       call:
         | `property options`
         | `random parameters`
+        | `random parameters from a number`
+        | `random parameters from a config`
         | `set seed`
         | `declare fixed seed`
         | `rebuild`
@@ -92,6 +97,8 @@ const call: fc.Arbitrary<Call> = fc.oneof(
     call: fc.constantFrom(
       `property options` as const,
       `random parameters` as const,
+      `random parameters from a number` as const,
+      `random parameters from a config` as const,
       `set seed` as const,
       `declare fixed seed` as const,
       `rebuild` as const,
@@ -135,6 +142,12 @@ function owedRoutes({ runner, replay, calls }: History): Array<string | null> {
           // A replay's seed comes from the environment and is declared; a
           // drawn one is not.
           options = { known: replay !== `none`, path: replay === `path` }
+          break
+        // A seed the caller passed, as a number or a configuration it built,
+        // is not known to be fixed.
+        case `random parameters from a number`:
+        case `random parameters from a config`:
+          options = { known: false, path: false }
           break
         case `set seed`:
         case `rebuild`:
@@ -227,6 +240,20 @@ async function driveRoutes(
             options = config.oracleRandomParameters(
               10,
               config.readOracleRunConfig(),
+              property,
+            )
+            break
+          case `random parameters from a number`:
+            options = config.oracleRandomParameters(10, 7, property)
+            break
+          case `random parameters from a config`:
+            options = config.oracleRandomParameters(
+              10,
+              {
+                campaignSeed: 7,
+                replayPath: undefined,
+                replayProperty: undefined,
+              },
               property,
             )
             break
@@ -379,6 +406,29 @@ oracleProperty<History, Array<string | null>>({
           calls: [
             { call: `property options` },
             { call: `set seed` },
+            { call: `route of options` },
+          ],
+        },
+      },
+      // A caller's own seed was declared fixed because it was defined.
+      {
+        name: `random parameters from a caller's number`,
+        history: {
+          runner: `own`,
+          replay: `none`,
+          calls: [
+            { call: `random parameters from a number` },
+            { call: `route of options` },
+          ],
+        },
+      },
+      {
+        name: `random parameters from a hand-built configuration`,
+        history: {
+          runner: `own`,
+          replay: `seed`,
+          calls: [
+            { call: `random parameters from a config` },
             { call: `route of options` },
           ],
         },

@@ -17,7 +17,15 @@ function witnessChannel(
   path: string | undefined,
 ): string | undefined {
   // The replay the configuration read, as every replay condition reads it.
-  const { witness, replayProperty, campaignSeed, replayPath } = replayConfig()
+  // An environment that cannot be read selects no witness: recording a
+  // witness never throws.
+  let read: ReturnType<typeof replayConfig>
+  try {
+    read = replayConfig()
+  } catch {
+    return undefined
+  }
+  const { witness, replayProperty, campaignSeed, replayPath } = read
   return witness !== undefined &&
     property === replayProperty &&
     seed === campaignSeed &&

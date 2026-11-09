@@ -90,14 +90,18 @@ export function replayConfig(): RunConfig {
   return (configuredReplay ??= readRunConfig(process.env, oracleSettings()))
 }
 
-/** Whether `next` selects another replay than the one an oracle read. */
-export function changesReadSelection(next: OracleReplayConfig): boolean {
+/**
+ * Whether `next` would change what an oracle read decided from: the replay
+ * selection, or the calibration variable read with it.
+ */
+export function changesReadSelection(next: RunConfig): boolean {
   if (!replayRead || configuredReplay === undefined) return false
   const read = configuredReplay
   return (
     read.campaignSeed !== next.campaignSeed ||
     read.replayPath !== next.replayPath ||
-    read.replayProperty !== next.replayProperty
+    read.replayProperty !== next.replayProperty ||
+    read.calibration !== next.calibration
   )
 }
 

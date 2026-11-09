@@ -9,8 +9,7 @@ import {
   replayConfig,
 } from './oracle-environment.js'
 import { oracleReplayReporter } from './oracle-replay-witness.js'
-import { oracleFixedSeed } from './oracle-route.js'
-import type { fixedSeedKey } from './oracle-route.js'
+import { fixedSeedKey, oracleFixedSeed } from './oracle-route.js'
 import type {
   OracleReplayConfig,
   OracleSettings,
@@ -140,7 +139,17 @@ export function readOracleRunConfig(
     environment === undefined
       ? replayConfig()
       : readRunConfig(environment, oracleSettings())
-  return Object.freeze({ multiplier, campaignSeed, replayPath, replayProperty })
+  return Object.freeze({
+    multiplier,
+    campaignSeed,
+    replayPath,
+    replayProperty,
+    // A seed the process's replay environment selected is declared fixed,
+    // so options built from this configuration name it `fixed seed`.
+    ...(environment === undefined && campaignSeed !== undefined
+      ? { [fixedSeedKey]: campaignSeed }
+      : {}),
+  })
 }
 
 /**
@@ -208,13 +217,20 @@ function randomParameters<TExample>(
         }
   const selectedSeed = oracleCampaignSeed(campaignSeed, property)
   // Building parameters registers no route: a caller may still change them.
-  // A seed from the replay environment is declared fixed; a drawn one is not,
-  // so `oracleRouteOf` names the route of what finally runs.
+  // Only a seed the process's replay environment selected, which
+  // `readOracleRunConfig()` declares, is declared fixed here; a drawn seed,
+  // a caller's number, or a configuration a caller built is not, so
+  // `oracleRouteOf` never names more than it knows.
+  const declared =
+    typeof replay === `object` &&
+    (replay as { [fixedSeedKey]?: number })[fixedSeedKey] === campaignSeed
   const parameters: OracleRunParameters =
     campaignSeed === undefined
       ? { numRuns, seed: selectedSeed }
       : {
-          ...oracleFixedSeed(campaignSeed),
+          ...(declared
+            ? oracleFixedSeed(campaignSeed)
+            : { seed: campaignSeed }),
           numRuns,
           // A path replays one recorded counterexample, so the replay runs
           // once. From a path with one segment, fast-check would otherwise
@@ -353,7 +369,7 @@ export function oraclePropertyOptions<TExample>(
 ): OracleRunParameters & { examples?: Array<TExample> } {
   return randomParameters(
     oracleRuns(baseRuns),
-    replayConfig(),
+    readOracleRunConfig(),
     property,
     examples,
   )

@@ -13,7 +13,8 @@
  *   first use; reads in between do not read it again. A change to the
  *   environment after that does not change what any read reports.
  * - Once anything has read the replay selection, a `configureOracles` call
- *   that would change it throws and changes nothing: tests already stood
+ *   that would change it, or the calibration variable read with it, throws
+ *   and changes nothing: tests already stood
  *   aside, or did not, by the selection they read (maintainer decision,
  *   2026-11-08, finding R1b-1). A later call that keeps the selection
  *   replaces the rest of the configuration. So a test that stands aside during a path
@@ -135,10 +136,13 @@ function owedResults(steps: History): Array<Result> {
     if (step.do === `configure`) {
       const changesDefaults = step.prefix !== `ORACLE` || step.registry
       if (!configured && readBefore && changesDefaults) return `threw`
-      // The selection this configuration would read, against the one read.
+      // What this configuration would read, against what reads decided
+      // from: the replay selection and the calibration variable.
       if (
         selectionRead &&
-        (environment.replay === step.prefix) !== (read!.replay === prefix)
+        ((environment.replay === step.prefix) !== (read!.replay === prefix) ||
+          (environment.calibration === step.prefix) !==
+            (read!.calibration === prefix))
       )
         return `threw`
       prefix = step.prefix
@@ -370,6 +374,20 @@ oracleProperty<History, Array<Result>>({
         ],
         enters: [selectionChange],
       },
+      // A reconfiguration once changed the calibration variable after a
+      // calibration witness decided by it.
+      {
+        name: `a reconfiguration that would change a read calibration`,
+        history: [
+          { do: `environment`, replay: `ORACLE`, calibration: `none` },
+          { do: `configure`, prefix: `ORACLE`, registry: false },
+          { do: `read`, reader: `calibration witness runs` },
+          { do: `environment`, replay: `ORACLE`, calibration: `ORACLE` },
+          { do: `configure`, prefix: `ORACLE`, registry: false },
+          { do: `read`, reader: `calibration witness runs` },
+        ],
+        enters: [selectionChange],
+      },
       {
         name: `a mutated run configuration`,
         history: [
@@ -448,10 +466,13 @@ oracleProperty<History, Array<Result>>({
     let registryRead = false
     // The selection a read saw, and the one a configuration would read.
     let replayIn: Prefix | `none` = `none`
+    let calibrationIn: Prefix | `none` = `none`
+    let seenCalibration = false
     let prefix: Prefix = `ORACLE`
     let seen: boolean | undefined
     for (const [index, step] of steps.entries()) {
-      if (step.do === `environment`) replayIn = step.replay
+      if (step.do === `environment`)
+        [replayIn, calibrationIn] = [step.replay, step.calibration]
       if (
         step.do === `read` &&
         ![
@@ -460,16 +481,23 @@ oracleProperty<History, Array<Result>>({
           `typo.id random parameters`,
         ].includes(step.reader)
       )
-        seen ??= replayIn === prefix
+        if (seen === undefined) {
+          seen = replayIn === prefix
+          seenCalibration = calibrationIn === prefix
+        }
       if (
         step.do === `configure` &&
         seen !== undefined &&
-        (replayIn === step.prefix) !== seen
+        ((replayIn === step.prefix) !== seen ||
+          (calibrationIn === step.prefix) !== seenCalibration)
       )
         reached.push(selectionChange)
       if (step.do === `configure` && owed[index] !== `threw`) {
         prefix = step.prefix
-        if (seen !== undefined) seen = replayIn === prefix
+        if (seen !== undefined) {
+          seen = replayIn === prefix
+          seenCalibration = calibrationIn === prefix
+        }
       }
       if (step.do === `read`) {
         if (configured === undefined && step.reader.startsWith(`typo.id`))

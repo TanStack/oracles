@@ -153,4 +153,19 @@ describe(`configureOracles`, () => {
       `envPrefix must be non-empty`,
     )
   })
+
+  // "It never throws": a witness for a replay that the environment cannot
+  // even describe records nothing.
+  it(`never throws while recording a replay witness`, async () => {
+    vi.stubEnv(`ORACLE_RUNS_MULTIPLIER`, `0`)
+    vi.resetModules()
+    const witness = await import(`../src/oracle-replay-witness`)
+    expect(() =>
+      witness.recordOracleFiniteReplay(`a.b`, {
+        seed: 1,
+        path: `0`,
+        failed: false,
+      }),
+    ).not.toThrow()
+  })
 })
