@@ -29,6 +29,7 @@
 // mutant is killed when any owner kills it, and a function with no owner is
 // reported as `unowned`, a warning rather than a gap.
 import { relative, resolve } from 'node:path'
+import { isOutside } from './args.mjs'
 
 /**
  * An owns entry's file and function. The file ends at the first `#`, so a
@@ -132,9 +133,7 @@ export function ownership(ts, program, pkg, oracles) {
   const checker = program.getTypeChecker()
   const inPackage = (fileName) => {
     const path = relative(pkg, fileName)
-    return (
-      !path.startsWith(`..`) && !path.split(/[\\/]/).includes(`node_modules`)
-    )
+    return !isOutside(path) && !path.split(/[\\/]/).includes(`node_modules`)
   }
   const indexed = new Map()
   const functionsOf = (source) => {

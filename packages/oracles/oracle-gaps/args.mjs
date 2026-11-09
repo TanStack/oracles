@@ -24,7 +24,7 @@ export function parseArgs(argv, cwd = process.cwd()) {
   if (!args.package) throw new Error(`--package is required`)
   // Test reports name files by their real path (on macOS, /tmp is
   // /private/tmp), so the package path is resolved the same way.
-  const pkg = realpathSync(resolve(cwd, args.package))
+  const pkg = realpathSync.native(resolve(cwd, args.package))
   if (args[`stop-daemon`]) return { stop: true, pkg }
   if (!args.source) throw new Error(`--package and --source are required`)
   // The prefix of the framework's environment variables (`${envPrefix}_SEED`
@@ -83,13 +83,22 @@ export function parseArgs(argv, cwd = process.cwd()) {
  */
 export function packagePath(pkg, path) {
   const absolute = resolve(pkg, path)
+  // The native real path, which also gives each name its letter case on a
+  // filesystem that ignores case.
   const named = relative(
     pkg,
-    existsSync(absolute) ? realpathSync(absolute) : absolute,
+    existsSync(absolute) ? realpathSync.native(absolute) : absolute,
   )
-  if (named.startsWith(`..`) || isAbsolute(named))
-    throw new Error(`${path} is outside the package`)
+  if (isOutside(named)) throw new Error(`${path} is outside the package`)
   return named
+}
+
+/**
+ * Whether a path relative to the package leaves it: its first segment is
+ * `..` (a name such as `..gen` is inside), or it is absolute.
+ */
+export function isOutside(path) {
+  return path === `..` || /^\.\.[\\/]/.test(path) || isAbsolute(path)
 }
 
 /**

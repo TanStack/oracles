@@ -41,7 +41,10 @@
  * budget of a few seconds for an incremental test run (2026-11-05).
  *
  * Each `--source` path comes from the history in one of its spellings
- * (`src/x.ts`, `./src/x.ts`, `src/../src/x.ts`) through the CLI's own
+ * (`src/x.ts`, `./src/x.ts`, `src/../src/x.ts`, an absolute path through a
+ * symbolic link to the package, and, only where the filesystem ignores
+ * letter case, `src/X.ts`; a source may sit under `..gen/`, a directory of
+ * the package whose name starts with `..`) through the CLI's own
  * argument parser, and the model names every source by its path in the
  * package whatever the spelling. Beside the end-to-end grammar, the witness
  * module here also holds functions that share a name in one file (a class
@@ -91,7 +94,9 @@ import {
   ownersOf,
   probeHelpers,
   resolveHistory,
+  removePath,
   sourceArgument,
+  caseless,
   writeFixture,
   written,
 } from './gap-report-model-oracle.mjs'
@@ -267,6 +272,9 @@ async function driver(plan, observe) {
         states.add(`a source spelled through a link to the package`)
       if (plan.ownsSpelling !== `plain`)
         states.add(`an owns entry spelled another way`)
+      if (plan.dotGenSource) states.add(`a source under a ..-named directory`)
+      if (plan.sourceSpelling === `cased`)
+        states.add(`a source spelled in another letter case`)
     }
     if (plan.stability !== `none` && !before.refusal) {
       observe(
@@ -278,7 +286,7 @@ async function driver(plan, observe) {
     for (const state of states) observe(`reach`, state)
   } finally {
     written.delete(dir)
-    rmSync(`${dir}.link`, { force: true })
+    removePath(`${dir}.link`)
     rmSync(dir, { recursive: true, force: true })
   }
 }
@@ -529,6 +537,9 @@ const required = [
   `a source spelled through a redundant segment`,
   `a source spelled through a link to the package`,
   `an owns entry spelled another way`,
+  `a source under a ..-named directory`,
+  // Only where the filesystem ignores letter case.
+  ...(caseless ? [`a source spelled in another letter case`] : []),
   `the first of two functions on one line named`,
   `the second of two functions on one line named`,
   `a call to a nested function named like a probe helper judged`,
@@ -568,6 +579,7 @@ oracleProperty({
               `owned by a whole-file entry`,
               `a source spelled through a redundant segment`,
               `a source spelled through a link to the package`,
+              `a source spelled in another letter case`,
               ...faults.map((f) => `refused ${f}`),
             ].includes(s),
         ),
@@ -580,6 +592,7 @@ oracleProperty({
           steps: null,
           sourceSpelling: `dot`,
           ownsSpelling: `dot`,
+          dotGen: true,
           // A library function that calls the library's `$derived`.
           library: [[{ kind: `dollar` }], ...generated.library].slice(0, 2),
           // Every rune form, in a Svelte module.
@@ -621,6 +634,21 @@ oracleProperty({
           sourceSpelling: `redundant`,
         }),
       },
+      ...(caseless
+        ? [
+            {
+              name: `a source in another letter case`,
+              enters: [`a source spelled in another letter case`],
+              build: (generated) => ({
+                ...generated,
+                sourceSpelling: `cased`,
+                witness: false,
+                fault: `none`,
+                steps: null,
+              }),
+            },
+          ]
+        : []),
       {
         name: `a source through a link to the package`,
         enters: [`a source spelled through a link to the package`],

@@ -337,5 +337,5 @@ async function serve(pkg) {
 
 if (import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   const at = process.argv.indexOf(`--package`)
-  await serve(realpathSync(resolve(process.argv[at + 1])))
+  await serve(realpathSync.native(resolve(process.argv[at + 1])))
 }

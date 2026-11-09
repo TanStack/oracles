@@ -306,6 +306,7 @@ import {
   writeFixture,
   applyEdit,
   readSummary,
+  removePath,
   sourceArgument,
   ENV_PREFIX,
 } from './gap-report-model-oracle.mjs'
@@ -1006,7 +1007,7 @@ async function driver(plan, observe) {
     for (const state of states) observe(`reach`, state)
   } finally {
     if (copy) rmSync(copy, { recursive: true, force: true })
-    rmSync(`${dir}.link`, { force: true })
+    removePath(`${dir}.link`)
     written.delete(dir)
     try {
       rmSync(dir, { recursive: true, force: true })

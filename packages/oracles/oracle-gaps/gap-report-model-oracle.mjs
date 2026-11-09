@@ -6,9 +6,11 @@
  */
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   rmSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -29,6 +31,12 @@ const SOURCE = `src/sut.ts`
 const LIB = `src/lib.ts`
 // A Svelte module, which only the static half reads: no test loads it.
 const RUNES = `src/state.svelte.ts`
+// A source in a directory of the package whose name starts with `..`, which
+// is in the package all the same. No test loads it.
+const DOTGEN = `..gen/extra.ts`
+// Whether this filesystem ignores letter case, so that `src/Sut.ts` names
+// `src/sut.ts`; the `cased` spelling applies only where it does.
+const caseless = existsSync(fileURLToPath(import.meta.url).toUpperCase())
 // How long a slow test waits, in real milliseconds: past the 1 s first
 // budget that the driver passes (`--first-limit`), within the 6 s full limit
 // (`--hang-limit`).
@@ -298,7 +306,11 @@ const histories = fc.record({
     `dot`,
     `redundant`,
     `linked`,
+    // The file names' first letters in capitals, on a caseless filesystem.
+    `cased`,
   ),
+  // A source file under `..gen/`, owned by file a.
+  dotGen: fc.constantFrom(false, false, false, true),
   // How owns entries spell their file, which names the same file in every
   // spelling, as `--source` does.
   ownsSpelling: fc.constantFrom(`plain`, `plain`, `dot`, `redundant`),
@@ -1485,6 +1497,19 @@ function resolveHistory(history) {
         },
       ]
     : []
+  // The `..gen/` source's one function.
+  const dotGen = history.dotGen
+    ? [
+        {
+          id: `e0`,
+          file: DOTGEN,
+          container: `free`,
+          owners: [`a`],
+          body: [{ kind: `push`, quote: `'` }],
+          tests: [],
+        },
+      ]
+    : []
   // The Svelte module's functions.
   const runes = (history.runes ?? []).map((body, index) => ({
     id: `r${index}`,
@@ -1499,6 +1524,7 @@ function resolveHistory(history) {
     ...library,
     ...dollar,
     ...runes,
+    ...dotGen,
     ...(history.witness
       ? witness
           .filter((w) => history.witness === true || captureWitness.has(w.id))
@@ -1668,6 +1694,9 @@ function resolveHistory(history) {
   libLines.push(...lines.splice(0))
   for (const fn of functions) if (fn.file === RUNES) emit(fn, ``)
   const runesLines = lines.splice(0)
+  for (const fn of functions) if (fn.file === DOTGEN) emit(fn, ``)
+  const dotGenSource =
+    dotGen.length > 0 ? `${lines.splice(0).join(`\n`)}\nexport {}\n` : undefined
   lines.push(...mainLines)
   const librarySource = `${libLines.join(`\n`)}\nexport {}\n`
   const runesSource =
@@ -1754,10 +1783,20 @@ function resolveHistory(history) {
     cliPath: history.cliPath ?? `plain`,
     concurrentStart: history.concurrentStart === true,
     setupGlobal: history.setupGlobal === true,
-    sourceSpelling: history.sourceSpelling ?? `plain`,
+    // `cased` names another file where letter case matters.
+    sourceSpelling:
+      history.sourceSpelling === `cased` && !caseless
+        ? `plain`
+        : (history.sourceSpelling ?? `plain`),
     ownsSpelling: history.ownsSpelling ?? `plain`,
     // The source files the CLI is asked to check.
-    sources: [SOURCE, LIB, ...(runesSource ? [RUNES] : [])],
+    sources: [
+      SOURCE,
+      LIB,
+      ...(runesSource ? [RUNES] : []),
+      ...(dotGenSource ? [DOTGEN] : []),
+    ],
+    dotGenSource,
     history,
     source,
     librarySource,
@@ -1775,7 +1814,12 @@ const spell = (path, spelling, link) =>
       ? path.replace(`src/`, `src/../src/`)
       : spelling === `linked`
         ? `${link}/${path}`
-        : path
+        : spelling === `cased`
+          ? path.replace(
+              /[^/]+$/,
+              (name) => name[0].toUpperCase() + name.slice(1),
+            )
+          : path
 // A file beside the fixture package, outside it (the fixture's directory
 // holds this CLI's own files).
 const OUTSIDE = `../vitest.config.mjs`
@@ -3015,6 +3059,7 @@ function fixtureFiles(plan, state = initialState(plan)) {
       : plan.source,
     [LIB]: plan.librarySource,
     ...(plan.runesSource ? { [RUNES]: plan.runesSource } : {}),
+    ...(plan.dotGenSource ? { [DOTGEN]: plan.dotGenSource } : {}),
     'tests/strict.ts': `export const strict = ${state.strict}\n`,
     // A workspace dependency with module state, linked through node_modules.
     'deps/state-dep/package.json': manifest({
@@ -3115,6 +3160,19 @@ function fixtureFiles(plan, state = initialState(plan)) {
   return files
 }
 
+/**
+ * Removes a file or a symbolic link, never what a link points to: on Linux,
+ * `rmSync` follows a link to a directory and refuses it (ERR_FS_EISDIR).
+ */
+function removePath(path) {
+  try {
+    if (lstatSync(path).isSymbolicLink()) unlinkSync(path)
+    else rmSync(path, { force: true })
+  } catch {
+    // Already gone.
+  }
+}
+
 // The paths each fixture directory holds, so a state that lacks a file of
 // the state before it removes that file.
 const written = new Map()
@@ -3130,7 +3188,7 @@ function writeFixture(dir, files) {
   if (!existsSync(join(dir, `node_modules/state-dep`)))
     symlinkSync(`../deps/state-dep`, join(dir, `node_modules/state-dep`), `dir`)
   for (const path of written.get(dir) ?? [])
-    if (!(path in files)) rmSync(join(dir, path), { force: true })
+    if (!(path in files)) removePath(join(dir, path))
   for (const [path, text] of Object.entries(files)) {
     const at = join(dir, path)
     mkdirSync(dirname(at), { recursive: true })
@@ -3285,6 +3343,9 @@ export {
   SOURCE,
   LIB,
   RUNES,
+  DOTGEN,
+  caseless,
+  removePath,
   sourceArgument,
   ORACLE_FILES,
   METHOD_NAMES,
