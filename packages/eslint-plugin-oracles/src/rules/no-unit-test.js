@@ -1283,7 +1283,7 @@ export default {
     },
   },
   create(context) {
-    // `oracle-config`, `oracle-reach`, and the other `oracle-` modules are the
+    // `oracle-config`, `oracle-property`, and the other `oracle-` modules are the
     // shared oracle machinery. Their tests check that machinery, not a law.
     if (basename(context.filename).startsWith(`oracle-`)) return {}
     const { sourceCode } = context

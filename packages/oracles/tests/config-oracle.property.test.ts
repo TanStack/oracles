@@ -18,8 +18,7 @@
  *   aside, or did not, by the selection they read (maintainer decision,
  *   2026-11-08, finding R1b-1). A later call that keeps the selection
  *   replaces the rest of the configuration. So a test that stands aside during a path
- *   replay (`oracleReplayRequested`), a declared reach that skips its check
- *   during one (`createOracleReach`), `readOracleRunConfig()`, and a
+ *   replay (`oracleReplayRequested`), `readOracleRunConfig()`, and a
  *   calibration witness, and the replay witness always agree. The object
  *   `readOracleRunConfig()` returns is the caller's: changing it changes no
  *   later read.
@@ -32,8 +31,7 @@
  * (prefix `ORACLE` or `ACME`, with or without the registry `[a.b]`), changes
  * the environment (a path replay of `a.b` under one prefix or none, and the
  * calibration variable naming the fault under one prefix or none), or reads:
- * whether a path replay is requested, whether a declared reach skips its
- * check, whether `readOracleRunConfig()` reports a path, whether
+ * whether a path replay is requested, whether `readOracleRunConfig()` reports a path, whether
  * `oracleRandomParameters` given it replays, whether a replay witness
  * attaches, whether a replay is still requested after the caller mutates the
  * object `readOracleRunConfig()` returned, whether `a.b` or `typo.id` is
@@ -55,7 +53,6 @@ import type { Observation } from '../src/index.js'
 type Prefix = `ORACLE` | `ACME`
 type Reader =
   | `replay requested`
-  | `reach skips its check`
   | `a.b registered`
   | `typo.id registered`
   | `typo.id random parameters`
@@ -90,7 +87,6 @@ const anyStep: fc.Arbitrary<Step> = fc.oneof(
     do: fc.constant(`read` as const),
     reader: fc.constantFrom<Reader>(
       `replay requested`,
-      `reach skips its check`,
       `a.b registered`,
       `typo.id registered`,
       `typo.id random parameters`,
@@ -156,7 +152,6 @@ function owedResults(steps: History): Array<Result> {
       // The witness channel is set with the replay, and a returned run
       // configuration is the caller's copy, so these all read the selection.
       case `replay requested`:
-      case `reach skips its check`:
       case `run config replays`:
       case `a.b random parameters replay`:
       case `replay witness attaches`:
@@ -214,22 +209,10 @@ async function driveConfiguration(
     setEnvironment(`none`, `none`)
     vi.resetModules()
     const config = await import(`../src/oracle-config.js`)
-    const { createOracleReach } = await import(`../src/oracle-reach.js`)
     const witness = await import(`../src/oracle-replay-witness.js`)
     const registration = { skip: `skipped` }
     const read: Record<Reader, () => boolean> = {
       'replay requested': () => config.oracleReplayRequested(),
-      'reach skips its check': () => {
-        // A reach whose one state no history entered fails its check unless
-        // it skips it.
-        const reach = createOracleReach(`a.b`, [`state`])
-        try {
-          reach.assertReached()
-          return true
-        } catch {
-          return false
-        }
-      },
       'a.b registered': () =>
         accepts(() => config.assertRegisteredOracleProperty(`a.b`)),
       'typo.id registered': () =>
@@ -340,8 +323,8 @@ oracleProperty<History, Array<Result>>({
         ],
         enters: [lateConfiguration],
       },
-      // A declared reach once read the live environment while replay
-      // selection kept the configured one, so they disagreed.
+      // A reader once saw the live environment while replay selection kept
+      // the configured one, so the two disagreed.
       {
         name: `run configuration read after the environment changed`,
         history: [
@@ -370,7 +353,7 @@ oracleProperty<History, Array<Result>>({
           { do: `read`, reader: `replay requested` },
           { do: `environment`, replay: `ORACLE`, calibration: `none` },
           { do: `configure`, prefix: `ORACLE`, registry: false },
-          { do: `read`, reader: `reach skips its check` },
+          { do: `read`, reader: `replay requested` },
         ],
         enters: [selectionChange],
       },
@@ -412,7 +395,7 @@ oracleProperty<History, Array<Result>>({
           { do: `configure`, prefix: `ORACLE`, registry: false },
           { do: `environment`, replay: `ORACLE`, calibration: `ORACLE` },
           { do: `read`, reader: `replay requested` },
-          { do: `read`, reader: `reach skips its check` },
+          { do: `read`, reader: `replay requested` },
         ],
         enters: [environmentAfterConfiguration],
       },
@@ -443,7 +426,7 @@ oracleProperty<History, Array<Result>>({
         build: (generated) => [
           { do: `configure`, prefix: `ORACLE`, registry: false },
           { do: `environment`, replay: `ORACLE`, calibration: `ORACLE` },
-          { do: `read`, reader: `reach skips its check` },
+          { do: `read`, reader: `replay requested` },
           ...generated.slice(0, 3),
         ],
       },
