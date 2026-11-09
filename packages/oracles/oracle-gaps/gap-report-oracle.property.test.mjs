@@ -722,16 +722,14 @@ async function incremental(dir, plan, cli, copy, observe, states) {
 
 async function driver(plan, observe) {
   const dir = mkdtempSync(join(here, `.scratch-`))
-  // A symbolic link to the package, for sources spelled through it.
-  symlinkSync(dir, `${dir}.link`, `dir`)
   // A history with steps runs its own copy of the CLI, which the `cli` edit
   // changes; a history that installs the CLI under a path with a space and
   // `#` runs every check from such a copy.
-  const copy =
-    plan.cliPath === `spaced` || plan.steps.length > 0
-      ? copyCli(plan)
-      : undefined
+  let copy
   try {
+    if (plan.cliPath === `spaced` || plan.steps.length > 0) copy = copyCli(plan)
+    // A symbolic link to the package, for sources spelled through it.
+    symlinkSync(dir, `${dir}.link`, `dir`)
     const files = fixtureFiles(plan)
     const how = {
       ordinary: plan.ordinary,

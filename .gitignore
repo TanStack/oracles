@@ -7,7 +7,7 @@ coverage
 .self-oracle-*
 # The gap CLI writes scratch packages and state beside the package it checks,
 # and its oracle writes scratch packages and CLI copies beside itself.
-/packages/oracles/oracle-gaps/.scratch-*/
+/packages/oracles/oracle-gaps/.scratch-*
 /packages/oracles/oracle-gaps-mutant*/
 .oracle-gaps/
 .oracle-gaps-*

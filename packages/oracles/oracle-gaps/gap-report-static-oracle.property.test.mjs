@@ -175,9 +175,9 @@ const namedStates = {
 
 async function driver(plan, observe) {
   const dir = realpathSync(mkdtempSync(join(here, `.scratch-`)))
-  // A symbolic link to the package, for sources spelled through it.
-  symlinkSync(dir, `${dir}.link`, `dir`)
   try {
+    // A symbolic link to the package, for sources spelled through it.
+    symlinkSync(dir, `${dir}.link`, `dir`)
     const files = fixtureFiles(plan)
     const before = analyzeFixture(dir, files, plan)
     observe(`static`, before)
