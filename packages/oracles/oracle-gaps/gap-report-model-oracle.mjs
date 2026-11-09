@@ -240,7 +240,26 @@ const edits = [
   `cli`,
   `restart`,
   `revert`,
+  // Events that end a daemon, not edits: a crash (killed, its socket and
+  // lock left behind), a reboot (killed, and its socket gone with the temp
+  // directory), a reboot that gives the dead daemon's process id to a live
+  // process, a crash followed by two checks at once, and a check started
+  // while the daemon is being stopped.
+  `crash`,
+  `reboot`,
+  `reusedPid`,
+  `crashAtOnce`,
+  `stopAtOnce`,
 ]
+// The steps that act on the daemon and change no file.
+const daemonEvents = new Set([
+  `restart`,
+  `crash`,
+  `reboot`,
+  `reusedPid`,
+  `crashAtOnce`,
+  `stopAtOnce`,
+])
 const histories = fc.record({
   functions: fc.array(fc.array(statement, { minLength: 1, maxLength: 5 }), {
     minLength: 1,
@@ -3260,6 +3279,7 @@ export {
   routes,
   testCase,
   edits,
+  daemonEvents,
   histories,
   kill,
   push,

@@ -147,8 +147,12 @@
  *    reused some and recomputed some, one that reused evidence from disk
  *    after a restart, and, for each content edit, a cold result that the
  *    edit changed: an edit that changes nothing cannot expose a stale cache.
- *    One daemon serves a package: two checks started at once both report
- *    what the cold run reports, and once `--stop-daemon` returns, no daemon
+ *    One daemon serves a package, across crashes, reboots, and concurrent
+ *    starts: two checks started at once, a check after the daemon was
+ *    killed (its socket and lock left behind), after a reboot (its socket
+ *    gone), after its process id went to a live process, two checks at
+ *    once after a crash, and a check started during a stop each report
+ *    what the cold run reports; once `--stop-daemon` returns, no daemon
  *    process serves the package.
  * 10. **The runner runs the package as Vitest does.** From any install path
  *    (one with a space and `#` included), for any spelling of `--source`
@@ -215,7 +219,12 @@
  * environment variable other than the seed, a new file that changes how an
  * unchanged import resolves, a change to the Vite config or the installed
  * packages, or checks at once other than the two that start the daemon.
- * The daemon count after a stop is read from the process list. Cut-off
+ * The daemon count after a stop is read from the process list. Two
+ * daemon defects have no observation here: a stale lock removed without
+ * the atomic claim (two daemons serve until the loser sees its lock taken,
+ * within 2 s), and a stop that releases the lock before it closes the
+ * store (each check has already flushed its evidence); their mutants
+ * survive. Cut-off
  * charging is judged only where it changes an outcome: under one budget
  * (`--first-limit` equal to `--hang-limit`), where a misplaced cut is a
  * timeout at once; under two budgets a misplaced cut only costs a
@@ -241,9 +250,11 @@
 import { spawn, spawnSync } from 'node:child_process'
 import {
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -252,6 +263,7 @@ import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import fc from 'fast-check'
 import { declareOracle } from '../src/oracle-declaration.ts'
+import { socketOf, stateDirOf } from './daemon.mjs'
 import { oracleProperty, pass, violation } from '../src/oracle-property.ts'
 
 import {
@@ -260,6 +272,7 @@ import {
   quote,
   statement,
   edits,
+  daemonEvents,
   histories,
   push,
   judging,
@@ -554,8 +567,10 @@ async function incremental(dir, plan, cli, copy, observe, states) {
     }
     if (!cold.has(key)) cold.set(key, runCli(dir, files, how))
     const coldRun = cold.get(key)
-    // The first check may be two at once, which must reach one daemon.
-    const twice = step === `start` && plan.concurrentStart
+    // The first check may be two at once, which must reach one daemon, and
+    // so are the two after a crash.
+    const twice =
+      (step === `start` && plan.concurrentStart) || step === `crashAtOnce`
     const [daemon, ...others] = twice
       ? await runClisAtOnce(dir, files, [
           { ...how, daemon: true },
@@ -582,7 +597,17 @@ async function incremental(dir, plan, cli, copy, observe, states) {
             .replaceAll(dir, `<package>`),
         },
       })
-    if (twice) states.add(`two checks started the daemon at once`)
+    if (twice && step === `start`)
+      states.add(`two checks started the daemon at once`)
+    const after = {
+      crash: `a check after a daemon crash`,
+      reboot: `a check after a reboot`,
+      reusedPid: `a check after the daemon's process id was reused`,
+      crashAtOnce: `two checks at once after a crash`,
+      stopAtOnce: `a check during a stop`,
+    }[step]
+    if (after && [daemon, ...others].every((run) => run.reported))
+      states.add(after)
     if (plan.cliPath === `spaced` && daemon.reported)
       states.add(`the daemon ran from a path with a space and #`)
     const reused = daemon.evidence?.reused ?? 0
@@ -621,11 +646,45 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       [join(copy, `index.mjs`), `--stop-daemon`, `--package`, dir],
       { cwd: repo, encoding: `utf8`, timeout: 60_000, env: cleanEnv() },
     )
+  // Kills the package's daemons as a crash or a power loss would, leaving
+  // what they wrote; returns their process ids.
+  const crash = async () => {
+    const killed = daemonsOf(dir)
+    for (const pid of killed) process.kill(pid, `SIGKILL`)
+    while (daemonsOf(dir).length > 0)
+      await new Promise((r) => setTimeout(r, 50))
+    return killed
+  }
   try {
     await checkAt(`start`)
     for (const step of plan.steps) {
       if (step === `restart`) stop()
-      else if (step === `revert`) {
+      else if (step === `crash` || step === `crashAtOnce`) await crash()
+      else if (step === `reboot` || step === `reusedPid`) {
+        const [dead] = await crash()
+        rmSync(socketOf(realpathSync(dir)), { force: true })
+        // A live process now has the dead daemon's id.
+        const lock = join(stateDirOf(realpathSync(dir)), `daemon.lock`)
+        if (step === `reusedPid` && dead !== undefined && existsSync(lock))
+          writeFileSync(
+            lock,
+            readFileSync(lock, `utf8`).replace(
+              String(dead),
+              String(process.pid),
+            ),
+          )
+      } else if (step === `stopAtOnce`) {
+        const stopping = new Promise((resolvePromise) =>
+          spawn(
+            process.execPath,
+            [join(copy, `index.mjs`), `--stop-daemon`, `--package`, dir],
+            { cwd: repo, env: cleanEnv(), stdio: `ignore` },
+          ).on(`close`, resolvePromise),
+        )
+        await checkAt(step)
+        await stopping
+        continue
+      } else if (step === `revert`) {
         if (trail.length > 1) trail.pop()
         reverted = made.pop()
       } else {
@@ -1315,8 +1374,13 @@ const incrementalStates = [
   `evidence reused after a daemon restart`,
   `a revert of a file edit reran nothing`,
   ...edits
-    .filter((edit) => edit !== `restart`)
+    .filter((edit) => !daemonEvents.has(edit))
     .map((edit) => `edit ${edit} changed the cold result`),
+  `a check after a daemon crash`,
+  `a check after a reboot`,
+  `a check after the daemon's process id was reused`,
+  `two checks at once after a crash`,
+  `a check during a stop`,
   `two checks started the daemon at once`,
   `the daemon ran from a path with a space and #`,
 ]
@@ -1611,6 +1675,11 @@ oracleProperty({
             `newOracle`,
             `cli`,
             `restart`,
+            `crash`,
+            `reboot`,
+            `reusedPid`,
+            `crashAtOnce`,
+            `stopAtOnce`,
           ],
         }),
       },
