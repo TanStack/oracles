@@ -83,9 +83,12 @@ import { declareOracle } from '../src/oracle-declaration.ts'
 import { oracleProperty, pass, violation } from '../src/oracle-property.ts'
 import { analyze, isRunnerCopy } from './analysis.mjs'
 import {
+  DERIVED,
+  DERIVED_INPUTS,
   LIB,
   RUNES,
   SOURCE,
+  derivedExpected,
   edited,
   fixtureFiles,
   histories,
@@ -142,9 +145,88 @@ function analyzeFixture(dir, files, plan) {
       runes: plan.runesSource
         ? instrumented.get(realpathSync(join(dir, RUNES)))
         : undefined,
+      derived: plan.derivedSource
+        ? {
+            code: instrumented.get(realpathSync(join(dir, DERIVED))),
+            numbers: mutants
+              .filter((m) => m.source === DERIVED)
+              .map((m) => m.number),
+          }
+        : undefined,
     }
   } catch (error) {
     return { refusal: String(error?.message ?? error) }
+  }
+}
+
+// ## The derived class, run
+//
+// The derived file's text runs as a CommonJS module, first as written and then
+// instrumented, for each input, and under each of the instrumented copy's
+// mutants. A run uses the switch the instrumented copy calls: `m` is true for
+// the active mutant's site, and each forced form (`cmp`, `not`, `b`, `cond`)
+// takes the mutant's rewrite. This restates the switch's contract, the one
+// schemata.mjs states per operator. A run returns what the constructor pushed,
+// the fields it set, or the error it threw.
+const opposite = {
+  '<': '<=',
+  '<=': '<',
+  '>': '>=',
+  '>=': '>',
+  '===': '!==',
+  '!==': '===',
+}
+const holdsFor = (a, op, b) =>
+  op === '<'
+    ? a < b
+    : op === '<='
+      ? a <= b
+      : op === '>'
+        ? a > b
+        : op === '>='
+          ? a >= b
+          : op === '==='
+            ? a === b
+            : a !== b
+function switchFor(active) {
+  return {
+    m: (id) => id === active,
+    v: (value) => value,
+    cmp: (id, a, b, op) => holdsFor(a, id === active ? opposite[op] : op, b),
+    not: (id, value) => (id === active ? value : !value),
+    b: (id, value) => (id === active ? !value : value),
+    cond: (ifTrue, ifFalse, value) =>
+      active === ifTrue ? true : active === ifFalse ? false : value,
+  }
+}
+function runDerived(ts, code, active, x) {
+  const js = ts.transpileModule(code, {
+    compilerOptions: {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.CommonJS,
+    },
+  }).outputText
+  const exported = {}
+  const previous = globalThis.__oracleGaps
+  globalThis.__oracleGaps = switchFor(active)
+  try {
+    new Function(`exports`, js)(exported)
+    const out = []
+    const made = exported.derivedMake(x, out)
+    return { labels: out, tag: made.tag, n: made.n, count: made.count }
+  } catch (error) {
+    return { error: String(error?.message ?? error) }
+  } finally {
+    globalThis.__oracleGaps = previous
+  }
+}
+function observeDerived(ts, source, code, numbers) {
+  const runs = (text, active) =>
+    DERIVED_INPUTS.map((x) => runDerived(ts, text, active, x))
+  return {
+    source: runs(source, null),
+    instrumented: runs(code, null),
+    mutants: numbers.map((number) => ({ number, runs: runs(code, number) })),
   }
 }
 
@@ -194,6 +276,16 @@ async function driver(plan, observe) {
     const files = fixtureFiles(plan)
     const before = analyzeFixture(dir, files, plan)
     observe(`static`, before)
+    if (before.derived)
+      observe(
+        `derived`,
+        observeDerived(
+          ts,
+          plan.derivedSource,
+          before.derived.code,
+          before.derived.numbers,
+        ),
+      )
     const states = new Set()
     if (before.refusal && plan.fault !== `none`)
       states.add(`refused ${plan.fault}`)
@@ -283,6 +375,27 @@ async function driver(plan, observe) {
       if (plan.dotGenSource) states.add(`a source under a ..-named directory`)
       if (plan.sourceSpelling === `cased`)
         states.add(`a source spelled in another letter case`)
+      if (plan.derivedSpec) {
+        const spec = plan.derivedSpec
+        states.add(`a derived class constructed`)
+        states.add(
+          spec.params === `property`
+            ? `a derived class with a parameter property`
+            : `a derived class with a plain parameter`,
+        )
+        if (spec.field) states.add(`a derived class with a field initializer`)
+        states.add(
+          spec.before.length > 0
+            ? `a derived class with statements before super`
+            : `a derived class with no statement before super`,
+        )
+        if (spec.before.some((s) => s.kind === `if`))
+          states.add(`a derived class with a conditional before super`)
+        if (spec.after.length > 0)
+          states.add(`a derived class with a statement after super`)
+        if (spec.after.some((s) => s.kind === `tag`))
+          states.add(`a derived class reading this after super`)
+      }
     }
     if (plan.stability !== `none` && !before.refusal) {
       observe(
@@ -351,6 +464,43 @@ function runePlacement(code) {
   return { calls, misplaced }
 }
 
+// The derived class's laws, in order. Its source runs as the model says; its
+// instrumented copy with no mutant active runs as its source does; and under
+// every mutant the constructor still completes, with its base class's tag,
+// so no mutant has made `super(...)` conditional, removed it, or moved it.
+function checkDerived(plan, observed) {
+  if (!observed)
+    return violation(`derived`, `the derived class was not run`, `completion`)
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+  const owed = DERIVED_INPUTS.map((x) => derivedExpected(plan.derivedSpec, x))
+  for (const [i, x] of DERIVED_INPUTS.entries())
+    if (!same(observed.source[i], owed[i]))
+      return violation(
+        `derived`,
+        `the source run for ${x} is ${JSON.stringify(observed.source[i])}, owed ${JSON.stringify(owed[i])}`,
+        `source behavior`,
+      )
+  for (const [i, x] of DERIVED_INPUTS.entries())
+    if (!same(observed.instrumented[i], observed.source[i]))
+      return violation(
+        `derived`,
+        `with no mutant active, the instrumented class for ${x} is ${JSON.stringify(observed.instrumented[i])}, the source's ${JSON.stringify(observed.source[i])}`,
+        `no-mutant behavior`,
+        { actual: observed.instrumented[i], expected: observed.source[i] },
+      )
+  for (const mutant of observed.mutants)
+    for (const [i, x] of DERIVED_INPUTS.entries()) {
+      const run = mutant.runs[i]
+      if (run.error !== undefined || run.tag !== owed[i].tag)
+        return violation(
+          `derived`,
+          `under mutant ${mutant.number} the class for ${x} ${run.error ?? `has tag ${JSON.stringify(run.tag)}`}`,
+          `super unconditional`,
+        )
+    }
+  return undefined
+}
+
 function check(plan, observations, expected) {
   const got = observations.find((o) => o.checkpoint === `static`)?.value
   if (!got) return violation(`static`, `no analysis was observed`, `completion`)
@@ -397,6 +547,11 @@ function check(plan, observations, expected) {
         `the instrumented Svelte module ${misplaced.length > 0 ? `moves a rune from its place: ${misplaced[0]}` : `has ${calls.length} rune calls, owed ${owed}`}`,
         `rune placement`,
       )
+  }
+  if (plan.derivedSource) {
+    const observed = observations.find((o) => o.checkpoint === `derived`)?.value
+    const broken = checkDerived(plan, observed)
+    if (broken) return broken
   }
   const owedMutants = runtime
     ? model({ ...plan, fault: `none` }).mutants
@@ -509,6 +664,28 @@ const calibrations = [
     }),
   },
   {
+    name: `a derived class's super call is made conditional`,
+    law: `super unconditional`,
+    corrupt: corrupt(`derived`, (v) => {
+      const run = v.mutants[0]?.runs[0]
+      if (!run) return false
+      v.mutants[0].runs[0] = {
+        error: `Must call super constructor in derived class before accessing 'this'`,
+      }
+    }),
+  },
+  {
+    name: `the instrumented derived class differs with no mutant active`,
+    law: `no-mutant behavior`,
+    corrupt: (trace) => {
+      const index = trace.findIndex((o) => o.checkpoint === `derived`)
+      if (index < 0) return undefined
+      const value = structuredClone(trace[index].value)
+      value.instrumented[0] = { error: `Must call super constructor` }
+      return trace.map((o, i) => (i === index ? { ...o, value } : o))
+    },
+  },
+  {
     name: `a key drops its statement`,
     law: `keys`,
     corrupt: corrupt(`static`, (v) => {
@@ -534,8 +711,20 @@ const calibrations = [
 ]
 
 const faults = [`badEntry`, `missingSource`, `nonLiteral`, `outsideSource`]
+const derivedStates = [
+  `a derived class constructed`,
+  `a derived class with a parameter property`,
+  `a derived class with a plain parameter`,
+  `a derived class with a field initializer`,
+  `a derived class with statements before super`,
+  `a derived class with no statement before super`,
+  `a derived class with a conditional before super`,
+  `a derived class with a statement after super`,
+  `a derived class reading this after super`,
+]
 const required = [
   ...Object.values(ownedStates),
+  ...derivedStates,
   ...Object.values(namedStates).map(([, state]) => state),
   `a $-named call outside Svelte judged`,
   `a Svelte module instrumented`,
@@ -572,9 +761,9 @@ const required = [
 oracleProperty({
   id: `oracle-gaps.report-static`,
   law: {
-    statement: `The gap report's static half keeps every Svelte rune where Svelte allows it, enumerates the promised operator mutants, marks exactly the probe-only code, refuses broken owns declarations, gives each function the owners whose call trees contain it, anchors each mutant's key, and keeps keys, probe marks, and ownership stable under unrelated edits.`,
-    authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the frozen design's plan for an oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); for rune placement, Svelte 5's placement rule for runes (state_invalid_placement, effect_invalid_placement) and the maintainer's report of svelte-db's useLiveQuery.svelte.ts failing to compile under instrumentation (2026-11-08).`,
-    limits: `The grammar and model of oracle-gaps.report, with its limits. Outcomes that need test runs, and the failing-owner refusal, belong to oracle-gaps.report. Same-named functions, accessors, and field arrows are judged for ownership only; runes only as $state, $state.raw, $derived, $derived.by, $effect, and $effect.pre in a .svelte.ts module, judged by a restatement of Svelte's placement rule rather than the compiler.`,
+    statement: `The gap report's static half keeps every Svelte rune where Svelte allows it, enumerates the promised operator mutants, marks exactly the probe-only code, refuses broken owns declarations, gives each function the owners whose call trees contain it, anchors each mutant's key, keeps keys, probe marks, and ownership stable under unrelated edits, and keeps each derived class's \`super(...)\` call unconditional: with no mutant active the instrumented class behaves as its source does, no mutant removes or moves the call, and under every mutant the class's constructor still completes with its base class's tag.`,
+    authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the frozen design's plan for an oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); for rune placement, Svelte 5's placement rule for runes (state_invalid_placement, effect_invalid_placement) and the maintainer's report of svelte-db's useLiveQuery.svelte.ts failing to compile under instrumentation (2026-11-08); for derived classes, the gap report's contract that instrumentation with no mutant active does not change behavior and that a mutant is a legal program variant (the operator contract in schemata.mjs), with ECMAScript's rule that a derived constructor calls \`super\` before it reads \`this\` and before it returns, and the maintainer's report of TanStack DB's subscription.ts failing with no mutant active (G11, 2026-11-09).`,
+    limits: `The grammar and model of oracle-gaps.report, with its limits. Outcomes that need test runs, and the failing-owner refusal, belong to oracle-gaps.report. Same-named functions, accessors, and field arrows are judged for ownership only; runes only as $state, $state.raw, $derived, $derived.by, $effect, and $effect.pre in a .svelte.ts module, judged by a restatement of Svelte's placement rule rather than the compiler. A derived class is judged only in this oracle's in-process run: its file is no test's import, so no test runs it, the end-to-end oracle does not load it, and the run transpiles it to CommonJS at ES2022 (other downlevel targets and Vitest's own transform are not run here). The mutant switch is a restatement of the contract in schemata.mjs, not the capture setup's runtime.`,
     owner: `packages/oracles/oracle-gaps`,
   },
   histories: {
@@ -592,6 +781,10 @@ oracleProperty({
               `a source spelled through a redundant segment`,
               `a source spelled through a link to the package`,
               `a source spelled in another letter case`,
+              // A plain-parameter class without statements before super is
+              // the next history's.
+              `a derived class with a plain parameter`,
+              `a derived class with no statement before super`,
               ...faults.map((f) => `refused ${f}`),
             ].includes(s),
         ),
@@ -605,6 +798,14 @@ oracleProperty({
           sourceSpelling: `dot`,
           ownsSpelling: `dot`,
           dotGen: true,
+          // A parameter property, a field, statements before and after
+          // `super(...)`, a conditional before it, and `this` read after it.
+          derived: {
+            params: `property`,
+            field: true,
+            before: [{ kind: `push` }, { kind: `if`, op: `>`, k: 4 }],
+            after: [{ kind: `push` }, { kind: `tag` }],
+          },
           // A library function that calls the library's `$derived`.
           library: [[{ kind: `dollar` }], ...generated.library].slice(0, 2),
           // Every rune form, in a Svelte module.
@@ -644,6 +845,27 @@ oracleProperty({
           stability: `none`,
           steps: null,
           sourceSpelling: `redundant`,
+        }),
+      },
+      {
+        name: `a plain derived class with no statement before super`,
+        enters: [
+          `a derived class with a plain parameter`,
+          `a derived class with no statement before super`,
+        ],
+        build: (generated) => ({
+          ...generated,
+          witness: false,
+          wholeFile: `none`,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+          derived: {
+            params: `plain`,
+            field: false,
+            before: [],
+            after: [{ kind: `push` }],
+          },
         }),
       },
       ...(caseless

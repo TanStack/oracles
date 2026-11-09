@@ -33,6 +33,13 @@ const SOURCE = `src/sut.ts`
 const LIB = `src/lib.ts`
 // A Svelte module, which only the static half reads: no test loads it.
 const RUNES = `src/state.svelte.ts`
+// A module with a base class and a derived class, which only the static half
+// reads: no test loads it. See `derivedFile`.
+const DERIVED = `src/derived.ts`
+// The derived class's constructor, as the model names it: no oracle owns it.
+const DERIVED_FN = `Derived.constructor`
+// The inputs a derived class is run with, each judged against the model.
+export const DERIVED_INPUTS = [0, 4, 9]
 // Where this package's own dependencies are installed.
 const OWN_MODULES = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -182,6 +189,27 @@ const runeStatement = fc.oneof(
     rune: fc.constantFrom(`$effect`, `$effect.pre`),
   }),
 )
+// A derived class (DERIVED's `Derived`, which extends `DerivedBase`). Its
+// constructor runs statements before `super(...)` that touch neither `this`
+// nor `super`, then statements after it, which may read `this`. Its
+// parameters may be parameter properties (`public n`), and it may have a
+// field initializer. No mutant may make its `super(...)` call conditional,
+// remove it, or move it, since the class would then read `this` before it
+// is set, or return without it, and throw.
+const derivedBefore = fc.oneof(
+  fc.record({ kind: fc.constant(`push`) }),
+  fc.record({ kind: fc.constant(`if`), op: comparison, k: constant }),
+)
+const derivedAfter = fc.oneof(
+  fc.record({ kind: fc.constant(`push`) }),
+  fc.record({ kind: fc.constant(`tag`) }),
+)
+const derivedClass = fc.record({
+  params: fc.constantFrom(`plain`, `property`),
+  field: fc.boolean(),
+  before: fc.array(derivedBefore, { maxLength: 2 }),
+  after: fc.array(derivedAfter, { maxLength: 2 }),
+})
 // The framework's route vocabulary (oracle-route.ts), and three names it
 // retired, which a registration may still carry and which are unknown
 // routes now.
@@ -315,6 +343,8 @@ const histories = fc.record({
   runes: fc.array(fc.array(runeStatement, { minLength: 1, maxLength: 4 }), {
     maxLength: 2,
   }),
+  // The derived class of DERIVED's file, when there is one.
+  derived: fc.option(derivedClass, { nil: null, freq: 4 }),
   // How `--source` spells each path: as the package names it, with a
   // leading `./`, or through a redundant segment. Each names the same file,
   // and the report names it by its path in the package.
@@ -1454,6 +1484,79 @@ function renderStatement(stmt, callText) {
   throw new Error(`unknown statement kind ${stmt.kind}`)
 }
 
+// ## The derived class's file
+//
+// `Derived` extends `DerivedBase`. Its constructor runs the spec's statements
+// before `super('a')`, then those after it. Each statement is one line, so a
+// site's line is its statement's line. A `push` before `super` labels its
+// output `b<i>`, an `if` labels `c<i>` when its condition holds, and a push
+// after it labels `a<i>`, or pushes `this.tag` (`a`). The class's
+// parameters may be parameter properties, and it may have a field
+// initializer. `derivedMake` returns a new `Derived`.
+function derivedFile(spec) {
+  const lines = [
+    `export class DerivedBase {`,
+    `  tag: string`,
+    `  constructor(tag: string) {`,
+    `    this.tag = tag`,
+    `  }`,
+    `}`,
+    `export class Derived extends DerivedBase {`,
+  ]
+  if (spec.field) lines.push(`  count = 0`)
+  lines.push(
+    `  constructor(${spec.params === `property` ? `public ` : ``}n: number, out: Array<string>) {`,
+  )
+  const statements = []
+  const statement = (text, call, extra) => {
+    lines.push(`    ${text}`)
+    statements.push({ ...extra, text, call, line: lines.length })
+  }
+  spec.before.forEach((s, i) => {
+    if (s.kind === `push`)
+      statement(`out.push('b${i}');`, `out.push('b${i}');`, { kind: `push` })
+    else
+      statement(
+        `if (n ${s.op} ${s.k}) out.push('c${i}');`,
+        `out.push('c${i}');`,
+        { kind: `if` },
+      )
+  })
+  lines.push(`    super('a');`)
+  spec.after.forEach((s, i) => {
+    const call =
+      s.kind === `push` ? `out.push('a${i}');` : `out.push(this.tag);`
+    statement(call, call, { kind: s.kind })
+  })
+  lines.push(`  }`, `}`)
+  lines.push(
+    `export function derivedMake(x: number, out: Array<string>): Derived {`,
+    `  return new Derived(x, out);`,
+    `}`,
+  )
+  return { source: `${lines.join(`\n`)}\n`, statements }
+}
+
+// What a derived class's constructor pushes for `x`, and the fields it sets:
+// the labels in order (each `if` pushes its label when its comparison holds
+// for `x`), the tag the base class sets, `n` for a parameter property, and
+// `count` for a field initializer. The source's and the instrumented copy's
+// runs must both agree with it.
+export function derivedExpected(spec, x) {
+  const labels = []
+  spec.before.forEach((s, i) => {
+    if (s.kind === `push`) labels.push(`b${i}`)
+    else if (holds(x, s.op, s.k)) labels.push(`c${i}`)
+  })
+  spec.after.forEach((s, i) => labels.push(s.kind === `push` ? `a${i}` : `a`))
+  return {
+    labels,
+    tag: `a`,
+    ...(spec.params === `property` ? { n: x } : {}),
+    ...(spec.field ? { count: 0 } : {}),
+  }
+}
+
 function resolveHistory(history) {
   let label = 0
   const containerOf = (index) => history.containers[index] ?? `free`
@@ -1584,6 +1687,9 @@ function resolveHistory(history) {
     body,
     tests: [],
   }))
+  // The derived class's file, which is no function of the model's (see
+  // `derivedFile`).
+  const derived = history.derived ? derivedFile(history.derived) : undefined
   const functions = [
     ...generated,
     ...library,
@@ -1873,12 +1979,16 @@ function resolveHistory(history) {
       LIB,
       ...(runesSource ? [RUNES] : []),
       ...(dotGenSource ? [DOTGEN] : []),
+      ...(derived ? [DERIVED] : []),
     ],
     dotGenSource,
     history,
     source,
     librarySource,
     runesSource,
+    derivedSpec: history.derived ?? undefined,
+    derivedSource: derived?.source,
+    derivedStatements: derived?.statements,
   }
 }
 
@@ -2263,6 +2373,25 @@ function sitesOf(plan) {
       }
     }
   }
+  // The derived class's file (`derivedFile`), which no oracle owns. Each
+  // `if` has the sites of its condition and of its call, and each other
+  // statement the site of its call. The `super(...)` call has no site: no
+  // mutant may make it conditional, remove it, or move it (a mutant is a
+  // legal program variant, and a derived constructor that skips `super`
+  // throws, or reads `this` before it).
+  for (const s of plan.derivedStatements ?? []) {
+    const at = (operator, text) =>
+      add(DERIVED_FN, s.line, operator, text, {
+        file: DERIVED,
+        function: DERIVED_FN,
+      })
+    if (s.kind === `if`) {
+      at(`if-true`, s.text)
+      at(`if-false`, s.text)
+      at(`binary-swap`, s.text)
+    }
+    at(`delete-call`, s.call)
+  }
   // A call statement to a probe helper is probe-only code (law 2), at
   // module level too.
   for (const call of plan.loadCalls)
@@ -2348,7 +2477,7 @@ function ownersOf(plan) {
   return (id) =>
     new Set([
       ...(owners.get(id) ?? []),
-      ...(plan.wholeFile === `none` || inLibrary.has(id)
+      ...(plan.wholeFile === `none` || inLibrary.has(id) || id === DERIVED_FN
         ? []
         : [plan.wholeFile]),
     ])
@@ -3208,6 +3337,7 @@ function fixtureFiles(plan, state = initialState(plan)) {
       : plan.source,
     [LIB]: plan.librarySource,
     ...(plan.runesSource ? { [RUNES]: plan.runesSource } : {}),
+    ...(plan.derivedSource ? { [DERIVED]: plan.derivedSource } : {}),
     ...(plan.dotGenSource ? { [DOTGEN]: plan.dotGenSource } : {}),
     'tests/strict.ts': `export const strict = ${state.strict}\n`,
     // A workspace dependency with module state, linked through node_modules.
@@ -3528,6 +3658,8 @@ export {
   SOURCE,
   LIB,
   RUNES,
+  DERIVED,
+  DERIVED_FN,
   DOTGEN,
   caseless,
   removePath,

@@ -22,7 +22,8 @@
 // - `if-true` / `if-false`: force an `if` condition.
 // - `loop-false`: force the condition of a `for`, `while`, or `do` loop to
 //   `false` (a `for` with no condition, `for...of`, and `for...in` have none).
-// - `delete-call`: skip a call statement (`switch || call()`).
+// - `delete-call`: skip a call statement (`switch || call()`), but not a
+//   `super(...)` call, which a derived constructor must make unconditionally.
 //
 // In a Svelte module (`.svelte.ts` or `.svelte.js`), a rune call that Svelte
 // allows in one place only (`$state`, `$derived`, `$effect`, `$props`,
@@ -513,9 +514,13 @@ export function instrument(ts, path, text, source, offset = 0) {
       ids.ifTrue = add(node.expression, `if-true`, condition, `true`)
       ids.ifFalse = add(node.expression, `if-false`, condition, `false`)
     }
+    // A `super(...)` call is no site: a derived constructor must call it
+    // unconditionally, before it reads `this` and before it returns, so a
+    // mutant that skips it, or wraps it, breaks every construction.
     if (
       ts.isExpressionStatement(node) &&
       ts.isCallExpression(node.expression) &&
+      node.expression.expression.kind !== ts.SyntaxKind.SuperKeyword &&
       !isRune(node.expression)
     )
       ids.call = add(node, `delete-call`, node.getText(file), `;`)

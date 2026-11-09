@@ -297,7 +297,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import fc from 'fast-check'
 import { declareOracle } from '../src/oracle-declaration.ts'
 import { socketOf, stateDirOf } from './daemon.mjs'
@@ -456,6 +456,18 @@ async function runClisAtOnce(dir, files, hows) {
       return readRun(dir, out, status, stderr)
     }),
   )
+}
+
+// Output with each scratch directory named, as a path or as the file URL the
+// stack spells it by (its escapes included).
+function namedScratch(text, names) {
+  let named = text
+  for (const [path, name] of names)
+    if (path !== undefined)
+      named = named
+        .replaceAll(pathToFileURL(path).href, name)
+        .replaceAll(path, name)
+  return named
 }
 
 /** What one run of the CLI reported, from its exit status and its files. */
@@ -858,8 +870,20 @@ async function driver(plan, observe) {
     }
     const cli = runCli(dir, files, how)
     // How many units were computed or reused says how the result was
-    // produced, not what it is, so it is not observed.
-    observe(`cli`, { ...cli, evidence: undefined })
+    // produced, not what it is, so it is not observed. A refusal's stack
+    // names the CLI copy and the scratch package, each a fresh directory per
+    // run, so its output names them as the daemon's below does.
+    observe(`cli`, {
+      ...cli,
+      stderr:
+        cli.stderr === undefined
+          ? undefined
+          : namedScratch(cli.stderr, [
+              [copy, `<cli>`],
+              [dir, `<package>`],
+            ]),
+      evidence: undefined,
+    })
     // Reach comes from what the CLI reported, mapped onto the plan.
     const states = new Set()
     // Each kind of declaration fault is its own state, so each refusal has
