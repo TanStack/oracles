@@ -14,12 +14,12 @@
  *   environment after that does not change what any read reports.
  * - Once anything has read the replay selection, a `configureOracles` call
  *   that would change it, or the calibration variable read with it, throws
- *   and changes nothing: tests already stood
- *   aside, or did not, by the selection they read (maintainer decision,
- *   2026-11-08, finding R1b-1). A later call that keeps the selection
- *   replaces the rest of the configuration. So a test that stands aside during a path
- *   replay (`oracleReplayRequested`), `readOracleRunConfig()`, and a
- *   calibration witness, and the replay witness always agree. The object
+ *   and changes nothing: tests already stood aside, or did not, by the
+ *   selection they read (maintainer decision, 2026-11-08, finding R1b-1). A
+ *   later call that keeps the selection replaces the rest of the
+ *   configuration. So a test that stands aside during a path replay
+ *   (`oracleReplayRequested`), `readOracleRunConfig()`, and a calibration
+ *   witness, and the replay witness always agree. The object
  *   `readOracleRunConfig()` returns is the caller's: changing it changes no
  *   later read.
  * - A project configures before its oracles read their configuration. A
@@ -31,13 +31,14 @@
  * (prefix `ORACLE` or `ACME`, with or without the registry `[a.b]`), changes
  * the environment (a path replay of `a.b` under one prefix or none, and the
  * calibration variable naming the fault under one prefix or none), or reads:
- * whether a path replay is requested, whether `readOracleRunConfig()` reports a path, whether
- * `oracleRandomParameters` given it replays, whether a replay witness
- * attaches, whether a replay is still requested after the caller mutates the
- * object `readOracleRunConfig()` returned, whether `a.b` or `typo.id` is
- * registered (directly and through `oracleRandomParameters`), and whether a
- * calibration witness for `a.b` runs. The model keeps the configuration, the replay
- * selection it read, and whether a read came before the first configuration,
+ * whether a path replay is requested, whether `readOracleRunConfig()` reports
+ * a path, whether `oracleRandomParameters` given it replays, whether a replay
+ * witness attaches, whether a replay is still requested after the caller
+ * mutates the object `readOracleRunConfig()` returned, whether `a.b` or
+ * `typo.id` is registered (directly and through `oracleRandomParameters`), and
+ * whether a calibration witness for `a.b` runs. The model keeps the
+ * configuration, the replay selection it read, and whether a read came before
+ * the first configuration,
  * and owes each step's result. The driver records each step's result, or
  * that it threw. The check compares them step by step.
  *
@@ -353,7 +354,7 @@ oracleProperty<History, Array<Result>>({
           { do: `read`, reader: `replay requested` },
           { do: `environment`, replay: `ORACLE`, calibration: `none` },
           { do: `configure`, prefix: `ORACLE`, registry: false },
-          { do: `read`, reader: `replay requested` },
+          { do: `read`, reader: `run config replays` },
         ],
         enters: [selectionChange],
       },
@@ -395,7 +396,7 @@ oracleProperty<History, Array<Result>>({
           { do: `configure`, prefix: `ORACLE`, registry: false },
           { do: `environment`, replay: `ORACLE`, calibration: `ORACLE` },
           { do: `read`, reader: `replay requested` },
-          { do: `read`, reader: `replay requested` },
+          { do: `read`, reader: `replay witness attaches` },
         ],
         enters: [environmentAfterConfiguration],
       },

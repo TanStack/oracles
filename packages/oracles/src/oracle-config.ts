@@ -155,7 +155,7 @@ export function readOracleRunConfig(
  * reporter and must still be replayable. This line records selection, not
  * execution; guarded replay witnesses remain the execution evidence.
  */
-export function oracleCampaignSeed(
+function oracleCampaignSeed(
   seed: number | undefined,
   property: string | undefined,
 ): number {

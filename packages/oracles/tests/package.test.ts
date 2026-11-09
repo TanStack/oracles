@@ -27,7 +27,6 @@ describe(`@tanstack/oracles`, () => {
         `differs`,
         `forwardCut`,
         `oracleCalibrationTest`,
-        `oracleCampaignSeed`,
         `oracleProperty`,
         `oracleRandomParameters`,
         `oracleReplayRequested`,
