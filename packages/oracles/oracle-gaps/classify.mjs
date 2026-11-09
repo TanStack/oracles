@@ -13,21 +13,13 @@
 // for it through `__oracleRoute` (capture-setup.mjs), never its name. A kill
 // counts only on a reproducible route. The random campaign draws a new seed
 // in every CI run, so a kill only it finds is a gap until it is kept as a
-// fixed history. Calibrations, probe calibrations, and the determinism test
-// check the oracle itself, not the law. A test that registered no route has
-// an unknown one, and cannot kill.
-const reproducibleRoutes = new Set([
-  `fixed seed`,
-  `fixed history`,
-  `constructed history`,
-  `case`,
-  `enumerated`,
-])
-const frameworkRoutes = new Set([
-  `calibration`,
-  `probe calibration`,
-  `determinism`,
-])
+// fixed history. The `calibration` route (calibrations, probe calibrations,
+// and the determinism test) checks the oracle itself, not the law. The names
+// are the framework's route vocabulary (oracle-route.ts); a test that
+// registered no route, or a name outside it, has an unknown one, and cannot
+// kill.
+const reproducibleRoutes = new Set([`fixed seed`, `fixed history`, `case`])
+const frameworkRoutes = new Set([`calibration`])
 function routeOf(registered) {
   if (registered === undefined) return `unknown`
   if (reproducibleRoutes.has(registered)) return `reproducible`

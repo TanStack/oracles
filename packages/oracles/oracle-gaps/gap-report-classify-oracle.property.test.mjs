@@ -22,8 +22,9 @@
  *    it, except tests whose values differed between the two unmutated runs
  *    (nondeterministic), which judge nothing.
  * 3. A law verdict takes the route active when it fired, or the test's route
- *    when none was active. A verdict on a reproducible route (a fixed seed,
- *    a fixed, constructed, or enumerated history, a case) under a behavioral
+ *    when none was active. A verdict on a reproducible route (`fixed seed`,
+ *    `fixed history`, `case`; any name outside the framework's vocabulary is
+ *    an unknown route) under a behavioral
  *    law (any law but reach agreement) kills: `killed`, even when another
  *    owner file's run timed out, and the kill names at least one such law.
  *    The runner may stop at the first one (maintainer decision, 2026-11-06),
@@ -35,8 +36,9 @@
  *    route an `unregistered-kill`.
  * 4. Failing that, if every failing test timed out, it is `timeout`; a
  *    failing test outside the framework's own checks makes it `crashed`; a
- *    failing framework check alone (a calibration, a probe calibration, the
- *    determinism test) makes it a `framework-error`; and errors outside any
+ *    failing framework check alone (the `calibration` route, which covers
+ *    calibrations, probe calibrations, and the determinism test) makes it a
+ *    `framework-error`; and errors outside any
  *    test make it a `setup-error`.
  * 5. With no failure it survived: a `comparison-gap` when a reaching,
  *    deterministic owner test's asserted or observed value changed (code
@@ -164,14 +166,13 @@ const records = fc.record({
 
 const fileName = (index) => `/pkg/tests/f${index}.test.ts`
 const keyOf = (fi, ti) => `${fileName(fi)} > t${ti}`
-const reproducible = new Set([
-  `fixed seed`,
-  `fixed history`,
-  `constructed history`,
-  `case`,
-  `enumerated`,
-])
-const framework = new Set([`calibration`, `probe calibration`, `determinism`])
+// The framework's route vocabulary (oracle-route.ts in PR #1): three
+// reproducible routes, the random campaign, and one route for the property's
+// own checks. Any other name, the retired `constructed history`,
+// `enumerated`, `probe calibration`, and `determinism` included, is an
+// unknown route.
+const reproducible = new Set([`fixed seed`, `fixed history`, `case`])
+const framework = new Set([`calibration`])
 const kindOf = (route) =>
   route === undefined
     ? `unknown`

@@ -167,12 +167,16 @@ const runeStatement = fc.oneof(
     rune: fc.constantFrom(`$effect`, `$effect.pre`),
   }),
 )
+// The framework's route vocabulary (oracle-route.ts), and three names it
+// retired, which a registration may still carry and which are unknown
+// routes now.
 const routes = [
   `fixed seed`,
   `fixed history`,
   `case`,
   `random seed`,
   `calibration`,
+  `enumerated`,
   `probe calibration`,
   `determinism`,
 ]
@@ -1723,7 +1727,9 @@ const routeOf = (t, part = t) =>
       ? `reproducible`
       : part.route === `random seed`
         ? `random`
-        : `framework`
+        : part.route === `calibration`
+          ? `framework`
+          : `unknown`
 
 /**
  * Law 6's normalization: the statement's tokens, as TypeScript's scanner
@@ -2009,9 +2015,12 @@ function sitesOf(plan) {
       }
     }
   }
+  // A call statement to a probe helper is probe-only code (law 2), at
+  // module level too.
   for (const call of plan.loadCalls)
     add(`<module>`, call.line, `delete-call`, call.text, {
       role: call.fn === `w_load` ? `moduleLoad` : `bootLoad`,
+      probe: helpers.has(call.fn),
     })
   // Order on a line, and the anchor's occurrence index within a function.
   const onLine = new Map()
