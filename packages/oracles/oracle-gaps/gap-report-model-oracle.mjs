@@ -190,26 +190,36 @@ const runeStatement = fc.oneof(
   }),
 )
 // A derived class (DERIVED's `Derived`, which extends `DerivedBase`). Its
-// constructor runs statements before `super(...)` that touch neither `this`
-// nor `super`, then statements after it, which may read `this`. Its
-// parameters may be parameter properties (`public n`), and it may have a
-// field initializer. No mutant may make its `super(...)` call conditional,
-// remove it, or move it, since the class would then read `this` before it
-// is set, or return without it, and throw.
+// constructor runs `before` statements, then one `super('a')` call in one of
+// four forms, then `after` statements. A before statement may return early
+// (an object, with no `super` call). The class's parameters may be parameter
+// properties, and it may have a field initializer.
 const derivedBefore = fc.oneof(
   fc.record({ kind: fc.constant(`push`) }),
   fc.record({ kind: fc.constant(`if`), op: comparison, k: constant }),
+  fc.record({ kind: fc.constant(`early`), op: comparison, k: constant }),
 )
 const derivedAfter = fc.oneof(
   fc.record({ kind: fc.constant(`push`) }),
   fc.record({ kind: fc.constant(`tag`) }),
+  fc.record({ kind: fc.constant(`if`), op: comparison, k: constant }),
 )
-const derivedClass = fc.record({
-  params: fc.constantFrom(`plain`, `property`),
-  field: fc.boolean(),
-  before: fc.array(derivedBefore, { maxLength: 2 }),
-  after: fc.array(derivedAfter, { maxLength: 2 }),
-})
+const derivedClass = fc
+  .record({
+    params: fc.constantFrom(`plain`, `property`),
+    field: fc.boolean(),
+    before: fc.array(derivedBefore, { maxLength: 3 }),
+    // `plain`: a statement `super('a')`; `arrow`: called in an arrow passed to
+    // a call; `and` and `or`: its right operand of `&&` or `||`.
+    form: fc.constantFrom(`plain`, `arrow`, `and`, `or`),
+    after: fc.array(derivedAfter, { maxLength: 3 }),
+  })
+  // Only a statement `super` is legal TypeScript beside parameter properties
+  // or a field initializer: TypeScript emits the former before the body, and
+  // requires a root-level `super` for the latter.
+  .filter(
+    (spec) => spec.form === `plain` || (spec.params === `plain` && !spec.field),
+  )
 // The framework's route vocabulary (oracle-route.ts), and three names it
 // retired, which a registration may still carry and which are unknown
 // routes now.
@@ -1486,13 +1496,22 @@ function renderStatement(stmt, callText) {
 
 // ## The derived class's file
 //
-// `Derived` extends `DerivedBase`. Its constructor runs the spec's statements
-// before `super('a')`, then those after it. Each statement is one line, so a
-// site's line is its statement's line. A `push` before `super` labels its
-// output `b<i>`, an `if` labels `c<i>` when its condition holds, and a push
-// after it labels `a<i>`, or pushes `this.tag` (`a`). The class's
-// parameters may be parameter properties, and it may have a field
-// initializer. `derivedMake` returns a new `Derived`.
+// `Derived` extends `DerivedBase`. Its constructor runs the spec's `before`
+// statements, the `super('a')` call in the spec's form, then its `after`
+// statements. Each statement is one line, so a site's line is its statement's
+// line. Before `super`, a push labels `b<i>`, an `if` labels `c<i>` when its
+// condition holds, and an `early` returns an object when it holds. After
+// `super`, a push labels `a<i>`, `tag` pushes `this.tag` (`a`), and an `if`
+// labels `d<i>` when its condition holds. `nothing` returns 0, so the `or`
+// form calls `super` as its right operand. `derivedMake` returns a new
+// `Derived`. `statements` records each statement with its phase, its line,
+// its text, and its call, which is what a site of the statement is.
+const superCall = {
+  plain: `super('a');`,
+  arrow: `[0].forEach(() => super('a'));`,
+  and: `out && super('a');`,
+  or: `nothing(n) || super('a');`,
+}
 function derivedFile(spec) {
   const lines = [
     `export class DerivedBase {`,
@@ -1508,28 +1527,41 @@ function derivedFile(spec) {
     `  constructor(${spec.params === `property` ? `public ` : ``}n: number, out: Array<string>) {`,
   )
   const statements = []
-  const statement = (text, call, extra) => {
+  const statement = (phase, kind, text, call) => {
     lines.push(`    ${text}`)
-    statements.push({ ...extra, text, call, line: lines.length })
+    statements.push({ phase, kind, text, call, line: lines.length })
   }
-  spec.before.forEach((s, i) => {
+  for (const [i, s] of spec.before.entries()) {
     if (s.kind === `push`)
-      statement(`out.push('b${i}');`, `out.push('b${i}');`, { kind: `push` })
-    else
+      statement(`before`, `push`, `out.push('b${i}');`, `out.push('b${i}');`)
+    else if (s.kind === `if`)
       statement(
+        `before`,
+        `if`,
         `if (n ${s.op} ${s.k}) out.push('c${i}');`,
         `out.push('c${i}');`,
-        { kind: `if` },
       )
-  })
-  lines.push(`    super('a');`)
-  spec.after.forEach((s, i) => {
-    const call =
-      s.kind === `push` ? `out.push('a${i}');` : `out.push(this.tag);`
-    statement(call, call, { kind: s.kind })
-  })
+    else statement(`before`, `early`, `if (n ${s.op} ${s.k}) return {};`)
+  }
+  statement(`super`, `super`, superCall[spec.form], undefined)
+  for (const [i, s] of spec.after.entries()) {
+    if (s.kind === `push`)
+      statement(`after`, `push`, `out.push('a${i}');`, `out.push('a${i}');`)
+    else if (s.kind === `tag`)
+      statement(`after`, `tag`, `out.push(this.tag);`, `out.push(this.tag);`)
+    else
+      statement(
+        `after`,
+        `if`,
+        `if (n ${s.op} ${s.k}) out.push('d${i}');`,
+        `out.push('d${i}');`,
+      )
+  }
   lines.push(`  }`, `}`)
   lines.push(
+    `function nothing(x: number): number {`,
+    `  return x - x;`,
+    `}`,
     `export function derivedMake(x: number, out: Array<string>): Derived {`,
     `  return new Derived(x, out);`,
     `}`,
@@ -1539,16 +1571,23 @@ function derivedFile(spec) {
 
 // What a derived class's constructor pushes for `x`, and the fields it sets:
 // the labels in order (each `if` pushes its label when its comparison holds
-// for `x`), the tag the base class sets, `n` for a parameter property, and
-// `count` for a field initializer. The source's and the instrumented copy's
-// runs must both agree with it.
+// for `x`), and, unless an early `return` left the constructor first, the tag
+// the base class sets, `n` for a parameter property, and `count` for a field
+// initializer. An early return yields the object it returns, with no fields.
+// The source's and the instrumented copy's runs must both agree with it.
 export function derivedExpected(spec, x) {
   const labels = []
-  spec.before.forEach((s, i) => {
+  for (const [i, s] of spec.before.entries()) {
     if (s.kind === `push`) labels.push(`b${i}`)
-    else if (holds(x, s.op, s.k)) labels.push(`c${i}`)
+    else if (s.kind === `if`) {
+      if (holds(x, s.op, s.k)) labels.push(`c${i}`)
+    } else if (holds(x, s.op, s.k)) return { labels }
+  }
+  spec.after.forEach((s, i) => {
+    if (s.kind === `push`) labels.push(`a${i}`)
+    else if (s.kind === `tag`) labels.push(`a`)
+    else if (holds(x, s.op, s.k)) labels.push(`d${i}`)
   })
-  spec.after.forEach((s, i) => labels.push(s.kind === `push` ? `a${i}` : `a`))
   return {
     labels,
     tag: `a`,
@@ -1689,7 +1728,7 @@ function resolveHistory(history) {
   }))
   // The derived class's file, which is no function of the model's (see
   // `derivedFile`).
-  const derived = history.derived ? derivedFile(history.derived) : undefined
+  const file = history.derived ? derivedFile(history.derived) : undefined
   const functions = [
     ...generated,
     ...library,
@@ -1979,16 +2018,18 @@ function resolveHistory(history) {
       LIB,
       ...(runesSource ? [RUNES] : []),
       ...(dotGenSource ? [DOTGEN] : []),
-      ...(derived ? [DERIVED] : []),
+      ...(file ? [DERIVED] : []),
     ],
     dotGenSource,
     history,
     source,
     librarySource,
     runesSource,
-    derivedSpec: history.derived ?? undefined,
-    derivedSource: derived?.source,
-    derivedStatements: derived?.statements,
+    derived: file && {
+      spec: history.derived,
+      source: file.source,
+      statements: file.statements,
+    },
   }
 }
 
@@ -2373,18 +2414,15 @@ function sitesOf(plan) {
       }
     }
   }
-  // The derived class's file (`derivedFile`), which no oracle owns. Each
-  // `if` has the sites of its condition and of its call, and each other
-  // statement the site of its call. The `super(...)` call has no site: no
-  // mutant may make it conditional, remove it, or move it (a mutant is a
-  // legal program variant, and a derived constructor that skips `super`
-  // throws, or reads `this` before it).
-  for (const s of plan.derivedStatements ?? []) {
+  // The derived class's file (`derivedFile`), which no oracle owns. A
+  // statement before `super(...)`, and the `super` statement itself, have no
+  // site: no mutant, when active, may prevent or delay the constructor's
+  // `super` call (maintainer decision, 2026-11-09). After `super`, a push or
+  // tag has its call's site, and an `if` the sites of its condition and call.
+  for (const s of plan.derived?.statements ?? []) {
+    if (s.phase !== `after`) continue
     const at = (operator, text) =>
-      add(DERIVED_FN, s.line, operator, text, {
-        file: DERIVED,
-        function: DERIVED_FN,
-      })
+      add(DERIVED_FN, s.line, operator, text, { file: DERIVED })
     if (s.kind === `if`) {
       at(`if-true`, s.text)
       at(`if-false`, s.text)
@@ -3337,7 +3375,7 @@ function fixtureFiles(plan, state = initialState(plan)) {
       : plan.source,
     [LIB]: plan.librarySource,
     ...(plan.runesSource ? { [RUNES]: plan.runesSource } : {}),
-    ...(plan.derivedSource ? { [DERIVED]: plan.derivedSource } : {}),
+    ...(plan.derived ? { [DERIVED]: plan.derived.source } : {}),
     ...(plan.dotGenSource ? { [DOTGEN]: plan.dotGenSource } : {}),
     'tests/strict.ts': `export const strict = ${state.strict}\n`,
     // A workspace dependency with module state, linked through node_modules.
@@ -3659,7 +3697,6 @@ export {
   LIB,
   RUNES,
   DERIVED,
-  DERIVED_FN,
   DOTGEN,
   caseless,
   removePath,
