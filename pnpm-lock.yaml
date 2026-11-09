@@ -82,7 +82,7 @@ importers:
   packages/oracles:
     dependencies:
       typescript:
-        specifier: ^5.9.3
+        specifier: ^5.9.2
         version: 5.9.3
     devDependencies:
       '@fast-check/vitest':

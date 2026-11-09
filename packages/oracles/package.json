@@ -67,7 +67,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.2"
   },
   "peerDependencies": {
     "fast-check": "^4.0.0",
