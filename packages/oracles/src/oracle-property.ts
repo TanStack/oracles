@@ -261,7 +261,10 @@ function sameData(actual: unknown, expected: unknown): boolean {
       encodeData(actual, ``, `compared`, true, false) ===
       encodeData(expected, ``, `compared`, true, false)
     )
-  } catch {
+  } catch (error) {
+    // Only a value outside the domain compares by isDeepStrictEqual; a
+    // framework limit is reported as such.
+    if (!(error instanceof OracleDataError)) throw error
     return isDeepStrictEqual(actual, expected)
   }
 }
@@ -916,18 +919,28 @@ function encodeData(
     prototype !== null &&
     prototypeOf(prototype) === null &&
     typeof descriptor(prototype, `hasOwnProperty`)?.value === `function`
-  // A realm's prototype for the constructor named `name`.
-  const intrinsic = (prototype: object | null, name: string) =>
-    prototype !== null &&
-    objectPrototype(prototypeOf(prototype)) &&
-    descriptor(
-      (descriptor(prototype, `constructor`)?.value as object | undefined) ?? {},
-      `name`,
-    )?.value === name
-  // How an object outside the domain is named.
-  const named = (prototype: object | null): string => {
+  // A prototype's constructor, read as data; a proxy is never read.
+  const constructorOf = (prototype: object | null): unknown => {
     const constructor: unknown =
       prototype && descriptor(prototype, `constructor`)?.value
+    return typeof constructor === `function` && types.isProxy(constructor)
+      ? `proxy`
+      : constructor
+  }
+  // A realm's prototype for the constructor named `name`.
+  const intrinsic = (prototype: object | null, name: string) => {
+    const constructor = constructorOf(prototype)
+    return (
+      prototype !== null &&
+      objectPrototype(prototypeOf(prototype)) &&
+      typeof constructor === `function` &&
+      descriptor(constructor, `name`)?.value === name
+    )
+  }
+  // How an object outside the domain is named.
+  const named = (prototype: object | null): string => {
+    const constructor = constructorOf(prototype)
+    if (constructor === `proxy`) return `an instance of a proxied class`
     if (typeof constructor !== `function`)
       return `an object with a custom prototype`
     const name: unknown = descriptor(constructor, `name`)?.value
@@ -1068,6 +1081,53 @@ function encodeData(
   }
 }
 
+// A copy of data as it was when it was observed, with its prototypes, its
+// brands, and its own properties; a shared reference stays shared. Only data
+// is copied: the observe call checked it first.
+function snapshotOf(
+  value: unknown,
+  copies = new Map<object, unknown>(),
+): unknown {
+  if (typeof value !== `object` || value === null) return value
+  const known = copies.get(value)
+  if (known !== undefined) return known
+  const copy = Object.setPrototypeOf(
+    Array.isArray(value)
+      ? []
+      : types.isMap(value)
+        ? new Map()
+        : types.isSet(value)
+          ? new Set()
+          : types.isNativeError(value)
+            ? Object.defineProperty(new Error(), `stack`, { value: undefined })
+            : {},
+    Object.getPrototypeOf(value) as object | null,
+  ) as object
+  copies.set(value, copy)
+  if (types.isMap(value))
+    for (const [key, entry] of Map.prototype.entries.call(value))
+      Map.prototype.set.call(
+        copy,
+        snapshotOf(key, copies),
+        snapshotOf(entry, copies),
+      )
+  if (types.isSet(value))
+    for (const entry of Set.prototype.values.call(value))
+      Set.prototype.add.call(copy, snapshotOf(entry, copies))
+  for (const key of Reflect.ownKeys(value)) {
+    if (Array.isArray(value) && key === `length`) continue
+    const property = Object.getOwnPropertyDescriptor(value, key)!
+    Object.defineProperty(
+      copy,
+      key,
+      `value` in property
+        ? { ...property, value: snapshotOf(property.value, copies) }
+        : property,
+    )
+  }
+  return copy
+}
+
 // A value as report text, which never throws and is never a name or a
 // comparison: its data encoding, or, for a value that is not data, Node's
 // inspection on one line without stack frames, which name this machine's
@@ -1077,11 +1137,16 @@ function reportText(value: unknown): string {
     return encodeData(value, ``, `report`).slice(0, 2000)
   } catch {
     try {
-      return inspect(value, { depth: 6, breakLength: Infinity })
-        .split(`\n`)
-        .filter((line) => !/^\s+(at |\.\.\. )/.test(line))
-        .join(` `)
-        .slice(0, 2000)
+      return (
+        inspect(value, { depth: 6, breakLength: Infinity })
+          .split(`\n`)
+          // A frame's text goes; the brace an Error's properties open after
+          // its last frame stays.
+          .map((line) => line.replace(/^\s+(?:at |\.\.\. ).*?( \{)?$/, `$1`))
+          .filter(Boolean)
+          .join(` `)
+          .slice(0, 2000)
+      )
     } catch {
       return Object.prototype.toString.call(value)
     }
@@ -1257,8 +1322,11 @@ async function recordGuarded<TPlan>(
           dataError = error
           throw error
         }
-        observations.push({ checkpoint, value })
-        globalThis.__oracleObserve?.(checkpoint, value)
+        // What this call saw: a later change to the value cannot change the
+        // verdict.
+        const seen = snapshotOf(value)
+        observations.push({ checkpoint, value: seen })
+        globalThis.__oracleObserve?.(checkpoint, seen)
       }),
     )
   } catch (error) {

@@ -158,6 +158,7 @@ export const oddKinds = [
   `proxy-prototype-error`,
   `proxy-object-prototype`,
   `old-error`,
+  `proxy-constructor`,
 ] as const
 export type OddKind = (typeof oddKinds)[number]
 
@@ -239,6 +240,10 @@ export type SyntheticSpec = {
   liveDate?: boolean
   /** Observes a list from another realm, which the check compares with differs. */
   realmCheck?: boolean
+  /** Observes an object, then changes it; the check compares what was observed. */
+  snapshotCheck?: boolean
+  /** The check compares two equal lists 20,000 links deep with differs. */
+  deepCheck?: boolean
 }
 
 /** The synthetic language: one to three items, mostly ordinary ones. */
@@ -314,7 +319,12 @@ const formOf =
             : spec.form === `errors`
               ? items.map(errorOf)
               : spec.form === `boxed`
-                ? new SyntheticBox(items, new Error(`synthetic failure`))
+                ? new SyntheticBox(
+                    items,
+                    Object.assign(new Error(`synthetic failure`), {
+                      code: `E`,
+                    }),
+                  )
                 : spec.form === `trap`
                   ? {
                       items,
@@ -393,6 +403,13 @@ const probeCondition = (
     default:
       return undefined
   }
+}
+
+// A list 20,000 links deep: data, beyond the framework's encoding depth.
+const deepList = () => {
+  let deep: unknown = null
+  for (let link = 0; link < 20_000; link += 1) deep = { next: deep }
+  return deep
 }
 
 const ranGetter = (): never => {
@@ -511,12 +528,8 @@ function oddValue(kind: OddKind): unknown {
       return new (class {})()
     case `dotted-key`:
       return { 'a.b': { c: () => undefined } }
-    case `deep`: {
-      // A list 20,000 links long: data, beyond the framework's encoding depth.
-      let deep: unknown = null
-      for (let link = 0; link < 20_000; link += 1) deep = { next: deep }
-      return deep
-    }
+    case `deep`:
+      return deepList()
     case `proxy-prototype-error`:
       return Object.setPrototypeOf(
         new Error(`synthetic`),
@@ -524,6 +537,13 @@ function oddValue(kind: OddKind): unknown {
       ) as unknown
     case `proxy-object-prototype`:
       return Object.create(new Proxy(Object.prototype, trapsThatRan)) as object
+    case `proxy-constructor`: {
+      // A prototype whose constructor is a proxy whose traps throw.
+      const prototype = {
+        constructor: new Proxy(function Synthetic() {}, trapsThatRan),
+      }
+      return Object.create(prototype) as object
+    }
     case `old-error`:
       return new (OldError as unknown as new (message: string) => object)(
         `synthetic`,
@@ -631,6 +651,11 @@ function syntheticDriver(spec: SyntheticSpec, mutant = false) {
     }
     if (spec.realmCheck)
       observe(`realm`, runInNewContext(`[1, { a: 2 }, new Map([[1, 2]])]`))
+    if (spec.snapshotCheck) {
+      const seen = { n: 1 }
+      observe(`snapshot`, seen)
+      seen.n = 2
+    }
     if (spec.zeroNoise) observe(`nonce`, zeroes++ % 2 === 0 ? -0 : 0)
     if (spec.orderNoise)
       observe(`nonce`, orders++ % 2 === 0 ? { a: 1, b: 2 } : { b: 2, a: 1 })
@@ -742,7 +767,14 @@ export function syntheticProperty(spec: SyntheticSpec): void {
     ) => {
       // Data from another realm is the same data as data built here.
       const realm = trace.find(({ checkpoint }) => checkpoint === `realm`)
+      // What was observed, not what the driver changed it to afterwards.
+      const snapshot = trace.find(({ checkpoint }) => checkpoint === `snapshot`)
       return (
+        (spec.deepCheck
+          ? differs(`deep`, `deep`, deepList(), deepList())
+          : undefined) ??
+        (snapshot &&
+          differs(`snapshot`, `snapshot`, snapshot.value, { n: 1 })) ??
         (realm &&
           differs(`realm`, `realm`, realm.value, [
             1,
