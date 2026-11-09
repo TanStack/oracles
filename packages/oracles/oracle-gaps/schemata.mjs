@@ -24,6 +24,8 @@
 //   `false` (a `for` with no condition, `for...of`, and `for...in` have none).
 // - `delete-call`: skip a call statement (`switch || call()`).
 //
+// No site lies in a derived constructor's super region (see `superGuarded`).
+//
 // In a Svelte module (`.svelte.ts` or `.svelte.js`), a rune call that Svelte
 // allows in one place only (`$state`, `$derived`, `$effect`, `$props`,
 // `$bindable`, `$inspect`, and their `.raw`, `.by`, `.pre`, `.id`, and
@@ -93,6 +95,8 @@ const placedRune =
 
 export function instrument(ts, path, text, source, offset = 0) {
   const file = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true)
+  // Without the word `super` no site can be in a super region: skip the walk.
+  const mentionsSuper = /\bsuper\b/.test(text)
   const svelte = /\.svelte\.[cm]?[jt]s$/.test(path)
   const isRune = (call) =>
     svelte && placedRune.test(call.expression.getText(file))
@@ -125,9 +129,47 @@ export function instrument(ts, path, text, source, offset = 0) {
     )
   }
   const mutants = []
+  // Whether a node is a `super(...)` call.
+  const isSuperCall = (node) =>
+    ts.isCallExpression(node) &&
+    node.expression.kind === ts.SyntaxKind.SuperKeyword
+  // Whether a node holds a `super(...)` call. An arrow inherits `super`, so
+  // its body counts; a function, method, accessor, constructor, or class does
+  // not, since `super` in it means something else.
+  const holdsSuper = (node) =>
+    isSuperCall(node) ||
+    ((!(
+      ts.isFunctionLike(node) ||
+      ts.isClassLike(node) ||
+      ts.isMethodDeclaration(node) ||
+      ts.isConstructorDeclaration(node) ||
+      ts.isGetAccessorDeclaration(node) ||
+      ts.isSetAccessorDeclaration(node)
+    ) ||
+      ts.isArrowFunction(node)) &&
+      (ts.forEachChild(node, (child) =>
+        holdsSuper(child) ? true : undefined,
+      ) ??
+        false))
+  // A derived constructor's super region: its parameters and the statements
+  // before its first statement that holds a `super(...)` call, and that
+  // statement. No mutant site lies in it, so no mutant, when active, can
+  // prevent or delay the call: a statement before it may return early or
+  // skip it, and the call's own statement may skip it. Statements after it
+  // keep their sites. Maintainer decision, 2026-11-09: one rule for every
+  // shape of `super`, including an early return before it.
+  const superGuarded = (node) => {
+    for (let owner = node; owner; owner = owner.parent)
+      if (ts.isConstructorDeclaration(owner) && owner.body) {
+        const first = owner.body.statements.find(holdsSuper)
+        if (first && node.getStart(file) < first.end) return true
+      }
+    return false
+  }
   // `at` is the node whose line the mutant reports: the operator token for a
   // swap and the condition for an `if`, as the earlier runner reported them.
   const add = (at, operator, original, replacement) => {
+    if (mentionsSuper && superGuarded(at)) return undefined
     const probeGuard = guarded
     const local = mutants.length + 1
     const id = offset + local
@@ -490,7 +532,7 @@ export function instrument(ts, path, text, source, offset = 0) {
           ts.isElementAccessExpression(node.parent)) &&
         node.parent.expression === node
       ) &&
-      node.expression.kind !== ts.SyntaxKind.SuperKeyword &&
+      !isSuperCall(node) &&
       node.expression.kind !== ts.SyntaxKind.ImportKeyword &&
       !isRune(node)
     )
@@ -516,6 +558,7 @@ export function instrument(ts, path, text, source, offset = 0) {
     if (
       ts.isExpressionStatement(node) &&
       ts.isCallExpression(node.expression) &&
+      !isSuperCall(node.expression) &&
       !isRune(node.expression)
     )
       ids.call = add(node, `delete-call`, node.getText(file), `;`)

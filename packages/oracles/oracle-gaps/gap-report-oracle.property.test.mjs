@@ -297,7 +297,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import fc from 'fast-check'
 import { declareOracle } from '../src/oracle-declaration.ts'
 import { socketOf, stateDirOf } from './daemon.mjs'
@@ -428,7 +428,7 @@ function runCli(dir, files, how = {}) {
     maxBuffer: 64 * 1024 * 1024,
     env: cleanEnv(),
   })
-  return readRun(dir, out, child.status, child.stderr)
+  return readRun(dir, out, child.status, child.stderr, how.cli ?? here)
 }
 
 /** Runs the CLI several times at once on one state of the fixture. */
@@ -453,13 +453,34 @@ async function runClisAtOnce(dir, files, hows) {
           resolvePromise(code)
         })
       })
-      return readRun(dir, out, status, stderr)
+      return readRun(dir, out, status, stderr, how.cli ?? here)
     }),
   )
 }
 
+// Output with each scratch directory named, as a path or as the file URL the
+// stack spells it by (its escapes included).
+function namedScratch(text, names) {
+  let named = text
+  for (const [path, name] of names)
+    if (path !== undefined)
+      named = named
+        .replaceAll(pathToFileURL(path).href, name)
+        .replaceAll(path, name)
+  return named
+}
+
 /** What one run of the CLI reported, from its exit status and its files. */
-function readRun(dir, out, status, stderr) {
+function readRun(dir, out, status, stderr, cli) {
+  // The output names the CLI directory that ran and the package, as scratch
+  // directories do, before it is cut to its last characters.
+  const named =
+    status === 0
+      ? undefined
+      : namedScratch(`${stderr}`, [
+          [cli, `<cli>`],
+          [dir, `<package>`],
+        ])
   let results
   let report
   let summary = ``
@@ -472,7 +493,7 @@ function readRun(dir, out, status, stderr) {
   }
   return {
     exit: status,
-    stderr: status === 0 ? undefined : `${stderr}`.slice(-1500),
+    stderr: named === undefined ? undefined : named.slice(-1500),
     reported: results !== undefined,
     // Law 9 compares everything the run reports except how it was
     // produced: durations, the options it was given (the output directory
@@ -493,8 +514,7 @@ function readRun(dir, out, status, stderr) {
       ),
     evidence: report?.evidence,
     // A refused run is compared by the cause it names.
-    refusal:
-      status === 0 ? undefined : `${stderr}`.match(/^Error: (.*)$/m)?.[1],
+    refusal: named?.match(/^Error: (.*)$/m)?.[1],
     mutants: (results ?? []).map((r) => ({
       key: r.key,
       source: r.source,
@@ -640,12 +660,9 @@ async function incremental(dir, plan, cli, copy, observe, states) {
           exit: run.exit,
           refusal: run.refusal,
           report: run.report,
-          // The first line of a failure, for the message, without the paths
-          // of this history's scratch package and CLI copy.
-          stderr: run.stderr
-            ?.split(`\n`)[0]
-            .replaceAll(copy, `<cli>`)
-            .replaceAll(dir, `<package>`),
+          // The first line of a failure, for the message; readRun has named
+          // the scratch package and CLI copy in it.
+          stderr: run.stderr?.split(`\n`)[0],
         },
       })
     if (twice && step === `start`)
@@ -836,10 +853,12 @@ async function incremental(dir, plan, cli, copy, observe, states) {
 
 async function driver(plan, observe) {
   // A package that resolves no TypeScript lives outside this repository.
-  const dir = mkdtempSync(
-    plan.fault === `noTypescript`
-      ? join(realpathSync(tmpdir()), `gap-fixture-`)
-      : join(here, `.scratch-`),
+  const dir = realpathSync(
+    mkdtempSync(
+      plan.fault === `noTypescript`
+        ? join(realpathSync(tmpdir()), `gap-fixture-`)
+        : join(here, `.scratch-`),
+    ),
   )
   // A history with steps runs its own copy of the CLI, which the `cli` edit
   // changes; a history that installs the CLI under a path with a space and
@@ -1656,7 +1675,7 @@ oracleProperty({
   law: {
     statement: `The gap report enumerates the promised operator mutants, leaves out exactly the probe-only code, discovers every oracle that owns a function's call tree and refuses broken ownership, judges each mutant only by its owners' tests on their registered routes and counts only law verdicts on reproducible routes as kills, which outrank a run that never ends, anchors each mutant by its function and normalized statement, lists every gap and unowned mutant once with consistent counts, keeps keys stable under unrelated edits, reports through one daemon per package what a cold run reports at every state of a sequence of edits, and runs the package as Vitest does from any install path and any --source spelling: one instance of each workspace dependency, no refusal over an unbuildable devDependency, child processes for a native addon anywhere in the tree, a capture that a test's builtin spies cannot see, and a refusal of test.projects.`,
     authority: `The maintainer's decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), not in this package's records, including that a kill by reach agreement alone is a gap and that an incremental run through the daemon equals a cold one (v19.3); the project's oracle guide on quiet exclusions; the oracle rubric's outcome kinds (ORC-006); the CLI's documented operator list in schemata.mjs.`,
-    limits: `Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 6 s full limit, and a slow run only as one witness that waits 3 s before it judges; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; no --only, --sample, or --diff-base; package configs only in vite.config.ts, vitest.config.ts, or vite.config.mjs, as an object or a sync or async function, with no plugins of their own and test.projects only as a refusal; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9's edits leave out files read through fs, other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; cut-off charging judged only under one budget; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages; daemon races (two CLIs reading one error file, a CLI hearing closing from the failing daemon it started, a reset connection on macOS) fixed by inspection.`,
+    limits: `Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 6 s full limit, and a slow run only as one witness that waits 3 s before it judges; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; no --only, --sample, or --diff-base; a derived class's file is instrumented and its sites are judged as unowned, but no test imports or constructs the class, so its no-mutant and super-region behavior is the static oracle's (in-process), not this oracle's; package configs only in vite.config.ts, vitest.config.ts, or vite.config.mjs, as an object or a sync or async function, with no plugins of their own and test.projects only as a refusal; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9's edits leave out files read through fs, other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; cut-off charging judged only under one budget; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages; daemon races (two CLIs reading one error file, a CLI hearing closing from the failing daemon it started, a reset connection on macOS) fixed by inspection.`,
     owner: `packages/oracles/oracle-gaps`,
   },
   histories: {
