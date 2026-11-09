@@ -26,15 +26,22 @@
  *    call that Svelte allows in one place only is no site of its own, so
  *    instrumentation does not move it.
  * 2. **Probe-only code.** A mutant is left out as probe code exactly when its
- *    site is probe-only code: a probe statement in the decided form,
- *    `process.env.NODE_ENV !== 'production' && globalThis.__oracleProbe?.(name,
- *    condition)` (the receiver may be cast), including its condition; a call
+ *    site is probe-only code: the probe guard, a declaration
+ *    `const probing = typeof process === 'undefined' ? false :
+ *    process.env.NODE_ENV !== 'production'` in a function; a probe statement
+ *    in the decided form, `probing && globalThis.__oracleProbe?.(name,
+ *    condition)`, whose `probing` resolves to that guard in the nearest
+ *    enclosing function (the receiver may be cast), including its condition
+ *    (maintainer decision of 2026-11-08); a call
  *    statement to a probe helper, which is a function declaration whose every
  *    statement is probe-only; an `if` with no `else` whose branch is
  *    probe-only; or a block of probe-only statements. Code beside a probe is
  *    production code and is judged: a mixed block's condition and other
  *    statements, an `if` whose `else` does work, a function that probes and
- *    also writes output, and any other probe shape, such as the older
+ *    also writes output, and any other probe shape: the former form with the
+ *    `NODE_ENV` comparison itself on the left of `&&`, a guard of another
+ *    name, a `let` guard, a guard of another initializer, a probe that only
+ *    an outer function's guard covers, and the older
  *    `if (devBuild() && …) probe(name)` form and its `devBuild()` helper.
  * 3. **Ownership.** The CLI discovers every oracle file in the package: a
  *    test file that calls `declareOracle({ owns })`. Each entry names a source
@@ -159,7 +166,10 @@
  * registration (v19 A4); gaps are judged across every owner of a function,
  * and owning an entry owns its static call tree (v19 P6, v19.1, v19.2); the
  * probe form (v11, confirmed 2026-11-05: "this is a standalone framework now
- * so we can't use the devBuild() stuff"); only probe-only code is left
+ * so we can't use the devBuild() stuff"; its guard revised 2026-11-08 to a
+ * function-local `probing` constant, because the bare `NODE_ENV` comparison
+ * throws where there is no `process` and a module-level constant is not
+ * folded in a module with imports); only probe-only code is left
  * out (v19 P5, A5); gaps are anchored by function and normalized statement
  * text with an occurrence index (v11, "An allowance lists its gaps"); unowned
  * code is a warning (v14 P7); and no quiet exclusions (the project's oracle guide). Law 1's
@@ -191,7 +201,9 @@
  * `await`, `new`, and `void` statements, `--only`, `--sample`, and
  * `--diff-base`, re-exports, namespace imports, and calls into another
  * package (a package's tree stops at its boundary, by the maintainer's
- * decision of 2026-11-05). A probe-bound state is not generated, so the claim that
+ * decision of 2026-11-05). A module-level probe guard, a guard declared
+ * in a block of the function beside its probe, and a parameter or function
+ * named `probing` are not generated. A probe-bound state is not generated, so the claim that
  * reach agreement kills every probe mutant is not checked. Gap answers and
  * the gate are not part of the CLI until answers become evidence-log events,
  * which waits on the maintainer's decision about how an answer maps to a law.

@@ -94,6 +94,17 @@ const statement = fc.oneof(
     message: fc.constantFrom(`plain`, `assertion`),
   }),
   fc.record({ kind: fc.constant(`guard`), op: comparison, k: constant, quote }),
+  // A probe statement in a shape the decided form does not accept, which is
+  // production code: the former form (the `NODE_ENV` comparison itself on
+  // the left of `&&`), a guard under another name, a `let` guard, a guard
+  // of another initializer, and a probe in a nested function that only an
+  // outer function's guard covers.
+  fc.record({
+    kind: fc.constant(`nearProbe`),
+    variant: fc.constantFrom(`former`, `name`, `let`, `init`, `outer`),
+    op: comparison,
+    k: constant,
+  }),
   // The probe form before the maintainer's decision: production code now.
   fc.record({ kind: fc.constant(`oldProbe`) }),
   fc.record({ kind: fc.constant(`mixed`), op: comparison, k: constant, quote }),
@@ -645,6 +656,21 @@ const witness = [
   { id: `W7.run`, owners: [], body: [{ kind: `pushTag` }], tests: [] },
   { id: `W6.run`, owners: [], body: [push], tests: [] },
   { id: `W6.step`, owners: [], body: [push], tests: [] },
+  // A probe in each shape that the decided form does not accept, beside a
+  // decided one: all of it but the decided probe and its guard is judged.
+  {
+    id: `w_near`,
+    owners: [`a`],
+    body: [
+      { kind: `guard`, op: `>`, k: 4, quote: `\`` },
+      { kind: `nearProbe`, variant: `former`, op: `>`, k: 4 },
+      { kind: `nearProbe`, variant: `name`, op: `>`, k: 4 },
+      { kind: `nearProbe`, variant: `let`, op: `>`, k: 4 },
+      { kind: `nearProbe`, variant: `init`, op: `>`, k: 4 },
+      { kind: `nearProbe`, variant: `outer`, op: `>`, k: 4 },
+    ],
+    tests: [],
+  },
   // Functions that share a name in one file are still distinct functions.
   // `W8.other` returns an object literal whose method is named like the
   // class method `W8.run`; it is `run`, a function of its own, owned only
@@ -1055,12 +1081,25 @@ const captureWitness = new Set([
 // writes output. The witness
 // function `w_probeonly` is a probe helper declared after its caller. The
 // model reads the layout; the driver writes the text.
-// The decided probe form: one statement, a `NODE_ENV` guard and the hook
-// called with the state's name and its condition.
-// The guard's `production` may be quoted with `'` or a backtick, as the lint
-// rule accepts.
-const probeText = (probe, condition, quote = `'`) =>
-  `process.env.NODE_ENV !== ${quote}production${quote} && (globalThis as { __oracleProbe?: (name: string, condition: unknown) => void }).__oracleProbe?.(${probe}, ${condition});`
+// The decided probe form (maintainer decision, 2026-11-08): at the top of
+// each function that probes, the guard
+// `const probing = typeof process === 'undefined' ? false : process.env.NODE_ENV !== 'production'`,
+// and each probe one statement, `probing && hook(name, condition)`. The
+// guard's strings may be quoted with `'` or a backtick, as the lint rule
+// accepts; a function's guard takes the quote of its first `guard`
+// statement.
+const hookText = (probe, condition) =>
+  `(globalThis as { __oracleProbe?: (name: string, condition: unknown) => void }).__oracleProbe?.(${probe}, ${condition})`
+const probeText = (probe, condition) =>
+  `probing && ${hookText(probe, condition)};`
+const guardInit = (quote = `'`) =>
+  `typeof process === ${quote}undefined${quote} ? false : process.env.NODE_ENV !== ${quote}production${quote}`
+const guardText = (quote = `'`) => `const probing = ${guardInit(quote)};`
+// The statements that read a function's `probing`, so the function declares
+// the guard.
+const usesGuard = (stmt) =>
+  [`guard`, `mixed`, `probeBlock`].includes(stmt.kind) ||
+  (stmt.kind === `nearProbe` && stmt.variant === `outer`)
 // The form before the decision, which is production code now.
 const oldProbeCallText = (probe) =>
   `(globalThis as { __oracleProbe?: (probe: string) => void }).__oracleProbe?.(${probe});`
@@ -1075,6 +1114,7 @@ const preamble = [
   `  }`,
   `}`,
   `function report(probe: string): void {`,
+  `  ${guardText()}`,
   `  ${probeText(`probe`, `true`)}`,
   `}`,
   `function reportTwice(probe: string): void {`,
@@ -1082,6 +1122,7 @@ const preamble = [
   `  report(probe);`,
   `}`,
   `export function reportAndPush(probe: string, out: Array<string>): void {`,
+  `  ${guardText()}`,
   `  ${probeText(`probe`, `true`)}`,
   `  out.push('h');`,
   `}`,
@@ -1146,7 +1187,30 @@ function renderStatement(stmt, callText) {
         `if (x > 100) throw new Error('${stmt.message === `assertion` ? `expected x to be at most 100` : `boom`}');`,
       ]
     case `guard`:
-      return [probeText(probe, `x ${stmt.op} ${stmt.k}`, stmt.quote)]
+      return [probeText(probe, `x ${stmt.op} ${stmt.k}`)]
+    case `nearProbe`: {
+      const hook = hookText(probe, `x ${stmt.op} ${stmt.k}`)
+      return {
+        former: [`process.env.NODE_ENV !== 'production' && ${hook};`],
+        name: [
+          `const enabled${stmt.label} = ${guardInit()};`,
+          `enabled${stmt.label} && ${hook};`,
+        ],
+        let: [
+          `{`,
+          `  let probing = ${guardInit()};`,
+          `  probing && ${hook};`,
+          `}`,
+        ],
+        init: [
+          `{`,
+          `  const probing = process.env.NODE_ENV !== 'production';`,
+          `  probing && ${hook};`,
+          `}`,
+        ],
+        outer: [`(() => {`, `  probing && ${hook};`, `})();`],
+      }[stmt.variant]
+    }
     case `oldProbe`:
       return [oldProbeText(probe)]
     case `mixed`:
@@ -1436,6 +1500,12 @@ function resolveHistory(history) {
         ? `${indent}export function ${signature} {`
         : `${indent}${signature} {`,
     )
+    if (fn.body.some(usesGuard)) {
+      fn.guardLine = lines.length + 1
+      fn.guardQuote =
+        fn.body.find((stmt) => stmt.kind === `guard`)?.quote ?? `'`
+      lines.push(`${indent}  ${guardText(fn.guardQuote)}`)
+    }
     emitBody(fn.body, `${indent}  `)
     lines.push(`${indent}}`)
   }
@@ -1716,18 +1786,25 @@ function sitesOf(plan) {
       probe: false,
       ...extra,
     })
-  // A decided probe statement: `&&`, then the guard's `!==`, then a
-  // comparison in its condition. It has no call statement to delete.
-  // A probe whose condition is the literal `true` has a `bool-flip` there.
-  // The probe call is the `&&`'s right operand, so it is also a value-position call.
-  const guard = (fn, line, probe, condition, quote) => {
-    const text = probeText(probe, condition, quote)
-    add(fn, line, `binary-swap`, text, { probe: true })
+  // A decided probe statement: `&&`, then the hook call, the `&&`'s right
+  // operand and so a value-position call, then a comparison in its
+  // condition, or a `bool-flip` for the literal `true`. It has no call
+  // statement to delete.
+  const guard = (fn, line, probe, condition) => {
+    const text = probeText(probe, condition)
     add(fn, line, `binary-swap`, text, { probe: true })
     add(fn, line, `value-undefined`, text, { probe: true })
     add(fn, line, condition === `true` ? `bool-flip` : `binary-swap`, text, {
       probe: true,
     })
+  }
+  // The guard's declaration: its `===`, its `false`, and its `!==`, all
+  // probe-only code.
+  const declaration = (fn, line, quote, extra = { probe: true }) => {
+    const text = guardText(quote)
+    add(fn, line, `binary-swap`, text, extra)
+    add(fn, line, `bool-flip`, text, extra)
+    add(fn, line, `binary-swap`, text, extra)
   }
   // `devBuild()` is an ordinary function now; only the older probe form calls it.
   add(`devBuild`, 4, `binary-swap`, preambleStatements.devBuild, {
@@ -1735,31 +1812,35 @@ function sitesOf(plan) {
   })
   // Its `return false` runs only when reading the environment throws.
   add(`devBuild`, 6, `bool-flip`, `return false`, { role: `devBuildFalse` })
-  guard(`report`, 10, `probe`, `true`)
-  add(`reportTwice`, 13, `delete-call`, preambleStatements.reportTwice, {
-    probe: true,
-  })
+  declaration(`report`, 10, `'`)
+  guard(`report`, 11, `probe`, `true`)
   add(`reportTwice`, 14, `delete-call`, preambleStatements.reportTwice, {
     probe: true,
   })
-  guard(`reportAndPush`, 17, `probe`, `true`)
+  add(`reportTwice`, 15, `delete-call`, preambleStatements.reportTwice, {
+    probe: true,
+  })
+  declaration(`reportAndPush`, 18, `'`)
+  guard(`reportAndPush`, 19, `probe`, `true`)
   add(
     `reportAndPush`,
-    18,
+    20,
     `delete-call`,
     preambleStatements.reportAndPushPush,
     {
       role: `helperPush`,
     },
   )
-  add(`apply`, 21, `delete-call`, preambleStatements.applyCall, {
+  add(`apply`, 23, `delete-call`, preambleStatements.applyCall, {
     role: `applyCall`,
   })
-  add(`make`, 24, `delete-call`, preambleStatements.makeCall, {
+  add(`make`, 26, `delete-call`, preambleStatements.makeCall, {
     role: `makeCall`,
   })
   for (const fn of plan.functions) {
     const inHelper = helpers.has(fn.id)
+    if (fn.guardLine !== undefined)
+      declaration(fn.id, fn.guardLine, fn.guardQuote)
     for (const stmt of fn.body) {
       const whole = stmt.lines.join(` `)
       const probe = inHelper || probeOnly(stmt)
@@ -1844,13 +1925,44 @@ function sitesOf(plan) {
       }
       if (stmt.kind === `throwIf`) condition()
       if (stmt.kind === `guard`)
-        guard(
-          fn.id,
-          stmt.line,
-          `'p${stmt.label}'`,
-          `x ${stmt.op} ${stmt.k}`,
-          stmt.quote,
-        )
+        guard(fn.id, stmt.line, `'p${stmt.label}'`, `x ${stmt.op} ${stmt.k}`)
+      // A probe in a shape the decided form does not accept is production
+      // code, its guard's declaration included.
+      if (stmt.kind === `nearProbe`) {
+        const near = { stmt: stmt.label, role: `near`, probe: inHelper }
+        const at = (line, operator, text) =>
+          add(fn.id, line, operator, text, near)
+        const call = (line) => {
+          const text = stmt.lines[line - stmt.line].trim()
+          at(line, `binary-swap`, text)
+          at(line, `value-undefined`, text)
+          at(line, `binary-swap`, text)
+        }
+        if (stmt.variant === `former`) {
+          at(stmt.line, `binary-swap`, whole)
+          at(stmt.line, `binary-swap`, whole)
+          at(stmt.line, `value-undefined`, whole)
+          at(stmt.line, `binary-swap`, whole)
+        }
+        if (stmt.variant === `name`) {
+          for (const op of [`binary-swap`, `bool-flip`, `binary-swap`])
+            at(stmt.line, op, stmt.lines[0])
+          call(stmt.line + 1)
+        }
+        if (stmt.variant === `let`) {
+          for (const op of [`binary-swap`, `bool-flip`, `binary-swap`])
+            at(stmt.line + 1, op, stmt.lines[1].trim())
+          call(stmt.line + 2)
+        }
+        if (stmt.variant === `init`) {
+          at(stmt.line + 1, `binary-swap`, stmt.lines[1].trim())
+          call(stmt.line + 2)
+        }
+        if (stmt.variant === `outer`) {
+          at(stmt.line, `delete-call`, whole)
+          call(stmt.line + 1)
+        }
+      }
       if (stmt.kind === `oldProbe`) {
         at(`if-true`, `oldTrue`, stmt.line, whole)
         at(`if-false`, `oldFalse`, stmt.line, whole)
@@ -2162,6 +2274,11 @@ function interpret(plan, fnId, x, sites, active) {
         }
       }
       if (stmt.kind === `setTag`) object.tag = `b`
+      // A probe in another shape reaches its sites; no hook is installed, so
+      // none of it writes output.
+      if (stmt.kind === `nearProbe`)
+        for (const site of sites)
+          if (site.stmt === stmt.label) reached.add(site.id)
       if (stmt.kind === `primeCall`) {
         const site = siteOf(stmt, `call`)
         reached.add(site.id)
@@ -2699,10 +2816,17 @@ function edited(plan) {
     ].join(`\n`)
   }
   if (plan.stability === `insertGuard`) {
+    // A probe, and the function's guard if it has none yet.
     const lines = plan.source.split(`\n`)
-    const at = plan.functions[0].body[0].line - 1
+    const [fn] = plan.functions
+    const at = fn.body[0].line - 1
     const indent = lines[at].match(/^\s*/)[0]
-    lines.splice(at, 0, `${indent}${probeText(`'zz'`, `true`)}`)
+    lines.splice(
+      at,
+      0,
+      ...(fn.guardLine === undefined ? [`${indent}${guardText()}`] : []),
+      `${indent}${probeText(`'zz'`, `true`)}`,
+    )
     return lines.join(`\n`)
   }
   // Whitespace only: drop spaces around comparisons, add them in calls.
@@ -3030,6 +3154,7 @@ export {
   judging,
   witness,
   probeText,
+  guardText,
   oldProbeCallText,
   oldProbeText,
   preamble,

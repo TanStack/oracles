@@ -150,8 +150,14 @@ export function instrument(ts, path, text, source, offset = 0) {
   // nothing in production builds (the bundle check owns it), and a deleted or
   // misplaced probe is reach agreement's to catch. Probe-only code is, by the
   // syntax tree:
+  // - the probe guard, a declaration
+  //   `const probing = typeof process === 'undefined' ? false : process.env.NODE_ENV !== 'production'`
+  //   in a function (maintainer decision, 2026-11-08: a build folds a
+  //   function-local guard to `false`, and the guard does not throw where
+  //   there is no `process`);
   // - a probe statement in the decided form,
-  //   `process.env.NODE_ENV !== 'production' && globalThis.__oracleProbe?.(name, condition)`,
+  //   `probing && globalThis.__oracleProbe?.(name, condition)`, whose
+  //   `probing` resolves to that guard in the nearest enclosing function and
   //   whose receiver may be cast with `as`, including its condition;
   // - a call statement to a probe helper, a function declaration whose every
   //   statement is probe-only (found by repeating until no helper is added);
@@ -182,13 +188,75 @@ export function instrument(ts, path, text, source, offset = 0) {
       unwrap(callee.expression).text === `globalThis`
     )
   }
-  const isProbeStatement = (node) =>
-    ts.isExpressionStatement(node) &&
-    ts.isBinaryExpression(node.expression) &&
-    node.expression.operatorToken.kind ===
-      ts.SyntaxKind.AmpersandAmpersandToken &&
-    isGuard(unwrap(node.expression.left)) &&
-    isHook(node.expression.right)
+  // `const probing = typeof process === 'undefined' ? false : <guard>`.
+  const isGuardDeclaration = (node) => {
+    if (
+      !ts.isVariableStatement(node) ||
+      !(node.declarationList.flags & ts.NodeFlags.Const) ||
+      node.declarationList.declarations.length !== 1
+    )
+      return false
+    const [{ name, initializer: init }] = node.declarationList.declarations
+    let scope = node.parent
+    while (scope && !ts.isFunctionLike(scope) && !ts.isSourceFile(scope))
+      scope = scope.parent
+    return (
+      // In a function: a module-level guard is not folded in a module with
+      // imports, so its probes would ship.
+      scope !== undefined &&
+      ts.isFunctionLike(scope) &&
+      ts.isIdentifier(name) &&
+      name.text === `probing` &&
+      init !== undefined &&
+      ts.isConditionalExpression(init) &&
+      ts.isBinaryExpression(init.condition) &&
+      init.condition.operatorToken.kind ===
+        ts.SyntaxKind.EqualsEqualsEqualsToken &&
+      init.condition.left.getText(file) === `typeof process` &&
+      ts.isStringLiteralLike(init.condition.right) &&
+      init.condition.right.text === `undefined` &&
+      init.whenTrue.kind === ts.SyntaxKind.FalseKeyword &&
+      isGuard(init.whenFalse)
+    )
+  }
+  // Whether `probing` here names the guard: the nearest declaration of the
+  // name, from the innermost block outward, is a guard declaration, and no
+  // function boundary lies between them.
+  const declares = (statement) =>
+    (ts.isVariableStatement(statement) &&
+      statement.declarationList.declarations.some(
+        (d) => ts.isIdentifier(d.name) && d.name.text === `probing`,
+      )) ||
+    ((ts.isFunctionDeclaration(statement) ||
+      ts.isClassDeclaration(statement)) &&
+      statement.name?.text === `probing`)
+  const resolvesToGuard = (identifier) => {
+    for (let node = identifier.parent; node; node = node.parent) {
+      if (ts.isSourceFile(node)) return false
+      if (ts.isBlock(node)) {
+        const found = node.statements.find(declares)
+        if (found) return isGuardDeclaration(found)
+      }
+      if (ts.isFunctionLike(node)) return false
+    }
+    return false
+  }
+  const isProbeStatement = (node) => {
+    if (
+      !ts.isExpressionStatement(node) ||
+      !ts.isBinaryExpression(node.expression) ||
+      node.expression.operatorToken.kind !==
+        ts.SyntaxKind.AmpersandAmpersandToken
+    )
+      return false
+    const guard = unwrap(node.expression.left)
+    return (
+      ts.isIdentifier(guard) &&
+      guard.text === `probing` &&
+      resolvesToGuard(guard) &&
+      isHook(node.expression.right)
+    )
+  }
   const callsHelper = (node) => {
     const target =
       ts.isExpressionStatement(node) && ts.isCallExpression(node.expression)
@@ -201,6 +269,7 @@ export function instrument(ts, path, text, source, offset = 0) {
     )
   }
   const isProbeOnly = (node) =>
+    isGuardDeclaration(node) ||
     isProbeStatement(node) ||
     callsHelper(node) ||
     (ts.isIfStatement(node) &&

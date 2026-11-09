@@ -3,11 +3,22 @@
  * one expression statement of this exact form, and every other mention of
  * `__oracleProbe` is reported:
  *
- *   process.env.NODE_ENV !== 'production' && globalThis.__oracleProbe?.(name, condition)
+ *   const probing = typeof process === 'undefined' ? false : process.env.NODE_ENV !== 'production'
+ *   ...
+ *   probing && globalThis.__oracleProbe?.(name, condition)
  *
- * The guard is the comparison on the left of `&&`, so a production build drops
- * the probe. The guard's `'production'` may be written with any of the three
- * quote styles, because the repository writes strings with backticks. The
+ * The guard on the left of `&&` is the identifier `probing`, and it resolves
+ * to a `const` with exactly that initializer in the nearest enclosing
+ * function, at its top or in a block of it. A production build defines
+ * `process.env.NODE_ENV`, folds a function-local `probing` to `false`, and
+ * drops the probe; an unbundled browser or Deno has no `process`, and the
+ * guard is `false` without throwing. A guard named otherwise, bound with
+ * `let`, with another initializer (the bare `NODE_ENV` comparison, or
+ * `typeof process !== 'undefined' && …`), declared in an outer function or
+ * at module level, or the former form with the comparison itself on the left
+ * of `&&`, is reported. The initializer's `'undefined'` and `'production'` may
+ * be written with any of the three quote styles, because the repository
+ * writes strings with backticks. The
  * receiver is `globalThis`, or `globalThis` cast with `as`. The name is a
  * string literal or a template literal without substitutions, and it names a
  * state as `package#name`. The statement has exactly two arguments,
@@ -18,12 +29,21 @@
  * (`rows.every((row) => …)`). A call is allowed in a condition: a lint cannot
  * prove that a call is pure, which is a limit of this law.
  *
- * Authority: the maintainer's decision on the probe form, which replaces the
- * `devBuild()` guard ("this is a standalone framework now so we can't use the
+ * Authority: the maintainer's decision of 2026-11-08 on the guard (a
+ * function-local `probing` constant: the bare `process.env.NODE_ENV` guard
+ * throws in unbundled browsers and Deno and reads the environment per record,
+ * and esbuild keeps a module-level constant in a module with imports, so its
+ * probes ship), which revises the earlier decision on the probe form that
+ * replaced the `devBuild()` guard ("this is a standalone framework now so we can't use the
  * devBuild() stuff", "our default lint forces the guard"), and the state probe
  * entry in docs/contributing/glossary.md, which names the call
  * `globalThis.__oracleProbe?.("package#name")`. AGENTS.md "Lint feedback while
  * you work" requires that an oracle-owned shortcut is reported, not disabled.
+ *
+ * Limits: the guard is generated at the top of the function and in a block
+ * beside its probe; a module-level guard, a parameter or a function named
+ * `probing`, and a guard declared after its probe are not generated (the
+ * rule reads bindings through ESLint's scope manager, which places each).
  *
  * Structure, following ORC-003:
  *   1. The grammar draws a program of sites. Each site has a kind: a legal
@@ -90,6 +110,20 @@ const two = () => 2
 
 const MODEL = {
   probe: { legal: true, mentions: () => 0 },
+  // The guard declared in a block of the function, beside its probe.
+  'block-guard': { legal: true, mentions: () => 0 },
+  // The former form: the `NODE_ENV` comparison itself on the left of `&&`.
+  'former-guard': { legal: false, mentions: castMentions },
+  // A guard of the right initializer under another name.
+  'other-name': { legal: false, mentions: castMentions },
+  // A `let` guard.
+  'let-guard': { legal: false, mentions: castMentions },
+  // A guard whose initializer is the bare comparison, or the `typeof`
+  // check joined by `&&`, which a build does not fold.
+  'bare-init': { legal: false, mentions: castMentions },
+  'and-init': { legal: false, mentions: castMentions },
+  // A probe in a nested function, whose nearest function declares no guard.
+  'outer-guard': { legal: false, mentions: castMentions },
   'if-guard': { legal: false, mentions: castMentions },
   'devbuild-and-guard': { legal: false, mentions: castMentions },
   'devbuild-only': { legal: false, mentions: castMentions },
@@ -211,10 +245,12 @@ const siteArbitrary = fc.record({
   wrap: fc.constantFrom(...WRAPS),
 })
 
-// A program is a list of sites. Each site is one line in the rendered function.
-const programArbitrary = fc
-  .array(siteArbitrary, { minLength: 1, maxLength: 6 })
-  .map((sites) => ({ sites }))
+// A program is a list of sites, each one line in the rendered function, below
+// the function's guard, whose strings take one quote style.
+const programArbitrary = fc.record({
+  guardQuote: quoteArb,
+  sites: fc.array(siteArbitrary, { minLength: 1, maxLength: 6 }),
+})
 
 // The census gives every kind every pool value once, by index, so the
 // declared reach does not depend on random draws. It is a fixed history, and
@@ -246,7 +282,7 @@ function censusProgram() {
       })
     }
   }
-  return { sites }
+  return { guardQuote: `'`, sites }
 }
 
 // -- 2. Model -----------------------------------------------------------------
@@ -257,8 +293,9 @@ function censusProgram() {
 // from the kind and the cast flag. A legal probe exempts its own mentions: the
 // callee property, and the cast's type member when it casts.
 
-// The header is line 1, so site `index` is on line `index + 2`.
-const siteLine = (index) => index + 2
+// The header is line 1 and the guard line 2, so site `index` is on line
+// `index + 3`.
+const siteLine = (index) => index + 3
 
 function predictReports(program) {
   return program.sites.flatMap((site, index) => {
@@ -280,8 +317,12 @@ function predictSeverity(filePath) {
 
 // -- 3. Drivers ---------------------------------------------------------------
 
-const guardText = (site) =>
+// The former guard, the comparison alone, and the guard's initializer.
+const comparisonText = (site) =>
   `process.env.NODE_ENV !== ${site.quote}production${site.quote}`
+const initText = (quote) =>
+  `typeof process === ${quote}undefined${quote} ? false : process.env.NODE_ENV !== ${quote}production${quote}`
+const guardText = () => `probing`
 const receiverText = (site) => {
   if (!site.cast) return `globalThis`
   return site.paren ? `(${CAST})` : CAST
@@ -295,6 +336,19 @@ const withBadCondition = (site) => site.wrap.split(`X`).join(site.badCond)
 const RENDER = {
   probe: (s) =>
     `${s.guardParens ? `(${guardText(s)})` : guardText(s)} && ${legalCall(s)};`,
+  'block-guard': (s) =>
+    `{ const probing = ${initText(s.quote)}; probing && ${legalCall(s)}; }`,
+  'former-guard': (s) =>
+    `${s.guardParens ? `(${comparisonText(s)})` : comparisonText(s)} && ${legalCall(s)};`,
+  'other-name': (s) =>
+    `{ const enabled = ${initText(s.quote)}; enabled && ${legalCall(s)}; }`,
+  'let-guard': (s) =>
+    `{ let probing = ${initText(s.quote)}; probing && ${legalCall(s)}; }`,
+  'bare-init': (s) =>
+    `{ const probing = ${comparisonText(s)}; probing && ${legalCall(s)}; }`,
+  'and-init': (s) =>
+    `{ const probing = typeof process !== ${s.quote}undefined${s.quote} && ${comparisonText(s)}; probing && ${legalCall(s)}; }`,
+  'outer-guard': (s) => `(() => { probing && ${legalCall(s)}; })();`,
   'if-guard': (s) => `if (${guardText(s)}) ${legalCall(s)};`,
   'devbuild-and-guard': (s) =>
     `devBuild() && ${guardText(s)} && ${legalCall(s)};`,
@@ -342,6 +396,7 @@ const RENDER = {
 function renderProgram(program) {
   return [
     `export async function* run(input: number, flag: boolean): AsyncGenerator<number> {`,
+    `  const probing = ${initText(program.guardQuote)};`,
     ...program.sites.map(
       (site, index) => `  ${RENDER[site.kind](site, index)}`,
     ),
@@ -402,6 +457,8 @@ function compareSeverity(path, actual, expected) {
 // -- 5. Reach and campaigns ---------------------------------------------------
 
 const LEGAL_SUBSTATES = [
+  `legal:guard-quote-double`,
+  `legal:guard-quote-backtick`,
   `legal:cast`,
   `legal:parenthesized-cast`,
   `legal:template-name`,
@@ -413,6 +470,10 @@ const STATES = [...Object.keys(MODEL), ...LEGAL_SUBSTATES]
 const reach = createOracleReach(PROPERTY, STATES, { minimum: 1 })
 
 function recordStates(program) {
+  if (program.sites.some((site) => MODEL[site.kind].legal)) {
+    if (program.guardQuote === `"`) reach.reach(`legal:guard-quote-double`)
+    if (program.guardQuote === '`') reach.reach(`legal:guard-quote-backtick`)
+  }
   for (const site of program.sites) {
     reach.reach(site.kind)
     if (!MODEL[site.kind].legal) continue

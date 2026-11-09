@@ -170,7 +170,34 @@ async function driver(plan, observe) {
     observe(`static`, before)
     const states = new Set()
     if (before.refusal) states.add(`refused ${plan.fault}`)
+    // The statement whose lines hold a mutant, by the model's layout.
+    const statementAt = (m) =>
+      plan.functions
+        .flatMap((fn) => fn.body.map((stmt) => ({ fn, stmt })))
+        .find(
+          ({ fn, stmt }) =>
+            fn.file === m.source &&
+            stmt.line <= m.line &&
+            m.line < stmt.line + stmt.lines.length,
+        )
+    const nearStates = {
+      former: `a former-form probe judged`,
+      name: `a guard under another name judged`,
+      let: `a let guard judged`,
+      init: `a guard of another initializer judged`,
+      outer: `a probe under an outer function's guard judged`,
+    }
     for (const m of before.mutants ?? []) {
+      const at = statementAt(m)
+      if (at?.stmt.kind === `nearProbe` && !m.probe)
+        states.add(nearStates[at.stmt.variant])
+      if (
+        m.probe &&
+        plan.functions.some(
+          (fn) => fn.file === m.source && fn.guardLine === m.line,
+        )
+      )
+        states.add(`a probe guard declaration left out`)
       if (m.probe) {
         if (m.function === `w_probeonly`) states.add(`derived probe helper`)
         if (m.function === `w_callschain`)
@@ -463,6 +490,12 @@ const required = [
   ...Object.values(namedStates).map(([, state]) => state),
   `a $-named call outside Svelte judged`,
   `a Svelte module instrumented`,
+  `a probe guard declaration left out`,
+  `a former-form probe judged`,
+  `a guard under another name judged`,
+  `a let guard judged`,
+  `a guard of another initializer judged`,
+  `a probe under an outer function's guard judged`,
   `a source spelled with ./`,
   `a source spelled through a redundant segment`,
   `derived probe helper`,
