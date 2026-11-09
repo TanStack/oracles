@@ -1180,17 +1180,17 @@ const preamble = [
   `    return false`,
   `  }`,
   `}`,
-  `function report(probe: string): void {`,
+  `function report(): void {`,
   `  ${guardText()}`,
-  `  ${probeText(`probe`, `true`)}`,
+  `  ${probeText(`'gap#report'`, `true`)}`,
   `}`,
-  `function reportTwice(probe: string): void {`,
-  `  report(probe);`,
-  `  report(probe);`,
+  `function reportTwice(): void {`,
+  `  report();`,
+  `  report();`,
   `}`,
-  `export function reportAndPush(probe: string, out: Array<string>): void {`,
+  `export function reportAndPush(out: Array<string>): void {`,
   `  ${guardText()}`,
-  `  ${probeText(`probe`, `true`)}`,
+  `  ${probeText(`'gap#mixed'`, `true`)}`,
   `  out.push('h');`,
   `}`,
   `export function apply(fn: (x: number, out: Array<string>) => void, x: number, out: Array<string>): void {`,
@@ -1206,7 +1206,7 @@ const preamble = [
 ]
 const preambleStatements = {
   devBuild: `return process.env.NODE_ENV !== 'production'`,
-  reportTwice: `report(probe);`,
+  reportTwice: `report();`,
   reportAndPushPush: `out.push('h');`,
   applyCall: `fn(x, out);`,
   makeCall: `new cls().run(x, out);`,
@@ -1231,7 +1231,7 @@ const condText = (stmt) =>
 
 /** The source lines of one statement. */
 function renderStatement(stmt, callText) {
-  const probe = `'p${stmt.label}'`
+  const probe = `'gap#p${stmt.label}'`
   switch (stmt.kind) {
     case `push`:
       return [pushText(stmt)]
@@ -1288,23 +1288,20 @@ function renderStatement(stmt, callText) {
         `}`,
       ]
     case `helperCall`:
-      return [`${stmt.helper}(${probe});`]
+      return [`${stmt.helper}();`]
     case `mixedHelperCall`:
-      return [`reportAndPush(${probe}, out);`]
+      return [`reportAndPush(out);`]
     case `probeIf`:
-      return [`if (${condText(stmt)}) report(${probe});`]
+      return [`if (${condText(stmt)}) report();`]
     case `probeBlock`:
       return [
         `if (${condText(stmt)}) {`,
-        `  report(${probe});`,
+        `  report();`,
         `  ${probeText(probe, `true`)}`,
         `}`,
       ]
     case `elseIf`:
-      return [
-        `if (${condText(stmt)}) report(${probe});`,
-        `else ${pushText(stmt)}`,
-      ]
+      return [`if (${condText(stmt)}) report();`, `else ${pushText(stmt)}`]
     case `pair`:
       return [
         `const pair = { get: (k: number): string => String(k), set: (k: number): string => String(k + 1) };`,
@@ -1902,7 +1899,7 @@ function sitesOf(plan) {
   // Its `return false` runs only when reading the environment throws.
   add(`devBuild`, 6, `bool-flip`, `return false`, { role: `devBuildFalse` })
   declaration(`report`, 10, `'`)
-  guard(`report`, 11, `probe`, `true`)
+  guard(`report`, 11, `'gap#report'`, `true`)
   add(`reportTwice`, 14, `delete-call`, preambleStatements.reportTwice, {
     probe: true,
   })
@@ -1910,7 +1907,7 @@ function sitesOf(plan) {
     probe: true,
   })
   declaration(`reportAndPush`, 18, `'`)
-  guard(`reportAndPush`, 19, `probe`, `true`)
+  guard(`reportAndPush`, 19, `'gap#mixed'`, `true`)
   add(
     `reportAndPush`,
     20,
@@ -2029,7 +2026,12 @@ function sitesOf(plan) {
       }
       if (stmt.kind === `throwIf`) condition()
       if (stmt.kind === `guard`)
-        guard(fn.id, stmt.line, `'p${stmt.label}'`, `x ${stmt.op} ${stmt.k}`)
+        guard(
+          fn.id,
+          stmt.line,
+          `'gap#p${stmt.label}'`,
+          `x ${stmt.op} ${stmt.k}`,
+        )
       // A probe in a shape the decided form does not accept is production
       // code, its guard's declaration included.
       if (stmt.kind === `nearProbe`) {
@@ -2077,12 +2079,12 @@ function sitesOf(plan) {
           `delete-call`,
           `oldCall`,
           stmt.line,
-          oldProbeCallText(`'p${stmt.label}'`),
+          oldProbeCallText(`'gap#p${stmt.label}'`),
         )
       }
       if (stmt.kind === `mixed`) {
         condition()
-        guard(fn.id, stmt.line + 1, `'p${stmt.label}'`, `true`)
+        guard(fn.id, stmt.line + 1, `'gap#p${stmt.label}'`, `true`)
         at(`delete-call`, `push`, stmt.line + 2, pushText(stmt))
       }
       if (stmt.kind === `helperCall`)
@@ -2091,22 +2093,22 @@ function sitesOf(plan) {
         at(`delete-call`, `call`, stmt.line, whole)
       if (stmt.kind === `probeIf`) {
         condition()
-        add(fn.id, stmt.line, `delete-call`, `report('p${stmt.label}');`, {
+        add(fn.id, stmt.line, `delete-call`, `report();`, {
           probe: true,
         })
       }
       if (stmt.kind === `probeBlock`) {
         condition()
-        add(fn.id, stmt.line + 1, `delete-call`, `report('p${stmt.label}');`, {
+        add(fn.id, stmt.line + 1, `delete-call`, `report();`, {
           probe: true,
         })
-        guard(fn.id, stmt.line + 2, `'p${stmt.label}'`, `true`)
+        guard(fn.id, stmt.line + 2, `'gap#p${stmt.label}'`, `true`)
       }
       if (stmt.kind === `elseIf`) {
         // An `if` with a production `else` is production; its probe branch
         // alone is probe-only.
         condition()
-        add(fn.id, stmt.line, `delete-call`, `report('p${stmt.label}');`, {
+        add(fn.id, stmt.line, `delete-call`, `report();`, {
           probe: true,
         })
         at(`delete-call`, `push`, stmt.line + 1, pushText(stmt))
@@ -2935,7 +2937,7 @@ function edited(plan) {
       at,
       0,
       ...(fn.guardLine === undefined ? [`${indent}${guardText()}`] : []),
-      `${indent}${probeText(`'zz'`, `true`)}`,
+      `${indent}${probeText(`'gap#zz'`, `true`)}`,
     )
     return lines.join(`\n`)
   }

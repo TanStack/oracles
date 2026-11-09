@@ -167,96 +167,142 @@ export function instrument(ts, path, text, source, offset = 0) {
   //   statements all are.
   // Code beside a probe, and any other probe shape, is production code.
   const helpers = new Set()
-  const unwrap = (node) => {
+  // The probe form is the lint rule's (packages/eslint-plugin-oracles,
+  // rules/probe-form.js), clause by clause, read over TypeScript's tree, in
+  // which parentheses are nodes of their own: `bare` removes them where the
+  // rule's tree has none.
+  const bare = (node) => {
     let inner = node
-    while (ts.isParenthesizedExpression(inner) || ts.isAsExpression(inner))
+    while (inner && ts.isParenthesizedExpression(inner))
       inner = inner.expression
     return inner
   }
-  const isGuard = (node) =>
-    ts.isBinaryExpression(node) &&
-    node.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken &&
-    node.left.getText(file) === `process.env.NODE_ENV` &&
-    ts.isStringLiteralLike(node.right) &&
-    node.right.text === `production`
-  const isHook = (node) => {
-    const call = unwrap(node)
-    if (!ts.isCallExpression(call) || call.arguments.length !== 2) return false
-    const callee = call.expression
+  const staticText = (node) =>
+    node && ts.isStringLiteralLike(node) ? node.text : undefined
+  // `process.env.NODE_ENV !== 'production'`, the comparison on the left.
+  const isGuard = (node) => {
+    const test = bare(node)
+    if (
+      !ts.isBinaryExpression(test) ||
+      test.operatorToken.kind !== ts.SyntaxKind.ExclamationEqualsEqualsToken
+    )
+      return false
+    const env = bare(test.left)
+    const object =
+      env && ts.isPropertyAccessExpression(env) && bare(env.expression)
     return (
-      ts.isPropertyAccessExpression(callee) &&
-      callee.name.text === `__oracleProbe` &&
-      ts.isIdentifier(unwrap(callee.expression)) &&
-      unwrap(callee.expression).text === `globalThis`
+      ts.isPropertyAccessExpression(env) &&
+      env.name.text === `NODE_ENV` &&
+      object !== undefined &&
+      ts.isPropertyAccessExpression(object) &&
+      object.name.text === `env` &&
+      ts.isIdentifier(bare(object.expression)) &&
+      bare(object.expression).text === `process` &&
+      staticText(bare(test.right)) === `production`
     )
   }
-  // `const probing = typeof process === 'undefined' ? false : <guard>`.
+  // A probe's name: `package#name`.
+  const NAME = /^[a-z][a-z0-9-]*#[a-zA-Z][a-zA-Z0-9.-]*$/
+  // What a condition may not hold: an assignment, an update, `new`,
+  // `delete`, `await`, `yield`, a function or class expression, or an arrow
+  // with a block body.
+  const forbidden = (node) =>
+    (ts.isBinaryExpression(node) &&
+      node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) ||
+    ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken ||
+        node.operator === ts.SyntaxKind.MinusMinusToken)) ||
+    ts.isNewExpression(node) ||
+    ts.isDeleteExpression(node) ||
+    ts.isAwaitExpression(node) ||
+    ts.isYieldExpression(node) ||
+    ts.isFunctionExpression(node) ||
+    ts.isClassExpression(node) ||
+    (ts.isArrowFunction(node) && ts.isBlock(node.body)) ||
+    (ts.forEachChild(node, (child) => (forbidden(child) ? true : undefined)) ??
+      false)
+  // `globalThis.__oracleProbe?.(name, condition)`, its receiver `globalThis`
+  // or one `as` cast of it.
+  const isHook = (node) => {
+    const call = bare(node)
+    if (
+      !ts.isCallExpression(call) ||
+      call.questionDotToken === undefined ||
+      call.arguments.length !== 2 ||
+      call.arguments.some(ts.isSpreadElement)
+    )
+      return false
+    const callee = call.expression
+    if (
+      !ts.isPropertyAccessExpression(callee) ||
+      callee.questionDotToken !== undefined ||
+      callee.name.text !== `__oracleProbe`
+    )
+      return false
+    const receiver = bare(callee.expression)
+    const cast = ts.isAsExpression(receiver)
+      ? bare(receiver.expression)
+      : receiver
+    const [name, condition] = call.arguments
+    return (
+      ts.isIdentifier(cast) &&
+      cast.text === `globalThis` &&
+      NAME.test(staticText(name) ?? ``) &&
+      !forbidden(condition)
+    )
+  }
+  // `const probing = typeof process === 'undefined' ? false : <guard>`, in a
+  // function: a module-level guard is not folded in a module with imports,
+  // so its probes would ship.
   const isGuardDeclaration = (node) => {
     if (
+      node === undefined ||
       !ts.isVariableStatement(node) ||
       !(node.declarationList.flags & ts.NodeFlags.Const) ||
       node.declarationList.declarations.length !== 1
     )
       return false
-    const [{ name, initializer: init }] = node.declarationList.declarations
+    const [{ name, initializer }] = node.declarationList.declarations
     let scope = node.parent
     while (scope && !ts.isFunctionLike(scope) && !ts.isSourceFile(scope))
       scope = scope.parent
+    const init = bare(initializer)
+    const test =
+      init && ts.isConditionalExpression(init) && bare(init.condition)
+    const typeOf = test && ts.isBinaryExpression(test) && bare(test.left)
     return (
-      // In a function: a module-level guard is not folded in a module with
-      // imports, so its probes would ship.
       scope !== undefined &&
       ts.isFunctionLike(scope) &&
       ts.isIdentifier(name) &&
       name.text === `probing` &&
-      init !== undefined &&
       ts.isConditionalExpression(init) &&
-      ts.isBinaryExpression(init.condition) &&
-      init.condition.operatorToken.kind ===
-        ts.SyntaxKind.EqualsEqualsEqualsToken &&
-      init.condition.left.getText(file) === `typeof process` &&
-      ts.isStringLiteralLike(init.condition.right) &&
-      init.condition.right.text === `undefined` &&
-      init.whenTrue.kind === ts.SyntaxKind.FalseKeyword &&
+      ts.isBinaryExpression(test) &&
+      test.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken &&
+      ts.isTypeOfExpression(typeOf) &&
+      ts.isIdentifier(bare(typeOf.expression)) &&
+      bare(typeOf.expression).text === `process` &&
+      staticText(bare(test.right)) === `undefined` &&
+      bare(init.whenTrue).kind === ts.SyntaxKind.FalseKeyword &&
       isGuard(init.whenFalse)
     )
   }
-  // Whether `probing` here names the guard: the nearest declaration of the
-  // name, from the innermost block outward, is a guard declaration, and no
-  // function boundary lies between them.
-  const declares = (statement) =>
-    (ts.isVariableStatement(statement) &&
-      statement.declarationList.declarations.some(
-        (d) => ts.isIdentifier(d.name) && d.name.text === `probing`,
-      )) ||
-    ((ts.isFunctionDeclaration(statement) ||
-      ts.isClassDeclaration(statement)) &&
-      statement.name?.text === `probing`)
-  const resolvesToGuard = (identifier) => {
-    for (let node = identifier.parent; node; node = node.parent) {
-      if (ts.isSourceFile(node)) return false
-      if (ts.isBlock(node)) {
-        const found = node.statements.find(declares)
-        if (found) return isGuardDeclaration(found)
-      }
-      if (ts.isFunctionLike(node)) return false
-    }
-    return false
-  }
+  // `probing && hook`, whose `probing` resolves, within its nearest
+  // function, to the guard's declaration.
   const isProbeStatement = (node) => {
+    const expression = ts.isExpressionStatement(node) && bare(node.expression)
     if (
-      !ts.isExpressionStatement(node) ||
-      !ts.isBinaryExpression(node.expression) ||
-      node.expression.operatorToken.kind !==
-        ts.SyntaxKind.AmpersandAmpersandToken
+      !expression ||
+      !ts.isBinaryExpression(expression) ||
+      expression.operatorToken.kind !== ts.SyntaxKind.AmpersandAmpersandToken
     )
       return false
-    const guard = unwrap(node.expression.left)
+    const guard = bare(expression.left)
     return (
       ts.isIdentifier(guard) &&
       guard.text === `probing` &&
-      resolvesToGuard(guard) &&
-      isHook(node.expression.right)
+      isGuardDeclaration(declarationOf(guard, true)) &&
+      isHook(expression.right)
     )
   }
   // A call statement to a probe helper: the callee resolves, lexically, to

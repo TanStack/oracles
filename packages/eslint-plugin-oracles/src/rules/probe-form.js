@@ -22,6 +22,13 @@
  * collection (maintainer decision, 2026-11-05). A call is allowed in the
  * condition: a syntactic rule cannot prove that a call is pure.
  *
+ * This header is the probe form's one definition: the gap CLI's probe-only
+ * code (packages/oracles/oracle-gaps/schemata.mjs) follows it clause by
+ * clause, and its oracle (gap-report-probe-form-oracle) checks the CLI on
+ * this rule's own grammar. Parentheses never matter; the guard may be
+ * declared at the function's top, in a block of it, or in a switch case;
+ * an undeclared `probing` is no guard.
+ *
  * The law and its authority are in
  * scripts/eslint-plugin-oracle/probe-form-oracle.property.test.js, which also
  * states the limits. The production config in index.js selects production
@@ -126,7 +133,9 @@ function isGuard(node, sourceCode) {
   let variable
   for (let at = scope; at && !variable; at = at.upper)
     variable = at.set.get(GUARD)
-  const [definition] = variable?.defs ?? []
+  // An undeclared `probing` is no guard.
+  if (variable === undefined) return false
+  const [definition] = variable.defs
   return (
     scope.variableScope.type === `function` &&
     variable.scope.variableScope === scope.variableScope &&
