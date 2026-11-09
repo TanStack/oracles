@@ -253,9 +253,6 @@ export function instrument(ts, path, text, source, offset = 0) {
       !forbidden(condition)
     )
   }
-  // `const probing = typeof process === 'undefined' ? false : <guard>`, in a
-  // function: a module-level guard is not folded in a module with imports,
-  // so its probes would ship.
   // The guard: a declarator `probing = typeof process === 'undefined' ?
   // false : <guard>` of a `const`, in a function: a module-level guard is not
   // folded in a module with imports, so its probes would ship.
@@ -263,7 +260,8 @@ export function instrument(ts, path, text, source, offset = 0) {
     if (
       node === undefined ||
       !ts.isVariableDeclaration(node) ||
-      !(node.parent.flags & ts.NodeFlags.Const) ||
+      // A `const`: `await using` sets the Const flag too, with Using.
+      (node.parent.flags & ts.NodeFlags.BlockScoped) !== ts.NodeFlags.Const ||
       !ts.isIdentifier(node.name) ||
       node.name.text !== `probing`
     )
@@ -344,11 +342,6 @@ export function instrument(ts, path, text, source, offset = 0) {
     (ts.isBlock(node) &&
       node.statements.length > 0 &&
       node.statements.every(isProbeOnly))
-  // The statement or parameter that declares `identifier`'s name, found
-  // from the innermost scope outward as JavaScript resolves it (function
-  // declarations and block bindings, case clauses sharing their switch's
-  // scope), or undefined when no file-level or enclosing declaration names
-  // it. `withinFunction` stops at the nearest function.
   // Whether a binding name (an identifier, or a destructuring pattern)
   // binds `name`.
   const bindsName = (binding, name) =>
@@ -369,6 +362,12 @@ export function instrument(ts, path, text, source, offset = 0) {
     (((ts.isFunctionDeclaration(statement) && statement.body !== undefined) ||
       ts.isClassDeclaration(statement)) &&
       statement.name?.text === name)
+  // What declares `identifier`'s name, found from the innermost scope
+  // outward as JavaScript resolves it: a statement (a variable, function, or
+  // class declaration; case clauses share their switch's scope), the loop
+  // statement or catch clause that binds it, or a parameter; undefined when
+  // nothing in the file declares it. `withinFunction` stops at the nearest
+  // function, returning its parameter of that name or undefined.
   function declarationOf(identifier, withinFunction = false) {
     const name = identifier.text
     for (let node = identifier.parent; node; node = node.parent) {

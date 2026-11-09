@@ -8,6 +8,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   unlinkSync,
@@ -31,6 +32,11 @@ const SOURCE = `src/sut.ts`
 const LIB = `src/lib.ts`
 // A Svelte module, which only the static half reads: no test loads it.
 const RUNES = `src/state.svelte.ts`
+// Where this package's own dependencies are installed.
+const OWN_MODULES = join(
+  dirname(fileURLToPath(import.meta.url)),
+  `../node_modules`,
+)
 // A source in a directory of the package whose name starts with `..`, which
 // is in the package all the same. No test loads it.
 const DOTGEN = `..gen/extra.ts`
@@ -262,6 +268,15 @@ const edits = [
   // addon installed into the dependency tree (or removed) between checks.
   `cliAtOnce`,
   `addAddon`,
+  // A daemon killed while it runs a check (under a seed no other step uses,
+  // so that the check has work to do), a daemon killed before it reads
+  // a request (the connection is reset), the session's dependency made
+  // resolvable (for a package that resolved no TypeScript), and a prebuilt
+  // addon added into an existing build/Release.
+  `dieMidCheck`,
+  `resetBeforeRead`,
+  `fixSession`,
+  `addRelease`,
 ]
 // The steps that act on the daemon and change no file.
 const daemonEvents = new Set([
@@ -271,6 +286,7 @@ const daemonEvents = new Set([
   `reusedPid`,
   `crashAtOnce`,
   `stopAtOnce`,
+  `resetBeforeRead`,
 ])
 const histories = fc.record({
   functions: fc.array(fc.array(statement, { minLength: 1, maxLength: 5 }), {
@@ -413,7 +429,7 @@ const histories = fc.record({
       weight: 1,
       arbitrary: fc.array(fc.constantFrom(...edits), {
         minLength: 1,
-        maxLength: edits.length + 2,
+        maxLength: edits.length * 2,
       }),
     },
   ),
@@ -1822,6 +1838,9 @@ function resolveHistory(history) {
     configFile: history.configFile ?? `vite.config.ts`,
     configEnv: history.configEnv === true,
     native: history.native ?? `none`,
+    // A prebuilt addon in the workspace dependency's build/Release
+    // (`addRelease`).
+    release: history.release === true,
     depSubpath: history.depSubpath === true,
     unbuiltDep: history.unbuiltDep === true,
     budget: history.budget ?? `two`,
@@ -2801,7 +2820,7 @@ function model(plan) {
   return {
     // A native addon can crash the whole process from a worker thread, so a
     // package that depends on one runs its tests in child processes.
-    pool: plan.native === `none` ? `threads` : `forks`,
+    pool: plan.native === `none` && !plan.release ? `threads` : `forks`,
     mutants,
     authored,
     authoredAll,
@@ -3080,6 +3099,9 @@ const initialState = (plan) => ({
   seed: 1,
   newOracle: false,
   cliEdited: false,
+  // Whether the package resolves TypeScript and Vitest through links in its
+  // own node_modules (`fixSession`).
+  linked: false,
 })
 
 /** The fixture package's files in one state. */
@@ -3137,6 +3159,19 @@ function fixtureFiles(plan, state = initialState(plan)) {
       ? {
           'deps/state-dep/extra.js': `export { seen as seenAgain } from './index.js'\n`,
         }
+      : {}),
+    // A build directory, so that an addon built later lands in a directory
+    // that already exists.
+    'deps/state-dep/build/Release/.keep': ``,
+    ...(plan.release ? { 'deps/state-dep/build/Release/state.node': `` } : {}),
+    // The runner's own dependencies, linked into the package.
+    ...(state.linked
+      ? Object.fromEntries(
+          [`typescript`, `vitest`, `fast-check`, `@fast-check`].map((name) => [
+            `node_modules/${name}`,
+            link(join(OWN_MODULES, name)),
+          ]),
+        )
       : {}),
     ...(plan.native === `gyp`
       ? { 'deps/state-dep/binding.gyp': `{ "targets": [] }\n` }
@@ -3244,8 +3279,11 @@ function writeFixture(dir, files) {
   for (const [path, text] of Object.entries(files)) {
     const at = join(dir, path)
     mkdirSync(dirname(at), { recursive: true })
-    if (typeof text === `string`) writeFileSync(at, text)
-    else if (!existsSync(at)) symlinkSync(text.link, at, `dir`)
+    // An unchanged file keeps its modification time, as in a real package.
+    if (typeof text === `string`) {
+      if (!existsSync(at) || readFileSync(at, `utf8`) !== text)
+        writeFileSync(at, text)
+    } else if (!existsSync(at)) symlinkSync(text.link, at, `dir`)
   }
   written.set(dir, Object.keys(files))
 }
@@ -3311,9 +3349,15 @@ function applyEdit(state, edit) {
     }
   if (edit === `helper`) return { ...state, strict: !state.strict }
   if (edit === `seed`) return { ...state, seed: state.seed === 1 ? 2 : 1 }
+  // A seed no other step uses, so the check has fresh work to be killed in.
+  if (edit === `dieMidCheck`)
+    return { ...state, seed: state.seed === 3 ? 1 : 3 }
   if (edit === `newOracle`) return { ...state, newOracle: !state.newOracle }
   if (edit === `cli` || edit === `cliAtOnce`)
     return { ...state, cliEdited: !state.cliEdited }
+  if (edit === `fixSession`) return { ...state, linked: true }
+  if (edit === `addRelease`)
+    return { ...state, history: { ...h, release: !h.release } }
   if (edit === `addAddon`)
     return {
       ...state,

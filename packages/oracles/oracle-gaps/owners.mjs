@@ -199,10 +199,16 @@ export function ownership(ts, program, pkg, oracles) {
         if (seen.has(fn)) return
         seen.add(fn)
         add(fn, oracle)
-        const file = fn.node.getSourceFile().fileName
-        for (const inner of functionsOf(relative(pkg, file)))
-          if (inner !== fn && fn.start <= inner.start && inner.end <= fn.end)
-            walk(inner)
+        // The functions in a function's text follow it in document order.
+        const functions = functionsOf(
+          relative(pkg, fn.node.getSourceFile().fileName),
+        )
+        for (
+          let at = functions.indexOf(fn) + 1;
+          at < functions.length && functions[at].start < fn.end;
+          at += 1
+        )
+          walk(functions[at])
         for (const next of referencesOf(fn.node)) walk(next)
       }
       for (const fn of functionsOf(source))

@@ -39,6 +39,9 @@ export const MODEL = {
   'destructured-shadow': { legal: false, mentions: castMentions },
   // The comparison read through optional chaining, another expression.
   'optional-env': { legal: false, mentions: castMentions },
+  // A guard bound with `using` or `await using`, which is not a `const`.
+  'using-guard': { legal: false, mentions: castMentions },
+  'await-using-guard': { legal: false, mentions: castMentions },
   // The former form: the `NODE_ENV` comparison itself on the left of `&&`.
   'former-guard': { legal: false, mentions: castMentions },
   // A guard of the right initializer under another name.
@@ -286,6 +289,10 @@ const RENDER = {
     `{ const { probing } = { probing: true }; probing && ${legalCall(s)}; }`,
   'optional-env': (s) =>
     `{ const probing = typeof process === ${s.quote}undefined${s.quote} ? false : ${s.paren ? `process?.env.NODE_ENV` : `process.env?.NODE_ENV`} !== ${s.quote}production${s.quote}; probing && ${legalCall(s)}; }`,
+  'using-guard': (s) =>
+    `{ using probing = ${initText(s.quote)}; probing && ${legalCall(s)}; }`,
+  'await-using-guard': (s) =>
+    `{ await using probing = ${initText(s.quote)}; probing && ${legalCall(s)}; }`,
   'switch-guard': (s) =>
     `switch (input) { case 1: const probing = ${initText(s.quote)}; probing && ${legalCall(s)}; break; }`,
   'former-guard': (s) =>

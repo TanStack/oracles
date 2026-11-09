@@ -35,6 +35,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs'
 import { connect, createServer } from 'node:net'
@@ -63,23 +64,27 @@ function send(pkg, message) {
       reply += chunk
     })
     socket.on(`end`, () => {
-      // A daemon that ends a connection unanswered is exiting: as `closing`.
-      if (reply === ``) return resolvePromise({ closing: true })
+      // A daemon that ends a connection unanswered has died, or is exiting.
+      if (reply === ``) return resolvePromise({ died: true })
       try {
         resolvePromise(JSON.parse(reply))
       } catch (error) {
         reject(error)
       }
     })
-    socket.on(`error`, reject)
+    socket.on(`error`, (error) =>
+      // A daemon that exits under a request resets its connection.
+      [`ECONNRESET`, `EPIPE`].includes(error.code)
+        ? resolvePromise({ died: true })
+        : reject(error),
+    )
   })
 }
 
-/**
- * Sends a check to the package's daemon, starting the daemon if needed. A
- * daemon whose own code has changed since it started declines the check and
- * exits, and a new one, which runs the current code, takes it.
- */
+// No daemon listens on the socket.
+const absent = (error) => [`ENOENT`, `ECONNREFUSED`].includes(error.code)
+const errorFileOf = (pkg) => join(stateDirOf(pkg), `daemon.error`)
+
 /** Starts a daemon for the package, detached from this process. */
 function startDaemon(pkg) {
   mkdirSync(stateDirOf(pkg), { recursive: true })
@@ -91,28 +96,46 @@ function startDaemon(pkg) {
 }
 
 /**
- * Sends a check to the package's daemon, starting the daemon if none
- * listens. A daemon that is closing is waited for; one whose own code has
- * changed declines the check and exits, and a new one, which runs the
- * current code, takes it.
+ * Sends a check to the package's daemon, starting one when none listens.
+ * The CLI gets the daemon's reply, or the error of a daemon it started that
+ * could not load or open its session, or a fresh daemon in place of one
+ * that died; a closing daemon is waited for. Never longer than 60 s.
  */
 export async function requestDaemon(pkg, argv) {
-  let started = false
-  for (let waited = 0; ; waited += 100) {
+  const began = Date.now()
+  // When this CLI last started a daemon; a daemon that answered since then
+  // (closing, restarting, or dying) makes it start the next one itself.
+  let startedAt
+  let deaths = 0
+  for (;;) {
+    let reply
     try {
-      const reply = await send(pkg, { argv, cwd: process.cwd() })
-      if (!reply.closing && !reply.restart) return reply
-      if (reply.restart) started = false
-      if (waited > WAIT_MS)
-        throw new Error(
-          `the package's daemon did not finish closing within 60 s`,
-        )
+      reply = await send(pkg, { argv, cwd: process.cwd() })
     } catch (error) {
-      if (![`ENOENT`, `ECONNREFUSED`].includes(error.code)) throw error
-      if (!started) startDaemon(pkg)
-      started = true
-      if (waited > WAIT_MS) throw error
+      if (!absent(error)) throw error
+      // The daemon this CLI started could not load or open its session.
+      const failed = startedAt !== undefined && readText(errorFileOf(pkg))
+      if (failed && statSync(errorFileOf(pkg)).mtimeMs >= startedAt) {
+        rmSync(errorFileOf(pkg), { force: true })
+        return { exitCode: 1, stdout: ``, stderr: failed }
+      }
+      // A daemon this CLI started has the grace period to listen.
+      if (startedAt === undefined || Date.now() - startedAt > GRACE_MS * 2) {
+        startDaemon(pkg)
+        startedAt = Date.now()
+      }
     }
+    if (reply?.died) {
+      deaths += 1
+      if (deaths > 2)
+        throw new Error(
+          `the package's daemon exited during the check ${deaths} times; its log is ${join(stateDirOf(pkg), `daemon.log`)}`,
+        )
+    }
+    if (reply && !reply.closing && !reply.restart && !reply.died) return reply
+    if (reply) startedAt = undefined
+    if (Date.now() - began > WAIT_MS)
+      throw new Error(`the package's daemon did not answer within 60 s`)
     await sleep(100)
   }
 }
@@ -125,9 +148,9 @@ export async function stopDaemon(pkg) {
   for (let waited = 0; waited <= WAIT_MS; waited += 100) {
     try {
       const reply = await send(pkg, { stop: true })
-      if (!reply.closing) return
+      if (!reply.closing && !reply.died) return
     } catch (error) {
-      if (![`ENOENT`, `ECONNREFUSED`].includes(error.code)) throw error
+      if (!absent(error)) throw error
       return
     }
     await sleep(100)
@@ -206,10 +229,13 @@ async function serve(pkg) {
   // A dead daemon's socket; this daemon holds the lock.
   rmSync(socket, { force: true })
   let closing = false
-  // Why the session could not open; every waiting request hears it.
+  // Why the daemon could not load or open its session.
   let failure
   let session
   let store
+  let code
+  let codeIdentity
+  let parseArgs
   let idle
   let watch
   // Requests wait until the session is open.
@@ -217,6 +243,18 @@ async function serve(pkg) {
   let queue = new Promise((resolvePromise) => {
     opened = resolvePromise
   })
+  // Stops serving: the requests already queued run first, each hearing
+  // `closing`, then the daemon shuts down.
+  const close = () => {
+    closing = true
+    queue = queue.then(() => shutdown())
+  }
+  const closeAfter = (ms) => {
+    clearTimeout(idle)
+    idle = setTimeout(close, ms)
+  }
+  const reply = (connection, value) =>
+    connection.end(`${JSON.stringify(value)}\n`)
   const server = createServer((connection) => {
     let request = ``
     connection.on(`data`, (chunk) => {
@@ -224,10 +262,7 @@ async function serve(pkg) {
       if (!request.includes(`\n`)) return
       const message = JSON.parse(request)
       // A closing daemon serves nothing more; the caller waits for the next.
-      if (closing) {
-        connection.end(`${JSON.stringify({ closing: true })}\n`)
-        return
-      }
+      if (closing) return reply(connection, { closing: true })
       if (message.stop) {
         closing = true
         queue = queue.then(() => shutdown(connection))
@@ -235,22 +270,14 @@ async function serve(pkg) {
       }
       queue = queue.then(async () => {
         clearTimeout(idle)
-        if (failure) {
-          connection.end(
-            `${JSON.stringify({ exitCode: 1, stdout: ``, stderr: `${failure?.stack ?? failure}\n` })}\n`,
-          )
-          // Keep answering while requests come; release once they stop.
-          clearTimeout(idle)
-          idle = setTimeout(() => {
-            closing = true
-            queue = queue.then(() => shutdown())
-          }, 2000)
-          return
-        }
-        if (closing) {
-          connection.end(`${JSON.stringify({ closing: true })}\n`)
-          return
-        }
+        // A request queued before the session failed hears why.
+        if (failure)
+          return reply(connection, {
+            exitCode: 1,
+            stdout: ``,
+            stderr: `${failure.stack ?? failure}\n`,
+          })
+        if (closing) return reply(connection, { closing: true })
         // A daemon whose code changed declines this check and closes after
         // the requests already queued, each of which hears `closing`.
         if (codeIdentity() !== code) {
@@ -272,19 +299,14 @@ async function serve(pkg) {
           stderr.push(`${error?.stack ?? error}\n`)
           exitCode = 1
         }
-        connection.end(
-          `${JSON.stringify({ exitCode, stdout, stderr: stderr.join(``) })}\n`,
-        )
-        idle = setTimeout(() => {
-          closing = true
-          queue = queue.then(() => shutdown())
-        }, idleMs)
+        reply(connection, { exitCode, stdout, stderr: stderr.join(``) })
+        closeAfter(idleMs)
       })
     })
   })
   // Close the contexts and flush the evidence, then release the socket and
   // the lock (when they are still this daemon's), then answer.
-  async function shutdown(connection, reply = { exitCode: 0 }) {
+  async function shutdown(connection, value = { exitCode: 0 }) {
     closing = true
     clearInterval(watch)
     await session?.close()
@@ -295,44 +317,40 @@ async function serve(pkg) {
     }
     server.close()
     if (connection)
-      await new Promise((r) => connection.end(`${JSON.stringify(reply)}\n`, r))
+      await new Promise((r) => connection.end(`${JSON.stringify(value)}\n`, r))
     process.exit(0)
   }
   // Listening proves that this daemon holds the lock, so it listens before
   // it loads anything; checks wait for the session.
   await new Promise((resolvePromise) => server.listen(socket, resolvePromise))
-  const { codeIdentity, openSession } = await import(`./check.mjs`)
-  // The CLI's code as this process loaded it. A process cannot reload its
-  // modules, so a daemon whose code changed must not run another check.
-  const code = codeIdentity()
-  const { diskStore } = await import(`./evidence.mjs`)
-  const { parseArgs } = await import(`./args.mjs`)
   try {
+    const check = await import(`./check.mjs`)
+    // The CLI's code as this process loaded it. A process cannot reload its
+    // modules, so a daemon whose code changed must not run another check.
+    codeIdentity = check.codeIdentity
+    code = codeIdentity()
+    ;({ parseArgs } = await import(`./args.mjs`))
+    const { diskStore } = await import(`./evidence.mjs`)
     store = await diskStore(stateDirOf(pkg))
-    session = await openSession(pkg)
+    session = await check.openSession(pkg)
   } catch (error) {
-    // Every request hears why, the ones that started this daemon included,
-    // until none has come for 2 s (at most 10 s); then it releases the lock.
+    // The requests already queued hear why, and the CLI that started this
+    // daemon reads it from the error file, written before the lock is
+    // released; then the daemon closes, so the next request starts a fresh
+    // one rather than hearing this error again.
     failure = error
+    writeFileSync(errorFileOf(pkg), `${error?.stack ?? error}\n`)
     opened()
-    idle = setTimeout(() => {
-      closing = true
-      queue = queue.then(() => shutdown())
-    }, 10_000)
+    close()
     return
   }
+  rmSync(errorFileOf(pkg), { force: true })
   opened()
   // A daemon whose lock another daemon took serves no more.
   watch = setInterval(() => {
-    if (!closing && readText(lock) !== token) {
-      closing = true
-      queue = queue.then(() => shutdown())
-    }
+    if (!closing && readText(lock) !== token) close()
   }, 2000)
-  idle = setTimeout(() => {
-    closing = true
-    queue = queue.then(() => shutdown())
-  }, idleMs)
+  closeAfter(idleMs)
 }
 
 if (import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {

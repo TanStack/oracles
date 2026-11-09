@@ -158,7 +158,11 @@
  *    once after the CLI's code changed, a check after a native addon was
  *    installed into the dependency tree (the pool follows it), and a
  *    check whose daemon cannot open its session (it reports the cold
- *    run's error) each report
+ *    run's error), a check whose daemon dies during it (the CLI starts a
+ *    fresh one), a check sent to a daemon killed before it reads (the
+ *    connection resets), a check right after a session's failure was fixed
+ *    (a fresh daemon, not the old error), and a check after a prebuilt
+ *    addon was added into an existing build/Release each report
  *    what the cold run reports; once `--stop-daemon` returns, no daemon
  *    process serves the package.
  * 10. **The runner runs the package as Vitest does.** From any install path
@@ -238,7 +242,11 @@
  * the atomic claim (two daemons serve until the loser sees its lock taken,
  * within 2 s), and a stop that releases the lock before it closes the
  * store (each check has already flushed its evidence); their mutants
- * survive. So does a restart that ends queued requests unanswered: the
+ * survive. A reset connection (ECONNRESET) is generated, but macOS
+ * reports it as an end of stream, so its read as a dying daemon is fixed by
+ * inspection; so is a daemon whose CLI modules fail to load (the CLI
+ * imports them first and fails the same way). A package installed into an
+ * ancestor node_modules is not generated. So does a restart that ends queued requests unanswered: the
  * CLI reads an unanswered connection as `closing` and retries. A daemon
  * stuck closing (the CLI gives up after 60 s) and a stop that waits for
  * the close are not generated. Cut-off
@@ -584,8 +592,10 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       sources: sourceArgument(plan, `${dir}.link`),
       budget: plan.budget,
     }
-    if (!cold.has(key)) cold.set(key, runCli(dir, files, how))
-    const coldRun = cold.get(key)
+    // The daemon's check runs first: a daemon's state must not depend on a
+    // cold run between its checks (a session fixed while requests keep
+    // coming, `fixSession`).
+    const pending = daemonChecks(step, files, how)
     // The first check may be two at once, which must reach one daemon, and
     // so are the two after a crash.
     const twice =
@@ -597,7 +607,9 @@ async function incremental(dir, plan, cli, copy, observe, states) {
           { ...how, daemon: true },
           { ...how, daemon: true, outName: `out-daemon-2` },
         ])
-      : [runCli(dir, files, { ...how, daemon: true })]
+      : await pending
+    if (!cold.has(key)) cold.set(key, runCli(dir, files, how))
+    const coldRun = cold.get(key)
     for (const [i, run] of [daemon, ...others].entries())
       observe(`incremental`, {
         step: i === 0 ? step : `${step} (a second check at once)`,
@@ -627,6 +639,9 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       crashAtOnce: `two checks at once after a crash`,
       stopAtOnce: `a check during a stop`,
       cliAtOnce: `two checks at once after a code change`,
+      dieMidCheck: `a check whose daemon died during it`,
+      resetBeforeRead: `a check whose connection was reset`,
+      fixSession: `a check after the session's failure was fixed`,
     }[step]
     if (after && [daemon, ...others].every((run) => run.reported))
       states.add(after)
@@ -668,6 +683,40 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       [join(copy, `index.mjs`), `--stop-daemon`, `--package`, dir],
       { cwd: repo, encoding: `utf8`, timeout: 60_000, env: cleanEnv() },
     )
+  // One check through the daemon, with what the step does to the daemon
+  // meanwhile: killed once the check has begun (`dieMidCheck`), or stopped
+  // and killed before it reads the request, which resets the connection
+  // (`resetBeforeRead`).
+  async function daemonChecks(step, files, how) {
+    if (step !== `dieMidCheck` && step !== `resetBeforeRead`)
+      return [runCli(dir, files, { ...how, daemon: true })]
+    // A daemon that this check's CLI starts itself is the one that dies.
+    if (step === `dieMidCheck`) stop()
+    const [pid] = daemonsOf(dir)
+    if (step === `resetBeforeRead` && pid) process.kill(pid, `SIGSTOP`)
+    const running = runClisAtOnce(dir, files, [{ ...how, daemon: true }])
+    if (step === `resetBeforeRead`) {
+      await new Promise((r) => setTimeout(r, 500))
+      if (pid) process.kill(pid, `SIGKILL`)
+    } else {
+      // Mid-check: the daemon has written this check's state file. A check
+      // that ends first (a refusal runs nothing) leaves its daemon alone.
+      const started = join(dir, `out-daemon`, `state.json`)
+      let finished = false
+      running.then(() => {
+        finished = true
+      })
+      for (let waited = 0; !finished && waited < 60_000; waited += 50) {
+        const [running] = daemonsOf(dir)
+        if (running && existsSync(started)) {
+          process.kill(running, `SIGKILL`)
+          break
+        }
+        await new Promise((r) => setTimeout(r, 50))
+      }
+    }
+    return running
+  }
   // Kills the package's daemons as a crash or a power loss would, leaving
   // what they wrote; returns their process ids.
   const crash = async () => {
@@ -1401,8 +1450,10 @@ const incrementalStates = [
   `evidence reused after a daemon restart`,
   `a revert of a file edit reran nothing`,
   ...edits
-    .filter((edit) => !daemonEvents.has(edit))
+    .filter((edit) => !daemonEvents.has(edit) && edit !== `fixSession`)
     .map((edit) => `edit ${edit} changed the cold result`),
+  `a check whose daemon died during it`,
+  `a check whose connection was reset`,
   `a check after a daemon crash`,
   `a check after a reboot`,
   `a check after the daemon's process id was reused`,
@@ -1511,6 +1562,8 @@ const required = [
   `refused projects`,
   `refused outsideSource`,
   `refused noTypescript`,
+  `edit fixSession changed the cold result`,
+  `a check after the session's failure was fixed`,
   ...incrementalStates,
 ]
 const faults = [
@@ -1531,6 +1584,8 @@ const separate = [
   `stale authored mutant`,
   `ambiguous authored mutant`,
   ...faults.map((fault) => `refused ${fault}`),
+  `edit fixSession changed the cold result`,
+  `a check after the session's failure was fixed`,
   ...incrementalStates,
 ]
 const witnessed = required.filter((s) => !separate.includes(s))
@@ -1692,6 +1747,7 @@ oracleProperty({
           // a path with a space and `#`.
           concurrentStart: true,
           cliPath: `spaced`,
+          native: `none`,
           steps: [
             `helper`,
             `seed`,
@@ -1707,12 +1763,20 @@ oracleProperty({
             `cli`,
             `cliAtOnce`,
             `restart`,
+            // The daemon this check's CLI starts dies during the check.
+            `dieMidCheck`,
             `crash`,
             `reboot`,
             `reusedPid`,
             `crashAtOnce`,
             `stopAtOnce`,
             `addAddon`,
+            `test`,
+            // The only addon is one built into an existing build/Release,
+            // and a daemon with a cached pool sees it.
+            `addAddon`,
+            `addRelease`,
+            `resetBeforeRead`,
           ],
         }),
       },
@@ -1773,12 +1837,22 @@ oracleProperty({
       },
       ...faults.map((fault) => ({
         name: `a declaration fault: ${fault}`,
-        enters: [`refused ${fault}`],
+        enters: [
+          `refused ${fault}`,
+          ...(fault === `noTypescript`
+            ? [
+                `edit fixSession changed the cold result`,
+                `a check after the session's failure was fixed`,
+              ]
+            : []),
+        ],
         // A session that cannot open is checked through the daemon too.
         build: (generated) => ({
           ...generated,
           fault,
-          ...(fault === `noTypescript` ? { steps: [`restart`] } : {}),
+          ...(fault === `noTypescript`
+            ? { steps: [`restart`, `fixSession`] }
+            : {}),
         }),
       })),
     ],

@@ -116,7 +116,8 @@ export function isOutside(path) {
  * nearly every package to child processes.
  */
 // The last decision for each package, with the modification times of what
-// it read: each package's directory, manifest, and node_modules. The daemon
+// it read: each manifest and node_modules it looked through, and each
+// dependency's directory, build/Release, and prebuilds. The daemon
 // parses every request's arguments; while those times are unchanged, the
 // walk's answer stands, and an install or a new addon file changes one.
 const pools = new Map()
@@ -144,10 +145,26 @@ function walkPool(pkg) {
     const dir = queue[next]
     if (seen.has(dir)) continue
     seen.add(dir)
+    // What decides the walk here: the manifest and node_modules, and, for a
+    // dependency, the directories an addon would appear in. The package's
+    // own directory is left out: a check writes its harness and test copies
+    // there.
+    const prebuilds = join(dir, `prebuilds`)
     for (const path of [
-      dir,
       join(dir, `package.json`),
       join(dir, `node_modules`),
+      ...(dir === pkg
+        ? []
+        : [
+            dir,
+            join(dir, `build`, `Release`),
+            prebuilds,
+            ...(existsSync(prebuilds)
+              ? readdirSync(prebuilds).map((platform) =>
+                  join(prebuilds, platform),
+                )
+              : []),
+          ]),
     ])
       stamps.push([path, stampOf(path)])
     if (dir !== pkg && isAddon(dir)) return decided(`forks`)
@@ -162,7 +179,7 @@ function walkPool(pkg) {
       ...manifest.peerDependencies,
       ...(dir === pkg ? manifest.devDependencies : {}),
     })) {
-      const found = locate(dir, name)
+      const found = locate(dir, name, stamps)
       if (found) queue.push(found)
     }
   }
@@ -170,8 +187,10 @@ function walkPool(pkg) {
 }
 
 /** Where Node finds package `name` from directory `from`, by its real path. */
-function locate(from, name) {
+function locate(from, name, stamps) {
   for (let dir = from; ; dir = dirname(dir)) {
+    // A package installed later into any node_modules looked through.
+    stamps.push([join(dir, `node_modules`), stampOf(join(dir, `node_modules`))])
     const candidate = join(dir, `node_modules`, name)
     if (existsSync(join(candidate, `package.json`)))
       return realpathSync(candidate)
