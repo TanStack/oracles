@@ -68,9 +68,11 @@
  *   `reached(history, trace, expected)` instead. Each campaign prints how many
  *   histories entered each declared state, including none (ORC-015).
  * - A **state probe** binds a declared state, written `{ name, probe }` in
- *   `states` or `measured`, to a production probe. Production calls
- *   `process.env.NODE_ENV !== 'production' && globalThis.__oracleProbe?.("package#name", condition)`
- *   where it decides whether it enters that state; `condition` is truthy when
+ *   `states` or `measured`, to a production probe. The function where
+ *   production decides whether it enters that state guards the probe with
+ *   `const probing = typeof process === 'undefined' ? false : process.env.NODE_ENV !== 'production'`
+ *   and calls `probing && globalThis.__oracleProbe?.('package#name', condition)`
+ *   (maintainer decision, 2026-11-08); `condition` is truthy when
  *   production enters it. The framework collects the calls each history makes
  *   inside that history's async context, and never shows them to the model or
  *   the check. Two laws read them. A probe is **reached** in a history when

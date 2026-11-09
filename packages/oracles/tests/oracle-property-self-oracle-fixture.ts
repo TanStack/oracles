@@ -321,6 +321,15 @@ const probeCondition = (
   }
 }
 
+/** A `late` spec's probe call, which arrives after its history ended. */
+function lateProbe() {
+  const probing =
+    typeof process === `undefined`
+      ? false
+      : process.env.NODE_ENV !== `production`
+  probing && globalThis.__oracleProbe?.(`synthetic#saw-0`, true)
+}
+
 /**
  * The synthetic driver. `mutant` records a 3 in place of the first item, the
  * wrong answer a driver calibration supplies.
@@ -338,21 +347,17 @@ function syntheticDriver(spec: SyntheticSpec, mutant = false) {
         `${JSON.stringify({ id: spec.id, test: expect.getState().currentTestName ?? ``, history, route: route ?? null })}\n`,
       )
     if (spec.slow) await new Promise((resolve) => setTimeout(resolve, 300))
+    // The probe form production uses, guarded in the probing function.
+    const probing =
+      typeof process === `undefined`
+        ? false
+        : process.env.NODE_ENV !== `production`
     const condition = probeCondition(spec, history)
     if (condition !== undefined)
-      process.env.NODE_ENV !== `production` &&
-        (
-          globalThis as {
-            __oracleProbe?: (name: string, condition: unknown) => void
-          }
-        ).__oracleProbe?.(`synthetic#saw-0`, condition)
+      probing && globalThis.__oracleProbe?.(`synthetic#saw-0`, condition)
     if (spec.noisyProbe)
-      process.env.NODE_ENV !== `production` &&
-        (
-          globalThis as {
-            __oracleProbe?: (name: string, condition: unknown) => void
-          }
-        ).__oracleProbe?.(`synthetic#noise`, noise++ % 2 === 0)
+      probing &&
+        globalThis.__oracleProbe?.(`synthetic#noise`, noise++ % 2 === 0)
     if (spec.reachVia === `observe`)
       for (const state of reachedStates(spec)(history)) observe(`reach`, state)
     // A real timer first: a clock that an earlier history released must have
@@ -386,17 +391,7 @@ function syntheticDriver(spec: SyntheticSpec, mutant = false) {
       clock?.release()
       // Production work the driver does not await, calling its probe after
       // its history, whether the driver returns or throws.
-      if (spec.probe === `late` && history.includes(0))
-        setTimeout(
-          () =>
-            process.env.NODE_ENV !== `production` &&
-            (
-              globalThis as {
-                __oracleProbe?: (name: string, condition: unknown) => void
-              }
-            ).__oracleProbe?.(`synthetic#saw-0`, true),
-          0,
-        )
+      if (spec.probe === `late` && history.includes(0)) setTimeout(lateProbe, 0)
     }
     // Last, so a comparison of only the first observations misses it.
     if (spec.nondeterministic) observe(`nonce`, nonce++)
