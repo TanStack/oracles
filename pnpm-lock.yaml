@@ -56,6 +56,9 @@ importers:
 
   packages/oracles:
     devDependencies:
+      '@fast-check/vitest':
+        specifier: ^0.5.0
+        version: 0.5.0(vitest@4.1.12(@types/node@25.9.9)(vite@7.3.7(@types/node@25.9.9)(yaml@2.9.1)))
       fast-check:
         specifier: ^4.10.2
         version: 4.10.2
@@ -346,6 +349,11 @@ packages:
   '@eslint/plugin-kit@0.4.1':
     resolution: {integrity: sha512-43/qtrDUokr7LJqoF2c3+RInu/t4zfrpYdoSDfYyhg52rwLV6TnOvdG4fXm7IkSB3wErkcmJS9iEhjVtOSEjjA==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+
+  '@fast-check/vitest@0.5.0':
+    resolution: {integrity: sha512-Kgbj2smuq1P4OhGKuPATs5i2fAxNmGbJ/zSmTrzWhQSLUrHREbKWgv9WGbNUOXcx77q6joLVMmTygyXuwP2Bog==}
+    peerDependencies:
+      vitest: ^4.1.0 || ^5.0.0
 
   '@humanfs/core@0.19.2':
     resolution: {integrity: sha512-UhXNm+CFMWcbChXywFwkmhqjs3PRCmcSa/hfBgLIb7oQ5HNb1wS0icWsGtSAUNgefHeI+eBrA8I1fxmbHsGdvA==}
@@ -2502,6 +2510,11 @@ snapshots:
     dependencies:
       '@eslint/core': 0.17.0
       levn: 0.4.1
+
+  '@fast-check/vitest@0.5.0(vitest@4.1.12(@types/node@25.9.9)(vite@7.3.7(@types/node@25.9.9)(yaml@2.9.1)))':
+    dependencies:
+      fast-check: 4.10.2
+      vitest: 4.1.12(@types/node@25.9.9)(vite@7.3.7(@types/node@25.9.9)(yaml@2.9.1))
 
   '@humanfs/core@0.19.2':
     dependencies:
