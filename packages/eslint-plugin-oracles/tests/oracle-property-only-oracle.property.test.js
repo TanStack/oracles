@@ -2,15 +2,18 @@
  * # `oracle/oracle-property-only`: an oracle file's campaigns run through `oracleProperty`
  *
  * Law: in an oracle file, a generated-history campaign runs only through
- * `oracleProperty`. The rule reports a raw campaign, which is `fc.assert` or
- * `fc.check` on a fast-check binding, or a `.prop` registration of
- * `@fast-check/vitest`, and it reports an import of a legacy reach or campaign
- * API, `createOracleReach` or `runOracleCampaign`, under any module. A file
- * that the project lists in `settings.oracles.legacyCampaigns` with a reason
- * keeps its raw campaigns and imports until it migrates. An entry without a
- * reason exempts nothing and is reported. An entry whose file has no legacy use
- * is stale and reported, so the baseline only shrinks. A framework
- * implementation module is exempt from every report.
+ * `oracleProperty`. The rule reports a raw campaign: `fc.assert` or `fc.check`
+ * on a fast-check binding, from `fast-check` or from `@fast-check/vitest`, or a
+ * `.prop` registration of a test root. It also reports an import of a legacy
+ * reach or campaign API, `createOracleReach` or `runOracleCampaign`, under any
+ * module. A file that the project lists in `settings.oracles.legacyCampaigns`
+ * with a reason keeps its raw campaigns and imports until it migrates. An entry
+ * without a reason exempts nothing and is reported. An entry whose file has no
+ * legacy use is reported as stale. A framework implementation module is exempt
+ * from every report. An entry the rule cannot judge (malformed, or naming a
+ * file outside the oracle-file glob or an implementation module) is a
+ * configuration error: the rule throws when it reads the settings, so the run
+ * stops with the message, and nothing else is reported.
  *
  * Authority: the maintainer decision of 2026-11-09 that `oracleProperty` is the
  * only campaign API in `@tanstack/oracles`. The header of
@@ -26,27 +29,30 @@
  * fast-check use that runs no campaign, a text, or a binding that is not
  * fast-check, and it must stay silent.
  *
- * Model: the expected reports follow from the program alone. An
- * implementation module reports nothing. A reasonless entry reports
- * `baselineWithoutReason`. A matching entry with no legacy use reports
- * `staleBaseline`. A file with a reasoned entry exempts its raw uses and
- * imports; any other setting reports each use at its line.
+ * Model: the expected outcome follows from the program alone. A bad entry is a
+ * configuration error, whatever the file, and the expected outcome names the
+ * message's phrase. Otherwise an implementation module reports nothing. A
+ * reasonless entry reports `baselineWithoutReason`. A matching entry with no
+ * legacy use reports `staleBaseline`. A file with a reasoned entry exempts its
+ * raw uses and imports; any other setting reports each use at its line.
  *
  * Driver: renders the program and lints it with the plugin's `recommended`
- * config, so the rule must be enabled there. Only the rule's reports are kept.
+ * config, so the rule must be enabled there. The outcome is the rule's reports,
+ * or the message of the error that the run threw.
  *
- * Check: the sorted reports (line and message) equal the model's, exactly.
+ * Check: the outcome is the configuration error the model owes (its message
+ * contains the phrase), or else the sorted reports equal the model's, exactly.
  *
  * Limits: an alias of a campaign (`const run = fc.assert`), a campaign held
  * in a helper, a fast-check import through a re-export, and `import()` of a
- * legacy module are not generated. The rule reads only the forms above. The
- * baseline's missing-file case is not reported, because the rule runs only on
- * files that exist to be linted.
+ * legacy module are not generated. The rule reads only the forms above. A
+ * baseline entry for a deleted or renamed file is not reported, because no
+ * lint run sees that file.
  */
 import tsParser from '@typescript-eslint/parser'
 import { Linter } from 'eslint'
 import fc from 'fast-check'
-import { differs, oracleProperty, pass } from '@tanstack/oracles'
+import { differs, oracleProperty, pass, violation } from '@tanstack/oracles'
 import plugin from '../src/index.js'
 
 const RULE = `oracle/oracle-property-only`
@@ -91,9 +97,16 @@ const program = fc.record({
     `reasonless`,
     `otherFile`,
   ),
-  // An entry that the rule can never judge: a file outside the oracle glob, or
-  // a framework implementation module. The file itself is unaffected.
-  invalid: fc.constantFrom(`none`, `none`, `outside`, `implementation`),
+  // The configuration entry that the rule must refuse, or none.
+  entry: fc.constantFrom(
+    `none`,
+    `none`,
+    `outsideGlob`,
+    `implementationModule`,
+    `bareString`,
+    `fileNotString`,
+    `reasonNotString`,
+  ),
   sites: fc.array(site, { minLength: 1, maxLength: 6 }),
 })
 
@@ -113,17 +126,34 @@ const usesOf = (sites) =>
 const entryMatches = (setting) =>
   setting === `reasoned` || setting === `reasonless`
 
-function predictReports({ setting, invalid, sites }) {
+function predictReports({ setting, sites }) {
   if (setting === `implementation`) return []
   const uses = usesOf(sites)
   const reports = []
-  if (invalid !== `none`) reports.push({ line: 1, messageId: `invalidEntry` })
   if (setting === `reasonless`)
     reports.push({ line: 1, messageId: `baselineWithoutReason` })
   if (entryMatches(setting) && uses.length === 0)
     reports.push({ line: 1, messageId: `staleBaseline` })
   if (setting !== `reasoned`) reports.push(...uses)
   return reports
+}
+
+// The phrase of the configuration error that each bad entry owes. A bad entry
+// is refused whatever the file, so it is judged before the implementation case.
+const REFUSED = {
+  outsideGlob: `is not an oracle file`,
+  implementationModule: `is a framework implementation module`,
+  bareString: `is malformed`,
+  fileNotString: `is malformed`,
+  reasonNotString: `is malformed`,
+}
+
+/** The outcome the model owes: a configuration error, or the reports. */
+function predictOutcome(plan) {
+  const phrase = REFUSED[plan.entry]
+  return phrase === undefined
+    ? { reports: predictReports(plan) }
+    : { configuration: phrase }
 }
 
 // The states a history enters, read from the program and the model's answer.
@@ -134,7 +164,9 @@ const STATES = {
   exempt: `a reasoned baseline exempts its uses`,
   reasonless: `a reasonless baseline is reported`,
   stale: `a stale baseline is reported`,
-  invalid: `an entry the rule cannot judge is reported`,
+  refused: `an entry outside the oracle glob is a configuration error`,
+  malformed: `a malformed entry is a configuration error`,
+  vitest: `a campaign through @fast-check/vitest is reported`,
 }
 const MEASURED = {
   implementation: `an implementation module is exempt`,
@@ -142,18 +174,30 @@ const MEASURED = {
   quiet: `a quiet site is not reported`,
 }
 
-function reachedStates({ setting, sites }, _trace, expected) {
-  const messages = new Set(expected.map((report) => report.messageId))
+function reachedStates(plan, _trace, expected) {
+  const { setting, sites, alias } = plan
+  const reports = expected.reports ?? []
+  const messages = new Set(reports.map((report) => report.messageId))
   return [
     ...(messages.has(`rawCampaign`) ? [STATES.campaign] : []),
     ...(messages.has(`rawProperty`) ? [STATES.property] : []),
-    ...(messages.has(`invalidEntry`) ? [STATES.invalid] : []),
     ...(messages.has(`legacyImport`) ? [STATES.legacy] : []),
     ...(setting === `reasoned` && usesOf(sites).length > 0
       ? [STATES.exempt]
       : []),
     ...(messages.has(`baselineWithoutReason`) ? [STATES.reasonless] : []),
     ...(messages.has(`staleBaseline`) ? [STATES.stale] : []),
+    ...(plan.entry === `outsideGlob` || plan.entry === `implementationModule`
+      ? [STATES.refused]
+      : []),
+    ...(plan.entry === `bareString` ||
+    plan.entry === `fileNotString` ||
+    plan.entry === `reasonNotString`
+      ? [STATES.malformed]
+      : []),
+    ...(alias === `vitest` && messages.has(`rawCampaign`)
+      ? [STATES.vitest]
+      : []),
     ...(setting === `implementation` ? [MEASURED.implementation] : []),
     ...(setting === `otherFile` ? [MEASURED.otherFile] : []),
     ...(sites.some((item) => item.kind === `quiet`) ? [MEASURED.quiet] : []),
@@ -207,19 +251,30 @@ function renderProgram({ alias, sites }) {
   ].join(`\n`)
 }
 
-// The entries that `invalid` adds: a file outside the oracle glob, and a
-// framework implementation module.
-const invalidEntryFor = {
+// The configuration entries that each bad-entry kind adds to the file's own.
+const entryFor = {
   none: { legacyCampaigns: [], implementationModules: [] },
-  outside: {
+  outsideGlob: {
     legacyCampaigns: [{ file: `packages/example/src/app.ts`, reason: `x` }],
     implementationModules: [],
   },
-  implementation: {
+  implementationModule: {
     legacyCampaigns: [
       { file: `packages/oracles/src/oracle-config.ts`, reason: `x` },
     ],
     implementationModules: [`packages/oracles/src/oracle-config.ts`],
+  },
+  bareString: {
+    legacyCampaigns: [`tests/a-oracle.test.js`],
+    implementationModules: [],
+  },
+  fileNotString: {
+    legacyCampaigns: [{ reason: `x` }],
+    implementationModules: [],
+  },
+  reasonNotString: {
+    legacyCampaigns: [{ file: FILE, reason: 3 }],
+    implementationModules: [],
   },
 }
 
@@ -238,9 +293,10 @@ const settingsFor = {
 
 const linter = new Linter({ configType: `flat` })
 
-function lintRendered(code, { setting, invalid }) {
-  const extra = invalidEntryFor[invalid]
+/** The rule's reports for a rendered program, or the error the run threw. */
+function lintRendered(code, { setting, entry }) {
   const own = settingsFor[setting]
+  const extra = entryFor[entry]
   const oracles = {
     ...own,
     implementationModules: [
@@ -276,13 +332,23 @@ const sortedReports = (reports) =>
   [...reports].sort((a, b) => (reportKey(a) < reportKey(b) ? -1 : 1))
 
 function check(plan, observations, expected) {
-  const observed = observations.find((o) => o.checkpoint === `reports`)
+  const observed = observations.find((o) => o.checkpoint === `outcome`).value
+  if (expected.configuration !== undefined) {
+    return observed.configuration?.includes(expected.configuration)
+      ? pass
+      : violation(
+          `outcome`,
+          `the rule should refuse the entry with a configuration error that says "${expected.configuration}"`,
+          `outcome`,
+          { actual: observed, expected },
+        )
+  }
   return (
     differs(
-      `reports`,
-      `reports`,
-      sortedReports(observed.value),
-      sortedReports(expected),
+      `outcome`,
+      `outcome`,
+      sortedReports(observed.reports ?? []),
+      sortedReports(expected.reports),
     ) ?? pass
   )
 }
@@ -290,7 +356,7 @@ function check(plan, observations, expected) {
 oracleProperty({
   id: `lint.oracle-property-only`,
   law: {
-    statement: `In an oracle file, a raw fast-check campaign (fc.assert, fc.check, or a .prop registration) and an import of createOracleReach or runOracleCampaign are reported, except in a file whose reasoned legacyCampaigns entry still matches a legacy use; a reasonless entry and a stale entry are reported; an implementation module is exempt.`,
+    statement: `In an oracle file, a raw fast-check campaign (fc.assert, fc.check, or a .prop registration, through fast-check or @fast-check/vitest) and an import of createOracleReach or runOracleCampaign are reported, except in a file whose reasoned legacyCampaigns entry still matches a legacy use; a reasonless entry and a stale entry are reported; an implementation module is exempt; a malformed entry, or an entry outside the oracle glob or naming an implementation module, is a configuration error that stops the run.`,
     authority: `Maintainer decision (2026-11-09): oracleProperty is the only campaign API in @tanstack/oracles. Its header in packages/oracles/src/oracle-property.ts: constructed histories make a state's reach required, and a raw campaign has none.`,
     limits: `Aliased campaigns, a campaign held in a helper, re-exported fast-check bindings, and import() of a legacy module are not generated. A stale entry for a deleted file is not reported, since no lint run sees that file.`,
     owner: `eslint-plugin-oracles lint rules`,
@@ -303,12 +369,35 @@ oracleProperty({
     measured: Object.values(MEASURED),
     constructed: [
       {
-        name: `an entry the rule cannot judge`,
-        enters: [STATES.invalid],
+        name: `an entry outside the oracle glob`,
+        enters: [STATES.refused],
         build: (generated) => ({
           ...generated,
           setting: `none`,
-          invalid: `outside`,
+          entry: `outsideGlob`,
+        }),
+      },
+      {
+        name: `a malformed entry`,
+        enters: [STATES.malformed],
+        build: (generated) => ({
+          ...generated,
+          setting: `none`,
+          entry: `bareString`,
+        }),
+      },
+      {
+        name: `a campaign through @fast-check/vitest`,
+        enters: [STATES.vitest],
+        build: (generated) => ({
+          ...generated,
+          setting: `none`,
+          entry: `none`,
+          alias: `vitest`,
+          sites: [
+            { kind: `campaign`, method: `assert`, via: `alias` },
+            ...generated.sites.slice(1),
+          ],
         }),
       },
       {
@@ -317,6 +406,7 @@ oracleProperty({
         build: (generated) => ({
           ...generated,
           setting: `none`,
+          entry: `none`,
           sites: [
             { kind: `campaign`, method: `assert`, via: `alias` },
             ...generated.sites.slice(1),
@@ -329,6 +419,7 @@ oracleProperty({
         build: (generated) => ({
           ...generated,
           setting: `none`,
+          entry: `none`,
           sites: [
             { kind: `prop`, root: `fcTest` },
             ...generated.sites.slice(1),
@@ -341,6 +432,7 @@ oracleProperty({
         build: (generated) => ({
           ...generated,
           setting: `none`,
+          entry: `none`,
           sites: [
             { kind: `legacyImport`, name: `runOracleCampaign` },
             ...generated.sites.slice(1),
@@ -353,6 +445,7 @@ oracleProperty({
         build: (generated) => ({
           ...generated,
           setting: `reasoned`,
+          entry: `none`,
           sites: [
             { kind: `campaign`, method: `check`, via: `fc` },
             ...generated.sites.slice(1),
@@ -362,7 +455,11 @@ oracleProperty({
       {
         name: `a reasonless baseline`,
         enters: [STATES.reasonless],
-        build: (generated) => ({ ...generated, setting: `reasonless` }),
+        build: (generated) => ({
+          ...generated,
+          setting: `reasonless`,
+          entry: `none`,
+        }),
       },
       {
         name: `a reasoned baseline with no legacy use`,
@@ -370,6 +467,7 @@ oracleProperty({
         build: (generated) => ({
           ...generated,
           setting: `reasoned`,
+          entry: `none`,
           sites: [
             { kind: `quiet`, variant: `foreign` },
             ...generated.sites
@@ -381,20 +479,39 @@ oracleProperty({
     ],
   },
   reached: reachedStates,
-  model: predictReports,
+  model: predictOutcome,
   driver: (plan, observe) => {
-    observe(`reports`, lintRendered(renderProgram(plan), plan))
+    try {
+      observe(`outcome`, { reports: lintRendered(renderProgram(plan), plan) })
+    } catch (error) {
+      // Only a bad entry may stop the run. Any other error is a driver error.
+      if (plan.entry === `none`) throw error
+      observe(`outcome`, { configuration: String(error.message) })
+    }
   },
   check,
   calibrations: [
     {
       name: `a report dropped from the rule's output`,
-      law: `reports`,
+      law: `outcome`,
       corrupt: (trace) => {
-        const observed = trace.find((o) => o.checkpoint === `reports`)
-        if (observed.value.length === 0) return undefined
+        const observed = trace.find((o) => o.checkpoint === `outcome`)
+        if (!observed.value.reports?.length) return undefined
         return trace.map((o) =>
-          o.checkpoint === `reports` ? { ...o, value: o.value.slice(1) } : o,
+          o.checkpoint === `outcome`
+            ? { ...o, value: { reports: o.value.reports.slice(1) } }
+            : o,
+        )
+      },
+    },
+    {
+      name: `a configuration error hidden as no reports`,
+      law: `outcome`,
+      corrupt: (trace) => {
+        const observed = trace.find((o) => o.checkpoint === `outcome`)
+        if (observed.value.configuration === undefined) return undefined
+        return trace.map((o) =>
+          o.checkpoint === `outcome` ? { ...o, value: { reports: [] } } : o,
         )
       },
     },

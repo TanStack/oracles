@@ -29,10 +29,12 @@
  * Entry checks. An entry without a reason exempts nothing and is reported
  * (`baselineWithoutReason`). An entry for a file that has no legacy use left is
  * reported as stale (`staleBaseline`). An entry that the rule can never judge
- * is reported as `invalidEntry`, from each oracle file that the rule lints: a
- * file outside the oracle-file glob (its name has no `oracle` and an
- * extension of .ts, .tsx, .js, .jsx, or .mjs), or a framework implementation
- * module.
+ * is a configuration error, and the rule throws when it reads the settings: a
+ * malformed entry (not an object with a string `file`, and a `reason` that is
+ * absent or a string), a file outside the oracle-file glob (its name has no
+ * `oracle` and an extension of .ts, .tsx, .js, .jsx, or .mjs), or a framework
+ * implementation module. The throw happens at rule creation, before any file is
+ * judged, so ESLint stops the run with that one message.
  *
  * What the rule cannot do. It sees one file's source and its settings, not the
  * base commit, so it cannot tell a new entry from an old one. It does not stop
@@ -81,6 +83,37 @@ function importOf(identifier, sourceCode) {
         ? importedName(definition.node)
         : undefined,
   }
+}
+
+/**
+ * Throws, with the entry's index, when a `legacyCampaigns` entry is malformed or
+ * can never be judged. Validation runs once per run, when the rule is created.
+ */
+function validateLegacyCampaigns(entries, implementationModules) {
+  if (!Array.isArray(entries))
+    throw new Error(
+      `oracle/oracle-property-only: legacyCampaigns must be an array of { file, reason } entries.`,
+    )
+  entries.forEach((entry, index) => {
+    const at = `oracle/oracle-property-only: legacyCampaigns entry ${index}`
+    if (
+      typeof entry !== `object` ||
+      entry === null ||
+      typeof entry.file !== `string` ||
+      (entry.reason !== undefined && typeof entry.reason !== `string`)
+    )
+      throw new Error(
+        `${at} is malformed: expected { file: string, reason?: string }.`,
+      )
+    if (!isOracleFileName(entry.file))
+      throw new Error(
+        `${at} is not an oracle file: ${entry.file} has no \`oracle\` in its name or no source extension. Remove the entry.`,
+      )
+    if (isModuleFile(entry.file, implementationModules))
+      throw new Error(
+        `${at} is a framework implementation module: ${entry.file} is never judged. Remove the entry.`,
+      )
+  })
 }
 
 /** Whether a file is in the oracle-file glob: its name has `oracle` and a source extension. */
@@ -135,7 +168,6 @@ export default {
       rawCampaign: `\`{{call}}\` runs a raw property campaign, which declares no constructed histories, so the states its law needs are reached only where the seed draws them. Declare the law with \`oracleProperty\` from \`@tanstack/oracles\`: its \`histories.constructed\` build each required state, so that reach is required.`,
       rawProperty: `\`{{call}}\` registers a raw fast-check property, which declares no constructed histories, so the states its law needs are reached only where the seed draws them. Declare the law with \`oracleProperty\` from \`@tanstack/oracles\`: its \`histories.constructed\` build each required state, so that reach is required.`,
       legacyImport: `\`{{name}}\` is a legacy campaign API whose reach depends on the seed. Declare the law with \`oracleProperty\` and its constructed histories instead.`,
-      invalidEntry: `This \`legacyCampaigns\` entry names {{file}}, which is not an oracle file or is a framework implementation module, so the rule never judges it. Remove the entry.`,
       baselineWithoutReason: `This file's \`legacyCampaigns\` entry has no reason, so it exempts nothing. Give the reason that the file keeps its raw campaigns, or move the file to \`oracleProperty\`.`,
       staleBaseline: `This file's \`legacyCampaigns\` entry is stale: the file runs no raw campaign and imports no legacy API. Remove the entry, so the baseline only shrinks.`,
     },
@@ -143,6 +175,10 @@ export default {
   create(context) {
     const { sourceCode } = context
     const settings = oracleSettings(context)
+    validateLegacyCampaigns(
+      settings.legacyCampaigns,
+      settings.implementationModules,
+    )
     if (isModuleFile(context.filename, settings.implementationModules)) {
       return {}
     }
@@ -176,17 +212,6 @@ export default {
         }
       },
       'Program:exit'(program) {
-        for (const entry of settings.legacyCampaigns) {
-          if (
-            !isOracleFileName(entry.file) ||
-            isModuleFile(entry.file, settings.implementationModules)
-          )
-            context.report({
-              node: program,
-              messageId: `invalidEntry`,
-              data: { file: entry.file },
-            })
-        }
         if (entries.length > 0) {
           if (!exempt)
             context.report({
