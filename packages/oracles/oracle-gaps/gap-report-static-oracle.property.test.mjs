@@ -569,13 +569,9 @@ function check(plan, observations, expected) {
   if (!got) return violation(`static`, `no analysis was observed`, `completion`)
   // An owner that fails, and a config the runner cannot honor, are found
   // only when the runner starts.
-  const runtime = [
-    `brokenOwner`,
-    `projects`,
-    `noTypescript`,
-    `brokenTypescript`,
-    `brokenVitest`,
-  ].includes(plan.fault)
+  const runtime = [`brokenOwner`, `projects`, `brokenVitest`].includes(
+    plan.fault,
+  )
   const refused = runtime ? undefined : expected.refused
   if (refused) {
     if (!got.refusal)

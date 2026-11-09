@@ -576,12 +576,9 @@ function daemonsOf(dir) {
 }
 
 // The faults under which a check's session cannot open, cold or through the
-// daemon.
-const sessionFaults = new Set([
-  `noTypescript`,
-  `brokenTypescript`,
-  `brokenVitest`,
-])
+// daemon. A package's TypeScript is no input to a session: the CLI analyzes
+// with its own compiler, so no TypeScript fault opens a session.
+const sessionFaults = new Set([`brokenVitest`])
 
 async function incremental(dir, plan, cli, copy, observe, states) {
   const reportFile = join(copy, `report.mjs`)
@@ -678,8 +675,6 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       [daemon, ...others].every((run) => run.refusal !== undefined)
     )
       states.add(`two checks at once on a session that cannot open`)
-    if (plan.fault === `brokenTypescript` && daemon.refusal !== undefined)
-      states.add(`a session failure before its daemon read a request`)
     if (plan.fault === `brokenVitest` && daemon.refusal !== undefined)
       states.add(`a session failure larger than a socket buffer`)
     const after = {
@@ -885,6 +880,8 @@ async function driver(plan, observe) {
     // a history that depends on it.
     if (plan.fault !== `none` && cli.exit !== 0)
       states.add(`refused ${plan.fault}`)
+    if (analyzedFaults.includes(plan.fault) && cli.exit === 0)
+      states.add(`analyzed ${plan.fault}`)
     const kindAt = new Map(
       plan.functions.flatMap((fn) =>
         fn.body.map((s) => [`${fn.file}:${s.line}`, s.kind]),
@@ -1631,16 +1628,17 @@ const required = [
   `a setup error beside a timeout under one budget`,
   `refused projects`,
   `refused outsideSource`,
-  `refused noTypescript`,
-  `refused brokenTypescript`,
+  `analyzed noTypescript`,
+  `analyzed apiLessTypescript`,
   `refused brokenVitest`,
   `edit fixSession changed the cold result`,
   `a check after the session's failure was fixed`,
   `two checks at once on a session that cannot open`,
-  `a session failure before its daemon read a request`,
   `a session failure larger than a socket buffer`,
   ...incrementalStates,
 ]
+// The faults the CLI analyzes anyway: a package's TypeScript is no input.
+const analyzedFaults = [`noTypescript`, `apiLessTypescript`]
 const faults = [
   `badEntry`,
   `missingSource`,
@@ -1648,9 +1646,8 @@ const faults = [
   `brokenOwner`,
   `projects`,
   `outsideSource`,
-  `noTypescript`,
-  `brokenTypescript`,
   `brokenVitest`,
+  ...analyzedFaults,
 ]
 const separate = [
   `ordinary tests left out by default`,
@@ -1660,11 +1657,13 @@ const separate = [
   `a setup error beside a timeout under one budget`,
   `stale authored mutant`,
   `ambiguous authored mutant`,
-  ...faults.map((fault) => `refused ${fault}`),
+  ...faults
+    .filter((fault) => !analyzedFaults.includes(fault))
+    .map((fault) => `refused ${fault}`),
+  ...analyzedFaults.map((fault) => `analyzed ${fault}`),
   `edit fixSession changed the cold result`,
   `a check after the session's failure was fixed`,
   `two checks at once on a session that cannot open`,
-  `a session failure before its daemon read a request`,
   `a session failure larger than a socket buffer`,
   ...incrementalStates,
 ]
@@ -1921,36 +1920,29 @@ oracleProperty({
       },
       ...faults.map((fault) => ({
         name: `a declaration fault: ${fault}`,
-        enters: [
-          `refused ${fault}`,
-          ...(fault === `noTypescript`
-            ? [
-                `edit fixSession changed the cold result`,
-                `a check after the session's failure was fixed`,
-              ]
-            : []),
-          ...(fault === `brokenTypescript` || fault === `brokenVitest`
-            ? [`two checks at once on a session that cannot open`]
-            : []),
-          ...(fault === `brokenTypescript`
-            ? [`a session failure before its daemon read a request`]
-            : []),
-          ...(fault === `brokenVitest`
-            ? [`a session failure larger than a socket buffer`]
-            : []),
-        ],
+        enters: analyzedFaults.includes(fault)
+          ? [`analyzed ${fault}`]
+          : [
+              `refused ${fault}`,
+              ...(fault === `brokenVitest`
+                ? [
+                    `two checks at once on a session that cannot open`,
+                    `a session failure larger than a socket buffer`,
+                    `edit fixSession changed the cold result`,
+                    `a check after the session's failure was fixed`,
+                  ]
+                : []),
+            ],
         // A session that cannot open is checked through the daemon too, and
         // fixed once; a long failure is heard by two checks at once, then by
         // a fresh daemon's check (fixing it reruns the whole generated
-        // campaign, which noTypescript's history already pays for).
+        // campaign).
         build: (generated) => ({
           ...generated,
           fault,
-          ...(fault === `noTypescript`
-            ? { steps: [`restart`, `fixSession`], concurrentStart: false }
-            : sessionFaults.has(fault)
-              ? { steps: [`restart`], concurrentStart: true }
-              : {}),
+          ...(fault === `brokenVitest`
+            ? { steps: [`restart`, `fixSession`], concurrentStart: true }
+            : {}),
         }),
       })),
     ],

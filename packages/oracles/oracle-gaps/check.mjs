@@ -250,13 +250,21 @@ export async function workspaceBundles(pkg) {
 }
 
 /**
- * A session over one package: the TypeScript and Vitest that the package
- * resolves, and warm Vitest contexts that later checks reuse. A cold run
- * opens a session for one check; the daemon keeps one open.
+ * A session over one package: the Vitest that the package resolves, and warm
+ * Vitest contexts that later checks reuse. A cold run opens a session for one
+ * check; the daemon keeps one open.
  */
 export async function openSession(pkg) {
+  // The analysis reads with this CLI's own TypeScript, never the package's: a
+  // TypeScript 7 package exposes its version and no compiler API. The CLI's
+  // dependency is TypeScript 5, so a copy without the API is a broken install,
+  // refused before any work.
+  const ts = createRequire(import.meta.url)(`typescript`)
+  if (typeof ts.createSourceFile !== `function`)
+    throw new Error(
+      `oracle-gaps: the TypeScript this CLI depends on (${ts.version}) has no compiler API. Reinstall @tanstack/oracles, which depends on TypeScript 5.`,
+    )
   const requireTarget = createRequire(join(pkg, `package.json`))
-  const ts = requireTarget(`typescript`)
   const { createVitest } = await import(
     pathToFileURL(requireTarget.resolve(`vitest/node`)).href
   )
