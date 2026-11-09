@@ -10,8 +10,9 @@
  * the original single file, moved unchanged: its laws are stated in the oracle
  * files that use it, and the header of each oracle file names the law it owns.
  *
- * The file's name contains no `oracle`, so the lint rules do not read it as an
- * oracle; it is support for the oracles that do.
+ * The file's name contains `oracle`, so the lint rules read it as an oracle
+ * file. It declares no oracleProperty and registers no test: the oracle files
+ * that import it own the properties, and their checks are at their call sites.
  */
 import {
   mkdirSync,
@@ -225,7 +226,6 @@ export const ALL = {
   frameworkNames: true,
 }
 
-/** A module that the lint selection lints as an oracle file. */
 /** The base grammar with `forms` added, and `more` overriding any feature. */
 export const withForms = (forms, more = {}) => ({
   ...BASE,
@@ -233,6 +233,7 @@ export const withForms = (forms, more = {}) => ({
   ...more,
 })
 
+/** A module that the lint selection lints as an oracle file. */
 export const lintedOnItsOwn = (file) =>
   file.includes(`oracle`) && !file.startsWith(`oracle-`)
 
@@ -2591,7 +2592,6 @@ export function familyOptions({
     reached,
     model: predictReports,
     driver: lintDriver,
-    check: checkPaths,
     calibrations,
   }
 }
