@@ -70,11 +70,19 @@
  * hidden index, a Map or a Set with an own property, an Error whose name is
  * an own getter or whose message is a getter on its prototype, a revoked
  * proxy, an object with a custom prototype, an instance of an anonymous
- * class, or a key with a dot holding a function). `domain` holds data from
+ * class, a key with a dot holding a function, an Error or an object whose
+ * prototype is a proxy, or an old-style Error without the native brand). A
+ * `deep` value is data 20,000 links deep, past the framework's encoding
+ * limit. `domain` holds data from
  * another realm too, and `shared` holds an array of shared references 23
  * levels deep, which is data, quick to check, and large to print. An
  * `emptyMessage` spec records, last, `new Error()` and `new Error('')` on
- * alternate runs, which are the same data. Every getter in these values
+ * alternate runs, which are the same data. A `liveNoise` spec observes one
+ * live array and Map at two checkpoints and changes them in between, with a
+ * first value that alternates between runs; a `liveDate` spec observes a live
+ * array and then puts a Date in it; a `realmCheck` spec observes a list from
+ * another realm, which its check compares with `differs`; a `domThrow`
+ * spec's 6 throws a DOMException. Every getter in these values
  * throws, so a getter that runs fails its history with an error that is not
  * a data error. An
  * `errorNoise` spec records, last, an Error whose `requestId` alternates
@@ -97,6 +105,7 @@ import fc from 'fast-check'
 import { afterAll, beforeEach, describe, expect, vi } from 'vitest'
 import {
   configureOracles,
+  differs,
   oracleProperty,
   pass,
   useOracleClock,
@@ -145,6 +154,10 @@ export const oddKinds = [
   `anonymous-class`,
   `dotted-key`,
   `shared`,
+  `deep`,
+  `proxy-prototype-error`,
+  `proxy-object-prototype`,
+  `old-error`,
 ] as const
 export type OddKind = (typeof oddKinds)[number]
 
@@ -218,6 +231,14 @@ export type SyntheticSpec = {
   throwOnSpin?: boolean
   /** A 6 throws a null-prototype object instead of an Error. */
   oddThrow?: boolean
+  /** A 6 throws a DOMException instead of an Error. */
+  domThrow?: boolean
+  /** Observes a live array and Map at two checkpoints, changing them between. */
+  liveNoise?: boolean
+  /** Observes a live array, then puts a Date in it. */
+  liveDate?: boolean
+  /** Observes a list from another realm, which the check compares with differs. */
+  realmCheck?: boolean
 }
 
 /** The synthetic language: one to three items, mostly ordinary ones. */
@@ -239,6 +260,7 @@ let zeroes = 0
 let orders = 0
 let requests = 0
 let empties = 0
+let lives = 0
 
 /** An Error subclass with the name and message of a plain Error. */
 class SyntheticFault extends Error {
@@ -376,6 +398,21 @@ const probeCondition = (
 const ranGetter = (): never => {
   throw new Error(`a getter ran while the value was read as data`)
 }
+// Proxy traps that throw, so a trap that runs fails its history with an
+// error that is not a data error.
+const trapsThatRan: ProxyHandler<object> = {
+  getPrototypeOf: ranGetter,
+  getOwnPropertyDescriptor: ranGetter,
+  ownKeys: ranGetter,
+  get: ranGetter,
+  has: ranGetter,
+}
+/** An old-style error: an Error prototype, without the native brand. */
+function OldError(this: { message: string }, message: string) {
+  this.message = message
+}
+OldError.prototype = Object.create(Error.prototype) as object
+
 /** An Error subclass whose message is a getter on its prototype. */
 class MessageGetterFault extends Error {
   override get message(): string {
@@ -474,6 +511,23 @@ function oddValue(kind: OddKind): unknown {
       return new (class {})()
     case `dotted-key`:
       return { 'a.b': { c: () => undefined } }
+    case `deep`: {
+      // A list 20,000 links long: data, beyond the framework's encoding depth.
+      let deep: unknown = null
+      for (let link = 0; link < 20_000; link += 1) deep = { next: deep }
+      return deep
+    }
+    case `proxy-prototype-error`:
+      return Object.setPrototypeOf(
+        new Error(`synthetic`),
+        new Proxy(Error.prototype, trapsThatRan),
+      ) as unknown
+    case `proxy-object-prototype`:
+      return Object.create(new Proxy(Object.prototype, trapsThatRan)) as object
+    case `old-error`:
+      return new (OldError as unknown as new (message: string) => object)(
+        `synthetic`,
+      )
     case `shared`: {
       // Shared references 23 levels deep: small to check, large to print.
       let shared: unknown = 0
@@ -536,7 +590,9 @@ function syntheticDriver(spec: SyntheticSpec, mutant = false) {
               Object.assign(Object.create(null) as object, {
                 message: `synthetic driver failed at item ${index}`,
               })
-            : new Error(`synthetic driver failed at item ${index}`)
+            : spec.domThrow
+              ? new DOMException(`synthetic driver failed at item ${index}`)
+              : new Error(`synthetic driver failed at item ${index}`)
         if (item === 7 && clock) {
           const spin = () => {
             setTimeout(spin, 0)
@@ -558,6 +614,23 @@ function syntheticDriver(spec: SyntheticSpec, mutant = false) {
     }
     // Last, so a comparison of only the first observations misses it.
     if (spec.nondeterministic) observe(`nonce`, nonce++)
+    if (spec.liveNoise) {
+      // What each observe call saw differs between runs; the final state
+      // does not.
+      const seen = lives++ % 2
+      const live = { list: [seen], map: new Map([[`k`, seen]]) }
+      observe(`live a`, live)
+      live.list[0] = 9
+      live.map.set(`k`, 9)
+      observe(`live b`, live)
+    }
+    if (spec.liveDate) {
+      const live: Array<unknown> = [0]
+      observe(`live`, live)
+      live.push(new Date(0))
+    }
+    if (spec.realmCheck)
+      observe(`realm`, runInNewContext(`[1, { a: 2 }, new Map([[1, 2]])]`))
     if (spec.zeroNoise) observe(`nonce`, zeroes++ % 2 === 0 ? -0 : 0)
     if (spec.orderNoise)
       observe(`nonce`, orders++ % 2 === 0 ? { a: 1, b: 2 } : { b: 2, a: 1 })
@@ -666,7 +739,19 @@ export function syntheticProperty(spec: SyntheticSpec): void {
     check: (
       history: Formed,
       trace: ReadonlyArray<{ checkpoint: string; value: unknown }>,
-    ) => syntheticCheck(items(history), trace),
+    ) => {
+      // Data from another realm is the same data as data built here.
+      const realm = trace.find(({ checkpoint }) => checkpoint === `realm`)
+      return (
+        (realm &&
+          differs(`realm`, `realm`, realm.value, [
+            1,
+            { a: 2 },
+            new Map([[1, 2]]),
+          ])) ??
+        syntheticCheck(items(history), trace)
+      )
+    },
     ...(spec.timeout !== undefined ? { timeout: spec.timeout } : {}),
   }
   const law = {

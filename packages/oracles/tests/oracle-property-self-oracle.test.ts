@@ -179,6 +179,10 @@ type Draft = {
   zeroNoise: boolean
   orderNoise: boolean
   odd: OddKind | `none`
+  liveNoise: boolean
+  liveDate: boolean
+  realmCheck: boolean
+  domThrow: boolean
   emptyMessage: boolean
   labelStyle: `plain` | `shell` | `default`
   nested: boolean
@@ -356,6 +360,22 @@ const draft: fc.Arbitrary<Draft> = fc.record({
     { weight: 7, arbitrary: fc.constant(false) },
     { weight: 1, arbitrary: fc.constant(true) },
   ),
+  domThrow: fc.oneof(
+    { weight: 7, arbitrary: fc.constant(false) },
+    { weight: 1, arbitrary: fc.constant(true) },
+  ),
+  liveNoise: fc.oneof(
+    { weight: 9, arbitrary: fc.constant(false) },
+    { weight: 1, arbitrary: fc.constant(true) },
+  ),
+  liveDate: fc.oneof(
+    { weight: 9, arbitrary: fc.constant(false) },
+    { weight: 1, arbitrary: fc.constant(true) },
+  ),
+  realmCheck: fc.oneof(
+    { weight: 9, arbitrary: fc.constant(false) },
+    { weight: 1, arbitrary: fc.constant(true) },
+  ),
 })
 const suite: fc.Arbitrary<Suite> = fc.record({
   drafts: fc.array(draft, { minLength: 1, maxLength: 2 }),
@@ -435,6 +455,10 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
         ...(d.errorNoise ? { errorNoise: true } : {}),
         ...(d.throwOnSpin ? { throwOnSpin: true } : {}),
         ...(d.oddThrow ? { oddThrow: true } : {}),
+        ...(d.domThrow && !d.oddThrow ? { domThrow: true } : {}),
+        ...(d.liveNoise ? { liveNoise: true } : {}),
+        ...(d.liveDate ? { liveDate: true } : {}),
+        ...(d.realmCheck ? { realmCheck: true } : {}),
         ...(d.zeroNoise ? { zeroNoise: true } : {}),
         ...(d.orderNoise ? { orderNoise: true } : {}),
         // An odd observation fails a history at once; it is drawn without
@@ -491,6 +515,7 @@ type Kind =
   | `timeout`
   | `model-not-total`
   | `data`
+  | `limit`
 type Outcome = {
   kind: Kind
   law?: `three` | `four` | `reach agreement` | `bounded clock`
@@ -697,9 +722,12 @@ const isCampaign = (name: string) =>
 // The data kinds: `domain`, and `shared`, shared references that are data.
 const inDomain = (odd: OddKind) => odd === `domain` || odd === `shared`
 const oddFailures: Record<
-  Exclude<OddKind, `domain` | `shared`>,
+  Exclude<OddKind, `domain` | `shared` | `deep`>,
   [string, string]
 > = {
+  'proxy-prototype-error': [`.reason`, `an object with a proxy prototype`],
+  'proxy-object-prototype': [`.reason`, `an object with a proxy prototype`],
+  'old-error': [`.reason`, `an old-style Error without the native brand`],
   cycle: [`.reason.self`, `a cycle`],
   sparse: [`.reason`, `a sparse array`],
   accessor: [`.reason.x`, `an accessor`],
@@ -725,6 +753,8 @@ const oddFailures: Record<
 }
 const dataOutcome = (spec: SyntheticSpec): Outcome | undefined => {
   if (spec.odd === undefined || inDomain(spec.odd)) return undefined
+  // Data deeper than the framework encodes fails as a framework limit.
+  if (spec.odd === `deep`) return { kind: `limit` }
   const [path, dataKind] = oddFailures[spec.odd]
   return { kind: `data`, dataPath: `observation 0 ("odd") ${path}`, dataKind }
 }
@@ -888,7 +918,8 @@ function predictSpec(
       spec.noisyProbe === true ||
       spec.zeroNoise === true ||
       spec.orderNoise === true ||
-      spec.errorNoise === true
+      spec.errorNoise === true ||
+      spec.liveNoise === true
     // A driver error ends the determinism test: at a 6, or right after a
     // spin in a throwOnSpin spec.
     const throwsIn = (history: SyntheticHistory) =>
@@ -1098,6 +1129,10 @@ const frameworkStates = [
   `observation-in-domain`,
   `equal-data-repeats`,
   `history-reported`,
+  `live-value`,
+  `realm-compared`,
+  `dom-thrown-value`,
+  `encoding-limit`,
   `uncut-spin-model-error`,
   `driver-error-carried`,
   `driver-error-after-spin`,
@@ -1121,6 +1156,12 @@ function frameworkReach(
     }
     if (spec.odd && inDomain(spec.odd)) reached.add(`observation-in-domain`)
     if (spec.emptyMessage) reached.add(`equal-data-repeats`)
+    if (spec.liveDate) reached.add(`live-value`)
+    if (spec.realmCheck) reached.add(`realm-compared`)
+    if (spec.domThrow && [...owed.tests.values()].some(({ cause }) => cause))
+      reached.add(`dom-thrown-value`)
+    if ([...owed.tests.values()].some(({ kind }) => kind === `limit`))
+      reached.add(`encoding-limit`)
     if (
       spec.form === `boxed` &&
       spec.source.kind === `generated` &&
@@ -1314,6 +1355,8 @@ type Failure = {
   rerun?: string
   /** Whether a law's failure prints the history's items. */
   showsHistory?: boolean
+  /** Whether a model error quotes this machine's paths. */
+  machinePath?: boolean
 }
 type SuiteRun = {
   files: Record<
@@ -1394,36 +1437,43 @@ function classify(error: ReportedError | undefined): Failure {
   const kind: Kind | `other` =
     inner.name === `OracleDataError`
       ? `data`
-      : inner.name === `OracleModelError`
-        ? `model-not-total`
-        : inner.name === `OracleViolation`
-          ? `violation`
-          : /timed out in \d+ms/.test(text) || /timed out in \d+ms/.test(outer)
-            ? `timeout`
-            : text.includes(`is not a history the arbitrary can generate`)
-              ? `fixed-membership`
-              : text.includes(`built a history the arbitrary cannot generate`)
-                ? `constructed-membership`
-                : text.includes(`did not enter`) &&
-                    text.includes(`: fixed history "`)
-                  ? `fixed-reach`
+      : text.includes(`the framework's encoding limit`)
+        ? `limit`
+        : inner.name === `OracleModelError`
+          ? `model-not-total`
+          : inner.name === `OracleViolation`
+            ? `violation`
+            : /timed out in \d+ms/.test(text) ||
+                /timed out in \d+ms/.test(outer)
+              ? `timeout`
+              : text.includes(`is not a history the arbitrary can generate`)
+                ? `fixed-membership`
+                : text.includes(`built a history the arbitrary cannot generate`)
+                  ? `constructed-membership`
                   : text.includes(`did not enter`) &&
-                      text.includes(`: constructed history "`)
-                    ? `constructed-reach`
-                    : text.includes(`two runs of`)
-                      ? `determinism`
-                      : text.includes(`but the check passed it`)
-                        ? `calibration-passed`
-                        : text.includes(`but the check reported law`)
-                          ? `calibration-wrong-law`
-                          : text.includes(`found no history`)
-                            ? `calibration-none`
-                            : text.includes(`synthetic driver failed`) ||
-                                text.includes(`cannot read a 7`)
-                              ? `setup`
-                              : `other`
+                      text.includes(`: fixed history "`)
+                    ? `fixed-reach`
+                    : text.includes(`did not enter`) &&
+                        text.includes(`: constructed history "`)
+                      ? `constructed-reach`
+                      : text.includes(`two runs of`)
+                        ? `determinism`
+                        : text.includes(`but the check passed it`)
+                          ? `calibration-passed`
+                          : text.includes(`but the check reported law`)
+                            ? `calibration-wrong-law`
+                            : text.includes(`found no history`)
+                              ? `calibration-none`
+                              : text.includes(`synthetic driver failed`) ||
+                                  text.includes(`cannot read a 7`)
+                                ? `setup`
+                                : `other`
   return {
     kind,
+    // A model error that quotes a machine path, such as an inspected stack.
+    ...(inner.name === `OracleModelError` && text.includes(packageDirectory)
+      ? { machinePath: true }
+      : {}),
     ...(law ? { law } : {}),
     ...(checkpoint ? { checkpoint } : {}),
     ...(diagnosis ? { diagnosis } : {}),
@@ -1721,7 +1771,7 @@ const lawOfTest = (name: string) =>
 const lawOfKind = (kind: string, name: string) =>
   kind === `timeout`
     ? `timeout`
-    : kind === `data`
+    : kind === `data` || kind === `limit`
       ? `data`
       : kind === `model-not-total`
         ? `verdict`
@@ -1812,6 +1862,13 @@ function checkSuite(
             test.name,
           ),
           { actual: failure ?? { kind: `pass` }, expected: outcome },
+        )
+      // A model error quotes the driver's error without this machine's paths.
+      if (failure?.machinePath)
+        return violation(
+          `run`,
+          `${spec.id} "${test.name}" reported a model error that quotes this machine's paths`,
+          `verdict`,
         )
       // A law's failure prints the history it ran, also a generated one that
       // is not data.
@@ -2042,6 +2099,10 @@ const generatedDraft = (overrides: Partial<Draft>): Draft => ({
   errorNoise: false,
   throwOnSpin: false,
   oddThrow: false,
+  domThrow: false,
+  liveNoise: false,
+  liveDate: false,
+  realmCheck: false,
   orderNoise: false,
   odd: `none`,
   emptyMessage: false,
@@ -2419,6 +2480,35 @@ oracleProperty({
         generatedDraft({ odd: `domain`, fixed: [at([0]), at([3])] }),
       ),
       fixedHistory(
+        `data past the framework's encoding depth fails as a framework limit`,
+        [`encoding-limit`],
+        generatedDraft({ odd: `deep`, fixed: [at([0])] }),
+      ),
+      fixedHistory(
+        `the determinism test compares what each observe call saw`,
+        [`determinism-caught`],
+        generatedDraft({ liveNoise: true, fixed: [at([0])] }),
+      ),
+      fixedHistory(
+        `a live value that later holds a Date was data when observed`,
+        [`live-value`],
+        generatedDraft({ liveDate: true, fixed: [at([0])] }),
+      ),
+      fixedHistory(
+        `differs takes data from another realm for the same data`,
+        [`realm-compared`],
+        generatedDraft({ realmCheck: true, fixed: [at([0]), at([3])] }),
+      ),
+      fixedHistory(
+        `a model error quotes a thrown DOMException without its stack`,
+        [`dom-thrown-value`, `driver-error-carried`],
+        generatedDraft({
+          strictModel: true,
+          domThrow: true,
+          fixed: [at([3, 6, 1])],
+        }),
+      ),
+      fixedHistory(
         `a large shared observation is checked without printing it`,
         [`observation-in-domain`],
         generatedDraft({ odd: `shared`, fixed: [at([0])] }),
@@ -2435,7 +2525,7 @@ oracleProperty({
         generatedDraft({ form: `boxed`, fixed: [at([3])] }),
       ),
       ...oddKinds
-        .filter((odd) => !inDomain(odd))
+        .filter((odd) => !inDomain(odd) && odd !== `deep`)
         .map((odd) =>
           fixedHistory(
             `an observed ${odd} fails the history, naming its path`,

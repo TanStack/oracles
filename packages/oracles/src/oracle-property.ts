@@ -45,17 +45,24 @@
  *
  * Observations and enumerated histories are data (maintainer decision,
  * 2026-11-08): primitives, with -0, NaN, the infinities, bigints, and
- * undefined; dense arrays; plain objects with string keys; Maps; Sets; and
- * Errors, as their name, message, own data properties, cause, and
- * AggregateError `errors`. A driver converts anything else (a Date, a class
+ * undefined; arrays whose own keys are exactly their indices, each an
+ * enumerable data property, and `length`; plain objects (a null prototype or
+ * a realm's `Object.prototype`) whose own properties are enumerable data
+ * properties with string keys; Maps and Sets without own properties; and
+ * Errors with the native brand, as their name and message (data properties
+ * on the Error or its prototype chain), their own enumerable data
+ * properties, cause, and AggregateError `errors`, never their stack. No
+ * prototype on the way may be a proxy. A driver converts anything else (a Date, a class
  * instance, a DOMException, a function) before it observes it: an
  * observation that is not data fails its history at once with an
  * `OracleDataError` naming the value's path, such as `observation 3
  * ("result") .reason: DOMException is not observation data`, and an
  * enumerated source holding a history that is not data fails to register.
  * Arrays, Maps, Sets, and Errors are recognized by their brands, so data from
- * another realm is data, and reading a value never runs its getters or a
- * proxy's traps. A failure report prints a generated history even when it is
+ * another realm is data; an old-style Error (an Error prototype without the
+ * native brand) is not. Reading a value never runs its getters or a proxy's
+ * traps. Data deeper or larger than the framework can encode fails as a
+ * framework limit, never as data that is not data. A failure report prints a generated history even when it is
  * not data, through Node's inspection; names and comparisons never do.
  *
  * Each history is one test, named by `label`, or, without one, by the
@@ -228,11 +235,13 @@ export function violation(
 
 /**
  * One exact comparison: a violation of `law` at `checkpoint` when `actual` is
- * not strictly deep-equal to `expected`, with both values attached so the
- * failure shows a diff; otherwise undefined, so comparisons chain as
- * `return differs(...) ?? differs(...) ?? pass`. Equality is Node's
- * `isDeepStrictEqual`: symbol keys, undefined-versus-absent fields, `-0`,
- * and prototypes count, where JSON text would erase them.
+ * not deep-equal to `expected`, with both values attached so the failure
+ * shows a diff; otherwise undefined, so comparisons chain as
+ * `return differs(...) ?? differs(...) ?? pass`. Two data values are equal
+ * when they are the same data, whatever order their object keys and Map and
+ * Set entries come in: undefined-versus-absent fields and `-0` count, and a
+ * prototype does not, so data from another realm equals data built here.
+ * Values outside the data domain compare by Node's `isDeepStrictEqual`.
  */
 export function differs(
   checkpoint: string,
@@ -241,9 +250,20 @@ export function differs(
   expected: unknown,
   difference = `the observed value differs from the owed value`,
 ): Verdict | undefined {
-  return isDeepStrictEqual(actual, expected)
+  return sameData(actual, expected)
     ? undefined
     : violation(checkpoint, difference, law, { actual, expected })
+}
+
+function sameData(actual: unknown, expected: unknown): boolean {
+  try {
+    return (
+      encodeData(actual, ``, `compared`, true, false) ===
+      encodeData(expected, ``, `compared`, true, false)
+    )
+  } catch {
+    return isDeepStrictEqual(actual, expected)
+  }
 }
 
 /**
@@ -782,15 +802,19 @@ async function repeatedRecord<TPlan>(
   ) => Promise<void> | void,
   plan: TPlan,
 ): Promise<Array<{ checkpoint: string; text: string }>> {
+  // What each observe call saw, encoded when it was observed.
+  const texts: Array<string> = []
   const { observations, driverError, probes, spin } = await recordGuarded(
     driver,
     plan,
+    undefined,
+    texts,
   )
   if (driverError) throw driverError.error
   return [
-    ...observations.map(({ checkpoint, value }, index) => ({
+    ...observations.map(({ checkpoint }, index) => ({
       checkpoint,
-      text: encodeData(value, `observation ${index}`, `observation`),
+      text: texts[index]!,
     })),
     ...(spin ? [{ checkpoint: `clock`, text: String(spin.at) }] : []),
     {
@@ -853,6 +877,7 @@ function encodeData(
   where: string,
   what: string,
   build = true,
+  ordered = true,
 ): string {
   const open = new Set<object>()
   const done = new Map<object, string>()
@@ -866,34 +891,35 @@ function encodeData(
       ? `${path}.${key}`
       : `${path}[${JSON.stringify(key)}]`
   const descriptor = Object.getOwnPropertyDescriptor
-  // An own data property's value; a hidden one only where `hidden` allows.
-  const data = (object: object, key: string, path: string, hidden = false) => {
-    const property = descriptor(object, key)!
+  const prototypeOf = Object.getPrototypeOf as (object: object) => object | null
+  // A data property's value; a hidden one only where `hidden` allows.
+  const data = (property: PropertyDescriptor, path: string, hidden = false) => {
     if (!(`value` in property)) return fail(path, `an accessor`)
     if (!property.enumerable && !hidden) return fail(path, `a hidden property`)
     return property.value as unknown
   }
-  // A data property on the object or its prototype chain.
+  // A data property on the object or its prototype chain, which holds no
+  // proxy by the time this is called.
   const inherited = (object: object, key: string, path: string): unknown => {
     for (
-      let holder: object | null = object;
-      holder !== null;
-      holder = Object.getPrototypeOf(holder) as object | null
+      let holder = object as object | null;
+      holder;
+      holder = prototypeOf(holder)
     ) {
-      if (types.isProxy(holder)) return fail(path, `a proxy`)
-      if (descriptor(holder, key)) return data(holder, key, path, true)
+      const property = descriptor(holder, key)
+      if (property) return data(property, path, true)
     }
     return undefined
   }
   // A realm's `Object.prototype`: no prototype, and Object's own methods.
   const objectPrototype = (prototype: object | null) =>
     prototype !== null &&
-    Object.getPrototypeOf(prototype) === null &&
+    prototypeOf(prototype) === null &&
     typeof descriptor(prototype, `hasOwnProperty`)?.value === `function`
   // A realm's prototype for the constructor named `name`.
   const intrinsic = (prototype: object | null, name: string) =>
     prototype !== null &&
-    objectPrototype(Object.getPrototypeOf(prototype) as object | null) &&
+    objectPrototype(prototypeOf(prototype)) &&
     descriptor(
       (descriptor(prototype, `constructor`)?.value as object | undefined) ?? {},
       `name`,
@@ -909,48 +935,50 @@ function encodeData(
       ? name
       : `an instance of an anonymous class`
   }
+  // Encodings in order, or sorted where order is not compared.
+  const joined = (parts: Array<string>) =>
+    (ordered ? parts : parts.sort()).join(`,`)
   const fields = (
     object: object,
     path: string,
     apart: ReadonlyArray<string> = [],
     hidden: ReadonlyArray<string> = [],
   ) =>
-    Reflect.ownKeys(object)
-      .filter((key) => !apart.includes(key as string))
-      .map((key) => {
-        if (typeof key === `symbol`) return fail(path, `a symbol key`)
-        const place = at(path, key)
-        const text = encode(
-          data(object, key, place, hidden.includes(key)),
-          place,
-        )
-        return `${JSON.stringify(key)}:${text}`
-      })
-      .join(`,`)
-  const entries = (
-    items: Iterable<unknown>,
-    path: string,
-    label: string,
-  ): Array<string> =>
-    [...items].map((item, index) => encode(item, `${path} ${label} ${index}`))
+    joined(
+      Reflect.ownKeys(object)
+        .filter((key) => !apart.includes(key as string))
+        .map((key) => {
+          if (typeof key === `symbol`) return fail(path, `a symbol key`)
+          const place = at(path, key)
+          const text = encode(
+            data(descriptor(object, key)!, place, hidden.includes(key)),
+            place,
+          )
+          return build ? `${JSON.stringify(key)}:${text}` : ``
+        }),
+    )
   const container = (item: object, path: string): string => {
     if (types.isProxy(item)) return fail(path, `a proxy`)
-    const prototype = Object.getPrototypeOf(item) as object | null
+    const prototype = prototypeOf(item)
+    // No proxy on the prototype chain, so walking it runs no trap.
+    for (let holder = prototype; holder; holder = prototypeOf(holder))
+      if (types.isProxy(holder))
+        return fail(path, `an object with a proxy prototype`)
     if (Array.isArray(item)) {
       if (!intrinsic(prototype, `Array`)) return fail(path, named(prototype))
       const length = descriptor(item, `length`)!.value as number
-      const items: Array<string> = []
-      for (let index = 0; index < length; index += 1) {
-        if (!descriptor(item, String(index)))
-          return fail(path, `a sparse array`)
-        const place = `${path}[${index}]`
-        items.push(encode(data(item, String(index), place), place))
-      }
       const extra = Reflect.ownKeys(item)[length + 1]
       if (extra !== undefined)
         return typeof extra === `symbol`
           ? fail(path, `a symbol key`)
           : fail(at(path, extra), `a property on an array`)
+      const items: Array<string> = []
+      for (let index = 0; index < length; index += 1) {
+        const property = descriptor(item, String(index))
+        if (!property) return fail(path, `a sparse array`)
+        const place = `${path}[${index}]`
+        items.push(encode(data(property, place), place))
+      }
       return build ? `[${items.join(`,`)}]` : ``
     }
     if (types.isMap(item) || types.isSet(item)) {
@@ -961,15 +989,18 @@ function encodeData(
         return typeof key === `symbol`
           ? fail(path, `a symbol key`)
           : fail(at(path, key), `a property on a ${kind}`)
-      if (types.isMap(item)) {
-        const pairs = [...Map.prototype.entries.call(item)].map(
-          ([entryKey, entry], index) =>
-            `${encode(entryKey, `${path} map key ${index}`)}=>${encode(entry, `${path} map value ${index}`)}`,
-        )
-        return build ? `Map{${pairs.join(`,`)}}` : ``
-      }
-      const members = entries(Set.prototype.values.call(item), path, `set item`)
-      return build ? `Set{${members.join(`,`)}}` : ``
+      const members = types.isMap(item)
+        ? [...Map.prototype.entries.call(item)].map(
+            ([entryKey, entry], index) => {
+              const keyText = encode(entryKey, `${path} map key ${index}`)
+              const entryText = encode(entry, `${path} map value ${index}`)
+              return build ? `${keyText}=>${entryText}` : ``
+            },
+          )
+        : [...Set.prototype.values.call(item)].map((entry, index) =>
+            encode(entry, `${path} set item ${index}`),
+          )
+      return build ? `${kind}{${joined(members)}}` : ``
     }
     if (types.isNativeError(item)) {
       if (typeof DOMException === `function` && item instanceof DOMException)
@@ -990,18 +1021,20 @@ function encodeData(
       )
       return build ? `Error(${name},${message}){${own}}` : ``
     }
+    if (item instanceof Error)
+      return fail(path, `an old-style Error without the native brand`)
     if (prototype !== null && !objectPrototype(prototype))
       return fail(path, named(prototype))
     const own = fields(item, path)
     return build ? `{${own}}` : ``
   }
   const encode = (item: unknown, path: string): string => {
-    if (typeof item === `string`) return JSON.stringify(item)
+    if (typeof item === `string`) return build ? JSON.stringify(item) : ``
     if (typeof item === `number`)
-      return Object.is(item, -0) ? `-0` : String(item)
-    if (typeof item === `bigint`) return `${item}n`
+      return build ? (Object.is(item, -0) ? `-0` : String(item)) : ``
+    if (typeof item === `bigint`) return build ? `${item}n` : ``
     if (item === null || item === undefined || typeof item === `boolean`)
-      return String(item)
+      return build ? String(item) : ``
     if (typeof item !== `object`) return fail(path, `a ${typeof item}`)
     if (open.has(item)) return fail(path, `a cycle`)
     const known = done.get(item)
@@ -1011,30 +1044,44 @@ function encodeData(
     try {
       text = container(item, path)
     } catch (error) {
+      // A framework limit is not a verdict about the value.
+      if (error instanceof OracleDataError || error instanceof RangeError)
+        throw error
       // An exotic object that throws while it is read is not data.
-      if (error instanceof OracleDataError) throw error
       return fail(path, `an object that cannot be read`)
     }
     open.delete(item)
     done.set(item, text)
     return text
   }
-  return encode(value, ``)
+  try {
+    return encode(value, ``)
+  } catch (error) {
+    // A stack or a string too large for the engine: data that is too deep
+    // or too large for the framework, which is not a property of the data.
+    if (error instanceof RangeError)
+      throw new Error(
+        `${where}: the value is deeper or larger than the framework's encoding limit`,
+        { cause: error },
+      )
+    throw error
+  }
 }
 
-// A value as report text, which never throws: its data encoding, or, for a
-// value that is not data, such as a generated history or a thrown value,
-// Node's inspection of it. Never a name or a comparison.
+// A value as report text, which never throws and is never a name or a
+// comparison: its data encoding, or, for a value that is not data, Node's
+// inspection on one line without stack frames, which name this machine's
+// files. At most 2,000 characters.
 function reportText(value: unknown): string {
   try {
     return encodeData(value, ``, `report`).slice(0, 2000)
   } catch {
     try {
-      // One line, as a report's other lines are.
-      return inspect(value, { depth: 6, breakLength: Infinity }).replace(
-        /\n\s*/g,
-        ` `,
-      )
+      return inspect(value, { depth: 6, breakLength: Infinity })
+        .split(`\n`)
+        .filter((line) => !/^\s+(at |\.\.\. )/.test(line))
+        .join(` `)
+        .slice(0, 2000)
     } catch {
       return Object.prototype.toString.call(value)
     }
@@ -1157,6 +1204,8 @@ async function recordGuarded<TPlan>(
   ) => Promise<void> | void,
   plan: TPlan,
   forced?: ForcedProbe,
+  // When given, each observation's encoding as it was observed.
+  texts?: Array<string>,
 ): Promise<{
   observations: Array<Observation>
   driverError?: { error: unknown }
@@ -1166,7 +1215,7 @@ async function recordGuarded<TPlan>(
   const observations: Array<Observation> = []
   // The first observation that is not data fails the history at once, also
   // when the driver catches the error its observe call throws.
-  let dataError: OracleDataError | undefined
+  let dataError: unknown
   const window: ProbeWindow = {
     reached: new Set(),
     entered: new Set(),
@@ -1193,14 +1242,19 @@ async function recordGuarded<TPlan>(
   try {
     await probeWindows.run(window, () =>
       driver(plan, (checkpoint, value) => {
-        if (dataError) throw dataError
+        if (dataError !== undefined) throw dataError
         const where = `observation ${observations.length} (${JSON.stringify(checkpoint)})`
         try {
-          // Checked, not printed: only the determinism test compares
-          // encodings.
-          encodeData(value, where, `observation`, false)
+          // Checked, and encoded only for the determinism test.
+          const text = encodeData(
+            value,
+            where,
+            `observation`,
+            texts !== undefined,
+          )
+          texts?.push(text)
         } catch (error) {
-          dataError = error as OracleDataError
+          dataError = error
           throw error
         }
         observations.push({ checkpoint, value })
@@ -1212,7 +1266,7 @@ async function recordGuarded<TPlan>(
   }
   const probes = close()
   const settled = settle()
-  if (dataError) throw dataError
+  if (dataError !== undefined) throw dataError
   return {
     observations,
     ...(driverError ? { driverError } : {}),
