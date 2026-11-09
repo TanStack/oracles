@@ -192,9 +192,10 @@ export function instrument(ts, path, text, source, offset = 0) {
       env && ts.isPropertyAccessExpression(env) && bare(env.expression)
     return (
       ts.isPropertyAccessExpression(env) &&
-      env.name.text === `NODE_ENV` &&
-      object !== undefined &&
+      env.questionDotToken === undefined &&
       ts.isPropertyAccessExpression(object) &&
+      object.questionDotToken === undefined &&
+      env.name.text === `NODE_ENV` &&
       object.name.text === `env` &&
       ts.isIdentifier(bare(object.expression)) &&
       bare(object.expression).text === `process` &&
@@ -255,27 +256,29 @@ export function instrument(ts, path, text, source, offset = 0) {
   // `const probing = typeof process === 'undefined' ? false : <guard>`, in a
   // function: a module-level guard is not folded in a module with imports,
   // so its probes would ship.
-  const isGuardDeclaration = (node) => {
+  // The guard: a declarator `probing = typeof process === 'undefined' ?
+  // false : <guard>` of a `const`, in a function: a module-level guard is not
+  // folded in a module with imports, so its probes would ship.
+  const isGuardDeclarator = (node) => {
     if (
       node === undefined ||
-      !ts.isVariableStatement(node) ||
-      !(node.declarationList.flags & ts.NodeFlags.Const) ||
-      node.declarationList.declarations.length !== 1
+      !ts.isVariableDeclaration(node) ||
+      !(node.parent.flags & ts.NodeFlags.Const) ||
+      !ts.isIdentifier(node.name) ||
+      node.name.text !== `probing`
     )
       return false
-    const [{ name, initializer }] = node.declarationList.declarations
     let scope = node.parent
     while (scope && !ts.isFunctionLike(scope) && !ts.isSourceFile(scope))
       scope = scope.parent
-    const init = bare(initializer)
+    const init = bare(node.initializer)
     const test =
       init && ts.isConditionalExpression(init) && bare(init.condition)
     const typeOf = test && ts.isBinaryExpression(test) && bare(test.left)
     return (
       scope !== undefined &&
       ts.isFunctionLike(scope) &&
-      ts.isIdentifier(name) &&
-      name.text === `probing` &&
+      init !== undefined &&
       ts.isConditionalExpression(init) &&
       ts.isBinaryExpression(test) &&
       test.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken &&
@@ -287,6 +290,12 @@ export function instrument(ts, path, text, source, offset = 0) {
       isGuard(init.whenFalse)
     )
   }
+  // A statement that is only the guard.
+  const isGuardDeclaration = (node) =>
+    node !== undefined &&
+    ts.isVariableStatement(node) &&
+    node.declarationList.declarations.length === 1 &&
+    isGuardDeclarator(node.declarationList.declarations[0])
   // `probing && hook`, whose `probing` resolves, within its nearest
   // function, to the guard's declaration.
   const isProbeStatement = (node) => {
@@ -298,10 +307,16 @@ export function instrument(ts, path, text, source, offset = 0) {
     )
       return false
     const guard = bare(expression.left)
+    const found = ts.isIdentifier(guard) && declarationOf(guard, true)
     return (
-      ts.isIdentifier(guard) &&
       guard.text === `probing` &&
-      isGuardDeclaration(declarationOf(guard, true)) &&
+      found !== undefined &&
+      ts.isVariableStatement(found) &&
+      isGuardDeclarator(
+        found.declarationList.declarations.find((d) =>
+          bindsName(d.name, `probing`),
+        ),
+      ) &&
       isHook(expression.right)
     )
   }
@@ -334,12 +349,24 @@ export function instrument(ts, path, text, source, offset = 0) {
   // declarations and block bindings, case clauses sharing their switch's
   // scope), or undefined when no file-level or enclosing declaration names
   // it. `withinFunction` stops at the nearest function.
+  // Whether a binding name (an identifier, or a destructuring pattern)
+  // binds `name`.
+  const bindsName = (binding, name) =>
+    ts.isIdentifier(binding)
+      ? binding.text === name
+      : (ts.isObjectBindingPattern(binding) ||
+          ts.isArrayBindingPattern(binding)) &&
+        binding.elements.some(
+          (element) =>
+            !ts.isOmittedExpression(element) && bindsName(element.name, name),
+        )
   const declaresName = (statement, name) =>
     (ts.isVariableStatement(statement) &&
-      statement.declarationList.declarations.some(
-        (d) => ts.isIdentifier(d.name) && d.name.text === name,
+      statement.declarationList.declarations.some((d) =>
+        bindsName(d.name, name),
       )) ||
-    ((ts.isFunctionDeclaration(statement) ||
+    // An overload signature names the function its implementation declares.
+    (((ts.isFunctionDeclaration(statement) && statement.body !== undefined) ||
       ts.isClassDeclaration(statement)) &&
       statement.name?.text === name)
   function declarationOf(identifier, withinFunction = false) {
@@ -354,10 +381,20 @@ export function instrument(ts, path, text, source, offset = 0) {
         declaresName(statement, name),
       )
       if (found) return found
+      // A loop's own variables, and a caught error.
+      const own =
+        (ts.isForStatement(node) ||
+          ts.isForOfStatement(node) ||
+          ts.isForInStatement(node)) &&
+        node.initializer !== undefined &&
+        ts.isVariableDeclarationList(node.initializer)
+          ? node.initializer.declarations.some((d) => bindsName(d.name, name))
+          : ts.isCatchClause(node) &&
+            node.variableDeclaration !== undefined &&
+            bindsName(node.variableDeclaration.name, name)
+      if (own) return node
       if (ts.isFunctionLike(node)) {
-        const parameter = node.parameters?.find(
-          (p) => ts.isIdentifier(p.name) && p.name.text === name,
-        )
+        const parameter = node.parameters?.find((p) => bindsName(p.name, name))
         if (parameter || withinFunction) return parameter
       }
     }
@@ -383,7 +420,8 @@ export function instrument(ts, path, text, source, offset = 0) {
       }
     }
   }
-  const isProbeGuard = (node) => isProbeOnly(node) || helpers.has(node)
+  const isProbeGuard = (node) =>
+    isProbeOnly(node) || helpers.has(node) || isGuardDeclarator(node)
   let guarded = false
 
   // Emit `node` with its children's instrumented text spliced in, then wrap

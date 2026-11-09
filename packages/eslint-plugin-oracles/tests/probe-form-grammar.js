@@ -30,6 +30,15 @@ export const MODEL = {
   // The guard declared in a switch case, beside its probe: a case's
   // bindings belong to the switch, within the function.
   'switch-guard': { legal: true, mentions: () => 0 },
+  // The guard as one declarator of several.
+  'multi-guard': { legal: true, mentions: () => 0 },
+  // A binding of `probing` that shadows the function's guard: a loop
+  // variable, a caught error, a destructured name. None is the guard.
+  'loop-shadow': { legal: false, mentions: castMentions },
+  'catch-shadow': { legal: false, mentions: castMentions },
+  'destructured-shadow': { legal: false, mentions: castMentions },
+  // The comparison read through optional chaining, another expression.
+  'optional-env': { legal: false, mentions: castMentions },
   // The former form: the `NODE_ENV` comparison itself on the left of `&&`.
   'former-guard': { legal: false, mentions: castMentions },
   // A guard of the right initializer under another name.
@@ -267,6 +276,16 @@ const RENDER = {
     `{ const probing = ${initText(s.quote)}; probing && ${legalCall(s)}; }`,
   'paren-init': (s) =>
     `{ const probing = (typeof (process) === (${s.quote}undefined${s.quote})) ? (false) : ((process.env.NODE_ENV) !== (${s.quote}production${s.quote})); probing && ${legalCall(s)}; }`,
+  'multi-guard': (s) =>
+    `{ const before = 1, probing = ${initText(s.quote)}; probing && ${legalCall(s)}; }`,
+  'loop-shadow': (s) =>
+    `for (const probing of [true]) { probing && ${legalCall(s)}; }`,
+  'catch-shadow': (s) =>
+    `try { throw 0 } catch (probing) { probing && ${legalCall(s)}; }`,
+  'destructured-shadow': (s) =>
+    `{ const { probing } = { probing: true }; probing && ${legalCall(s)}; }`,
+  'optional-env': (s) =>
+    `{ const probing = typeof process === ${s.quote}undefined${s.quote} ? false : ${s.paren ? `process?.env.NODE_ENV` : `process.env?.NODE_ENV`} !== ${s.quote}production${s.quote}; probing && ${legalCall(s)}; }`,
   'switch-guard': (s) =>
     `switch (input) { case 1: const probing = ${initText(s.quote)}; probing && ${legalCall(s)}; break; }`,
   'former-guard': (s) =>
