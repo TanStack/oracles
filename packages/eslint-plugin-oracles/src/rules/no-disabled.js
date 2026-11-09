@@ -413,22 +413,9 @@ function isSerializedReplayWitness(
   sourceCode,
   witnessModules,
 ) {
-  if (!isModuleFile(filename, witnessModules)) return false
-  // Standard JSON invokes own or inherited toJSON hooks. A spread, accessor,
-  // method or prototype field can expose the record through `this` without
-  // another binding reference. Only the plain witness data shape qualifies.
-  const fields = new Set([`property`, `seed`, `path`, `numRuns`, `failed`])
-  if (
-    !object.properties.every(
-      (property) =>
-        property.type === `Property` &&
-        property.kind === `init` &&
-        !property.method &&
-        !property.computed &&
-        fields.has(propertyName(property)),
-    )
-  )
+  if (!isModuleFile(filename, witnessModules) || !isPlainWitness(object))
     return false
+  if (isGuardedWitnessWrite(object, sourceCode)) return true
   const declaration = object.parent
   if (
     declaration.type !== `VariableDeclarator` ||
@@ -450,6 +437,65 @@ function isSerializedReplayWitness(
   )
     return false
   const variable = findVariable(sourceCode.getScope(object), id.name)
+  return isOnlySerialized(variable, id, sourceCode)
+}
+
+// Standard JSON invokes own or inherited toJSON hooks. A spread, accessor,
+// method or prototype field can expose the record through `this` without
+// another binding reference. Only the plain witness data shape qualifies.
+function isPlainWitness(object) {
+  const fields = new Set([`property`, `seed`, `path`, `numRuns`, `failed`])
+  return object.properties.every(
+    (property) =>
+      property.type === `Property` &&
+      property.kind === `init` &&
+      !property.method &&
+      !property.computed &&
+      fields.has(propertyName(property)),
+  )
+}
+
+/**
+ * A plain witness written straight through the module's guarded writer:
+ * `appendWitness(channel, { ... })`, where `appendWitness` resolves to a
+ * function declaration of the module, whose record parameter is an
+ * `OracleReplayWitness` that it only serializes.
+ */
+function isGuardedWitnessWrite(object, sourceCode) {
+  const call = object.parent
+  if (
+    call.type !== `CallExpression` ||
+    call.optional ||
+    call.arguments.length !== 2 ||
+    call.arguments[1] !== object ||
+    call.callee.type !== `Identifier` ||
+    call.callee.name !== `appendWitness`
+  )
+    return false
+  const writer = findVariable(sourceCode.getScope(call), `appendWitness`)
+  const [definition] = writer?.defs ?? []
+  if (writer?.defs.length !== 1 || definition.type !== `FunctionName`)
+    return false
+  const parameter = definition.node.params[1]
+  const type = parameter?.typeAnnotation?.typeAnnotation
+  if (
+    parameter?.type !== `Identifier` ||
+    type?.type !== `TSTypeReference` ||
+    type.typeName.type !== `Identifier` ||
+    type.typeName.name !== `OracleReplayWitness`
+  )
+    return false
+  const record = sourceCode
+    .getDeclaredVariables(definition.node)
+    .find((variable) => variable.name === parameter.name)
+  return isOnlySerialized(record, parameter, sourceCode)
+}
+
+/**
+ * Whether every value reference to `variable`, other than its declaring
+ * identifier `id`, passes it alone to the unshadowed standard serializer.
+ */
+function isOnlySerialized(variable, id, sourceCode) {
   if (variable === null || variable === undefined) return false
   const uses = variable.references.filter(({ identifier }) => {
     if (identifier === id) return false

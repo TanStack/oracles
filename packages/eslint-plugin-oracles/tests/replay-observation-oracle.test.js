@@ -20,6 +20,17 @@
  * behavior is a trusted premise. Global monkeypatches are outside this law.
  * Other serializers,
  * destructuring and intermodule flow are deliberately outside the allowance.
+ *
+ * The writer may also pass the record through its guarded write (PR #1's
+ * `appendWitness`, which records no witness when the channel cannot be
+ * written and never throws): a plain witness literal written as the second
+ * argument of a call to `appendWitness` is an observation exactly when that
+ * name resolves to a function declaration of the writer module,
+ * whose record parameter is typed `OracleReplayWitness` and only serialized.
+ * Writer-call programs vary the module, the function's body (serialize, or
+ * pass the record to fast-check), the parameter's type, whether a parameter
+ * shadows the function's name, and the literal's spelling (maintainer's
+ * request of 2026-11-08 to route the finite witness through the guard).
  */
 import assert from 'node:assert/strict'
 import tsParser from '@typescript-eslint/parser'
@@ -90,9 +101,32 @@ for (const program of [...programs])
     ])
       programs.push({ ...program, initializer })
 
+// Writer-call programs: the record passed straight to `appendWitness`.
+for (const location of ['writer', 'lookalike'])
+  for (const writerBody of ['serialize', 'budget'])
+    for (const parameter of ['witness', 'other'])
+      for (const callee of ['declared', 'shadowed'])
+        for (const initializer of ['plain', 'spread', 'method'])
+          programs.push({
+            flow: 'append-witness',
+            location,
+            writerBody,
+            parameter,
+            callee,
+            initializer,
+          })
+
 // Only a dedicated recording program emits a count observation. Every other
 // authored program has a literal count with no fixed history, whose enforcement must remain.
 function expectedReports(program) {
+  if (program.flow === 'append-witness')
+    return program.location === 'writer' &&
+      program.writerBody === 'serialize' &&
+      program.parameter === 'witness' &&
+      program.callee === 'declared' &&
+      program.initializer === 'plain'
+      ? []
+      : ['singleRun']
   return program.location === 'writer' &&
     program.annotation === 'witness' &&
     program.flow === 'serialize' &&
@@ -103,7 +137,35 @@ function expectedReports(program) {
     : ['singleRun']
 }
 
+function writerCallSource(program) {
+  const type =
+    program.parameter === 'witness' ? 'OracleReplayWitness' : 'OtherRecord'
+  const write =
+    program.writerBody === 'serialize'
+      ? 'appendFileSync(channel, JSON.stringify(witness))'
+      : 'fc.assert(property, witness)'
+  const custom =
+    program.initializer === 'spread'
+      ? '...budgetHook, '
+      : program.initializer === 'method'
+        ? 'toJSON(this: OracleReplayWitness) { fc.assert(property, this); return null }, '
+        : ''
+  const call = `appendWitness(channel, { ${custom}property, seed, path, numRuns: 1, failed })`
+  return [
+    'const budgetHook = { toJSON(this: OracleReplayWitness) { fc.assert(property, this); return null } };',
+    `function appendWitness(channel: string, witness: ${type}): void {`,
+    `  try { ${write} } catch {}`,
+    '}',
+    // A callback of that name, beside a serialized record parameter, may be
+    // any function: it shadows the writer.
+    program.callee === 'shadowed'
+      ? `function record(appendWitness: (channel: string, witness: OracleReplayWitness) => void, witness: OracleReplayWitness) { appendFileSync(channel, JSON.stringify(witness)); ${call} }`
+      : call,
+  ].join('\n')
+}
+
 function source(program) {
+  if (program.flow === 'append-witness') return writerCallSource(program)
   const { name, annotation, flow } = program
   const type =
     annotation === 'none'
@@ -212,15 +274,10 @@ function checkReports(program, observed) {
   assert.deepEqual(observed, expectedReports(program), JSON.stringify(program))
 }
 
-const stateOf = ({
-  location,
-  annotation,
-  flow,
-  typeQuery,
-  jsonBinding,
-  initializer,
-}) =>
-  `${location}/${annotation}/${flow}/${typeQuery}/${jsonBinding}/${initializer}`
+const stateOf = (program) =>
+  program.flow === 'append-witness'
+    ? `${program.location}/append-witness/${program.writerBody}/${program.parameter}/${program.callee}/${program.initializer}`
+    : `${program.location}/${program.annotation}/${program.flow}/${program.typeQuery}/${program.jsonBinding}/${program.initializer}`
 const states = [...new Set(programs.map(stateOf))]
 const reach = createOracleReach('lint.replay-observation', states, {
   replaying: false,

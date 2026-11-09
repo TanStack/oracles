@@ -82,17 +82,8 @@ export function recordOracleFiniteReplay(
   { seed, path, failed }: { seed: number; path: string; failed: boolean },
 ): void {
   const channel = witnessChannel(property, seed, path)
-  if (channel === undefined) return
-  // A plain record serialized in place, which the lint rule accepts as a
-  // witness rather than as fast-check options with one run.
-  const witness: OracleReplayWitness = {
-    property,
-    seed,
-    path,
-    numRuns: 1,
-    failed,
-  }
-  appendFileSync(channel, `${JSON.stringify(witness)}\n`)
+  if (channel !== undefined)
+    appendWitness(channel, { property, seed, path, numRuns: 1, failed })
 }
 
 /**
