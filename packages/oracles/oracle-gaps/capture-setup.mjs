@@ -39,11 +39,24 @@ const run =
 // left by an earlier copy.
 // Real clocks and timers, taken once per worker, when the first copy's setup
 // runs: before any test fakes timers, `Date`, or `performance`, and before
-// the counting wrappers below replace the timers.
+// the counting wrappers below replace the timers. So are the builtins the
+// capture calls on the values a test asserts on and on `globalThis`: a test
+// may spy on one and count its calls, and the capture's own calls must not
+// reach that spy.
 const real = (globalThis.__oracleGapsReal ??= {
   setInterval: globalThis.setInterval,
   now: Date.now.bind(Date),
   use: performance.eventLoopUtilization.bind(performance),
+  keys: Object.keys,
+  getPrototypeOf: Object.getPrototypeOf,
+  getOwnPropertyDescriptor: Object.getOwnPropertyDescriptor,
+  is: Object.is,
+  ownKeys: Reflect.ownKeys,
+  isArray: Array.isArray,
+  from: Array.from,
+  isView: ArrayBuffer.isView,
+  isInteger: Number.isInteger,
+  stringify: JSON.stringify,
 })
 const realInterval = real.setInterval
 const realNow = real.now
@@ -97,7 +110,7 @@ const skippedCopy = unit !== undefined && killed.has(unit.mutant)
 // outlive the reset. Each copy starts from the worker's first globals, as in
 // a fresh worker; Vitest's names and this runner's stay.
 const firstGlobals = (globalThis.__oracleGapsGlobals ??= new Set(
-  Reflect.ownKeys(globalThis),
+  real.ownKeys(globalThis),
 ))
 // A setup file may define a new global without \`configurable\`, which no
 // reset could remove: the next copy's setup would then throw "Cannot
@@ -119,10 +132,9 @@ if (!globalThis.__oracleGapsDefine) {
       ? defineAll(
           target,
           Object.fromEntries(
-            Reflect.ownKeys(descriptors).map((key) => [
-              key,
-              removable(target, key, descriptors[key]),
-            ]),
+            real
+              .ownKeys(descriptors)
+              .map((key) => [key, removable(target, key, descriptors[key])]),
           ),
         )
       : defineAll(target, descriptors)
@@ -134,11 +146,19 @@ const ownName = (key) =>
     typeof key === `symbol` ? (key.description ?? ``) : key,
   )
 if (run.units && !skippedCopy) {
-  for (const key of Reflect.ownKeys(globalThis))
+  for (const key of real.ownKeys(globalThis))
     if (!firstGlobals.has(key) && !ownName(key)) delete globalThis[key]
   vi.resetModules()
 }
 const state = unit ? { ...run, ...unit } : run
+// A batch's watchdog reads this row to know which copy is running. A copy
+// whose test file fails to load runs no `afterAll` and so writes no closing
+// row; the next copy's start ends its turn.
+if (unit && state.capture)
+  appendFileSync(
+    state.capture,
+    `${JSON.stringify({ file: globalThis.__vitest_worker__?.filepath, started: true })}\n`,
+  )
 // The seed travels with each run's state, so a worker that a warm context
 // started under an earlier check's seed runs under this run's seed.
 if (`seed` in state) {
@@ -432,7 +452,7 @@ function identity(value, name) {
   return identities.get(value)
 }
 const isTime = (value) =>
-  Number.isInteger(value) && Math.abs(value - runStart) < tenYears
+  real.isInteger(value) && Math.abs(value - runStart) < tenYears
 
 // A stable, cycle-safe rendering. It keeps the distinctions an assertion can
 // see (types, order, Map and Set entries, error identity by name and message)
@@ -443,8 +463,8 @@ function render(value, seen = new Set(), depth = 0) {
   const type = typeof value
   if (type === `undefined`) return `undefined`
   if (type === `number`)
-    return Object.is(value, -0) ? `-0` : isTime(value) ? time() : String(value)
-  if (type === `string`) return JSON.stringify(canonical(value.slice(0, 4000)))
+    return real.is(value, -0) ? `-0` : isTime(value) ? time() : String(value)
+  if (type === `string`) return real.stringify(canonical(value.slice(0, 4000)))
   if (type === `boolean` || type === `bigint`) return `${type}:${value}`
   if (type === `symbol`) return `symbol:${value.description ?? ``}`
   if (type === `function`) return `fn:${value.name}`
@@ -459,12 +479,12 @@ function render(value, seen = new Set(), depth = 0) {
       return `Map{${[...value].map(([k, v]) => `${render(k, seen, depth + 1)}=>${render(v, seen, depth + 1)}`).join(`,`)}}`
     if (value instanceof Set)
       return `Set{${[...value].map((v) => render(v, seen, depth + 1)).join(`,`)}}`
-    if (Array.isArray(value))
+    if (real.isArray(value))
       return `[${value.map((v) => render(v, seen, depth + 1)).join(`,`)}]`
-    if (ArrayBuffer.isView(value))
-      return `${value.constructor.name}(${Array.from(value).join(`,`)})`
+    if (real.isView(value))
+      return `${value.constructor.name}(${real.from(value).join(`,`)})`
     if (typeof value.then === `function`) return `Promise`
-    const prototype = Object.getPrototypeOf(value)
+    const prototype = real.getPrototypeOf(value)
     if (prototype !== Object.prototype && prototype !== null) {
       const name = value.constructor?.name ?? `anonymous`
       if (typeof value.toJSON === `function`)
@@ -474,11 +494,11 @@ function render(value, seen = new Set(), depth = 0) {
       return identity(value, name)
     }
     const name = prototype === null ? `null-proto` : `Object`
-    const keys = Object.keys(value).sort()
+    const keys = real.keys(value).sort()
     // An accessor is recorded as one, never called: a getter can count its
     // reads, and the capture must not change what the test observes.
     const field = (k) => {
-      const descriptor = Object.getOwnPropertyDescriptor(value, k)
+      const descriptor = real.getOwnPropertyDescriptor(value, k)
       return descriptor && !(`value` in descriptor)
         ? `accessor`
         : render(value[k], seen, depth + 1)

@@ -1,8 +1,8 @@
 // The CLI's arguments, shared by the CLI (index.mjs) and the daemon
 // (daemon.mjs), which parses each request's arguments the same way.
-import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { availableParallelism } from 'node:os'
-import { join, relative, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 
 const flags = new Set([`daemon`, `stop-daemon`, `ordinary`])
 /**
@@ -63,7 +63,7 @@ export function parseArgs(argv, cwd = process.cwd()) {
     // again alone with the full limit before it can be a timeout.
     firstLimit: Number(args[`first-limit`] ?? 2000),
     // Vitest's worker pool. Threads start much faster than child processes;
-    // a package whose tests need process isolation runs with `forks`.
+    // a package with a native addon in its tree runs with `forks`.
     pool: args.pool ?? defaultPool(pkg),
     // A directory of authored mutants (see loadAuthored).
     mutants: args.mutants ? resolve(cwd, args.mutants) : undefined,
@@ -71,20 +71,67 @@ export function parseArgs(argv, cwd = process.cwd()) {
 }
 
 /**
- * Threads, unless a direct dependency of the package is a native addon (a
- * `binding.gyp` beside its manifest, as better-sqlite3 has): an addon can
- * crash the whole process from a worker thread, which takes the CLI with
- * it, so such a package runs its tests in child processes.
+ * Threads, unless a native addon is in the package's dependency tree: an
+ * addon can crash the whole process from a worker thread, which takes the
+ * CLI with it, so such a package runs its tests in child processes. The
+ * tree is the package's dependencies, devDependencies, and peer
+ * dependencies, and theirs in turn (dependencies and peers), resolved as
+ * Node resolves them from each package's real directory. An addon is a
+ * package with a `binding.gyp` beside its manifest, as better-sqlite3 has,
+ * or a prebuilt `.node` file in its own directory, `build/Release`, or
+ * `prebuilds/<platform>`. Optional dependencies are not followed: they hold
+ * the platform binaries of bundlers and file watchers (rollup, fsevents),
+ * which run in the runner's own process, and following them would send
+ * nearly every package to child processes.
  */
 function defaultPool(pkg) {
-  const manifest = JSON.parse(readFileSync(join(pkg, `package.json`), `utf8`))
-  const names = Object.keys({
-    ...manifest.dependencies,
-    ...manifest.devDependencies,
-  })
-  return names.some((name) =>
-    existsSync(join(pkg, `node_modules`, name, `binding.gyp`)),
-  )
-    ? `forks`
-    : `threads`
+  const seen = new Set()
+  const queue = [pkg]
+  while (queue.length > 0) {
+    const dir = queue.shift()
+    if (seen.has(dir)) continue
+    seen.add(dir)
+    if (dir !== pkg && isAddon(dir)) return `forks`
+    let manifest
+    try {
+      manifest = JSON.parse(readFileSync(join(dir, `package.json`), `utf8`))
+    } catch {
+      continue
+    }
+    for (const name of Object.keys({
+      ...manifest.dependencies,
+      ...manifest.peerDependencies,
+      ...(dir === pkg ? manifest.devDependencies : {}),
+    })) {
+      const found = locate(dir, name)
+      if (found) queue.push(found)
+    }
+  }
+  return `threads`
 }
+
+/** Where Node finds package `name` from directory `from`, by its real path. */
+function locate(from, name) {
+  for (let dir = from; ; dir = dirname(dir)) {
+    const candidate = join(dir, `node_modules`, name)
+    if (existsSync(join(candidate, `package.json`)))
+      return realpathSync(candidate)
+    if (dirname(dir) === dir) return undefined
+  }
+}
+
+const holdsAddon = (dir) => {
+  try {
+    return readdirSync(dir).some((file) => file.endsWith(`.node`))
+  } catch {
+    return false
+  }
+}
+const isAddon = (dir) =>
+  existsSync(join(dir, `binding.gyp`)) ||
+  holdsAddon(dir) ||
+  holdsAddon(join(dir, `build`, `Release`)) ||
+  (existsSync(join(dir, `prebuilds`)) &&
+    readdirSync(join(dir, `prebuilds`)).some((platform) =>
+      holdsAddon(join(dir, `prebuilds`, platform)),
+    ))

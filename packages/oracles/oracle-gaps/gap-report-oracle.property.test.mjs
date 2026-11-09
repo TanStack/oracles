@@ -57,7 +57,12 @@
  *    a failing owner is named with a failing test and its error. The CLI's
  *    capture must not change what a test observes: an owner that passes
  *    alone passes under the CLI, even when it counts the reads of a getter
- *    on a value it asserts on.
+ *    on a value it asserts on, or spies on the builtins a value is scanned
+ *    with (`Object.keys`, `Object.getPrototypeOf`,
+ *    `Object.getOwnPropertyDescriptor`) and counts their calls. A Vitest
+ *    config that defines `test.projects`, which the runner cannot honor,
+ *    refuses the run and names `test.projects` (maintainer decision of
+ *    2026-11-08), rather than leave every mutant unreached.
  * 4. **Classification across owners.** Each mutant is judged only by the
  *    tests of its function's owners. Each test's route is the one the
  *    framework registered for it (`__oracleRoute`), never its name; a test
@@ -80,8 +85,12 @@
  *    mutant that no owner test reaches is `unreached`; code that runs when
  *    a file loads the module reaches every test of that file (maintainer
  *    decision of 2026-11-06); a mutant that only nondeterministic owner tests
- *    could judge is `indeterminate`. A run is cut off when it passes its
- *    first, short budget, and it then runs again alone with the full limit
+ *    could judge is `indeterminate`. A mutant under which the module throws
+ *    while it loads fails every file that imports it before any test runs:
+ *    an error outside any test, a `setup-error`. A run is cut off when it
+ *    passes its first, short budget, and only the copy that ran past it is
+ *    charged with that time (a copy whose file fails to load ends its turn
+ *    there); it then runs again alone with the full limit
  *    (the short budget with confirmation, maintainer decision of
  *    2026-11-06): a run that ends within the full limit is judged as if it
  *    had never been cut off, so a slow kill is a kill. An owner test that
@@ -129,6 +138,18 @@
  *    reused some and recomputed some, one that reused evidence from disk
  *    after a restart, and, for each content edit, a cold result that the
  *    edit changed: an edit that changes nothing cannot expose a stale cache.
+ *    One daemon serves a package: two checks started at once both report
+ *    what the cold run reports, and once `--stop-daemon` returns, no daemon
+ *    process serves the package.
+ * 10. **The runner runs the package as Vitest does.** From any install path
+ *    (one with a space and `#` included), for any spelling of `--source`,
+ *    the run completes and reports the same result. A source that imports
+ *    a subpath of a workspace dependency sees one instance of that
+ *    dependency, as Vitest gives it; a devDependency that no test loads and
+ *    that cannot be built does not refuse the run; and a package with a
+ *    native addon anywhere in its dependency tree (a `binding.gyp`, or a
+ *    prebuilt `.node` file in a dependency of a dependency) runs in child
+ *    processes, and the run's inputs name the pool.
  *
  * Authority: the maintainer's decisions in the gap-check design runs v11, v14,
  * and v19 (2026-11-04 and 2026-11-05; the design notes are kept by the project
@@ -150,7 +171,11 @@
  * agent that checks hundreds of times, through a daemon whose evidence
  * table is a disk-backed JSON store, and an incremental run must
  * equal a cold one (v19.3, 2026-11-05); the daemon is a cache over the
- * evidence, never the record (v19 freeze).
+ * evidence, never the record (v19 freeze). Law 10 and the setup error at
+ * load, the one-daemon clause, and the builtin-spy clause of law 3 come
+ * from the review of the CLI's pull request and TanStack DB's conversion
+ * (2026-11-08); the refusal of `test.projects` is the maintainer's choice
+ * of that date over running each project.
  *
  * Limits. Sources are one file of exported functions and classes over one
  * number. A hang is generated only as an owner test that waits on a promise
@@ -158,7 +183,8 @@
  * (`--first-limit`, `--hang-limit`); a slow run that ends is only a
  * witness, a test that waits 3 s before it judges. Not generated: a busy
  * loop, a slow run past the full limit that would still end, a hang in an
- * ordinary or nondeterministic test, setup errors, multi-line
+ * ordinary or nondeterministic test, a setup error other than a throw at
+ * module load from a function the module calls with 0, multi-line
  * conditions, nested functions, object-literal methods, accessors, and
  * class-field arrows in code that a test calls (the static oracle judges
  * their ownership), two functions on one line,
@@ -172,7 +198,18 @@
  * Law 9's edits do not include a file that a test reads through `fs`, an
  * environment variable other than the seed, a new file that changes how an
  * unchanged import resolves, a change to the Vite config or the installed
- * packages, or two checks at once.
+ * packages, or checks at once other than the two that start the daemon.
+ * The daemon count after a stop is read from the process list. Cut-off
+ * charging is judged only where it changes an outcome: under one budget
+ * (`--first-limit` equal to `--hang-limit`), where a misplaced cut is a
+ * timeout at once; under two budgets a misplaced cut only costs a
+ * confirming run, which no law here measures. A copy that failed to load in
+ * a batch cut off later is run again rather than judged from its rows, so
+ * its setup error keeps Vitest's message. Native addons only as a
+ * `binding.gyp` beside the workspace dependency or a prebuilt `.node` file
+ * in its dependency's directory; an addon that ships only as an optional
+ * platform package is not detected (optional dependencies are not
+ * followed). `test.projects` only as one project without `extends`.
  *
  * Structure:
  *   1. The grammar draws functions, classes, owners, tests, an authored
@@ -185,7 +222,7 @@
  *      applies each edit, and runs each state cold and through the daemon.
  *   4. The check compares them law by law.
  */
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import {
   cpSync,
   mkdirSync,
@@ -256,11 +293,10 @@ const cleanEnv = () =>
   )
 
 /**
- * Writes the fixture's files and runs the CLI on it: cold, or through the
- * daemon (law 9). A file of an earlier state that this state lacks is
- * removed.
+ * The CLI's arguments for one run of a fixture: cold, or through the daemon
+ * (law 9), and where the run writes its report.
  */
-function runCli(
+function cliArgs(
   dir,
   files,
   {
@@ -269,10 +305,11 @@ function runCli(
     cli = here,
     ordinary = false,
     sources = `${SOURCE},${LIB}`,
+    budget = `two`,
+    outName = daemon ? `out-daemon` : `out`,
   } = {},
 ) {
-  writeFixture(dir, files)
-  const out = join(dir, daemon ? `out-daemon` : `out`)
+  const out = join(dir, outName)
   rmSync(out, { recursive: true, force: true })
   // The CLI runs from the package directory. A daemon check names its paths
   // relative to there, as an author types them, and the daemon must read
@@ -295,9 +332,9 @@ function runCli(
     `4`,
     // A fixture's tests run in milliseconds. A 1 s first budget cuts off
     // the slow witness, and the 6 s full limit lets it end; each hang costs
-    // about 7 s.
+    // about 7 s. With one budget, a run past 6 s is a timeout at once.
     `--first-limit`,
-    `1000`,
+    budget === `one` ? `6000` : `1000`,
     `--hang-limit`,
     `6000`,
     `--out`,
@@ -306,14 +343,55 @@ function runCli(
   if (ordinary) args.push(`--ordinary`)
   if (files[AUTHORED] !== undefined)
     args.push(`--mutants`, path(join(dir, `mutants`)))
-  const env = cleanEnv()
+  return { args, out }
+}
+
+/**
+ * Writes the fixture's files and runs the CLI on it. A file of an earlier
+ * state that this state lacks is removed.
+ */
+function runCli(dir, files, how = {}) {
+  writeFixture(dir, files)
+  const { args, out } = cliArgs(dir, files, how)
   const child = spawnSync(process.execPath, args, {
     cwd: repo,
     encoding: `utf8`,
     timeout: 300_000,
     maxBuffer: 64 * 1024 * 1024,
-    env,
+    env: cleanEnv(),
   })
+  return readRun(dir, out, child.status, child.stderr)
+}
+
+/** Runs the CLI several times at once on one state of the fixture. */
+async function runClisAtOnce(dir, files, hows) {
+  writeFixture(dir, files)
+  return Promise.all(
+    hows.map(async (how) => {
+      const { args, out } = cliArgs(dir, files, how)
+      const child = spawn(process.execPath, args, {
+        cwd: repo,
+        env: cleanEnv(),
+        stdio: [`ignore`, `ignore`, `pipe`],
+      })
+      let stderr = ``
+      child.stderr.on(`data`, (chunk) => {
+        stderr += chunk
+      })
+      const status = await new Promise((resolvePromise) => {
+        const timer = setTimeout(() => child.kill(), 300_000)
+        child.on(`close`, (code) => {
+          clearTimeout(timer)
+          resolvePromise(code)
+        })
+      })
+      return readRun(dir, out, status, stderr)
+    }),
+  )
+}
+
+/** What one run of the CLI reported, from its exit status and its files. */
+function readRun(dir, out, status, stderr) {
   let results
   let report
   let summary = ``
@@ -325,8 +403,8 @@ function runCli(
     // A run that wrote no report is recorded by its exit status and output.
   }
   return {
-    exit: child.status,
-    stderr: child.status === 0 ? undefined : `${child.stderr}`.slice(-1500),
+    exit: status,
+    stderr: status === 0 ? undefined : `${stderr}`.slice(-1500),
     reported: results !== undefined,
     // Law 9 compares everything the run reports except how it was
     // produced: durations, the options it was given (the output directory
@@ -348,9 +426,7 @@ function runCli(
     evidence: report?.evidence,
     // A refused run is compared by the cause it names.
     refusal:
-      child.status === 0
-        ? undefined
-        : `${child.stderr}`.match(/^Error: (.*)$/m)?.[1],
+      status === 0 ? undefined : `${stderr}`.match(/^Error: (.*)$/m)?.[1],
     mutants: (results ?? []).map((r) => ({
       key: r.key,
       source: r.source,
@@ -373,14 +449,45 @@ function runCli(
  * run cold. A cold run is deterministic, so a state seen before (after
  * `restart` or `revert`) keeps its first cold result.
  */
-function incremental(dir, plan, cli, observe, states) {
-  // The history runs its own copy of the CLI, beside this one so that its
-  // relative imports resolve, and the `cli` edit changes the copy's wording.
-  const copy = mkdtempSync(join(here, `..`, `oracle-gaps-mutant-cli-`))
+/**
+ * A copy of the CLI beside this one, so that its relative imports resolve:
+ * for law 9's `cli` edit, and for a history that installs the CLI under a
+ * path with a space and `#`.
+ */
+function copyCli(plan) {
+  const copy = mkdtempSync(
+    join(
+      here,
+      `..`,
+      plan.cliPath === `spaced`
+        ? `oracle-gaps-mutant cli #`
+        : `oracle-gaps-mutant-cli-`,
+    ),
+  )
   cpSync(here, copy, {
     recursive: true,
     filter: (path) => !/\.scratch-|node_modules/.test(path),
   })
+  return copy
+}
+
+/**
+ * The daemons that serve a package, by process id: the processes running
+ * daemon.mjs for it, as the operating system lists them.
+ */
+function daemonsOf(dir) {
+  const listed = spawnSync(`ps`, [`-A`, `-o`, `pid=,command=`], {
+    encoding: `utf8`,
+  }).stdout
+  return listed
+    .split(`\n`)
+    .filter(
+      (line) => line.includes(`daemon.mjs --package`) && line.includes(dir),
+    )
+    .map((line) => Number(line.trim().split(/\s+/)[0]))
+}
+
+async function incremental(dir, plan, cli, copy, observe, states) {
   const reportFile = join(copy, `report.mjs`)
   const reportText = readFileSync(reportFile, `utf8`)
   const RUN_LINE = '`Run ${run.id}. Inputs: ${run.inputs}.`'
@@ -408,7 +515,7 @@ function incremental(dir, plan, cli, observe, states) {
   const made = []
   let reverted
   let previous = cli
-  const checkAt = (step) => {
+  const checkAt = async (step) => {
     const state = trail.at(-1)
     writeFileSync(
       reportFile,
@@ -426,29 +533,41 @@ function incremental(dir, plan, cli, observe, states) {
       cli: copy,
       ordinary: plan.ordinary,
       sources: sourceArgument(plan),
+      budget: plan.budget,
     }
     if (!cold.has(key)) cold.set(key, runCli(dir, files, how))
     const coldRun = cold.get(key)
-    const daemon = runCli(dir, files, { ...how, daemon: true })
-    observe(`incremental`, {
-      step,
-      cold: {
-        exit: coldRun.exit,
-        refusal: coldRun.refusal,
-        report: coldRun.report,
-      },
-      daemon: {
-        exit: daemon.exit,
-        refusal: daemon.refusal,
-        report: daemon.report,
-        // The first line of a failure, for the message, without the paths
-        // of this history's scratch package and CLI copy.
-        stderr: daemon.stderr
-          ?.split(`\n`)[0]
-          .replaceAll(copy, `<cli>`)
-          .replaceAll(dir, `<package>`),
-      },
-    })
+    // The first check may be two at once, which must reach one daemon.
+    const twice = step === `start` && plan.concurrentStart
+    const [daemon, ...others] = twice
+      ? await runClisAtOnce(dir, files, [
+          { ...how, daemon: true },
+          { ...how, daemon: true, outName: `out-daemon-2` },
+        ])
+      : [runCli(dir, files, { ...how, daemon: true })]
+    for (const [i, run] of [daemon, ...others].entries())
+      observe(`incremental`, {
+        step: i === 0 ? step : `${step} (a second check at once)`,
+        cold: {
+          exit: coldRun.exit,
+          refusal: coldRun.refusal,
+          report: coldRun.report,
+        },
+        daemon: {
+          exit: run.exit,
+          refusal: run.refusal,
+          report: run.report,
+          // The first line of a failure, for the message, without the paths
+          // of this history's scratch package and CLI copy.
+          stderr: run.stderr
+            ?.split(`\n`)[0]
+            .replaceAll(copy, `<cli>`)
+            .replaceAll(dir, `<package>`),
+        },
+      })
+    if (twice) states.add(`two checks started the daemon at once`)
+    if (plan.cliPath === `spaced` && daemon.reported)
+      states.add(`the daemon ran from a path with a space and #`)
     const reused = daemon.evidence?.reused ?? 0
     const computed = daemon.evidence?.computed ?? 0
     if (step !== `start` && reused > 0)
@@ -486,7 +605,7 @@ function incremental(dir, plan, cli, observe, states) {
       { cwd: repo, encoding: `utf8`, timeout: 60_000, env: cleanEnv() },
     )
   try {
-    checkAt(`start`)
+    await checkAt(`start`)
     for (const step of plan.steps) {
       if (step === `restart`) stop()
       else if (step === `revert`) {
@@ -496,19 +615,45 @@ function incremental(dir, plan, cli, observe, states) {
         trail.push(applyEdit(trail.at(-1), step))
         made.push(step)
       }
-      checkAt(step)
+      await checkAt(step)
     }
   } finally {
     stop()
-    rmSync(copy, { recursive: true, force: true })
+    // One daemon serves a package, so once it is stopped none is left. A
+    // daemon that exits takes a moment to close its contexts.
+    let left = daemonsOf(dir)
+    for (let waited = 0; left.length > 0 && waited < 20_000; waited += 250) {
+      await new Promise((r) => setTimeout(r, 250))
+      left = daemonsOf(dir)
+    }
+    observe(`daemons`, { left: left.length })
+    for (const pid of left) {
+      try {
+        process.kill(pid)
+      } catch {
+        // It exited meanwhile.
+      }
+    }
   }
 }
 
 async function driver(plan, observe) {
   const dir = mkdtempSync(join(here, `.scratch-`))
+  // A history with steps runs its own copy of the CLI, which the `cli` edit
+  // changes; a history that installs the CLI under a path with a space and
+  // `#` runs every check from such a copy.
+  const copy =
+    plan.cliPath === `spaced` || plan.steps.length > 0
+      ? copyCli(plan)
+      : undefined
   try {
     const files = fixtureFiles(plan)
-    const how = { ordinary: plan.ordinary, sources: sourceArgument(plan) }
+    const how = {
+      ordinary: plan.ordinary,
+      sources: sourceArgument(plan),
+      budget: plan.budget,
+      cli: plan.cliPath === `spaced` ? copy : here,
+    }
     const cli = runCli(dir, files, how)
     // How many units were computed or reused says how the result was
     // produced, not what it is, so it is not observed.
@@ -589,6 +734,8 @@ async function driver(plan, observe) {
         states.add(`killed under an unnamed law`)
       if (m.function === `w_getter` && m.outcome === `killed`)
         states.add(`a getter the capture left unread`)
+      if (m.function === `w_spy` && m.outcome === `killed`)
+        states.add(`a builtin spy the capture left uncalled`)
       if (m.function === `w_shared` && m.class === `generator-gap`)
         states.add(`a test that depends on an earlier test`)
       if (m.function === `w_late` && m.outcome === `killed`)
@@ -723,10 +870,28 @@ async function driver(plan, observe) {
         states.add(`a config in vitest.config.ts ran`)
       if (plan.configEnv)
         states.add(`a config that reads Vitest's environment ran`)
-      if (plan.nativeDep)
+      if (plan.native === `gyp`)
         states.add(`a package with a native addon ran in child processes`)
+      if (plan.native === `deep`)
+        states.add(
+          `a package with a prebuilt addon deep in its tree ran in child processes`,
+        )
       if (plan.setupGlobal)
         states.add(`a setup file that defines a fixed global ran in every copy`)
+      if (plan.depSubpath)
+        states.add(`a source that imports a dependency's subpath ran`)
+      if (plan.unbuiltDep)
+        states.add(`a package with an unbuilt devDependency ran`)
+      if (plan.cliPath === `spaced`)
+        states.add(`the CLI ran from a path with a space and #`)
+    }
+    if (cli.mutants.some((m) => m.outcome === `setup-error`)) {
+      states.add(`a setup error`)
+      if (
+        plan.budget === `one` &&
+        cli.mutants.some((m) => m.outcome === `timeout`)
+      )
+        states.add(`a setup error beside a timeout under one budget`)
     }
     if (plan.ordinary && cli.mutants.some((m) => m.ordinaryOutcome))
       states.add(`ordinary tests run when asked`)
@@ -737,9 +902,11 @@ async function driver(plan, observe) {
       observe(`stability`, runCli(dir, moved, how))
       states.add(`stability rerun`)
     }
-    if (plan.steps.length > 0) incremental(dir, plan, cli, observe, states)
+    if (plan.steps.length > 0)
+      await incremental(dir, plan, cli, copy, observe, states)
     for (const state of states) observe(`reach`, state)
   } finally {
+    if (copy) rmSync(copy, { recursive: true, force: true })
     written.delete(dir)
     try {
       rmSync(dir, { recursive: true, force: true })
@@ -796,6 +963,21 @@ function incrementalCheck(observations) {
   return undefined
 }
 
+/**
+ * Law 9's daemon is one per package: checks started at once reach it, and
+ * once it is stopped no daemon serves the package.
+ */
+function daemonCheck(observations) {
+  const left = observations.find((o) => o.checkpoint === `daemons`)?.value?.left
+  if (left > 0)
+    return violation(
+      `daemons`,
+      `${left} daemon${left === 1 ? `` : `s`} still serve${left === 1 ? `s` : ``} the package after --stop-daemon`,
+      `one daemon`,
+    )
+  return undefined
+}
+
 function check(plan, observations, expected) {
   const cli = observations.find((o) => o.checkpoint === `cli`)?.value
   if (!cli) return violation(`cli`, `no CLI run was observed`, `completion`)
@@ -821,7 +1003,7 @@ function check(plan, observations, expected) {
         `the refusal does not give the failing test's error, ${expected.refused.detail}: ${cli.stderr}`,
         `ownership`,
       )
-    return incrementalCheck(observations) ?? pass
+    return incrementalCheck(observations) ?? daemonCheck(observations) ?? pass
   }
   if (cli.exit !== 0 || !cli.reported)
     return violation(
@@ -965,11 +1147,11 @@ function check(plan, observations, expected) {
         { actual: after, expected: before },
       )
   }
-  return incrementalCheck(observations) ?? pass
+  return incrementalCheck(observations) ?? daemonCheck(observations) ?? pass
 }
 
 declareOracle({
-  check: [check, incrementalCheck],
+  check: [check, incrementalCheck, daemonCheck],
   model: [model, interpret, ownersOf, probeHelpers],
   grammar: [histories],
 })
@@ -1094,6 +1276,16 @@ calibrations.push({
   },
 })
 
+calibrations.push({
+  name: `a daemon is left after --stop-daemon`,
+  law: `one daemon`,
+  corrupt: (trace) => {
+    const index = trace.findIndex((o) => o.checkpoint === `daemons`)
+    if (index < 0) return undefined
+    return trace.map((o, i) => (i === index ? { ...o, value: { left: 1 } } : o))
+  },
+})
+
 // Law 9's states: reuse, a mix of reuse and recomputation, reuse from disk
 // after a restart, and each content edit changing the cold result, without
 // which a stale cache would match the cold run by chance.
@@ -1105,6 +1297,8 @@ const incrementalStates = [
   ...edits
     .filter((edit) => edit !== `restart`)
     .map((edit) => `edit ${edit} changed the cold result`),
+  `two checks started the daemon at once`,
+  `the daemon ran from a path with a space and #`,
 ]
 // The static states (probe structure and ownership through the reference
 // tree) are gap-report-static-oracle's: it reaches each in every campaign,
@@ -1194,12 +1388,29 @@ const required = [
   `a config that reads Vitest's environment ran`,
   `a package with a native addon ran in child processes`,
   `a setup file that defines a fixed global ran in every copy`,
+  `a package with a prebuilt addon deep in its tree ran in child processes`,
+  `a source that imports a dependency's subpath ran`,
+  `a package with an unbuilt devDependency ran`,
+  `a builtin spy the capture left uncalled`,
+  `the CLI ran from a path with a space and #`,
+  `a setup error`,
+  `a setup error beside a timeout under one budget`,
+  `refused projects`,
   ...incrementalStates,
 ]
-const faults = [`badEntry`, `missingSource`, `nonLiteral`, `brokenOwner`]
+const faults = [
+  `badEntry`,
+  `missingSource`,
+  `nonLiteral`,
+  `brokenOwner`,
+  `projects`,
+]
 const separate = [
   `ordinary tests left out by default`,
   `two authored mutants judged apart`,
+  `a package with a prebuilt addon deep in its tree ran in child processes`,
+  `a setup error`,
+  `a setup error beside a timeout under one budget`,
   `stale authored mutant`,
   `ambiguous authored mutant`,
   ...faults.map((fault) => `refused ${fault}`),
@@ -1210,9 +1421,9 @@ const witnessed = required.filter((s) => !separate.includes(s))
 oracleProperty({
   id: `oracle-gaps.report`,
   law: {
-    statement: `The gap report enumerates the promised operator mutants, leaves out exactly the probe-only code, discovers every oracle that owns a function's call tree and refuses broken ownership, judges each mutant only by its owners' tests on their registered routes and counts only law verdicts on reproducible routes as kills, which outrank a run that never ends, anchors each mutant by its function and normalized statement, lists every gap and unowned mutant once with consistent counts, keeps keys stable under unrelated edits, and reports through its daemon what a cold run reports at every state of a sequence of edits.`,
+    statement: `The gap report enumerates the promised operator mutants, leaves out exactly the probe-only code, discovers every oracle that owns a function's call tree and refuses broken ownership, judges each mutant only by its owners' tests on their registered routes and counts only law verdicts on reproducible routes as kills, which outrank a run that never ends, anchors each mutant by its function and normalized statement, lists every gap and unowned mutant once with consistent counts, keeps keys stable under unrelated edits, reports through one daemon per package what a cold run reports at every state of a sequence of edits, and runs the package as Vitest does from any install path and any --source spelling: one instance of each workspace dependency, no refusal over an unbuildable devDependency, child processes for a native addon anywhere in the tree, a capture that a test's builtin spies cannot see, and a refusal of test.projects.`,
     authority: `The maintainer's decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), not in this package's records, including that a kill by reach agreement alone is a gap and that an incremental run through the daemon equals a cold one (v19.3); the project's oracle guide on quiet exclusions; the oracle rubric's outcome kinds (ORC-006); the CLI's documented operator list in schemata.mjs.`,
-    limits: `Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 6 s full limit, and a slow run only as one witness that waits 3 s before it judges; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; no --only, --sample, or --diff-base; package configs only in vite.config.ts, vitest.config.ts, or vite.config.mjs, as an object or a sync or async function, with no projects and no plugins of their own; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9's edits leave out files read through fs, other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks.`,
+    limits: `Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 6 s full limit, and a slow run only as one witness that waits 3 s before it judges; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; no --only, --sample, or --diff-base; package configs only in vite.config.ts, vitest.config.ts, or vite.config.mjs, as an object or a sync or async function, with no plugins of their own and test.projects only as a refusal; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9's edits leave out files read through fs, other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; cut-off charging judged only under one budget; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages.`,
     owner: `packages/oracles/oracle-gaps`,
   },
   histories: {
@@ -1240,8 +1451,60 @@ oracleProperty({
           config: `async`,
           configFile: `vitest.config.ts`,
           configEnv: true,
-          nativeDep: true,
+          native: `gyp`,
           setupGlobal: true,
+          // A subpath import, an unbuilt devDependency, a `./` spelling, and
+          // a CLI installed under a path with a space and `#`.
+          depSubpath: true,
+          unbuiltDep: true,
+          sourceSpelling: `dot`,
+          cliPath: `spaced`,
+          boot: false,
+          budget: `two`,
+        }),
+      },
+      {
+        // A mutant that throws while the module loads (the booted `f0`'s
+        // `if (x > 100) throw` forced true), and, in the same group of four
+        // mutants and so the same batch, a mutant whose owner test in file
+        // b then hangs. Under one budget a run past it is final, so a
+        // watchdog that charges b's hang to the copy that failed to load
+        // reports that mutant as a timeout instead of a setup error.
+        name: `a load failure beside a hang`,
+        enters: [
+          `a setup error`,
+          `a setup error beside a timeout under one budget`,
+        ],
+        build: (generated) => ({
+          ...generated,
+          functions: [
+            [
+              { kind: `push`, quote: `'` },
+              { kind: `throwIf`, message: `plain` },
+            ],
+            [{ kind: `push`, quote: `'` }],
+          ],
+          containers: [],
+          overloads: [],
+          owners: [`a`, `b`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          wholeFile: `none`,
+          witness: false,
+          tests: [
+            { ...judging(`a`, `fixed seed`, 1), fn: 0 },
+            {
+              ...judging(`b`, `fixed seed`, 1, { judges: false, hangs: true }),
+              fn: 1,
+            },
+          ],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+          boot: true,
+          budget: `one`,
         }),
       },
       {
@@ -1308,6 +1571,10 @@ oracleProperty({
           authored: { stmt: 0, kind: `apply` },
           fault: `none`,
           stability: `none`,
+          // Two checks at once start the daemon, from a CLI installed under
+          // a path with a space and `#`.
+          concurrentStart: true,
+          cliPath: `spaced`,
           steps: [
             `helper`,
             `seed`,
@@ -1330,7 +1597,10 @@ oracleProperty({
         // comparison gap: a run that let one see the other's patch would
         // judge them alike.
         name: `two authored mutants`,
-        enters: [`two authored mutants judged apart`],
+        enters: [
+          `two authored mutants judged apart`,
+          `a package with a prebuilt addon deep in its tree ran in child processes`,
+        ],
         build: (generated) => ({
           ...generated,
           functions: [
@@ -1351,6 +1621,8 @@ oracleProperty({
           fault: `none`,
           stability: `none`,
           steps: null,
+          // A prebuilt addon two levels down: the run uses child processes.
+          native: `deep`,
         }),
       },
       {

@@ -157,6 +157,13 @@ function lockfileOf(pkg) {
  * reset (fresh module state, law 3). Its file name carries the hash of its
  * text, so evidence that read it is keyed by what it contains. The package
  * under test is never bundled: its sources are the mutated ones.
+ *
+ * Only a package that the bundle can stand in for whole is bundled: one
+ * whose `exports` names a single entry, so no import can reach its modules
+ * apart from the bundle and load a second instance of them, and whose entry
+ * builds. Any other loads file by file, as Vitest loads it. A dependency's
+ * devDependencies are not followed: only the package's own tests load
+ * devDependencies.
  */
 export async function workspaceBundles(pkg) {
   const linked = new Map()
@@ -167,7 +174,7 @@ export async function workspaceBundles(pkg) {
     const names = Object.keys({
       ...manifest.dependencies,
       ...manifest.peerDependencies,
-      ...manifest.devDependencies,
+      ...(dir === pkg ? manifest.devDependencies : {}),
     })
     for (const name of names) {
       if (linked.has(name)) continue
@@ -186,35 +193,46 @@ export async function workspaceBundles(pkg) {
   const esbuild = await import(
     pathToFileURL(requireVite.resolve(`esbuild`)).href
   )
-  // A package's ESM entry: its `exports` for `.`, under `import`, else
-  // `node` or `default`, or its `module` or `main`.
+  // A package's one ESM entry: its `exports` for `.`, under `import`, else
+  // `node` or `default`. A package with no `exports`, or one that also
+  // exports a subpath (other than its manifest), has none.
   const entryOf = (dir) => {
-    const manifest = JSON.parse(readFileSync(join(dir, `package.json`), `utf8`))
-    let entry =
-      manifest.exports?.[`.`] ??
-      manifest.exports ??
-      manifest.module ??
-      manifest.main ??
-      `index.js`
+    const { exports } = JSON.parse(
+      readFileSync(join(dir, `package.json`), `utf8`),
+    )
+    const subpaths = Object.keys(
+      typeof exports === `object` && exports !== null ? exports : {},
+    ).filter((key) => key.startsWith(`.`))
+    if (
+      exports === undefined ||
+      subpaths.some((key) => key !== `.` && key !== `./package.json`)
+    )
+      return undefined
+    let entry = subpaths.length > 0 ? exports[`.`] : exports
     while (entry && typeof entry === `object`)
       entry = entry.import ?? entry.node ?? entry.default
-    return join(dir, entry)
+    return typeof entry === `string` ? join(dir, entry) : undefined
   }
   const bundles = new Map()
   for (const [name, { dir }] of linked) {
-    const built = await esbuild.build({
-      entryPoints: [entryOf(dir)],
-      absWorkingDir: dir,
-      bundle: true,
-      write: false,
-      format: `esm`,
-      platform: `node`,
-      packages: `external`,
-      // A package's tsconfig `paths` can point a dependency at its sources;
-      // the bundle keeps every package import as the built code has it.
-      tsconfigRaw: `{}`,
-      logLevel: `silent`,
-    })
+    const entry = entryOf(dir)
+    if (!entry) continue
+    const built = await esbuild
+      .build({
+        entryPoints: [entry],
+        absWorkingDir: dir,
+        bundle: true,
+        write: false,
+        format: `esm`,
+        platform: `node`,
+        packages: `external`,
+        // A package's tsconfig `paths` can point a dependency at its sources;
+        // the bundle keeps every package import as the built code has it.
+        tsconfigRaw: `{}`,
+        logLevel: `silent`,
+      })
+      .catch(() => undefined)
+    if (!built) continue
     const text = built.outputFiles[0].text
     const out = join(
       dir,
@@ -371,6 +389,17 @@ export default async (env) => {
     })
     // Vitest 3 calls this step `init`; Vitest 4 renamed it `standalone`.
     await (context.standalone ? context.standalone() : context.init())
+    // Each project of a `test.projects` config has its own environment and
+    // setup files, which the runner's copies would not run under, so every
+    // mutant would read as unreached. The run refuses instead.
+    if (
+      context.projects.some((project) => project !== context.getRootProject())
+    ) {
+      await context.close()
+      throw new Error(
+        `the package's Vitest config defines test.projects, which the gap report does not run: run it on a package whose config has no projects`,
+      )
+    }
     indexOf.set(context, index)
     lastServed.delete(index)
     return context
@@ -655,9 +684,11 @@ export default async (env) => {
       copies.map((copy) => project.createSpecification(copy)),
       false,
     )
-    // The watchdog: each copy writes a closing row when it finishes, so the
-    // copy that is running is the first without one. A copy that passes its
-    // file's time limit is cut off.
+    // The watchdog: each copy writes a starting row when its setup runs and
+    // a closing row when it finishes, so the copy that is running is the
+    // last that started, or the one after it once that one closed. A copy
+    // whose file fails to load never closes, and its turn ends when the next
+    // one starts. A copy that passes its file's time limit is cut off.
     // A copy that reported itself idle, or past its call budget, is cut off
     // at once (capture-setup.mjs).
     const idle = new Set()
@@ -666,11 +697,14 @@ export default async (env) => {
     // ends the loop and the copy finishes on its own; a copy still running
     // IDLE_MS after it spun swallowed the throw and is cut off.
     const spunAt = new Map()
+    const closed = new Set()
     const finished = () => {
       if (!existsSync(capture)) return 0
-      const done = new Set()
+      let at = 0
       for (const line of readFileSync(capture, `utf8`).split(`\n`)) {
-        if (line.includes(`"closed":true`)) done.add(JSON.parse(line).file)
+        if (line.includes(`"started":true`))
+          at = Math.max(at, copies.indexOf(JSON.parse(line).file))
+        if (line.includes(`"closed":true`)) closed.add(JSON.parse(line).file)
         if (line.includes(`"idle":true`)) idle.add(JSON.parse(line).file)
         if (line.includes(`"spin":true`)) {
           const file = JSON.parse(line).file
@@ -678,7 +712,8 @@ export default async (env) => {
           if (!spunAt.has(file)) spunAt.set(file, Date.now())
         }
       }
-      return copies.findIndex((copy) => !done.has(copy))
+      if (closed.has(copies[at])) at += 1
+      return at === copies.length ? -1 : at
     }
     let current = 0
     let copyStarted = Date.now()
@@ -719,7 +754,7 @@ export default async (env) => {
           )
           if (copy && row.skipped) skipped.add(copy)
           if (copy && row.spin) spun.add(copy)
-          if (copy && !row.closed && !row.idle && !row.spin)
+          if (copy && !row.closed && !row.idle && !row.spin && !row.started)
             rows.get(copy).push(row)
         }
       return rows
@@ -746,10 +781,12 @@ export default async (env) => {
           timedOut: current,
         })
         // The copies before the one that hung finished: their units come
-        // from their capture rows.
+        // from their capture rows. One that never closed failed to load, and
+        // a cut-off run does not say why, so it runs again (`undefined`).
         const rows = rowsOf()
         return {
           units: items.slice(0, current).map((item, i) => {
+            if (!closed.has(copies[i])) return undefined
             if (skipped.has(copies[i])) return skippedUnit(item)
             if (spun.has(copies[i])) return spunUnit(item)
             const map = keyFor(copies[i], item.file)
@@ -1053,7 +1090,7 @@ export default async (env) => {
           break
         }
         batch.units.forEach((u, k) => {
-          if (u.skipped) return
+          if (u === undefined || u.skipped) return
           if (u.spin) evidence.spin += 1
           got[rest[k].i] = u
           remember(rest[k].id, rest[k].file, u, index)
@@ -1089,7 +1126,10 @@ export default async (env) => {
               at === undefined ? (got[hung.i] = u) : settle(hung, u, at),
             ),
           )
-        rest = rest.slice(batch.timedOutAt + 1)
+        rest = [
+          ...rest.slice(0, batch.timedOutAt).filter((_, k) => !batch.units[k]),
+          ...rest.slice(batch.timedOutAt + 1),
+        ]
         evidence.rerun += rest.length
       }
       // This slot takes what no other slot has, then waits for the rest.
@@ -1681,7 +1721,10 @@ export default async (env) => {
               ignore: ignoredIn(file),
             },
           ])
-          job.units.push(got)
+          // In its owner file's place, not in the order the contexts
+          // finish, so the outcome's tests and laws are listed alike in
+          // every run (law 9).
+          job.units[job.targets.indexOf(file)] = got
           serve[slot.index] = undefined
           invalidateChanged([job.path], slot.context)
         }

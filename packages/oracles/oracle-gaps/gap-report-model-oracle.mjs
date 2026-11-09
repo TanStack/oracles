@@ -277,6 +277,9 @@ const histories = fc.record({
     `missingSource`,
     `nonLiteral`,
     `brokenOwner`,
+    // The package's Vitest config defines `test.projects`, which the runner
+    // cannot honor: each project has its own environment and setup files.
+    `projects`,
   ),
   stability: fc.constantFrom(
     `none`,
@@ -304,9 +307,33 @@ const histories = fc.record({
   // `configurable`, as offline-transactions' defines `indexedDB`. Vitest runs
   // it once per file in a fresh worker; every copy must see the same.
   setupGlobal: fc.constantFrom(false, false, false, true),
-  // The workspace dependency may be a native addon (a `binding.gyp` beside
-  // its manifest), as better-sqlite3 is.
-  nativeDep: fc.constantFrom(false, false, false, true),
+  // A native addon in the package's dependency tree: the workspace
+  // dependency itself, built from a `binding.gyp` beside its manifest, as
+  // better-sqlite3 is; or a dependency of the workspace dependency that ships
+  // only a prebuilt `.node` file, as prebuilt-binary packages do.
+  native: fc.constantFrom(`none`, `none`, `none`, `none`, `gyp`, `deep`),
+  // The source imports a subpath of the workspace dependency
+  // (`state-dep/extra`), which loads the dependency's main module too.
+  depSubpath: fc.constantFrom(false, false, false, true),
+  // The package and its workspace dependency each name a devDependency that
+  // no test loads and that has no ESM entry (only `require`), as an unbuilt
+  // workspace package has.
+  unbuiltDep: fc.constantFrom(false, false, false, true),
+  // The first generated function, when it is a free function that calls no
+  // other generated function and has no `while` loop, also runs when the
+  // module loads, with 0. A mutant under which it throws then fails every
+  // file that imports the module, before any test runs.
+  boot: fc.constantFrom(false, false, false, true),
+  // The run's time budgets: a short first budget confirmed by a run alone
+  // with the full limit, or one budget (`--first-limit` equal to
+  // `--hang-limit`), where a run past it is a timeout at once.
+  budget: fc.constantFrom(`two`, `two`, `two`, `one`),
+  // Where the CLI is installed: a plain path, or one with a space and `#`,
+  // which a file URL spells with escapes.
+  cliPath: fc.constantFrom(`plain`, `plain`, `plain`, `spaced`),
+  // Whether law 9's first check is two checks through the daemon at once,
+  // as an editor hook and a terminal can start them.
+  concurrentStart: fc.boolean(),
   configFile: fc.constantFrom(
     `vite.config.ts`,
     `vite.config.ts`,
@@ -742,6 +769,17 @@ const witness = [
     body: [push],
     tests: [judging(`a`, `fixed seed`, 1, { getter: true })],
   },
+  // A test that spies on the builtins a value is scanned with
+  // (`Object.keys`, `Object.getPrototypeOf`,
+  // `Object.getOwnPropertyDescriptor`), asserts on a value, and checks that
+  // nothing scanned it, as TanStack DB's includes work counter does. The
+  // capture must keep its own references to the builtins it calls.
+  {
+    id: `w_spy`,
+    owners: [`a`],
+    body: [push],
+    tests: [judging(`a`, `fixed seed`, 1, { spies: true })],
+  },
   // Two tests that share state: the first, which calls another function,
   // sets it; the second calls this function only when it is set. A runner
   // that runs only the tests that reached a site must not change what the
@@ -980,6 +1018,7 @@ const captureWitness = new Set([
   `w_campaigns`,
   `w_soft`,
   `w_getter`,
+  `w_spy`,
   `w_shared`,
   `w_caught`,
   `w_late`,
@@ -1350,7 +1389,7 @@ function resolveHistory(history) {
   // The workspace dependency's import shares the first line, so the
   // preamble's lines do not move.
   const lines = [
-    `import { ${imported.join(`, `)} } from './lib'; import { note, seen } from 'state-dep'`,
+    `import { ${imported.join(`, `)} } from './lib'; import { note, seen } from 'state-dep'${history.depSubpath ? `; import 'state-dep/extra'` : ``}`,
     ...preamble,
   ]
   // A body's statements, each on its own lines. A nested function (an
@@ -1421,11 +1460,34 @@ function resolveHistory(history) {
     lines.push(`}`)
   }
   // Code that runs when the module loads: `w_load` writes its labels into
-  // `loaded`, which `w_loaded` reads.
-  let moduleLoadLine
+  // `loaded`, which `w_loaded` reads, and a booted first function writes
+  // into an array no one reads.
+  const loadCalls = []
   if (functions.some((fn) => fn.id === `w_load`)) {
-    moduleLoadLine = lines.length + 1
+    loadCalls.push({
+      fn: `w_load`,
+      line: lines.length + 1,
+      text: `w_load(0, loaded);`,
+    })
     lines.push(`w_load(0, loaded);`)
+  }
+  const [first] = generated
+  if (
+    history.boot === true &&
+    first?.container === `free` &&
+    first.body.every(
+      (stmt) =>
+        stmt.kind !== `until` &&
+        !referenceKinds.has(stmt.kind) &&
+        stmt.kind !== `libCall`,
+    )
+  ) {
+    loadCalls.push({
+      fn: first.id,
+      line: lines.length + 1,
+      text: `${first.id}(0, []);`,
+    })
+    lines.push(`${first.id}(0, []);`)
   }
   const source = `${lines.join(`\n`)}\n`
   // The library and the Svelte module are laid out the same way, each in
@@ -1504,7 +1566,7 @@ function resolveHistory(history) {
     tests,
     authored,
     authoredList,
-    moduleLoadLine,
+    loadCalls,
     wholeFile: history.wholeFile,
     template: history.template,
     fault: history.fault,
@@ -1514,7 +1576,12 @@ function resolveHistory(history) {
     config: history.config ?? `object`,
     configFile: history.configFile ?? `vite.config.ts`,
     configEnv: history.configEnv === true,
-    nativeDep: history.nativeDep === true,
+    native: history.native ?? `none`,
+    depSubpath: history.depSubpath === true,
+    unbuiltDep: history.unbuiltDep === true,
+    budget: history.budget ?? `two`,
+    cliPath: history.cliPath ?? `plain`,
+    concurrentStart: history.concurrentStart === true,
     setupGlobal: history.setupGlobal === true,
     sourceSpelling: history.sourceSpelling ?? `plain`,
     // The source files the CLI is asked to check.
@@ -1830,9 +1897,9 @@ function sitesOf(plan) {
       }
     }
   }
-  if (plan.moduleLoadLine !== undefined)
-    add(`<module>`, plan.moduleLoadLine, `delete-call`, `w_load(0, loaded);`, {
-      role: `moduleLoad`,
+  for (const call of plan.loadCalls)
+    add(`<module>`, call.line, `delete-call`, call.text, {
+      role: call.fn === `w_load` ? `moduleLoad` : `bootLoad`,
     })
   // Order on a line, and the anchor's occurrence index within a function.
   const onLine = new Map()
@@ -2241,6 +2308,9 @@ function refusal(plan) {
   if (plan.fault === `badEntry`) return { cause: `${SOURCE}#nope` }
   if (plan.fault === `missingSource`) return { cause: `src/missing.ts` }
   if (plan.fault === `nonLiteral`) return { cause: `b.test.ts` }
+  // A config the runner cannot honor refuses the run rather than leave every
+  // mutant unreached (maintainer decision, 2026-11-08).
+  if (plan.fault === `projects`) return { cause: `test.projects` }
   // A failing owner is named with its test's error, so the author can fix it.
   if (plan.fault === `brokenOwner`)
     return {
@@ -2259,15 +2329,13 @@ function model(plan) {
     plan.tests.filter(
       (t) => ORACLE_FILES.includes(t.file) && owners(id).has(t.file),
     )
-  // Code that ran when the module loaded: the call at the end of the source,
-  // and the sites of `w_load` that the call reached (with 0).
-  const loadRun =
-    plan.moduleLoadLine !== undefined
-      ? interpret(plan, `w_load`, 0, sites)
-      : undefined
+  // Code that ran when the module loaded: the calls at the end of the
+  // source, and the sites that each call reached (with 0).
+  const loadRuns = plan.loadCalls.map((call) =>
+    interpret(plan, call.fn, 0, sites),
+  )
   const ranAtLoad = (site) =>
-    site.fnId === `<module>` ||
-    (site.fnId === `w_load` && loadRun?.reached.has(site.id) === true)
+    site.fnId === `<module>` || loadRuns.some((run) => run.reached.has(site.id))
   const kindOf = (site) => {
     if (owners(site.fnId).size === 0) return `unowned`
     const tests = ownerTests(site.fnId)
@@ -2282,15 +2350,27 @@ function model(plan) {
       }
     // What runs at load reaches every test of the file (maintainer decision,
     // 2026-11-06), so the outcomes its `if`s take count as taken there.
-    if (loadRun && tests.length > 0)
-      for (const [line, value] of loadRun.outcomes)
-        taken.set(line, new Set([...(taken.get(line) ?? []), value]))
+    if (tests.length > 0)
+      for (const run of loadRuns)
+        for (const [line, value] of run.outcomes)
+          taken.set(line, new Set([...(taken.get(line) ?? []), value]))
     // Code that ran when the module loaded runs in every owner file that has
     // a test, and reaches every test of that file (maintainer decision,
     // 2026-11-06); a site that the load did not run is reached only by tests.
     const atLoad = ranAtLoad(site)
     if (!reached.has(site.id) && !(atLoad && tests.length > 0))
       return `unreached`
+    // A mutant under which the module throws while it loads fails every
+    // file that imports it before any test runs: an error outside any test
+    // (law 4; the classification oracle's `setup-error`, ORC-006's setup
+    // failure).
+    if (
+      atLoad &&
+      plan.loadCalls.some(
+        (call) => interpret(plan, call.fn, 0, sites, { site: site.id }).threw,
+      )
+    )
+      return `setup-error`
     const reaching = atLoad
       ? tests
       : tests.filter((t) =>
@@ -2369,7 +2449,7 @@ function model(plan) {
   return {
     // A native addon can crash the whole process from a worker thread, so a
     // package that depends on one runs its tests in child processes.
-    pool: plan.nativeDep ? `forks` : `threads`,
+    pool: plan.native === `none` ? `threads` : `forks`,
     mutants,
     authored,
     authoredAll,
@@ -2432,7 +2512,7 @@ function oracleTestFile(plan, file) {
         ]
       : [`declareOracle({ owns: [${entries.join(`, `)}] })`]
   const out = [
-    `import { ${plan.tests.some((t) => t.file === file && t.cleanupThrows) ? `afterEach, ` : ``}describe, expect, test } from 'vitest'`,
+    `import { ${plan.tests.some((t) => t.file === file && t.cleanupThrows) ? `afterEach, ` : ``}describe, expect, test${plan.tests.some((t) => t.file === file && t.spies) ? `, vi` : ``} } from 'vitest'`,
     ...(plan.tests.some((t) => t.file === file && t.shrinks)
       ? [`import fc from 'fast-check'`]
       : []),
@@ -2495,6 +2575,16 @@ function oracleTestFile(plan, file) {
           : `    g.__oracleObserve?.('trace', ${out})`,
         ...(t.flaky
           ? [`    g.__oracleObserve?.('clock', performance.now())`]
+          : []),
+        ...(t.spies
+          ? [
+              `    const payload${i} = { trace: ${out} }`,
+              `    const spies${i} = [vi.spyOn(Object, 'keys'), vi.spyOn(Object, 'getPrototypeOf'), vi.spyOn(Object, 'getOwnPropertyDescriptor')]`,
+              `    expect(payload${i}).toBeDefined()`,
+              `    const scans${i} = spies${i}.flatMap((spy) => spy.mock.calls).filter(([target]) => target === payload${i}).length`,
+              `    for (const spy of spies${i}) spy.mockRestore()`,
+              `    if (scans${i} !== 0) throw new Error('the payload was scanned')`,
+            ]
           : []),
         ...(t.getter
           ? [
@@ -2635,15 +2725,28 @@ const initialState = (plan) => ({
 
 /** The fixture package's files in one state. */
 function fixtureFiles(plan, state = initialState(plan)) {
+  const manifest = (fields) =>
+    `${JSON.stringify({ private: true, type: `module`, ...fields })}\n`
+  // A symbolic link, as a package manager links a workspace package.
+  const link = (target) => ({ link: target })
+  const test = `{ include: ${
+    plan.configEnv
+      ? `process.env.VITEST === 'true' && process.env.TEST === 'true' && process.env.NODE_ENV === 'test' ? ['tests/**/*.test.ts'] : []`
+      : `['tests/**/*.test.ts']`
+  }${plan.setupGlobal ? `, setupFiles: ['./tests/setup.ts']` : ``} }`
   const files = {
-    'package.json': `{ "name": "gap-fixture", "private": true, "type": "module", "dependencies": { "state-dep": "*" } }\n`,
+    'package.json': manifest({
+      name: `gap-fixture`,
+      dependencies: { 'state-dep': `*` },
+      ...(plan.unbuiltDep ? { devDependencies: { 'unbuilt-dep': `*` } } : {}),
+    }),
     [plan.configFile]: `import { defineConfig } from 'vitest/config'\nexport default defineConfig(${
       { object: ``, function: `() => (`, async: `async () => (` }[plan.config]
-    }{ test: { include: ${
-      plan.configEnv
-        ? `process.env.VITEST === 'true' && process.env.TEST === 'true' && process.env.NODE_ENV === 'test' ? ['tests/**/*.test.ts'] : []`
-        : `['tests/**/*.test.ts']`
-    }${plan.setupGlobal ? `, setupFiles: ['./tests/setup.ts']` : ``} } }${plan.config === `object` ? `` : `)`})\n`,
+    }{ test: ${
+      plan.fault === `projects`
+        ? `{ projects: [{ test: { name: 'unit', ...${test} } }] }`
+        : test
+    } }${plan.config === `object` ? `` : `)`})\n`,
     [SOURCE]: state.prepend
       ? edited({ ...plan, stability: `prepend` })
       : plan.source,
@@ -2651,7 +2754,14 @@ function fixtureFiles(plan, state = initialState(plan)) {
     ...(plan.runesSource ? { [RUNES]: plan.runesSource } : {}),
     'tests/strict.ts': `export const strict = ${state.strict}\n`,
     // A workspace dependency with module state, linked through node_modules.
-    'deps/state-dep/package.json': `{ "name": "state-dep", "private": true, "type": "module", "exports": "./index.js" }\n`,
+    'deps/state-dep/package.json': manifest({
+      name: `state-dep`,
+      exports: plan.depSubpath
+        ? { '.': `./index.js`, './extra': `./extra.js` }
+        : `./index.js`,
+      ...(plan.native === `deep` ? { dependencies: { 'addon-dep': `*` } } : {}),
+      ...(plan.unbuiltDep ? { devDependencies: { 'unbuilt-dep': `*` } } : {}),
+    }),
     // It also refuses a second load into one realm through a global marker,
     // as a duplicate-instance check does in a browser window:
     // each copy must load it as a fresh worker would.
@@ -2661,8 +2771,40 @@ function fixtureFiles(plan, state = initialState(plan)) {
           'tests/setup.ts': `Object.defineProperty(globalThis, 'fixtureStore', { value: { ready: true } })\n`,
         }
       : {}),
-    ...(plan.nativeDep
+    // A subpath that reads the dependency's main module, so a runner that
+    // loads the two apart loads the main module twice.
+    ...(plan.depSubpath
+      ? {
+          'deps/state-dep/extra.js': `export { seen as seenAgain } from './index.js'\n`,
+        }
+      : {}),
+    ...(plan.native === `gyp`
       ? { 'deps/state-dep/binding.gyp': `{ "targets": [] }\n` }
+      : {}),
+    // A dependency of the workspace dependency that ships a prebuilt addon
+    // and no binding.gyp. No test loads the addon.
+    ...(plan.native === `deep`
+      ? {
+          'deps/addon-dep/package.json': manifest({
+            name: `addon-dep`,
+            exports: `./index.js`,
+          }),
+          'deps/addon-dep/index.js': `export {}\n`,
+          'deps/addon-dep/addon.node': ``,
+          'deps/state-dep/node_modules/addon-dep': link(`../../addon-dep`),
+        }
+      : {}),
+    // A devDependency that no test loads, with only a CommonJS entry that was
+    // never built.
+    ...(plan.unbuiltDep
+      ? {
+          'deps/unbuilt-dep/package.json': manifest({
+            name: `unbuilt-dep`,
+            exports: { '.': { require: `./dist/index.cjs` } },
+          }),
+          'node_modules/unbuilt-dep': link(`../deps/unbuilt-dep`),
+          'deps/state-dep/node_modules/unbuilt-dep': link(`../../unbuilt-dep`),
+        }
       : {}),
     'tests/c.test.ts': ordinaryTestFile(plan),
     // A copy that a check which died left behind (the runner names its
@@ -2726,8 +2868,12 @@ function writeFixture(dir, files) {
     symlinkSync(`../deps/state-dep`, join(dir, `node_modules/state-dep`), `dir`)
   for (const path of written.get(dir) ?? [])
     if (!(path in files)) rmSync(join(dir, path), { force: true })
-  for (const [path, text] of Object.entries(files))
-    writeFileSync(join(dir, path), text)
+  for (const [path, text] of Object.entries(files)) {
+    const at = join(dir, path)
+    mkdirSync(dirname(at), { recursive: true })
+    if (typeof text === `string`) writeFileSync(at, text)
+    else if (!existsSync(at)) symlinkSync(text.link, at, `dir`)
+  }
   written.set(dir, Object.keys(files))
 }
 

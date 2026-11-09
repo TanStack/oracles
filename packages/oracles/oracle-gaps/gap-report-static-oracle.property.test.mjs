@@ -16,8 +16,8 @@
  *
  * - **Refusal.** An owns entry that names no function, an entry that names a
  *   missing file, and an owns list that is not a literal each refuse, naming
- *   the cause. An owner whose tests fail is a runtime refusal, so here it
- *   must not refuse.
+ *   the cause. An owner whose tests fail, and a Vitest config with
+ *   `test.projects`, are runtime refusals, so here they must not refuse.
  * - **Rune placement.** Instrumenting a source does not change whether it
  *   compiles. In a Svelte module, every rune call stays where Svelte allows
  *   it: `$state` and `$derived` (and `.raw`, `.by`) as a variable's
@@ -284,8 +284,10 @@ function runePlacement(code) {
 function check(plan, observations, expected) {
   const got = observations.find((o) => o.checkpoint === `static`)?.value
   if (!got) return violation(`static`, `no analysis was observed`, `completion`)
-  // An owner that fails is found only when its tests run.
-  const refused = plan.fault === `brokenOwner` ? undefined : expected.refused
+  // An owner that fails, and a config the runner cannot honor, are found
+  // only when the runner starts.
+  const runtime = [`brokenOwner`, `projects`].includes(plan.fault)
+  const refused = runtime ? undefined : expected.refused
   if (refused) {
     if (!got.refusal)
       return violation(
@@ -320,10 +322,9 @@ function check(plan, observations, expected) {
         `rune placement`,
       )
   }
-  const owedMutants =
-    plan.fault === `brokenOwner`
-      ? model({ ...plan, fault: `none` }).mutants
-      : expected.mutants
+  const owedMutants = runtime
+    ? model({ ...plan, fault: `none` }).mutants
+    : expected.mutants
   const actual = withOrdinals(got.mutants)
   if (
     actual.map(siteOf).sort().join() !== owedMutants.map(siteOf).sort().join()

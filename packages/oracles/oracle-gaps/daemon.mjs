@@ -4,6 +4,11 @@
 // only the units whose inputs changed. A check through the daemon reports
 // what a cold run reports (the CLI oracle's law 9).
 //
+// One daemon serves a package. Two CLIs that find no daemon at once each
+// start one; each daemon takes the package's lock file before it listens,
+// and one that finds the lock held by a live daemon exits, so both CLIs
+// reach the daemon that holds it. A lock whose holder died is taken over.
+//
 // The CLI talks to it over a Unix socket named by the package's path. Each
 // request is one line of JSON, the CLI's arguments; the reply is one line of
 // JSON with the exit code and the output a cold run would have printed. One
@@ -15,11 +20,18 @@
 // ran.
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdirSync, openSync, realpathSync, rmSync } from 'node:fs'
+import {
+  mkdirSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { connect, createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const idleMs = 30 * 60_000
@@ -90,7 +102,43 @@ export async function stopDaemon(pkg) {
   }
 }
 
+/**
+ * Takes the package's daemon lock, or returns false when a live daemon
+ * holds it. The lock file holds its holder's process id.
+ */
+async function takeLock(lock) {
+  for (;;) {
+    try {
+      writeFileSync(lock, String(process.pid), { flag: `wx` })
+      return true
+    } catch (error) {
+      if (error.code !== `EEXIST`) throw error
+    }
+    let holder
+    try {
+      holder = Number(readFileSync(lock, `utf8`))
+    } catch {
+      continue
+    }
+    // A holder that has created the file may not have written its id yet.
+    if (!holder) {
+      await new Promise((r) => setTimeout(r, 20))
+      continue
+    }
+    try {
+      process.kill(holder, 0)
+      return false
+    } catch (error) {
+      if (error.code !== `ESRCH`) return false
+      rmSync(lock, { force: true })
+    }
+  }
+}
+
 async function serve(pkg) {
+  mkdirSync(stateDirOf(pkg), { recursive: true })
+  const lock = join(stateDirOf(pkg), `daemon.lock`)
+  if (!(await takeLock(lock))) process.exit(0)
   const { codeIdentity, openSession } = await import(`./check.mjs`)
   // The CLI's code as this process loaded it. A process cannot reload its
   // modules, so a daemon whose code changed must not run another check.
@@ -142,6 +190,7 @@ async function serve(pkg) {
   async function shutdown(connection, reply = { exitCode: 0 }) {
     server.close()
     rmSync(socket, { force: true })
+    rmSync(lock, { force: true })
     await session.close()
     await store.close()
     if (connection)
@@ -154,7 +203,7 @@ async function serve(pkg) {
   }, idleMs)
 }
 
-if (import.meta.url === `file://${realpathSync(process.argv[1])}`) {
+if (import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   const at = process.argv.indexOf(`--package`)
   await serve(realpathSync(resolve(process.argv[at + 1])))
 }

@@ -31,6 +31,10 @@
 //    it, for information only: an ordinary test never closes a gap. Without
 //    it, ordinary test files do not run at all.
 //
+// A Vitest config that defines `test.projects` refuses the run: each project
+// has its own environment and setup files, which the runner's copies would
+// not run under.
+//
 // The pipeline lives in check.mjs, as a session that keeps Vitest warm. A
 // cold run opens one session for one check. With --daemon, the CLI sends the
 // check to a daemon for the package (daemon.mjs), starting it if needed; the
@@ -48,7 +52,7 @@
 // configuration must read that prefix.
 //
 // Usage:
-//   oracle-gaps --package <dir> --source <src/x.ts,...>
+//   oracle-gaps --package <dir> --source <src/x.ts,...>   (relative to <dir>)
 //     [--env-prefix <name>]   (the framework's variable prefix; default ORACLE)
 //     [--daemon]              (check through the package's daemon)
 //     [--ordinary]            (also run ordinary test files, for information)
@@ -62,15 +66,19 @@
 //     [--contexts <n>]        (warm contexts, one worker each; default
 //                              the machine's parallelism minus 2, at most 16)
 //     [--pool threads|forks]  (Vitest's pool; default threads, or forks when
-//                              a direct dependency is a native addon)
+//                              a native addon is anywhere in the package's
+//                              dependency tree)
 //   oracle-gaps --stop-daemon --package <dir>
 import { realpathSync } from 'node:fs'
+import { pathToFileURL } from 'node:url'
 import { parseArgs } from './args.mjs'
 import { openSession } from './check.mjs'
 import { requestDaemon, stopDaemon } from './daemon.mjs'
 import { memoryStore } from './evidence.mjs'
 
-if (import.meta.url === `file://${realpathSync(process.argv[1])}`) {
+// A file URL escapes a space, `#`, and the like, so the script's own URL is
+// compared with the URL of the path it was started as.
+if (import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   let exitCode = 0
   try {
     const options = parseArgs(process.argv.slice(2))
