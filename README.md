@@ -46,8 +46,13 @@ settings: {
 ```
 
 An entry exempts its file's raw campaigns and legacy imports only with a
-non-empty `reason`. The rule also reports an entry that has no reason, an entry
-whose file has no legacy use left, and an entry it cannot judge (a file outside
-the oracle-file glob, or an implementation module). It sees one file at a time,
-so it cannot tell a new entry from an old one: a project that wants the baseline
-to shrink enforces that in its own diff check.
+non-empty `reason`. The rule also reports an entry that has no reason, and an
+entry whose file has no legacy use left (a stale entry). An entry for a deleted
+or renamed file is not reported, because no lint run sees that file. An entry
+the rule cannot judge is a configuration error: a malformed entry, or one that
+names a file outside the oracle-file glob or a framework implementation module.
+The rule throws when it reads the settings, so the run stops with that message.
+
+The rule sees one file at a time, so it cannot tell a new entry from an old
+one: a project that wants the baseline to shrink enforces that in its own diff
+check.
