@@ -31,9 +31,8 @@
  *   mutant driver) fails with the named law.
  * - `determinism`: the determinism test runs every fixed and constructed history
  *   and three generated ones, and fails for a driver whose trace changes,
- *   compared as data, by stable text: `-0` is not `0`, and key order and
- *   Map and Set order count, which a check that iterates them can see; a
- *   function counts by its name, so a fresh closure is the same data.
+ *   compared by their data encoding: `-0` is not `0`, and key order and
+ *   Map and Set order count, which a check that iterates them can see.
  * - `agreement`: for a probe-bound state, a history whose `predict` says it
  *   enters the state while the history does not enter it, or does not enter
  *   it while the history does, violates law `reach agreement` at checkpoint
@@ -62,6 +61,13 @@
  * - `replay`: replaying a failing campaign's seed and path runs only that
  *   property's random campaign, starts from the counterexample itself, and
  *   reproduces it.
+ * - `data`: observations and enumerated histories are a closed data domain
+ *   (maintainer decision, 2026-11-08): primitives (with -0, NaN, the
+ *   infinities, bigints, and undefined), dense arrays, plain objects with
+ *   string keys, Maps, Sets, and Errors. A history whose driver observes
+ *   anything else fails at once with an `OracleDataError` that names the
+ *   value's path in the trace and its kind; an enumerated source holding
+ *   such a history fails to load, naming the history's path.
  * - `names`: no test name holds this machine's paths, so names are the same
  *   on every machine (an Error in a history is named by its name and
  *   message, not its stack).
@@ -100,7 +106,9 @@
  * from a setup error has no witness: no shrink in this language turns one
  * into the other. The gap report's observation hook,
  * `forwardCut`, and `differs` have no law here; `withinTurns` has its own
- * oracle. Only generated sources bind a probe, and only
+ * oracle. A counterexample of the `errors` form prints its Errors without
+ * the items they hold, so the shrink and replay checks cannot read it back
+ * and skip it. Only generated sources bind a probe, and only
  * `saw-0`. A late probe is judged by whether the run reports it, not by which
  * test Vitest blames.
  */
@@ -118,12 +126,14 @@ import { fileURLToPath } from 'node:url'
 import fc from 'fast-check'
 import { oracleProperty, pass, violation } from '../src/index.js'
 import {
+  oddKinds,
   outerSuite,
   shellText,
   syntheticArbitrary,
   syntheticIds,
 } from './oracle-property-self-oracle-fixture.js'
 import type {
+  OddKind,
   SyntheticHistory,
   SyntheticSpec,
 } from './oracle-property-self-oracle-fixture.js'
@@ -168,7 +178,7 @@ type Draft = {
   oddThrow: boolean
   zeroNoise: boolean
   orderNoise: boolean
-  freshClosure: boolean
+  odd: OddKind | `none`
   labelStyle: `plain` | `shell` | `default`
   nested: boolean
   strictModel: boolean
@@ -312,9 +322,10 @@ const draft: fc.Arbitrary<Draft> = fc.record({
     { weight: 9, arbitrary: fc.constant(false) },
     { weight: 1, arbitrary: fc.constant(true) },
   ),
-  freshClosure: fc.oneof(
-    { weight: 9, arbitrary: fc.constant(false) },
-    { weight: 1, arbitrary: fc.constant(true) },
+  odd: fc.oneof(
+    { weight: 10, arbitrary: fc.constant(`none` as const) },
+    { weight: 1, arbitrary: fc.constant(`domain` as const) },
+    { weight: 2, arbitrary: fc.constantFrom(...oddKinds.slice(1)) },
   ),
   nested: fc.oneof(
     { weight: 4, arbitrary: fc.constant(false) },
@@ -421,7 +432,13 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
         ...(d.oddThrow ? { oddThrow: true } : {}),
         ...(d.zeroNoise ? { zeroNoise: true } : {}),
         ...(d.orderNoise ? { orderNoise: true } : {}),
-        ...(d.freshClosure ? { freshClosure: true } : {}),
+        // An odd observation fails a history at once; it is drawn without
+        // probes or a slow driver, whose counts it would cut short.
+        ...(d.odd !== `none` &&
+        !(d.timing === `slow`) &&
+        (!generated || d.probe === `none`)
+          ? { odd: d.odd }
+          : {}),
         ...(!generated && d.labelStyle !== `plain`
           ? { labelStyle: d.labelStyle }
           : {}),
@@ -462,6 +479,7 @@ type Kind =
   | `calibration-none`
   | `timeout`
   | `model-not-total`
+  | `data`
 type Outcome = {
   kind: Kind
   law?: `three` | `four` | `reach agreement` | `bounded clock`
@@ -471,6 +489,9 @@ type Outcome = {
   checkpoint?: string
   /** For a predicted entry that did not happen: whether the probe was called. */
   diagnosis?: `never-reached` | `false-condition`
+  /** For a data error: the value's path and its kind. */
+  dataPath?: string
+  dataKind?: string
 }
 type LogEntry = {
   id: string
@@ -528,7 +549,6 @@ function verdictOf(history: SyntheticHistory, spec: SyntheticSpec): Outcome {
       spec.nondeterministic ||
       spec.zeroNoise === true ||
       spec.orderNoise === true ||
-      spec.freshClosure === true ||
       spec.errorNoise === true
     // A spin cuts the trace when anything follows it: an observation, or a
     // driver error.
@@ -661,8 +681,37 @@ function enumeratedName(
 const isCampaign = (name: string) =>
   name.startsWith(`fixed seed`) || name === `random seed`
 
+// Where an odd value outside the domain fails, and how its kind is named.
+// The odd observation is a history's first, at checkpoint `odd`.
+const oddFailures: Record<Exclude<OddKind, `domain`>, [string, string]> = {
+  cycle: [`.reason.self`, `a cycle`],
+  sparse: [`.reason`, `a sparse array or one with other properties`],
+  accessor: [`.reason.x`, `an accessor`],
+  'symbol-key': [`.reason`, `a symbol key`],
+  class: [`.reason`, `SyntheticBox`],
+  function: [`.reason`, `a function`],
+  symbol: [`.reason`, `a symbol`],
+  'dom-exception': [`.reason`, `DOMException`],
+  'typed-array': [`.reason`, `Uint8Array`],
+  date: [`.reason`, `Date`],
+  'cross-realm': [`.reason`, `an object from another realm`],
+}
+const dataOutcome = (spec: SyntheticSpec): Outcome | undefined => {
+  if (spec.odd === undefined || spec.odd === `domain`) return undefined
+  const [path, dataKind] = oddFailures[spec.odd]
+  return { kind: `data`, dataPath: `observation 0 ("odd") ${path}`, dataKind }
+}
+// The forms an enumerated history may not hold: a class instance, and an
+// accessor; the first history fails registration.
+const historyFailures: Partial<
+  Record<NonNullable<SyntheticSpec[`form`]>, string>
+> = {
+  boxed: `history 0: SyntheticBox is not history data`,
+  trap: `history 0 .trap: an accessor is not history data`,
+}
+
 type SpecExpectation =
-  | { loads: false }
+  | { loads: false; loadError?: string }
   | {
       loads: true
       tests: Map<string, Outcome>
@@ -690,6 +739,11 @@ function predictSpec(
   const generated = spec.source.kind === `generated`
   // Every source, enumerated or generated, must name a registered property.
   if (spec.unregistered) return { loads: false }
+  const historyFailure =
+    spec.source.kind === `enumerated` && spec.form
+      ? historyFailures[spec.form]
+      : undefined
+  if (historyFailure) return { loads: false, loadError: historyFailure }
   // `predict` and a probe-bound state come together, and only a generated
   // source declares states.
   if (
@@ -728,6 +782,36 @@ function predictSpec(
   ]
   // A slow driver outlives the 100 ms limit in every test that runs a
   // history, and every test runs at least one.
+  // A driver that observes a value outside the data domain fails every
+  // history at once; a history outside the language still fails its
+  // membership check first.
+  const data = dataOutcome(spec)
+  if (data) {
+    const constructedOutside = spec.constructed.some(
+      (construction) => !constructedMember(construction.prefix),
+    )
+    for (const name of all)
+      tests.set(
+        name,
+        constructedOutside &&
+          (isCampaign(name) ||
+            name === `determinism` ||
+            name.startsWith(`calibration:`))
+          ? { kind: `constructed-membership` }
+          : data,
+      )
+    for (const fixedHistory of spec.fixed)
+      if (!member(fixedHistory.history))
+        tests.set(`fixed history: ${fixedHistory.name}`, {
+          kind: `fixed-membership`,
+        })
+    return {
+      loads: true,
+      tests,
+      reach: new Map(),
+      replays: constructedOutside ? [] : names.filter(isCampaign),
+    }
+  }
   // A history outside the language fails its membership check before any
   // driver runs, so it fails fast even in a slow spec.
   if (spec.slow) {
@@ -980,11 +1064,11 @@ const frameworkStates = [
   `lossy-history`,
   `seedless-route`,
   `error-history`,
-  `fresh-closure`,
   `model-not-total`,
   `errors-history`,
-  `boxed-history`,
-  `trap-history`,
+  `history-out-of-domain`,
+  `observation-out-of-domain`,
+  `observation-in-domain`,
   `uncut-spin-model-error`,
   `driver-error-carried`,
   `driver-error-after-spin`,
@@ -1003,9 +1087,12 @@ function frameworkReach(
     const owed = expected.get(spec.id)!
     if (!owed.loads) {
       reached.add(`registration-error`)
+      if (owed.loadError) reached.add(`history-out-of-domain`)
       continue
     }
+    if (spec.odd === `domain`) reached.add(`observation-in-domain`)
     for (const [name, outcome] of owed.tests) {
+      if (outcome.kind === `data`) reached.add(`observation-out-of-domain`)
       if (isCampaign(name) && outcome.kind === `violation`)
         reached.add(`campaign-violation`)
       if (isCampaign(name) && outcome.kind === `setup`)
@@ -1077,10 +1164,7 @@ function frameworkReach(
       if (spec.form === `lossy`) reached.add(`lossy-history`)
       if (spec.form === `error`) reached.add(`error-history`)
       if (spec.form === `errors`) reached.add(`errors-history`)
-      if (spec.form === `boxed`) reached.add(`boxed-history`)
-      if (spec.form === `trap`) reached.add(`trap-history`)
     }
-    if (spec.freshClosure) reached.add(`fresh-closure`)
     if (
       spec.strictModel &&
       logged.some(({ history }) => {
@@ -1179,6 +1263,8 @@ type Report = {
 }
 type Failure = {
   kind: Kind | `other`
+  dataPath?: string
+  dataKind?: string
   law?: string
   checkpoint?: string
   diagnosis?: `never-reached` | `false-condition`
@@ -1193,6 +1279,8 @@ type SuiteRun = {
     string,
     {
       loaded: boolean
+      /** The file's load errors, by message. */
+      loadErrors: Array<string>
       tests: Array<{
         name: string
         state: string
@@ -1259,40 +1347,47 @@ function classify(error: ReportedError | undefined): Failure {
       text.includes(`synthetic driver failed`))
       ? (`driver` as const)
       : undefined
+  // A data error names the value's path, then its kind.
+  const data = /^(.*): (.*) is not (?:observation|history) data$/.exec(text)
   const kind: Kind | `other` =
-    inner.name === `OracleModelError`
-      ? `model-not-total`
-      : inner.name === `OracleViolation`
-        ? `violation`
-        : /timed out in \d+ms/.test(text) || /timed out in \d+ms/.test(outer)
-          ? `timeout`
-          : text.includes(`is not a history the arbitrary can generate`)
-            ? `fixed-membership`
-            : text.includes(`built a history the arbitrary cannot generate`)
-              ? `constructed-membership`
-              : text.includes(`did not enter`) &&
-                  text.includes(`: fixed history "`)
-                ? `fixed-reach`
+    inner.name === `OracleDataError`
+      ? `data`
+      : inner.name === `OracleModelError`
+        ? `model-not-total`
+        : inner.name === `OracleViolation`
+          ? `violation`
+          : /timed out in \d+ms/.test(text) || /timed out in \d+ms/.test(outer)
+            ? `timeout`
+            : text.includes(`is not a history the arbitrary can generate`)
+              ? `fixed-membership`
+              : text.includes(`built a history the arbitrary cannot generate`)
+                ? `constructed-membership`
                 : text.includes(`did not enter`) &&
-                    text.includes(`: constructed history "`)
-                  ? `constructed-reach`
-                  : text.includes(`two runs of`)
-                    ? `determinism`
-                    : text.includes(`but the check passed it`)
-                      ? `calibration-passed`
-                      : text.includes(`but the check reported law`)
-                        ? `calibration-wrong-law`
-                        : text.includes(`found no history`)
-                          ? `calibration-none`
-                          : text.includes(`synthetic driver failed`) ||
-                              text.includes(`cannot read a 7`)
-                            ? `setup`
-                            : `other`
+                    text.includes(`: fixed history "`)
+                  ? `fixed-reach`
+                  : text.includes(`did not enter`) &&
+                      text.includes(`: constructed history "`)
+                    ? `constructed-reach`
+                    : text.includes(`two runs of`)
+                      ? `determinism`
+                      : text.includes(`but the check passed it`)
+                        ? `calibration-passed`
+                        : text.includes(`but the check reported law`)
+                          ? `calibration-wrong-law`
+                          : text.includes(`found no history`)
+                            ? `calibration-none`
+                            : text.includes(`synthetic driver failed`) ||
+                                text.includes(`cannot read a 7`)
+                              ? `setup`
+                              : `other`
   return {
     kind,
     ...(law ? { law } : {}),
     ...(checkpoint ? { checkpoint } : {}),
     ...(diagnosis ? { diagnosis } : {}),
+    ...(inner.name === `OracleDataError` && data
+      ? { dataPath: data[1], dataKind: data[2] }
+      : {}),
     ...(cause ? { cause } : {}),
     ...(seed !== undefined ? { seed: Number(seed) } : {}),
     ...(path !== undefined ? { path } : {}),
@@ -1383,11 +1478,19 @@ const readLog = (log: string): Array<LogEntry> =>
         })
     : []
 // The items of a counterexample that fast-check printed, in any form: the
-// first bracketed list of integers.
-const counterexampleItems = (text: string): SyntheticHistory =>
-  JSON.parse(
-    /\[(?:\d+(?:,\d+)*)?\]/.exec(text)?.[0] ?? `null`,
-  ) as SyntheticHistory
+// first bracketed list of integers, where the lossy form's `Number.NaN` is a
+// 1 and its `-0` a 2.
+const item = String.raw`(?:-?\d+|Number\.NaN)`
+const counterexampleItems = (text: string): SyntheticHistory | null => {
+  const list = new RegExp(String.raw`\[(${item}(?:,${item})*)?\]`).exec(text)
+  if (!list) return null
+  return (list[1] ?? ``)
+    .split(`,`)
+    .filter(Boolean)
+    .map((token) =>
+      token === `Number.NaN` ? 1 : token === `-0` ? 2 : Number(token),
+    )
+}
 const statesIn = (report: Report, plan: Plan, files: Array<string>) =>
   plan.specs.flatMap((spec, index) =>
     (report.files.find((file) => file.file === files[index])?.tests ?? []).map(
@@ -1436,6 +1539,9 @@ async function driveSuite(
       }
       run.files[spec.id] = {
         loaded: reported !== undefined && reported.errors.length === 0,
+        loadErrors: (reported?.errors ?? []).map(
+          (error) => error.message ?? ``,
+        ),
         tests: (reported?.tests ?? []).map((test) => ({
           name: short(spec.id, test.name),
           state: test.state,
@@ -1569,13 +1675,15 @@ const lawOfTest = (name: string) =>
 const lawOfKind = (kind: string, name: string) =>
   kind === `timeout`
     ? `timeout`
-    : kind === `model-not-total`
-      ? `verdict`
-      : kind.endsWith(`membership`)
-        ? `membership`
-        : kind.endsWith(`reach`)
-          ? `reach`
-          : lawOfTest(name)
+    : kind === `data`
+      ? `data`
+      : kind === `model-not-total`
+        ? `verdict`
+        : kind.endsWith(`membership`)
+          ? `membership`
+          : kind.endsWith(`reach`)
+            ? `reach`
+            : lawOfTest(name)
 
 function checkSuite(
   plan: Plan,
@@ -1600,8 +1708,18 @@ function checkSuite(
       if (seen.loaded)
         return violation(
           `run`,
-          `${spec.id} loaded, but its id is unregistered, a required state has no constructed history, or a constructed history names an undeclared state`,
+          `${spec.id} loaded, but its id is unregistered, a required state has no constructed history, a constructed history names an undeclared state, or a history is not data`,
           `registration`,
+        )
+      if (
+        owed.loadError &&
+        !seen.loadErrors.some((message) => message.includes(owed.loadError!))
+      )
+        return violation(
+          `run`,
+          `${spec.id} failed to load with ${JSON.stringify(seen.loadErrors)}, owed ${JSON.stringify(owed.loadError)}`,
+          `data`,
+          { actual: seen.loadErrors, expected: owed.loadError },
         )
       continue
     }
@@ -1636,6 +1754,8 @@ function checkSuite(
         (outcome.checkpoint !== undefined &&
           failure?.checkpoint !== outcome.checkpoint) ||
         failure?.diagnosis !== outcome.diagnosis ||
+        failure?.dataPath !== outcome.dataPath ||
+        failure?.dataKind !== outcome.dataKind ||
         (!isCampaign(test.name) && failure?.cause !== outcome.cause)
       )
         return violation(
@@ -1686,7 +1806,9 @@ function checkSuite(
       }
       if (failure?.counterexample && outcome.law) {
         const shrunk = counterexampleItems(failure.counterexample)
-        if (judged(spec, shrunk).law !== outcome.law)
+        // A counterexample of Errors prints without its items; it is not
+        // read back.
+        if (shrunk && judged(spec, shrunk).law !== outcome.law)
           return violation(
             `run`,
             `${spec.id} "${test.name}" reported counterexample ${failure.counterexample}, which does not violate law ${outcome.law}`,
@@ -1821,7 +1943,10 @@ function checkSuite(
     // fast-check walks the recorded path through the shrink tree without
     // running the property, so a direct replay runs the counterexample first.
     const counterexample = counterexampleItems(probe.original.counterexample!)
-    if (JSON.stringify(probe.ran?.[0]) !== JSON.stringify(counterexample))
+    if (
+      counterexample &&
+      JSON.stringify(probe.ran?.[0]) !== JSON.stringify(counterexample)
+    )
       return violation(
         checkpoint,
         `${probe.id}: the replay first ran ${JSON.stringify(probe.ran?.[0] ?? null)}, not the counterexample ${JSON.stringify(counterexample)}`,
@@ -1860,7 +1985,7 @@ const generatedDraft = (overrides: Partial<Draft>): Draft => ({
   throwOnSpin: false,
   oddThrow: false,
   orderNoise: false,
-  freshClosure: false,
+  odd: `none`,
   labelStyle: `plain`,
   nested: false,
   strictModel: false,
@@ -2182,16 +2307,25 @@ oracleProperty({
         },
       ),
       fixedHistory(
-        `an Error inside a class instance is named without its stack`,
-        [`unlabelled-enumerated`, `boxed-history`],
+        `an enumerated history holding a class instance fails to load, naming its path`,
+        [`registration-error`, `history-out-of-domain`],
         {
           ...generatedDraft({ form: `boxed`, labelStyle: `default` }),
           source: { kind: `enumerated`, histories: [[0], [1]] },
         },
       ),
+      // A label names the test, but the history must still be data.
       fixedHistory(
-        `a history whose getter throws is still named`,
-        [`unlabelled-enumerated`, `trap-history`],
+        `a labelled enumerated history holding a class instance fails to load`,
+        [`registration-error`, `history-out-of-domain`],
+        {
+          ...generatedDraft({ form: `boxed` }),
+          source: { kind: `enumerated`, histories: [[0], [1]] },
+        },
+      ),
+      fixedHistory(
+        `an enumerated history holding an accessor fails to load, naming its path`,
+        [`registration-error`, `history-out-of-domain`],
         {
           ...generatedDraft({ form: `trap`, labelStyle: `default` }),
           source: { kind: `enumerated`, histories: [[0], [1]] },
@@ -2221,10 +2355,19 @@ oracleProperty({
         generatedDraft({ orderNoise: true, fixed: [at([0])] }),
       ),
       fixedHistory(
-        `the determinism test accepts a fresh closure`,
-        [`fresh-closure`],
-        generatedDraft({ freshClosure: true, fixed: [at([0])] }),
+        `data of every kind the domain holds is observed and repeats`,
+        [`observation-in-domain`],
+        generatedDraft({ odd: `domain`, fixed: [at([0]), at([3])] }),
       ),
+      ...oddKinds
+        .slice(1)
+        .map((odd) =>
+          fixedHistory(
+            `an observed ${odd} fails the history, naming its path`,
+            [`observation-out-of-domain`],
+            generatedDraft({ odd, fixed: [at([0])] }),
+          ),
+        ),
       fixedHistory(
         `the determinism test tells -0 from 0`,
         [`determinism-caught`],

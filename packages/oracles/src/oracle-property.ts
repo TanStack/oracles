@@ -43,13 +43,22 @@
  *   the `actual` and `expected` values gets the test runner's usual diff;
  *   `differs` builds one from an exact comparison.
  *
+ * Observations and enumerated histories are data (maintainer decision,
+ * 2026-11-08): primitives, with -0, NaN, the infinities, bigints, and
+ * undefined; dense arrays; plain objects with string keys; Maps; Sets; and
+ * Errors, as their name, message, own data properties, cause, and
+ * AggregateError `errors`. A driver converts anything else (a Date, a class
+ * instance, a DOMException, a function) before it observes it: an
+ * observation that is not data fails its history at once with an
+ * `OracleDataError` naming the value's path, such as `observation 3
+ * ("result") .reason: DOMException is not observation data`, and an
+ * enumerated source holding a history that is not data fails to register.
+ *
  * Each history is one test, named by `label`, or, without one, by the
- * history's stable text: its JSON when JSON carries it exactly, and otherwise
- * Node's inspection of it, which keeps NaN, -0, undefined, bigints, Maps,
- * Sets, symbol keys, and class names apart, and shows an Error by its name
- * and message without its stack, so a name is the same on every machine. A violation fails it with an
- * `OracleViolation` that names the property, the law, the checkpoint, the
- * difference, the history in that text, and the command that reruns that history: a `-t` pattern
+ * history's data encoding, which is its JSON text for JSON data and the same
+ * on every machine. A violation fails it with an `OracleViolation` that
+ * names the property, the law, the checkpoint, the difference, the history
+ * in that encoding, and the command that reruns that history: a `-t` pattern
  * that matches the test's full name, its enclosing suites' names included,
  * escaped because Vitest reads `-t` as a regular expression, and quoted for a
  * POSIX shell, so it pastes as printed. Every observation is
@@ -123,10 +132,9 @@
  * - **Determinism.** A `determinism` test runs some histories twice and
  *   requires the same trace: every fixed and constructed history of a generated
  *   source and three generated histories, or up to eight evenly spaced
- *   enumerated histories. Observations are data: two runs are compared by
- *   their stable text, so `-0` and `0`, key order, and Map and Set order
- *   count, as a check that iterates them can see, and a function counts by
- *   its name, so a fresh closure is the same data. A trace
+ *   enumerated histories. Two runs are compared by their observations' data
+ *   encodings, so `-0` and `0`, key order, and Map and Set order count, as a
+ *   check that iterates them can see. A trace
  *   that differs between runs of one history breaks replay, shrinking, and the gap
  *   report's comparison, so a driver records relations (before and after,
  *   same or different id) rather than clock readings or random ids.
@@ -156,7 +164,7 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { appendFileSync } from 'node:fs'
-import { inspect, isDeepStrictEqual, types } from 'node:util'
+import { isDeepStrictEqual } from 'node:util'
 import fc from 'fast-check'
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -630,10 +638,11 @@ function enumeratedTests<THistory, TExpected, TPlan>(
   histories: ReadonlyArray<THistory>,
 ): Array<PropertyTest> {
   const spacing = Math.max(1, Math.ceil(histories.length / 8))
-  const named = histories.map((history) => ({
-    name: options.label?.(history) ?? stableText(history),
-    history,
-  }))
+  // Every enumerated history is data; one that is not fails registration.
+  const named = histories.map((history, index) => {
+    const text = encodeData(history, `history ${index}`, `history`)
+    return { name: options.label?.(history) ?? text, history }
+  })
   return [
     ...named.map(({ name, history }) => enumeratedTest(options, name, history)),
     ...calibrationTests(options, () => named),
@@ -768,21 +777,26 @@ async function repeatedRecord<TPlan>(
     observe: (checkpoint: string, value: unknown) => void,
   ) => Promise<void> | void,
   plan: TPlan,
-): Promise<Array<Observation>> {
-  const { observations, driverError, probes, spin } = await recordGuarded(
-    driver,
-    plan,
-  )
+): Promise<Array<{ checkpoint: string; text: string }>> {
+  const { observations, texts, driverError, probes, spin } =
+    await recordGuarded(driver, plan)
   if (driverError) throw driverError.error
   return [
-    ...observations,
-    ...(spin ? [{ checkpoint: `clock`, value: spin.at }] : []),
+    ...observations.map(({ checkpoint }, index) => ({
+      checkpoint,
+      text: texts[index]!,
+    })),
+    ...(spin ? [{ checkpoint: `clock`, text: String(spin.at) }] : []),
     {
       checkpoint: `probes`,
-      value: {
-        reached: [...probes.reached].sort(),
-        entered: [...probes.entered].sort(),
-      },
+      text: encodeData(
+        {
+          reached: [...probes.reached].sort(),
+          entered: [...probes.entered].sort(),
+        },
+        `probes`,
+        `observation`,
+      ),
     },
   ]
 }
@@ -797,130 +811,110 @@ function planOf<THistory, TExpected, TPlan>(
     : (history as unknown as TPlan)
 }
 
-// A stable text for a history or an observation: its JSON when JSON carries
-// it exactly, so a plain history keeps the name JSON gives it, and otherwise
-// Node's inspection of it, which keeps NaN, -0, undefined, bigints, Maps,
-// Sets, symbol keys, class names, and every Error's class, message, cause,
-// `errors`, and own properties apart, and never reads as JSON. Only what
-// differs between machines is dropped: each Error's stack. Naming never
-// throws: a value that cannot be copied, such as a revoked proxy, falls back
-// to its plain inspection.
-function stableText(value: unknown): string {
+/**
+ * A value outside the data domain, in an observation or an enumerated
+ * history. Its message names the value's path in the trace and its kind.
+ */
+export class OracleDataError extends Error {
+  override name = `OracleDataError`
+}
+
+/**
+ * The encoding of a value in the data domain (maintainer decision,
+ * 2026-11-08): primitives, with -0, NaN, the infinities, bigints, and
+ * undefined; dense arrays; plain objects (`Object.prototype` or a null
+ * prototype) whose own properties are enumerable data properties with string
+ * keys; Maps; Sets; and Errors, as their name, message, own data properties,
+ * cause, and AggregateError `errors`, never their stack. Two values have the
+ * same encoding exactly when they are the same data: key order and Map and
+ * Set order count, -0 is not 0, and an object's prototype is not data. JSON
+ * data encodes as its JSON text. Anything else throws an `OracleDataError`
+ * that names `where` and the value's path.
+ */
+function encodeData(value: unknown, where: string, what: string): string {
+  const open = new Set<object>()
+  const fail = (path: string, kind: string): never => {
+    throw new OracleDataError(
+      `${where}${path === `` ? `` : ` ${path.trimStart()}`}: ${kind} is not ${what} data`,
+    )
+  }
+  // An object's own properties: enumerable data properties with string keys,
+  // and, on an Error, also its hidden message, cause, and errors, not its stack.
+  const fields = (object: object, path: string, error = false) =>
+    `{${Reflect.ownKeys(object)
+      .filter((key) => !error || key !== `stack`)
+      .map((key) => {
+        if (typeof key === `symbol`) return fail(path, `a symbol key`)
+        const property = Object.getOwnPropertyDescriptor(object, key)!
+        const at = `${path}.${key}`
+        if (!(`value` in property)) return fail(at, `an accessor`)
+        if (!property.enumerable && !error) return fail(at, `a hidden property`)
+        return `${JSON.stringify(key)}:${encode(property.value, at)}`
+      })
+      .join(`,`)}}`
+  const encode = (item: unknown, path: string): string => {
+    if (typeof item === `string`) return JSON.stringify(item)
+    if (typeof item === `number`)
+      return Object.is(item, -0) ? `-0` : String(item)
+    if (typeof item === `bigint`) return `${item}n`
+    if (item === null || item === undefined || typeof item === `boolean`)
+      return String(item)
+    if (typeof item !== `object`) return fail(path, `a ${typeof item}`)
+    if (open.has(item)) return fail(path, `a cycle`)
+    open.add(item)
+    try {
+      const prototype: unknown = Object.getPrototypeOf(item)
+      if (Array.isArray(item) && prototype === Array.prototype) {
+        if (Reflect.ownKeys(item).length !== item.length + 1)
+          return fail(path, `a sparse array or one with other properties`)
+        return `[${item.map((entry, index) => encode(entry, `${path}[${index}]`)).join(`,`)}]`
+      }
+      if (prototype === Object.prototype || prototype === null)
+        return fields(item, path)
+      if (prototype === Map.prototype && item instanceof Map)
+        return `Map{${[...item]
+          .map(
+            ([key, entry], index) =>
+              `${encode(key, `${path} map key ${index}`)}=>${encode(entry, `${path} map value ${index}`)}`,
+          )
+          .join(`,`)}}`
+      if (prototype === Set.prototype && item instanceof Set)
+        return `Set{${[...item].map((entry, index) => encode(entry, `${path} set item ${index}`)).join(`,`)}}`
+      if (
+        item instanceof Error &&
+        !(typeof DOMException === `function` && item instanceof DOMException)
+      )
+        return `Error(${encode(item.name, `${path}.name`)})${fields(item, path, true)}`
+      const named = (prototype as { constructor?: { name?: unknown } } | null)
+        ?.constructor?.name
+      return fail(
+        path,
+        typeof named === `string` && named !== `Object`
+          ? named
+          : `an object from another realm`,
+      )
+    } finally {
+      open.delete(item)
+    }
+  }
+  return encode(value, ``)
+}
+
+// A value's encoding for failure text, which never throws: a generated
+// history or a thrown value need not be data. Otherwise an Error's name and
+// message, or why it is not data.
+function textOf(value: unknown, where: string): string {
   try {
-    const data = machineFree(value)
+    return encodeData(value, where, `observation`)
+  } catch (error) {
     try {
-      // undefined, a function, or a symbol prints as nothing.
-      const text = JSON.stringify(data) as string | undefined
-      if (text !== undefined && isDeepStrictEqual(JSON.parse(text), data))
-        return text
+      const { name, message } = value as Error
+      if (typeof message === `string`) return `${String(name)}: ${message}`
     } catch {
-      // JSON cannot print it, such as a bigint or a getter that throws.
+      // A getter or a proxy that throws.
     }
-    return inspect(data, inspection)
-  } catch {
-    try {
-      return inspect(value, inspection)
-    } catch {
-      return Object.prototype.toString.call(value)
-    }
+    return `(${(error as Error).message})`
   }
-}
-
-const inspection = {
-  depth: Infinity,
-  maxArrayLength: Infinity,
-  maxStringLength: Infinity,
-  breakLength: Infinity,
-}
-
-// A copy of a value that every check reads the same way, without each
-// Error's stack, which names this machine's files. Arrays, Maps, Sets, plain
-// objects, and class instances are copied with their prototypes and own
-// properties, an accessor as an accessor, so a getter is not called; an
-// Error keeps its prototype and every own property but `stack`. Other
-// objects, such as dates, are kept as they are.
-function machineFree(
-  value: unknown,
-  seen = new Map<object, unknown>(),
-): unknown {
-  if (typeof value !== `object` || value === null) return value
-  if (seen.has(value)) return seen.get(value)
-  const prototype = Object.getPrototypeOf(value) as object | null
-  let copy: object
-  if (Array.isArray(value)) copy = new Array(value.length)
-  else if (types.isMap(value))
-    copy = new Map(
-      [...value].map(([key, item]) => [
-        machineFree(key, seen),
-        machineFree(item, seen),
-      ]),
-    )
-  else if (types.isSet(value))
-    copy = new Set([...value].map((item) => machineFree(item, seen)))
-  else if (
-    types.isNativeError(value) ||
-    value instanceof Error ||
-    Object.prototype.toString.call(value) === `[object Object]`
-  )
-    copy = {}
-  else return value
-  Object.setPrototypeOf(copy, prototype)
-  seen.set(value, copy)
-  const error = types.isNativeError(value) || value instanceof Error
-  for (const key of Reflect.ownKeys(value)) {
-    if (
-      (error && key === `stack`) ||
-      (Array.isArray(value) && key === `length`)
-    )
-      continue
-    const property = Object.getOwnPropertyDescriptor(value, key)!
-    Object.defineProperty(
-      copy,
-      key,
-      `value` in property
-        ? { ...property, value: machineFree(property.value, seen) }
-        : property,
-    )
-  }
-  return copy
-}
-
-// Whether two observations are the same plain data (primitives, arrays, and
-// plain objects, with their keys in order), or undefined when either holds
-// anything else, a symbol key, a function, or a symbol, which the stable text
-// then decides. A fast path that agrees with the stable text.
-function sameData(a: unknown, b: unknown): boolean | undefined {
-  if (Object.is(a, b)) return true
-  const kinds = [typeof a, typeof b]
-  if (kinds.some((kind) => kind === `function` || kind === `symbol`))
-    return undefined
-  if (typeof a !== `object` || typeof b !== `object` || !a || !b) return false
-  const plain = (item: object) =>
-    Array.isArray(item)
-      ? Object.getPrototypeOf(item) === Array.prototype
-      : Object.getPrototypeOf(item) === Object.prototype
-  if (!plain(a) || !plain(b)) return undefined
-  if (Array.isArray(a) !== Array.isArray(b)) return false
-  const [keysA, keysB] = [Reflect.ownKeys(a), Reflect.ownKeys(b)].map((keys) =>
-    keys.filter((key) => key !== `length` || !Array.isArray(a)),
-  )
-  if (keysA!.some((key) => typeof key === `symbol`)) return undefined
-  if (keysB!.some((key) => typeof key === `symbol`)) return undefined
-  if (keysA!.length !== keysB!.length) return false
-  let same: boolean | undefined = true
-  for (const [index, key] of keysA!.entries()) {
-    if (key !== keysB![index]) return false
-    const [propertyA, propertyB] = [
-      Object.getOwnPropertyDescriptor(a, key)!,
-      Object.getOwnPropertyDescriptor(b, key)!,
-    ]
-    if (!(`value` in propertyA) || !(`value` in propertyB)) return undefined
-    if (propertyA.enumerable !== propertyB.enumerable) return undefined
-    const item = sameData(propertyA.value, propertyB.value)
-    if (item === false) return false
-    if (item === undefined) same = undefined
-  }
-  return same
 }
 
 function determinismTest<THistory, TExpected, TPlan>(
@@ -941,15 +935,17 @@ function determinismTest<THistory, TExpected, TPlan>(
         const length = Math.max(first.length, second.length)
         for (let index = 0; index < length; index += 1) {
           const [a, b] = [first[index], second[index]]
-          if (sameData(a, b) === true) continue
-          const [textA, textB] = [stableText(a), stableText(b)]
+          const [textA, textB] = [
+            a ? `${a.checkpoint} ${a.text}` : `nothing`,
+            b ? `${b.checkpoint} ${b.text}` : `nothing`,
+          ]
           if (textA === textB) continue
           const error = new Error(
             [
               `${options.id}: two runs of "${name}" recorded different traces at observation ${index}${a ? ` ("${a.checkpoint}")` : ``}.`,
               `First run:  ${textA.slice(0, 2000)}`,
               `Second run: ${textB.slice(0, 2000)}`,
-              `History: ${stableText(history)}`,
+              `History: ${textOf(history, `history`)}`,
               `A driver records relations, such as before and after or same and different, instead of clock readings or random ids.`,
             ].join(`\n`),
           ) as Error & {
@@ -1039,11 +1035,17 @@ async function recordGuarded<TPlan>(
   forced?: ForcedProbe,
 ): Promise<{
   observations: Array<Observation>
+  /** Each observation's data encoding. */
+  texts: Array<string>
   driverError?: { error: unknown }
   probes: ProbeRecord
   spin?: { at: number; maxTimers: number }
 }> {
   const observations: Array<Observation> = []
+  const texts: Array<string> = []
+  // The first observation that is not data fails the history at once, also
+  // when the driver catches the error its observe call throws.
+  let dataError: OracleDataError | undefined
   const window: ProbeWindow = {
     reached: new Set(),
     entered: new Set(),
@@ -1066,22 +1068,35 @@ async function recordGuarded<TPlan>(
     const spin = takeClockSpin()
     return spin ? { spin } : {}
   }
+  let driverError: { error: unknown } | undefined
   try {
     await probeWindows.run(window, () =>
       driver(plan, (checkpoint, value) => {
+        if (dataError) throw dataError
+        const where = `observation ${observations.length} (${JSON.stringify(checkpoint)})`
+        try {
+          texts.push(encodeData(value, where, `observation`))
+        } catch (error) {
+          dataError = error as OracleDataError
+          throw error
+        }
         observations.push({ checkpoint, value })
         globalThis.__oracleObserve?.(checkpoint, value)
       }),
     )
   } catch (error) {
-    return {
-      observations,
-      driverError: { error },
-      probes: close(),
-      ...settle(),
-    }
+    driverError = { error }
   }
-  return { observations, probes: close(), ...settle() }
+  const probes = close()
+  const settled = settle()
+  if (dataError) throw dataError
+  return {
+    observations,
+    texts,
+    ...(driverError ? { driverError } : {}),
+    probes,
+    ...settled,
+  }
 }
 
 /** The model predicts and the check judges a recorded trace. */
@@ -1104,12 +1119,12 @@ function judge<THistory, TExpected, TPlan>(
   } catch (error) {
     const cut = driverError ? `a driver error` : cutBy
     if (cut === undefined) throw error
-    // Any thrown value, an Error or not, as stable text, which never throws.
+    // Any thrown value, an Error or not, as text, which never throws.
     const carried = driverError ?? later
     const thrown =
       carried === undefined
         ? ``
-        : ` The driver's error: ${stableText(carried.error)}`
+        : ` The driver's error: ${textOf(carried.error, `the driver's error`)}`
     const modelError = new OracleModelError(
       `${options.id}: the model threw on a trace that ${cut} cut short after ${observations.length} observations. A model must accept any prefix of a trace.${thrown}`,
       { cause: error },
@@ -1265,7 +1280,7 @@ function failure<THistory>(
       `${id} violated at checkpoint "${verdict.checkpoint}"${verdict.law ? ` (law: ${verdict.law})` : ``}.`,
       `Law: ${law.statement}`,
       `Difference: ${verdict.difference}`,
-      `History: ${stableText(history)}`,
+      `History: ${textOf(history, `history`)}`,
       `Authority: ${law.authority}`,
       `Known limits: ${law.limits}`,
       `Rerun: ${rerun}`,
@@ -1365,7 +1380,15 @@ function generatedTests<THistory, TExpected, TPlan>(
       try {
         outcome = await runOne(options, history)
       } catch (error) {
-        if (keeps(error instanceof OracleModelError ? `model` : `setup`))
+        if (
+          keeps(
+            error instanceof OracleModelError
+              ? `model`
+              : error instanceof OracleDataError
+                ? `data`
+                : `setup`,
+          )
+        )
           throw error
         return
       }
