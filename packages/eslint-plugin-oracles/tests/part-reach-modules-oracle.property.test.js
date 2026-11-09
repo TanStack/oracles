@@ -11,8 +11,7 @@
  * Each feature family is one oracle property. Cycles are rare in random
  * programs, so their budgets are larger (400 runs), as in the original file.
  * Each property gates the states its features enter, each with a constructed
- * history (rejection sampling from the grammar, seeded from the generated
- * history).
+ * history (a builder that splices the parts entering the state into the generated skeleton).
  *
  * Authority: see PART_REACH_AUTHORITY in part-reach-oracle-support.js.
  *

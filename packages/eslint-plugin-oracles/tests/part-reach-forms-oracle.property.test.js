@@ -15,8 +15,8 @@
  * generated properties. Each feature family is one oracle property with its
  * own features, budget, and fixed and random campaigns. Each property gates
  * the states its features enter, and each gated state has a constructed
- * history: rejection sampling from the grammar, seeded from the generated
- * history (`constructedFor` in part-reach-oracle-support.js).
+ * history: a builder that splices the parts entering the state into the generated
+ * skeleton (`CONSTRUCTIONS` in part-reach-oracle-support.js).
  *
  * Authority: see PART_REACH_AUTHORITY in part-reach-oracle-support.js.
  *

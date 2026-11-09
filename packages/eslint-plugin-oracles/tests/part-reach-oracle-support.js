@@ -1356,9 +1356,11 @@ export function teardownReceivingPaths() {
 }
 
 /** Registers the receiving paths' setup and teardown for this test file. */
+// Setup starts one ESLint instance and writes scratch directories: a loaded
+// machine can exceed the default hook timeout, so the hooks allow a minute.
 export function usePartReachPaths() {
-  beforeAll(setupReceivingPaths)
-  afterAll(teardownReceivingPaths)
+  beforeAll(setupReceivingPaths, 60_000)
+  afterAll(teardownReceivingPaths, 60_000)
 }
 
 /** A fresh sequence number for a history's directory. */
@@ -2057,39 +2059,274 @@ export const REPORTS_LAW = `part-reach reports`
 /** The authority and limits that every part-reach oracle file states. */
 export const PART_REACH_AUTHORITY = `The header contract of rules/no-unit-test.js (reach and report rules, laws L1, L2, L3, L6, and the oracle-property paragraph of maintainer decision 2026-11-02); docs/contributing/oracle-rubric.md, "Name oracle files consistently"; AGENTS.md, "Name Oracle Files for Discovery".`
 
-/** A stable 32-bit hash of a value's JSON text, which seeds a construction. */
-function seedOf(value) {
-  const text = String(JSON.stringify(value))
-  let hash = 0x811c9dc5
-  for (let i = 0; i < text.length; i++) {
-    hash ^= text.charCodeAt(i)
-    hash = Math.imul(hash, 0x01000193)
-  }
-  return hash >>> 0
+// -- Constructions ------------------------------------------------------------
+//
+// A construction builds one state's constructed history from the generated
+// skeleton. Each one is a factory of the features that gate its property: it
+// splices in the fragments that enter the state, in the generated shape, and
+// keeps the rest of the generated input, so a failing history shrinks through
+// the skeleton that fast-check generated. The framework checks each `enters`
+// at run time, so a construction that does not enter its state fails the
+// property.
+
+/** Replaces the first companions with `fragments`; the others are kept. */
+const withCompanions = (fragments) => (generated) => ({
+  ...generated,
+  companions: [...fragments, ...generated.companions.slice(fragments.length)],
+})
+/** Merges the fields that `fields` computes from the oracle's skeleton. */
+const withOracle = (fields) => (generated) => ({
+  ...generated,
+  oracle: { ...generated.oracle, ...fields(generated.oracle) },
+})
+/** Replaces the first registrations with `tests`; the others are kept. */
+const withTests = (tests) =>
+  withOracle((oracle) => ({
+    tests: [...tests, ...oracle.tests.slice(tests.length)],
+  }))
+const withModule = (module) => withOracle(() => ({ module }))
+const withTopLevel = (fields) => (generated) => ({ ...generated, ...fields })
+const compose =
+  (...steps) =>
+  (generated) =>
+    steps.reduce((skeleton, step) => step(skeleton), generated)
+
+/** A fixture module in the generated shape: every import link names its form. */
+const generableModule = (module) => ({
+  ...module,
+  imports: module.imports.map((link) => ({ form: `named`, ...link })),
+})
+/**
+ * A registration in the generated shape. A fixture names its form, which the
+ * generated shape carries as an index into the features' forms; a generated
+ * registration has a `frameworkOptions` too.
+ */
+const generableTest = (features, test) => {
+  const { form, ...rest } = { frameworkOptions: `check-model`, ...test }
+  if (form === undefined) return rest
+  const formIndex = features.forms.indexOf(form)
+  if (formIndex < 0)
+    throw new Error(`the features do not enable the form ${form}`)
+  return { ...rest, formIndex }
 }
+/** A fixture's companions, module, and registrations, in the generated shape. */
+const fromFixture = (fixture) => (features) =>
+  compose(
+    withCompanions(fixture.companions.map(generableModule)),
+    withModule(generableModule(fixture.oracle.module)),
+    withTests(
+      fixture.oracle.tests.map((test) => generableTest(features, test)),
+    ),
+  )
+
+// The fragments that the constructions splice in.
+const exportedCheck = moduleOf({
+  slots: [
+    slot(true, [], { exported: true, part: `check` }),
+    slot(false),
+    slot(false),
+  ],
+})
+const typeModelFixture = fixed({
+  oracle: {
+    module: moduleOf({
+      slots: [slot(false), slot(false), slot(true, [], { part: `check` })],
+      typeAliases: [true, false, false],
+      typeNames: [0],
+      stringKeys: true,
+    }),
+    objectRefs: [],
+    registrarCall: false,
+    tests: [reg({ refs: [typeRef(0)] })],
+  },
+})
+// Two functions that call each other, and neither reaches the check.
+const mutualNoPart = fixed({
+  oracle: {
+    module: moduleOf({
+      slots: [
+        slot(true, [local(1)]),
+        slot(true, [local(0)]),
+        slot(true, [], { part: `check` }),
+      ],
+    }),
+    objectRefs: [],
+    registrarCall: false,
+    tests: [reg({ form: `identifier`, callee: 0 })],
+  },
+})
+// A `for...of` over one function that reaches the check and one that does not.
+const forOfMixed = fixed({
+  oracle: {
+    module: moduleOf({
+      slots: [slot(true, [], { part: `check` }), slot(true), slot(false)],
+    }),
+    objectRefs: [],
+    registrarCall: false,
+    tests: [reg({ form: `for-of`, elements: [0, 1] })],
+  },
+})
+// An oracle that imports one exported check from a companion, by `form`.
+const linkedTo = (form) =>
+  fromFixture(
+    fixed({
+      companions: [exportedCheck],
+      oracle: {
+        module: moduleOf({ imports: [{ target: 0, slot: 0, form }] }),
+        objectRefs: [],
+        registrarCall: false,
+        tests: [reg({ refs: [imported(0)] })],
+      },
+    }),
+  )
+const registrarCall = withOracle(() => ({ registrarCall: true }))
+/** Registrations of the given form, each in the generated shape. */
+const testsOf = (features, ...tests) =>
+  withTests(tests.map((test) => generableTest(features, test)))
 
 /**
- * A constructed history for `state` under `features`. It is rejection sampling
- * from the grammar: fast-check draws skeletons from a seed derived from the
- * generated history, and the first one whose program enters `state` is the
- * construction. The generated history supplies the seed, so the randomness
- * before and after the state stays the generated history's. If the features
- * cannot enter the state within the budget, the construction throws, and the
- * property fails rather than claim a reach it did not reach.
+ * One construction factory per declared state. Each enters its state under the
+ * features of the property that gates it (see familyOptions); the framework
+ * checks that at run time.
  */
-export function constructedFor(features, state, budget = 3000) {
-  return (generated) => {
-    const seed = seedOf(generated)
-    for (const skeleton of fc.sample(programSkeleton, {
-      seed,
-      numRuns: budget,
-    })) {
-      if (statesOf(buildProgram(skeleton, features)).has(state)) return skeleton
-    }
-    throw new Error(
-      `no skeleton under these features enters "${state}" within ${budget} samples`,
-    )
-  }
+export const CONSTRUCTIONS = {
+  // Companions and modules.
+  'export-star-cycle': fromFixture(exportCycle),
+  'named-reexport-cycle': fromFixture(namedCycle),
+  'string-keyed-declaration': fromFixture(typeModelFixture),
+  'type-model-declaration': fromFixture(typeModelFixture),
+  'unparseable-companion': () => withTopLevel({ broken: true }),
+  'javascript-companion-import-reaches-part': fromFixture(javascriptCompanion),
+  'mutual-recursion-reaches-part': fromFixture(mutualRecursion),
+  'mutual-recursion-reaches-no-part': fromFixture(mutualNoPart),
+  'declaration-spread': () =>
+    withModule(
+      moduleOf({
+        spread: true,
+        slots: [slot(true, [], { part: `check` }), slot(false), slot(false)],
+      }),
+    ),
+  // Registration forms and drivers.
+  'form-each': (f) => testsOf(f, reg({ form: `each` })),
+  'form-call-body': (f) => testsOf(f, reg({ form: `call` })),
+  'form-member-body': (f) => testsOf(f, reg({ form: `member` })),
+  'form-for': (f) => testsOf(f, reg({ form: `for`, rows: [{ value: 1 }] })),
+  'form-options': (f) =>
+    testsOf(f, reg({ form: `options-first`, literalOptions: true })),
+  'let-assigned-driver': (f) =>
+    testsOf(f, reg({ form: `let-driver`, refs: [local(0)] })),
+  'for-of-driver': (f) =>
+    compose(
+      withModule(generableModule(checkOnly)),
+      testsOf(f, reg({ form: `for-of`, elements: [0] })),
+    ),
+  'for-of-mixed-elements': fromFixture(forOfMixed),
+  // Generated properties.
+  'named-constant-arbitrary': (f) =>
+    testsOf(f, reg({ form: `property`, constantArb: true, arbNamed: true })),
+  'imported-predicate': (f) =>
+    testsOf(f, reg({ form: `property`, predicate: `imported` })),
+  'predicate-ignores-input': (f) =>
+    testsOf(f, reg({ form: `property`, readsInput: false })),
+  // Registration helpers and their import forms.
+  'imported-registration': () =>
+    compose(withTopLevel({ registrarName: `reg.ts` }), registrarCall),
+  'prefixed-oracle-registrar': () =>
+    compose(withTopLevel({ registrarName: `oracle-reg.ts` }), registrarCall),
+  'default-import-registration': () =>
+    compose(withTopLevel({ registrarImport: `default` }), registrarCall),
+  'member-callee-registration': () =>
+    compose(withTopLevel({ registrarImport: `namespace` }), registrarCall),
+  'oracle-named-helper': (f) =>
+    compose(
+      withTopLevel({ helperName: `reg-helper-oracle.ts` }),
+      testsOf(f, reg({ form: `helper-plain` })),
+    ),
+  'prefixed-oracle-helper': (f) =>
+    compose(
+      withTopLevel({ helperName: `oracle-reg-helper.ts` }),
+      testsOf(f, reg({ form: `helper-plain` })),
+    ),
+  'default-import': (f) => linkedTo(`default`)(f),
+  'namespace-import': (f) => linkedTo(`namespace`)(f),
+  'default-import-through-star': fromFixture(defaultThroughStar),
+  'default-import-star-target-has-part': fromFixture(defaultThroughStar),
+  // Caller-passed bodies.
+  'caller-passed-body-helper': (f) => testsOf(f, reg({ form: `helper-plain` })),
+  'caller-body-trailing-name': (f) =>
+    compose(
+      withModule(generableModule(checkOnly)),
+      testsOf(
+        f,
+        reg({ form: `helper-plain`, wrap: WRAP.timed, trailing: `name` }),
+      ),
+    ),
+  'caller-body-wrapper': (f) =>
+    testsOf(f, reg({ form: `helper-plain`, wrap: WRAP.wrap })),
+  'caller-body-wrapper-reaches-part': (f) =>
+    compose(
+      withCompanions([generableModule(exportedCheck)]),
+      testsOf(f, reg({ form: `helper-plain`, wrap: WRAP[`wrap-part`] })),
+    ),
+  // The framework module and its lookalikes.
+  'oracle-property-complete': (f) =>
+    compose(
+      withTopLevel({ frameworkName: `oracle-property.ts` }),
+      testsOf(
+        f,
+        reg({ form: `framework-property`, frameworkOptions: `check-model` }),
+      ),
+    ),
+  'oracle-property-without-check': (f) =>
+    compose(
+      withTopLevel({ frameworkName: `oracle-property.ts` }),
+      testsOf(
+        f,
+        reg({ form: `framework-property`, frameworkOptions: `model` }),
+      ),
+    ),
+  'oracle-property-named-options': (f) =>
+    compose(
+      withTopLevel({ frameworkName: `oracle-property.ts` }),
+      testsOf(f, reg({ form: `framework-property`, frameworkOptions: `name` })),
+    ),
+  'oracle-property-namespace-import': (f) =>
+    compose(
+      withTopLevel({
+        frameworkName: `oracle-property.ts`,
+        frameworkImport: `namespace`,
+      }),
+      testsOf(
+        f,
+        reg({ form: `framework-property`, frameworkOptions: `check-model` }),
+      ),
+    ),
+  'oracle-property-machinery-lookalike': (f) =>
+    compose(
+      withTopLevel({ frameworkName: `oracle-propertyx.ts` }),
+      testsOf(
+        f,
+        reg({ form: `framework-property`, frameworkOptions: `check-model` }),
+      ),
+    ),
+  'oracle-property-ordinary-lookalike': (f) =>
+    compose(
+      withTopLevel({ frameworkName: `property.ts` }),
+      testsOf(
+        f,
+        reg({ form: `framework-property`, frameworkOptions: `check-model` }),
+      ),
+    ),
+  'oracle-property-oracle-named-lookalike': (f) =>
+    compose(
+      withTopLevel({ frameworkName: `property-oracle.ts` }),
+      testsOf(
+        f,
+        reg({ form: `framework-property`, frameworkOptions: `check-model` }),
+      ),
+    ),
+  // A companion edited between lints: the chain's companions and module.
+  'companion-edited-between-lints': fromFixture(chain),
 }
 
 /** The check: every receiving path's keys equal the model's, exactly. */
@@ -2150,6 +2387,9 @@ export function familyOptions({
   gated = [],
   runs = BASE_RUNS,
   fixedSeeds = [FIXED_SEED],
+  arbitrary = programSkeleton,
+  reached = (program) => [...statesOf(program)],
+  calibrations = reportCalibrations,
 }) {
   return {
     id,
@@ -2160,7 +2400,7 @@ export function familyOptions({
       owner: `eslint-plugin-oracles lint rules`,
     },
     histories: {
-      arbitrary: programSkeleton,
+      arbitrary,
       runs,
       fixedSeeds,
       states: gated,
@@ -2168,15 +2408,15 @@ export function familyOptions({
       constructed: gated.map((state) => ({
         name: state,
         enters: [state],
-        build: constructedFor(features, state),
+        build: CONSTRUCTIONS[state](features),
       })),
     },
     resolve: (skeleton) => buildProgram(skeleton, features),
-    reached: (program) => [...statesOf(program)],
+    reached,
     model: predictReports,
     driver: lintDriver,
     check: checkPaths,
-    calibrations: reportCalibrations,
+    calibrations,
   }
 }
 
