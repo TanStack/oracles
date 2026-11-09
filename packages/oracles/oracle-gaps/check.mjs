@@ -1302,7 +1302,7 @@ export default async (env) => {
           if (fileOf(key) === file) first.rows.delete(key)
       }
     }
-    const ownersOf = (mutant) => owned.at(mutant.source, mutant.line).owners
+    const ownersOf = (mutant) => owned.at(mutant.source, mutant.position).owners
     let queue = mutants.filter((m) => !options.only || options.only.has(m.id))
     if (options.sample !== undefined) {
       // A fixed-seed shuffle, so a survey samples the same mutants every run.
@@ -1676,7 +1676,7 @@ export default async (env) => {
         result.outcome = `does-not-apply`
         continue
       }
-      const { name, owners } = owned.at(mutant.source, patched.line)
+      const { name, owners } = owned.at(mutant.source, patched.position)
       result.function = name
       if (owners.size === 0) {
         result.outcome = `unowned`

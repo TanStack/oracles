@@ -54,7 +54,10 @@
  * Limits: the grammar and model are the end-to-end oracle's
  * (gap-report-model-oracle.mjs), with its limits. Whether a mutant is
  * killed, and anything else that needs a test run, is the end-to-end
- * oracle's. No test calls the same-named functions, accessors, or field
+ * oracle's. Whether an owned function owns a function defined in its body
+ * that nothing refers to is open (the CLI owns it, through the definition's
+ * name), so the same-line witness `w_pair` is unowned and judges names only.
+ * No test calls the same-named functions, accessors, or field
  * arrows, so their outcomes beyond ownership are not judged. The rune
  * judge restates Svelte's rule; the Svelte compiler itself is not installed
  * here, so a rune placement the rule does not name (`$props`, `$bindable`,
@@ -63,7 +66,13 @@
  * but only the getter and setter pair is generated as such an entry's
  * target. An authored mutant's `source` field is used as written.
  */
-import { mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs'
+import {
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+} from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -110,7 +119,7 @@ function analyzeFixture(dir, files, plan) {
     .map((name) => join(dir, `tests`, name))
   try {
     const { sources } = parseArgs(
-      [`--package`, dir, `--source`, sourceArgument(plan)],
+      [`--package`, dir, `--source`, sourceArgument(plan, `${dir}.link`)],
       dir,
     )
     const { mutants, owned, instrumented } = analyze(ts, dir, sources, tests)
@@ -122,7 +131,7 @@ function analyzeFixture(dir, files, plan) {
         line: m.line,
         operator: m.operator,
         probe: m.probeGuard === true,
-        owned: owned.at(m.source, m.line).owners.size > 0,
+        owned: owned.at(m.source, m.position).owners.size > 0,
         key: m.key,
       })),
       runes: plan.runesSource
@@ -160,16 +169,21 @@ const namedStates = {
   'W9.status#get': [true, `a getter owned through a property read`],
   'W9.status#set': [true, `a setter owned through a property read`],
   'W9.handle': [true, `a class-field arrow owned through this`],
+  'W10.#helper': [true, `a private method owned through this`],
+  'W10.#named': [true, `a private method named in an owns entry`],
 }
 
 async function driver(plan, observe) {
   const dir = realpathSync(mkdtempSync(join(here, `.scratch-`)))
+  // A symbolic link to the package, for sources spelled through it.
+  symlinkSync(dir, `${dir}.link`, `dir`)
   try {
     const files = fixtureFiles(plan)
     const before = analyzeFixture(dir, files, plan)
     observe(`static`, before)
     const states = new Set()
-    if (before.refusal) states.add(`refused ${plan.fault}`)
+    if (before.refusal && plan.fault !== `none`)
+      states.add(`refused ${plan.fault}`)
     // The statement whose lines hold a mutant, by the model's layout.
     const statementAt = (m) =>
       plan.functions
@@ -230,6 +244,14 @@ async function driver(plan, observe) {
       const named = namedStates[fnId]
       if (named && named[0] === m.owned) states.add(named[1])
       if (kind === `dollar`) states.add(`a $-named call outside Svelte judged`)
+      if (m.function === `get` && m.line === statementAt(m)?.stmt.line)
+        states.add(`the first of two functions on one line named`)
+      if (m.function === `set` && m.line === statementAt(m)?.stmt.line)
+        states.add(`the second of two functions on one line named`)
+      if (m.function === `w_shadow` && !m.probe && m.operator === `delete-call`)
+        states.add(
+          `a call to a nested function named like a probe helper judged`,
+        )
       if (kind === `oldProbe`) states.add(`old probe form judged`)
       if (kind === `mixed` && m.operator === `if-true`)
         states.add(`production beside a probe`)
@@ -241,6 +263,10 @@ async function driver(plan, observe) {
       if (plan.sourceSpelling === `redundant`)
         states.add(`a source spelled through a redundant segment`)
       if (plan.runesSource) states.add(`a Svelte module instrumented`)
+      if (plan.sourceSpelling === `linked`)
+        states.add(`a source spelled through a link to the package`)
+      if (plan.ownsSpelling !== `plain`)
+        states.add(`an owns entry spelled another way`)
     }
     if (plan.stability !== `none` && !before.refusal) {
       observe(
@@ -252,6 +278,7 @@ async function driver(plan, observe) {
     for (const state of states) observe(`reach`, state)
   } finally {
     written.delete(dir)
+    rmSync(`${dir}.link`, { force: true })
     rmSync(dir, { recursive: true, force: true })
   }
 }
@@ -484,7 +511,7 @@ const calibrations = [
   },
 ]
 
-const faults = [`badEntry`, `missingSource`, `nonLiteral`]
+const faults = [`badEntry`, `missingSource`, `nonLiteral`, `outsideSource`]
 const required = [
   ...Object.values(ownedStates),
   ...Object.values(namedStates).map(([, state]) => state),
@@ -498,6 +525,11 @@ const required = [
   `a probe under an outer function's guard judged`,
   `a source spelled with ./`,
   `a source spelled through a redundant segment`,
+  `a source spelled through a link to the package`,
+  `an owns entry spelled another way`,
+  `the first of two functions on one line named`,
+  `the second of two functions on one line named`,
+  `a call to a nested function named like a probe helper judged`,
   `derived probe helper`,
   `derived probe helper chain`,
   `mixed helper judged`,
@@ -533,6 +565,7 @@ oracleProperty({
             ![
               `owned by a whole-file entry`,
               `a source spelled through a redundant segment`,
+              `a source spelled through a link to the package`,
               ...faults.map((f) => `refused ${f}`),
             ].includes(s),
         ),
@@ -544,6 +577,7 @@ oracleProperty({
           stability: `insertGuard`,
           steps: null,
           sourceSpelling: `dot`,
+          ownsSpelling: `dot`,
           // A library function that calls the library's `$derived`.
           library: [[{ kind: `dollar` }], ...generated.library].slice(0, 2),
           // Every rune form, in a Svelte module.
@@ -583,6 +617,17 @@ oracleProperty({
           stability: `none`,
           steps: null,
           sourceSpelling: `redundant`,
+        }),
+      },
+      {
+        name: `a source through a link to the package`,
+        enters: [`a source spelled through a link to the package`],
+        build: (generated) => ({
+          ...generated,
+          sourceSpelling: `linked`,
+          witness: false,
+          fault: `none`,
+          steps: null,
         }),
       },
       ...faults.map((fault) => ({

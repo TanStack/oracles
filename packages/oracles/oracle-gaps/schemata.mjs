@@ -137,6 +137,8 @@ export function instrument(ts, path, text, source, offset = 0) {
       number: id,
       source,
       line: lineOf(at.getStart(file)),
+      // Where the site starts, which names its function (owners.mjs).
+      position: at.getStart(file),
       operator,
       original,
       replacement,
@@ -257,6 +259,9 @@ export function instrument(ts, path, text, source, offset = 0) {
       isHook(node.expression.right)
     )
   }
+  // A call statement to a probe helper: the callee resolves, lexically, to
+  // a function declaration that is a helper, not to any function that
+  // shares its name.
   const callsHelper = (node) => {
     const target =
       ts.isExpressionStatement(node) && ts.isCallExpression(node.expression)
@@ -265,7 +270,7 @@ export function instrument(ts, path, text, source, offset = 0) {
     return (
       target !== undefined &&
       ts.isIdentifier(target) &&
-      helpers.has(target.text)
+      helpers.has(declarationOf(target))
     )
   }
   const isProbeOnly = (node) =>
@@ -278,6 +283,40 @@ export function instrument(ts, path, text, source, offset = 0) {
     (ts.isBlock(node) &&
       node.statements.length > 0 &&
       node.statements.every(isProbeOnly))
+  // The statement or parameter that declares `identifier`'s name, found
+  // from the innermost scope outward as JavaScript resolves it (function
+  // declarations and block bindings, case clauses sharing their switch's
+  // scope), or undefined when no file-level or enclosing declaration names
+  // it. `withinFunction` stops at the nearest function.
+  const declaresName = (statement, name) =>
+    (ts.isVariableStatement(statement) &&
+      statement.declarationList.declarations.some(
+        (d) => ts.isIdentifier(d.name) && d.name.text === name,
+      )) ||
+    ((ts.isFunctionDeclaration(statement) ||
+      ts.isClassDeclaration(statement)) &&
+      statement.name?.text === name)
+  function declarationOf(identifier, withinFunction = false) {
+    const name = identifier.text
+    for (let node = identifier.parent; node; node = node.parent) {
+      const statements = ts.isCaseBlock(node)
+        ? node.clauses.flatMap((clause) => clause.statements)
+        : ts.isBlock(node) || ts.isSourceFile(node) || ts.isModuleBlock(node)
+          ? node.statements
+          : []
+      const found = statements.find((statement) =>
+        declaresName(statement, name),
+      )
+      if (found) return found
+      if (ts.isFunctionLike(node)) {
+        const parameter = node.parameters?.find(
+          (p) => ts.isIdentifier(p.name) && p.name.text === name,
+        )
+        if (parameter || withinFunction) return parameter
+      }
+    }
+    return undefined
+  }
   const declarations = []
   const collect = (node) => {
     if (ts.isFunctionDeclaration(node) && node.name && node.body)
@@ -288,21 +327,17 @@ export function instrument(ts, path, text, source, offset = 0) {
   for (let grew = true; grew;) {
     grew = false
     for (const node of declarations) {
-      if (helpers.has(node.name.text)) continue
+      if (helpers.has(node)) continue
       if (
         node.body.statements.length > 0 &&
         node.body.statements.every(isProbeOnly)
       ) {
-        helpers.add(node.name.text)
+        helpers.add(node)
         grew = true
       }
     }
   }
-  const isProbeGuard = (node) =>
-    isProbeOnly(node) ||
-    (ts.isFunctionDeclaration(node) &&
-      node.name !== undefined &&
-      helpers.has(node.name.text))
+  const isProbeGuard = (node) => isProbeOnly(node) || helpers.has(node)
   let guarded = false
 
   // Emit `node` with its children's instrumented text spliced in, then wrap

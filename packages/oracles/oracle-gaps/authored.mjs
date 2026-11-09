@@ -59,5 +59,6 @@ export function applyAuthored(text, mutant) {
     text:
       text.slice(0, at) + mutant.replace + text.slice(at + mutant.find.length),
     line: text.slice(0, at).split(`\n`).length,
+    position: at,
   }
 }

@@ -267,7 +267,18 @@ const histories = fc.record({
   // How `--source` spells each path: as the package names it, with a
   // leading `./`, or through a redundant segment. Each names the same file,
   // and the report names it by its path in the package.
-  sourceSpelling: fc.constantFrom(`plain`, `plain`, `dot`, `redundant`),
+  // `linked` names each source by an absolute path through a symbolic link
+  // to the package (as macOS's /tmp is a link to /private/tmp).
+  sourceSpelling: fc.constantFrom(
+    `plain`,
+    `plain`,
+    `dot`,
+    `redundant`,
+    `linked`,
+  ),
+  // How owns entries spell their file, which names the same file in every
+  // spelling, as `--source` does.
+  ownsSpelling: fc.constantFrom(`plain`, `plain`, `dot`, `redundant`),
   wholeFile: fc.constantFrom(`none`, `none`, `none`, `a`, `b`),
   template: fc.boolean(),
   tests: fc.array(testCase, { minLength: 1, maxLength: 5 }),
@@ -292,6 +303,9 @@ const histories = fc.record({
     `missingSource`,
     `nonLiteral`,
     `brokenOwner`,
+    // `--source` also names a file outside the package, which the run
+    // refuses rather than report as unowned.
+    `outsideSource`,
     // The package's Vitest config defines `test.projects`, which the runner
     // cannot honor: each project has its own environment and setup files.
     `projects`,
@@ -673,6 +687,55 @@ const witness = [
       { kind: `nearProbe`, variant: `init`, op: `>`, k: 4 },
       { kind: `nearProbe`, variant: `outer`, op: `>`, k: 4 },
     ],
+    tests: [],
+  },
+  // Private members: `W10.run` calls `this.#helper`, which its tree holds,
+  // and file b names `W10.#named` in an owns entry (the file is split from
+  // the function at the first `#`).
+  {
+    id: `W10.run`,
+    owners: [`a`],
+    body: [{ kind: `call`, to: `W10.#helper` }],
+    tests: [],
+  },
+  { id: `W10.#helper`, owners: [], body: [push], tests: [] },
+  { id: `W10.#named`, owners: [`b`], body: [push], tests: [] },
+  // Two functions that start on one line: an object literal's `get` and
+  // `set` arrows. Each mutant belongs to the one whose text holds it. No
+  // oracle owns `w_pair`: whether an owned function owns a function defined
+  // in its body that nothing refers to is an open question (round 2).
+  { id: `w_pair`, owners: [], body: [{ kind: `pair` }], tests: [] },
+  {
+    id: `w_pair>get`,
+    name: `get`,
+    container: `nested`,
+    owners: [],
+    body: [],
+    tests: [],
+  },
+  {
+    id: `w_pair>set`,
+    name: `set`,
+    container: `nested`,
+    owners: [],
+    body: [],
+    tests: [],
+  },
+  // A nested function that has the name of the probe helper `report`: a
+  // call to it is a call to production code, which is judged.
+  {
+    id: `w_shadow`,
+    owners: [`a`],
+    body: [{ kind: `inner`, to: `w_shadow>report` }],
+    tests: [],
+  },
+  {
+    id: `w_shadow>report`,
+    name: `report`,
+    container: `nested`,
+    form: `function`,
+    owners: [],
+    body: [push],
     tests: [],
   },
   // Functions that share a name in one file are still distinct functions.
@@ -1242,6 +1305,11 @@ function renderStatement(stmt, callText) {
         `if (${condText(stmt)}) report(${probe});`,
         `else ${pushText(stmt)}`,
       ]
+    case `pair`:
+      return [
+        `const pair = { get: (k: number): string => String(k), set: (k: number): string => String(k + 1) };`,
+        `out.push(pair.get(x));`,
+      ]
     case `pushStatus`:
       return [`out.push(this.status);`]
     case `getterReturn`:
@@ -1471,6 +1539,10 @@ function resolveHistory(history) {
           lines.push(`${indent}const ${inner.name} = (): void => {`)
           emitBody(inner.body, `${indent}  `)
           lines.push(`${indent}};`)
+        } else if (inner.form === `function`) {
+          lines.push(`${indent}function ${inner.name}(): void {`)
+          emitBody(inner.body, `${indent}  `)
+          lines.push(`${indent}}`)
         } else {
           lines.push(
             `${indent}const peer = {`,
@@ -1480,7 +1552,9 @@ function resolveHistory(history) {
           lines.push(`${indent}  },`, `${indent}};`)
         }
         stmt.lines = [
-          inner.form === `arrow` ? `${inner.name}();` : `peer.${inner.name}();`,
+          inner.form === `method`
+            ? `peer.${inner.name}();`
+            : `${inner.name}();`,
         ]
       } else
         stmt.lines = renderStatement(
@@ -1658,6 +1732,7 @@ function resolveHistory(history) {
     concurrentStart: history.concurrentStart === true,
     setupGlobal: history.setupGlobal === true,
     sourceSpelling: history.sourceSpelling ?? `plain`,
+    ownsSpelling: history.ownsSpelling ?? `plain`,
     // The source files the CLI is asked to check.
     sources: [SOURCE, LIB, ...(runesSource ? [RUNES] : [])],
     history,
@@ -1668,16 +1743,24 @@ function resolveHistory(history) {
 }
 
 /** The `--source` argument: each source path in the plan's spelling. */
-const sourceArgument = (plan) =>
-  plan.sources
-    .map((path) =>
-      plan.sourceSpelling === `dot`
-        ? `./${path}`
-        : plan.sourceSpelling === `redundant`
-          ? path.replace(`src/`, `src/../src/`)
-          : path,
-    )
-    .join(`,`)
+// A path in the package, spelled as `spelling` says; `link` is the absolute
+// path of a symbolic link to the package, for `linked`.
+const spell = (path, spelling, link) =>
+  spelling === `dot`
+    ? `./${path}`
+    : spelling === `redundant`
+      ? path.replace(`src/`, `src/../src/`)
+      : spelling === `linked`
+        ? `${link}/${path}`
+        : path
+// A file beside the fixture package, outside it (the fixture's directory
+// holds this CLI's own files).
+const OUTSIDE = `../vitest.config.mjs`
+const sourceArgument = (plan, link) =>
+  [
+    ...plan.sources.map((path) => spell(path, plan.sourceSpelling, link)),
+    ...(plan.fault === `outsideSource` ? [OUTSIDE] : []),
+  ].join(`,`)
 
 // ## Model
 //
@@ -1862,6 +1945,21 @@ function sitesOf(plan) {
         at(`delete-call`, `push`, stmt.line, whole)
       // A call of a nested function where it is defined.
       if (stmt.kind === `inner`) at(`delete-call`, `call`, stmt.line, whole)
+      // Two arrows on one line: each property's field drop, its call, and
+      // the `+ 1` belong to the arrow whose text holds them; the push and
+      // its argument to `w_pair`.
+      if (stmt.kind === `pair`) {
+        const [declaration, call] = stmt.lines
+        const inPair = (fn, operator) =>
+          add(fn, stmt.line, operator, declaration, { stmt: stmt.label })
+        inPair(`w_pair>get`, `field-drop`)
+        inPair(`w_pair>get`, `value-undefined`)
+        inPair(`w_pair>set`, `field-drop`)
+        inPair(`w_pair>set`, `value-undefined`)
+        inPair(`w_pair>set`, `arithmetic-swap`)
+        at(`delete-call`, `push`, stmt.line + 1, call)
+        at(`value-undefined`, `string`, stmt.line + 1, call)
+      }
       if (stmt.kind === `getterReturn`) {
         at(`value-undefined`, `string`, stmt.line, whole)
         at(`bool-flip`, `flag`, stmt.line, whole)
@@ -2067,10 +2165,12 @@ function ownersOf(plan) {
                         ? [stmt.to]
                         : stmt.kind === `dollar`
                           ? [`$derived`]
-                          : // A property read refers to both its accessors.
-                            stmt.kind === `pushStatus`
-                            ? [`W9.status#get`, `W9.status#set`]
-                            : [],
+                          : stmt.kind === `pair`
+                            ? [`w_pair>get`]
+                            : // A property read refers to both its accessors.
+                              stmt.kind === `pushStatus`
+                              ? [`W9.status#get`, `W9.status#set`]
+                              : [],
       ),
     ]),
   )
@@ -2434,6 +2534,7 @@ function refusal(plan) {
   if (plan.fault === `badEntry`) return { cause: `${SOURCE}#nope` }
   if (plan.fault === `missingSource`) return { cause: `src/missing.ts` }
   if (plan.fault === `nonLiteral`) return { cause: `b.test.ts` }
+  if (plan.fault === `outsideSource`) return { cause: `outside the package` }
   // A config the runner cannot honor refuses the run rather than leave every
   // mutant unreached (maintainer decision, 2026-11-08).
   if (plan.fault === `projects`) return { cause: `test.projects` }
@@ -2621,10 +2722,10 @@ const quoteEntry = (plan, entry) =>
 function oracleTestFile(plan, file) {
   const sites = sitesOf(plan)
   const entries = [
-    ...(plan.wholeFile === file ? [SOURCE] : []),
+    ...(plan.wholeFile === file ? [spell(SOURCE, plan.ownsSpelling)] : []),
     ...plan.functions
       .filter((fn) => fn.owners.includes(file))
-      .map((fn) => `${fn.file}#${fn.id}`),
+      .map((fn) => `${spell(fn.file, plan.ownsSpelling)}#${fn.name ?? fn.id}`),
     ...(file === `b` && plan.fault === `badEntry` ? [`${SOURCE}#nope`] : []),
     ...(file === `b` && plan.fault === `missingSource`
       ? [`src/missing.ts#f0`]

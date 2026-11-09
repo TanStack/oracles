@@ -2,7 +2,7 @@
 // (daemon.mjs), which parses each request's arguments the same way.
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { availableParallelism } from 'node:os'
-import { dirname, join, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
 const flags = new Set([`daemon`, `stop-daemon`, `ordinary`])
 /**
@@ -40,12 +40,8 @@ export function parseArgs(argv, cwd = process.cwd()) {
     contexts: Number(
       args.contexts ?? Math.min(16, Math.max(2, availableParallelism() - 2)),
     ),
-    // Each source as the package names it, so every spelling of a path
-    // (`./src/x.ts`, `src/../src/x.ts`) names the same file in owns
-    // entries, keys, and the report.
-    sources: args.source
-      .split(`,`)
-      .map((source) => relative(pkg, resolve(pkg, source))),
+    // Each source as the package names it (packagePath).
+    sources: args.source.split(`,`).map((source) => packagePath(pkg, source)),
     seed: args.seed,
     diffBase: args[`diff-base`],
     out: resolve(cwd, args.out ?? `/tmp/oracle-gaps`),
@@ -68,6 +64,26 @@ export function parseArgs(argv, cwd = process.cwd()) {
     // A directory of authored mutants (see loadAuthored).
     mutants: args.mutants ? resolve(cwd, args.mutants) : undefined,
   }
+}
+
+/**
+ * A file of the package as the package names it, so every spelling of it
+ * (`./src/x.ts`, `src/../src/x.ts`, an absolute path, one through a
+ * symbolic link) names the same file in `--source`, in owns entries, in
+ * keys, and in the report: its real path relative to the package's real
+ * path (`pkg`). A file that does not exist keeps its resolved path, so its
+ * absence is reported where it is named. A file outside the package
+ * refuses the run: the report would call its code unowned.
+ */
+export function packagePath(pkg, path) {
+  const absolute = resolve(pkg, path)
+  const named = relative(
+    pkg,
+    existsSync(absolute) ? realpathSync(absolute) : absolute,
+  )
+  if (named.startsWith(`..`) || isAbsolute(named))
+    throw new Error(`${path} is outside the package`)
+  return named
 }
 
 /**

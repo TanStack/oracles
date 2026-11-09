@@ -6,7 +6,8 @@
 // oracle checks it in-process.
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { basename, join } from 'node:path'
-import { ownership, readOwns } from './owners.mjs'
+import { packagePath } from './args.mjs'
+import { ownership, readOwns, splitEntry } from './owners.mjs'
 import { instrument } from './schemata.mjs'
 
 /**
@@ -63,14 +64,24 @@ export function analyze(ts, pkg, sources, testFiles) {
     if (!declared.declares) continue
     if (declared.problem)
       throw new Error(`${relative(file)}: ${declared.problem}`)
-    for (const entry of declared.entries) {
-      const [source] = entry.split(`#`)
-      if (!existsSync(join(pkg, source)))
+    // Each entry's file as the package names it, as `--source` is.
+    const entries = declared.entries.map((entry) => {
+      const [source, fn] = splitEntry(entry)
+      let named
+      try {
+        named = packagePath(pkg, source)
+      } catch (error) {
+        throw new Error(
+          `${relative(file)}: owns entry ${entry}: ${error.message}`,
+        )
+      }
+      if (!existsSync(join(pkg, named)))
         throw new Error(
           `${relative(file)}: owns entry ${entry} names a missing file, ${source}`,
         )
-    }
-    declarations.set(file, declared.entries)
+      return fn === undefined ? named : `${named}#${fn}`
+    })
+    declarations.set(file, entries)
   }
   const instrumented = new Map()
   const mutants = []
@@ -95,7 +106,7 @@ export function analyze(ts, pkg, sources, testFiles) {
         ...sources,
         ...[...declarations.values()]
           .flat()
-          .map((entry) => entry.split(`#`)[0]),
+          .map((entry) => splitEntry(entry)[0]),
       ]),
     ].map((source) => join(pkg, source)),
     compilerOptions(ts),
@@ -104,15 +115,16 @@ export function analyze(ts, pkg, sources, testFiles) {
   const owned = ownership(ts, program, pkg, declarations)
   for (const [file, entries] of declarations)
     for (const entry of entries) {
-      const [source, fn] = entry.split(`#`)
+      const [source, fn] = splitEntry(entry)
       if (fn !== undefined && !owned.has(source, fn))
         throw new Error(
           `${relative(file)}: owns entry ${entry} names no function in ${source}`,
         )
     }
-  // Each mutant belongs to the innermost function whose lines hold it; its
-  // key reads that function's name, and its owners are that function's.
+  // Each mutant belongs to the innermost function whose text holds its
+  // site; its key reads that function's name, and its owners are that
+  // function's.
   for (const mutant of mutants)
-    mutant.function = owned.at(mutant.source, mutant.line).name
+    mutant.function = owned.at(mutant.source, mutant.position).name
   return { instrumented, mutants, declarations, owned }
 }

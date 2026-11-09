@@ -46,7 +46,9 @@
  * 3. **Ownership.** The CLI discovers every oracle file in the package: a
  *    test file that calls `declareOracle({ owns })`. Each entry names a source
  *    file (`src/x.ts`, owning all of it) or a function in it
- *    (`src/x.ts#run`, `src/x.ts#Class.method`), as a string or a plain
+ *    (`src/x.ts#run`, `src/x.ts#Class.method`, `src/x.ts#Class.#private`,
+ *    the file ending at the first `#`), in any spelling that names the
+ *    package's file (as `--source` is read), as a string or a plain
  *    template literal. Owning a function owns its static reference tree within
  *    the package, as the type checker resolves it: every function, method,
  *    or class that its body refers to, whether it calls it by name, through
@@ -149,8 +151,10 @@
  *    what the cold run reports, and once `--stop-daemon` returns, no daemon
  *    process serves the package.
  * 10. **The runner runs the package as Vitest does.** From any install path
- *    (one with a space and `#` included), for any spelling of `--source`,
- *    the run completes and reports the same result. A source that imports
+ *    (one with a space and `#` included), for any spelling of `--source`
+ *    (`./`, a redundant segment, an absolute path through a symbolic link
+ *    to the package), the run completes and reports the same result; a
+ *    source outside the package refuses the run. A source that imports
  *    a subpath of a workspace dependency sees one instance of that
  *    dependency, as Vitest gives it; a devDependency that no test loads and
  *    that cannot be built does not refuse the run; and a package with a
@@ -241,6 +245,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
@@ -544,7 +549,7 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       seed: state.seed,
       cli: copy,
       ordinary: plan.ordinary,
-      sources: sourceArgument(plan),
+      sources: sourceArgument(plan, `${dir}.link`),
       budget: plan.budget,
     }
     if (!cold.has(key)) cold.set(key, runCli(dir, files, how))
@@ -651,6 +656,8 @@ async function incremental(dir, plan, cli, copy, observe, states) {
 
 async function driver(plan, observe) {
   const dir = mkdtempSync(join(here, `.scratch-`))
+  // A symbolic link to the package, for sources spelled through it.
+  symlinkSync(dir, `${dir}.link`, `dir`)
   // A history with steps runs its own copy of the CLI, which the `cli` edit
   // changes; a history that installs the CLI under a path with a space and
   // `#` runs every check from such a copy.
@@ -662,7 +669,7 @@ async function driver(plan, observe) {
     const files = fixtureFiles(plan)
     const how = {
       ordinary: plan.ordinary,
-      sources: sourceArgument(plan),
+      sources: sourceArgument(plan, `${dir}.link`),
       budget: plan.budget,
       cli: plan.cliPath === `spaced` ? copy : here,
     }
@@ -919,6 +926,7 @@ async function driver(plan, observe) {
     for (const state of states) observe(`reach`, state)
   } finally {
     if (copy) rmSync(copy, { recursive: true, force: true })
+    rmSync(`${dir}.link`, { force: true })
     written.delete(dir)
     try {
       rmSync(dir, { recursive: true, force: true })
@@ -1408,6 +1416,7 @@ const required = [
   `a setup error`,
   `a setup error beside a timeout under one budget`,
   `refused projects`,
+  `refused outsideSource`,
   ...incrementalStates,
 ]
 const faults = [
@@ -1416,6 +1425,7 @@ const faults = [
   `nonLiteral`,
   `brokenOwner`,
   `projects`,
+  `outsideSource`,
 ]
 const separate = [
   `ordinary tests left out by default`,

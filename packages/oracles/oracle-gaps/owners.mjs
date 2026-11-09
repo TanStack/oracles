@@ -1,8 +1,10 @@
 // Ownership: which oracle files judge a function.
 //
 // An oracle file names what it owns in `declareOracle({ owns: [...] })`. Each
-// entry is a source path relative to the package, either alone (the whole
-// file) or with an entry function (`src/x.ts#run`, `src/x.ts#Class.method`).
+// entry is a source path relative to the package, in any spelling that
+// names the package's file (args.mjs, packagePath), either alone (the whole
+// file) or with an entry function after the first `#` (`src/x.ts#run`,
+// `src/x.ts#Class.method`, `src/x.ts#Class.#private`).
 // Owning an entry function owns its static reference tree within the package,
 // as the TypeScript type checker resolves it: every function, method, or
 // class that its body refers to, whether it calls it by name, through an
@@ -27,6 +29,15 @@
 // mutant is killed when any owner kills it, and a function with no owner is
 // reported as `unowned`, a warning rather than a gap.
 import { relative, resolve } from 'node:path'
+
+/**
+ * An owns entry's file and function. The file ends at the first `#`, so a
+ * private member is named `src/x.ts#Class.#member`.
+ */
+export function splitEntry(entry) {
+  const at = entry.indexOf(`#`)
+  return at < 0 ? [entry, undefined] : [entry.slice(0, at), entry.slice(at + 1)]
+}
 
 /**
  * Whether a test file calls `declareOracle` (which makes it an oracle file),
@@ -74,7 +85,6 @@ export function readOwns(ts, path, text) {
  * its node, the class it is a member of (if any), and its line span.
  */
 export function functionsIn(ts, file) {
-  const lineOf = (pos) => file.getLineAndCharacterOfPosition(pos).line + 1
   const functions = []
   const isFunction = (node) =>
     node !== undefined &&
@@ -104,8 +114,8 @@ export function functionsIn(ts, file) {
         name: named(node.name ? node.name.getText(file) : `constructor`),
         node: valued ? node.initializer : node,
         cls,
-        start: lineOf(node.getStart(file)),
-        end: lineOf(node.end),
+        start: node.getStart(file),
+        end: node.end,
       })
     ts.forEachChild(node, visit)
   }
@@ -155,7 +165,7 @@ export function ownership(ts, program, pkg, oracles) {
   const referencesOf = (node) => {
     const found = []
     const visit = (child) => {
-      if (ts.isIdentifier(child)) {
+      if (ts.isIdentifier(child) || ts.isPrivateIdentifier(child)) {
         let symbol = checker.getSymbolAtLocation(child)
         if (symbol && symbol.flags & ts.SymbolFlags.Alias)
           symbol = checker.getAliasedSymbol(symbol)
@@ -175,7 +185,7 @@ export function ownership(ts, program, pkg, oracles) {
     owners.set(key, new Set([...(owners.get(key) ?? []), oracle]))
   for (const [oracle, entries] of oracles)
     for (const entry of entries) {
-      const [source, entryFunction] = entry.split(`#`)
+      const [source, entryFunction] = splitEntry(entry)
       if (entryFunction === undefined) {
         add(source, oracle)
         continue
@@ -193,17 +203,17 @@ export function ownership(ts, program, pkg, oracles) {
   return {
     has: (source, name) => functionsOf(source).some((fn) => fn.name === name),
     /**
-     * The innermost function that holds a line, by its name (`<module>` for
-     * none), and its owners. A whole-file entry owns every function in the
-     * file.
+     * The innermost function whose text holds a position (an offset in the
+     * source), by its name (`<module>` for none), and its owners. A
+     * whole-file entry owns every function in the file.
      */
-    at: (source, line) => {
+    at: (source, position) => {
       let best
       for (const fn of functionsOf(source))
         if (
-          fn.start <= line &&
-          line <= fn.end &&
-          (!best || fn.start >= best.start)
+          fn.start <= position &&
+          position < fn.end &&
+          (!best || fn.start > best.start)
         )
           best = fn
       return {
