@@ -38,6 +38,11 @@ const OWN_MODULES = join(
   dirname(fileURLToPath(import.meta.url)),
   `../node_modules`,
 )
+// The Vite this repository installs, which the CLI reads from a package's own
+// resolution (`vite` from its package.json), so a fixture outside it links it.
+const ROOT_VITE = dirname(
+  createRequire(import.meta.url).resolve(`vite/package.json`),
+)
 // A source in a directory of the package whose name starts with `..`, which
 // is in the package all the same. No test loads it.
 const DOTGEN = `..gen/extra.ts`
@@ -364,14 +369,14 @@ const histories = fc.record({
     // The package's Vitest config defines `test.projects`, which the runner
     // cannot honor: each project has its own environment and setup files.
     `projects`,
-    // The package resolves no TypeScript, so a check's session cannot
-    // open, cold or through the daemon.
+    // The package resolves no TypeScript. The CLI analyzes with its own
+    // compiler, so the package's TypeScript is no input to the analysis
+    // (the peer range is optional; the 2026-11-09 adopter report).
     `noTypescript`,
-    // The package's TypeScript throws when it loads, after a moment, with an
-    // error larger than a socket's buffer, as a broken install's long log
-    // would be. It blocks while it loads, so a daemon reads no request
-    // before its session fails.
-    `brokenTypescript`,
+    // The package's TypeScript has TypeScript 7's shape: its version and no
+    // compiler API. The CLI analyzes with its own compiler, as it does for
+    // noTypescript, and must not read the package's TypeScript at all.
+    `apiLessTypescript`,
     // The package's Vitest fails the same way, after waiting on I/O, so a
     // daemon has read its requests when its session fails.
     `brokenVitest`,
@@ -2695,8 +2700,6 @@ function refusal(plan) {
   // A config the runner cannot honor refuses the run rather than leave every
   // mutant unreached (maintainer decision, 2026-11-08).
   if (plan.fault === `projects`) return { cause: `test.projects` }
-  if (plan.fault === `noTypescript` || plan.fault === `brokenTypescript`)
-    return { cause: `typescript` }
   if (plan.fault === `brokenVitest`) return { cause: `vitest` }
   // A failing owner is named with its test's error, so the author can fix it.
   if (plan.fault === `brokenOwner`)
@@ -3118,7 +3121,7 @@ const initialState = (plan) => ({
   seed: 1,
   newOracle: false,
   cliEdited: false,
-  // Whether the package resolves TypeScript and Vitest through links in its
+  // Whether the package's Vitest and runner dependencies are linked into its
   // own node_modules (`fixSession`).
   linked: false,
 })
@@ -3165,25 +3168,16 @@ function fixtureFiles(plan, state = initialState(plan)) {
           'node_modules/@gap/addon/addon.node': ``,
         }
       : {}),
-    // A TypeScript or a Vitest whose load throws a long error, linked as a
-    // package manager links a package, until `fixSession` links a working
-    // one.
-    ...(plan.fault === `brokenTypescript` && !state.linked
+    // A TypeScript that exposes its version and no compiler API, as
+    // TypeScript 7's package does. The CLI must analyze without reading it.
+    ...(plan.fault === `apiLessTypescript`
       ? {
-          'node_modules/typescript': link(`../deps/broken-typescript`),
-          'deps/broken-typescript/package.json': `${JSON.stringify({ name: `typescript`, main: `index.js` })}\n`,
-          'deps/broken-typescript/index.js': [
-            // It takes a moment to fail, as a broken install can, so a CLI
-            // that started the daemon is connected when the session fails.
-            `const until = Date.now() + 1500`,
-            `while (Date.now() < until) {}`,
-            `const log = Array.from({ length: 8000 }, (_, i) => \`  step \${i} of the typescript build failed\`)`,
-            `const error = new Error(\`typescript failed to load: its build is incomplete\\n\${log.join('\\n')}\`)`,
-            `throw error`,
-            ``,
-          ].join(`\n`),
+          'node_modules/typescript/package.json': `${JSON.stringify({ name: `typescript`, version: `7.0.2`, main: `index.js` })}\n`,
+          'node_modules/typescript/index.js': `module.exports = { version: '7.0.2', versionMajorMinor: '7.0' }\n`,
         }
       : {}),
+    // A Vitest whose load throws a long error, linked as a package manager
+    // links a package, until `fixSession` links a working one.
     ...(plan.fault === `brokenVitest` && !state.linked
       ? {
           'node_modules/vitest': link(`../deps/broken-vitest`),
@@ -3239,14 +3233,19 @@ function fixtureFiles(plan, state = initialState(plan)) {
     // that already exists.
     'deps/state-dep/build/Release/.keep': ``,
     ...(plan.release ? { 'deps/state-dep/build/Release/state.node': `` } : {}),
-    // The runner's own dependencies, linked into the package.
-    ...(state.linked
+    // The runner's own dependencies, linked into the package. A package with
+    // no TypeScript sits outside this repository, so it links them, and Vite
+    // too: the CLI bundles a workspace dependency with the package's Vite.
+    ...(state.linked || plan.fault === `noTypescript`
       ? Object.fromEntries(
-          [`typescript`, `vitest`, `fast-check`, `@fast-check`].map((name) => [
+          [`vitest`, `fast-check`, `@fast-check`].map((name) => [
             `node_modules/${name}`,
             link(join(OWN_MODULES, name)),
           ]),
         )
+      : {}),
+    ...(plan.fault === `noTypescript`
+      ? { 'node_modules/vite': link(ROOT_VITE) }
       : {}),
     ...(plan.native === `gyp`
       ? { 'deps/state-dep/binding.gyp': `{ "targets": [] }\n` }
