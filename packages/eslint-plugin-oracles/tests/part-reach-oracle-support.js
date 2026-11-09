@@ -2059,272 +2059,450 @@ export const PART_REACH_AUTHORITY = `The header contract of rules/no-unit-test.j
 
 // -- Constructions ------------------------------------------------------------
 //
-// A construction builds one state's constructed history from the generated
-// skeleton. Each one is a factory of the features that gate its property: it
-// splices in the fragments that enter the state, in the generated shape, and
-// keeps the rest of the generated input, so a failing history shrinks through
-// the skeleton that fast-check generated. The framework checks each `enters`
-// at run time, so a construction that does not enter its state fails the
-// property.
+// A construction changes only the fields that gate its state. Each is a write:
+// a dotted path into the generated skeleton and the value that gates the state
+// there, or a function of the features for a form index. Everything else is
+// the generated input's: its registrations, modules, and companions still vary
+// with the input, and a failing history shrinks through them. A write may create
+// an element that the input lacks (a companion, a registration, a slot); it is
+// created in its default shape, and the writes on it gate the state. The
+// framework checks each `enters` at run time, and the construction law (part-
+// reach-constructions-oracle.property.test.js) checks that nothing else changes.
 
-/** Replaces the first companions with `fragments`; the others are kept. */
-const withCompanions = (fragments) => (generated) => ({
-  ...generated,
-  companions: [...fragments, ...generated.companions.slice(fragments.length)],
-})
-/** Merges the fields that `fields` computes from the oracle's skeleton. */
-const withOracle = (fields) => (generated) => ({
-  ...generated,
-  oracle: { ...generated.oracle, ...fields(generated.oracle) },
-})
-/** Replaces the first registrations with `tests`; the others are kept. */
-const withTests = (tests) =>
-  withOracle((oracle) => ({
-    tests: [...tests, ...oracle.tests.slice(tests.length)],
-  }))
-const withModule = (module) => withOracle(() => ({ module }))
-const withTopLevel = (fields) => (generated) => ({ ...generated, ...fields })
-const compose =
-  (...steps) =>
-  (generated) =>
-    steps.reduce((skeleton, step) => step(skeleton), generated)
-
-/** A fixture module in the generated shape: every import link names its form. */
-const generableModule = (module) => ({
-  ...module,
-  imports: module.imports.map((link) => ({ form: `named`, ...link })),
-})
-/**
- * A registration in the generated shape. A fixture names its form, which the
- * generated shape carries as an index into the features' forms; a generated
- * registration has a `frameworkOptions` too.
- */
-const generableTest = (features, test) => {
-  const { form, ...rest } = { frameworkOptions: `check-model`, ...test }
-  if (form === undefined) return rest
-  const formIndex = features.forms.indexOf(form)
-  if (formIndex < 0)
-    throw new Error(`the features do not enable the form ${form}`)
-  return { ...rest, formIndex }
+/** The default shape of an element that a write creates, by its array's name. */
+const FILL = {
+  companions: () => moduleOf(),
+  // A registration in the generated shape: a fixture's `form` name is not a
+  // generated field, so the default carries a form index instead.
+  tests: () => ({
+    formIndex: 0,
+    frameworkOptions: `check-model`,
+    refs: [],
+    callee: 0,
+    literalOptions: false,
+    wrapped: false,
+    rows: [{ value: 1 }],
+    wrap: 0,
+    trailing: `literal`,
+    constantArb: false,
+    arbNamed: false,
+    predicate: `inline`,
+    readsInput: true,
+    elements: [0],
+  }),
+  slots: () => slot(false),
 }
-/** A fixture's companions, module, and registrations, in the generated shape. */
-const fromFixture = (fixture) => (features) =>
-  compose(
-    withCompanions(fixture.companions.map(generableModule)),
-    withModule(generableModule(fixture.oracle.module)),
-    withTests(
-      fixture.oracle.tests.map((test) => generableTest(features, test)),
-    ),
+
+/** `node` with `value` at the path `[head, ...rest]`, creating missing elements. */
+function setPath(node, [head, ...rest], value, name) {
+  const copy = Array.isArray(node) ? [...node] : { ...node }
+  const key = Array.isArray(copy) ? Number(head) : head
+  if (Array.isArray(copy)) while (copy.length <= key) copy.push(FILL[name]?.())
+  copy[key] = rest.length === 0 ? value : setPath(copy[key], rest, value, head)
+  return copy
+}
+
+/** `node` without the leaf at `path`: the gated field, which the law does not compare. */
+function unsetPath(node, [head, ...rest]) {
+  const copy = { ...node }
+  if (rest.length === 0) delete copy[head]
+  else copy[head] = unsetPath(copy[head], rest)
+  return copy
+}
+
+/** Applies a construction's writes to the generated skeleton. */
+const applyWrites = (writes, features) => (generated) =>
+  Object.entries(writes).reduce(
+    (skeleton, [path, value]) =>
+      setPath(
+        skeleton,
+        path.split(`.`),
+        typeof value === `function` ? value(features) : value,
+        undefined,
+      ),
+    generated,
   )
 
-// The fragments that the constructions splice in.
-const exportedCheck = moduleOf({
-  slots: [
-    slot(true, [], { exported: true, part: `check` }),
-    slot(false),
-    slot(false),
-  ],
-})
-const typeModelFixture = fixed({
-  oracle: {
-    module: moduleOf({
-      slots: [slot(false), slot(false), slot(true, [], { part: `check` })],
-      typeAliases: [true, false, false],
-      typeNames: [0],
-      stringKeys: true,
-    }),
-    objectRefs: [],
-    registrarCall: false,
-    tests: [reg({ refs: [typeRef(0)] })],
-  },
-})
-// Two functions that call each other, and neither reaches the check.
-const mutualNoPart = fixed({
-  oracle: {
-    module: moduleOf({
-      slots: [
-        slot(true, [local(1)]),
-        slot(true, [local(0)]),
-        slot(true, [], { part: `check` }),
-      ],
-    }),
-    objectRefs: [],
-    registrarCall: false,
-    tests: [reg({ form: `identifier`, callee: 0 })],
-  },
-})
-// A `for...of` over one function that reaches the check and one that does not.
-const forOfMixed = fixed({
-  oracle: {
-    module: moduleOf({
-      slots: [slot(true, [], { part: `check` }), slot(true), slot(false)],
-    }),
-    objectRefs: [],
-    registrarCall: false,
-    tests: [reg({ form: `for-of`, elements: [0, 1] })],
-  },
-})
-// An oracle that imports one exported check from a companion, by `form`.
-const linkedTo = (form) =>
-  fromFixture(
-    fixed({
-      companions: [exportedCheck],
-      oracle: {
-        module: moduleOf({ imports: [{ target: 0, slot: 0, form }] }),
-        objectRefs: [],
-        registrarCall: false,
-        tests: [reg({ refs: [imported(0)] })],
-      },
-    }),
-  )
-const registrarCall = withOracle(() => ({ registrarCall: true }))
-/** Registrations of the given form, each in the generated shape. */
-const testsOf = (features, ...tests) =>
-  withTests(tests.map((test) => generableTest(features, test)))
+/** The form index of `form` under the features that enable it. */
+const formAt = (form) => (features) => features.forms.indexOf(form)
 
 /**
- * One construction factory per declared state. Each enters its state under the
- * features of the property that gates it (see familyOptions); the framework
- * checks that at run time.
+ * The module-level scalars and lists at `prefix` that the fixtures leave at
+ * their neutral values: no imports, stars, or re-exports, no default, no
+ * JavaScript, spread, or string keys. A construction writes them so that its state's
+ * structure is the only one; its slots and registrations stay generated.
  */
-export const CONSTRUCTIONS = {
+const plain = (prefix) => ({
+  [`${prefix}.stars`]: [],
+  [`${prefix}.reexports`]: [],
+  [`${prefix}.defaultSlot`]: undefined,
+  [`${prefix}.js`]: false,
+  [`${prefix}.spread`]: false,
+  [`${prefix}.stringKeys`]: false,
+  [`${prefix}.missingPart`]: false,
+  [`${prefix}.imports`]: [],
+})
+
+/**
+ * The slots at `prefix` that the fixtures leave absent and unexported, except
+ * those in `keep`: a re-export or a companion that the state does not use is
+ * neutral, as a fixture's default one is.
+ */
+const neutralSlots = (prefix, keep = []) =>
+  Object.fromEntries(
+    [0, 1, 2]
+      .filter((index) => !keep.includes(index))
+      .flatMap((index) => [
+        [`${prefix}.slots.${index}.present`, false],
+        [`${prefix}.slots.${index}.exported`, false],
+        [`${prefix}.slots.${index}.part`, `none`],
+        [`${prefix}.slots.${index}.refs`, []],
+      ]),
+  )
+
+/**
+ * The registration fields at `test` that a plain, direct registration of the
+ * fixtures leaves at their defaults. Only the form index and the references
+ * stay generated: a body with a wrapper, a trailing argument, or a callee
+ * moves the reach that the state needs.
+ */
+const plainTest = (test) => ({
+  [`${test}.callee`]: 0,
+  [`${test}.wrapped`]: false,
+  [`${test}.wrap`]: 0,
+  [`${test}.trailing`]: `literal`,
+  [`${test}.constantArb`]: false,
+  [`${test}.arbNamed`]: false,
+  [`${test}.predicate`]: `inline`,
+  [`${test}.readsInput`]: true,
+  [`${test}.elements`]: [0],
+  [`${test}.literalOptions`]: false,
+  [`${test}.frameworkOptions`]: `check-model`,
+})
+
+/** The writes that gate each declared state, by path (see the note above). */
+export const WRITES = {
   // Companions and modules.
-  'export-star-cycle': fromFixture(exportCycle),
-  'named-reexport-cycle': fromFixture(namedCycle),
-  'string-keyed-declaration': fromFixture(typeModelFixture),
-  'type-model-declaration': fromFixture(typeModelFixture),
-  'unparseable-companion': () => withTopLevel({ broken: true }),
-  'javascript-companion-import-reaches-part': fromFixture(javascriptCompanion),
-  'mutual-recursion-reaches-part': fromFixture(mutualRecursion),
-  'mutual-recursion-reaches-no-part': fromFixture(mutualNoPart),
-  'declaration-spread': () =>
-    withModule(
-      moduleOf({
-        spread: true,
-        slots: [slot(true, [], { part: `check` }), slot(false), slot(false)],
-      }),
-    ),
+  'export-star-cycle': {
+    ...plain('companions.0'),
+    ...plain('companions.1'),
+    ...plain('oracle.module'),
+    'oracle.registrarCall': false,
+    'companions.0.stars': [0],
+    'companions.0.reexports': [{ target: 0, slot: 0, exportIndex: 3 }],
+    'companions.1.stars': [0],
+    'companions.1.reexports': [{ target: 0, slot: 0, exportIndex: 3 }],
+    'oracle.module.imports': [{ form: `named`, target: 0, slot: 0 }],
+    'oracle.module.slots.2.present': true,
+    'oracle.module.slots.2.part': `check`,
+    'oracle.tests.0.refs': [imported(0)],
+  },
+  'named-reexport-cycle': {
+    ...plain('companions.0'),
+    ...plain('companions.1'),
+    ...plain('oracle.module'),
+    ...neutralSlots('companions.0'),
+    ...neutralSlots('companions.1'),
+    'oracle.registrarCall': false,
+    'companions.0.js': false,
+    'companions.1.js': false,
+    'companions.0.reexports': [{ target: 0, slot: 0, exportIndex: 0 }],
+    'companions.1.reexports': [{ target: 0, slot: 0, exportIndex: 3 }],
+    'oracle.module.imports': [{ form: `named`, target: 0, slot: 0 }],
+    'oracle.module.slots.2.present': true,
+    'oracle.module.slots.2.part': `check`,
+    'oracle.tests.0.refs': [imported(0)],
+  },
+  'string-keyed-declaration': {
+    ...plain('oracle.module'),
+    'oracle.module.typeAliases': [true, false, false],
+    'oracle.module.typeNames': [0],
+    'oracle.module.stringKeys': true,
+    'oracle.module.slots.2.present': true,
+    'oracle.module.slots.2.part': `check`,
+    'oracle.tests.0.refs': [typeRef(0)],
+  },
+  'type-model-declaration': {
+    ...plain('oracle.module'),
+    'oracle.module.typeAliases': [true, false, false],
+    'oracle.module.typeNames': [0],
+    'oracle.module.stringKeys': true,
+    'oracle.module.slots.2.present': true,
+    'oracle.module.slots.2.part': `check`,
+    'oracle.tests.0.refs': [typeRef(0)],
+  },
+  'unparseable-companion': { broken: true },
+  'javascript-companion-import-reaches-part': {
+    ...plainTest('oracle.tests.0'),
+    'oracle.registrarCall': false,
+    'oracle.tests.0.formIndex': formAt(`plain`),
+    ...plain('companions.0'),
+    ...plain('oracle.module'),
+    ...neutralSlots('companions.0', [0]),
+    ...plain('companions.1'),
+    ...neutralSlots('companions.1'),
+    ...plain('companions.2'),
+    ...neutralSlots('companions.2'),
+    'companions.0.js': true,
+    'companions.0.stars': [],
+    'companions.0.slots.0.present': true,
+    'companions.0.slots.0.exported': true,
+    'companions.0.slots.0.part': `check`,
+    'oracle.module.imports': [{ target: 0, slot: 0, form: `named` }],
+    'oracle.tests.0.refs': [imported(0)],
+  },
+  'mutual-recursion-reaches-part': {
+    ...plain('oracle.module'),
+    'oracle.module.slots.0.present': true,
+    'oracle.module.slots.0.refs': [local(1), local(2)],
+    'oracle.module.slots.1.present': true,
+    'oracle.module.slots.1.refs': [local(0)],
+    'oracle.module.slots.2.present': true,
+    'oracle.module.slots.2.part': `check`,
+    'oracle.tests.0.formIndex': formAt(`identifier`),
+    'oracle.tests.0.callee': 0,
+    'oracle.tests.1.formIndex': formAt(`identifier`),
+    'oracle.tests.1.callee': 1,
+  },
+  'mutual-recursion-reaches-no-part': {
+    ...plain('oracle.module'),
+    'oracle.module.slots.0.present': true,
+    'oracle.module.slots.0.part': `none`,
+    'oracle.module.slots.0.refs': [local(1)],
+    'oracle.module.slots.1.present': true,
+    'oracle.module.slots.1.part': `none`,
+    'oracle.module.slots.1.refs': [local(0)],
+    'oracle.module.slots.2.present': true,
+    'oracle.module.slots.2.part': `check`,
+    'oracle.tests.0.formIndex': formAt(`identifier`),
+    'oracle.tests.0.callee': 0,
+  },
+  'declaration-spread': {
+    ...plain('oracle.module'),
+    'oracle.module.spread': true,
+    'oracle.module.slots.0.present': true,
+    'oracle.module.slots.0.part': `check`,
+  },
   // Registration forms and drivers.
-  'form-each': (f) => testsOf(f, reg({ form: `each` })),
-  'form-call-body': (f) => testsOf(f, reg({ form: `call` })),
-  'form-member-body': (f) => testsOf(f, reg({ form: `member` })),
-  'form-for': (f) => testsOf(f, reg({ form: `for`, rows: [{ value: 1 }] })),
-  'form-options': (f) =>
-    testsOf(f, reg({ form: `options-first`, literalOptions: true })),
-  'let-assigned-driver': (f) =>
-    testsOf(f, reg({ form: `let-driver`, refs: [local(0)] })),
-  'for-of-driver': (f) =>
-    compose(
-      withModule(generableModule(checkOnly)),
-      testsOf(f, reg({ form: `for-of`, elements: [0] })),
-    ),
-  'for-of-mixed-elements': fromFixture(forOfMixed),
+  'form-each': { 'oracle.tests.0.formIndex': formAt(`each`) },
+  'form-call-body': { 'oracle.tests.0.formIndex': formAt(`call`) },
+  'form-member-body': { 'oracle.tests.0.formIndex': formAt(`member`) },
+  'form-for': {
+    'oracle.tests.0.formIndex': formAt(`for`),
+    'oracle.tests.0.rows': [{ value: 1 }],
+  },
+  'form-options': {
+    'oracle.tests.0.formIndex': formAt(`options-first`),
+    'oracle.tests.0.literalOptions': true,
+  },
+  'let-assigned-driver': {
+    'oracle.tests.0.formIndex': formAt(`let-driver`),
+    'oracle.tests.0.refs': [local(0)],
+  },
+  'for-of-driver': {
+    'oracle.tests.0.formIndex': formAt(`for-of`),
+    'oracle.tests.0.elements': [0],
+    'oracle.module.slots.2.present': true,
+    'oracle.module.slots.2.part': `check`,
+  },
+  'for-of-mixed-elements': {
+    ...plain('oracle.module'),
+    'oracle.tests.0.formIndex': formAt(`for-of`),
+    'oracle.tests.0.elements': [0, 1],
+    'oracle.module.slots.0.present': true,
+    'oracle.module.slots.0.part': `check`,
+    'oracle.module.slots.1.present': true,
+    'oracle.module.slots.1.part': `none`,
+    'oracle.module.slots.1.refs': [],
+    'oracle.module.slots.2.present': false,
+  },
   // Generated properties.
-  'named-constant-arbitrary': (f) =>
-    testsOf(f, reg({ form: `property`, constantArb: true, arbNamed: true })),
-  'imported-predicate': (f) =>
-    testsOf(f, reg({ form: `property`, predicate: `imported` })),
-  'predicate-ignores-input': (f) =>
-    testsOf(f, reg({ form: `property`, readsInput: false })),
+  'named-constant-arbitrary': {
+    'oracle.tests.0.formIndex': formAt(`property`),
+    'oracle.tests.0.constantArb': true,
+    'oracle.tests.0.arbNamed': true,
+  },
+  'imported-predicate': {
+    'oracle.tests.0.formIndex': formAt(`property`),
+    'oracle.tests.0.predicate': `imported`,
+  },
+  'predicate-ignores-input': {
+    'oracle.tests.0.formIndex': formAt(`property`),
+    'oracle.tests.0.constantArb': false,
+    'oracle.tests.0.readsInput': false,
+  },
   // Registration helpers and their import forms.
-  'imported-registration': () =>
-    compose(withTopLevel({ registrarName: `reg.ts` }), registrarCall),
-  'prefixed-oracle-registrar': () =>
-    compose(withTopLevel({ registrarName: `oracle-reg.ts` }), registrarCall),
-  'default-import-registration': () =>
-    compose(withTopLevel({ registrarImport: `default` }), registrarCall),
-  'member-callee-registration': () =>
-    compose(withTopLevel({ registrarImport: `namespace` }), registrarCall),
-  'oracle-named-helper': (f) =>
-    compose(
-      withTopLevel({ helperName: `reg-helper-oracle.ts` }),
-      testsOf(f, reg({ form: `helper-plain` })),
-    ),
-  'prefixed-oracle-helper': (f) =>
-    compose(
-      withTopLevel({ helperName: `oracle-reg-helper.ts` }),
-      testsOf(f, reg({ form: `helper-plain` })),
-    ),
-  'default-import': (f) => linkedTo(`default`)(f),
-  'namespace-import': (f) => linkedTo(`namespace`)(f),
-  'default-import-through-star': fromFixture(defaultThroughStar),
-  'default-import-star-target-has-part': fromFixture(defaultThroughStar),
+  'imported-registration': {
+    registrarName: `reg.ts`,
+    'oracle.registrarCall': true,
+  },
+  'prefixed-oracle-registrar': {
+    registrarName: `oracle-reg.ts`,
+    'oracle.registrarCall': true,
+  },
+  'default-import-registration': {
+    registrarImport: `default`,
+    'oracle.registrarCall': true,
+  },
+  'member-callee-registration': {
+    registrarImport: `namespace`,
+    'oracle.registrarCall': true,
+  },
+  'oracle-named-helper': {
+    helperName: `reg-helper-oracle.ts`,
+    'oracle.tests.0.formIndex': formAt(`helper-plain`),
+  },
+  'prefixed-oracle-helper': {
+    helperName: `oracle-reg-helper.ts`,
+    'oracle.tests.0.formIndex': formAt(`helper-plain`),
+  },
+  'default-import': {
+    ...plain('companions.0'),
+    ...plain('oracle.module'),
+    'oracle.registrarCall': false,
+    'companions.0.slots.0.present': true,
+    'companions.0.slots.0.exported': true,
+    'companions.0.slots.0.part': `check`,
+    'oracle.module.imports': [{ target: 0, slot: 0, form: `default` }],
+    'oracle.tests.0.refs': [imported(0)],
+  },
+  'namespace-import': {
+    ...plain('companions.0'),
+    ...plain('oracle.module'),
+    'oracle.registrarCall': false,
+    'companions.0.slots.0.present': true,
+    'companions.0.slots.0.exported': true,
+    'companions.0.slots.0.part': `check`,
+    'oracle.module.imports': [{ target: 0, slot: 0, form: `namespace` }],
+    'oracle.tests.0.refs': [imported(0)],
+  },
+  'default-import-through-star': {
+    ...plain('companions.0'),
+    ...plain('companions.1'),
+    ...plain('oracle.module'),
+    'oracle.registrarCall': false,
+    'companions.0.stars': [0],
+    'companions.1.slots.0.present': true,
+    'companions.1.slots.0.part': `check`,
+    'companions.1.defaultSlot': 0,
+    'oracle.module.imports': [{ target: 0, slot: 0, form: `default` }],
+    'oracle.tests.0.refs': [imported(0)],
+  },
+  'default-import-star-target-has-part': {
+    ...plain('companions.0'),
+    ...plain('companions.1'),
+    ...plain('oracle.module'),
+    'oracle.registrarCall': false,
+    'companions.0.stars': [0],
+    'companions.1.slots.0.present': true,
+    'companions.1.slots.0.part': `check`,
+    'companions.1.defaultSlot': 0,
+    'oracle.module.imports': [{ target: 0, slot: 0, form: `default` }],
+    'oracle.tests.0.refs': [imported(0)],
+  },
   // Caller-passed bodies.
-  'caller-passed-body-helper': (f) => testsOf(f, reg({ form: `helper-plain` })),
-  'caller-body-trailing-name': (f) =>
-    compose(
-      withModule(generableModule(checkOnly)),
-      testsOf(
-        f,
-        reg({ form: `helper-plain`, wrap: WRAP.timed, trailing: `name` }),
-      ),
-    ),
-  'caller-body-wrapper': (f) =>
-    testsOf(f, reg({ form: `helper-plain`, wrap: WRAP.wrap })),
-  'caller-body-wrapper-reaches-part': (f) =>
-    compose(
-      withCompanions([generableModule(exportedCheck)]),
-      testsOf(f, reg({ form: `helper-plain`, wrap: WRAP[`wrap-part`] })),
-    ),
+  'caller-passed-body-helper': {
+    'oracle.tests.0.formIndex': formAt(`helper-plain`),
+  },
+  'caller-body-trailing-name': {
+    'oracle.module.slots.2.present': true,
+    'oracle.module.slots.2.part': `check`,
+    'oracle.tests.0.formIndex': formAt(`helper-plain`),
+    'oracle.tests.0.wrap': WRAP.timed,
+    'oracle.tests.0.trailing': `name`,
+  },
+  'caller-body-wrapper': {
+    'oracle.tests.0.formIndex': formAt(`helper-plain`),
+    'oracle.tests.0.wrap': WRAP.wrap,
+  },
+  'caller-body-wrapper-reaches-part': {
+    ...plain('companions.0'),
+    'companions.0.slots.0.present': true,
+    'companions.0.slots.0.exported': true,
+    'companions.0.slots.0.part': `check`,
+    'oracle.tests.0.formIndex': formAt(`helper-plain`),
+    'oracle.tests.0.wrap': WRAP[`wrap-part`],
+  },
   // The framework module and its lookalikes.
-  'oracle-property-complete': (f) =>
-    compose(
-      withTopLevel({ frameworkName: `oracle-property.ts` }),
-      testsOf(
-        f,
-        reg({ form: `framework-property`, frameworkOptions: `check-model` }),
-      ),
-    ),
-  'oracle-property-without-check': (f) =>
-    compose(
-      withTopLevel({ frameworkName: `oracle-property.ts` }),
-      testsOf(
-        f,
-        reg({ form: `framework-property`, frameworkOptions: `model` }),
-      ),
-    ),
-  'oracle-property-named-options': (f) =>
-    compose(
-      withTopLevel({ frameworkName: `oracle-property.ts` }),
-      testsOf(f, reg({ form: `framework-property`, frameworkOptions: `name` })),
-    ),
-  'oracle-property-namespace-import': (f) =>
-    compose(
-      withTopLevel({
-        frameworkName: `oracle-property.ts`,
-        frameworkImport: `namespace`,
-      }),
-      testsOf(
-        f,
-        reg({ form: `framework-property`, frameworkOptions: `check-model` }),
-      ),
-    ),
-  'oracle-property-machinery-lookalike': (f) =>
-    compose(
-      withTopLevel({ frameworkName: `oracle-propertyx.ts` }),
-      testsOf(
-        f,
-        reg({ form: `framework-property`, frameworkOptions: `check-model` }),
-      ),
-    ),
-  'oracle-property-ordinary-lookalike': (f) =>
-    compose(
-      withTopLevel({ frameworkName: `property.ts` }),
-      testsOf(
-        f,
-        reg({ form: `framework-property`, frameworkOptions: `check-model` }),
-      ),
-    ),
-  'oracle-property-oracle-named-lookalike': (f) =>
-    compose(
-      withTopLevel({ frameworkName: `property-oracle.ts` }),
-      testsOf(
-        f,
-        reg({ form: `framework-property`, frameworkOptions: `check-model` }),
-      ),
-    ),
+  'oracle-property-complete': {
+    frameworkName: `oracle-property.ts`,
+    'oracle.tests.0.formIndex': formAt(`framework-property`),
+    'oracle.tests.0.frameworkOptions': `check-model`,
+  },
+  'oracle-property-without-check': {
+    frameworkName: `oracle-property.ts`,
+    'oracle.tests.0.formIndex': formAt(`framework-property`),
+    'oracle.tests.0.frameworkOptions': `model`,
+  },
+  'oracle-property-named-options': {
+    frameworkName: `oracle-property.ts`,
+    'oracle.tests.0.formIndex': formAt(`framework-property`),
+    'oracle.tests.0.frameworkOptions': `name`,
+  },
+  'oracle-property-namespace-import': {
+    frameworkName: `oracle-property.ts`,
+    frameworkImport: `namespace`,
+    'oracle.tests.0.formIndex': formAt(`framework-property`),
+    'oracle.tests.0.frameworkOptions': `check-model`,
+  },
+  'oracle-property-machinery-lookalike': {
+    frameworkName: `oracle-propertyx.ts`,
+    'oracle.tests.0.formIndex': formAt(`framework-property`),
+    'oracle.tests.0.frameworkOptions': `check-model`,
+  },
+  'oracle-property-ordinary-lookalike': {
+    frameworkName: `property.ts`,
+    'oracle.tests.0.formIndex': formAt(`framework-property`),
+    'oracle.tests.0.frameworkOptions': `check-model`,
+  },
+  'oracle-property-oracle-named-lookalike': {
+    frameworkName: `property-oracle.ts`,
+    'oracle.tests.0.formIndex': formAt(`framework-property`),
+    'oracle.tests.0.frameworkOptions': `check-model`,
+  },
   // A companion edited between lints: the chain's companions and module.
-  'companion-edited-between-lints': fromFixture(chain),
+  'companion-edited-between-lints': {
+    ...plainTest('oracle.tests.0'),
+    'oracle.registrarCall': false,
+    'oracle.tests.0.formIndex': formAt(`plain`),
+    ...plain('companions.0'),
+    ...plain('companions.1'),
+    ...plain('oracle.module'),
+    ...neutralSlots('companions.0', [0]),
+    ...neutralSlots('companions.1', [0]),
+    ...plain('companions.2'),
+    ...neutralSlots('companions.2'),
+    'companions.0.slots.0.present': true,
+    'companions.0.slots.0.exported': true,
+    'companions.0.slots.0.part': `check`,
+    'companions.1.slots.0.present': true,
+    'companions.1.slots.0.exported': true,
+    'companions.1.slots.0.refs': [imported(0)],
+    'companions.1.imports': [{ form: `named`, target: 0, slot: 0 }],
+    'oracle.module.imports': [{ form: `named`, target: 1, slot: 0 }],
+    'oracle.tests.0.refs': [imported(0)],
+  },
+}
+
+/** The gated paths of a state: the fields its construction writes. */
+export const gatesOf = (state) => Object.keys(WRITES[state])
+
+/** One construction factory per declared state, built from its writes. */
+export const CONSTRUCTIONS = Object.fromEntries(
+  Object.entries(WRITES).map(([state, writes]) => [
+    state,
+    (features) => applyWrites(writes, features),
+  ]),
+)
+
+/** The skeleton without the gated fields of `state`, padded as its construction pads it. */
+export function ungated(state, skeleton) {
+  const gates = gatesOf(state)
+  const padded = gates.reduce(
+    (node, path) => setPath(node, path.split(`.`), undefined, undefined),
+    skeleton,
+  )
+  return gates.reduce((node, path) => unsetPath(node, path.split(`.`)), padded)
 }
 
 /** The check: every receiving path's keys equal the model's, exactly. */
