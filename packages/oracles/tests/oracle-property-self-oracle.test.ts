@@ -182,6 +182,8 @@ type Draft = {
   liveNoise: boolean
   liveDate: boolean
   realmCheck: boolean
+  snapshotCheck: boolean
+  deepCheck: boolean
   domThrow: boolean
   emptyMessage: boolean
   labelStyle: `plain` | `shell` | `default`
@@ -376,6 +378,14 @@ const draft: fc.Arbitrary<Draft> = fc.record({
     { weight: 9, arbitrary: fc.constant(false) },
     { weight: 1, arbitrary: fc.constant(true) },
   ),
+  snapshotCheck: fc.oneof(
+    { weight: 9, arbitrary: fc.constant(false) },
+    { weight: 1, arbitrary: fc.constant(true) },
+  ),
+  deepCheck: fc.oneof(
+    { weight: 12, arbitrary: fc.constant(false) },
+    { weight: 1, arbitrary: fc.constant(true) },
+  ),
 })
 const suite: fc.Arbitrary<Suite> = fc.record({
   drafts: fc.array(draft, { minLength: 1, maxLength: 2 }),
@@ -459,6 +469,17 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
         ...(d.liveNoise ? { liveNoise: true } : {}),
         ...(d.liveDate ? { liveDate: true } : {}),
         ...(d.realmCheck ? { realmCheck: true } : {}),
+        ...(d.snapshotCheck ? { snapshotCheck: true } : {}),
+        // A deep check is drawn without a clock, a model that throws,
+        // calibrations, or probes, whose own failures it would cut across.
+        ...(d.deepCheck &&
+        !d.clock &&
+        !d.strictModel &&
+        !d.sevenModel &&
+        d.calibrations.length === 0 &&
+        (!generated || d.probe === `none`)
+          ? { deepCheck: true }
+          : {}),
         ...(d.zeroNoise ? { zeroNoise: true } : {}),
         ...(d.orderNoise ? { orderNoise: true } : {}),
         // An odd observation fails a history at once; it is drawn without
@@ -595,6 +616,10 @@ function verdictOf(history: SyntheticHistory, spec: SyntheticSpec): Outcome {
       return { kind: `model-not-total`, ...carried }
     return { kind: `setup` }
   }
+  // A check that compares data past the encoding limit fails as that limit,
+  // after a driver error, which decides first.
+  if (spec.deepCheck)
+    return history.includes(6) ? { kind: `setup` } : { kind: `limit` }
   for (const [at, item] of history.entries()) {
     if (item === 3 || item === 4)
       return {
@@ -728,6 +753,7 @@ const oddFailures: Record<
   'proxy-prototype-error': [`.reason`, `an object with a proxy prototype`],
   'proxy-object-prototype': [`.reason`, `an object with a proxy prototype`],
   'old-error': [`.reason`, `an old-style Error without the native brand`],
+  'proxy-constructor': [`.reason`, `an instance of a proxied class`],
   cycle: [`.reason.self`, `a cycle`],
   sparse: [`.reason`, `a sparse array`],
   accessor: [`.reason.x`, `an accessor`],
@@ -1022,9 +1048,13 @@ function predictSpec(
   const replays = names.filter(
     (name) =>
       isCampaign(name) &&
-      [`violation`, `setup`, `constructed-reach`, `model-not-total`].includes(
-        tests.get(name)!.kind,
-      ),
+      [
+        `violation`,
+        `setup`,
+        `constructed-reach`,
+        `model-not-total`,
+        `limit`,
+      ].includes(tests.get(name)!.kind),
   )
   const rerun = names.find(
     (name) => !isCampaign(name) && tests.get(name)!.kind === `violation`,
@@ -1131,6 +1161,7 @@ const frameworkStates = [
   `history-reported`,
   `live-value`,
   `realm-compared`,
+  `snapshot-judged`,
   `dom-thrown-value`,
   `encoding-limit`,
   `uncut-spin-model-error`,
@@ -1158,6 +1189,7 @@ function frameworkReach(
     if (spec.emptyMessage) reached.add(`equal-data-repeats`)
     if (spec.liveDate) reached.add(`live-value`)
     if (spec.realmCheck) reached.add(`realm-compared`)
+    if (spec.snapshotCheck) reached.add(`snapshot-judged`)
     if (spec.domThrow && [...owed.tests.values()].some(({ cause }) => cause))
       reached.add(`dom-thrown-value`)
     if ([...owed.tests.values()].some(({ kind }) => kind === `limit`))
@@ -1487,7 +1519,12 @@ function classify(error: ReportedError | undefined): Failure {
     ...(rerun !== undefined ? { rerun } : {}),
     // Only whether it shows the items: a report may print machine paths.
     ...(history !== undefined
-      ? { showsHistory: history.includes(`items`) }
+      ? {
+          // The items, with every brace an inspected Error opens closed.
+          showsHistory:
+            history.includes(`items`) &&
+            history.split(`{`).length === history.split(`}`).length,
+        }
       : {}),
   }
 }
@@ -2103,6 +2140,8 @@ const generatedDraft = (overrides: Partial<Draft>): Draft => ({
   liveNoise: false,
   liveDate: false,
   realmCheck: false,
+  snapshotCheck: false,
+  deepCheck: false,
   orderNoise: false,
   odd: `none`,
   emptyMessage: false,
@@ -2493,6 +2532,16 @@ oracleProperty({
         `a live value that later holds a Date was data when observed`,
         [`live-value`],
         generatedDraft({ liveDate: true, fixed: [at([0])] }),
+      ),
+      fixedHistory(
+        `the check judges what was observed, not a later change`,
+        [`snapshot-judged`],
+        generatedDraft({ snapshotCheck: true, fixed: [at([0]), at([3])] }),
+      ),
+      fixedHistory(
+        `differs on data past the encoding limit reports the limit`,
+        [`encoding-limit`],
+        generatedDraft({ deepCheck: true, fixed: [at([0])] }),
       ),
       fixedHistory(
         `differs takes data from another realm for the same data`,
