@@ -154,7 +154,7 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { appendFileSync } from 'node:fs'
-import { inspect, isDeepStrictEqual } from 'node:util'
+import { inspect, isDeepStrictEqual, types } from 'node:util'
 import fc from 'fast-check'
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -404,10 +404,13 @@ export class OracleViolation extends Error {
 /**
  * A model threw on a trace that a driver error or a controlled-clock spin cut
  * short. Models must accept any prefix of a trace, so this is the model's
- * defect, not the driver's, and not a verdict about production.
+ * defect, not a verdict about production. Its `cause` is the model's error,
+ * and `driverError` the driver's, often production's own crash, which its
+ * message also quotes.
  */
-class OracleModelError extends Error {
+export class OracleModelError extends Error {
   override name = `OracleModelError`
+  driverError?: unknown
 }
 
 /**
@@ -795,72 +798,127 @@ function planOf<THistory, TExpected, TPlan>(
 // A stable text for a history or an observation: its JSON when JSON carries
 // it exactly, so a plain history keeps the name JSON gives it, and otherwise
 // Node's inspection of it, which keeps NaN, -0, undefined, bigints, Maps,
-// Sets, symbol keys, and class names apart and never reads as JSON.
+// Sets, symbol keys, class names, and every Error's class, message, cause,
+// `errors`, and own properties apart, and never reads as JSON. Only what
+// differs between machines is dropped: each Error's stack. Naming never
+// throws: a value that cannot be copied, such as a revoked proxy, falls back
+// to its plain inspection.
 function stableText(value: unknown): string {
-  value = withoutStacks(value)
   try {
-    // undefined, a function, or a symbol prints as nothing.
-    const text = JSON.stringify(value) as string | undefined
-    if (text !== undefined && isDeepStrictEqual(JSON.parse(text), value))
-      return text
+    const data = machineFree(value)
+    try {
+      // undefined, a function, or a symbol prints as nothing.
+      const text = JSON.stringify(data) as string | undefined
+      if (text !== undefined && isDeepStrictEqual(JSON.parse(text), data))
+        return text
+    } catch {
+      // JSON cannot print it, such as a bigint or a getter that throws.
+    }
+    return inspect(data, inspection)
   } catch {
-    // JSON cannot print it, such as a bigint.
+    try {
+      return inspect(value, inspection)
+    } catch {
+      return Object.prototype.toString.call(value)
+    }
   }
-  return inspect(value, {
-    depth: Infinity,
-    maxArrayLength: Infinity,
-    maxStringLength: Infinity,
-    breakLength: Infinity,
-  })
 }
 
-/** An Error as its name and message: its stack names files and lines. */
-class ErrorText {
-  constructor(
-    readonly name: string,
-    readonly message: string,
-  ) {}
+const inspection = {
+  depth: Infinity,
+  maxArrayLength: Infinity,
+  maxStringLength: Infinity,
+  breakLength: Infinity,
 }
 
-// A copy of a value in which each Error, in arrays, plain objects, Maps, and
-// Sets, is its name and message. Other values are kept as they are.
-function withoutStacks(
+// A copy of a value that every check reads the same way, without each
+// Error's stack, which names this machine's files. Arrays, Maps, Sets, plain
+// objects, and class instances are copied with their prototypes and own
+// properties, an accessor as an accessor, so a getter is not called; an
+// Error keeps its prototype and every own property but `stack`. Other
+// objects, such as dates, are kept as they are.
+function machineFree(
   value: unknown,
   seen = new Map<object, unknown>(),
 ): unknown {
-  if (value instanceof Error) return new ErrorText(value.name, value.message)
   if (typeof value !== `object` || value === null) return value
   if (seen.has(value)) return seen.get(value)
-  if (Array.isArray(value)) {
-    const copy: Array<unknown> = new Array(value.length)
-    seen.set(value, copy)
-    value.forEach((item, index) => (copy[index] = withoutStacks(item, seen)))
-    return copy
-  }
-  if (value instanceof Map) {
-    const copy = new Map()
-    seen.set(value, copy)
-    for (const [key, item] of value)
-      copy.set(withoutStacks(key, seen), withoutStacks(item, seen))
-    return copy
-  }
-  if (value instanceof Set) {
-    const copy = new Set()
-    seen.set(value, copy)
-    for (const item of value) copy.add(withoutStacks(item, seen))
-    return copy
-  }
-  const prototype: unknown = Object.getPrototypeOf(value)
-  if (prototype !== Object.prototype && prototype !== null) return value
-  const copy = Object.create(prototype) as Record<PropertyKey, unknown>
+  const prototype = Object.getPrototypeOf(value) as object | null
+  let copy: object
+  if (Array.isArray(value)) copy = new Array(value.length)
+  else if (types.isMap(value))
+    copy = new Map(
+      [...value].map(([key, item]) => [
+        machineFree(key, seen),
+        machineFree(item, seen),
+      ]),
+    )
+  else if (types.isSet(value))
+    copy = new Set([...value].map((item) => machineFree(item, seen)))
+  else if (
+    types.isNativeError(value) ||
+    value instanceof Error ||
+    Object.prototype.toString.call(value) === `[object Object]`
+  )
+    copy = {}
+  else return value
+  Object.setPrototypeOf(copy, prototype)
   seen.set(value, copy)
-  for (const key of Reflect.ownKeys(value))
-    if (Object.prototype.propertyIsEnumerable.call(value, key))
-      copy[key] = withoutStacks(
-        (value as Record<PropertyKey, unknown>)[key],
-        seen,
-      )
+  const error = types.isNativeError(value) || value instanceof Error
+  for (const key of Reflect.ownKeys(value)) {
+    if (
+      (error && key === `stack`) ||
+      (Array.isArray(value) && key === `length`)
+    )
+      continue
+    const property = Object.getOwnPropertyDescriptor(value, key)!
+    Object.defineProperty(
+      copy,
+      key,
+      `value` in property
+        ? { ...property, value: machineFree(property.value, seen) }
+        : property,
+    )
+  }
   return copy
+}
+
+// Whether two observations are the same plain data (primitives, arrays, and
+// plain objects, with their keys in order), or undefined when either holds
+// anything else, a symbol key, a function, or a symbol, which the stable text
+// then decides. A fast path that agrees with the stable text.
+function sameData(a: unknown, b: unknown): boolean | undefined {
+  if (Object.is(a, b)) return true
+  const kinds = [typeof a, typeof b]
+  if (kinds.some((kind) => kind === `function` || kind === `symbol`))
+    return undefined
+  if (typeof a !== `object` || typeof b !== `object` || !a || !b) return false
+  const plain = (item: object) =>
+    Array.isArray(item)
+      ? Object.getPrototypeOf(item) === Array.prototype
+      : Object.getPrototypeOf(item) === Object.prototype
+  if (!plain(a) || !plain(b)) return undefined
+  if (Array.isArray(a) !== Array.isArray(b)) return false
+  const [keysA, keysB] = [Reflect.ownKeys(a), Reflect.ownKeys(b)].map((keys) =>
+    keys.filter((key) => key !== `length` || !Array.isArray(a)),
+  )
+  if (keysA!.some((key) => typeof key === `symbol`)) return undefined
+  if (keysB!.some((key) => typeof key === `symbol`)) return undefined
+  if (keysA!.length !== keysB!.length) return false
+  let same: boolean | undefined = true
+  for (const [index, key] of keysA!.entries()) {
+    if (key !== keysB![index]) return false
+    const [propertyA, propertyB] = [
+      Object.getOwnPropertyDescriptor(a, key)!,
+      Object.getOwnPropertyDescriptor(b, key)!,
+    ]
+    if (!(`value` in propertyA) || !(`value` in propertyB)) return undefined
+    if (propertyA.enumerable !== propertyB.enumerable) return undefined
+    const item = sameData(propertyA.value, propertyB.value)
+    if (item === false) return false
+    if (item === undefined) same = undefined
+  }
+  return same
 }
 
 function determinismTest<THistory, TExpected, TPlan>(
@@ -881,6 +939,7 @@ function determinismTest<THistory, TExpected, TPlan>(
         const length = Math.max(first.length, second.length)
         for (let index = 0; index < length; index += 1) {
           const [a, b] = [first[index], second[index]]
+          if (sameData(a, b) === true) continue
           const [textA, textB] = [stableText(a), stableText(b)]
           if (textA === textB) continue
           const error = new Error(
@@ -934,11 +993,21 @@ async function runOne<THistory, TExpected, TPlan>(
       `the controlled clock fired more than ${spin.maxTimers} timers in one history: work that never goes quiet (raise maxTimers if a legal history needs more)`,
       `bounded clock`,
     )
+    // A spin after the last observation cuts nothing: an error judging that
+    // whole trace is the parts' own.
+    const cutShort = spin.at < observations.length
     let judged: { verdict: Verdict; reached: Set<string> }
     try {
-      judged = judge(options, plan, cut, undefined, probes, `a clock spin`)
+      judged = judge(
+        options,
+        plan,
+        cut,
+        undefined,
+        probes,
+        cutShort ? `a clock spin` : undefined,
+      )
     } catch (error) {
-      if (error instanceof OracleModelError) throw error
+      if (error instanceof OracleModelError || !cutShort) throw error
       return { verdict: clock, reached: new Set() }
     }
     const { verdict, reached } = judged
@@ -1023,10 +1092,16 @@ function judge<THistory, TExpected, TPlan>(
   } catch (error) {
     const cut = driverError ? `a driver error` : cutBy
     if (cut === undefined) throw error
-    throw new OracleModelError(
-      `${options.id}: the model threw on a trace that ${cut} cut short after ${observations.length} observations. A model must accept any prefix of a trace.`,
+    const thrown =
+      driverError === undefined
+        ? ``
+        : ` The driver's error: ${driverError.error instanceof Error ? `${driverError.error.name}: ${driverError.error.message}` : String(driverError.error)}`
+    const modelError = new OracleModelError(
+      `${options.id}: the model threw on a trace that ${cut} cut short after ${observations.length} observations. A model must accept any prefix of a trace.${thrown}`,
       { cause: error },
     )
+    if (driverError) modelError.driverError = driverError.error
+    throw modelError
   }
   try {
     verdict = options.check(plan, observations, expected)

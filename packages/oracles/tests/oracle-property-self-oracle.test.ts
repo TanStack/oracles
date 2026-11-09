@@ -158,7 +158,10 @@ type Draft = {
   noisyProbe: boolean
   predictMode: `match` | `missing` | `extra`
   clock: boolean
-  form: `plain` | `bigint` | `map` | `lossy` | `error`
+  form:
+    `plain` | `bigint` | `map` | `lossy` | `error` | `errors` | `boxed` | `trap`
+  sevenModel: boolean
+  errorNoise: boolean
   zeroNoise: boolean
   orderNoise: boolean
   freshClosure: boolean
@@ -283,6 +286,9 @@ const draft: fc.Arbitrary<Draft> = fc.record({
         `map` as const,
         `lossy` as const,
         `error` as const,
+        `errors` as const,
+        `boxed` as const,
+        `trap` as const,
       ),
     },
   ),
@@ -312,6 +318,14 @@ const draft: fc.Arbitrary<Draft> = fc.record({
   ),
   strictModel: fc.oneof(
     { weight: 3, arbitrary: fc.constant(false) },
+    { weight: 1, arbitrary: fc.constant(true) },
+  ),
+  sevenModel: fc.oneof(
+    { weight: 5, arbitrary: fc.constant(false) },
+    { weight: 1, arbitrary: fc.constant(true) },
+  ),
+  errorNoise: fc.oneof(
+    { weight: 9, arbitrary: fc.constant(false) },
     { weight: 1, arbitrary: fc.constant(true) },
   ),
 })
@@ -377,7 +391,20 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
         ...(d.predictMode !== `match` ? { predictMode: d.predictMode } : {}),
         ...(d.timing === `slow` ? { slow: true, timeout: 100 } : {}),
         ...(d.clock ? { clock: true } : {}),
-        ...(d.form !== `plain` ? { form: d.form } : {}),
+        // fast-check cannot print a history whose getter throws, so only an
+        // enumerated source holds one.
+        ...(d.form !== `plain` && (d.form !== `trap` || !generated)
+          ? { form: d.form }
+          : {}),
+        // A seven model with calibrations would need the model's error in
+        // each candidate's clean check; it is drawn without them.
+        ...(d.sevenModel &&
+        !d.strictModel &&
+        d.calibrations.length === 0 &&
+        (!generated || d.probe === `none`)
+          ? { sevenModel: true }
+          : {}),
+        ...(d.errorNoise ? { errorNoise: true } : {}),
         ...(d.zeroNoise ? { zeroNoise: true } : {}),
         ...(d.orderNoise ? { orderNoise: true } : {}),
         ...(d.freshClosure ? { freshClosure: true } : {}),
@@ -457,15 +484,33 @@ const clockOutcome: Outcome = {
   law: `bounded clock`,
   checkpoint: `clock`,
 }
-function verdictOf(
-  history: SyntheticHistory,
-  clock = false,
-  strict = false,
-): Outcome {
+// A model that throws on the trace it is given: a strict model on a trace a
+// stop cut before the last item, a seven model on a trace holding an item 7.
+// On a trace a driver error cut short, that is a model error that carries
+// the driver's error; on a trace a spin cut short (items or other
+// observations follow the spin), a model error; on a whole trace, the
+// model's own error, a setup error.
+function verdictOf(history: SyntheticHistory, spec: SyntheticSpec): Outcome {
+  const clock = spec.clock === true
   const stops = (item: number) => item === 6 || (clock && item === 7)
   const stopAt = history.findIndex(stops)
-  if (strict && stopAt >= 0 && stopAt < history.length - 1)
-    return { kind: `model-not-total` }
+  const judgedItems = stopAt >= 0 ? history.slice(0, stopAt + 1) : history
+  const modelThrows = spec.strictModel
+    ? stopAt >= 0 && stopAt < history.length - 1
+    : spec.sevenModel === true && judgedItems.includes(7)
+  if (modelThrows) {
+    if (stopAt >= 0 && history[stopAt] === 6)
+      return { kind: `model-not-total`, cause: `driver` }
+    const trailing =
+      spec.nondeterministic ||
+      spec.zeroNoise === true ||
+      spec.orderNoise === true ||
+      spec.freshClosure === true ||
+      spec.errorNoise === true
+    if (stopAt >= 0 && (stopAt < history.length - 1 || trailing))
+      return { kind: `model-not-total` }
+    return { kind: `setup` }
+  }
   for (const [at, item] of history.entries()) {
     if (item === 3 || item === 4) {
       const stop = history.slice(at + 1).find(stops)
@@ -528,7 +573,7 @@ function judged(
   history: SyntheticHistory,
   forced?: boolean,
 ): Outcome {
-  const verdict = verdictOf(history, spec.clock === true, spec.strictModel)
+  const verdict = verdictOf(history, spec)
   if (verdict.kind !== `pass` || !spec.probe) return verdict
   const predicts = predictsZero(history)
   if (enteredFor(spec, history, forced) === predicts) return verdict
@@ -657,8 +702,27 @@ function predictSpec(
   ]
   // A slow driver outlives the 100 ms limit in every test that runs a
   // history, and every test runs at least one.
+  // A history outside the language fails its membership check before any
+  // driver runs, so it fails fast even in a slow spec.
   if (spec.slow) {
-    for (const name of all) tests.set(name, { kind: `timeout` })
+    const constructedOutside = spec.constructed.some(
+      (construction) => !constructedMember(construction.prefix),
+    )
+    for (const name of all)
+      tests.set(
+        name,
+        constructedOutside &&
+          (isCampaign(name) ||
+            name === `determinism` ||
+            name.startsWith(`calibration:`))
+          ? { kind: `constructed-membership` }
+          : { kind: `timeout` },
+      )
+    for (const fixedHistory of spec.fixed)
+      if (!member(fixedHistory.history))
+        tests.set(`fixed history: ${fixedHistory.name}`, {
+          kind: `fixed-membership`,
+        })
     return { loads: true, tests, reach: new Map(), replays: [] }
   }
   // A calibration needs a candidate whose clean trace passes; it skips the
@@ -686,7 +750,8 @@ function predictSpec(
       spec.nondeterministic ||
       spec.noisyProbe === true ||
       spec.zeroNoise === true ||
-      spec.orderNoise === true
+      spec.orderNoise === true ||
+      spec.errorNoise === true
     for (const history of histories) {
       if (history.includes(6)) return { kind: `setup` }
       if (varies) return { kind: `determinism` }
@@ -715,10 +780,7 @@ function predictSpec(
   }
   if (spec.source.kind === `enumerated`)
     for (const history of spec.source.histories)
-      tests.set(
-        enumeratedName(spec, history, logged),
-        verdictOf(history, spec.clock === true, spec.strictModel),
-      )
+      tests.set(enumeratedName(spec, history, logged), verdictOf(history, spec))
   else {
     tests.set(names[0]!, campaign(names[0]!))
     tests.set(`random seed`, campaign(`random seed`))
@@ -889,6 +951,11 @@ const frameworkStates = [
   `error-history`,
   `fresh-closure`,
   `model-not-total`,
+  `errors-history`,
+  `boxed-history`,
+  `trap-history`,
+  `uncut-spin-model-error`,
+  `driver-error-carried`,
 ] as const
 
 function frameworkReach(
@@ -913,6 +980,15 @@ function frameworkReach(
       if (outcome.cause) reached.add(`cause-attached`)
       if (outcome.kind === `timeout`) reached.add(`timeout`)
       if (outcome.kind === `model-not-total`) reached.add(`model-not-total`)
+      if (outcome.kind === `model-not-total` && outcome.cause === `driver`)
+        reached.add(`driver-error-carried`)
+      if (
+        outcome.kind === `setup` &&
+        spec.sevenModel &&
+        spec.clock &&
+        name.startsWith(`fixed history:`)
+      )
+        reached.add(`uncut-spin-model-error`)
       if (name === `random seed`) reached.add(`random-campaign`)
       if (outcome.kind === `determinism`) reached.add(`determinism-caught`)
       if (outcome.law === agreementLaw) reached.add(`agreement-violation`)
@@ -963,6 +1039,9 @@ function frameworkReach(
       if (spec.form === `map`) reached.add(`map-history`)
       if (spec.form === `lossy`) reached.add(`lossy-history`)
       if (spec.form === `error`) reached.add(`error-history`)
+      if (spec.form === `errors`) reached.add(`errors-history`)
+      if (spec.form === `boxed`) reached.add(`boxed-history`)
+      if (spec.form === `trap`) reached.add(`trap-history`)
     }
     if (spec.freshClosure) reached.add(`fresh-closure`)
     if (
@@ -1134,9 +1213,13 @@ function classify(error: ReportedError | undefined): Failure {
     : /was reached with a false condition/.test(text)
       ? (`false-condition` as const)
       : undefined
+  // A violation carries the driver's error as its cause; a model error
+  // carries it in its message.
   const cause =
-    inner.name === `OracleViolation` &&
-    (inner.cause?.message ?? ``).includes(`synthetic driver failed`)
+    (inner.name === `OracleViolation` &&
+      (inner.cause?.message ?? ``).includes(`synthetic driver failed`)) ||
+    (inner.name === `OracleModelError` &&
+      text.includes(`synthetic driver failed`))
       ? (`driver` as const)
       : undefined
   const kind: Kind | `other` =
@@ -1164,7 +1247,8 @@ function classify(error: ReportedError | undefined): Failure {
                         ? `calibration-wrong-law`
                         : text.includes(`found no history`)
                           ? `calibration-none`
-                          : text.includes(`synthetic driver failed`)
+                          : text.includes(`synthetic driver failed`) ||
+                              text.includes(`cannot read a 7`)
                             ? `setup`
                             : `other`
   return {
@@ -1734,6 +1818,8 @@ const generatedDraft = (overrides: Partial<Draft>): Draft => ({
   clock: false,
   form: `plain`,
   zeroNoise: false,
+  sevenModel: false,
+  errorNoise: false,
   orderNoise: false,
   freshClosure: false,
   labelStyle: `plain`,
@@ -2015,6 +2101,42 @@ oracleProperty({
           source: { kind: `enumerated`, histories: [[0], [2], [1]] },
         },
       ),
+      // A spin after the last observation cuts nothing: a model that throws
+      // there has its own error, a setup error.
+      fixedHistory(
+        `a model that throws on an uncut trace with a spin is a setup error`,
+        [`uncut-spin-model-error`],
+        generatedDraft({ clock: true, sevenModel: true, fixed: [at([1, 7])] }),
+      ),
+      fixedHistory(
+        `unlabelled histories of Errors that differ only in their data are named apart`,
+        [`unlabelled-enumerated`, `errors-history`],
+        {
+          ...generatedDraft({ form: `errors`, labelStyle: `default` }),
+          source: { kind: `enumerated`, histories: [[0], [1], [2], [3]] },
+        },
+      ),
+      fixedHistory(
+        `an Error inside a class instance is named without its stack`,
+        [`unlabelled-enumerated`, `boxed-history`],
+        {
+          ...generatedDraft({ form: `boxed`, labelStyle: `default` }),
+          source: { kind: `enumerated`, histories: [[0], [1]] },
+        },
+      ),
+      fixedHistory(
+        `a history whose getter throws is still named`,
+        [`unlabelled-enumerated`, `trap-history`],
+        {
+          ...generatedDraft({ form: `trap`, labelStyle: `default` }),
+          source: { kind: `enumerated`, histories: [[0], [1]] },
+        },
+      ),
+      fixedHistory(
+        `the determinism test tells an Error's data apart`,
+        [`determinism-caught`],
+        generatedDraft({ errorNoise: true, fixed: [at([0])] }),
+      ),
       seedlessHistory(
         `an ordinary run's random campaign runs under random seed`,
         [`seedless-route`],
@@ -2065,7 +2187,7 @@ oracleProperty({
       // setup error: the model that cannot read the rest is named.
       fixedHistory(
         `a model that throws on a trace a driver error cut short is a model error`,
-        [`strict-model-cut-short`, `model-not-total`],
+        [`strict-model-cut-short`, `model-not-total`, `driver-error-carried`],
         generatedDraft({ strictModel: true, fixed: [at([3, 6, 1])] }),
       ),
       // A campaign reports a model error as one, and its replay reproduces

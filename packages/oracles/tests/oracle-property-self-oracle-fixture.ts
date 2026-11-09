@@ -42,7 +42,13 @@
  * `new Map([["items", items]])` (which JSON prints as `{}`), or, `lossy`,
  * as the array with each 1 held as `NaN` and each 2 as `-0` (which JSON
  * prints as `null` and `0`), or, `error`, as `{ items, failure }` with an
- * Error, whose stack names this machine's paths. The arbitrary,
+ * Error, whose stack names this machine's paths. Three more forms hold the
+ * items where only an Error's data tells histories apart: `errors`, one
+ * Error per item (0: an Error; 1: a `SyntheticFault`, a subclass with the
+ * same name and message; 2: an Error with a cause; any other k: an Error
+ * whose `code` is k); `boxed`, a `SyntheticBox` instance holding the items
+ * and an Error; and `trap`, `{ items }` with an enumerable getter that
+ * throws. The arbitrary,
  * constructed and fixed histories, and every part use that form; the log
  * records the items. An enumerated spec labels its histories as
  * `items a | b`, or, with `labelStyle` `shell`, adds a shell's special
@@ -54,7 +60,10 @@
  * tell apart but an exact comparison can. An `orderNoise` spec records, last,
  * an object whose keys come in a different order on alternate runs, which a
  * check that iterates it can tell apart. A `freshClosure` spec records, last,
- * a new function named `tool` on every run: the same data each time. The fixture records
+ * a new function named `tool` on every run: the same data each time. An
+ * `errorNoise` spec records, last, an Error whose `requestId` alternates
+ * between runs. A `sevenModel` spec's model throws on any trace that holds an
+ * item 7, cut short or not. The fixture records
  * the route registered through `__oracleRoute` when each history runs, in
  * the log beside it.
  *
@@ -136,7 +145,7 @@ export type SyntheticSpec = {
   /** Runs every history on a controlled clock, where a 7 spins it. */
   clock?: boolean
   /** How the property holds a history's items; the array itself when absent. */
-  form?: `bigint` | `map` | `lossy` | `error`
+  form?: `bigint` | `map` | `lossy` | `error` | `errors` | `boxed` | `trap`
   /** An enumerated label with shell characters, or no label at all. */
   labelStyle?: `shell` | `default`
   /** Registers the property inside `describe(outerSuite)`. */
@@ -149,6 +158,10 @@ export type SyntheticSpec = {
   freshClosure?: boolean
   /** A model that throws on a trace with fewer items than the history. */
   strictModel?: boolean
+  /** A model that throws on any trace holding an item 7. */
+  sevenModel?: boolean
+  /** Records an Error whose requestId alternates between runs, last. */
+  errorNoise?: boolean
 }
 
 /** The synthetic language: one to three items, mostly ordinary ones. */
@@ -168,6 +181,32 @@ const syntheticProbe = `synthetic#saw-0`
 let nonce = 0
 let zeroes = 0
 let orders = 0
+let requests = 0
+
+/** An Error subclass with the name and message of a plain Error. */
+class SyntheticFault extends Error {}
+/** A class instance that holds a history's items and an Error. */
+class SyntheticBox {
+  constructor(
+    readonly items: SyntheticHistory,
+    readonly failure: Error,
+  ) {}
+}
+const errorOf = (item: number): Error =>
+  item === 0
+    ? new Error(`synthetic`)
+    : item === 1
+      ? new SyntheticFault(`synthetic`)
+      : item === 2
+        ? new Error(`synthetic`, { cause: new Error(`inner`) })
+        : Object.assign(new Error(`synthetic`), { code: item })
+const itemOf = (failure: unknown): number => {
+  if (failure instanceof SyntheticFault) return 1
+  if (!(failure instanceof Error)) throw new Error(`not an errors-form item`)
+  if (failure.cause !== undefined) return 2
+  const { code } = failure as { code?: number }
+  return code ?? 0
+}
 let noise = 0
 // The route registered for the running test, as the gap report reads it.
 let route: string | undefined
@@ -191,7 +230,18 @@ const formOf =
           ? items.map((item) => (item === 1 ? NaN : item === 2 ? -0 : item))
           : spec.form === `error`
             ? { items, failure: new Error(`synthetic failure`) }
-            : items
+            : spec.form === `errors`
+              ? items.map(errorOf)
+              : spec.form === `boxed`
+                ? new SyntheticBox(items, new Error(`synthetic failure`))
+                : spec.form === `trap`
+                  ? {
+                      items,
+                      get trap(): never {
+                        throw new Error(`a getter that throws`)
+                      },
+                    }
+                  : items
 const itemsOf =
   (spec: SyntheticSpec) =>
   (history: Formed): SyntheticHistory => {
@@ -211,6 +261,19 @@ const itemsOf =
       if (formed?.failure instanceof Error && Array.isArray(formed.items))
         return formed.items as SyntheticHistory
       throw new Error(`not an error-form history`)
+    }
+    if (spec.form === `errors`) {
+      if (!Array.isArray(history)) throw new Error(`not an errors-form history`)
+      return (history as ReadonlyArray<unknown>).map(itemOf)
+    }
+    if (spec.form === `boxed`) {
+      if (history instanceof SyntheticBox) return history.items
+      throw new Error(`not a boxed history`)
+    }
+    if (spec.form === `trap`) {
+      const formed = history as { items?: unknown } | null
+      if (Array.isArray(formed?.items)) return formed.items as SyntheticHistory
+      throw new Error(`not a trap-form history`)
     }
     if (spec.form === `lossy`) {
       const held = history as ReadonlyArray<number>
@@ -327,6 +390,11 @@ function syntheticDriver(spec: SyntheticSpec, mutant = false) {
       const tool = () => undefined
       observe(`nonce`, { tool })
     }
+    if (spec.errorNoise)
+      observe(
+        `nonce`,
+        Object.assign(new Error(`request failed`), { requestId: requests++ }),
+      )
   }
 }
 
@@ -393,7 +461,21 @@ export function syntheticProperty(spec: SyntheticSpec): void {
             )
           return undefined
         }
-      : () => undefined,
+      : spec.sevenModel
+        ? (
+            _history: Formed,
+            trace: ReadonlyArray<{ checkpoint: string; value: unknown }>,
+          ) => {
+            if (
+              trace.some(
+                ({ checkpoint, value }) =>
+                  checkpoint.startsWith(`item`) && value === 7,
+              )
+            )
+              throw new TypeError(`the seven model cannot read a 7`)
+            return undefined
+          }
+        : () => undefined,
     // Without `reached`, the framework counts the driver's `reach` records.
     ...(spec.reachVia === `reached`
       ? { reached: (history: Formed) => reachedStates(spec)(items(history)) }
