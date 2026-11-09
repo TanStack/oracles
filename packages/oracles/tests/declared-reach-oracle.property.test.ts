@@ -17,7 +17,9 @@
  *   full budget. A path replay, which runs one recorded history, skips it in
  *   every reach of that process, also in a property that the replay does not
  *   name: a reach need not carry its property's name, so it cannot tell whose
- *   replay runs. An explicit `replaying` option overrides the environment.
+ *   replay runs. The reach reads the replay selection that the configuration
+ *   read (`configureOracles`, or the first use), as every other replay
+ *   condition does. An explicit `replaying` option overrides it.
  * - A property can run fixed examples first in every run. It declares their
  *   number as `fixedHistories: n` and begins each example's history with
  *   `beginHistory({ fixed: true })`. The check then also fails for each state
@@ -43,8 +45,9 @@
  * optional `replaying` override, the options, the states reached before the
  * first history, each history with its fixed mark and the states it enters,
  * the campaign runner's fixed seed, and an optional invalid campaign
- * environment. The drivers run `createOracleReach`, `runOracleCampaign`, and
- * `oracleRandomParameters` under that run kind's environment, and
+ * environment. The drivers run `createOracleReach` on a fresh copy of the
+ * modules in that run kind's environment, `runOracleCampaign` and
+ * `oracleRandomParameters` under that environment, and
  * `oraclePropertyOptions` under the process's own. Each check compares one
  * whole observation with the model.
  */
@@ -271,14 +274,23 @@ const replayNames = [`ORACLE_SEED`, `ORACLE_PATH`, `ORACLE_PROPERTY`]
 async function observeLedger(ledger: Ledger): Promise<Verdict> {
   let reach: ReturnType<typeof createOracleReach<string>>
   try {
-    reach = await withEnvironment(replayNames, runEnvironment(ledger.run), () =>
-      createOracleReach(`ledger`, ledger.states, {
-        minimum: ledger.minimum,
-        fixedHistories: ledger.fixedHistories,
-        ...(ledger.replaying === undefined
-          ? {}
-          : { replaying: ledger.replaying }),
-      }),
+    // A process reads its replay selection once, and may not change it after
+    // a read, so each ledger's run kind gets a fresh copy of the modules that
+    // reads it from that environment, as a process of that kind would.
+    reach = await withEnvironment(
+      replayNames,
+      runEnvironment(ledger.run),
+      async () => {
+        vi.resetModules()
+        const fresh = await import(`../src/oracle-reach.js`)
+        return fresh.createOracleReach(`ledger`, ledger.states, {
+          minimum: ledger.minimum,
+          fixedHistories: ledger.fixedHistories,
+          ...(ledger.replaying === undefined
+            ? {}
+            : { replaying: ledger.replaying }),
+        })
+      },
     )
   } catch {
     return {
@@ -403,24 +415,32 @@ function campaignLedger(ledger: Ledger): Ledger {
 // The campaign model: two campaigns without a prefix seed, one campaign named
 // `replay` with one. Each campaign has a minimum of one and no fixed
 // histories, checks reach unless a path replays it, and reports its seed and counts
-// even when reach fails. The first failing campaign ends the run.
+// even when reach fails. The first failing campaign ends the run. A fixed
+// campaign's seed and a replay's seed are declared fixed, under the registered
+// symbol of oracle-route.ts; a drawn seed is not.
+const fixedSeed: unique symbol = Symbol.for(`@tanstack/oracles/fixed-seed`)
 function expectedCampaign(ledger: Ledger): CampaignObservation {
   if (ledger.campaignFault !== undefined) {
     return { parameters: [], lines: [], failure: `invalid environment` }
   }
   const run = campaignRun(ledger.run)
   const campaigns: ReadonlyArray<
-    readonly [string, { seed?: number; path?: string; numRuns?: number }]
+    readonly [
+      string,
+      { seed?: number; path?: string; numRuns?: number; [fixedSeed]?: number },
+    ]
   > =
     run === `ordinary`
       ? [
-          [`fixed`, { seed: ledger.fixedSeed }],
+          [`fixed`, { seed: ledger.fixedSeed, [fixedSeed]: ledger.fixedSeed }],
           [`random`, { seed: expect.any(Number) }],
         ]
       : [
           [
             `replay`,
-            run === `seed` ? { seed: 1 } : { seed: 1, path: `0`, numRuns: 1 },
+            run === `seed`
+              ? { seed: 1, [fixedSeed]: 1 }
+              : { seed: 1, path: `0`, numRuns: 1, [fixedSeed]: 1 },
           ],
         ]
   const replayed = campaignLedger(ledger)

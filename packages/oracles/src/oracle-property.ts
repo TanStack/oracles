@@ -33,16 +33,26 @@
  *   trace recorded before it already violates the law: then the violation is
  *   the failure, with the error as its cause, so a later crash cannot hide an
  *   earlier wrong observation. A check therefore judges the recorded
- *   checkpoints first and the trace's completeness last.
+ *   checkpoints first and the trace's completeness last, and a model must
+ *   accept any prefix of a trace: a driver error or a controlled-clock spin
+ *   cuts a trace short, and a model that throws on the cut trace fails the
+ *   history with an `OracleModelError` that names the model, a framework
+ *   error that shrinks as its own kind (maintainer decision, 2026-11-08).
  * - `check` compares the observations with the model and returns a verdict.
  *   Only the check can report a violation of the law. A violation that gives
  *   the `actual` and `expected` values gets the test runner's usual diff;
  *   `differs` builds one from an exact comparison.
  *
- * Each history is one test, named by `label`. A violation fails it with an
+ * Each history is one test, named by `label`, or, without one, by the
+ * history's stable text: its JSON when JSON carries it exactly, and otherwise
+ * Node's inspection of it, which keeps NaN, -0, undefined, bigints, Maps,
+ * Sets, symbol keys, and class names apart, and shows an Error by its name
+ * and message without its stack, so a name is the same on every machine. A violation fails it with an
  * `OracleViolation` that names the property, the law, the checkpoint, the
- * difference, and the command that reruns that history (the name is escaped,
- * because Vitest reads `-t` as a regular expression). Every observation is
+ * difference, the history in that text, and the command that reruns that history: a `-t` pattern
+ * that matches the test's full name, its enclosing suites' names included,
+ * escaped because Vitest reads `-t` as a regular expression, and quoted for a
+ * POSIX shell, so it pastes as printed. Every observation is
  * also offered to `globalThis.__oracleObserve` when a harness installs one,
  * so the gap report can tell an output the check does not compare from one
  * that never changed.
@@ -111,8 +121,11 @@
  * - **Determinism.** A `determinism` test runs some histories twice and
  *   requires the same trace: every fixed and constructed history of a generated
  *   source and three generated histories, or up to eight evenly spaced
- *   enumerated histories. A trace that
- *   differs between runs of one history breaks replay, shrinking, and the gap
+ *   enumerated histories. Observations are data: two runs are compared by
+ *   their stable text, so `-0` and `0`, key order, and Map and Set order
+ *   count, as a check that iterates them can see, and a function counts by
+ *   its name, so a fresh closure is the same data. A trace
+ *   that differs between runs of one history breaks replay, shrinking, and the gap
  *   report's comparison, so a driver records relations (before and after,
  *   same or different id) rather than clock readings or random ids.
  * - **Shrinking keeps the failure.** A violation can name the law it broke.
@@ -141,7 +154,7 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { appendFileSync } from 'node:fs'
-import { isDeepStrictEqual } from 'node:util'
+import { inspect, isDeepStrictEqual, types } from 'node:util'
 import fc from 'fast-check'
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -152,6 +165,8 @@ import {
   withOracleFixedHistories,
 } from './oracle-config.js'
 import { oracleEnvName } from './oracle-environment.js'
+import { oracleFixedSeed, oracleRoute, oracleRouteOf } from './oracle-route.js'
+import type { OracleRoute } from './oracle-route.js'
 
 /** A law and where it comes from. */
 export interface OracleLaw {
@@ -241,9 +256,12 @@ export function forwardCut<TState>(
  * Logical time for drivers. A driver that
  * must not hang when production never settles a promise waits with
  * `withinTurns(promise, turns)`: it resolves `true` as soon as the promise
- * settles, at the same microtask an `await` would, or `false` after `turns`
- * event-loop turns. The bound counts turns, not milliseconds, so a loaded
- * machine cannot turn a slow but legal settlement into a timeout. It cannot
+ * settles, or `false` once `turns` event-loop turns pass without it settling.
+ * A promise that had already settled when `withinTurns` was called settled
+ * in time, even with zero turns. `turns` is a nonnegative integer; any other
+ * number counts no turns, so `withinTurns` throws when called with one. The
+ * bound counts turns, not milliseconds, so a loaded machine cannot turn a
+ * slow but legal settlement into a timeout. It cannot
  * wait for work that production schedules on a delayed timer; a driver for
  * such work controls that timer.
  */
@@ -263,6 +281,10 @@ export function withinTurns(
   promise: Promise<unknown>,
   turns: number,
 ): Promise<boolean> {
+  if (!Number.isInteger(turns) || turns < 0)
+    throw new Error(
+      `withinTurns: ${turns} turns counts no turns; a number of turns is a nonnegative integer`,
+    )
   // An object, so the loop reads the flag that the callbacks set.
   const state = { settled: false }
   const done = promise.then(
@@ -272,7 +294,10 @@ export function withinTurns(
   const expiry = (async () => {
     for (let turn = 0; turn < turns && !state.settled; turn += 1)
       await nextTurn()
-    return false
+    // The settlement callbacks of a promise that settled by the deadline,
+    // or before the call, run before this one.
+    await undefined
+    return state.settled
   })()
   return Promise.race([done, expiry])
 }
@@ -286,7 +311,9 @@ export function withinTurns(
  * engine completes one store's operations in order. At each step the schedule
  * releases the oldest task of queue `choices[step] % queues`, counting the
  * queues that have a pending task in the order they first did, and the oldest
- * task overall once the choices run out. A history that holds the choices replays exactly, shrinks
+ * task overall once the choices run out. A choice is a nonnegative integer:
+ * any other number names no queue, so `scheduleFrom` throws when it is called
+ * with one. A history that holds the choices replays exactly, shrinks
  * like any array, can be a fixed or constructed history, and prints as JSON; a
  * `fc.scheduler()` value does none of these (it is consumed as it runs, its
  * clones do not reproduce, and it is never a member of its own language).
@@ -307,6 +334,14 @@ export interface DataScheduler {
 }
 
 export function scheduleFrom(choices: ReadonlyArray<number>): DataScheduler {
+  // findIndex visits a hole as undefined, which names no queue too.
+  const misfit = choices.findIndex(
+    (choice) => !Number.isInteger(choice) || choice < 0,
+  )
+  if (misfit >= 0)
+    throw new Error(
+      `scheduleFrom: choice ${String(choices[misfit])} names no queue; a choice is a nonnegative integer`,
+    )
   const pending: Array<{ label: string; queue: string; release: () => void }> =
     []
   const released: Array<string> = []
@@ -364,6 +399,18 @@ export class OracleViolation extends Error {
   actual?: unknown
   expected?: unknown
   showDiff?: boolean
+}
+
+/**
+ * A model threw on a trace that a driver error or a controlled-clock spin cut
+ * short. Models must accept any prefix of a trace, so this is the model's
+ * defect, not a verdict about production. Its `cause` is the model's error,
+ * and `driverError` the driver's, often production's own crash, which its
+ * message also quotes.
+ */
+export class OracleModelError extends Error {
+  override name = `OracleModelError`
+  driverError?: unknown
 }
 
 /**
@@ -472,9 +519,6 @@ declare global {
     ((checkpoint: string, value: unknown) => void) | undefined
   // Production probes call this in development builds; see `probes`.
   var __oracleProbe: ((name: string, condition: unknown) => void) | undefined
-  // Installed by the gap report's test setup, absent otherwise. Each
-  // registered test reports its route before it runs.
-  var __oracleRoute: ((route: string) => void) | undefined
   // Installed by the gap report's test setup, absent otherwise. It receives
   // every law violation the framework raises, so a mutant's kill is
   // classified by the law that rejected it rather than by its message.
@@ -529,6 +573,12 @@ type BoundOptions<THistory, TExpected, TPlan> = OraclePropertyOptions<
 const stateName = (state: DeclaredState) =>
   typeof state === `string` ? state : state.name
 
+/** A Vitest test or suite, as far as its full name needs. */
+interface NamedTask {
+  name: string
+  suite?: NamedTask
+}
+
 /** One test that a property registers. */
 interface PropertyTest {
   name: string
@@ -536,8 +586,9 @@ interface PropertyTest {
    * The test's route, which the gap report reads to tell a reproducible kill
    * from a random-only one or a framework check (`__oracleRoute`).
    */
-  route: string
-  run: () => Promise<void>
+  route: OracleRoute
+  /** Runs the test; `task` is Vitest's record of it, for its full name. */
+  run: (task: NamedTask) => Promise<void>
   /** Path replays this test runs during; empty stands aside during every one. */
   replays: ReadonlyArray<string>
 }
@@ -563,9 +614,9 @@ export function oracleProperty<THistory, TExpected, TPlan = THistory>(
     for (const test of tests)
       oracleReplayTest(it, ...test.replays)(
         test.name,
-        () => {
-          globalThis.__oracleRoute?.(test.route)
-          return test.run()
+        ({ task }) => {
+          oracleRoute(test.route)
+          return test.run(task)
         },
         options.timeout ?? 120_000,
       )
@@ -577,45 +628,33 @@ function enumeratedTests<THistory, TExpected, TPlan>(
   histories: ReadonlyArray<THistory>,
 ): Array<PropertyTest> {
   const spacing = Math.max(1, Math.ceil(histories.length / 8))
-  const sampled = histories.filter((_, index) => index % spacing === 0)
+  const named = histories.map((history) => ({
+    name: options.label?.(history) ?? stableText(history),
+    history,
+  }))
   return [
-    ...histories.map((history) => enumeratedTest(options, history)),
-    ...calibrationTests(options, () =>
-      histories.map((history) => ({
-        name: options.label?.(history) ?? JSON.stringify(history),
-        history,
-      })),
-    ),
+    ...named.map(({ name, history }) => enumeratedTest(options, name, history)),
+    ...calibrationTests(options, () => named),
     determinismTest(options, () =>
-      sampled.map((history) => ({
-        name: options.label?.(history) ?? JSON.stringify(history),
-        history,
-      })),
+      named.filter((_, index) => index % spacing === 0),
     ),
   ]
 }
 
 function enumeratedTest<THistory, TExpected, TPlan>(
   options: OraclePropertyOptions<THistory, TExpected, TPlan>,
+  name: string,
   history: THistory,
 ): PropertyTest {
-  {
-    const name = options.label?.(history) ?? JSON.stringify(history)
-    return {
-      name,
-      route: `enumerated`,
-      replays: [],
-      run: async () => {
-        const { verdict } = await runOne(options, history)
-        if (verdict.kind === `violation`)
-          throw failure(
-            options,
-            verdict,
-            history,
-            rerunByName(options.id, name),
-          )
-      },
-    }
+  return {
+    name,
+    route: `case`,
+    replays: [],
+    run: async (task) => {
+      const { verdict } = await runOne(options, history)
+      if (verdict.kind === `violation`)
+        throw failure(options, verdict, history, rerunOf(task))
+    },
   }
 }
 
@@ -716,44 +755,34 @@ export function useOracleClock({
   }
 }
 
-/** Runs only the driver, for a history's recorded trace. */
-async function recordTrace<TPlan>(
+/**
+ * Everything a deterministic driver repeats in one run of a history: its
+ * trace, where a controlled clock passed its bound, and its probe calls. A
+ * driver error ends the determinism test with that error.
+ */
+async function repeatedRecord<TPlan>(
   driver: (
     plan: TPlan,
     observe: (checkpoint: string, value: unknown) => void,
   ) => Promise<void> | void,
   plan: TPlan,
 ): Promise<Array<Observation>> {
-  const observations: Array<Observation> = []
-  const window: ProbeWindow = {
-    reached: new Set(),
-    entered: new Set(),
-    open: true,
-  }
-  historyTrace = observations
-  clockSpin = undefined
-  try {
-    await probeWindows.run(window, () =>
-      driver(plan, (checkpoint, value) => {
-        observations.push({ checkpoint, value })
-      }),
-    )
-  } finally {
-    historyTrace = undefined
-  }
-  window.open = false
-  // Where a controlled clock passed its bound is part of the trace.
-  const spin = takeClockSpin()
-  if (spin) observations.push({ checkpoint: `clock`, value: spin.at })
-  // The probe calls a history makes are part of what a deterministic driver repeats.
-  observations.push({
-    checkpoint: `probes`,
-    value: {
-      reached: [...window.reached].sort(),
-      entered: [...window.entered].sort(),
+  const { observations, driverError, probes, spin } = await recordGuarded(
+    driver,
+    plan,
+  )
+  if (driverError) throw driverError.error
+  return [
+    ...observations,
+    ...(spin ? [{ checkpoint: `clock`, value: spin.at }] : []),
+    {
+      checkpoint: `probes`,
+      value: {
+        reached: [...probes.reached].sort(),
+        entered: [...probes.entered].sort(),
+      },
     },
-  })
-  return observations
+  ]
 }
 
 /** The plan a history resolves to; a history is its own plan by default. */
@@ -766,18 +795,130 @@ function planOf<THistory, TExpected, TPlan>(
     : (history as unknown as TPlan)
 }
 
-// A stable text for an observation: Maps, Sets, undefined, bigints, and
-// errors keep their distinctions, which JSON alone drops.
-function traceText(value: unknown): string {
-  return JSON.stringify(value, (_key, item: unknown) => {
-    if (item === undefined) return `$undefined`
-    if (typeof item === `bigint`) return `$bigint:${item}`
-    if (item instanceof Map) return { $map: [...item] }
-    if (item instanceof Set) return { $set: [...item] }
-    if (item instanceof Error)
-      return { $error: item.name, message: item.message }
-    return item
-  })
+// A stable text for a history or an observation: its JSON when JSON carries
+// it exactly, so a plain history keeps the name JSON gives it, and otherwise
+// Node's inspection of it, which keeps NaN, -0, undefined, bigints, Maps,
+// Sets, symbol keys, class names, and every Error's class, message, cause,
+// `errors`, and own properties apart, and never reads as JSON. Only what
+// differs between machines is dropped: each Error's stack. Naming never
+// throws: a value that cannot be copied, such as a revoked proxy, falls back
+// to its plain inspection.
+function stableText(value: unknown): string {
+  try {
+    const data = machineFree(value)
+    try {
+      // undefined, a function, or a symbol prints as nothing.
+      const text = JSON.stringify(data) as string | undefined
+      if (text !== undefined && isDeepStrictEqual(JSON.parse(text), data))
+        return text
+    } catch {
+      // JSON cannot print it, such as a bigint or a getter that throws.
+    }
+    return inspect(data, inspection)
+  } catch {
+    try {
+      return inspect(value, inspection)
+    } catch {
+      return Object.prototype.toString.call(value)
+    }
+  }
+}
+
+const inspection = {
+  depth: Infinity,
+  maxArrayLength: Infinity,
+  maxStringLength: Infinity,
+  breakLength: Infinity,
+}
+
+// A copy of a value that every check reads the same way, without each
+// Error's stack, which names this machine's files. Arrays, Maps, Sets, plain
+// objects, and class instances are copied with their prototypes and own
+// properties, an accessor as an accessor, so a getter is not called; an
+// Error keeps its prototype and every own property but `stack`. Other
+// objects, such as dates, are kept as they are.
+function machineFree(
+  value: unknown,
+  seen = new Map<object, unknown>(),
+): unknown {
+  if (typeof value !== `object` || value === null) return value
+  if (seen.has(value)) return seen.get(value)
+  const prototype = Object.getPrototypeOf(value) as object | null
+  let copy: object
+  if (Array.isArray(value)) copy = new Array(value.length)
+  else if (types.isMap(value))
+    copy = new Map(
+      [...value].map(([key, item]) => [
+        machineFree(key, seen),
+        machineFree(item, seen),
+      ]),
+    )
+  else if (types.isSet(value))
+    copy = new Set([...value].map((item) => machineFree(item, seen)))
+  else if (
+    types.isNativeError(value) ||
+    value instanceof Error ||
+    Object.prototype.toString.call(value) === `[object Object]`
+  )
+    copy = {}
+  else return value
+  Object.setPrototypeOf(copy, prototype)
+  seen.set(value, copy)
+  const error = types.isNativeError(value) || value instanceof Error
+  for (const key of Reflect.ownKeys(value)) {
+    if (
+      (error && key === `stack`) ||
+      (Array.isArray(value) && key === `length`)
+    )
+      continue
+    const property = Object.getOwnPropertyDescriptor(value, key)!
+    Object.defineProperty(
+      copy,
+      key,
+      `value` in property
+        ? { ...property, value: machineFree(property.value, seen) }
+        : property,
+    )
+  }
+  return copy
+}
+
+// Whether two observations are the same plain data (primitives, arrays, and
+// plain objects, with their keys in order), or undefined when either holds
+// anything else, a symbol key, a function, or a symbol, which the stable text
+// then decides. A fast path that agrees with the stable text.
+function sameData(a: unknown, b: unknown): boolean | undefined {
+  if (Object.is(a, b)) return true
+  const kinds = [typeof a, typeof b]
+  if (kinds.some((kind) => kind === `function` || kind === `symbol`))
+    return undefined
+  if (typeof a !== `object` || typeof b !== `object` || !a || !b) return false
+  const plain = (item: object) =>
+    Array.isArray(item)
+      ? Object.getPrototypeOf(item) === Array.prototype
+      : Object.getPrototypeOf(item) === Object.prototype
+  if (!plain(a) || !plain(b)) return undefined
+  if (Array.isArray(a) !== Array.isArray(b)) return false
+  const [keysA, keysB] = [Reflect.ownKeys(a), Reflect.ownKeys(b)].map((keys) =>
+    keys.filter((key) => key !== `length` || !Array.isArray(a)),
+  )
+  if (keysA!.some((key) => typeof key === `symbol`)) return undefined
+  if (keysB!.some((key) => typeof key === `symbol`)) return undefined
+  if (keysA!.length !== keysB!.length) return false
+  let same: boolean | undefined = true
+  for (const [index, key] of keysA!.entries()) {
+    if (key !== keysB![index]) return false
+    const [propertyA, propertyB] = [
+      Object.getOwnPropertyDescriptor(a, key)!,
+      Object.getOwnPropertyDescriptor(b, key)!,
+    ]
+    if (!(`value` in propertyA) || !(`value` in propertyB)) return undefined
+    if (propertyA.enumerable !== propertyB.enumerable) return undefined
+    const item = sameData(propertyA.value, propertyB.value)
+    if (item === false) return false
+    if (item === undefined) same = undefined
+  }
+  return same
 }
 
 function determinismTest<THistory, TExpected, TPlan>(
@@ -786,26 +927,27 @@ function determinismTest<THistory, TExpected, TPlan>(
 ): PropertyTest {
   return {
     name: `determinism`,
-    route: `determinism`,
+    route: `calibration`,
     replays: [],
     run: async () => {
       for (const { name, history } of histories()) {
         const plan = planOf(options, history)
         const [first, second] = [
-          await recordTrace(options.driver, plan),
-          await recordTrace(options.driver, plan),
+          await repeatedRecord(options.driver, plan),
+          await repeatedRecord(options.driver, plan),
         ]
         const length = Math.max(first.length, second.length)
         for (let index = 0; index < length; index += 1) {
           const [a, b] = [first[index], second[index]]
-          const [textA, textB] = [traceText(a), traceText(b)]
+          if (sameData(a, b) === true) continue
+          const [textA, textB] = [stableText(a), stableText(b)]
           if (textA === textB) continue
           const error = new Error(
             [
               `${options.id}: two runs of "${name}" recorded different traces at observation ${index}${a ? ` ("${a.checkpoint}")` : ``}.`,
               `First run:  ${textA.slice(0, 2000)}`,
               `Second run: ${textB.slice(0, 2000)}`,
-              `History: ${traceText(history)}`,
+              `History: ${stableText(history)}`,
               `A driver records relations, such as before and after or same and different, instead of clock readings or random ids.`,
             ].join(`\n`),
           ) as Error & {
@@ -841,30 +983,46 @@ async function runOne<THistory, TExpected, TPlan>(
     forced,
   )
   // A spin ranks as a driver error does, by where it happens: the trace is
-  // judged up to it, and a driver error after it does not decide.
+  // judged up to it, and a driver error after it does not decide. A trace it
+  // cut short that the model or check cannot read leaves the spin to decide,
+  // as a driver error does.
   if (spin) {
-    const { verdict, reached } = judge(
-      options,
-      plan,
-      observations.slice(0, spin.at),
-      undefined,
-      probes,
+    const cut = observations.slice(0, spin.at)
+    const clock = violation(
+      `clock`,
+      `the controlled clock fired more than ${spin.maxTimers} timers in one history: work that never goes quiet (raise maxTimers if a legal history needs more)`,
+      `bounded clock`,
     )
+    // A spin cuts the trace short when anything follows it, an observation
+    // or a driver error; after the last observation with no error, it cuts
+    // nothing, and an error judging that whole trace is the parts' own. A
+    // driver error after the spin does not decide, but is kept as the cause
+    // of what does.
+    const cutShort = spin.at < observations.length || driverError !== undefined
+    const kept = (decided: Verdict): Verdict =>
+      driverError && decided.kind === `violation`
+        ? { ...decided, cause: driverError.error }
+        : decided
+    let judged: { verdict: Verdict; reached: Set<string> }
+    try {
+      judged = judge(
+        options,
+        plan,
+        cut,
+        undefined,
+        probes,
+        cutShort ? `a clock spin` : undefined,
+        driverError,
+      )
+    } catch (error) {
+      if (error instanceof OracleModelError || !cutShort) throw error
+      return { verdict: kept(clock), reached: new Set() }
+    }
+    const { verdict, reached } = judged
     const recorded =
       verdict.kind === `violation` &&
-      observations
-        .slice(0, spin.at)
-        .some(({ checkpoint }) => checkpoint === verdict.checkpoint)
-    return recorded
-      ? { verdict, reached }
-      : {
-          verdict: violation(
-            `clock`,
-            `the controlled clock fired more than ${spin.maxTimers} timers in one history: work that never goes quiet (raise maxTimers if a legal history needs more)`,
-            `bounded clock`,
-          ),
-          reached,
-        }
+      cut.some(({ checkpoint }) => checkpoint === verdict.checkpoint)
+    return { verdict: kept(recorded ? verdict : clock), reached }
   }
   return judge(options, plan, observations, driverError, probes)
 }
@@ -931,12 +1089,33 @@ function judge<THistory, TExpected, TPlan>(
   observations: ReadonlyArray<Observation>,
   driverError?: { error: unknown },
   probes: ProbeRecord = { reached: new Set(), entered: new Set() },
+  // What cut the trace short, when something other than a driver error did,
+  // and a driver error that came after that cut, which a model error carries.
+  cutBy?: string,
+  later?: { error: unknown },
 ): { verdict: Verdict; reached: Set<string> } {
   let expected: TExpected
   let verdict: Verdict
   let predicted: Readonly<Record<string, boolean>> = {}
   try {
     expected = options.model(plan, observations)
+  } catch (error) {
+    const cut = driverError ? `a driver error` : cutBy
+    if (cut === undefined) throw error
+    // Any thrown value, an Error or not, as stable text, which never throws.
+    const carried = driverError ?? later
+    const thrown =
+      carried === undefined
+        ? ``
+        : ` The driver's error: ${stableText(carried.error)}`
+    const modelError = new OracleModelError(
+      `${options.id}: the model threw on a trace that ${cut} cut short after ${observations.length} observations. A model must accept any prefix of a trace.${thrown}`,
+      { cause: error },
+    )
+    if (carried) modelError.driverError = carried.error
+    throw modelError
+  }
+  try {
     verdict = options.check(plan, observations, expected)
     predicted = options.predict?.(plan) ?? {}
   } catch (error) {
@@ -1002,24 +1181,24 @@ function calibrationTests<THistory, TExpected, TPlan>(
   return [...(options.calibrations ?? []), ...forcedCalibrations].map(
     (calibration) => ({
       name: `calibration: ${calibration.name}`,
-      route: `forced` in calibration ? `probe calibration` : `calibration`,
+      route: `calibration`,
       replays: [],
       run: async () => {
         const seen: Array<string> = []
         for (const { name, history } of candidates()) {
           const plan = planOf(options, history)
           if (`corrupt` in calibration) {
-            const { observations, driverError, probes } = await recordGuarded(
-              options.driver,
-              plan,
-            )
+            const { observations, driverError, probes, spin } =
+              await recordGuarded(options.driver, plan)
             const corrupted = calibration.corrupt(observations, plan)
             if (corrupted === undefined) continue
             // A calibration is meaningful only where the true trace passes, so
-            // a candidate whose clean trace fails, or whose driver throws, is
-            // skipped; that history fails in its own test.
+            // a candidate whose clean trace fails, whose driver throws, or
+            // whose clock spins is skipped; that history fails in its own
+            // test.
             if (
               driverError ||
+              spin ||
               judge(options, plan, observations, undefined, probes).verdict
                 .kind !== `pass`
             )
@@ -1041,6 +1220,7 @@ function calibrationTests<THistory, TExpected, TPlan>(
           const clean = await recordGuarded(options.driver, plan)
           if (
             clean.driverError ||
+            clean.spin ||
             judge(options, plan, clean.observations, undefined, clean.probes)
               .verdict.kind !== `pass`
           )
@@ -1083,7 +1263,7 @@ function failure<THistory>(
       `${id} violated at checkpoint "${verdict.checkpoint}"${verdict.law ? ` (law: ${verdict.law})` : ``}.`,
       `Law: ${law.statement}`,
       `Difference: ${verdict.difference}`,
-      `History: ${JSON.stringify(history)}`,
+      `History: ${stableText(history)}`,
       `Authority: ${law.authority}`,
       `Known limits: ${law.limits}`,
       `Rerun: ${rerun}`,
@@ -1099,13 +1279,19 @@ function failure<THistory>(
 }
 
 /**
- * A Vitest `-t` argument that matches exactly the test `name` in the suite
- * `suite`. Vitest 4 matches `-t` against the suite and test names joined by a
- * space, Vitest 5 joined by ` > `, so the pattern accepts either between them.
+ * The command that reruns exactly one test: a Vitest `-t` pattern that
+ * matches its full name, the names of its suites and its own, in a POSIX
+ * shell's single quotes. Vitest 4 matches `-t` against those names joined by
+ * a space, Vitest 5 joined by ` > `, so the pattern accepts either between
+ * them.
  */
-function rerunByName(suite: string, name: string): string {
+function rerunOf(task: NamedTask): string {
+  const names: Array<string> = []
+  for (let at: NamedTask | undefined = task; at; at = at.suite)
+    names.unshift(at.name)
   const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
-  return `-t ${JSON.stringify(`^${escape(suite)}(?: | > )${escape(name)}$`)}`
+  const pattern = `^${names.map(escape).join(`(?: | > )`)}$`
+  return `-t '${pattern.replace(/'/g, `'\\''`)}'`
 }
 
 function generatedTests<THistory, TExpected, TPlan>(
@@ -1177,7 +1363,8 @@ function generatedTests<THistory, TExpected, TPlan>(
       try {
         outcome = await runOne(options, history)
       } catch (error) {
-        if (keeps(`setup`)) throw error
+        if (keeps(error instanceof OracleModelError ? `model` : `setup`))
+          throw error
         return
       }
       const { verdict, reached } = outcome
@@ -1254,13 +1441,15 @@ function generatedTests<THistory, TExpected, TPlan>(
     name: `fixed seed ${seed}`,
     route: `fixed seed`,
     replays: [],
-    run: () =>
-      runCampaign(`fixed seed ${seed}`, seed, (examples) =>
-        withOracleFixedHistories(
-          { numRuns: oracleRuns(source.runs), seed },
-          examples,
-        ),
-      ),
+    run: () => {
+      const parameters = oracleFixedSeed(seed, {
+        numRuns: oracleRuns(source.runs),
+      })
+      oracleRoute(oracleRouteOf(parameters))
+      return runCampaign(`fixed seed ${seed}`, seed, (examples) =>
+        withOracleFixedHistories(parameters, examples),
+      )
+    },
   }))
   // The random campaign picks its seed itself, so a replay of that seed
   // rebuilds the same constructed histories, which the replay path counts.
@@ -1271,6 +1460,9 @@ function generatedTests<THistory, TExpected, TPlan>(
     run: () => {
       // One call selects and logs the seed; a replay reads that log line.
       const parameters = oraclePropertyOptions(source.runs, id)
+      // A path replay runs one recorded history, a seed from the replay
+      // environment reseeds the campaign, and a drawn seed is random.
+      oracleRoute(oracleRouteOf(parameters))
       return runCampaign(`random seed`, parameters.seed!, (examples) =>
         withOracleFixedHistories(parameters, examples),
       )
@@ -1280,19 +1472,14 @@ function generatedTests<THistory, TExpected, TPlan>(
     name: `fixed history: ${fixed.name}`,
     route: `fixed history`,
     replays: [],
-    run: async () => {
+    run: async (task) => {
       if (!source.arbitrary.canShrinkWithoutContext(fixed.history))
         throw new Error(
           `${id}: fixed history "${fixed.name}" is not a history the arbitrary can generate. A fixed history must stay inside the generated language, or the property must declare the missing dimension as a limit.`,
         )
       const { verdict, reached } = await runOne(options, fixed.history)
       if (verdict.kind === `violation`)
-        throw failure(
-          options,
-          verdict,
-          fixed.history,
-          rerunByName(id, `fixed history: ${fixed.name}`),
-        )
+        throw failure(options, verdict, fixed.history, rerunOf(task))
       const missing = (fixed.enters ?? []).filter(
         (state) => !reached.has(state),
       )

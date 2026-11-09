@@ -1,4 +1,4 @@
-import { readOracleRunConfig } from './oracle-config.js'
+import { oracleReplayRequested } from './oracle-config.js'
 
 /**
  * Declared reach for a generated-history property.
@@ -29,9 +29,11 @@ import { readOracleRunConfig } from './oracle-config.js'
  *
  * A path replay checks one recorded history, not reach, so the check does
  * nothing then, in every reach of that process: a reach need not carry its
- * property's name, so it cannot tell whose replay runs. A seed alone reseeds
- * the whole campaign, which runs its full budget, so its reach is checked like
- * an ordinary run's.
+ * property's name, so it cannot tell whose replay runs. The reach reads the
+ * replay selection that the configuration read once (`configureOracles`), as
+ * a test that stands aside during a replay does, so the two always agree. A
+ * seed alone reseeds the whole campaign, which runs its full budget, so its
+ * reach is checked like an ordinary run's.
  * `packages/oracles/tests/declared-reach-oracle.property.test.ts` owns these rules.
  */
 export function createOracleReach<TState extends string>(
@@ -58,10 +60,11 @@ export function createOracleReach<TState extends string>(
   let fixedBegun = 0
   let currentFixed = false
   let current = new Set<TState>()
-  // Other packages use their own replay prefixes. An explicit campaign choice
-  // must not inherit an unrelated replay selector from the environment.
-  const replaying =
-    replayOverride ?? readOracleRunConfig().replayPath !== undefined
+  // The replay selection the configuration read, as every other replay
+  // condition reads it. Other packages use their own replay prefixes, so an
+  // explicit campaign choice overrides it rather than inherit an unrelated
+  // replay selector.
+  const replaying = replayOverride ?? oracleReplayRequested()
   return {
     /** Starts one generated history, or a fixed history's when `fixed`. */
     beginHistory({ fixed = false }: { fixed?: boolean } = {}): void {

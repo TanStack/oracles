@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   assertRegisteredOracleProperty,
   configureOracles,
-  oracleReplayRequested,
   readOracleRunConfig,
 } from '../src/index'
 
@@ -38,14 +37,31 @@ describe(`configureOracles`, () => {
     )
   })
 
-  it(`follows the configured prefix for replay selection`, () => {
+  it(`follows the configured prefix for replay selection`, async () => {
     vi.stubEnv(`ACME_ORACLE_SEED`, `1`)
     vi.stubEnv(`ACME_ORACLE_PATH`, `0`)
     vi.stubEnv(`ACME_ORACLE_PROPERTY`, `a.b`)
-    configureOracles({ envPrefix: `ACME_ORACLE` })
-    expect(oracleReplayRequested()).toBe(true)
-    configureOracles({ envPrefix: `OTHER_ORACLE` })
-    expect(oracleReplayRequested()).toBe(false)
+    vi.resetModules()
+    const fresh = await import(`../src/index`)
+    fresh.configureOracles({ envPrefix: `OTHER_ORACLE` })
+    fresh.configureOracles({ envPrefix: `ACME_ORACLE` })
+    expect(fresh.oracleReplayRequested()).toBe(true)
+  })
+
+  // Tests already stood aside, or did not, by the selection they read
+  // (maintainer decision, 2026-11-08).
+  it(`refuses a configuration that would change a replay selection already read`, async () => {
+    vi.stubEnv(`ACME_ORACLE_SEED`, `1`)
+    vi.stubEnv(`ACME_ORACLE_PATH`, `0`)
+    vi.stubEnv(`ACME_ORACLE_PROPERTY`, `a.b`)
+    vi.resetModules()
+    const fresh = await import(`../src/index`)
+    fresh.configureOracles({ envPrefix: `ACME_ORACLE` })
+    expect(fresh.oracleReplayRequested()).toBe(true)
+    expect(() => fresh.configureOracles({ envPrefix: `OTHER_ORACLE` })).toThrow(
+      `would change the replay selection`,
+    )
+    expect(fresh.oracleReplayRequested()).toBe(true)
   })
 
   it(`accepts any property id without a registry`, () => {
@@ -136,5 +152,47 @@ describe(`configureOracles`, () => {
     expect(() => configureOracles({ envPrefix: `` })).toThrow(
       `envPrefix must be non-empty`,
     )
+  })
+
+  // "It never throws": a witness for a replay that the environment cannot
+  // even describe records nothing.
+  it(`never throws while recording a replay witness`, async () => {
+    vi.stubEnv(`ORACLE_RUNS_MULTIPLIER`, `0`)
+    vi.resetModules()
+    const witness = await import(`../src/oracle-replay-witness`)
+    expect(() =>
+      witness.recordOracleFiniteReplay(`a.b`, {
+        seed: 1,
+        path: `0`,
+        failed: false,
+      }),
+    ).not.toThrow()
+  })
+
+  // An unwritable witness channel records nothing, and a failing replay
+  // still reports fast-check's own counterexample, not the write error.
+  it(`never lets an unwritable witness channel replace a replay's report`, async () => {
+    const channel = `/nonexistent-oracle-witness-dir/witness.jsonl`
+    vi.stubEnv(`ORACLE_SEED`, `1`)
+    vi.stubEnv(`ORACLE_PATH`, `0`)
+    vi.stubEnv(`ORACLE_PROPERTY`, `a.b`)
+    vi.stubEnv(`ORACLE_REPLAY_WITNESS`, channel)
+    vi.stubEnv(`ORACLE_REPLAY_WITNESS_MODE`, `sync`)
+    vi.resetModules()
+    const witness = await import(`../src/oracle-replay-witness`)
+    expect(() =>
+      witness.recordOracleFiniteReplay(`a.b`, {
+        seed: 1,
+        path: `0`,
+        failed: false,
+      }),
+    ).not.toThrow()
+    const { default: fc } = await import(`fast-check`)
+    expect(() =>
+      fc.assert(
+        fc.property(fc.nat(), () => false),
+        { seed: 1, path: `0`, ...witness.oracleReplayReporter(`a.b`, 1, `0`) },
+      ),
+    ).toThrow(/Property failed/)
   })
 })

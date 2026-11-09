@@ -1,7 +1,26 @@
-import { oracleEnvName, setOracleEnvPrefix } from './oracle-environment.js'
+import {
+  assertRegisteredIn,
+  changesReadSelection,
+  defaultOracleSettings,
+  installOracleSettings,
+  oracleDefaultsRead,
+  oracleSettings,
+  readRunConfig,
+  replayConfig,
+} from './oracle-environment.js'
 import { oracleReplayReporter } from './oracle-replay-witness.js'
+import { fixedSeedKey, oracleFixedSeed } from './oracle-route.js'
+import type {
+  OracleReplayConfig,
+  OracleSettings,
+} from './oracle-environment.js'
 
 type OracleEnvironment = Record<string, string | undefined>
+
+export type { OracleReplayConfig } from './oracle-environment.js'
+
+export { oracleFixedSeed, oracleRoute, oracleRouteOf } from './oracle-route.js'
+export type { OracleRoute } from './oracle-route.js'
 
 /**
  * The options of `configureOracles`, which a project calls once, before its
@@ -39,44 +58,6 @@ export interface OracleConfigurationOptions {
   retiredVariables?: Iterable<string>
 }
 
-// The current configuration, replaced as a whole by `configureOracles`.
-type OracleSettings = {
-  prefix: string
-  registry: ReadonlySet<string> | undefined
-  retired: ReadonlyArray<string>
-}
-const defaults: OracleSettings = {
-  prefix: `ORACLE`,
-  registry: undefined,
-  retired: [],
-}
-let settings = defaults
-
-export type OracleReplayConfig = {
-  campaignSeed: number | undefined
-  replayPath: string | undefined
-  replayProperty: string | undefined
-}
-
-// The replay environment under the current configuration: read by
-// `configureOracles`, or, in a project that never configures, on first use.
-// Nothing is read at import, so a stray variable under the default prefix
-// (SQL*Plus sets `ORACLE_PATH`) cannot break a project with its own prefix.
-let configuredReplay: (OracleReplayConfig & { multiplier: number }) | undefined
-// Whether `configureOracles` has run, and whether an oracle read the default
-// configuration before it did: a first configuration that changes the
-// defaults after that would leave the earlier reads wrong, so it fails.
-let configured = false
-let readDefaults = false
-
-function replayConfig(): OracleReplayConfig & { multiplier: number } {
-  if (configuredReplay === undefined) {
-    if (!configured) readDefaults = true
-    configuredReplay = readRunConfig(process.env, settings)
-  }
-  return configuredReplay
-}
-
 /**
  * Sets the environment prefix, the property registry, and the retired
  * variables for this process, and reads the replay environment under them. A
@@ -84,8 +65,12 @@ function replayConfig(): OracleReplayConfig & { multiplier: number } {
  * oracles at import fails at import. Everything is checked before anything
  * changes: a call that throws leaves the previous configuration in place. A
  * project calls it before its oracles read their configuration; a first call
- * that changes the defaults after an oracle read them throws. A later call
- * replaces the configuration.
+ * that changes the defaults after an oracle read them throws. Every read
+ * counts: a replay selection, a registry check (an `oracleProperty`
+ * registration makes one), and a variable name. Once an oracle read the
+ * replay selection, a call that would change it throws (maintainer decision,
+ * 2026-11-08); a later call that keeps it replaces the rest of the
+ * configuration.
  */
 export function configureOracles({
   envPrefix = `ORACLE`,
@@ -105,20 +90,23 @@ export function configureOracles({
   }
   const replay = readRunConfig(process.env, candidate)
   const changesDefaults =
-    candidate.prefix !== defaults.prefix ||
+    candidate.prefix !== defaultOracleSettings.prefix ||
     candidate.registry !== undefined ||
     candidate.retired.length > 0
-  if (!configured && readDefaults && changesDefaults) {
+  if (oracleDefaultsRead() && changesDefaults) {
     throw new Error(
       `configureOracles must run before oracles read their configuration: ` +
-        `an oracle already read the defaults (prefix ${defaults.prefix}). ` +
+        `an oracle already read the defaults (prefix ${defaultOracleSettings.prefix}). ` +
         `Call it before importing the modules that define oracles.`,
     )
   }
-  settings = candidate
-  setOracleEnvPrefix(candidate.prefix)
-  configuredReplay = replay
-  configured = true
+  if (changesReadSelection(replay)) {
+    throw new Error(
+      `configureOracles would change the replay selection that oracles already read; ` +
+        `tests stood aside, or ran, by that selection. Configure once, before any oracle runs.`,
+    )
+  }
+  installOracleSettings(candidate, replay)
 }
 
 export function validateOraclePropertyRegistry(
@@ -135,98 +123,33 @@ export function validateOraclePropertyRegistry(
 }
 
 export function assertRegisteredOracleProperty(property: string): void {
-  assertRegisteredIn(settings, property)
+  assertRegisteredIn(oracleSettings(), property)
 }
 
-function assertRegisteredIn(within: OracleSettings, property: string): void {
-  if (within.registry !== undefined && !within.registry.has(property)) {
-    throw new Error(`unknown oracle property: ${property}`)
-  }
-}
-
+/**
+ * The replay selection and run multiplier. Without an environment, the ones
+ * the configuration read, which every replay condition uses; with one, that
+ * environment's, read under the configuration in force. The result is a
+ * frozen copy, so no caller can change what the replay conditions read.
+ */
 export function readOracleRunConfig(
-  environment: OracleEnvironment = process.env,
-): OracleReplayConfig & { multiplier: number } {
-  if (environment === process.env && !configured) readDefaults = true
-  return readRunConfig(environment, settings)
-}
-
-function readRunConfig(
-  environment: OracleEnvironment,
-  within: OracleSettings,
-): OracleReplayConfig & { multiplier: number } {
-  const name = (setting: string) => `${within.prefix}_${setting}`
-  const seedName = name(`SEED`)
-  const pathName = name(`PATH`)
-  const propertyName = name(`PROPERTY`)
-  const multiplierName = name(`RUNS_MULTIPLIER`)
-  const retired = within.retired.filter(
-    (variable) => environment[variable] !== undefined,
-  )
-  if (retired.length > 0) {
-    throw new Error(
-      `Retired oracle replay variables are set: ${retired.join(`, `)}. ` +
-        `Use ${seedName}, ${pathName}, and ` +
-        `${propertyName} to select a replay, and ` +
-        `${multiplierName} to scale run counts.`,
-    )
-  }
-  const multiplierValue = environment[multiplierName] ?? `1`
-  const multiplier = Number(multiplierValue)
-  if (
-    multiplierValue.trim() === `` ||
-    !Number.isSafeInteger(multiplier) ||
-    multiplier < 1
-  ) {
-    throw new Error(`${multiplierName} must be a positive integer`)
-  }
-
-  const seedValue = environment[seedName]
-  const replayPath = environment[pathName]
-  const replayProperty = environment[propertyName]
-  if (seedValue === undefined) {
-    if (replayPath !== undefined) {
-      throw new Error(`${pathName} requires ${seedName}`)
-    }
-    if (replayProperty !== undefined) {
-      throw new Error(`${propertyName} requires ${pathName}`)
-    }
-    return {
-      multiplier,
-      campaignSeed: undefined,
-      replayPath: undefined,
-      replayProperty: undefined,
-    }
-  }
-
-  const campaignSeed = Number(seedValue)
-  if (seedValue.trim() === `` || !Number.isSafeInteger(campaignSeed)) {
-    throw new Error(`${seedName} must be an integer`)
-  }
-  if (replayPath === undefined) {
-    if (replayProperty !== undefined) {
-      throw new Error(`${propertyName} requires ${pathName}`)
-    }
-    return {
-      multiplier,
-      campaignSeed,
-      replayPath: undefined,
-      replayProperty: undefined,
-    }
-  }
-  if (replayPath.trim() === ``) {
-    throw new Error(`${pathName} must be non-empty`)
-  }
-  if (!/^\d+(?::\d+)*$/.test(replayPath)) {
-    throw new Error(
-      `${pathName} must contain colon-separated nonnegative integers`,
-    )
-  }
-  if (replayProperty === undefined || replayProperty.trim() === ``) {
-    throw new Error(`${pathName} requires ${propertyName}`)
-  }
-  assertRegisteredIn(within, replayProperty)
-  return { multiplier, campaignSeed, replayPath, replayProperty }
+  environment?: OracleEnvironment,
+): Readonly<OracleReplayConfig & { multiplier: number }> {
+  const { multiplier, campaignSeed, replayPath, replayProperty } =
+    environment === undefined
+      ? replayConfig()
+      : readRunConfig(environment, oracleSettings())
+  return Object.freeze({
+    multiplier,
+    campaignSeed,
+    replayPath,
+    replayProperty,
+    // A seed the process's replay environment selected is declared fixed,
+    // so options built from this configuration name it `fixed seed`.
+    ...(environment === undefined && campaignSeed !== undefined
+      ? { [fixedSeedKey]: campaignSeed }
+      : {}),
+  })
 }
 
 /**
@@ -250,6 +173,8 @@ type OracleRunParameters = {
   numRuns: number
   seed?: number
   path?: string
+  /** A seed declared fixed, which `oracleRouteOf` reads. */
+  [fixedSeedKey]?: number
 } & ReturnType<typeof oracleReplayReporter>
 
 // fast-check infers a property's argument types from `examples` too, so only
@@ -291,23 +216,22 @@ function randomParameters<TExample>(
           replayProperty: undefined,
         }
   const selectedSeed = oracleCampaignSeed(campaignSeed, property)
-  // These are a random campaign's parameters; a path replay runs one
-  // recorded history. The gap report reads the route only from a test that
-  // builds its parameters while it runs, so a campaign whose parameters are
-  // built when its file loads keeps an unknown route.
-  globalThis.__oracleRoute?.(
-    property !== undefined &&
-      replayPath !== undefined &&
-      replayProperty === property
-      ? `fixed history`
-      : `random seed`,
-  )
+  // Building parameters registers no route: a caller may still change them.
+  // Only a seed the process's replay environment selected, which
+  // `readOracleRunConfig()` declares, is declared fixed here; a drawn seed,
+  // a caller's number, or a configuration a caller built is not, so
+  // `oracleRouteOf` never names more than it knows.
+  const declared =
+    typeof replay === `object` &&
+    (replay as { [fixedSeedKey]?: number })[fixedSeedKey] === campaignSeed
   const parameters: OracleRunParameters =
     campaignSeed === undefined
       ? { numRuns, seed: selectedSeed }
       : {
+          ...(declared
+            ? oracleFixedSeed(campaignSeed)
+            : { seed: campaignSeed }),
           numRuns,
-          seed: campaignSeed,
           // A path replays one recorded counterexample, so the replay runs
           // once. From a path with one segment, fast-check would otherwise
           // run `numRuns` histories that start at that index.
@@ -414,23 +338,8 @@ export function oracleCalibrationTest<TRegistration extends { skip: unknown }>(
 ): TRegistration {
   const standsAside =
     oracleReplaySkips(property) ||
-    (oracleReplayRequested() &&
-      process.env[oracleEnvName(`CALIBRATION`)] !== fault)
+    (oracleReplayRequested() && replayConfig().calibration !== fault)
   return standsAside ? (registration.skip as TRegistration) : registration
-}
-
-/**
- * Registers the running test's route for the gap report, which counts a
- * verdict as a kill only on a reproducible route: a fixed seed, a fixed
- * history, or an enumerated case. A test that builds its fast-check options
- * when its file loads cannot register them there, so it calls this inside
- * the test: first, or, for a random campaign, in its predicate.
- */
-export function oracleRoute(
-  route:
-    `fixed seed` | `fixed history` | `case` | `random seed` | `calibration`,
-): void {
-  globalThis.__oracleRoute?.(route)
 }
 
 /** Keeps ordinary CI bounded while allowing long randomized oracle campaigns. */
@@ -460,7 +369,7 @@ export function oraclePropertyOptions<TExample>(
 ): OracleRunParameters & { examples?: Array<TExample> } {
   return randomParameters(
     oracleRuns(baseRuns),
-    replayConfig(),
+    readOracleRunConfig(),
     property,
     examples,
   )

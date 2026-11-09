@@ -1,5 +1,6 @@
 import { oracleCampaignSeed } from './oracle-config.js'
 import { createOracleReach } from './oracle-reach.js'
+import { oracleFixedSeed, oracleRoute, oracleRouteOf } from './oracle-route.js'
 
 /**
  * Run the same oracle with separate fixed/random reach ledgers. The callback
@@ -36,17 +37,24 @@ export async function runOracleCampaign<TState extends string>(
   )
     throw new Error(`${prefix}_PATH requires a seed and numeric shrink path`)
 
-  const campaigns =
+  // A fixed seed and a replay's seed are declared fixed; the random
+  // campaign's seed is drawn below.
+  const campaigns: Array<{
+    name: string
+    parameters: { seed?: number; path?: string; numRuns?: number }
+  }> =
     seed === undefined
       ? [
-          { name: `fixed`, parameters: { seed: fixedSeed } },
+          { name: `fixed`, parameters: oracleFixedSeed(fixedSeed) },
           { name: `random`, parameters: {} },
         ]
       : [
           {
             name: `replay`,
-            parameters:
-              path === undefined ? { seed } : { seed, path, numRuns: 1 },
+            parameters: oracleFixedSeed(
+              seed,
+              path === undefined ? {} : { path, numRuns: 1 },
+            ),
           },
         ]
   for (const campaign of campaigns) {
@@ -58,11 +66,8 @@ export async function runOracleCampaign<TState extends string>(
       seed: oracleCampaignSeed(campaign.parameters.seed, prefix),
     }
     // The gap report counts a kill only on a reproducible route, so each
-    // campaign registers its own: the fixed seed and a recorded replay are
-    // reproducible, and the random campaign draws a new seed in every CI run.
-    globalThis.__oracleRoute?.(
-      campaign.name === `random` ? `random seed` : `fixed seed`,
-    )
+    // campaign registers its own, by the one classifier (oracle-route.ts).
+    oracleRoute(oracleRouteOf(parameters))
     try {
       await run(reach, parameters)
       reach.assertReached()
