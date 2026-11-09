@@ -16,6 +16,7 @@ describe(`@tanstack/oracles`, () => {
       [
         `OracleCheckpointFailure`,
         `OracleFailureReport`,
+        `OracleDataError`,
         `OracleModelError`,
         `OracleViolation`,
         `assertRegisteredOracleProperty`,
