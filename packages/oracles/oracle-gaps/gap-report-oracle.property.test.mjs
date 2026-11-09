@@ -151,7 +151,11 @@
  *    starts: two checks started at once, a check after the daemon was
  *    killed (its socket and lock left behind), after a reboot (its socket
  *    gone), after its process id went to a live process, two checks at
- *    once after a crash, and a check started during a stop each report
+ *    once after a crash, a check started during a stop, two checks at
+ *    once after the CLI's code changed, a check after a native addon was
+ *    installed into the dependency tree (the pool follows it), and a
+ *    check whose daemon cannot open its session (it reports the cold
+ *    run's error) each report
  *    what the cold run reports; once `--stop-daemon` returns, no daemon
  *    process serves the package.
  * 10. **The runner runs the package as Vitest does.** From any install path
@@ -231,7 +235,10 @@
  * the atomic claim (two daemons serve until the loser sees its lock taken,
  * within 2 s), and a stop that releases the lock before it closes the
  * store (each check has already flushed its evidence); their mutants
- * survive. Cut-off
+ * survive. So does a restart that ends queued requests unanswered: the
+ * CLI reads an unanswered connection as `closing` and retries. A daemon
+ * stuck closing (the CLI gives up after 60 s) and a stop that waits for
+ * the close are not generated. Cut-off
  * charging is judged only where it changes an outcome: under one budget
  * (`--first-limit` equal to `--hang-limit`), where a misplaced cut is a
  * timeout at once; under two budgets a misplaced cut only costs a
@@ -266,6 +273,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import fc from 'fast-check'
@@ -577,7 +585,9 @@ async function incremental(dir, plan, cli, copy, observe, states) {
     // The first check may be two at once, which must reach one daemon, and
     // so are the two after a crash.
     const twice =
-      (step === `start` && plan.concurrentStart) || step === `crashAtOnce`
+      (step === `start` && plan.concurrentStart) ||
+      step === `crashAtOnce` ||
+      step === `cliAtOnce`
     const [daemon, ...others] = twice
       ? await runClisAtOnce(dir, files, [
           { ...how, daemon: true },
@@ -612,6 +622,7 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       reusedPid: `a check after the daemon's process id was reused`,
       crashAtOnce: `two checks at once after a crash`,
       stopAtOnce: `a check during a stop`,
+      cliAtOnce: `two checks at once after a code change`,
     }[step]
     if (after && [daemon, ...others].every((run) => run.reported))
       states.add(after)
@@ -721,7 +732,12 @@ async function incremental(dir, plan, cli, copy, observe, states) {
 }
 
 async function driver(plan, observe) {
-  const dir = mkdtempSync(join(here, `.scratch-`))
+  // A package that resolves no TypeScript lives outside this repository.
+  const dir = mkdtempSync(
+    plan.fault === `noTypescript`
+      ? join(realpathSync(tmpdir()), `gap-fixture-`)
+      : join(here, `.scratch-`),
+  )
   // A history with steps runs its own copy of the CLI, which the `cli` edit
   // changes; a history that installs the CLI under a path with a space and
   // `#` runs every check from such a copy.
@@ -1386,6 +1402,7 @@ const incrementalStates = [
   `a check after the daemon's process id was reused`,
   `two checks at once after a crash`,
   `a check during a stop`,
+  `two checks at once after a code change`,
   `two checks started the daemon at once`,
   `the daemon ran from a path with a space and #`,
 ]
@@ -1486,6 +1503,7 @@ const required = [
   `a setup error beside a timeout under one budget`,
   `refused projects`,
   `refused outsideSource`,
+  `refused noTypescript`,
   ...incrementalStates,
 ]
 const faults = [
@@ -1495,6 +1513,7 @@ const faults = [
   `brokenOwner`,
   `projects`,
   `outsideSource`,
+  `noTypescript`,
 ]
 const separate = [
   `ordinary tests left out by default`,
@@ -1679,12 +1698,14 @@ oracleProperty({
             `authored`,
             `newOracle`,
             `cli`,
+            `cliAtOnce`,
             `restart`,
             `crash`,
             `reboot`,
             `reusedPid`,
             `crashAtOnce`,
             `stopAtOnce`,
+            `addAddon`,
           ],
         }),
       },
@@ -1746,7 +1767,12 @@ oracleProperty({
       ...faults.map((fault) => ({
         name: `a declaration fault: ${fault}`,
         enters: [`refused ${fault}`],
-        build: (generated) => ({ ...generated, fault }),
+        // A session that cannot open is checked through the daemon too.
+        build: (generated) => ({
+          ...generated,
+          fault,
+          ...(fault === `noTypescript` ? { steps: [`restart`] } : {}),
+        }),
       })),
     ],
   },

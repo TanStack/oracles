@@ -63,6 +63,8 @@ function send(pkg, message) {
       reply += chunk
     })
     socket.on(`end`, () => {
+      // A daemon that ends a connection unanswered is exiting: as `closing`.
+      if (reply === ``) return resolvePromise({ closing: true })
       try {
         resolvePromise(JSON.parse(reply))
       } catch (error) {
@@ -101,26 +103,41 @@ export async function requestDaemon(pkg, argv) {
       const reply = await send(pkg, { argv, cwd: process.cwd() })
       if (!reply.closing && !reply.restart) return reply
       if (reply.restart) started = false
+      if (waited > WAIT_MS)
+        throw new Error(
+          `the package's daemon did not finish closing within 60 s`,
+        )
     } catch (error) {
       if (![`ENOENT`, `ECONNREFUSED`].includes(error.code)) throw error
       if (!started) startDaemon(pkg)
       started = true
-      if (waited > 60_000) throw error
+      if (waited > WAIT_MS) throw error
     }
     await sleep(100)
   }
 }
 
-/** Stops the package's daemon, if one runs, after its current check. */
+/**
+ * Stops the package's daemon, if one runs, after its current check, and
+ * returns once it has closed: its socket answers no more.
+ */
 export async function stopDaemon(pkg) {
-  try {
-    await send(pkg, { stop: true })
-  } catch (error) {
-    if (![`ENOENT`, `ECONNREFUSED`].includes(error.code)) throw error
+  for (let waited = 0; waited <= WAIT_MS; waited += 100) {
+    try {
+      const reply = await send(pkg, { stop: true })
+      if (!reply.closing) return
+    } catch (error) {
+      if (![`ENOENT`, `ECONNREFUSED`].includes(error.code)) throw error
+      return
+    }
+    await sleep(100)
   }
+  throw new Error(`the package's daemon did not finish closing within 60 s`)
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+// How long a CLI waits for a daemon to start or to finish closing.
+const WAIT_MS = 60_000
 // This daemon's lock token, which no other process can hold.
 const token = `${process.pid}:${randomUUID()}`
 // How long a lock's holder has to listen before the lock counts as left by
@@ -189,6 +206,8 @@ async function serve(pkg) {
   // A dead daemon's socket; this daemon holds the lock.
   rmSync(socket, { force: true })
   let closing = false
+  // Why the session could not open; every waiting request hears it.
+  let failure
   let session
   let store
   let idle
@@ -216,13 +235,28 @@ async function serve(pkg) {
       }
       queue = queue.then(async () => {
         clearTimeout(idle)
+        if (failure) {
+          connection.end(
+            `${JSON.stringify({ exitCode: 1, stdout: ``, stderr: `${failure?.stack ?? failure}\n` })}\n`,
+          )
+          // Keep answering while requests come; release once they stop.
+          clearTimeout(idle)
+          idle = setTimeout(() => {
+            closing = true
+            queue = queue.then(() => shutdown())
+          }, 2000)
+          return
+        }
         if (closing) {
           connection.end(`${JSON.stringify({ closing: true })}\n`)
           return
         }
+        // A daemon whose code changed declines this check and closes after
+        // the requests already queued, each of which hears `closing`.
         if (codeIdentity() !== code) {
           closing = true
-          await shutdown(connection, { restart: true })
+          queue = queue.then(() => shutdown(connection, { restart: true }))
+          return
         }
         const stderr = []
         let stdout = ``
@@ -273,8 +307,20 @@ async function serve(pkg) {
   const code = codeIdentity()
   const { diskStore } = await import(`./evidence.mjs`)
   const { parseArgs } = await import(`./args.mjs`)
-  store = await diskStore(stateDirOf(pkg))
-  session = await openSession(pkg)
+  try {
+    store = await diskStore(stateDirOf(pkg))
+    session = await openSession(pkg)
+  } catch (error) {
+    // Every request hears why, the ones that started this daemon included,
+    // until none has come for 2 s (at most 10 s); then it releases the lock.
+    failure = error
+    opened()
+    idle = setTimeout(() => {
+      closing = true
+      queue = queue.then(() => shutdown())
+    }, 10_000)
+    return
+  }
   opened()
   // A daemon whose lock another daemon took serves no more.
   watch = setInterval(() => {

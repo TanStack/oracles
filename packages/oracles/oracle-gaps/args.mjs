@@ -1,6 +1,12 @@
 // The CLI's arguments, shared by the CLI (index.mjs) and the daemon
 // (daemon.mjs), which parses each request's arguments the same way.
-import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+} from 'node:fs'
 import { availableParallelism } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
@@ -100,22 +106,42 @@ export function packagePath(pkg, path) {
  * which run in the runner's own process, and following them would send
  * nearly every package to child processes.
  */
-// One decision per package in a process: the daemon parses every request's
-// arguments, and the walk reads the whole tree. A dependency change takes
-// effect when the daemon restarts.
+// The last decision for each package, with the modification times of what
+// it read: each package's directory, manifest, and node_modules. The daemon
+// parses every request's arguments; while those times are unchanged, the
+// walk's answer stands, and an install or a new addon file changes one.
 const pools = new Map()
+const stampOf = (path) => {
+  try {
+    return statSync(path).mtimeMs
+  } catch {
+    return undefined
+  }
+}
 function defaultPool(pkg) {
-  if (!pools.has(pkg)) pools.set(pkg, walkPool(pkg))
-  return pools.get(pkg)
+  const known = pools.get(pkg)
+  if (known?.stamps.every(([path, stamp]) => stampOf(path) === stamp))
+    return known.pool
+  const decided = walkPool(pkg)
+  pools.set(pkg, decided)
+  return decided.pool
 }
 function walkPool(pkg) {
   const seen = new Set()
   const queue = [pkg]
+  const stamps = []
+  const decided = (pool) => ({ pool, stamps })
   for (let next = 0; next < queue.length; next += 1) {
     const dir = queue[next]
     if (seen.has(dir)) continue
     seen.add(dir)
-    if (dir !== pkg && isAddon(dir)) return `forks`
+    for (const path of [
+      dir,
+      join(dir, `package.json`),
+      join(dir, `node_modules`),
+    ])
+      stamps.push([path, stampOf(path)])
+    if (dir !== pkg && isAddon(dir)) return decided(`forks`)
     let manifest
     try {
       manifest = JSON.parse(readFileSync(join(dir, `package.json`), `utf8`))
@@ -131,7 +157,7 @@ function walkPool(pkg) {
       if (found) queue.push(found)
     }
   }
-  return `threads`
+  return decided(`threads`)
 }
 
 /** Where Node finds package `name` from directory `from`, by its real path. */

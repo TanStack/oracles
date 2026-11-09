@@ -250,6 +250,10 @@ const edits = [
   `reusedPid`,
   `crashAtOnce`,
   `stopAtOnce`,
+  // A change to the CLI's code followed by two checks at once, and a native
+  // addon installed into the dependency tree (or removed) between checks.
+  `cliAtOnce`,
+  `addAddon`,
 ]
 // The steps that act on the daemon and change no file.
 const daemonEvents = new Set([
@@ -328,6 +332,9 @@ const histories = fc.record({
     // The package's Vitest config defines `test.projects`, which the runner
     // cannot honor: each project has its own environment and setup files.
     `projects`,
+    // The package resolves no TypeScript, so a check's session cannot
+    // open, cold or through the daemon.
+    `noTypescript`,
   ),
   stability: fc.constantFrom(
     `none`,
@@ -2559,6 +2566,7 @@ function refusal(plan) {
   // A config the runner cannot honor refuses the run rather than leave every
   // mutant unreached (maintainer decision, 2026-11-08).
   if (plan.fault === `projects`) return { cause: `test.projects` }
+  if (plan.fault === `noTypescript`) return { cause: `typescript` }
   // A failing owner is named with its test's error, so the author can fix it.
   if (plan.fault === `brokenOwner`)
     return {
@@ -3194,7 +3202,16 @@ function applyEdit(state, edit) {
   if (edit === `helper`) return { ...state, strict: !state.strict }
   if (edit === `seed`) return { ...state, seed: state.seed === 1 ? 2 : 1 }
   if (edit === `newOracle`) return { ...state, newOracle: !state.newOracle }
-  if (edit === `cli`) return { ...state, cliEdited: !state.cliEdited }
+  if (edit === `cli` || edit === `cliAtOnce`)
+    return { ...state, cliEdited: !state.cliEdited }
+  if (edit === `addAddon`)
+    return {
+      ...state,
+      history: {
+        ...h,
+        native: (h.native ?? `none`) === `none` ? `gyp` : `none`,
+      },
+    }
   return state
 }
 
