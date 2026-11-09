@@ -2,7 +2,6 @@ import { readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { configDefaults, defineConfig, mergeConfig } from 'vitest/config'
-import { tanstackViteConfig } from '@tanstack/vite-config'
 import packageJson from './package.json'
 import type { Plugin } from 'vite'
 
@@ -50,7 +49,8 @@ export function commonJsForDeclarationOnly(): Plugin {
   }
 }
 
-const config = defineConfig({
+/** The settings a test run uses; the self-oracle's config extends them. */
+export const testConfig = defineConfig({
   plugins: [commonJsForDeclarationOnly()],
   test: {
     name: packageJson.name,
@@ -64,10 +64,17 @@ const config = defineConfig({
   },
 })
 
-export default mergeConfig(
-  config,
-  tanstackViteConfig({
-    entry: [`./src/index.ts`, `./src/declaration.ts`],
-    srcDir: `./src`,
-  }),
+// The library build's plugins load the declaration tooling, which was about
+// half of each Vitest process's startup, so only a build loads them. The
+// self-oracle starts hundreds of child Vitest runs.
+export default defineConfig(async ({ command }) =>
+  command === `build`
+    ? mergeConfig(
+        testConfig,
+        (await import(`@tanstack/vite-config`)).tanstackViteConfig({
+          entry: [`./src/index.ts`, `./src/declaration.ts`],
+          srcDir: `./src`,
+        }),
+      )
+    : testConfig,
 )

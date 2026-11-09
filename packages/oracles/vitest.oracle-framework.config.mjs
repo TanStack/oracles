@@ -1,11 +1,11 @@
 import { configDefaults, defineConfig, mergeConfig } from 'vitest/config'
-import base from './vite.config'
+import { testConfig } from './vite.config'
 
 // The oracleProperty self-oracle, outside the package's default test run. It
 // runs synthetic properties in child Vitest processes, which use the default
 // config.
 const config = mergeConfig(
-  base,
+  testConfig,
   defineConfig({
     test: { coverage: { enabled: false }, typecheck: { enabled: false } },
   }),
