@@ -57,10 +57,10 @@
  * Limits: the grammar and model are the end-to-end oracle's
  * (gap-report-model-oracle.mjs), with its limits. Whether a mutant is
  * killed, and anything else that needs a test run, is the end-to-end
- * oracle's. Whether an owned function owns a function defined in its body
- * that nothing refers to is open (the CLI owns it, through the definition's
- * name), so the same-line witness `w_pair` is unowned and judges names only.
- * No test calls the same-named functions, accessors, or field
+ * oracle's. A function defined inside an owned function is owned with it,
+ * called or not (`w_dead`, `w_closure`; maintainer decision, 2026-11-08).
+ * The same-line witness `w_pair` is unowned and judges names only. No test
+ * calls the same-named functions, accessors, or field
  * arrows, so their outcomes beyond ownership are not judged. The rune
  * judge restates Svelte's rule; the Svelte compiler itself is not installed
  * here, so a rune placement the rule does not name (`$props`, `$bindable`,
@@ -175,6 +175,14 @@ const namedStates = {
   'W9.status#set': [true, `a setter owned through a property read`],
   'W9.handle': [true, `a class-field arrow owned through this`],
   'W10.#helper': [true, `a private method owned through this`],
+  'w_dead>unused': [
+    true,
+    `an uncalled function inside an owned function owned`,
+  ],
+  'w_closure>later': [
+    true,
+    `a returned function inside an owned function owned`,
+  ],
   'W10.#named': [true, `a private method named in an owns entry`],
 }
 

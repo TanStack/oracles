@@ -5,8 +5,9 @@
 // names the package's file (args.mjs, packagePath), either alone (the whole
 // file) or with an entry function after the first `#` (`src/x.ts#run`,
 // `src/x.ts#Class.method`, `src/x.ts#Class.#private`).
-// Owning an entry function owns its static reference tree within the package,
-// as the TypeScript type checker resolves it: every function, method, or
+// Owning an entry function owns its text, every function defined inside it
+// whether or not anything refers to it, and its static reference tree within
+// the package, as the TypeScript type checker resolves it: every function, method, or
 // class that its body refers to, whether it calls it by name, through an
 // import or its alias, through `this` or a typed field, through `.bind`, or
 // passes it as a value. A class passed as a value brings all its methods;
@@ -190,10 +191,18 @@ export function ownership(ts, program, pkg, oracles) {
         continue
       }
       const seen = new Set()
+      // Owning a function owns its whole text, every function defined in it
+      // whether or not anything calls it (a gap there often marks dead
+      // code), and what its text refers to outside it (maintainer
+      // decision, 2026-11-08).
       const walk = (fn) => {
         if (seen.has(fn)) return
         seen.add(fn)
         add(fn, oracle)
+        const file = fn.node.getSourceFile().fileName
+        for (const inner of functionsOf(relative(pkg, file)))
+          if (inner !== fn && fn.start <= inner.start && inner.end <= fn.end)
+            walk(inner)
         for (const next of referencesOf(fn.node)) walk(next)
       }
       for (const fn of functionsOf(source))

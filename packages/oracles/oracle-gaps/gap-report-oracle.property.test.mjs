@@ -49,7 +49,10 @@
  *    (`src/x.ts#run`, `src/x.ts#Class.method`, `src/x.ts#Class.#private`,
  *    the file ending at the first `#`), in any spelling that names the
  *    package's file (as `--source` is read), as a string or a plain
- *    template literal. Owning a function owns its static reference tree within
+ *    template literal. Owning a function owns its whole text, every
+ *    function defined in it whether or not anything refers to it (a gap
+ *    there often marks dead production code; maintainer decision of
+ *    2026-11-08), and its static reference tree within
  *    the package, as the type checker resolves it: every function, method,
  *    or class that its body refers to, whether it calls it by name, through
  *    an import or its alias, through `this` or a typed field, through
@@ -834,6 +837,8 @@ async function driver(plan, observe) {
         states.add(`killed under an unnamed law`)
       if (m.function === `w_getter` && m.outcome === `killed`)
         states.add(`a getter the capture left unread`)
+      if (m.function === `unused` && m.outcome === `unreached`)
+        states.add(`an uncalled function in an owned function is a gap`)
       if (m.function === `w_spy` && m.outcome === `killed`)
         states.add(`a builtin spy the capture left uncalled`)
       if (m.function === `w_shared` && m.class === `generator-gap`)
@@ -1499,6 +1504,7 @@ const required = [
   `a source that imports a dependency's subpath ran`,
   `a package with an unbuilt devDependency ran`,
   `a builtin spy the capture left uncalled`,
+  `an uncalled function in an owned function is a gap`,
   `the CLI ran from a path with a space and #`,
   `a setup error`,
   `a setup error beside a timeout under one budget`,

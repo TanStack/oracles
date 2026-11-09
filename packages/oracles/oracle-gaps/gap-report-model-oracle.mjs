@@ -738,10 +738,45 @@ const witness = [
   },
   { id: `W10.#helper`, owners: [], body: [push], tests: [] },
   { id: `W10.#named`, owners: [`b`], body: [push], tests: [] },
+  // Everything defined inside an owned function's text is owned with it,
+  // whether or not anything refers to it (maintainer decision, 2026-11-08:
+  // a gap in an unreferenced nested function often marks dead production
+  // code, which the report should flag). `w_dead` defines a helper nothing
+  // calls; `w_closure` returns one, reached only through what it returns.
+  {
+    id: `w_dead`,
+    owners: [`a`],
+    body: [{ kind: `innerUnused`, to: `w_dead>unused` }, push],
+    tests: [judging(`a`, `fixed seed`, 1)],
+  },
+  {
+    id: `w_dead>unused`,
+    name: `unused`,
+    container: `nested`,
+    form: `arrow`,
+    owners: [],
+    body: [push],
+    tests: [],
+  },
+  {
+    id: `w_closure`,
+    owners: [`a`],
+    signature: `w_closure(x: number, out: Array<string>): () => void`,
+    body: [{ kind: `innerReturned`, to: `w_closure>later` }],
+    tests: [],
+  },
+  {
+    id: `w_closure>later`,
+    name: `later`,
+    container: `nested`,
+    form: `arrow`,
+    owners: [],
+    body: [push],
+    tests: [],
+  },
   // Two functions that start on one line: an object literal's `get` and
   // `set` arrows. Each mutant belongs to the one whose text holds it. No
-  // oracle owns `w_pair`: whether an owned function owns a function defined
-  // in its body that nothing refers to is an open question (round 2).
+  // oracle owns `w_pair`, so its names alone are judged.
   { id: `w_pair`, owners: [], body: [{ kind: `pair` }], tests: [] },
   {
     id: `w_pair>get`,
@@ -1129,6 +1164,8 @@ const witness = [
 // in-process.
 const captureWitness = new Set([
   `w_kill`,
+  `w_dead`,
+  `w_dead>unused`,
   `w_both`,
   `w_random`,
   `w_agree`,
@@ -1582,7 +1619,15 @@ function resolveHistory(history) {
   // its name, or a method of an object literal.
   const emitBody = (body, indent) => {
     for (const stmt of body) {
-      if (stmt.kind === `inner`) {
+      if (stmt.kind === `innerUnused` || stmt.kind === `innerReturned`) {
+        // Defined, and called by nothing here: left unused, or returned.
+        const inner = byId.get(stmt.to)
+        lines.push(`${indent}const ${inner.name} = (): void => {`)
+        emitBody(inner.body, `${indent}  `)
+        lines.push(`${indent}};`)
+        stmt.lines =
+          stmt.kind === `innerReturned` ? [`return ${inner.name};`] : []
+      } else if (stmt.kind === `inner`) {
         const inner = byId.get(stmt.to)
         if (inner.form === `arrow`) {
           lines.push(`${indent}const ${inner.name} = (): void => {`)
@@ -2254,6 +2299,13 @@ function ownersOf(plan) {
     owners.set(id, set)
     for (const callee of calls.get(id) ?? []) visit(callee, file)
   }
+  // A nested function (`parent>name`) is contained in its parent's text, so
+  // its parent's tree holds it, called or not.
+  for (const fn of plan.functions)
+    if (fn.id.includes(`>`)) {
+      const parent = fn.id.slice(0, fn.id.lastIndexOf(`>`))
+      calls.set(parent, [...(calls.get(parent) ?? []), fn.id])
+    }
   for (const fn of plan.functions)
     for (const file of fn.owners) visit(fn.id, file)
   // A whole-file entry names the main source, so it owns only its functions.
