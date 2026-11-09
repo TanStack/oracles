@@ -1,0 +1,51 @@
+{
+  "name": "@tanstack/eslint-plugin-oracles",
+  "version": "0.0.0",
+  "description": "ESLint rules for oracle tests: no disabled or unit-test oracles, pure models, replayable seeds, and the production probe form",
+  "author": "Kyle Mathews",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TanStack/oracles.git",
+    "directory": "packages/eslint-plugin-oracles"
+  },
+  "homepage": "https://github.com/TanStack/oracles",
+  "keywords": [
+    "eslint",
+    "eslint-plugin",
+    "testing",
+    "oracle",
+    "property-based-testing"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./rules/*": "./src/rules/*.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "lint": "eslint . --fix",
+    "test": "vitest --run"
+  },
+  "peerDependencies": {
+    "eslint": "^9.0.0 || ^10.0.0"
+  },
+  "dependencies": {
+    "@typescript-eslint/parser": "^8.72.1"
+  },
+  "devDependencies": {
+    "@fast-check/vitest": "^0.5.0",
+    "@tanstack/oracles": "workspace:*",
+    "eslint": "^9.39.2",
+    "fast-check": "^4.10.2",
+    "vitest": "^4.1.12"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

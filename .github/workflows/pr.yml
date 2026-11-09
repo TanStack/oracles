@@ -33,6 +33,11 @@ jobs:
       # The oracleProperty self-oracle spawns real Vitest runs, so the
       # default test run leaves it out; it runs here on its own.
       - run: pnpm --filter @tanstack/oracles run test:oracle-framework
+      # The gap report's own oracles also run real Vitest runs on fixture
+      # packages: the static and classify oracles, then the end-to-end
+      # oracle's fixed seed (its random campaign runs locally).
+      - run: pnpm --filter @tanstack/oracles run test:oracle-gaps:fast
+      - run: pnpm --filter @tanstack/oracles exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "fixed seed"
       - run: pnpm run test:publint
       - run: pnpm run test:sherif
   test-vitest-5:

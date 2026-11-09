@@ -82,8 +82,8 @@ export function recordOracleFiniteReplay(
   { seed, path, failed }: { seed: number; path: string; failed: boolean },
 ): void {
   const channel = witnessChannel(property, seed, path)
-  if (channel === undefined) return
-  appendWitness(channel, { property, seed, path, numRuns: 1, failed })
+  if (channel !== undefined)
+    appendWitness(channel, { property, seed, path, numRuns: 1, failed })
 }
 
 /**
