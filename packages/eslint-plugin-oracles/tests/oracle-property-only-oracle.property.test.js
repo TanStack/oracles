@@ -83,7 +83,7 @@ const site = fc.oneof(
 )
 
 const program = fc.record({
-  alias: fc.constantFrom(`default`, `namespace`, `named`),
+  alias: fc.constantFrom(`default`, `namespace`, `named`, `vitest`),
   setting: fc.constantFrom(
     `none`,
     `implementation`,
@@ -91,6 +91,9 @@ const program = fc.record({
     `reasonless`,
     `otherFile`,
   ),
+  // An entry that the rule can never judge: a file outside the oracle glob, or
+  // a framework implementation module. The file itself is unaffected.
+  invalid: fc.constantFrom(`none`, `none`, `outside`, `implementation`),
   sites: fc.array(site, { minLength: 1, maxLength: 6 }),
 })
 
@@ -110,10 +113,11 @@ const usesOf = (sites) =>
 const entryMatches = (setting) =>
   setting === `reasoned` || setting === `reasonless`
 
-function predictReports({ setting, sites }) {
+function predictReports({ setting, invalid, sites }) {
   if (setting === `implementation`) return []
   const uses = usesOf(sites)
   const reports = []
+  if (invalid !== `none`) reports.push({ line: 1, messageId: `invalidEntry` })
   if (setting === `reasonless`)
     reports.push({ line: 1, messageId: `baselineWithoutReason` })
   if (entryMatches(setting) && uses.length === 0)
@@ -130,6 +134,7 @@ const STATES = {
   exempt: `a reasoned baseline exempts its uses`,
   reasonless: `a reasonless baseline is reported`,
   stale: `a stale baseline is reported`,
+  invalid: `an entry the rule cannot judge is reported`,
 }
 const MEASURED = {
   implementation: `an implementation module is exempt`,
@@ -142,6 +147,7 @@ function reachedStates({ setting, sites }, _trace, expected) {
   return [
     ...(messages.has(`rawCampaign`) ? [STATES.campaign] : []),
     ...(messages.has(`rawProperty`) ? [STATES.property] : []),
+    ...(messages.has(`invalidEntry`) ? [STATES.invalid] : []),
     ...(messages.has(`legacyImport`) ? [STATES.legacy] : []),
     ...(setting === `reasoned` && usesOf(sites).length > 0
       ? [STATES.exempt]
@@ -164,6 +170,8 @@ const ALIAS_IMPORT = {
   default: `import fastCheck from 'fast-check'`,
   namespace: `import * as fastCheck from 'fast-check'`,
   named: `import { assert, check } from 'fast-check'`,
+  // The fast-check namespace that @fast-check/vitest re-exports.
+  vitest: `import { fc as fastCheck } from '@fast-check/vitest'`,
 }
 const QUIET = {
   property: `const property{i} = fc.property(fc.nat(), (n) => n >= 0)`,
@@ -199,6 +207,22 @@ function renderProgram({ alias, sites }) {
   ].join(`\n`)
 }
 
+// The entries that `invalid` adds: a file outside the oracle glob, and a
+// framework implementation module.
+const invalidEntryFor = {
+  none: { legacyCampaigns: [], implementationModules: [] },
+  outside: {
+    legacyCampaigns: [{ file: `packages/example/src/app.ts`, reason: `x` }],
+    implementationModules: [],
+  },
+  implementation: {
+    legacyCampaigns: [
+      { file: `packages/oracles/src/oracle-config.ts`, reason: `x` },
+    ],
+    implementationModules: [`packages/oracles/src/oracle-config.ts`],
+  },
+}
+
 const settingsFor = {
   none: {},
   implementation: { implementationModules: [FILE] },
@@ -214,7 +238,17 @@ const settingsFor = {
 
 const linter = new Linter({ configType: `flat` })
 
-function lintRendered(code, setting) {
+function lintRendered(code, { setting, invalid }) {
+  const extra = invalidEntryFor[invalid]
+  const own = settingsFor[setting]
+  const oracles = {
+    ...own,
+    implementationModules: [
+      ...(own.implementationModules ?? []),
+      ...extra.implementationModules,
+    ],
+    legacyCampaigns: [...(own.legacyCampaigns ?? []), ...extra.legacyCampaigns],
+  }
   const messages = linter.verify(
     code,
     [
@@ -222,7 +256,7 @@ function lintRendered(code, setting) {
         ...plugin.configs.recommended,
         files: [`**/*.js`],
         languageOptions: { parser: tsParser, sourceType: `module` },
-        settings: { oracles: settingsFor[setting] },
+        settings: { oracles },
       },
     ],
     { filename: FILE },
@@ -268,6 +302,15 @@ oracleProperty({
     states: Object.values(STATES),
     measured: Object.values(MEASURED),
     constructed: [
+      {
+        name: `an entry the rule cannot judge`,
+        enters: [STATES.invalid],
+        build: (generated) => ({
+          ...generated,
+          setting: `none`,
+          invalid: `outside`,
+        }),
+      },
       {
         name: `a raw campaign`,
         enters: [STATES.campaign],
@@ -340,7 +383,7 @@ oracleProperty({
   reached: reachedStates,
   model: predictReports,
   driver: (plan, observe) => {
-    observe(`reports`, lintRendered(renderProgram(plan), plan.setting))
+    observe(`reports`, lintRendered(renderProgram(plan), plan))
   },
   check,
   calibrations: [

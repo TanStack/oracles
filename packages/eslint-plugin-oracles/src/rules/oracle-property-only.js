@@ -26,10 +26,22 @@
  *   `reason` keeps its raw campaigns and legacy imports while it migrates. The
  *   entry exempts only the file it names, by a path boundary.
  *
- * The baseline only shrinks. An entry without a reason exempts nothing and is
- * reported (`baselineWithoutReason`). An entry for a file that has no legacy use
- * left is reported as stale (`staleBaseline`), so the file must be removed from
- * the baseline when it migrates.
+ * Entry checks. An entry without a reason exempts nothing and is reported
+ * (`baselineWithoutReason`). An entry for a file that has no legacy use left is
+ * reported as stale (`staleBaseline`). An entry that the rule can never judge
+ * is reported as `invalidEntry`, from each oracle file that the rule lints: a
+ * file outside the oracle-file glob (its name has no `oracle` and an
+ * extension of .ts, .tsx, .js, .jsx, or .mjs), or a framework implementation
+ * module.
+ *
+ * What the rule cannot do. It sees one file's source and its settings, not the
+ * base commit, so it cannot tell a new entry from an old one. It does not stop
+ * a baseline from growing. A project that wants the baseline to shrink only
+ * enforces that in its own diff check, against the base's entries.
+ *
+ * The legacy-name check is kept after the APIs are removed from
+ * @tanstack/oracles, so a project that still vendors them, and reimports
+ * them, sees the reports.
  *
  * Limits: the rule reads the forms above only. A campaign held in an alias
  * (`const run = fc.assert`), called from a helper, or reached through a
@@ -45,9 +57,15 @@ import {
   oracleSettings,
 } from '../registration.js'
 
-const FAST_CHECK = `fast-check`
+// The modules that export fast-check's campaign functions: fast-check itself,
+// and @fast-check/vitest, which re-exports its `fc`.
+const FAST_CHECK_MODULES = new Set([`fast-check`, `@fast-check/vitest`])
 const CAMPAIGN_METHODS = new Set([`assert`, `check`])
 const LEGACY_NAMES = new Set([`createOracleReach`, `runOracleCampaign`])
+
+/** The name an import specifier takes from its module, by its identifier or string form. */
+const importedName = (specifier) =>
+  specifier.imported?.name ?? specifier.imported?.value
 
 /** The `import` a binding came from, as `{ source, imported }`, or undefined. */
 function importOf(identifier, sourceCode) {
@@ -56,14 +74,19 @@ function importOf(identifier, sourceCode) {
     identifier.name,
   )?.defs[0]
   if (definition?.type !== `ImportBinding`) return undefined
-  const imported = definition.node.imported
   return {
     source: definition.parent.source.value,
     imported:
       definition.node.type === `ImportSpecifier`
-        ? (imported.name ?? imported.value)
+        ? importedName(definition.node)
         : undefined,
   }
+}
+
+/** Whether a file is in the oracle-file glob: its name has `oracle` and a source extension. */
+const isOracleFileName = (file) => {
+  const name = file.replaceAll(`\\`, `/`).split(`/`).at(-1)
+  return name.includes(`oracle`) && /\.(ts|tsx|js|jsx|mjs)$/.test(name)
 }
 
 /**
@@ -75,7 +98,7 @@ function rawCampaignOf(node, sourceCode) {
   const { callee } = node
   if (callee.type === `Identifier`) {
     const binding = importOf(callee, sourceCode)
-    return binding?.source === FAST_CHECK &&
+    return FAST_CHECK_MODULES.has(binding?.source) &&
       CAMPAIGN_METHODS.has(binding.imported)
       ? { messageId: `rawCampaign`, call: callee.name }
       : undefined
@@ -91,7 +114,7 @@ function rawCampaignOf(node, sourceCode) {
     callee.property.type === `Identifier` &&
     !callee.computed &&
     CAMPAIGN_METHODS.has(callee.property.name) &&
-    importOf(callee.object, sourceCode)?.source === FAST_CHECK
+    FAST_CHECK_MODULES.has(importOf(callee.object, sourceCode)?.source)
   )
     return {
       messageId: `rawCampaign`,
@@ -112,6 +135,7 @@ export default {
       rawCampaign: `\`{{call}}\` runs a raw property campaign, which declares no constructed histories, so the states its law needs are reached only where the seed draws them. Declare the law with \`oracleProperty\` from \`@tanstack/oracles\`: its \`histories.constructed\` build each required state, so that reach is required.`,
       rawProperty: `\`{{call}}\` registers a raw fast-check property, which declares no constructed histories, so the states its law needs are reached only where the seed draws them. Declare the law with \`oracleProperty\` from \`@tanstack/oracles\`: its \`histories.constructed\` build each required state, so that reach is required.`,
       legacyImport: `\`{{name}}\` is a legacy campaign API whose reach depends on the seed. Declare the law with \`oracleProperty\` and its constructed histories instead.`,
+      invalidEntry: `This \`legacyCampaigns\` entry names {{file}}, which is not an oracle file or is a framework implementation module, so the rule never judges it. Remove the entry.`,
       baselineWithoutReason: `This file's \`legacyCampaigns\` entry has no reason, so it exempts nothing. Give the reason that the file keeps its raw campaigns, or move the file to \`oracleProperty\`.`,
       staleBaseline: `This file's \`legacyCampaigns\` entry is stale: the file runs no raw campaign and imports no legacy API. Remove the entry, so the baseline only shrinks.`,
     },
@@ -142,7 +166,7 @@ export default {
       },
       ImportDeclaration(node) {
         for (const specifier of node.specifiers) {
-          const name = specifier.imported?.name ?? specifier.imported?.value
+          const name = importedName(specifier)
           if (specifier.type === `ImportSpecifier` && LEGACY_NAMES.has(name))
             uses.push({
               node: specifier,
@@ -152,6 +176,17 @@ export default {
         }
       },
       'Program:exit'(program) {
+        for (const entry of settings.legacyCampaigns) {
+          if (
+            !isOracleFileName(entry.file) ||
+            isModuleFile(entry.file, settings.implementationModules)
+          )
+            context.report({
+              node: program,
+              messageId: `invalidEntry`,
+              data: { file: entry.file },
+            })
+        }
         if (entries.length > 0) {
           if (!exempt)
             context.report({
