@@ -313,8 +313,9 @@ function editModel(plan, fileOf) {
   }
 }
 
+// The second lint is owed whenever the plan has a dependency to edit. A missing
+// observation then differs from the owed reports, and fails the check.
 function editCheck(_plan, observations, expected) {
-  const after = observations.find((o) => o.checkpoint === `after`)
   return (
     differs(
       `before`,
@@ -322,11 +323,27 @@ function editCheck(_plan, observations, expected) {
       observed(observations, `before`),
       expected.before,
     ) ??
-    (after === undefined
+    (expected.after === undefined
       ? pass
-      : differs(`after`, REPORTS_LAW, after.value, expected.after)) ??
+      : differs(
+          `after`,
+          REPORTS_LAW,
+          observed(observations, `after`),
+          expected.after,
+        )) ??
     pass
   )
+}
+
+// Wrong answers the edit check must reject (ORC-006): a second lint that never
+// ran, and reports that the second lint dropped.
+const dropSecondLint = {
+  name: `the second lint is not recorded`,
+  law: REPORTS_LAW,
+  corrupt: (trace) =>
+    trace.some((o) => o.checkpoint === `after`)
+      ? trace.filter((o) => o.checkpoint !== `after`)
+      : undefined,
 }
 
 oracleProperty({
@@ -336,6 +353,18 @@ oracleProperty({
     features: COMPANION,
     gated: [EDIT_STATE],
     runs: 40,
+    // Only programs with a dependency are drawn, so every run edits a file.
+    arbitrary: programSkeleton.filter(
+      (skeleton) =>
+        dependencyOfReached(buildProgram(skeleton, COMPANION)) !== undefined,
+    ),
+    // The edit state is entered only when a second lint was recorded, that is,
+    // when the driver really edited a companion between the two lints.
+    reached: (plan, trace) => [
+      ...statesOf(plan),
+      ...(trace.some((o) => o.checkpoint === `after`) ? [EDIT_STATE] : []),
+    ],
+    calibrations: [...reportCalibrations, dropSecondLint],
   }),
   driver: (plan, observe) => editAndRelint(plan, observe, editedFile),
   model: (plan) => editModel(plan, editedFile),

@@ -1580,8 +1580,6 @@ export function statesOf(program) {
     if (oracle.imports.get(`oracleProperty`)?.form === `namespace`)
       states.add(`oracle-property-namespace-import`)
   }
-  if (dependencyOfReached(program) !== undefined)
-    states.add(`companion-edited-between-lints`)
   return states
 }
 

@@ -11,9 +11,10 @@
  * oracle properties from the framework module and its lookalikes.
  *
  * Each feature family is one oracle property with its own features and budget
- * (200 runs for layouts and namespace imports, as in the original file). Each
+ * (200 runs for layouts, namespace imports, and oracle properties, as in the
+ * original file). Each
  * property gates the states its features enter, each with a constructed history
- * (rejection sampling from the grammar, seeded from the generated history).
+ * (a builder that splices the parts entering the state into the generated skeleton).
  *
  * Authority: see PART_REACH_AUTHORITY in part-reach-oracle-support.js.
  *
@@ -114,6 +115,7 @@ oracleProperty({
       `oracle-property-ordinary-lookalike`,
       `oracle-property-oracle-named-lookalike`,
     ],
+    runs: 200,
   }),
   check: checkPaths,
 })
