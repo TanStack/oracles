@@ -32,11 +32,9 @@
  * shadows the function's name, and the literal's spelling (maintainer's
  * request of 2026-11-08 to route the finite witness through the guard).
  */
-import assert from 'node:assert/strict'
 import tsParser from '@typescript-eslint/parser'
 import { Linter } from 'eslint'
-import { afterAll, test } from 'vitest'
-import { createOracleReach, declareOracle } from '@tanstack/oracles'
+import { differs, oracleProperty, pass } from '@tanstack/oracles'
 import noDisabled from '../src/rules/no-disabled.js'
 
 const writer = '/repo/packages/db/tests/oracle-replay-witness.ts'
@@ -270,50 +268,53 @@ function reports(program) {
     .map((report) => report.messageId ?? `parse:${report.message}`)
 }
 
-function checkReports(program, observed) {
-  assert.deepEqual(observed, expectedReports(program), JSON.stringify(program))
+const LAW = {
+  statement: `A replay witness is reported only by the rule's own budget exemption: a finite replay observation is output data, so no-disabled reports each budget that a witness does not write, and nothing else.`,
+  authority: `The maintainer decisions of 2026-10-28 and 2026-11-08 on the typed OracleReplayWitness record and its guarded writer, as recorded in this file's header.`,
+  limits: `The grammar varies location, annotation, value use, and writer shape; the serializer is the standard JSON.stringify, and the other serializers are outside the allowance. The finite list is exhaustive over its grammar, so it declares no reach states.`,
+  owner: `eslint-plugin-oracles lint rules`,
 }
 
-const stateOf = (program) =>
-  program.flow === 'append-witness'
-    ? `${program.location}/append-witness/${program.writerBody}/${program.parameter}/${program.callee}/${program.initializer}`
-    : `${program.location}/${program.annotation}/${program.flow}/${program.typeQuery}/${program.jsonBinding}/${program.initializer}`
-const states = [...new Set(programs.map(stateOf))]
-const reach = createOracleReach('lint.replay-observation', states, {
-  replaying: false,
-})
-let campaignEntered = false
-afterAll(() => {
-  // Calibrations can be selected independently. Once any source comparison
-  // starts, the finite campaign still owes every declared reach state.
-  if (campaignEntered) reach.assertReached()
-})
-declareOracle({
-  check: [checkReports],
-  model: [expectedReports],
-  grammar: [programs],
-})
+const expectedAndObserved = (observed, expected) =>
+  differs(`reports`, `replay observation reports`, observed, expected) ?? pass
 
-test.each(programs)(
-  'separates replay observations from budgets %j',
-  (program) => {
-    campaignEntered = true
-    reach.beginHistory()
-    const observed = reports(program)
-    reach.reach(stateOf(program))
-    checkReports(program, observed)
+// The finite grammar is exhaustive, so each history is one fixed program. Its
+// two calibrations, a missing report and a spurious one, feed the same check.
+oracleProperty({
+  id: `lint.replay-observation`,
+  law: LAW,
+  histories: programs,
+  model: expectedReports,
+  driver: (program, observe) => {
+    observe(`reports`, reports(program))
   },
-)
-
-test.each(['missing-report', 'spurious-report'])(
-  'rejects wrong report observation %s',
-  (fault) => {
-    const program = programs.find(
-      (candidate) =>
-        (expectedReports(candidate).length === 0) ===
-        (fault === 'spurious-report'),
-    )
-    const wrong = expectedReports(program).length === 0 ? ['singleRun'] : []
-    assert.throws(() => checkReports(program, wrong))
-  },
-)
+  check: (_program, observations, expected) =>
+    expectedAndObserved(
+      observations.find((o) => o.checkpoint === `reports`).value,
+      expected,
+    ),
+  calibrations: [
+    {
+      name: `rejects wrong report observation: a missing report`,
+      law: `replay observation reports`,
+      corrupt: (trace) => {
+        const observed = trace.find((o) => o.checkpoint === `reports`)
+        if (observed.value.length === 0) return undefined
+        return trace.map((o) =>
+          o.checkpoint === `reports` ? { ...o, value: o.value.slice(1) } : o,
+        )
+      },
+    },
+    {
+      name: `rejects wrong report observation: a spurious report`,
+      law: `replay observation reports`,
+      corrupt: (trace) => {
+        const observed = trace.find((o) => o.checkpoint === `reports`)
+        if (observed.value.length > 0) return undefined
+        return trace.map((o) =>
+          o.checkpoint === `reports` ? { ...o, value: [`singleRun`] } : o,
+        )
+      },
+    },
+  ],
+})

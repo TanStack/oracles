@@ -1342,7 +1342,13 @@ function registrationText(test, use) {
  * is a key too, so a configuration or parse failure cannot pass as no reports.
  */
 function keysOf(messages, subjects) {
-  return messages.map((message) => keyOf(message, subjects)).sort()
+  // The fixtures are deliberately raw campaigns in oracle-named files, so
+  // oracle/oracle-property-only reports them. That rule has its own oracle
+  // (oracle-property-only-oracle.property.test.js); this law judges no-unit-test.
+  return messages
+    .filter((message) => message.ruleId !== `oracle/oracle-property-only`)
+    .map((message) => keyOf(message, subjects))
+    .sort()
 }
 
 function keyOf(message, subjects) {

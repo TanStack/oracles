@@ -58,8 +58,9 @@ it(`permits selecting only the replay observation checker controls`, () => {
   const report = JSON.parse(result.stdout)
   assert.equal(report.numPassedTests, 2)
   assert.equal(report.numFailedTests, 0)
-  // Every source program of the oracle, 48 of them writer-call programs.
-  assert.equal(report.numPendingTests, 3896)
+  // Every source program of the oracle, 48 of them writer-call programs, and
+  // the framework's determinism test, which the oracleProperty form adds.
+  assert.equal(report.numPendingTests, 3897)
 })
 
 ruleTester.run(`oracle/no-disabled`, noDisabled, {
