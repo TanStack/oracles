@@ -100,11 +100,19 @@ export function packagePath(pkg, path) {
  * which run in the runner's own process, and following them would send
  * nearly every package to child processes.
  */
+// One decision per package in a process: the daemon parses every request's
+// arguments, and the walk reads the whole tree. A dependency change takes
+// effect when the daemon restarts.
+const pools = new Map()
 function defaultPool(pkg) {
+  if (!pools.has(pkg)) pools.set(pkg, walkPool(pkg))
+  return pools.get(pkg)
+}
+function walkPool(pkg) {
   const seen = new Set()
   const queue = [pkg]
-  while (queue.length > 0) {
-    const dir = queue.shift()
+  for (let next = 0; next < queue.length; next += 1) {
+    const dir = queue[next]
     if (seen.has(dir)) continue
     seen.add(dir)
     if (dir !== pkg && isAddon(dir)) return `forks`

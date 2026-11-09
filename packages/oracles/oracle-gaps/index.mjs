@@ -31,6 +31,16 @@
 //    it, for information only: an ordinary test never closes a gap. Without
 //    it, ordinary test files do not run at all.
 //
+// Copies of the test files share one realm, so each copy must start from the
+// worker's first globals. To remove the globals a copy defines, the harness
+// wraps `Object.defineProperty`, `Object.defineProperties`, and
+// `Reflect.defineProperty` and keeps every new global configurable. A test
+// that inspects global property descriptors (a global it defined reports
+// `configurable: true`) or the identity of `Object.defineProperty` can
+// behave differently under the gap report; leave such a test out of the
+// files that declare `owns` (maintainer decision, 2026-11-08: speed over
+// this rare case).
+//
 // A Vitest config that defines `test.projects` refuses the run: each project
 // has its own environment and setup files, which the runner's copies would
 // not run under.

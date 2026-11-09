@@ -18,7 +18,11 @@
 // are the framework's route vocabulary (oracle-route.ts); a test that
 // registered no route, or a name outside it, has an unknown one, and cannot
 // kill.
-const reproducibleRoutes = new Set([`fixed seed`, `fixed history`, `case`])
+export const reproducibleRoutes = new Set([
+  `fixed seed`,
+  `fixed history`,
+  `case`,
+])
 const frameworkRoutes = new Set([`calibration`])
 function routeOf(registered) {
   if (registered === undefined) return `unknown`

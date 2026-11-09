@@ -219,7 +219,14 @@
  * environment variable other than the seed, a new file that changes how an
  * unchanged import resolves, a change to the Vite config or the installed
  * packages, or checks at once other than the two that start the daemon.
- * The daemon count after a stop is read from the process list. Two
+ * The harness keeps every global a copy defines configurable, by wrapping
+ * `Object.defineProperty`, `Object.defineProperties`, and
+ * `Reflect.defineProperty`, so that each copy in the shared realm starts
+ * from the worker's first globals: a test that inspects a global's
+ * descriptor or the identity of those functions can behave differently
+ * under the report, which law 3's capture clause does not cover
+ * (maintainer decision, 2026-11-08; such a test belongs outside the
+ * owns-declaring files). The daemon count after a stop is read from the process list. Two
  * daemon defects have no observation here: a stale lock removed without
  * the atomic claim (two daemons serve until the loser sees its lock taken,
  * within 2 s), and a stop that releases the lock before it closes the

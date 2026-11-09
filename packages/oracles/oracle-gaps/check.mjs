@@ -45,6 +45,7 @@ import {
   judgeOrdinary,
   needsOrdinary,
   outcomeOf,
+  reproducibleRoutes,
   targetsOf,
 } from './classify.mjs'
 
@@ -477,6 +478,9 @@ export default async (env) => {
   ) {
     const capture = join(out, `run-${process.pid}-${++runCounter}.jsonl`)
     const state = {
+      // The one list of reproducible routes (classify.mjs), for the
+      // harness's stop at a first kill.
+      reproducibleRoutes: [...reproducibleRoutes],
       mutant,
       select,
       capture,
@@ -669,6 +673,7 @@ export default async (env) => {
       ]),
     )
     const state = {
+      reproducibleRoutes: [...reproducibleRoutes],
       mutant: null,
       select: null,
       capture,

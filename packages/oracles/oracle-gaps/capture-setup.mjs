@@ -599,9 +599,9 @@ function recordAssertion() {
 // are skipped. The runner also runs no further file (check.mjs). A verdict
 // in a test that passes kills nothing, as in the classification, and so does
 // a verdict in a nondeterministic test.
-// The framework's reproducible routes (oracle-route.ts), as classify.mjs
-// reads them.
-const reproducibleRoutes = new Set([`fixed seed`, `fixed history`, `case`])
+// The reproducible routes, from classify.mjs through the run's state (this
+// file is copied into the package and imports nothing of the CLI's).
+const reproducibleRoutes = new Set(state.reproducibleRoutes ?? [])
 let stopped = skippedCopy
 let currentTask
 // When the current test started, so its row records how long it took.
