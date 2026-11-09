@@ -58,11 +58,16 @@ it(`permits selecting only the replay observation checker controls`, () => {
   const report = JSON.parse(result.stdout)
   assert.equal(report.numPassedTests, 2)
   assert.equal(report.numFailedTests, 0)
-  assert.equal(report.numPendingTests, 3848)
+  // Every source program of the oracle, 48 of them writer-call programs.
+  assert.equal(report.numPendingTests, 3896)
 })
 
 ruleTester.run(`oracle/no-disabled`, noDisabled, {
   valid: [
+    // Both branches register the same tests: inside a suite, or at the top.
+    `const register = () => { it('a', () => check()) }\nif (nested) describe('s', register)\nelse register()`,
+    `const register = () => { it('a', () => check()) }\nif (nested) { describe('s', register) } else { register() }`,
+    `const register = () => { it('a', () => check()) }\nif (!nested) register()\nelse describe('s', register)`,
     // A selection helper's result used as a registration, with no modifier.
     {
       code: `import { oracleReplayTest } from './oracle-config.js'\nimport { it as vitestIt } from 'vitest'\nconst fixedCase = oracleReplayTest(vitestIt)\nfixedCase('checks the fixed history', () => check(history))`,
@@ -400,6 +405,20 @@ ruleTester.run(`oracle/no-disabled`, noDisabled, {
     },
     {
       code: `if (!replayRequested) { it('a', () => check()) }`,
+      errors: [{ messageId: `guarded` }],
+    },
+    // A suite under a condition whose other branch runs something else, or
+    // nothing, registers its tests only under that condition.
+    {
+      code: `const register = () => { it('a', () => check()) }\nif (nested) describe('s', register)\nelse other()`,
+      errors: [{ messageId: `guarded` }],
+    },
+    {
+      code: `const register = () => { it('a', () => check()) }\nif (nested) describe('s', register)`,
+      errors: [{ messageId: `guarded` }],
+    },
+    {
+      code: `const register = () => { it('a', () => check()) }\nif (nested) { describe('s', register); other() } else register()`,
       errors: [{ messageId: `guarded` }],
     },
     {

@@ -227,6 +227,13 @@ function guardingConditions(node, sourceCode) {
       conditions.push(...iterableConditions(parent.right, sourceCode))
     }
     if (
+      parent.type === `IfStatement` &&
+      child !== parent.test &&
+      registersBothWays(node, parent, child)
+    ) {
+      // `if (c) describe(name, register) else register()`: either way the
+      // callback's tests register, inside the suite or beside it.
+    } else if (
       (parent.type === `IfStatement` ||
         parent.type === `ConditionalExpression`) &&
       child !== parent.test
@@ -261,6 +268,47 @@ function guardingConditions(node, sourceCode) {
     child = parent
   }
   return conditions
+}
+
+/**
+ * Whether `branch`, a branch of an `if`, is one expression statement, or a
+ * block of only one, whose expression passes `test`.
+ */
+function soleStatement(branch, test) {
+  const statement =
+    branch?.type === `BlockStatement` && branch.body.length === 1
+      ? branch.body[0]
+      : branch
+  return statement?.type === `ExpressionStatement` && test(statement.expression)
+}
+
+/**
+ * Whether the `if` statement `branching`, whose branch `child` holds the
+ * suite call `suite`, registers the same tests on its other branch: the
+ * suite's callback is a name, the suite is its branch's only statement, and
+ * the other branch only calls that name.
+ */
+function registersBothWays(suite, branching, child) {
+  const callback = suite.arguments[1]
+  if (
+    calleeChain(suite.callee).root !== `describe` ||
+    suite.arguments.length !== 2 ||
+    callback?.type !== `Identifier`
+  )
+    return false
+  const other =
+    child === branching.consequent ? branching.alternate : branching.consequent
+  return (
+    soleStatement(child, (expression) => expression === suite) &&
+    soleStatement(
+      other,
+      (expression) =>
+        expression.type === `CallExpression` &&
+        expression.arguments.length === 0 &&
+        expression.callee.type === `Identifier` &&
+        expression.callee.name === callback.name,
+    )
+  )
 }
 
 /**
