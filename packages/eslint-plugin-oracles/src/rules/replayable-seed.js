@@ -3,7 +3,8 @@
  * and the shared variables TANSTACK_DB_ORACLE_SEED and
  * TANSTACK_DB_ORACLE_PATH replay it. That works only when every campaign takes
  * its seed from one of the places a replay can reach. This rule reports a
- * `seed` option that a replay cannot reach:
+ * `seed` option, or a seed passed to the framework's `oracleFixedSeed`, that a
+ * replay cannot reach:
  *
  * - A seed that can be `undefined`: the literal `undefined`, or a parameter of
  *   an `.each(table)` callback whose table holds `undefined`, used where
@@ -28,7 +29,12 @@
  * function. Reviewers still check those.
  */
 
-import { findVariable, isModuleFile, oracleSettings } from '../registration.js'
+import {
+  callsFrameworkExport,
+  findVariable,
+  isModuleFile,
+  oracleSettings,
+} from '../registration.js'
 
 const ambientCalls = new Set([
   `Date.now`,
@@ -202,6 +208,19 @@ export default {
       return {}
     }
     return {
+      // A seed declared fixed from a clock would route as `fixed seed`, and
+      // no replay reaches it.
+      CallExpression(node) {
+        if (!callsFrameworkExport(node, `oracleFixedSeed`, sourceCode)) return
+        const call = ambientCall(node.arguments[0])
+        if (call !== undefined) {
+          context.report({
+            node: node.arguments[0],
+            messageId: `ambientSeed`,
+            data: { call },
+          })
+        }
+      },
       Property(node) {
         if (propertyName(node) !== `seed`) return
         const value = node.value

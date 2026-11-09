@@ -32,7 +32,9 @@
  *   literal `numRuns` of 1 or 0, or a base of 1 passed to the run helpers. One
  *   random history is not a generated property. A witness fixes its history
  *   with a recorded `path` (a literal, or a failure's `counterexamplePath`) or
- *   with a seed that is a number literal or a constant bound to one. A replay
+ *   with a seed that is a number literal or a constant bound to one: a `seed`
+ *   option, or the seed of the framework's `oracleFixedSeed(seed, { ... })`,
+ *   in place, held in a constant, or spread into the object. A replay
  *   from configuration takes its options from `oraclePropertyOptions`, which
  *   returns one run for a path replay.
  * - A literal run count above 1 that has no fixed history. It does not scale with
@@ -55,6 +57,7 @@
 import {
   aliasModifiers,
   calleeChain,
+  callsFrameworkExport,
   conditionalModifiers,
   disablingModifiers,
   findVariable,
@@ -405,21 +408,38 @@ function isPrivateReplayVariable(name, envNames) {
   return replayVariableName.test(name) && !shared.includes(name)
 }
 
+/** The initializer of the `const` that `node` names, if it names one. */
+function constantInit(node, sourceCode) {
+  if (node?.type !== `Identifier`) return undefined
+  const definition = findVariable(sourceCode.getScope(node), node.name)?.defs[0]
+  return definition?.type === `Variable` && definition.parent.kind === `const`
+    ? definition.node.init
+    : undefined
+}
+
 /** The number literal that `node` is, or that a constant `node` names. */
 function constantNumber(node, sourceCode) {
   if (isNumberLiteral(node)) return node
-  if (node?.type !== `Identifier`) return undefined
-  const definition = findVariable(sourceCode.getScope(node), node.name)?.defs[0]
-  return definition?.type === `Variable` &&
-    definition.parent.kind === `const` &&
-    isNumberLiteral(definition.node.init)
-    ? definition.node.init
-    : undefined
+  const init = constantInit(node, sourceCode)
+  return isNumberLiteral(init) ? init : undefined
 }
 
 /** A number literal, or a constant bound to one. */
 function isFixedSeed(node, sourceCode) {
   return constantNumber(node, sourceCode) !== undefined
+}
+
+/**
+ * The framework's `oracleFixedSeed(seed, ...)` with a fixed seed, in place or
+ * held in a constant.
+ */
+function isFixedSeedDeclaration(node, sourceCode) {
+  const call =
+    node?.type === `Identifier` ? constantInit(node, sourceCode) : node
+  return (
+    callsFrameworkExport(call, `oracleFixedSeed`, sourceCode) &&
+    isFixedSeed(call.arguments[0], sourceCode)
+  )
 }
 
 function propertyName(property) {
@@ -431,7 +451,8 @@ function propertyName(property) {
 
 /**
  * A one-run object has a fixed history when it replays a `path` or passes a
- * fixed seed. An object that an `expect` matcher compares holds an observed
+ * fixed seed: as its `seed`, as the parameters of a fixed-seed declaration,
+ * or by spreading one. An object that an `expect` matcher compares holds an observed
  * run count, and `fc.sample` draws examples without running a property.
  */
 function isFixedOrObservation(object, sourceCode) {
@@ -442,6 +463,17 @@ function isFixedOrObservation(object, sourceCode) {
   const seed = option(`seed`)
   if (seed !== undefined && isFixedSeed(seed.value, sourceCode)) return true
   const { parent } = object
+  if (
+    (parent.type === `CallExpression` &&
+      parent.arguments[1] === object &&
+      isFixedSeedDeclaration(parent, sourceCode)) ||
+    object.properties.some(
+      (property) =>
+        property.type === `SpreadElement` &&
+        isFixedSeedDeclaration(property.argument, sourceCode),
+    )
+  )
+    return true
   if (parent.type !== `CallExpression` || !parent.arguments.includes(object)) {
     return false
   }

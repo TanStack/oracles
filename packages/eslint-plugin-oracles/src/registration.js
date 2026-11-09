@@ -139,6 +139,24 @@ export function isOracleConfigSource(source) {
 }
 
 /**
+ * Whether `node` calls the framework's export `name`, imported under that
+ * name or another from a framework entry or a project's oracle-config.
+ */
+export function callsFrameworkExport(node, name, sourceCode) {
+  if (node?.type !== `CallExpression` || node.callee.type !== `Identifier`) {
+    return false
+  }
+  const definition = findVariable(sourceCode.getScope(node), node.callee.name)
+    ?.defs[0]
+  const imported = definition?.node.imported
+  return (
+    definition?.type === `ImportBinding` &&
+    (imported?.name ?? imported?.value) === name &&
+    isOracleConfigSource(definition.parent.source.value)
+  )
+}
+
+/**
  * The project's settings for these rules, from `settings.oracles` in the flat
  * config. Every field is optional:
  *
