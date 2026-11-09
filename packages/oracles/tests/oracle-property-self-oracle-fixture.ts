@@ -63,7 +63,10 @@
  * a new function named `tool` on every run: the same data each time. An
  * `errorNoise` spec records, last, an Error whose `requestId` alternates
  * between runs. A `sevenModel` spec's model throws on any trace that holds an
- * item 7, cut short or not. The fixture records
+ * item 7, cut short or not. A `throwOnSpin` spec's driver throws right after
+ * a 7 spins its clock, recording nothing more. An `oddThrow` spec's 6 throws
+ * a null-prototype object with a `message`, which has no string form. The
+ * fixture records
  * the route registered through `__oracleRoute` when each history runs, in
  * the log beside it.
  *
@@ -162,6 +165,10 @@ export type SyntheticSpec = {
   sevenModel?: boolean
   /** Records an Error whose requestId alternates between runs, last. */
   errorNoise?: boolean
+  /** On a controlled clock, throws right after a 7 spins it. */
+  throwOnSpin?: boolean
+  /** A 6 throws a null-prototype object instead of an Error. */
+  oddThrow?: boolean
 }
 
 /** The synthetic language: one to three items, mostly ordinary ones. */
@@ -356,13 +363,23 @@ function syntheticDriver(spec: SyntheticSpec, mutant = false) {
       for (const [index, item] of history.entries()) {
         observe(`item ${index}`, mutant && index === 0 ? 3 : item)
         if (item === 6)
-          throw new Error(`synthetic driver failed at item ${index}`)
+          throw spec.oddThrow
+            ? // A thrown value that is no Error and cannot become a string.
+              Object.assign(Object.create(null) as object, {
+                message: `synthetic driver failed at item ${index}`,
+              })
+            : new Error(`synthetic driver failed at item ${index}`)
         if (item === 7 && clock) {
           const spin = () => {
             setTimeout(spin, 0)
           }
           spin()
           await vi.advanceTimersByTimeAsync(1000)
+          // The driver fails right after the spin, observing nothing more.
+          if (spec.throwOnSpin)
+            throw new Error(
+              `synthetic driver failed after the spin at item ${index}`,
+            )
         }
       }
     } finally {

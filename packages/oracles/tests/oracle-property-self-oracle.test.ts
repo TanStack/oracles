@@ -53,7 +53,9 @@
  * - `clock`: a driver on `useOracleClock` whose clock passes its bound fails
  *   that history under law `bounded clock` at checkpoint `clock`, ranked as
  *   a driver error is: a violation recorded before the spin still decides,
- *   and a driver error after it does not (maintainer decision, 2026-11-06).
+ *   and a driver error after it does not (maintainer decision, 2026-11-06),
+ *   but it is kept as the cause of what decides, and it cuts the trace short
+ *   even when it comes right after the spin.
  *   A model that throws on the trace cut at the spin is a model error, as
  *   above.
  * - `timeout`: a property's `timeout` limits every test it registers.
@@ -162,6 +164,8 @@ type Draft = {
     `plain` | `bigint` | `map` | `lossy` | `error` | `errors` | `boxed` | `trap`
   sevenModel: boolean
   errorNoise: boolean
+  throwOnSpin: boolean
+  oddThrow: boolean
   zeroNoise: boolean
   orderNoise: boolean
   freshClosure: boolean
@@ -328,6 +332,14 @@ const draft: fc.Arbitrary<Draft> = fc.record({
     { weight: 9, arbitrary: fc.constant(false) },
     { weight: 1, arbitrary: fc.constant(true) },
   ),
+  throwOnSpin: fc.oneof(
+    { weight: 5, arbitrary: fc.constant(false) },
+    { weight: 1, arbitrary: fc.constant(true) },
+  ),
+  oddThrow: fc.oneof(
+    { weight: 7, arbitrary: fc.constant(false) },
+    { weight: 1, arbitrary: fc.constant(true) },
+  ),
 })
 const suite: fc.Arbitrary<Suite> = fc.record({
   drafts: fc.array(draft, { minLength: 1, maxLength: 2 }),
@@ -405,6 +417,8 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
           ? { sevenModel: true }
           : {}),
         ...(d.errorNoise ? { errorNoise: true } : {}),
+        ...(d.throwOnSpin ? { throwOnSpin: true } : {}),
+        ...(d.oddThrow ? { oddThrow: true } : {}),
         ...(d.zeroNoise ? { zeroNoise: true } : {}),
         ...(d.orderNoise ? { orderNoise: true } : {}),
         ...(d.freshClosure ? { freshClosure: true } : {}),
@@ -494,12 +508,21 @@ function verdictOf(history: SyntheticHistory, spec: SyntheticSpec): Outcome {
   const clock = spec.clock === true
   const stops = (item: number) => item === 6 || (clock && item === 7)
   const stopAt = history.findIndex(stops)
+  // The driver throws at a 6, or, after a spin, at a later 6 or, in a
+  // throwOnSpin spec, right after the spin. Such an error is kept as the
+  // cause of whatever decides the history.
+  const driverThrows =
+    stopAt >= 0 &&
+    (history[stopAt] === 6 ||
+      spec.throwOnSpin === true ||
+      history.slice(stopAt + 1).includes(6))
+  const carried = driverThrows ? { cause: `driver` as const } : {}
   const judgedItems = stopAt >= 0 ? history.slice(0, stopAt + 1) : history
   const modelThrows = spec.strictModel
     ? stopAt >= 0 && stopAt < history.length - 1
     : spec.sevenModel === true && judgedItems.includes(7)
   if (modelThrows) {
-    if (stopAt >= 0 && history[stopAt] === 6)
+    if (history[stopAt] === 6)
       return { kind: `model-not-total`, cause: `driver` }
     const trailing =
       spec.nondeterministic ||
@@ -507,21 +530,24 @@ function verdictOf(history: SyntheticHistory, spec: SyntheticSpec): Outcome {
       spec.orderNoise === true ||
       spec.freshClosure === true ||
       spec.errorNoise === true
-    if (stopAt >= 0 && (stopAt < history.length - 1 || trailing))
-      return { kind: `model-not-total` }
+    // A spin cuts the trace when anything follows it: an observation, or a
+    // driver error.
+    if (
+      stopAt >= 0 &&
+      (stopAt < history.length - 1 || trailing || driverThrows)
+    )
+      return { kind: `model-not-total`, ...carried }
     return { kind: `setup` }
   }
   for (const [at, item] of history.entries()) {
-    if (item === 3 || item === 4) {
-      const stop = history.slice(at + 1).find(stops)
+    if (item === 3 || item === 4)
       return {
         kind: `violation`,
         law: item === 3 ? `three` : `four`,
-        ...(stop === 6 ? { cause: `driver` } : {}),
+        ...(history.slice(at + 1).some(stops) ? carried : {}),
       }
-    }
     if (item === 6) return { kind: `setup` }
-    if (clock && item === 7) return clockOutcome
+    if (clock && item === 7) return { ...clockOutcome, ...carried }
   }
   return { kind: `pass` }
 }
@@ -752,8 +778,13 @@ function predictSpec(
       spec.zeroNoise === true ||
       spec.orderNoise === true ||
       spec.errorNoise === true
+    // A driver error ends the determinism test: at a 6, or right after a
+    // spin in a throwOnSpin spec.
+    const throwsIn = (history: SyntheticHistory) =>
+      history.includes(6) ||
+      (spec.clock === true && spec.throwOnSpin === true && history.includes(7))
     for (const history of histories) {
-      if (history.includes(6)) return { kind: `setup` }
+      if (throwsIn(history)) return { kind: `setup` }
       if (varies) return { kind: `determinism` }
     }
     if (varies && generated) return { kind: `determinism` }
@@ -956,6 +987,8 @@ const frameworkStates = [
   `trap-history`,
   `uncut-spin-model-error`,
   `driver-error-carried`,
+  `driver-error-after-spin`,
+  `odd-thrown-value`,
 ] as const
 
 function frameworkReach(
@@ -982,6 +1015,10 @@ function frameworkReach(
       if (outcome.kind === `model-not-total`) reached.add(`model-not-total`)
       if (outcome.kind === `model-not-total` && outcome.cause === `driver`)
         reached.add(`driver-error-carried`)
+      if (outcome.law === `bounded clock` && outcome.cause === `driver`)
+        reached.add(`driver-error-after-spin`)
+      if (spec.oddThrow && outcome.cause === `driver`)
+        reached.add(`odd-thrown-value`)
       if (
         outcome.kind === `setup` &&
         spec.sevenModel &&
@@ -1820,6 +1857,8 @@ const generatedDraft = (overrides: Partial<Draft>): Draft => ({
   zeroNoise: false,
   sevenModel: false,
   errorNoise: false,
+  throwOnSpin: false,
+  oddThrow: false,
   orderNoise: false,
   freshClosure: false,
   labelStyle: `plain`,
@@ -2103,6 +2142,32 @@ oracleProperty({
       ),
       // A spin after the last observation cuts nothing: a model that throws
       // there has its own error, a setup error.
+      // A driver that fails right after a spin observes nothing more, yet
+      // the trace is cut short, and its error is kept.
+      fixedHistory(
+        `a driver error right after a spin is kept as the spin's cause`,
+        [`driver-error-after-spin`, `clock-violation`],
+        generatedDraft({ clock: true, throwOnSpin: true, fixed: [at([7])] }),
+      ),
+      fixedHistory(
+        `a model that throws on a trace a driver error cut right after a spin is a model error`,
+        [`driver-error-carried`, `model-not-total`],
+        generatedDraft({
+          clock: true,
+          throwOnSpin: true,
+          sevenModel: true,
+          fixed: [at([1, 7])],
+        }),
+      ),
+      fixedHistory(
+        `a model error quotes a thrown value that has no string form`,
+        [`odd-thrown-value`, `driver-error-carried`],
+        generatedDraft({
+          strictModel: true,
+          oddThrow: true,
+          fixed: [at([3, 6, 1])],
+        }),
+      ),
       fixedHistory(
         `a model that throws on an uncut trace with a spin is a setup error`,
         [`uncut-spin-model-error`],

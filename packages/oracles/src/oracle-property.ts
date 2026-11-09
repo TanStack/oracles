@@ -993,9 +993,16 @@ async function runOne<THistory, TExpected, TPlan>(
       `the controlled clock fired more than ${spin.maxTimers} timers in one history: work that never goes quiet (raise maxTimers if a legal history needs more)`,
       `bounded clock`,
     )
-    // A spin after the last observation cuts nothing: an error judging that
-    // whole trace is the parts' own.
-    const cutShort = spin.at < observations.length
+    // A spin cuts the trace short when anything follows it, an observation
+    // or a driver error; after the last observation with no error, it cuts
+    // nothing, and an error judging that whole trace is the parts' own. A
+    // driver error after the spin does not decide, but is kept as the cause
+    // of what does.
+    const cutShort = spin.at < observations.length || driverError !== undefined
+    const kept = (decided: Verdict): Verdict =>
+      driverError && decided.kind === `violation`
+        ? { ...decided, cause: driverError.error }
+        : decided
     let judged: { verdict: Verdict; reached: Set<string> }
     try {
       judged = judge(
@@ -1005,16 +1012,17 @@ async function runOne<THistory, TExpected, TPlan>(
         undefined,
         probes,
         cutShort ? `a clock spin` : undefined,
+        driverError,
       )
     } catch (error) {
       if (error instanceof OracleModelError || !cutShort) throw error
-      return { verdict: clock, reached: new Set() }
+      return { verdict: kept(clock), reached: new Set() }
     }
     const { verdict, reached } = judged
     const recorded =
       verdict.kind === `violation` &&
       cut.some(({ checkpoint }) => checkpoint === verdict.checkpoint)
-    return { verdict: recorded ? verdict : clock, reached }
+    return { verdict: kept(recorded ? verdict : clock), reached }
   }
   return judge(options, plan, observations, driverError, probes)
 }
@@ -1081,8 +1089,10 @@ function judge<THistory, TExpected, TPlan>(
   observations: ReadonlyArray<Observation>,
   driverError?: { error: unknown },
   probes: ProbeRecord = { reached: new Set(), entered: new Set() },
-  // What cut the trace short, when something other than a driver error did.
+  // What cut the trace short, when something other than a driver error did,
+  // and a driver error that came after that cut, which a model error carries.
   cutBy?: string,
+  later?: { error: unknown },
 ): { verdict: Verdict; reached: Set<string> } {
   let expected: TExpected
   let verdict: Verdict
@@ -1092,15 +1102,17 @@ function judge<THistory, TExpected, TPlan>(
   } catch (error) {
     const cut = driverError ? `a driver error` : cutBy
     if (cut === undefined) throw error
+    // Any thrown value, an Error or not, as stable text, which never throws.
+    const carried = driverError ?? later
     const thrown =
-      driverError === undefined
+      carried === undefined
         ? ``
-        : ` The driver's error: ${driverError.error instanceof Error ? `${driverError.error.name}: ${driverError.error.message}` : String(driverError.error)}`
+        : ` The driver's error: ${stableText(carried.error)}`
     const modelError = new OracleModelError(
       `${options.id}: the model threw on a trace that ${cut} cut short after ${observations.length} observations. A model must accept any prefix of a trace.${thrown}`,
       { cause: error },
     )
-    if (driverError) modelError.driverError = driverError.error
+    if (carried) modelError.driverError = carried.error
     throw modelError
   }
   try {

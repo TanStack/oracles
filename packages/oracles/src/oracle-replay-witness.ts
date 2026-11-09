@@ -34,8 +34,14 @@ function witnessChannel(
     : undefined
 }
 
+// A channel that cannot be written records no witness, and neither the
+// write nor its failure may replace the run's own report.
 function appendWitness(channel: string, witness: OracleReplayWitness): void {
-  appendFileSync(channel, `${JSON.stringify(witness)}\n`)
+  try {
+    appendFileSync(channel, `${JSON.stringify(witness)}\n`)
+  } catch {
+    // An unwritable channel selects no witness.
+  }
 }
 
 function runWitness<T>(

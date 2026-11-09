@@ -168,4 +168,31 @@ describe(`configureOracles`, () => {
       }),
     ).not.toThrow()
   })
+
+  // An unwritable witness channel records nothing, and a failing replay
+  // still reports fast-check's own counterexample, not the write error.
+  it(`never lets an unwritable witness channel replace a replay's report`, async () => {
+    const channel = `/nonexistent-oracle-witness-dir/witness.jsonl`
+    vi.stubEnv(`ORACLE_SEED`, `1`)
+    vi.stubEnv(`ORACLE_PATH`, `0`)
+    vi.stubEnv(`ORACLE_PROPERTY`, `a.b`)
+    vi.stubEnv(`ORACLE_REPLAY_WITNESS`, channel)
+    vi.stubEnv(`ORACLE_REPLAY_WITNESS_MODE`, `sync`)
+    vi.resetModules()
+    const witness = await import(`../src/oracle-replay-witness`)
+    expect(() =>
+      witness.recordOracleFiniteReplay(`a.b`, {
+        seed: 1,
+        path: `0`,
+        failed: false,
+      }),
+    ).not.toThrow()
+    const { default: fc } = await import(`fast-check`)
+    expect(() =>
+      fc.assert(
+        fc.property(fc.nat(), () => false),
+        { seed: 1, path: `0`, ...witness.oracleReplayReporter(`a.b`, 1, `0`) },
+      ),
+    ).toThrow(/Property failed/)
+  })
 })
