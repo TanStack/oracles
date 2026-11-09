@@ -23,7 +23,7 @@
  * R2b-7).
  *
  * The grammar, model, and renderer are the lint rule's oracle's
- * (packages/eslint-plugin-oracles/tests/probe-form-grammar.js): each site is
+ * (packages/eslint-plugin-oracles/tests/probe-form-oracle-grammar.js): each site is
  * a legal probe or one near-miss, on its own line of one function, below the
  * function's guard or with none. The driver instruments the program with the
  * CLI's own `instrument` (schemata.mjs) and records, for each line, which of
@@ -47,7 +47,7 @@ import {
   programArbitrary,
   renderProgram,
   siteLine,
-} from '../../eslint-plugin-oracles/tests/probe-form-grammar.js'
+} from '../../eslint-plugin-oracles/tests/probe-form-oracle-grammar.js'
 import { instrument } from './schemata.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))

@@ -77,7 +77,7 @@ import {
   predictReports,
   programArbitrary,
   renderProgram,
-} from './probe-form-grammar.js'
+} from './probe-form-oracle-grammar.js'
 
 const PROPERTY = `lint.probe-form`
 const PROPERTY_CENSUS = `lint.probe-form.census`
