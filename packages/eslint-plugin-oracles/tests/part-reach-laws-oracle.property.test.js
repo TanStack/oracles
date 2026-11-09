@@ -2,7 +2,7 @@
  * # Declared reach: the laws that hold across lints and receiving paths
  *
  * Laws, each an oracle property over the shared grammar (see
- * part-reach-fixtures.js for the grammar, the model, the drivers, and their
+ * part-reach-oracle-support.js for the grammar, the model, the drivers, and their
  * authority):
  *
  * - Receiving paths: a single-file Linter call agrees with the model on the
@@ -28,7 +28,7 @@
  *   that imports the check; editing the check's companion between two lints
  *   must change the reports of the next lint.
  *
- * Authority: see PART_REACH_AUTHORITY in part-reach-fixtures.js; the edit laws
+ * Authority: see PART_REACH_AUTHORITY in part-reach-oracle-support.js; the edit laws
  * also rest on the rule's reach cache, which is stated in the no-unit-test
  * rule's header (maintainer decision 2026-11-02).
  *
@@ -36,7 +36,6 @@
  * the rule's cache sees a change. A history with no dependency is edited in no
  * law. The fixed inputs and the chain are enumerated, not generated.
  */
-import { afterAll, beforeAll } from 'vitest'
 import fc from 'fast-check'
 import { differs, oracleProperty, pass } from '@tanstack/oracles'
 import {
@@ -77,12 +76,12 @@ import {
   teardownReceivingPaths,
   toggleDeclaration,
   trailingArguments,
+  usePartReachPaths,
   wrappedBody,
   writeProgram,
-} from './part-reach-fixtures.js'
+} from './part-reach-oracle-support.js'
 
-beforeAll(setupReceivingPaths)
-afterAll(teardownReceivingPaths)
+usePartReachPaths()
 
 const observed = (observations, name) =>
   observations.find((observation) => observation.checkpoint === name)?.value
@@ -98,6 +97,7 @@ oracleProperty({
     runs: 4,
     fixedSeeds: [FIXED_SEED, FIXED_SEED + 1],
   }),
+  check: checkPaths,
   driver: (plan, observe) => observe(`linter`, lintWithLinter(plan)),
   timeout: 900_000,
 })
@@ -137,7 +137,7 @@ oracleProperty({
   id: `lint.part-reach.fixed-inputs`,
   law: {
     statement: `The reviewer's fixed inputs, built with every feature family on, agree with the model on every receiving path.`,
-    authority: `See PART_REACH_AUTHORITY in part-reach-fixtures.js.`,
+    authority: `See PART_REACH_AUTHORITY in part-reach-oracle-support.js.`,
     limits: `The inputs are enumerated, so the grammar is not sampled here; they carry no expected answers of their own.`,
     owner: `eslint-plugin-oracles lint rules`,
   },
@@ -177,7 +177,7 @@ oracleProperty({
   id: `lint.part-reach.registration-order`,
   law: {
     statement: `Permuting an oracle's registrations does not change its reports, up to the subject names: the reordered lint agrees with the model, and it names the same subjects as the original.`,
-    authority: `See PART_REACH_AUTHORITY in part-reach-fixtures.js; the reports are a pure function of the source files (law L1 of rules/no-unit-test.js).`,
+    authority: `See PART_REACH_AUTHORITY in part-reach-oracle-support.js; the reports are a pure function of the source files (law L1 of rules/no-unit-test.js).`,
     limits: `Identifier registrations in one file, the shape whose evaluation order the reach rule must not depend on. Companions are not generated here.`,
     owner: `eslint-plugin-oracles lint rules`,
   },
@@ -241,7 +241,7 @@ oracleProperty({
   id: `lint.part-reach.rerun`,
   law: {
     statement: `Linting the same program twice in one process gives the same reports.`,
-    authority: `See PART_REACH_AUTHORITY in part-reach-fixtures.js.`,
+    authority: `See PART_REACH_AUTHORITY in part-reach-oracle-support.js.`,
     limits: `Rerun equality only: the model is checked by the other properties, so this law has no expectation of its own.`,
     owner: `eslint-plugin-oracles lint rules`,
   },
@@ -349,7 +349,7 @@ oracleProperty({
   id: `lint.part-reach.dependency-chain`,
   law: {
     statement: `An oracle that imports a companion which imports the check: editing the check's companion between two lints changes the next lint's reports, although the middle companion is unchanged.`,
-    authority: `See PART_REACH_AUTHORITY in part-reach-fixtures.js, and the rule's reach cache (maintainer decision 2026-11-02).`,
+    authority: `See PART_REACH_AUTHORITY in part-reach-oracle-support.js, and the rule's reach cache (maintainer decision 2026-11-02).`,
     limits: `One fixed chain, enumerated; the generated companion edits are the companion-edits property.`,
     owner: `eslint-plugin-oracles lint rules`,
   },

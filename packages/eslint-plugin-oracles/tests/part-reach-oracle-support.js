@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url'
 import tsParser from '@typescript-eslint/parser'
 import { ESLint, Linter } from 'eslint'
 import fc from 'fast-check'
+import { afterAll, beforeAll } from 'vitest'
 import { differs, pass } from '@tanstack/oracles'
 import oraclePlugin from '../src/index.js'
 
@@ -225,6 +226,13 @@ export const ALL = {
 }
 
 /** A module that the lint selection lints as an oracle file. */
+/** The base grammar with `forms` added, and `more` overriding any feature. */
+export const withForms = (forms, more = {}) => ({
+  ...BASE,
+  forms: [...BASE.forms, ...forms],
+  ...more,
+})
+
 export const lintedOnItsOwn = (file) =>
   file.includes(`oracle`) && !file.startsWith(`oracle-`)
 
@@ -1347,6 +1355,12 @@ export function teardownReceivingPaths() {
   rmSync(scratch, { recursive: true, force: true })
 }
 
+/** Registers the receiving paths' setup and teardown for this test file. */
+export function usePartReachPaths() {
+  beforeAll(setupReceivingPaths)
+  afterAll(teardownReceivingPaths)
+}
+
 /** A fresh sequence number for a history's directory. */
 export function nextSeq() {
   return historySeq++
@@ -1385,11 +1399,6 @@ export async function lintWithEslint(program) {
     join(root, `h${historySeq++}`),
     program,
   )
-  if (process.env.REACH_ORACLE_DEBUG) {
-    console.log(
-      `DEBUG ${oracle}\n${[...renderProgram(program).files].map(([f, t]) => `--- ${f}\n${t}`).join(`\n`)}`,
-    )
-  }
   const results = await eslint.lintFiles([oracle])
   return keysOf(
     results.flatMap((result) => result.messages),
