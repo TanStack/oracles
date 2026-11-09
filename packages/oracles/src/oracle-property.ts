@@ -53,6 +53,10 @@
  * `OracleDataError` naming the value's path, such as `observation 3
  * ("result") .reason: DOMException is not observation data`, and an
  * enumerated source holding a history that is not data fails to register.
+ * Arrays, Maps, Sets, and Errors are recognized by their brands, so data from
+ * another realm is data, and reading a value never runs its getters or a
+ * proxy's traps. A failure report prints a generated history even when it is
+ * not data, through Node's inspection; names and comparisons never do.
  *
  * Each history is one test, named by `label`, or, without one, by the
  * history's data encoding, which is its JSON text for JSON data and the same
@@ -164,7 +168,7 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { appendFileSync } from 'node:fs'
-import { isDeepStrictEqual } from 'node:util'
+import { inspect, isDeepStrictEqual, types } from 'node:util'
 import fc from 'fast-check'
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -778,13 +782,15 @@ async function repeatedRecord<TPlan>(
   ) => Promise<void> | void,
   plan: TPlan,
 ): Promise<Array<{ checkpoint: string; text: string }>> {
-  const { observations, texts, driverError, probes, spin } =
-    await recordGuarded(driver, plan)
+  const { observations, driverError, probes, spin } = await recordGuarded(
+    driver,
+    plan,
+  )
   if (driverError) throw driverError.error
   return [
-    ...observations.map(({ checkpoint }, index) => ({
+    ...observations.map(({ checkpoint, value }, index) => ({
       checkpoint,
-      text: texts[index]!,
+      text: encodeData(value, `observation ${index}`, `observation`),
     })),
     ...(spin ? [{ checkpoint: `clock`, text: String(spin.at) }] : []),
     {
@@ -822,36 +828,173 @@ export class OracleDataError extends Error {
 /**
  * The encoding of a value in the data domain (maintainer decision,
  * 2026-11-08): primitives, with -0, NaN, the infinities, bigints, and
- * undefined; dense arrays; plain objects (`Object.prototype` or a null
- * prototype) whose own properties are enumerable data properties with string
- * keys; Maps; Sets; and Errors, as their name, message, own data properties,
- * cause, and AggregateError `errors`, never their stack. Two values have the
- * same encoding exactly when they are the same data: key order and Map and
- * Set order count, -0 is not 0, and an object's prototype is not data. JSON
- * data encodes as its JSON text. Anything else throws an `OracleDataError`
- * that names `where` and the value's path.
+ * undefined; dense arrays; plain objects (a null prototype or a realm's
+ * `Object.prototype`) whose own properties are enumerable data properties
+ * with string keys; Maps and Sets without own properties; and Errors, as
+ * their name and message (each a data property on the Error or its
+ * prototype chain), their own enumerable data properties, cause, and
+ * AggregateError `errors`, never their stack. An array is data when its own
+ * keys are exactly its indices, each an enumerable data property, and
+ * `length`. Arrays, Maps, Sets, and Errors are recognized by their brands,
+ * so data from another realm is data. Two values have the same encoding
+ * exactly when they are the same data: key order and Map and Set order
+ * count, -0 is not 0, and an object's prototype is not data. JSON data
+ * encodes as its JSON text.
+ *
+ * Reading a value never runs its code: only own property descriptors,
+ * prototypes, and internal slots are read, never a getter, and a proxy is
+ * not data. Anything else throws an `OracleDataError` that names `where` and
+ * the value's path, a key that is not an identifier quoted. With `build`
+ * false, the value is only checked; shared subtrees are read once either
+ * way.
  */
-function encodeData(value: unknown, where: string, what: string): string {
+function encodeData(
+  value: unknown,
+  where: string,
+  what: string,
+  build = true,
+): string {
   const open = new Set<object>()
+  const done = new Map<object, string>()
   const fail = (path: string, kind: string): never => {
     throw new OracleDataError(
       `${where}${path === `` ? `` : ` ${path.trimStart()}`}: ${kind} is not ${what} data`,
     )
   }
-  // An object's own properties: enumerable data properties with string keys,
-  // and, on an Error, also its hidden message, cause, and errors, not its stack.
-  const fields = (object: object, path: string, error = false) =>
-    `{${Reflect.ownKeys(object)
-      .filter((key) => !error || key !== `stack`)
+  const at = (path: string, key: string) =>
+    /^[A-Za-z_$][\w$]*$/.test(key)
+      ? `${path}.${key}`
+      : `${path}[${JSON.stringify(key)}]`
+  const descriptor = Object.getOwnPropertyDescriptor
+  // An own data property's value; a hidden one only where `hidden` allows.
+  const data = (object: object, key: string, path: string, hidden = false) => {
+    const property = descriptor(object, key)!
+    if (!(`value` in property)) return fail(path, `an accessor`)
+    if (!property.enumerable && !hidden) return fail(path, `a hidden property`)
+    return property.value as unknown
+  }
+  // A data property on the object or its prototype chain.
+  const inherited = (object: object, key: string, path: string): unknown => {
+    for (
+      let holder: object | null = object;
+      holder !== null;
+      holder = Object.getPrototypeOf(holder) as object | null
+    ) {
+      if (types.isProxy(holder)) return fail(path, `a proxy`)
+      if (descriptor(holder, key)) return data(holder, key, path, true)
+    }
+    return undefined
+  }
+  // A realm's `Object.prototype`: no prototype, and Object's own methods.
+  const objectPrototype = (prototype: object | null) =>
+    prototype !== null &&
+    Object.getPrototypeOf(prototype) === null &&
+    typeof descriptor(prototype, `hasOwnProperty`)?.value === `function`
+  // A realm's prototype for the constructor named `name`.
+  const intrinsic = (prototype: object | null, name: string) =>
+    prototype !== null &&
+    objectPrototype(Object.getPrototypeOf(prototype) as object | null) &&
+    descriptor(
+      (descriptor(prototype, `constructor`)?.value as object | undefined) ?? {},
+      `name`,
+    )?.value === name
+  // How an object outside the domain is named.
+  const named = (prototype: object | null): string => {
+    const constructor: unknown =
+      prototype && descriptor(prototype, `constructor`)?.value
+    if (typeof constructor !== `function`)
+      return `an object with a custom prototype`
+    const name: unknown = descriptor(constructor, `name`)?.value
+    return typeof name === `string` && name !== ``
+      ? name
+      : `an instance of an anonymous class`
+  }
+  const fields = (
+    object: object,
+    path: string,
+    apart: ReadonlyArray<string> = [],
+    hidden: ReadonlyArray<string> = [],
+  ) =>
+    Reflect.ownKeys(object)
+      .filter((key) => !apart.includes(key as string))
       .map((key) => {
         if (typeof key === `symbol`) return fail(path, `a symbol key`)
-        const property = Object.getOwnPropertyDescriptor(object, key)!
-        const at = `${path}.${key}`
-        if (!(`value` in property)) return fail(at, `an accessor`)
-        if (!property.enumerable && !error) return fail(at, `a hidden property`)
-        return `${JSON.stringify(key)}:${encode(property.value, at)}`
+        const place = at(path, key)
+        const text = encode(
+          data(object, key, place, hidden.includes(key)),
+          place,
+        )
+        return `${JSON.stringify(key)}:${text}`
       })
-      .join(`,`)}}`
+      .join(`,`)
+  const entries = (
+    items: Iterable<unknown>,
+    path: string,
+    label: string,
+  ): Array<string> =>
+    [...items].map((item, index) => encode(item, `${path} ${label} ${index}`))
+  const container = (item: object, path: string): string => {
+    if (types.isProxy(item)) return fail(path, `a proxy`)
+    const prototype = Object.getPrototypeOf(item) as object | null
+    if (Array.isArray(item)) {
+      if (!intrinsic(prototype, `Array`)) return fail(path, named(prototype))
+      const length = descriptor(item, `length`)!.value as number
+      const items: Array<string> = []
+      for (let index = 0; index < length; index += 1) {
+        if (!descriptor(item, String(index)))
+          return fail(path, `a sparse array`)
+        const place = `${path}[${index}]`
+        items.push(encode(data(item, String(index), place), place))
+      }
+      const extra = Reflect.ownKeys(item)[length + 1]
+      if (extra !== undefined)
+        return typeof extra === `symbol`
+          ? fail(path, `a symbol key`)
+          : fail(at(path, extra), `a property on an array`)
+      return build ? `[${items.join(`,`)}]` : ``
+    }
+    if (types.isMap(item) || types.isSet(item)) {
+      const kind = types.isMap(item) ? `Map` : `Set`
+      if (!intrinsic(prototype, kind)) return fail(path, named(prototype))
+      const [key] = Reflect.ownKeys(item)
+      if (key !== undefined)
+        return typeof key === `symbol`
+          ? fail(path, `a symbol key`)
+          : fail(at(path, key), `a property on a ${kind}`)
+      if (types.isMap(item)) {
+        const pairs = [...Map.prototype.entries.call(item)].map(
+          ([entryKey, entry], index) =>
+            `${encode(entryKey, `${path} map key ${index}`)}=>${encode(entry, `${path} map value ${index}`)}`,
+        )
+        return build ? `Map{${pairs.join(`,`)}}` : ``
+      }
+      const members = entries(Set.prototype.values.call(item), path, `set item`)
+      return build ? `Set{${members.join(`,`)}}` : ``
+    }
+    if (types.isNativeError(item)) {
+      if (typeof DOMException === `function` && item instanceof DOMException)
+        return fail(path, `DOMException`)
+      const name = encode(
+        inherited(item, `name`, at(path, `name`)),
+        at(path, `name`),
+      )
+      const message = encode(
+        inherited(item, `message`, at(path, `message`)),
+        at(path, `message`),
+      )
+      const own = fields(
+        item,
+        path,
+        [`stack`, `name`, `message`],
+        [`cause`, `errors`],
+      )
+      return build ? `Error(${name},${message}){${own}}` : ``
+    }
+    if (prototype !== null && !objectPrototype(prototype))
+      return fail(path, named(prototype))
+    const own = fields(item, path)
+    return build ? `{${own}}` : ``
+  }
   const encode = (item: unknown, path: string): string => {
     if (typeof item === `string`) return JSON.stringify(item)
     if (typeof item === `number`)
@@ -861,59 +1004,40 @@ function encodeData(value: unknown, where: string, what: string): string {
       return String(item)
     if (typeof item !== `object`) return fail(path, `a ${typeof item}`)
     if (open.has(item)) return fail(path, `a cycle`)
+    const known = done.get(item)
+    if (known !== undefined) return known
     open.add(item)
+    let text: string
     try {
-      const prototype: unknown = Object.getPrototypeOf(item)
-      if (Array.isArray(item) && prototype === Array.prototype) {
-        if (Reflect.ownKeys(item).length !== item.length + 1)
-          return fail(path, `a sparse array or one with other properties`)
-        return `[${item.map((entry, index) => encode(entry, `${path}[${index}]`)).join(`,`)}]`
-      }
-      if (prototype === Object.prototype || prototype === null)
-        return fields(item, path)
-      if (prototype === Map.prototype && item instanceof Map)
-        return `Map{${[...item]
-          .map(
-            ([key, entry], index) =>
-              `${encode(key, `${path} map key ${index}`)}=>${encode(entry, `${path} map value ${index}`)}`,
-          )
-          .join(`,`)}}`
-      if (prototype === Set.prototype && item instanceof Set)
-        return `Set{${[...item].map((entry, index) => encode(entry, `${path} set item ${index}`)).join(`,`)}}`
-      if (
-        item instanceof Error &&
-        !(typeof DOMException === `function` && item instanceof DOMException)
-      )
-        return `Error(${encode(item.name, `${path}.name`)})${fields(item, path, true)}`
-      const named = (prototype as { constructor?: { name?: unknown } } | null)
-        ?.constructor?.name
-      return fail(
-        path,
-        typeof named === `string` && named !== `Object`
-          ? named
-          : `an object from another realm`,
-      )
-    } finally {
-      open.delete(item)
+      text = container(item, path)
+    } catch (error) {
+      // An exotic object that throws while it is read is not data.
+      if (error instanceof OracleDataError) throw error
+      return fail(path, `an object that cannot be read`)
     }
+    open.delete(item)
+    done.set(item, text)
+    return text
   }
   return encode(value, ``)
 }
 
-// A value's encoding for failure text, which never throws: a generated
-// history or a thrown value need not be data. Otherwise an Error's name and
-// message, or why it is not data.
-function textOf(value: unknown, where: string): string {
+// A value as report text, which never throws: its data encoding, or, for a
+// value that is not data, such as a generated history or a thrown value,
+// Node's inspection of it. Never a name or a comparison.
+function reportText(value: unknown): string {
   try {
-    return encodeData(value, where, `observation`)
-  } catch (error) {
+    return encodeData(value, ``, `report`).slice(0, 2000)
+  } catch {
     try {
-      const { name, message } = value as Error
-      if (typeof message === `string`) return `${String(name)}: ${message}`
+      // One line, as a report's other lines are.
+      return inspect(value, { depth: 6, breakLength: Infinity }).replace(
+        /\n\s*/g,
+        ` `,
+      )
     } catch {
-      // A getter or a proxy that throws.
+      return Object.prototype.toString.call(value)
     }
-    return `(${(error as Error).message})`
   }
 }
 
@@ -945,7 +1069,7 @@ function determinismTest<THistory, TExpected, TPlan>(
               `${options.id}: two runs of "${name}" recorded different traces at observation ${index}${a ? ` ("${a.checkpoint}")` : ``}.`,
               `First run:  ${textA.slice(0, 2000)}`,
               `Second run: ${textB.slice(0, 2000)}`,
-              `History: ${textOf(history, `history`)}`,
+              `History: ${reportText(history)}`,
               `A driver records relations, such as before and after or same and different, instead of clock readings or random ids.`,
             ].join(`\n`),
           ) as Error & {
@@ -1035,14 +1159,11 @@ async function recordGuarded<TPlan>(
   forced?: ForcedProbe,
 ): Promise<{
   observations: Array<Observation>
-  /** Each observation's data encoding. */
-  texts: Array<string>
   driverError?: { error: unknown }
   probes: ProbeRecord
   spin?: { at: number; maxTimers: number }
 }> {
   const observations: Array<Observation> = []
-  const texts: Array<string> = []
   // The first observation that is not data fails the history at once, also
   // when the driver catches the error its observe call throws.
   let dataError: OracleDataError | undefined
@@ -1075,7 +1196,9 @@ async function recordGuarded<TPlan>(
         if (dataError) throw dataError
         const where = `observation ${observations.length} (${JSON.stringify(checkpoint)})`
         try {
-          texts.push(encodeData(value, where, `observation`))
+          // Checked, not printed: only the determinism test compares
+          // encodings.
+          encodeData(value, where, `observation`, false)
         } catch (error) {
           dataError = error as OracleDataError
           throw error
@@ -1092,7 +1215,6 @@ async function recordGuarded<TPlan>(
   if (dataError) throw dataError
   return {
     observations,
-    texts,
     ...(driverError ? { driverError } : {}),
     probes,
     ...settled,
@@ -1124,7 +1246,7 @@ function judge<THistory, TExpected, TPlan>(
     const thrown =
       carried === undefined
         ? ``
-        : ` The driver's error: ${textOf(carried.error, `the driver's error`)}`
+        : ` The driver's error: ${reportText(carried.error)}`
     const modelError = new OracleModelError(
       `${options.id}: the model threw on a trace that ${cut} cut short after ${observations.length} observations. A model must accept any prefix of a trace.${thrown}`,
       { cause: error },
@@ -1280,7 +1402,7 @@ function failure<THistory>(
       `${id} violated at checkpoint "${verdict.checkpoint}"${verdict.law ? ` (law: ${verdict.law})` : ``}.`,
       `Law: ${law.statement}`,
       `Difference: ${verdict.difference}`,
-      `History: ${textOf(history, `history`)}`,
+      `History: ${reportText(history)}`,
       `Authority: ${law.authority}`,
       `Known limits: ${law.limits}`,
       `Rerun: ${rerun}`,

@@ -179,6 +179,7 @@ type Draft = {
   zeroNoise: boolean
   orderNoise: boolean
   odd: OddKind | `none`
+  emptyMessage: boolean
   labelStyle: `plain` | `shell` | `default`
   nested: boolean
   strictModel: boolean
@@ -322,6 +323,10 @@ const draft: fc.Arbitrary<Draft> = fc.record({
     { weight: 9, arbitrary: fc.constant(false) },
     { weight: 1, arbitrary: fc.constant(true) },
   ),
+  emptyMessage: fc.oneof(
+    { weight: 9, arbitrary: fc.constant(false) },
+    { weight: 1, arbitrary: fc.constant(true) },
+  ),
   odd: fc.oneof(
     { weight: 10, arbitrary: fc.constant(`none` as const) },
     { weight: 1, arbitrary: fc.constant(`domain` as const) },
@@ -437,8 +442,14 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
         ...(d.odd !== `none` &&
         !(d.timing === `slow`) &&
         (!generated || d.probe === `none`)
-          ? { odd: d.odd }
+          ? {
+              odd: d.odd,
+              // Checking a large shared value is quick; encoding it at every
+              // observation was not.
+              ...(d.odd === `shared` ? { timeout: 5_000 } : {}),
+            }
           : {}),
+        ...(d.emptyMessage ? { emptyMessage: true } : {}),
         ...(!generated && d.labelStyle !== `plain`
           ? { labelStyle: d.labelStyle }
           : {}),
@@ -683,9 +694,14 @@ const isCampaign = (name: string) =>
 
 // Where an odd value outside the domain fails, and how its kind is named.
 // The odd observation is a history's first, at checkpoint `odd`.
-const oddFailures: Record<Exclude<OddKind, `domain`>, [string, string]> = {
+// The data kinds: `domain`, and `shared`, shared references that are data.
+const inDomain = (odd: OddKind) => odd === `domain` || odd === `shared`
+const oddFailures: Record<
+  Exclude<OddKind, `domain` | `shared`>,
+  [string, string]
+> = {
   cycle: [`.reason.self`, `a cycle`],
-  sparse: [`.reason`, `a sparse array or one with other properties`],
+  sparse: [`.reason`, `a sparse array`],
   accessor: [`.reason.x`, `an accessor`],
   'symbol-key': [`.reason`, `a symbol key`],
   class: [`.reason`, `SyntheticBox`],
@@ -694,10 +710,21 @@ const oddFailures: Record<Exclude<OddKind, `domain`>, [string, string]> = {
   'dom-exception': [`.reason`, `DOMException`],
   'typed-array': [`.reason`, `Uint8Array`],
   date: [`.reason`, `Date`],
-  'cross-realm': [`.reason`, `an object from another realm`],
+  'array-holes-and-key': [`.reason`, `a sparse array`],
+  'array-key': [`.reason.x`, `a property on an array`],
+  'array-accessor': [`.reason[0]`, `an accessor`],
+  'array-hidden': [`.reason[0]`, `a hidden property`],
+  'map-key': [`.reason.meta`, `a property on a Map`],
+  'set-key': [`.reason.meta`, `a property on a Set`],
+  'error-name-getter': [`.reason.name`, `an accessor`],
+  'error-message-getter': [`.reason.message`, `an accessor`],
+  proxy: [`.reason`, `a proxy`],
+  'custom-prototype': [`.reason`, `an object with a custom prototype`],
+  'anonymous-class': [`.reason`, `an instance of an anonymous class`],
+  'dotted-key': [`.reason["a.b"].c`, `a function`],
 }
 const dataOutcome = (spec: SyntheticSpec): Outcome | undefined => {
-  if (spec.odd === undefined || spec.odd === `domain`) return undefined
+  if (spec.odd === undefined || inDomain(spec.odd)) return undefined
   const [path, dataKind] = oddFailures[spec.odd]
   return { kind: `data`, dataPath: `observation 0 ("odd") ${path}`, dataKind }
 }
@@ -1069,6 +1096,8 @@ const frameworkStates = [
   `history-out-of-domain`,
   `observation-out-of-domain`,
   `observation-in-domain`,
+  `equal-data-repeats`,
+  `history-reported`,
   `uncut-spin-model-error`,
   `driver-error-carried`,
   `driver-error-after-spin`,
@@ -1090,7 +1119,17 @@ function frameworkReach(
       if (owed.loadError) reached.add(`history-out-of-domain`)
       continue
     }
-    if (spec.odd === `domain`) reached.add(`observation-in-domain`)
+    if (spec.odd && inDomain(spec.odd)) reached.add(`observation-in-domain`)
+    if (spec.emptyMessage) reached.add(`equal-data-repeats`)
+    if (
+      spec.form === `boxed` &&
+      spec.source.kind === `generated` &&
+      [...owed.tests].some(
+        ([name, outcome]) =>
+          name.startsWith(`fixed history:`) && outcome.kind === `violation`,
+      )
+    )
+      reached.add(`history-reported`)
     for (const [name, outcome] of owed.tests) {
       if (outcome.kind === `data`) reached.add(`observation-out-of-domain`)
       if (isCampaign(name) && outcome.kind === `violation`)
@@ -1273,6 +1312,8 @@ type Failure = {
   seed?: number
   path?: string
   rerun?: string
+  /** Whether a law's failure prints the history's items. */
+  showsHistory?: boolean
 }
 type SuiteRun = {
   files: Record<
@@ -1331,6 +1372,7 @@ function classify(error: ReportedError | undefined): Failure {
   const counterexample = /Counterexample: (.*)/.exec(outer)?.[1]
   // The rerun command as printed, to be pasted into a shell.
   const rerun = /^Rerun: (-t .*)$/m.exec(text)?.[1]
+  const history = /^History: (.*)$/m.exec(text)?.[1]
   const law = /\(law: ([^)]+)\)/.exec(text)?.[1]
   const checkpoint = /violated at checkpoint "([^"]+)"/.exec(text)?.[1]
   const diagnosis = /was never reached/.test(text)
@@ -1393,6 +1435,10 @@ function classify(error: ReportedError | undefined): Failure {
     ...(path !== undefined ? { path } : {}),
     ...(counterexample !== undefined ? { counterexample } : {}),
     ...(rerun !== undefined ? { rerun } : {}),
+    // Only whether it shows the items: a report may print machine paths.
+    ...(history !== undefined
+      ? { showsHistory: history.includes(`items`) }
+      : {}),
   }
 }
 
@@ -1767,6 +1813,18 @@ function checkSuite(
           ),
           { actual: failure ?? { kind: `pass` }, expected: outcome },
         )
+      // A law's failure prints the history it ran, also a generated one that
+      // is not data.
+      if (
+        spec.form === `boxed` &&
+        failure?.kind === `violation` &&
+        failure.showsHistory !== true
+      )
+        return violation(
+          `run`,
+          `${spec.id} "${test.name}" printed a History line that does not show the history`,
+          `verdict`,
+        )
       // A random campaign selects its seed once and logs that selection once;
       // a failing campaign's reported seed is the logged one.
       const owedSeedLogs = test.name === `random seed` ? 1 : 0
@@ -1986,6 +2044,7 @@ const generatedDraft = (overrides: Partial<Draft>): Draft => ({
   oddThrow: false,
   orderNoise: false,
   odd: `none`,
+  emptyMessage: false,
   labelStyle: `plain`,
   nested: false,
   strictModel: false,
@@ -2359,8 +2418,24 @@ oracleProperty({
         [`observation-in-domain`],
         generatedDraft({ odd: `domain`, fixed: [at([0]), at([3])] }),
       ),
+      fixedHistory(
+        `a large shared observation is checked without printing it`,
+        [`observation-in-domain`],
+        generatedDraft({ odd: `shared`, fixed: [at([0])] }),
+      ),
+      fixedHistory(
+        `an Error without a message and one with '' are the same data`,
+        [`equal-data-repeats`],
+        generatedDraft({ emptyMessage: true, fixed: [at([0])] }),
+      ),
+      // A generated history need not be data, and a failure still prints it.
+      fixedHistory(
+        `a violation prints a generated history that is not data`,
+        [`history-reported`],
+        generatedDraft({ form: `boxed`, fixed: [at([3])] }),
+      ),
       ...oddKinds
-        .slice(1)
+        .filter((odd) => !inDomain(odd))
         .map((odd) =>
           fixedHistory(
             `an observed ${odd} fails the history, naming its path`,

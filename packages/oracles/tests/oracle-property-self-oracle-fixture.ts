@@ -65,8 +65,18 @@
  * Error with a cause, a code, and AggregateError errors, -0, NaN, the
  * infinities, a bigint, undefined), or one value outside it (a cycle, a
  * sparse array, an accessor, a symbol key, a class instance, a function, a
- * symbol, a DOMException, a typed array, a Date, an object from another
- * realm). An
+ * symbol, a DOMException, a typed array, a Date, a sparse array with an
+ * extra key, an array with an extra key, an array with an accessor or a
+ * hidden index, a Map or a Set with an own property, an Error whose name is
+ * an own getter or whose message is a getter on its prototype, a revoked
+ * proxy, an object with a custom prototype, an instance of an anonymous
+ * class, or a key with a dot holding a function). `domain` holds data from
+ * another realm too, and `shared` holds an array of shared references 23
+ * levels deep, which is data, quick to check, and large to print. An
+ * `emptyMessage` spec records, last, `new Error()` and `new Error('')` on
+ * alternate runs, which are the same data. Every getter in these values
+ * throws, so a getter that runs fails its history with an error that is not
+ * a data error. An
  * `errorNoise` spec records, last, an Error whose `requestId` alternates
  * between runs. A `sevenModel` spec's model throws on any trace that holds an
  * item 7, cut short or not. A `throwOnSpin` spec's driver throws right after
@@ -122,7 +132,19 @@ export const oddKinds = [
   `dom-exception`,
   `typed-array`,
   `date`,
-  `cross-realm`,
+  `array-holes-and-key`,
+  `array-key`,
+  `array-accessor`,
+  `array-hidden`,
+  `map-key`,
+  `set-key`,
+  `error-name-getter`,
+  `error-message-getter`,
+  `proxy`,
+  `custom-prototype`,
+  `anonymous-class`,
+  `dotted-key`,
+  `shared`,
 ] as const
 export type OddKind = (typeof oddKinds)[number]
 
@@ -190,6 +212,8 @@ export type SyntheticSpec = {
   sevenModel?: boolean
   /** Records an Error whose requestId alternates between runs, last. */
   errorNoise?: boolean
+  /** Records, last, an Error with no message and one with '' on alternate runs: the same data. */
+  emptyMessage?: boolean
   /** On a controlled clock, throws right after a 7 spins it. */
   throwOnSpin?: boolean
   /** A 6 throws a null-prototype object instead of an Error. */
@@ -214,6 +238,7 @@ let nonce = 0
 let zeroes = 0
 let orders = 0
 let requests = 0
+let empties = 0
 
 /** An Error subclass with the name and message of a plain Error. */
 class SyntheticFault extends Error {
@@ -348,6 +373,16 @@ const probeCondition = (
   }
 }
 
+const ranGetter = (): never => {
+  throw new Error(`a getter ran while the value was read as data`)
+}
+/** An Error subclass whose message is a getter on its prototype. */
+class MessageGetterFault extends Error {
+  override get message(): string {
+    return ranGetter()
+  }
+}
+
 /** A fresh value of an odd kind, the same data on every run. */
 function oddValue(kind: OddKind): unknown {
   switch (kind) {
@@ -367,6 +402,10 @@ function oddValue(kind: OddKind): unknown {
         failure,
         many: new AggregateError([new Error(`one`)], `many`),
         numbers: [Infinity, -Infinity, -0, NaN, 3n, undefined, null],
+        // Data from another realm is data by its brand.
+        realm: runInNewContext(
+          `({ list: [1], map: new Map([[1, 2]]), set: new Set([3]), failure: new Error("x"), plain: { a: 1 } })`,
+        ) as unknown,
       }
     }
     case `cycle`: {
@@ -399,8 +438,48 @@ function oddValue(kind: OddKind): unknown {
       return new Uint8Array([1])
     case `date`:
       return new Date(0)
-    case `cross-realm`:
-      return runInNewContext(`({ a: 1 })`) as unknown
+    // A getter that would run, or a trap, throws an error that is not a
+    // data error, so the oracle sees a getter that ran.
+    case `array-holes-and-key`: {
+      const holes: Array<number> = new Array<number>(3)
+      holes[0] = 1
+      holes[2] = 3
+      return Object.assign(holes, { x: 1 })
+    }
+    case `array-key`:
+      return Object.assign([1], { x: 1 })
+    case `array-accessor`:
+      return Object.defineProperty([0], 0, { get: ranGetter, enumerable: true })
+    case `array-hidden`:
+      return Object.defineProperty([0], 0, { value: 0, enumerable: false })
+    case `map-key`:
+      return Object.assign(new Map([[1, 2]]), { meta: 1 })
+    case `set-key`:
+      return Object.assign(new Set([1]), { meta: 1 })
+    case `error-name-getter`:
+      return Object.defineProperty(new Error(`synthetic`), `name`, {
+        get: ranGetter,
+        enumerable: false,
+      })
+    case `error-message-getter`:
+      return new MessageGetterFault()
+    case `proxy`: {
+      const { proxy, revoke } = Proxy.revocable({}, {})
+      revoke()
+      return proxy
+    }
+    case `custom-prototype`:
+      return Object.create({ k: 1 }) as object
+    case `anonymous-class`:
+      return new (class {})()
+    case `dotted-key`:
+      return { 'a.b': { c: () => undefined } }
+    case `shared`: {
+      // Shared references 23 levels deep: small to check, large to print.
+      let shared: unknown = 0
+      for (let level = 0; level < 23; level += 1) shared = [shared, shared]
+      return shared
+    }
   }
 }
 
@@ -482,6 +561,8 @@ function syntheticDriver(spec: SyntheticSpec, mutant = false) {
     if (spec.zeroNoise) observe(`nonce`, zeroes++ % 2 === 0 ? -0 : 0)
     if (spec.orderNoise)
       observe(`nonce`, orders++ % 2 === 0 ? { a: 1, b: 2 } : { b: 2, a: 1 })
+    if (spec.emptyMessage)
+      observe(`nonce`, empties++ % 2 === 0 ? new Error() : new Error(``))
     if (spec.errorNoise)
       observe(
         `nonce`,
