@@ -216,8 +216,11 @@ Techniques: [guide § Histories](../../docs/guide.md#histories).
 - **Calibration.** Give at least one `calibration`: a wrong answer, as a
   corrupted trace or a mutant driver, and the law that must reject it
   (ORC-006).
-- **Ownership.** Put the owned files or functions on the property's `owns`
-  list. The gap check judges only owned code.
+- **Ownership.** Put the owned code on the property's `owns` list. An entry is
+  a file (`src/x.ts`) or one function and its static call tree
+  (`src/x.ts#run`, `src/x.ts#Class.method`). Own only what the laws cover. The
+  gap check judges only owned code, and the gap check's `--source` selects
+  files.
 
 Keep the law, its authority, and its limits in `law`, and prose beside each
 part that says why it predicts the promised result (ORC-003).
@@ -267,7 +270,12 @@ comes with one instruction. Do what it says, within the rules below.
   history, observation, or law, or it shows dead code.
 - **An effect that no check sees is one that the driver does not record.**
   Record it.
-- **Code whose removal no legal history can observe is dead.** Remove it.
+- **Code whose removal no legal history can observe is dead.** Remove it in
+  the same change as the oracle. That is a production change, so say so in
+  the evidence, and rerun the oracle and the gap check.
+- **A law that kills nothing** owns no mutated code, or its witness never
+  varies in the histories. Check its witness and its constructed history. If
+  the law still kills nothing, it may restate another law: compare the two.
 - **The only exclusions are probe-only code and the `super()` region of a
   derived constructor.**
 - **Never propose an exit.** If a gap can be neither killed nor removed, it is
