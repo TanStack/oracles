@@ -205,8 +205,8 @@ export type SyntheticSpec = {
   noisyProbe?: boolean
   /** `missing` omits `predict` for a bound probe; `extra` passes it unbound. */
   predictMode?: `missing` | `extra`
-  /** The `owns` option as the gap report reads it: a list, a string, or a list with a non-string entry. */
-  ownsMode?: `list` | `string` | `bad entry`
+  /** The `owns` option as the gap report reads it: a list, an empty list, a string, or a list with a non-string entry. */
+  ownsMode?: `list` | `empty` | `string` | `bad entry`
   /** Runs every history on a controlled clock, where a 7 spins it. */
   clock?: boolean
   /** How the property holds a history's items; the array itself when absent. */
@@ -726,9 +726,11 @@ const ownsOf = (spec: SyntheticSpec) =>
         owns:
           spec.ownsMode === `list`
             ? [`src/x.ts`]
-            : spec.ownsMode === `string`
-              ? (`src/x.ts` as unknown as Array<string>)
-              : [`src/x.ts`, 3 as unknown as string],
+            : spec.ownsMode === `empty`
+              ? []
+              : spec.ownsMode === `string`
+                ? (`src/x.ts` as unknown as Array<string>)
+                : [`src/x.ts`, 3 as unknown as string],
       }
 
 export function syntheticProperty(spec: SyntheticSpec): void {

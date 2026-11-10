@@ -549,9 +549,10 @@ export interface OraclePropertyOptions<THistory, TExpected, TPlan = THistory> {
    * The production code this oracle owns: a source path relative to the
    * package (`src/x.ts`), or one of its functions (`src/x.ts#run`,
    * `src/x.ts#Class.method`), whose static call tree it then owns. The gap
-   * report reads this list statically, so it must be a literal list of
-   * literal strings; any other value fails registration (maintainer decision,
-   * 2026-11-10: `oracleProperty` takes `owns`).
+   * report reads this list statically, so it must be a non-empty literal
+   * list of literal strings; an empty list, or any other value, fails
+   * registration (maintainer decision, 2026-11-10: `oracleProperty` takes
+   * `owns`).
    */
   owns?: ReadonlyArray<string>
 }
@@ -645,10 +646,14 @@ export function oracleProperty<THistory, TExpected, TPlan = THistory>(
   const { id, histories, owns } = options
   if (
     owns !== undefined &&
-    !(Array.isArray(owns) && owns.every((entry) => typeof entry === `string`))
+    !(
+      Array.isArray(owns) &&
+      owns.length > 0 &&
+      owns.every((entry) => typeof entry === `string`)
+    )
   )
     throw new Error(
-      `${id}: \`owns\` must be a literal list of strings, which the gap report reads statically.`,
+      `${id}: \`owns\` must be a non-empty literal list of strings, which the gap report reads statically.`,
     )
   if (Array.isArray(histories) && options.predict)
     throw new Error(
