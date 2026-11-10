@@ -205,6 +205,8 @@ export type SyntheticSpec = {
   noisyProbe?: boolean
   /** `missing` omits `predict` for a bound probe; `extra` passes it unbound. */
   predictMode?: `missing` | `extra`
+  /** The `owns` option as the gap report reads it: a list, a string, or a list with a non-string entry. */
+  ownsMode?: `list` | `string` | `bad entry`
   /** Runs every history on a controlled clock, where a 7 spins it. */
   clock?: boolean
   /** How the property holds a history's items; the array itself when absent. */
@@ -716,6 +718,19 @@ function syntheticCalibrations(
   )
 }
 
+// `owns`, the literal list the gap report reads, in the shape the spec names.
+const ownsOf = (spec: SyntheticSpec) =>
+  spec.ownsMode === undefined
+    ? {}
+    : {
+        owns:
+          spec.ownsMode === `list`
+            ? [`src/x.ts`]
+            : spec.ownsMode === `string`
+              ? (`src/x.ts` as unknown as Array<string>)
+              : [`src/x.ts`, 3 as unknown as string],
+      }
+
 export function syntheticProperty(spec: SyntheticSpec): void {
   const id = spec.unregistered ? `self-oracle.unregistered` : spec.id
   const form = formOf(spec)
@@ -785,6 +800,7 @@ export function syntheticProperty(spec: SyntheticSpec): void {
       )
     },
     ...(spec.timeout !== undefined ? { timeout: spec.timeout } : {}),
+    ...ownsOf(spec),
   }
   const law = {
     statement: `A synthetic history holds no 3 and no 4.`,

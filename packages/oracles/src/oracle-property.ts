@@ -545,6 +545,15 @@ export interface OraclePropertyOptions<THistory, TExpected, TPlan = THistory> {
   predict?: (plan: TPlan) => Readonly<Record<string, boolean>>
   /** Each registered test's limit in milliseconds; 120 seconds by default. */
   timeout?: number
+  /**
+   * The production code this oracle owns: a source path relative to the
+   * package (`src/x.ts`), or one of its functions (`src/x.ts#run`,
+   * `src/x.ts#Class.method`), whose static call tree it then owns. The gap
+   * report reads this list statically, so it must be a literal list of
+   * literal strings; any other value fails registration (maintainer decision,
+   * 2026-11-10: `oracleProperty` takes `owns`).
+   */
+  owns?: ReadonlyArray<string>
 }
 
 declare global {
@@ -633,7 +642,14 @@ export function oracleProperty<THistory, TExpected, TPlan = THistory>(
   // Every source names a registered property, so its replay and manifest
   // entries exist; an enumerated source has no random campaign to check it.
   assertRegisteredOracleProperty(options.id)
-  const { id, histories } = options
+  const { id, histories, owns } = options
+  if (
+    owns !== undefined &&
+    !(Array.isArray(owns) && owns.every((entry) => typeof entry === `string`))
+  )
+    throw new Error(
+      `${id}: \`owns\` must be a literal list of strings, which the gap report reads statically.`,
+    )
   if (Array.isArray(histories) && options.predict)
     throw new Error(
       `${id}: \`predict\` needs probe-bound states, which only a generated source declares.`,

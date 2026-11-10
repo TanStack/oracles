@@ -10,8 +10,8 @@
  * - `registration`: a property registers its campaigns, fixed histories, calibrations, and
  *   determinism test, and an enumerated property without a `label` gives
  *   distinct histories distinct test names, or fails to load when its id is not a registered
- *   oracle property, a required state has no constructed history, or a constructed history names an
- *   undeclared state.
+ *   oracle property, a required state has no constructed history, a constructed history names an
+ *   undeclared state, or `owns` is not a literal list of strings (the gap report reads it statically).
  * - `verdict`: a test fails with a violation of law L exactly when its first
  *   failing history violates L, whatever values the history holds (a bigint,
  *   a Map, NaN, or -0 too). Within one history a driver error decides
@@ -169,6 +169,8 @@ type Draft = {
   overReport: boolean
   noisyProbe: boolean
   predictMode: `match` | `missing` | `extra`
+  /** The `owns` option: absent, a literal list, a string, or a list with a non-string entry. */
+  ownsMode: `none` | `list` | `string` | `bad entry`
   clock: boolean
   form:
     `plain` | `bigint` | `map` | `lossy` | `error` | `errors` | `boxed` | `trap`
@@ -290,6 +292,15 @@ const draft: fc.Arbitrary<Draft> = fc.record({
     {
       weight: 1,
       arbitrary: fc.constantFrom(`missing` as const, `extra` as const),
+    },
+  ),
+  // `owns` is read statically by the gap report, so it must be a literal list of strings.
+  ownsMode: fc.oneof(
+    { weight: 6, arbitrary: fc.constant(`none` as const) },
+    { weight: 4, arbitrary: fc.constant(`list` as const) },
+    {
+      weight: 1,
+      arbitrary: fc.constantFrom(`string` as const, `bad entry` as const),
     },
   ),
   // A property whose driver runs on the framework's controlled clock.
@@ -447,6 +458,7 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
         ...(d.overReport ? { overReport: true } : {}),
         ...(d.noisyProbe ? { noisyProbe: true } : {}),
         ...(d.predictMode !== `match` ? { predictMode: d.predictMode } : {}),
+        ...(d.ownsMode !== `none` ? { ownsMode: d.ownsMode } : {}),
         ...(d.timing === `slow` ? { slow: true, timeout: 100 } : {}),
         ...(d.clock ? { clock: true } : {}),
         // fast-check cannot print a history whose getter throws, so only an
@@ -822,6 +834,9 @@ function predictSpec(
   const generated = spec.source.kind === `generated`
   // Every source, enumerated or generated, must name a registered property.
   if (spec.unregistered) return { loads: false }
+  // `owns` must be a literal list of strings, which the gap report reads.
+  if (spec.ownsMode === `string` || spec.ownsMode === `bad entry`)
+    return { loads: false }
   const historyFailure =
     spec.source.kind === `enumerated` && spec.form
       ? historyFailures[spec.form]
@@ -2129,6 +2144,7 @@ const generatedDraft = (overrides: Partial<Draft>): Draft => ({
   overReport: false,
   noisyProbe: false,
   predictMode: `match`,
+  ownsMode: `none`,
   clock: false,
   form: `plain`,
   zeroNoise: false,
@@ -2370,6 +2386,21 @@ oracleProperty({
         `a probe-bound state needs predict`,
         [`registration-error`],
         generatedDraft({ probe: `agree`, predictMode: `missing` }),
+      ),
+      fixedHistory(
+        `owns given as a string fails to load`,
+        [`registration-error`],
+        generatedDraft({ ownsMode: `string` }),
+      ),
+      fixedHistory(
+        `owns with a non-string entry fails to load`,
+        [`registration-error`],
+        generatedDraft({ ownsMode: `bad entry` }),
+      ),
+      fixedHistory(
+        `a literal owns list loads`,
+        [],
+        generatedDraft({ ownsMode: `list` }),
       ),
       fixedHistory(
         `predict needs a probe-bound state`,
