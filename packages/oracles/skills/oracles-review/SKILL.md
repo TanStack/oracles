@@ -49,7 +49,7 @@ contains one is not ready.
 | **Pinned only**                   | A fixed example where the law needs a generator dimension.                                                                                                                                                       |
 | **Unit test in an oracle file**   | An ordinary test or a fixed expected answer in an oracle file.                                                                                                                                                   |
 | **"Pre-existing" as a dismissal** | A reachable counterexample labeled as older than the change, and then left without a fix or a decision from the user.                                                                                            |
-| **No mutant**                     | A claim that a defect is closed, without a hostile mutant that fails the oracle.                                                                                                                                 |
+| **No mutant**                     | A claim that a defect is closed, without a mutant, such as the original defect, that fails the oracle.                                                                                                           |
 | **An exit**                       | Any reasoning that calls a mutant "equivalent", an effect "unobservable", or a gap acceptable. A gap is closed only by a kill or by removing dead code. A gap that can be neither is a framework bug to report.  |
 
 The evidence counts only as a set: law, reach, RED, GREEN, mutant, gaps,
@@ -95,18 +95,18 @@ hunt is your main job.
   is not an exit.
 - **An invariant guard without a witness.** A throw for a contradictory
   collaborator signal or an impossible state has no history that reaches it.
-  Require a fault-injected step that supplies the contradictory signal.
+  Require a history step that simulates the contradictory signal.
   Expect production to fail at the boundary, before it releases established
   state or publishes success.
 
-## 4. Choose attacks for the real uncertainty
+## 4. Choose challenges for the real uncertainty
 
 Use the [instrument cards](../../docs/instruments/) when they fit. Do not run
 every card, and do not require a finding at every level.
 
-- **[Adversarial review](../../docs/instruments/adversarial-review.md):**
-  attacks enforcement, the law's statement, its suitability, or its
-  concepts. Name the level each attack addresses.
+- **[Challenge review](../../docs/instruments/challenge-review.md):**
+  challenges enforcement, the law's statement, its suitability, or its
+  concepts. Name the level each challenge addresses.
 - **[Law discovery](../../docs/instruments/law-discovery.md):** for a law with
   no clear authority, or two readings that predict different behavior.
 - **[Tension scan](../../docs/instruments/tension-scan.md):** for demands that

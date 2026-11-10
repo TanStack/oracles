@@ -158,7 +158,7 @@ count is not a substitute for a constructed history.
 ### Generate histories that reach the problem
 
 Once the model can tell the relevant states apart, the histories must put
-production into them. Random payloads alone do not create reuse, failed
+production into them. Random values alone do not create reuse, failed
 startup, or work after recovery.
 
 Look for relationships and transitions:

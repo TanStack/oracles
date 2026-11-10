@@ -179,7 +179,7 @@ part that says why it predicts the promised result (ORC-003).
 
 Techniques: [guide § The driver and the check](../../docs/guide.md#the-driver-and-the-check).
 
-## 7. RED, change, GREEN, hostile mutant
+## 7. RED, change, GREEN, mutant
 
 When the task changes production:
 
@@ -190,7 +190,7 @@ When the task changes production:
 2. Change production, and rerun the oracle after each attempt. It also shows
    when an attempt breaks a neighboring law.
 3. Run the oracle again. It passes. This is GREEN.
-4. Show that a hostile mutant, such as the original defect, fails the
+4. Show that a mutant, such as the original defect, fails the
    oracle.
 
 Do not change production before step 1. A later run does not make up for a
@@ -233,7 +233,8 @@ The evidence counts only as a set. One item alone proves little.
 - **Reach:** each declared state and how many histories entered it.
 - **RED:** the command and the failure on unchanged production.
 - **GREEN:** the command and the result after the change.
-- **Mutant:** the hostile mutant and the law that rejected it.
+- **Mutant:** the mutant, such as the original defect, and the law that
+  rejected it.
 - **Gaps:** the gap check's totals, and any gap reported as a framework bug.
 - **Limits:** the states, paths, and observations that the evidence does not
   cover.
@@ -243,10 +244,10 @@ The evidence counts only as a set. One item alone proves little.
 Use a card when one of these uncertainties is real. There is no required
 sequence.
 
-| Uncertainty                                                        | Card                                                               |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------ |
-| The promise is unclear, or two readings predict different behavior | [Law discovery](../../docs/instruments/law-discovery.md)           |
-| Production and the model may share a mistake                       | [Adversarial review](../../docs/instruments/adversarial-review.md) |
-| Two obligations collide under some condition                       | [Tension scan](../../docs/instruments/tension-scan.md)             |
-| Laws overlap, or their concepts seem wrong                         | [Law restructuring](../../docs/instruments/law-restructuring.md)   |
-| The oracle is green but may accept a wrong implementation          | [Mutant gap hunt](../../docs/instruments/mutant-gap-hunt.md)       |
+| Uncertainty                                                        | Card                                                             |
+| ------------------------------------------------------------------ | ---------------------------------------------------------------- |
+| The promise is unclear, or two readings predict different behavior | [Law discovery](../../docs/instruments/law-discovery.md)         |
+| Production and the model may share a mistake                       | [Challenge review](../../docs/instruments/challenge-review.md)   |
+| Two obligations collide under some condition                       | [Tension scan](../../docs/instruments/tension-scan.md)           |
+| Laws overlap, or their concepts seem wrong                         | [Law restructuring](../../docs/instruments/law-restructuring.md) |
+| The oracle is green but may accept a wrong implementation          | [Mutant gap hunt](../../docs/instruments/mutant-gap-hunt.md)     |

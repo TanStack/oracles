@@ -20,7 +20,7 @@ recovering the obligations they represent.
    alone do not establish improvement.
 3. Map every original obligation to where it is preserved, narrowed, strengthened,
    rejected, or still unresolved in the candidate. State what insight originally
-   made the obligation necessary. A claim may be defeated, but needs a reason
+   made the obligation necessary. A claim may be overturned, but needs a reason
    and a design decision rather than disappearing from the mapping.
 4. Derive old and proposed predictions for a witness exercising each distinction
    that the reorganization could erase. Compare both allowed and forbidden
@@ -29,7 +29,7 @@ recovering the obligations they represent.
 5. When an independent preservation check is useful and authorized, give a fresh
    agent the original obligation, its sources, and one candidate. Hide sibling
    candidates and the author's preferred outcome. Ask what insight survives,
-   what is defeated, and what smallest repair is needed. Without that separation,
+   what is overturned, and what smallest repair is needed. Without that separation,
    describe the result as a trace audit, not independent validation.
 
 **Return:** the proposed organization, the old-to-new obligation mapping,

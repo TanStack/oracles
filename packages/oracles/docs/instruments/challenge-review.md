@@ -1,4 +1,4 @@
-# Adversarial review
+# Challenge review
 
 **Use when:** a model, oracle, or proposed law needs a concrete challenge.
 
@@ -12,7 +12,7 @@ validation.
 Start with a plausible way this account could be wrong. Select the relevant
 levels; they are different questions, not a mandatory sequence:
 
-| Level       | Attack                                                                                                                                                                                         |
+| Level       | Challenge                                                                                                                                                                                      |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Enforcement | Find a legal history or wrong output that the model, generator, driver, or recorder cannot distinguish. Can the intended production path remain unexercised while the test passes?             |
 | Formulation | Find an omitted precondition, excessive guarantee, wrong checkpoint, or ambiguous observation. Try a correct alternative implementation as well as a wrong one.                                |
@@ -25,7 +25,7 @@ step 5.
 
 ### Locate the repair
 
-The attack level names what to challenge. Once evidence shows a problem, use
+The level names what to challenge. Once evidence shows a problem, use
 this table to locate the repair:
 
 | Finding or question                                                             | Possible repair location                                                  |
@@ -46,14 +46,14 @@ information needed to meet it. A repair might require additional provider
 data. Moving the promised checkpoint or narrowing the guarantee needs an
 authorized contract decision; changing an assertion supplies no data.
 
-For each material attack, name the broken claim and construct a small legal
+For each material challenge, name the broken claim and construct a small legal
 history or concrete failure scene. State the competing expected observations,
 the evidence that could decide between them, and a possible repair condition.
-Check that the attack is within scope and that its standard actually applies.
+Check that the challenge is within scope and that its standard actually applies.
 An outside-domain case may motivate a scope change; label that proposal.
 
 When execution is authorized and practical, run the discriminating experiment.
-A hostile control must reach the intended comparison to demonstrate rejection.
+A wrong-answer control must reach the intended comparison to demonstrate rejection.
 Use the oracle guide's calibration and mutant-outcome rules. A source-level
 argument can remain useful when execution is unavailable; label it accurately.
 For a systematic search across plausible wrong implementations, use the
@@ -64,13 +64,13 @@ survivors.
 separate kinds of finding, with sources, witnesses, outcomes, and repair
 conditions. For bugs, identify the test gap that permitted the class of failure.
 
-**Control:** explain what would defeat the criticism. Check whether the attack
+**Control:** explain what would refute the criticism. Check whether the challenge
 would also reject a valid implementation or depend on a condition the contract
-excludes. Do not presume a defect merely because the stance is adversarial.
+excludes. Do not presume a defect merely because the stance is critical.
 
 **Distortion:** generic pessimism, irrelevant external standards, author capture,
 or treating a preferred design as evidence of a current correctness bug.
 
-**Stop when:** the material attacks have evidence or an explicit unresolved
+**Stop when:** the material challenges have evidence or an explicit unresolved
 experiment. No supported finding is a valid result. Challenging a law does not
 silently replace it.

@@ -166,7 +166,7 @@ No requirement here can be met by declaring something out of reach.
 - **Framework:** Enforced. A generated `oracleProperty` runs one test per
   fixed seed and one random test with the same arbitrary, check, and budget.
   A failure prints how to replay it.
-- **Author:** Do not bypass this with a raw `fc.assert`, `fc.check`, or `.prop`
+- **Author:** Do not work around this with a raw `fc.assert`, `fc.check`, or `.prop`
   in an oracle file. The `oracle/oracle-property-only` lint rule reports them.
 
 ### ORC-008: Stateful-model minimality
@@ -309,7 +309,7 @@ rubric's ID still names the same requirement.
 
 | ID      | Change                                                                  | Reason                                                                                                      |
 | ------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| All     | "Framework" and "Author" notes added                                    | Say what `@tanstack/oracles` enforces, so nobody re-implements or bypasses it.                              |
+| All     | "Framework" and "Author" notes added                                    | Say what `@tanstack/oracles` enforces, so nobody re-implements or works around it.                          |
 | All     | Coverage-map owner entries replaced by the oracle's `limits`            | Adopters have no coverage map; code ownership belongs to tools such as CODEOWNERS (maintainer, 2026-11-10). |
 | ORC-004 | Narrowing a grammar, filter, or validity predicate is a contract change | Maintainer, 2026-11-10.                                                                                     |
 | ORC-006 | "Equivalence within the tested domain" removed from mutant outcomes     | There are no equivalent mutants (maintainer, 2026-11-10).                                                   |

@@ -58,7 +58,7 @@ term for one concept. Do not rotate synonyms for style.
 | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | owns              | The production files or functions an oracle answers for, listed in the `owns` option of `oracleProperty`. The gap check judges owned code only.                                                                         |
 | gap check         | The loop that runs the oracle files against production and against mutants of the owned code. It reports every gap with one instruction.                                                                                |
-| mutant            | A small deliberate change to owned production code.                                                                                                                                                                     |
+| mutant            | A small deliberate change to owned production code. Every mutant is deliberately wrong, so do not qualify the word. The original defect is a common mutant to check.                                                    |
 | kill              | A mutant that a law rejects through a registered `oracleProperty` route. A plain test in an oracle file is an unregistered kill, and it does not count.                                                                 |
 | survivor          | A mutant that no law rejects. Every survivor is a gap.                                                                                                                                                                  |
 | gap               | Owned behavior that the oracles do not judge. It closes only when a law kills it or the code is removed.                                                                                                                |
@@ -70,7 +70,6 @@ term for one concept. Do not rotate synonyms for style.
 | unowned           | Production code that no oracle owns. The gap check reports it as a warning, not as judged.                                                                                                                              |
 | RED               | The extended oracle failing on unchanged production. It shows that the oracle can see the defect.                                                                                                                       |
 | GREEN             | The same oracle passing after the change.                                                                                                                                                                               |
-| hostile mutant    | A deliberate wrong implementation, often the original defect, that the oracle must reject before a repair is called closed.                                                                                             |
 
 There is no "equivalent mutant" and no "unobservable effect". A survivor
 shows a missing history, observation, or law, or dead code. An effect that
