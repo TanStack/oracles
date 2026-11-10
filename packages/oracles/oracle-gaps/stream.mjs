@@ -24,15 +24,17 @@ export function change(result) {
 
 /**
  * One gap as one line: its kind, line, short id (the rerun's `--only` id),
- * and the change. Printed as each mutant is judged, and again in the summary.
+ * and the change. A mutant that never applied (an authored `find` that no
+ * longer matches) has no line, and says so. Printed as each mutant is judged,
+ * and again in the summary.
  */
 export function gapLine(result) {
-  return `${kindOf(result)} L${result.line} ${result.id} ${change(result)}`
+  return `${kindOf(result)} L${result.line ?? `?`} ${result.id} ${change(result)}`
 }
 
 /** The periodic count while mutants are judged. */
 export function progressLine({ judged, total, gaps }) {
-  return `judged ${judged} of ${total} mutants: ${gaps} gaps so far, ${judged - gaps} killed or not gaps`
+  return `judged ${judged} of ${total} mutants: ${gaps} gaps so far, ${judged - gaps} not gaps`
 }
 
 /**

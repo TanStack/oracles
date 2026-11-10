@@ -1766,9 +1766,12 @@ export default async (env) => {
     )
     for (const job of authoredJobs) {
       Object.assign(job.result, judgeAuthored(job.units, baseline))
-      if (gapsOf([job.result]).length > 0) log(gapLine(job.result))
     }
     endPhase(`authored mutants`, { mutants: authored.length })
+    // Every authored gap is streamed once, judged or not (a stale `find` is
+    // judged by nothing).
+    for (const result of results)
+      if (result.authored && gapsOf([result]).length > 0) log(gapLine(result))
     // Keys go into every output, so an agent reads them from the JSON
     // results.
     assignKeys(results)

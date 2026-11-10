@@ -118,6 +118,7 @@ const placeholders = {
   changedTests: [`<file> > <test>`],
   nondeterministicBy: [`<file> > <test>`],
   by: [`<test>`],
+  detail: `<error>`,
 }
 const legendOf = (kind) => directive[kind]({ ...placeholders, outcome: kind })
 
