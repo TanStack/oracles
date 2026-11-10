@@ -221,6 +221,9 @@ export function ownership(ts, program, pkg, oracles) {
     }
   return {
     has: (source, name) => functionsOf(source).some((fn) => fn.name === name),
+    /** Whether a function of the source, or the whole source, has an owner. */
+    ownsAny: (source) =>
+      owners.has(source) || functionsOf(source).some((fn) => owners.has(fn)),
     /**
      * The innermost function whose text holds a position (an offset in the
      * source), by its name (`<module>` for none), and its owners. A

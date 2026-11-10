@@ -54,8 +54,8 @@ function hostFor(ts) {
  * absolute paths of every test file the package's config includes. A
  * declaration that names nothing, a list that is not a literal, or an entry
  * that names a missing file or function throws, because it would hide gaps.
- * A run with no oracle file, or whose entries own no selected source, throws
- * too.
+ * A run with no oracle file, or in which no function of a selected source
+ * has an owner through the call trees, throws too.
  */
 export function analyze(ts, pkg, sources, testFiles) {
   const relative = (file) => file.slice(pkg.length + 1)
@@ -92,14 +92,6 @@ export function analyze(ts, pkg, sources, testFiles) {
     throw new Error(
       `no oracle file: no test file calls oracleProperty or declareOracle, so no file owns any selected source`,
     )
-  if (
-    ![...declarations.values()]
-      .flat()
-      .some((entry) => sources.includes(splitEntry(entry)[0]))
-  )
-    throw new Error(
-      `no file owns any selected source: no owns entry names a --source file`,
-    )
   const instrumented = new Map()
   const mutants = []
   for (const source of sources) {
@@ -130,6 +122,12 @@ export function analyze(ts, pkg, sources, testFiles) {
     hostFor(ts),
   )
   const owned = ownership(ts, program, pkg, declarations)
+  // Owned through the call trees, which may reach a selected source from an
+  // entry in another file.
+  if (!sources.some((source) => owned.ownsAny(source)))
+    throw new Error(
+      `no file owns any selected source: no function of a --source file has an owner`,
+    )
   for (const [file, entries] of declarations)
     for (const entry of entries) {
       const [source, fn] = splitEntry(entry)
