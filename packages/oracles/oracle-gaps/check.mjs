@@ -36,7 +36,7 @@ import { createRequire } from 'node:module'
 import { basename, dirname, join, relative as relativePath } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { applyAuthored, loadAuthored } from './authored.mjs'
-import { assignKeys, renderReport } from './report.mjs'
+import { authoredKey, keyAndSelect, renderReport } from './report.mjs'
 import { analyze, isRunnerCopy } from './analysis.mjs'
 import {
   baselineOf,
@@ -98,6 +98,37 @@ function failureOf(unit) {
     ? `${test.fullName}: ${test.message.split(`\n`)[0]}`
     : (unit.setupErrors[0] ?? unit.unhandled[0] ?? `it failed`)
   return text.slice(0, 300)
+}
+
+/**
+ * A unit from a copy's capture rows alone: its tests, as the rows record
+ * them, and the rows. A copy cut off for spinning (`cut`) keeps the rows of
+ * the tests it finished, so the verdicts it recorded before the cut still
+ * judge (classify.mjs outcomeOf).
+ */
+function unitOfRows(file, own, seconds, cut = false) {
+  return {
+    file,
+    timedOut: cut,
+    ...(cut ? { spin: true } : {}),
+    seconds,
+    setupErrors: [],
+    tests: own
+      .filter((row) => !row.background)
+      .map((row) => ({
+        key: row.key,
+        fullName: row.key.split(` > `).slice(1).join(` > `),
+        state:
+          row.state === `fail`
+            ? `failed`
+            : row.state === `skip`
+              ? `skipped`
+              : `passed`,
+        message: row.message ?? ``,
+      })),
+    unhandled: [],
+    rows: own.map((row) => [row.key, row]),
+  }
 }
 
 /** A hash of this CLI's own code and the framework it reads. */
@@ -311,11 +342,13 @@ export default async (env) => {
       return globalThis.__oracleGapsBundles?.get(source)
     },
     load(id) {
-      const path = id.split('?')[0]
+      // A query import ('./x?worker&url', '?raw') is Vite's to load: only the
+      // module itself, by its plain id, is served instrumented.
+      if (id.includes('?')) return undefined
       // This context's authored patch, or else the instrumented source of the
       // current check, both set by the runner in this process.
       try {
-        const real = realpathSync(path)
+        const real = realpathSync(id)
         return globalThis.__oracleGapsServe?.[${index}]?.get(real) ?? globalThis.__oracleGapsSchemata?.get(real)
       } catch { return undefined }
     },
@@ -550,13 +583,31 @@ export default async (env) => {
       running.catch(() => undefined)
       forceCancel(context)
       span(`run`, started, { ...profiled, timedOut: true })
-      rmSync(capture, { force: true })
-      return { file, timedOut: true, seconds, ...(spun ? { spin: true } : {}) }
+      if (!spun) {
+        rmSync(capture, { force: true })
+        return { file, timedOut: true, seconds }
+      }
     }
-    if (spun) {
-      rmSync(capture, { force: true })
-      return { file, timedOut: true, spin: true, seconds }
+    const rows = []
+    if (existsSync(capture)) {
+      for (const line of readFileSync(capture, `utf8`)
+        .split(`\n`)
+        .filter(Boolean)) {
+        const row = JSON.parse(line)
+        // A closing row marks the end of a file for a batch's watchdog.
+        if (!row.closed && !row.idle) rows.push([row.key, row])
+      }
+      rmSync(capture)
     }
+    // A copy cut off for spinning keeps the rows of the tests it finished:
+    // the verdicts it recorded before the cut still judge (unitOfRows).
+    if (spun)
+      return unitOfRows(
+        file,
+        rows.filter(([key]) => key !== undefined).map(([, row]) => row),
+        seconds,
+        true,
+      )
     // The result also lists test modules from earlier runs, with their old
     // results. Only this run's file counts.
     const modules = result.testModules.filter((m) => m.moduleId === file)
@@ -575,17 +626,6 @@ export default async (env) => {
         setup: Math.round(d.setupDuration ?? 0),
         testsMs: Math.round(d.duration ?? 0),
       })
-    }
-    const rows = []
-    if (existsSync(capture)) {
-      for (const line of readFileSync(capture, `utf8`)
-        .split(`\n`)
-        .filter(Boolean)) {
-        const row = JSON.parse(line)
-        // A closing row marks the end of a file for a batch's watchdog.
-        if (!row.closed && !row.idle) rows.push([row.key, row])
-      }
-      rmSync(capture)
     }
     const tests = modules.flatMap((module) =>
       [...module.children.allTests()].map((testCase) => {
@@ -775,13 +815,17 @@ export default async (env) => {
     const skippedUnit = (item) => ({ file: item.file, skipped: true })
     // A copy that ran past its call budget, even one whose throw ended the
     // loop and let it finish, is a timeout as it stands (a count, not a
-    // clock: no confirming run).
-    const spunUnit = (item) => ({
-      file: item.file,
-      timedOut: true,
-      spin: true,
-      seconds,
-    })
+    // clock: no confirming run). Its rows stand too (unitOfRows).
+    const spunUnit = (i, item, rows) =>
+      unitOfRows(
+        item.file,
+        rows.get(copies[i]).map((row) => ({
+          ...row,
+          key: keyFor(copies[i], item.file)(row.key),
+        })),
+        seconds,
+        true,
+      )
     try {
       if (result === undefined) {
         // Cancelled without waiting; the caller replaces the context (see
@@ -801,36 +845,20 @@ export default async (env) => {
           units: items.slice(0, current).map((item, i) => {
             if (!closed.has(copies[i])) return undefined
             if (skipped.has(copies[i])) return skippedUnit(item)
-            if (spun.has(copies[i])) return spunUnit(item)
+            if (spun.has(copies[i])) return spunUnit(i, item, rows)
             const map = keyFor(copies[i], item.file)
             const own = rows
               .get(copies[i])
               .map((row) => ({ ...row, key: map(row.key) }))
-            return {
-              file: item.file,
-              timedOut: false,
-              seconds: seconds / items.length,
-              setupErrors: [],
-              tests: own
-                .filter((row) => !row.background)
-                .map((row) => ({
-                  key: row.key,
-                  fullName: row.key.split(` > `).slice(1).join(` > `),
-                  state:
-                    row.state === `fail`
-                      ? `failed`
-                      : row.state === `skip`
-                        ? `skipped`
-                        : `passed`,
-                  message: row.message ?? ``,
-                })),
-              unhandled: [],
-              rows: own.map((row) => [row.key, row]),
-            }
+            return unitOfRows(item.file, own, seconds / items.length)
           }),
           timedOutAt: current,
           idle: idle.has(copies[current]),
           spin: spun.has(copies[current]),
+          // The copy cut off for spinning, with the rows it wrote before it.
+          hung: spun.has(copies[current])
+            ? spunUnit(current, items[current], rows)
+            : undefined,
         }
       }
       // Errors outside any test cannot be attributed to one copy, so the
@@ -843,7 +871,7 @@ export default async (env) => {
         units: items.map((item, i) => {
           const copy = copies[i]
           if (skipped.has(copy)) return skippedUnit(item)
-          if (spun.has(copy)) return spunUnit(item)
+          if (spun.has(copy)) return spunUnit(i, item, rows)
           const map = keyFor(copy, item.file)
           const modules = result.testModules.filter((m) => m.moduleId === copy)
           return {
@@ -1088,18 +1116,7 @@ export default async (env) => {
         )
         if (batch.unattributed) {
           for (const r of rest)
-            if (needed(r, got)) {
-              got[r.i] = await unit(slot.context, r.file, r.spec, {
-                mutant: r.mutant,
-                select: r.select,
-                stopOnKill: r.stopOnKill,
-                ignore: r.ignore,
-                limitMs: r.limitMs,
-                callBudget: r.callBudget,
-              })
-              if (got[r.i].spin) evidence.spin += 1
-              if (got[r.i].timedOut) await replace(slot)
-            }
+            if (needed(r, got)) got[r.i] = await runAlone(slot, r)
           break
         }
         batch.units.forEach((u, k) => {
@@ -1125,7 +1142,9 @@ export default async (env) => {
         if (hung.limitMs >= full || batch.idle || batch.spin)
           settle(
             hung,
-            { file: hung.file, timedOut: true, seconds: full / 1000 },
+            batch.spin
+              ? batch.hung
+              : { file: hung.file, timedOut: true, seconds: full / 1000 },
             index,
           )
         else
@@ -1149,6 +1168,21 @@ export default async (env) => {
       await confirmOn(slot)
       await Promise.all(confirming)
       return got
+    }
+    // A request run alone in the slot's context: a copy that a batch did not
+    // judge, or one whose errors outside any test cannot be attributed.
+    async function runAlone(slot, r) {
+      const u = await unit(slot.context, r.file, r.spec, {
+        mutant: r.mutant,
+        select: r.select,
+        stopOnKill: r.stopOnKill,
+        ignore: r.ignore,
+        limitMs: r.limitMs,
+        callBudget: r.callBudget,
+      })
+      if (u.spin) evidence.spin += 1
+      if (u.timedOut) await replace(slot)
+      return u
     }
     // A hung copy's confirming run: alone, in a clean context, with the full
     // limit. Only a run cut off there too is a timeout. An idle copy in a
@@ -1316,21 +1350,8 @@ export default async (env) => {
       }
     }
     const ownersOf = (mutant) => owned.at(mutant.source, mutant.position).owners
-    let queue = mutants.filter((m) => !options.only || options.only.has(m.id))
-    if (options.sample !== undefined) {
-      // A fixed-seed shuffle, so a survey samples the same mutants every run.
-      let seed = 20251102
-      const random = () =>
-        (seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31
-      queue = options.sources.flatMap((source) => {
-        const own = queue.filter((m) => m.source === source)
-        for (let i = own.length - 1; i > 0; i -= 1) {
-          const j = Math.floor(random() * (i + 1))
-          ;[own[i], own[j]] = [own[j], own[i]]
-        }
-        return own.slice(0, options.sample)
-      })
-    }
+    // Keys are numbered over every mutant before the selection (report.mjs).
+    let queue = keyAndSelect(mutants, options)
     // The tests of a file that a mutant must run: every test from the first
     // one that reached its site. A later test can see the mutant through
     // state that a reaching test changed, so only the tests before the
@@ -1551,13 +1572,14 @@ export default async (env) => {
       for (const st of active) {
         for (const [i, request] of requests.entries()) {
           if (request.st !== st) continue
-          // Only a kill earlier in the mutant's files leaves a file without
-          // a unit.
+          // A kill earlier in the mutant's files leaves a file without a
+          // unit. Any other missing unit is a copy that its batch did not
+          // judge: skipped because an earlier copy killed the mutant, or
+          // replaced after a cut. It runs alone, so every mutant gets an
+          // outcome and no copy aborts the run.
           if (got[i] === undefined) {
             if (st.units.some(kills)) break
-            throw new Error(
-              `${st.mutant.id}: ${relative(request.file)} has no unit and no earlier kill`,
-            )
+            got[i] = await runAlone(slot, request)
           }
           st.units.push(got[i])
           if (kills(got[i])) break
@@ -1676,6 +1698,7 @@ export default async (env) => {
         authored: true,
         authoredId: mutant.id,
         source: mutant.source,
+        key: authoredKey(mutant.source, mutant.id),
         operator: `authored`,
         function: `authored mutants`,
         intent: mutant.intent,
@@ -1750,9 +1773,6 @@ export default async (env) => {
       )
     }
     endPhase(`authored mutants`, { mutants: authored.length })
-    // Keys go into every output, so an agent reads them from the JSON
-    // results.
-    assignKeys(results)
     const mutantSeconds = (Date.now() - started) / 1000
     log(
       `mutant phase: ${results.length} mutants in ${mutantSeconds.toFixed(1)}s`,

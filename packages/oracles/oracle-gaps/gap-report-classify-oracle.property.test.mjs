@@ -33,7 +33,11 @@
  *    reach agreement alone make it an `agreement-only-kill`, which names
  *    them all. Failing that, a verdict on the random campaign
  *    makes it a `random-only-kill`, and one on an unknown or unregistered
- *    route an `unregistered-kill`.
+ *    route an `unregistered-kill`. A copy that spins (its call budget ran
+ *    out, not its clock) is a timeout as it stands, but the verdicts its
+ *    tests recorded before the cut judge as usual, so a verdict before a spin
+ *    kills (maintainer's reply in the TanStack DB conversion thread,
+ *    2026-11-10; the framework's `bounded work` law is not built here).
  * 4. Failing that, if every failing test timed out, it is `timeout`; a
  *    failing test outside the framework's own checks makes it `crashed`; a
  *    failing framework check alone (the `calibration` route, which covers
@@ -116,6 +120,10 @@ const effect = fc.record({
     `crash`,
     `timeoutMessage`,
     `runTimeout`,
+    // A test whose copy spins after a verdict (its verdict stands), or a copy
+    // that spins with no verdict (a timeout).
+    `spinVerdict`,
+    `runSpin`,
     `setupError`,
     `unhandled`,
   ),
@@ -210,7 +218,11 @@ function modelOutcome(h, mi) {
     h.files[fi].tests.map((t, ti) => ({ t, fi, ti })),
   )
   const under = ({ t }) => t.under[mi].kind
-  const timedOut = tests.some((x) => under(x) === `runTimeout`)
+  // A copy that spins (no clock cut or load failure in its file) is cut off,
+  // and only the verdicts its tests recorded before the cut judge.
+  const spun = targets.filter((fi) => spinning(h, fi, mi))
+  const timedOut =
+    tests.some((x) => under(x) === `runTimeout`) || spun.length > 0
   const setup = tests.some((x) => under(x) === `setupError`)
   // A file that failed to load, or whose run timed out, ran no tests.
   const ran = tests.filter(
@@ -222,13 +234,17 @@ function modelOutcome(h, mi) {
   const failing = ran.filter(
     (x) =>
       !x.t.flaky &&
-      [`verdict`, `assertion`, `crash`, `timeoutMessage`].includes(under(x)),
+      (spun.includes(x.fi)
+        ? verdictKinds.includes(under(x))
+        : [`verdict`, `assertion`, `crash`, `timeoutMessage`].includes(
+            under(x),
+          )),
   )
   const verdictsOn = (kind) =>
     failing
       .filter(
         (x) =>
-          under(x) === `verdict` &&
+          verdictKinds.includes(under(x)) &&
           kindOf(x.t.under[mi].firedAt ?? x.t.route) === kind,
       )
       .map((x) => x.t.under[mi].law)
@@ -300,7 +316,11 @@ function targetsSeen(h, oi, owners) {
 function ordinaryOutcome(h, mi, files) {
   const tests = files.flatMap((fi) => h.files[fi].tests.map((t) => ({ t, fi })))
   const under = ({ t }) => t.under[mi].kind
-  const timedOut = tests.some((x) => under(x) === `runTimeout`)
+  // A copy that spins is cut off, and only the verdicts its tests recorded
+  // before the cut judge (as for an owner, in modelOutcome).
+  const spun = files.filter((fi) => spinning(h, fi, mi))
+  const timedOut =
+    tests.some((x) => under(x) === `runTimeout`) || spun.length > 0
   const ran = tests.filter(
     (x) =>
       !h.files[x.fi].tests.some((t) =>
@@ -308,12 +328,14 @@ function ordinaryOutcome(h, mi, files) {
       ),
   )
   const failing = ran.filter((x) =>
-    [`verdict`, `assertion`, `crash`, `timeoutMessage`].includes(under(x)),
+    spun.includes(x.fi)
+      ? verdictKinds.includes(under(x))
+      : [`verdict`, `assertion`, `crash`, `timeoutMessage`].includes(under(x)),
   )
   const judgedOn = (kind) =>
     failing.filter(
       (x) =>
-        (under(x) === `verdict` &&
+        (verdictKinds.includes(under(x)) &&
           kindOf(x.t.under[mi].firedAt ?? x.t.route) === kind) ||
         (under(x) === `assertion` &&
           kindOf(x.t.route) === kind &&
@@ -395,6 +417,7 @@ function model(h) {
 // and renders the summary.
 const messages = {
   verdict: `Error: violation`,
+  spinVerdict: `Error: violation`,
   assertion: `AssertionError: expected [ 'a' ] to deeply equal [ 'b' ]`,
   crash: `TypeError: x.y is not a function`,
   timeoutMessage: `Error: Test timed out in 15000ms.`,
@@ -429,6 +452,18 @@ function rowsOf(h, pass) {
   })
   return rows
 }
+// The effects of a copy that spins, and the verdict kinds that still judge
+// from it.
+const spinKinds = [`spinVerdict`, `runSpin`]
+const verdictKinds = [`verdict`, `spinVerdict`]
+// A file whose copy spins: no clock cut and no load failure in it.
+function spinning(h, fi, mi) {
+  const kinds = h.files[fi].tests.map((t) => t.under[mi].kind)
+  return (
+    kinds.some((kind) => spinKinds.includes(kind)) &&
+    !kinds.some((kind) => [`runTimeout`, `setupError`].includes(kind))
+  )
+}
 function unitOf(h, fi, mi) {
   const f = h.files[fi]
   const under = (t) => t.under[mi]
@@ -436,9 +471,10 @@ function unitOf(h, fi, mi) {
     return { file: fileName(fi), timedOut: true, seconds: 1 }
   const loadFailed = f.tests.some((t) => under(t).kind === `setupError`)
   const tests = loadFailed ? [] : f.tests
+  const spin = spinning(h, fi, mi)
   return {
     file: fileName(fi),
-    timedOut: false,
+    ...(spin ? { timedOut: true, spin: true } : { timedOut: false }),
     seconds: 1,
     setupErrors: loadFailed ? [`Error: cannot load the file`] : [],
     unhandled: tests.some((t) => under(t).kind === `unhandled`)
@@ -464,17 +500,16 @@ function unitOf(h, fi, mi) {
           hits: [],
           outcomes: [],
           route: t.route,
-          verdicts:
-            kind === `verdict`
-              ? [
-                  {
-                    property: `p`,
-                    law: under(t).law,
-                    checkpoint: `c`,
-                    route: under(t).firedAt,
-                  },
-                ]
-              : [],
+          verdicts: verdictKinds.includes(kind)
+            ? [
+                {
+                  property: `p`,
+                  law: under(t).law,
+                  checkpoint: `c`,
+                  route: under(t).firedAt,
+                },
+              ]
+            : [],
         },
       ]
     }),
@@ -732,6 +767,17 @@ const constructed = [
     effect: { kind: `verdict` },
   }),
   single(`a crash`, [`crashed`], { effect: { kind: `crash` } }),
+  // A copy that spins after its verdict: the verdict stands, as a kill.
+  single(`a spin after a verdict`, [`killed`], {
+    effect: { kind: `spinVerdict`, law: `L` },
+  }),
+  // A spin after a verdict of reach agreement alone judges nothing: a timeout.
+  single(`a spin after an agreement verdict`, [`timeout`], {
+    effect: { kind: `spinVerdict`, law: `reach agreement` },
+  }),
+  single(`a spin with no verdict`, [`timeout`], {
+    effect: { kind: `runSpin`, law: `L` },
+  }),
   {
     // One owner file kills; another's run times out. The kill decides.
     name: `a kill beside a timed-out run`,

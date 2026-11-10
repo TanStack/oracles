@@ -31,6 +31,12 @@
  * - **Ownership.** A mutant's function has an owner exactly when the model
  *   says it is not `unowned`.
  * - **Keys.** Each mutant's key is the model's anchor.
+ * - **Selected keys.** A run that selects mutants (`--only`, `--sample`)
+ *   keys each selected mutant as the full run does: keys are numbered over
+ *   the whole mutant list before any selection, so a partial run and a full
+ *   run agree on every key they share.
+ * - **Help.** `--help` prints the usage for any package, with no `--package`,
+ *   and refuses nothing (authority: the CLI's usage text in args.mjs).
  * - **Key stability.** After the history's stability edit, every mutant
  *   that existed before keeps its key, its probe mark, and its ownership.
  *
@@ -104,7 +110,7 @@ import {
   written,
 } from './gap-report-model-oracle.mjs'
 import { parseArgs } from './args.mjs'
-import { assignKeys } from './report.mjs'
+import { keyAndSelect } from './report.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const ts = createRequire(join(here, `../package.json`))(`typescript`)
@@ -125,23 +131,37 @@ function analyzeFixture(dir, files, plan) {
   const tests = readdirSync(join(dir, `tests`))
     .filter((name) => name.endsWith(`.test.ts`) && !isRunnerCopy(name))
     .map((name) => join(dir, `tests`, name))
+  // `--help` names no package and is answered with the usage text (index.mjs).
+  const help = helpOf(dir)
   try {
     const { sources } = parseArgs(
       [`--package`, dir, `--source`, sourceArgument(plan, `${dir}.link`)],
       dir,
     )
     const { mutants, owned, instrumented } = analyze(ts, dir, sources, tests)
-    assignKeys(mutants)
+    // A run's keys come from the whole mutant list, whatever its selection
+    // (--only, --sample). The full run's keys are the reference, read before
+    // any selection runs; a selected run must key each mutant it selects the
+    // same way.
+    const full = keyAndSelect(mutants, { sources }).map((m) => ({
+      id: m.id,
+      source: m.source,
+      function: m.function,
+      line: m.line,
+      operator: m.operator,
+      probe: m.probeGuard === true,
+      owned: owned.at(m.source, m.position).owners.size > 0,
+      key: m.key,
+    }))
+    const only = new Set(mutants.filter((_, i) => i % 2 === 0).map((m) => m.id))
+    const keyed = (selected) => selected.map((m) => ({ id: m.id, key: m.key }))
     return {
-      mutants: mutants.map((m) => ({
-        source: m.source,
-        function: m.function,
-        line: m.line,
-        operator: m.operator,
-        probe: m.probeGuard === true,
-        owned: owned.at(m.source, m.position).owners.size > 0,
-        key: m.key,
-      })),
+      help,
+      selection: {
+        only: keyed(keyAndSelect(mutants, { only, sources })),
+        sample: keyed(keyAndSelect(mutants, { sample: 1, sources })),
+      },
+      mutants: full,
       runes: plan.runesSource
         ? instrumented.get(realpathSync(join(dir, RUNES)))
         : undefined,
@@ -154,6 +174,15 @@ function analyzeFixture(dir, files, plan) {
           }
         : undefined,
     }
+  } catch (error) {
+    return { help, refusal: String(error?.message ?? error) }
+  }
+}
+
+/** What `--help` answers for a package: usage, or the refusal it gives. */
+function helpOf(dir) {
+  try {
+    return { usage: parseArgs([`--help`], dir).help === true }
   } catch (error) {
     return { refusal: String(error?.message ?? error) }
   }
@@ -567,6 +596,12 @@ function checkDerived(plan, observed) {
 function check(plan, observations, expected) {
   const got = observations.find((o) => o.checkpoint === `static`)?.value
   if (!got) return violation(`static`, `no analysis was observed`, `completion`)
+  if (!got.help?.usage)
+    return violation(
+      `static`,
+      `--help did not print usage: ${got.help?.refusal ?? `no usage`}`,
+      `help`,
+    )
   // An owner that fails, and a config the runner cannot honor, are found
   // only when the runner starts.
   const runtime = [`brokenOwner`, `projects`, `brokenVitest`].includes(
@@ -648,6 +683,17 @@ function check(plan, observations, expected) {
         `${siteOf(m)}: key ${JSON.stringify(m.key)}, owed ${JSON.stringify(owed.key)}`,
         `keys`,
       )
+  // A selected run's keys are the full run's, for each mutant it selects.
+  for (const run of Object.values(got.selection ?? {}))
+    for (const selected of run) {
+      const full = got.mutants.find((m) => m.id === selected.id)
+      if (full?.key !== selected.key)
+        return violation(
+          `static`,
+          `${selected.id}: key ${JSON.stringify(selected.key)} in a selected run, ${JSON.stringify(full?.key)} in the full run`,
+          `selection keys`,
+        )
+    }
   const moved = observations.find((o) => o.checkpoint === `stability`)?.value
   if (moved) {
     if (moved.refusal)

@@ -81,7 +81,7 @@
 //   oracle-gaps --stop-daemon --package <dir>
 import { realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
-import { parseArgs } from './args.mjs'
+import { parseArgs, usage } from './args.mjs'
 import { openSession } from './check.mjs'
 import { requestDaemon, stopDaemon } from './daemon.mjs'
 import { memoryStore } from './evidence.mjs'
@@ -92,7 +92,8 @@ if (import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   let exitCode = 0
   try {
     const options = parseArgs(process.argv.slice(2))
-    if (options.stop) await stopDaemon(options.pkg)
+    if (options.help) console.log(usage)
+    else if (options.stop) await stopDaemon(options.pkg)
     else if (options.daemon) {
       const reply = await requestDaemon(options.pkg, process.argv.slice(2))
       if (reply.stderr) process.stderr.write(reply.stderr)

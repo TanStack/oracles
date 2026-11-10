@@ -107,9 +107,19 @@
  *    2026-11-06): a run that ends within the full limit is judged as if it
  *    had never been cut off, so a slow kill is a kill. An owner test that
  *    does not end within the full limit cuts its file's run off, and the
- *    cut-off run records nothing, not even its earlier verdicts; a kill in another
+ *    clock-cut run records nothing, not even its earlier verdicts; a kill in another
  *    owner still decides (a kill outranks a timeout, v19), and failing one,
- *    the mutant is a `timeout`, whatever any other owner reported. A mutant
+ *    the mutant is a `timeout`, whatever any other owner reported. A copy
+ *    cut off for spinning (its call budget ran out, not its clock) is
+ *    different: the law verdicts its tests recorded before the cut stand, so
+ *    a spin after a verdict is a kill, and the owners after it that the kill
+ *    skips are not run (a skipped copy never aborts the run). Without such a
+ *    verdict, a spin is a timeout. Authority: the maintainer's reply in the
+ *    TanStack DB conversion thread (2026-11-10): a spin that an owning law
+ *    rejects is preserved as that law's verdict. The framework's `bounded
+ *    work` law, which kills a spinning mutant outright, is not built here.
+ *    A copy that a batch did not judge (skipped, or replaced after a cut)
+ *    and has no earlier kill runs alone, so every mutant gets an outcome. A mutant
  *    that no owner test fails is a survivor: a `comparison-gap` when an owner
  *    test's observation or asserted value changed, a `generator-gap` when an
  *    `if` on its line never took one of its outcomes in an owner test, and
@@ -173,7 +183,11 @@
  *    (one with a space and `#` included), for any spelling of `--source`
  *    (`./`, a redundant segment, an absolute path through a symbolic link
  *    to the package), the run completes and reports the same result; a
- *    source outside the package refuses the run. A source that imports
+ *    source outside the package refuses the run. An owned module imported
+ *    through a query (`?raw`, or the `?worker&url` a worker is imported
+ *    with) is loaded by Vite as written: the runner serves the instrumented
+ *    copy only under the module's plain id, so the query import reads the
+ *    module's own text (a test's `?raw` import is checked against the file). A source that imports
  *    a subpath of a workspace dependency sees one instance of that
  *    dependency, as Vitest gives it; a devDependency that no test loads and
  *    that cannot be built does not refuse the run; and a package with a
@@ -394,10 +408,10 @@ function cliArgs(
     String(seed),
     `--env-prefix`,
     ENV_PREFIX,
-    // Four warm contexts run mutants in parallel; results do not depend on
+    // Two warm contexts run mutants in parallel; results do not depend on
     // the count.
     `--contexts`,
-    `4`,
+    `2`,
     // A fixture's tests run in milliseconds. A 1 s first budget cuts off
     // the slow witness, and the 6 s full limit lets it end; each hang costs
     // about 7 s. With one budget, a run past 6 s is a timeout at once.
