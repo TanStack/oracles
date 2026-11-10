@@ -80,10 +80,7 @@ function importOf(identifier, sourceCode) {
   if (definition?.type !== `ImportBinding`) return undefined
   return {
     source: definition.parent.source.value,
-    imported:
-      definition.node.type === `ImportSpecifier`
-        ? importedName(definition.node)
-        : undefined,
+    imported: importedName(definition.node),
   }
 }
 
@@ -99,7 +96,7 @@ const isOracleFileName = (file) => {
  */
 function judgeEntries(entries, implementationModules) {
   if (!Array.isArray(entries))
-    return { judged: [], problems: [{ messageId: `malformedList`, data: {} }] }
+    return { judged: [], problems: [{ messageId: `malformedList` }] }
   const judged = []
   const problems = []
   entries.forEach((entry, index) => {
@@ -133,7 +130,8 @@ function judgeEntries(entries, implementationModules) {
 /**
  * The raw campaign that `node` is, as `{ messageId, call }`, or undefined:
  * `fc.assert(...)` or `fc.check(...)`, a named `assert(...)` or `check(...)`
- * from fast-check, or a `.prop(...)` registration of a test root.
+ * from fast-check, or a `.prop(...)` registration of a test root, as the
+ * `messageId` and `data` of the report.
  */
 function rawCampaignOf(node, sourceCode) {
   const { callee } = node
@@ -141,7 +139,7 @@ function rawCampaignOf(node, sourceCode) {
     const binding = importOf(callee, sourceCode)
     return FAST_CHECK_MODULES.has(binding?.source) &&
       CAMPAIGN_METHODS.has(binding.imported)
-      ? { messageId: `rawCampaign`, call: callee.name }
+      ? { messageId: `rawCampaign`, data: { call: callee.name } }
       : undefined
   }
   if (callee.type !== `MemberExpression`) return undefined
@@ -149,7 +147,10 @@ function rawCampaignOf(node, sourceCode) {
   // registration `fcTest.prop([...])(name, body)` reports once.
   const chain = calleeChain(callee)
   if (chain.names.at(-1) === `prop` && isTestRoot(chain.rootNode, sourceCode))
-    return { messageId: `rawProperty`, call: sourceCode.getText(callee) }
+    return {
+      messageId: `rawProperty`,
+      data: { call: sourceCode.getText(callee) },
+    }
   if (
     callee.object.type === `Identifier` &&
     callee.property.type === `Identifier` &&
@@ -159,7 +160,7 @@ function rawCampaignOf(node, sourceCode) {
   )
     return {
       messageId: `rawCampaign`,
-      call: sourceCode.getText(callee),
+      data: { call: sourceCode.getText(callee) },
     }
   return undefined
 }
@@ -205,12 +206,7 @@ export default {
     return {
       CallExpression(node) {
         const raw = rawCampaignOf(node, sourceCode)
-        if (raw !== undefined)
-          uses.push({
-            node,
-            messageId: raw.messageId,
-            data: { call: raw.call },
-          })
+        if (raw !== undefined) uses.push({ node, ...raw })
       },
       ImportDeclaration(node) {
         for (const specifier of node.specifiers) {
