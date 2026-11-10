@@ -790,7 +790,6 @@ export function syntheticProperty(spec: SyntheticSpec): void {
     statement: `A synthetic history holds no 3 and no 4.`,
     authority: `the oracleProperty self-oracle's synthetic specification`,
     limits: `Synthetic; histories of one to three integers.`,
-    owner: `oracleProperty framework`,
   }
   // The last history's late probe call comes after its test; the file waits
   // for it, so the run still reports it.

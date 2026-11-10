@@ -15,8 +15,7 @@
  *
  * The parts keep their jobs separate (oracle rubric, ORC-003):
  *
- * - `law` states the promise, its authority, its limits, and its owner in the
- *   coverage map. A failure names it.
+ * - `law` states the promise, its authority, and its limits. A failure names it.
  * - `histories` is either an enumerated list, which runs in full (bounded
  *   exhaustiveness, glossary), or a generated source: a fast-check arbitrary
  *   with a run budget, fixed seeds, constructed histories, and fixed histories
@@ -197,8 +196,6 @@ export interface OracleLaw {
   authority: string
   /** What this property does not establish. */
   limits: string
-  /** The oracle owner in the coverage map. */
-  owner: string
 }
 
 /** One recorded public fact, at the checkpoint where the contract owes it. */
@@ -1815,7 +1812,6 @@ function recordRegistration(
     `${JSON.stringify({
       id,
       file: relativeTestFile(),
-      owner: law.owner,
       authority: law.authority,
       histories: Array.isArray(histories)
         ? histories.length

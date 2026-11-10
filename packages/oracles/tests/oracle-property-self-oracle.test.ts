@@ -2168,7 +2168,6 @@ oracleProperty({
     statement: `oracleProperty registers, fails, shrinks, replays, reruns, calibrates, times out, and checks determinism, membership, and reach as its contract states.`,
     authority: `packages/oracles/src/oracle-property.ts header; maintainer decisions of 2026-11-03; oracle rubric ORC-006, ORC-007, ORC-015`,
     limits: `Synthetic properties with histories of one to three integers, one or two per run; real Vitest child processes; one rerun probe per property.`,
-    owner: `oracleProperty framework`,
   },
   histories: {
     arbitrary: suite,

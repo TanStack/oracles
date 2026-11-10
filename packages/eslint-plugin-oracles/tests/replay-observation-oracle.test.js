@@ -272,7 +272,6 @@ const LAW = {
   statement: `A replay witness is reported only by the rule's own budget exemption: a finite replay observation is output data, so no-disabled reports each budget that a witness does not write, and nothing else.`,
   authority: `The maintainer decisions of 2026-10-28 and 2026-11-08 on the typed OracleReplayWitness record and its guarded writer, as recorded in this file's header.`,
   limits: `The grammar varies location, annotation, value use, and writer shape; the serializer is the standard JSON.stringify, and the other serializers are outside the allowance. The finite list is exhaustive over its grammar, so it declares no reach states.`,
-  owner: `eslint-plugin-oracles lint rules`,
 }
 
 const expectedAndObserved = (observed, expected) =>

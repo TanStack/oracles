@@ -188,7 +188,6 @@ oracleProperty({
     statement: `A data schedule releases the oldest task of the queue its next choice names, the oldest task overall once the choices run out, and settles each task like the promise it wraps; a choice that is not a nonnegative integer names no queue, and scheduleFrom throws when called with one.`,
     authority: `the scheduleFrom contract in the header of packages/oracles/src/oracle-property.ts; fail fast on a contract breach (TanStack DB AGENTS.md, "Separate valid edge cases from contract contradictions")`,
     limits: `Tasks scheduled up front, in up to three queues; no tasks scheduled by continuations. A rejected schedule is observed only as a throw, not by its message.`,
-    owner: `oracleProperty framework`,
   },
   histories: {
     arbitrary: history,

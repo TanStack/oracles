@@ -130,7 +130,6 @@ oracleProperty({
     statement: `withinTurns resolves true in the turn its promise settles when that is before its deadline, including a promise already settled when it is called, and false in the deadline's turn otherwise; it throws for a number of turns that is not a nonnegative integer.`,
     authority: `the withinTurns contract in the header of packages/oracles/src/oracle-property.ts`,
     limits: `Settlement in the deadline's own turn may answer either way; settlement in a later microtask of the calling turn is not generated; up to three turns.`,
-    owner: `oracleProperty framework`,
   },
   histories: {
     arbitrary: history,

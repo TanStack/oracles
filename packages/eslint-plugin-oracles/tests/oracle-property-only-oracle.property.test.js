@@ -359,7 +359,6 @@ oracleProperty({
     statement: `In an oracle file, a raw fast-check campaign (fc.assert, fc.check, or a .prop registration, through fast-check or @fast-check/vitest) and an import of createOracleReach or runOracleCampaign are reported, except in a file whose reasoned legacyCampaigns entry still matches a legacy use; a reasonless entry and a stale entry are reported; an implementation module is exempt; a malformed entry, or an entry outside the oracle glob or naming an implementation module, is a configuration error that stops the run.`,
     authority: `Maintainer decision (2026-11-09): oracleProperty is the only campaign API in @tanstack/oracles. Its header in packages/oracles/src/oracle-property.ts: constructed histories make a state's reach required, and a raw campaign has none.`,
     limits: `Aliased campaigns, a campaign held in a helper, re-exported fast-check bindings, and import() of a legacy module are not generated. A stale entry for a deleted file is not reported, since no lint run sees that file.`,
-    owner: `eslint-plugin-oracles lint rules`,
   },
   histories: {
     arbitrary: program,
