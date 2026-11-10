@@ -12,9 +12,14 @@ import replayableSeed from './rules/replayable-seed.js'
  * its law ("How oracle work is scored"). These rules report the ones that a
  * syntactic check can see, in TypeScript and JavaScript files whose names
  * contain `oracle`. They need no type information, so an agent's post-edit hook
- * can run them on one file in well under a second. A directive can silence them in the root config, so
- * scripts/agent-lint-feedback.mjs enforces them in a pass that ignores inline
- * directives.
+ * can run them on one file in well under a second.
+ *
+ * P8 of the frozen design grammar: lint rules cannot be disabled inline. The
+ * `recommended` config sets `linterOptions.noInlineConfig`, so in an oracle file
+ * a disable directive has no effect (ESLint reports that it was ignored); the
+ * directive cannot silence `oracle/*` rules there. The setting applies to every
+ * rule in the file, not only the oracle rules, because ESLint has no per-rule
+ * switch.
  */
 
 // The same names that the run-budget check (check-oracle-run-counts) accepts.
@@ -43,6 +48,7 @@ plugin.configs = {
     name: `oracle/recommended`,
     files: oracleFiles,
     plugins: { oracle: plugin },
+    linterOptions: { noInlineConfig: true },
     rules: {
       'oracle/no-disabled': `error`,
       'oracle/no-unit-test': `error`,
