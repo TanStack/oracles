@@ -375,7 +375,8 @@ oracleProperty({
         const observed = trace.find(
           (o) => o.checkpoint === `production reports`,
         )
-        if (observed.value.length === 0) return undefined
+        if (!Array.isArray(observed.value) || observed.value.length === 0)
+          return undefined
         return trace.map((o) =>
           o.checkpoint === `production reports`
             ? { ...o, value: o.value.map((r) => ({ ...r, line: r.line + 1 })) }
@@ -390,7 +391,8 @@ oracleProperty({
         const observed = trace.find(
           (o) => o.checkpoint === `production reports`,
         )
-        if (observed.value.length === 0) return undefined
+        if (!Array.isArray(observed.value) || observed.value.length === 0)
+          return undefined
         return trace.map((o) =>
           o.checkpoint === `production reports`
             ? { ...o, value: o.value.slice(1) }
