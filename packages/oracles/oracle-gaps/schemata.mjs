@@ -8,9 +8,10 @@
 //
 // Operators, in the order the sites are numbered:
 // - `binary-swap`: `===`↔`!==`, `<`↔`<=`, `>`↔`>=`, `&&`↔`||`, `??`→`&&`.
-//   An ordering swap whose branches yield its two operands is no site
-//   (`yieldsOperands`): at a tie the swap picks the other branch, which yields
-//   the same value.
+//   Every site is emitted. Evidence (`evidenceOf`) marks two cases: `dead code`
+//   when the site's two values are the same operand (no input distinguishes
+//   it), and the hint `boundary: -0` on an ordering swap whose branches are
+//   its two operands (a signed zero distinguishes it, but never a skip).
 // - `drop-not`: `!x` → `x`.
 // - `bool-flip`: a boolean literal `true` ↔ `false` (not a literal type).
 // - `arithmetic-swap`: `+` ↔ `-` where one operand is a numeric literal
@@ -58,6 +59,9 @@ const logical = new Map([
   [`??`, `&&`],
 ])
 const ordering = new Set([`<`, `<=`, `>`, `>=`])
+// Evidence a mutant may carry for the report (never a reason to skip it).
+const DEAD_CODE = `dead code`
+const BOUNDARY_HINT = `boundary: -0`
 
 // A mutant's anchor is the innermost statement that holds its site, as its
 // tokens joined by single spaces, so formatting does not move it.
@@ -172,7 +176,9 @@ export function instrument(ts, path, text, source, offset = 0) {
   }
   // `at` is the node whose line the mutant reports: the operator token for a
   // swap and the condition for an `if`, as the earlier runner reported them.
-  const add = (at, operator, original, replacement) => {
+  // `evidence` is a hint for the report, and never changes whether a site is
+  // emitted: see `evidenceOf`.
+  const add = (at, operator, original, replacement, evidence) => {
     if (mentionsSuper && superGuarded(at)) return undefined
     const probeGuard = guarded
     const local = mutants.length + 1
@@ -190,6 +196,7 @@ export function instrument(ts, path, text, source, offset = 0) {
       replacement,
       anchor: anchorOf(ts, file, at),
       ...(probeGuard ? { probeGuard: true } : {}),
+      ...(evidence ? { evidence } : {}),
     })
     return id
   }
@@ -469,51 +476,70 @@ export function instrument(ts, path, text, source, offset = 0) {
     isProbeOnly(node) || helpers.has(node) || isGuardDeclarator(node)
   let guarded = false
 
-  // Whether a comparison's branches yield its two operands, one each, in
-  // either order: the two values of its `?:`, or of its `if` (the else, or the
-  // statement after an `if` with no `else`, which must return a value). An
-  // operand is an identifier or a numeric literal, so the same text reads the
-  // same value on both branches. At a tie the operands are equal, so the other
-  // branch yields the same value under either operator: the swap cannot be
-  // told apart from the original, and it is no site.
-  const yieldsOperands = (node) => {
+  // An operand is an identifier or a numeric literal: its text reads the same
+  // value wherever it appears. Anything else has no text here.
+  const operandText = (expression) => {
+    const inner = expression && bare(expression)
+    return inner && (ts.isIdentifier(inner) || ts.isNumericLiteral(inner))
+      ? inner.getText(file)
+      : undefined
+  }
+  // The operand text a branch returns: the value of a `return` statement, or
+  // of a block of one such statement.
+  const returnedText = (statement) => {
+    const only =
+      statement && ts.isBlock(statement) && statement.statements.length === 1
+        ? statement.statements[0]
+        : statement
+    return only && ts.isReturnStatement(only)
+      ? operandText(only.expression)
+      : undefined
+  }
+  // The two values of a ternary, or of an `if` (its else, or the statement
+  // after an `if` with no `else`, which must return), as operand texts. Any
+  // other node has none.
+  const valuesOf = (holder) => {
+    if (ts.isConditionalExpression(holder))
+      return [operandText(holder.whenTrue), operandText(holder.whenFalse)]
+    if (ts.isIfStatement(holder)) {
+      const siblings = holder.parent.statements
+      return [
+        returnedText(holder.thenStatement),
+        holder.elseStatement
+          ? returnedText(holder.elseStatement)
+          : returnedText(siblings?.[siblings.indexOf(holder) + 1]),
+      ]
+    }
+    return []
+  }
+  // The ternary or `if` whose condition is `node`, through parentheses.
+  const holderOf = (node) => {
     let test = node
     while (ts.isParenthesizedExpression(test.parent)) test = test.parent
     const holder = test.parent
-    const returned = (statement) => {
-      const only =
-        statement && ts.isBlock(statement) && statement.statements.length === 1
-          ? statement.statements[0]
-          : statement
-      return only && ts.isReturnStatement(only) && only.expression
-        ? bare(only.expression)
-        : undefined
-    }
-    const operand = (expression) => {
-      const inner = expression && bare(expression)
-      return inner && (ts.isIdentifier(inner) || ts.isNumericLiteral(inner))
-        ? inner.getText(file)
-        : undefined
-    }
-    let whenTrue
-    let whenFalse
-    if (ts.isConditionalExpression(holder) && holder.condition === test) {
-      whenTrue = holder.whenTrue
-      whenFalse = holder.whenFalse
-    } else if (ts.isIfStatement(holder) && holder.expression === test) {
-      const siblings = holder.parent.statements
-      whenTrue = returned(holder.thenStatement)
-      whenFalse = holder.elseStatement
-        ? returned(holder.elseStatement)
-        : returned(siblings?.[siblings.indexOf(holder) + 1])
-    } else return false
-    const [left, right] = [operand(node.left), operand(node.right)]
-    const [yes, no] = [operand(whenTrue), operand(whenFalse)]
-    return (
-      left !== undefined &&
+    return (ts.isConditionalExpression(holder) && holder.condition === test) ||
+      (ts.isIfStatement(holder) && holder.expression === test)
+      ? holder
+      : undefined
+  }
+  // The evidence a binary swap or an `if` carries, for the report. A site
+  // whose two values are the same operand is dead code: no input distinguishes
+  // its mutant, because the program is redundant (identical branches, or a
+  // logical operator on one operand). An ordering swap whose two branches are
+  // its two compared operands gets the boundary hint: at a tie the other branch
+  // yields the same value, so the hint marks where a signed zero can tell them
+  // apart. The site is emitted either way.
+  const evidenceOf = (node) => {
+    const [left, right] = [operandText(node.left), operandText(node.right)]
+    if (!ordering.has(node.operatorToken.getText(file)))
+      return left !== undefined && left === right ? DEAD_CODE : undefined
+    const [yes, no] = valuesOf(holderOf(node) ?? node)
+    if (yes !== undefined && yes === no) return DEAD_CODE
+    return left !== undefined &&
       right !== undefined &&
       ((yes === left && no === right) || (yes === right && no === left))
-    )
+      ? BOUNDARY_HINT
+      : undefined
   }
 
   // Emit `node` with its children's instrumented text spliced in, then wrap
@@ -533,8 +559,14 @@ export function instrument(ts, path, text, source, offset = 0) {
     if (ts.isBinaryExpression(node)) {
       const op = node.operatorToken.getText(file)
       const swap = comparisons.get(op) ?? logical.get(op)
-      if (swap && !(ordering.has(op) && yieldsOperands(node)))
-        ids.binary = add(node.operatorToken, `binary-swap`, op, swap)
+      if (swap)
+        ids.binary = add(
+          node.operatorToken,
+          `binary-swap`,
+          op,
+          swap,
+          evidenceOf(node),
+        )
     }
     if (
       ts.isBinaryExpression(node) &&
@@ -604,8 +636,16 @@ export function instrument(ts, path, text, source, offset = 0) {
       )
     if (ts.isIfStatement(node)) {
       const condition = node.expression.getText(file)
-      ids.ifTrue = add(node.expression, `if-true`, condition, `true`)
-      ids.ifFalse = add(node.expression, `if-false`, condition, `false`)
+      const [yes, no] = valuesOf(node)
+      const evidence = yes !== undefined && yes === no ? DEAD_CODE : undefined
+      ids.ifTrue = add(node.expression, `if-true`, condition, `true`, evidence)
+      ids.ifFalse = add(
+        node.expression,
+        `if-false`,
+        condition,
+        `false`,
+        evidence,
+      )
     }
     if (
       ts.isExpressionStatement(node) &&
