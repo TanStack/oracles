@@ -11,7 +11,13 @@
  *   determinism test, and an enumerated property without a `label` gives
  *   distinct histories distinct test names, or fails to load when its id is not a registered
  *   oracle property, a required state has no constructed history, or a constructed history names an
- *   undeclared state.
+ *   undeclared state. When several of the named load errors apply, the declaration's shape reports
+ *   first, in this order: an unregistered id, then `predict` on an enumerated source (only a
+ *   generated source declares states), then a history that is not data (`data`). A load fails with
+ *   its first error alone. This precedence is analyst-chosen (2026-11-10): no contract text or
+ *   maintainer decision orders these errors. The source kind decides which checks reach the
+ *   histories, so fixing the shape can remove a data error, and fixing the data error first can be
+ *   wasted work.
  * - `verdict`: a test fails with a violation of law L exactly when its first
  *   failing history violates L, whatever values the history holds (a bigint,
  *   a Map, NaN, or -0 too). Within one history a driver error decides
@@ -794,7 +800,7 @@ const historyFailures: Partial<
 }
 
 type SpecExpectation =
-  | { loads: false; loadError?: string }
+  | { loads: false; loadError?: string; dataError?: boolean }
   | {
       loads: true
       tests: Map<string, Outcome>
@@ -822,11 +828,19 @@ function predictSpec(
   const generated = spec.source.kind === `generated`
   // Every source, enumerated or generated, must name a registered property.
   if (spec.unregistered) return { loads: false }
+  // Load errors report the declaration's shape first (law `registration`): a
+  // `predict` on an enumerated source, then the data of its histories.
+  if (!generated && spec.predictMode === `extra`)
+    return {
+      loads: false,
+      loadError: `${spec.id}: \`predict\` needs probe-bound states, which only a generated source declares.`,
+    }
   const historyFailure =
     spec.source.kind === `enumerated` && spec.form
       ? historyFailures[spec.form]
       : undefined
-  if (historyFailure) return { loads: false, loadError: historyFailure }
+  if (historyFailure)
+    return { loads: false, loadError: historyFailure, dataError: true }
   // `predict` and a probe-bound state come together, and only a generated
   // source declares states.
   if (
@@ -1182,7 +1196,7 @@ function frameworkReach(
     const owed = expected.get(spec.id)!
     if (!owed.loads) {
       reached.add(`registration-error`)
-      if (owed.loadError) reached.add(`history-out-of-domain`)
+      if (owed.dataError) reached.add(`history-out-of-domain`)
       continue
     }
     if (spec.odd && inDomain(spec.odd)) reached.add(`observation-in-domain`)
@@ -2384,6 +2398,25 @@ oracleProperty({
           ...generatedDraft({ predictMode: `extra` }),
           source: { kind: `enumerated`, histories: [[0]] },
         },
+      ),
+      // The CI counterexample of d8adfee (random seed 471115903, path
+      // `1:0:0:0:0:0:2`), replayed field for field: an enumerated source under
+      // `predict` whose only history is a class instance. Both load errors
+      // hold, and the declaration's shape is the one that decides.
+      fixedHistory(
+        `a predict error on an enumerated source outranks a history that is not data`,
+        [`registration-error`],
+        generatedDraft({
+          source: { kind: `enumerated`, histories: [[0]] },
+          nondeterministic: true,
+          probe: `agree`,
+          predictMode: `extra`,
+          clock: true,
+          form: `boxed`,
+          odd: `cycle`,
+          sevenModel: true,
+          errorNoise: true,
+        }),
       ),
       fixedHistory(
         `the determinism test compares the probes a driver records`,
