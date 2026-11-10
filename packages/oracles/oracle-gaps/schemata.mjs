@@ -8,6 +8,9 @@
 //
 // Operators, in the order the sites are numbered:
 // - `binary-swap`: `===`↔`!==`, `<`↔`<=`, `>`↔`>=`, `&&`↔`||`, `??`→`&&`.
+//   An ordering swap whose branches yield its two operands is no site
+//   (`yieldsOperands`): at a tie the swap picks the other branch, which yields
+//   the same value.
 // - `drop-not`: `!x` → `x`.
 // - `bool-flip`: a boolean literal `true` ↔ `false` (not a literal type).
 // - `arithmetic-swap`: `+` ↔ `-` where one operand is a numeric literal
@@ -54,6 +57,7 @@ const logical = new Map([
   [`||`, `&&`],
   [`??`, `&&`],
 ])
+const ordering = new Set([`<`, `<=`, `>`, `>=`])
 
 // A mutant's anchor is the innermost statement that holds its site, as its
 // tokens joined by single spaces, so formatting does not move it.
@@ -465,6 +469,53 @@ export function instrument(ts, path, text, source, offset = 0) {
     isProbeOnly(node) || helpers.has(node) || isGuardDeclarator(node)
   let guarded = false
 
+  // Whether a comparison's branches yield its two operands, one each, in
+  // either order: the two values of its `?:`, or of its `if` (the else, or the
+  // statement after an `if` with no `else`, which must return a value). An
+  // operand is an identifier or a numeric literal, so the same text reads the
+  // same value on both branches. At a tie the operands are equal, so the other
+  // branch yields the same value under either operator: the swap cannot be
+  // told apart from the original, and it is no site.
+  const yieldsOperands = (node) => {
+    let test = node
+    while (ts.isParenthesizedExpression(test.parent)) test = test.parent
+    const holder = test.parent
+    const returned = (statement) => {
+      const only =
+        statement && ts.isBlock(statement) && statement.statements.length === 1
+          ? statement.statements[0]
+          : statement
+      return only && ts.isReturnStatement(only) && only.expression
+        ? bare(only.expression)
+        : undefined
+    }
+    const operand = (expression) => {
+      const inner = expression && bare(expression)
+      return inner && (ts.isIdentifier(inner) || ts.isNumericLiteral(inner))
+        ? inner.getText(file)
+        : undefined
+    }
+    let whenTrue
+    let whenFalse
+    if (ts.isConditionalExpression(holder) && holder.condition === test) {
+      whenTrue = holder.whenTrue
+      whenFalse = holder.whenFalse
+    } else if (ts.isIfStatement(holder) && holder.expression === test) {
+      const siblings = holder.parent.statements
+      whenTrue = returned(holder.thenStatement)
+      whenFalse = holder.elseStatement
+        ? returned(holder.elseStatement)
+        : returned(siblings?.[siblings.indexOf(holder) + 1])
+    } else return false
+    const [left, right] = [operand(node.left), operand(node.right)]
+    const [yes, no] = [operand(whenTrue), operand(whenFalse)]
+    return (
+      left !== undefined &&
+      right !== undefined &&
+      ((yes === left && no === right) || (yes === right && no === left))
+    )
+  }
+
   // Emit `node` with its children's instrumented text spliced in, then wrap
   // the node itself if it is a mutation site. Sites are numbered before their
   // children, matching the order of the earlier per-file runner.
@@ -482,7 +533,8 @@ export function instrument(ts, path, text, source, offset = 0) {
     if (ts.isBinaryExpression(node)) {
       const op = node.operatorToken.getText(file)
       const swap = comparisons.get(op) ?? logical.get(op)
-      if (swap) ids.binary = add(node.operatorToken, `binary-swap`, op, swap)
+      if (swap && !(ordering.has(op) && yieldsOperands(node)))
+        ids.binary = add(node.operatorToken, `binary-swap`, op, swap)
     }
     if (
       ts.isBinaryExpression(node) &&
