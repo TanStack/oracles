@@ -113,6 +113,9 @@ every card, and do not require a finding at every level.
   collide under a concrete condition.
 - **[Law restructuring](../../docs/instruments/law-restructuring.md):** for
   whether merging, splitting, or replacing laws gives a better account.
+- **[Design grammar](../../docs/instruments/design-grammar.md):** for a
+  simplification or a growing model: what each part does, and what the change
+  newly allows or rejects.
 - **[Mutant gap hunt](../../docs/instruments/mutant-gap-hunt.md):** for whether
   a plausible wrong implementation can pass.
 

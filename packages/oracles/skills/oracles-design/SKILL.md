@@ -56,6 +56,21 @@ Write these down. They stay fixed while you build the oracle.
 Do not weaken a check, history, or law in the same step that clears a
 failure. Make each weakening its own decision, with its own reason.
 
+**Name the parts, then reconstruct.** Before you trust a model:
+
+- List its actions, its state, and its observations. Give each one its job:
+  the law sentence it serves, or the legality it decides.
+- Write each model rule as one sentence of the law. Mark any rule that you
+  added rather than found in the authority.
+- Rebuild the known examples (docs, issues, existing tests) with the
+  histories and the model. A known example that the model cannot reproduce
+  shows a missing part or a wrong rule.
+- When two rules conflict, record the conflict as an open question for the
+  user. Do not pick a winner.
+
+For a hard law or a model that keeps growing, use the
+[design grammar](../../docs/instruments/design-grammar.md) card.
+
 ## 3. Choose the model
 
 Pick by the shape of the law, in this order, and use the first style that
@@ -128,6 +143,8 @@ If you cannot find a witness, look for a simpler representation before
 adding more machinery. For example, three disjoint sets of ids that move
 between each other may be one map from id to status. Count complexity that
 you move into helpers, adapters, or mappings. Moving it does not remove it.
+The [design grammar](../../docs/instruments/design-grammar.md) card shows how
+to compare a simplification with the model it replaces.
 
 **Laws stay simple; history generators may be elaborate.** Reaching a hard
 state can need a sophisticated generator. Put that work in the histories, not
@@ -244,10 +261,11 @@ The evidence counts only as a set. One item alone proves little.
 Use a card when one of these uncertainties is real. There is no required
 sequence.
 
-| Uncertainty                                                        | Card                                                             |
-| ------------------------------------------------------------------ | ---------------------------------------------------------------- |
-| The promise is unclear, or two readings predict different behavior | [Law discovery](../../docs/instruments/law-discovery.md)         |
-| Production and the model may share a mistake                       | [Challenge review](../../docs/instruments/challenge-review.md)   |
-| Two obligations collide under some condition                       | [Tension scan](../../docs/instruments/tension-scan.md)           |
-| Laws overlap, or their concepts seem wrong                         | [Law restructuring](../../docs/instruments/law-restructuring.md) |
-| The oracle is green but may accept a wrong implementation          | [Mutant gap hunt](../../docs/instruments/mutant-gap-hunt.md)     |
+| Uncertainty                                                                                  | Card                                                             |
+| -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| The promise is unclear, or two readings predict different behavior                           | [Law discovery](../../docs/instruments/law-discovery.md)         |
+| Production and the model may share a mistake                                                 | [Challenge review](../../docs/instruments/challenge-review.md)   |
+| Two obligations collide under some condition                                                 | [Tension scan](../../docs/instruments/tension-scan.md)           |
+| Laws overlap, or their concepts seem wrong                                                   | [Law restructuring](../../docs/instruments/law-restructuring.md) |
+| The model keeps growing, a simplification is proposed, or the law has many interacting rules | [Design grammar](../../docs/instruments/design-grammar.md)       |
+| The oracle is green but may accept a wrong implementation                                    | [Mutant gap hunt](../../docs/instruments/mutant-gap-hunt.md)     |
