@@ -58,16 +58,14 @@ plugin.configs = {
     },
   },
   // Production source, not oracle files: a state probe is the only development
-  // code that the production build must not carry (the probe form).
+  // code that the production build must not carry (the probe form). A monorepo
+  // package keeps its source under packages/*/src; a single-package repository
+  // keeps it under src at the root.
   production: {
     name: `oracle/production`,
-    files: [
-      `packages/*/src/**/*.ts`,
-      `packages/*/src/**/*.tsx`,
-      `packages/*/src/**/*.js`,
-      `packages/*/src/**/*.jsx`,
-      `packages/*/src/**/*.mjs`,
-    ],
+    files: [`packages/*/src`, `src`].flatMap((dir) =>
+      [`ts`, `tsx`, `js`, `jsx`, `mjs`].map((ext) => `${dir}/**/*.${ext}`),
+    ),
     plugins: { oracle: plugin },
     rules: {
       'oracle/probe-form': `error`,
