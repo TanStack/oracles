@@ -569,7 +569,7 @@ const directives = {
   'framework-error':
     /^Make a law in `[^`]+` reject the change: only a framework calibration failed, and it judges no behavior\.$/,
   crashed:
-    /^Write a law in `[^`]+` that rejects this crash, and check it where the crash happens\.$/,
+    /^Production threw `[^`]*` in `[^`]+`; record the error as an observation in the driver, and state the law that decides if this input may throw\.$/,
   timeout:
     /^Bound the run of the owner tests so that they end, and let a law reject a run that does not\.$/,
   'setup-error':

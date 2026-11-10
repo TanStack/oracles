@@ -57,6 +57,9 @@ const BOUNDARY_SENTENCE = `Add a boundary history with -0 and 0.`
 const testName = (key) =>
   key ? key.split(` > `).slice(1).join(` > `) : `(background)`
 const first = (names) => names?.[0] ?? `(none)`
+// The error a crash threw, as one short line that fits a code span.
+const errorText = (text = `(no message)`) =>
+  text.replace(/`/g, `'`).split(`\n`)[0].slice(0, 120)
 
 // Each gap kind's directive, from the run's data. The legend prints each one
 // with placeholders (`legendOf`), and the messages print it with the data.
@@ -87,7 +90,7 @@ const directive = {
   'framework-error': (g) =>
     `Make a law in \`${first(g.by)}\` reject the change: only a framework calibration failed, and it judges no behavior.`,
   crashed: (g) =>
-    `Write a law in \`${first(g.by)}\` that rejects this crash, and check it where the crash happens.`,
+    `Production threw \`${errorText(g.detail)}\` in \`${first(g.by)}\`; record the error as an observation in the driver, and state the law that decides if this input may throw.`,
   timeout: () =>
     `Bound the run of the owner tests so that they end, and let a law reject a run that does not.`,
   'setup-error': () =>
