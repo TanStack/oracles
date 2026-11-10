@@ -289,6 +289,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -420,6 +421,7 @@ function cliArgs(
  */
 function runCli(dir, files, how = {}) {
   writeFixture(dir, files)
+  const before = new Set(filesUnder(dir))
   const { args, out } = cliArgs(dir, files, how)
   const child = spawnSync(process.execPath, args, {
     cwd: repo,
@@ -428,8 +430,31 @@ function runCli(dir, files, how = {}) {
     maxBuffer: 64 * 1024 * 1024,
     env: cleanEnv(),
   })
-  return readRun(dir, out, child.status, child.stderr, how.cli ?? here)
+  const run = readRun(dir, out, child.status, child.stderr, how.cli ?? here)
+  // What the run wrote beside its output directory and outside the package's
+  // own state (`.oracle-gaps`), as a path relative to the package.
+  const strayWrites = filesUnder(dir).filter(
+    (file) =>
+      !before.has(file) &&
+      !OWN_WRITES.some((home) => file === home || file.startsWith(`${home}/`)),
+  )
+  return { ...run, strayWrites }
 }
+
+/** Relative paths of the files under a directory, not inside node_modules. */
+function filesUnder(root, within = ``) {
+  return readdirSync(join(root, within), { withFileTypes: true }).flatMap(
+    (entry) => {
+      const path = within === `` ? entry.name : `${within}/${entry.name}`
+      if (entry.name === `node_modules`) return []
+      return entry.isDirectory() ? filesUnder(root, path) : [path]
+    },
+  )
+}
+
+// Where a run may write in the package: its output directories and its own
+// state (the CLI's `out` and `out-daemon` in the fixture, and `.oracle-gaps`).
+const OWN_WRITES = [`out`, `out-daemon`, `.oracle-gaps`]
 
 /** Runs the CLI several times at once on one state of the fixture. */
 async function runClisAtOnce(dir, files, hows) {
@@ -1202,6 +1227,12 @@ function daemonCheck(observations) {
 function check(plan, observations, expected) {
   const cli = observations.find((o) => o.checkpoint === `cli`)?.value
   if (!cli) return violation(`cli`, `no CLI run was observed`, `completion`)
+  if (cli.strayWrites?.length > 0)
+    return violation(
+      `cli`,
+      `the run wrote ${cli.strayWrites.join(`, `)} outside its output directory and the package's .oracle-gaps`,
+      `output namespace`,
+    )
   if (expected.refused) {
     if (cli.exit === 0)
       return violation(
@@ -1669,6 +1700,20 @@ const separate = [
 ]
 const witnessed = required.filter((s) => !separate.includes(s))
 
+// A constructed history builds from a generated base that declares its oracle
+// file and owns its functions (as the static oracle's constructed histories
+// do), so a random `neither` or `ownerless` cannot refuse a state it names.
+const withDeclaration = (constructed) =>
+  constructed.map((item) => ({
+    ...item,
+    build: (generated) =>
+      item.build({
+        ...generated,
+        declaration: `declareOracle`,
+        ownerless: false,
+      }),
+  }))
+
 oracleProperty({
   id: `oracle-gaps.report`,
   law: {
@@ -1682,7 +1727,7 @@ oracleProperty({
     measured: staticStates,
     runs: 2,
     fixedSeeds: [20261105],
-    constructed: [
+    constructed: withDeclaration([
       {
         name: `every outcome class`,
         enters: witnessed,
@@ -1709,6 +1754,27 @@ oracleProperty({
           unbuiltDep: true,
           sourceSpelling: `dot`,
           cliPath: `spaced`,
+          boot: false,
+          budget: `two`,
+        }),
+      },
+      {
+        // A workspace dependency whose one entry is bundled into the package's
+        // state. Its bundle must not be written into the dependency's own
+        // directory (a run writes only under its output directory and the
+        // package's `.oracle-gaps`).
+        name: `a workspace dependency bundled into the package's state`,
+        enters: [],
+        build: (generated) => ({
+          ...generated,
+          depSubpath: false,
+          native: `none`,
+          unbuiltDep: false,
+          witness: false,
+          wholeFile: `none`,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
           boot: false,
           budget: `two`,
         }),
@@ -1944,7 +2010,7 @@ oracleProperty({
             : {}),
         }),
       })),
-    ],
+    ]),
   },
   resolve: resolveHistory,
   model,

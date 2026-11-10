@@ -77,7 +77,7 @@ import {
   symlinkSync,
 } from 'node:fs'
 import { createRequire } from 'node:module'
-import { dirname, join } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { declareOracle } from '../src/oracle-declaration.ts'
 import { oracleProperty, pass, violation } from '../src/oracle-property.ts'
@@ -130,9 +130,11 @@ function analyzeFixture(dir, files, plan) {
       [`--package`, dir, `--source`, sourceArgument(plan, `${dir}.link`)],
       dir,
     )
+    const outputs = defaultOutputsOf(dir, sources)
     const { mutants, owned, instrumented } = analyze(ts, dir, sources, tests)
     assignKeys(mutants)
     return {
+      outputs,
       mutants: mutants.map((m) => ({
         source: m.source,
         function: m.function,
@@ -157,6 +159,46 @@ function analyzeFixture(dir, files, plan) {
   } catch (error) {
     return { refusal: String(error?.message ?? error) }
   }
+}
+
+// The default output of three runs, two of this package and one of another
+// package (a sibling, made for the run). The driver records relations, not
+// the paths: whether each output is a directory under its own package's
+// state, and which pairs of outputs are the same directory.
+function defaultOutputsOf(dir, sources) {
+  const other = realpathSync(mkdtempSync(join(here, `.scratch-`)))
+  try {
+    const run = (pkg) =>
+      parseArgs([`--package`, pkg, `--source`, sources.join(`,`)], pkg).out
+    const home = (pkg) => join(pkg, `.oracle-gaps`, `out`) + sep
+    const outs = [run(dir), run(dir), run(other)]
+    const homes = [home(dir), home(dir), home(other)]
+    return {
+      contained: outs.map((out, i) => out.startsWith(homes[i])),
+      // Pairs: the two runs of one package, then each with the other package.
+      same: [outs[0] === outs[1], outs[0] === outs[2], outs[1] === outs[2]],
+    }
+  } finally {
+    rmSync(other, { recursive: true, force: true })
+  }
+}
+
+// Each run's default output is a directory of its own under its package's
+// state, so runs of one package and of two packages never collide.
+function outputNamespace({ contained, same }) {
+  if (!contained.every(Boolean))
+    return violation(
+      `static`,
+      `a run's default output is not a directory under its package's .oracle-gaps/out`,
+      `output namespace`,
+    )
+  if (same.some(Boolean))
+    return violation(
+      `static`,
+      `two runs share one default output directory`,
+      `output namespace`,
+    )
+  return undefined
 }
 
 // ## The derived class, run
@@ -579,6 +621,10 @@ function checkDerived(plan, observed) {
 function check(plan, observations, expected) {
   const got = observations.find((o) => o.checkpoint === `static`)?.value
   if (!got) return violation(`static`, `no analysis was observed`, `completion`)
+  if (got.outputs) {
+    const namespace = outputNamespace(got.outputs)
+    if (namespace) return namespace
+  }
   // An owner that fails, and a config the runner cannot honor, are found
   // only when the runner starts.
   const runtime = [`brokenOwner`, `projects`, `brokenVitest`].includes(
@@ -837,7 +883,7 @@ const required = [
 oracleProperty({
   id: `oracle-gaps.report-static`,
   law: {
-    statement: `The gap report's static half keeps every Svelte rune where Svelte allows it, enumerates the promised operator mutants, marks exactly the probe-only code, refuses broken owns declarations, gives each function the owners whose call trees contain it, anchors each mutant's key, keeps keys, probe marks, and ownership stable under unrelated edits, and keeps each derived class's \`super(...)\` call unconditional. In a derived constructor, no mutant site lies before the first statement that calls super or inside that statement (an arrow inherits super, so an arrow's call counts), and statements after it keep their sites. So no mutant, when active, prevents or delays the super call. With no mutant active the instrumented class behaves as its source does, and under every mutant the constructor completes with its base class's tag unless an early return ends it first.`,
+    statement: `The gap report's static half keeps every Svelte rune where Svelte allows it, gives each run's default output a directory of its own under its package's state, so runs of one package and of two packages never collide, enumerates the promised operator mutants, marks exactly the probe-only code, refuses broken owns declarations, gives each function the owners whose call trees contain it, anchors each mutant's key, keeps keys, probe marks, and ownership stable under unrelated edits, and keeps each derived class's \`super(...)\` call unconditional. In a derived constructor, no mutant site lies before the first statement that calls super or inside that statement (an arrow inherits super, so an arrow's call counts), and statements after it keep their sites. So no mutant, when active, prevents or delays the super call. With no mutant active the instrumented class behaves as its source does, and under every mutant the constructor completes with its base class's tag unless an early return ends it first.`,
     authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the frozen design's plan for an oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); for rune placement, Svelte 5's placement rule for runes (state_invalid_placement, effect_invalid_placement) and the maintainer's report of svelte-db's useLiveQuery.svelte.ts failing to compile under instrumentation (2026-11-08); for derived classes, the gap report's contract that instrumentation with no mutant active does not change behavior and that a mutant is a legal program variant (the operator contract in schemata.mjs), ECMAScript's rule that a derived constructor calls \`super\` before it reads \`this\` and before it returns, the maintainer's report of TanStack DB's subscription.ts failing with no mutant active (G11, 2026-11-09), and the maintainer's decision of 2026-11-09 on the derived constructor's site region (every shape of super, including an early return before it, is covered by the one rule).`,
     limits: `The grammar and model of oracle-gaps.report, with its limits. Outcomes that need test runs, and the failing-owner refusal, belong to oracle-gaps.report. Same-named functions, accessors, and field arrows are judged for ownership only; runes only as $state, $state.raw, $derived, $derived.by, $effect, and $effect.pre in a .svelte.ts module, judged by a restatement of Svelte's placement rule rather than the compiler. A derived class is judged in this oracle's in-process run and in the end-to-end oracle's static half: the end-to-end oracle instruments its file and judges its sites as unowned, but no test imports or constructs the class, so no test runs it. The in-process run transpiles the file to CommonJS at ES2022; other downlevel targets and Vitest's own transform are not exercised. The mutant switch (switchFor) is a hand copy of the switch's contract in schemata.mjs, not the capture setup's runtime: the capture setup imports Vitest and installs timers and globals when it loads, so it cannot run in-process. The derived grammar has one derived class per history, with parameter properties, a field, statements before and after super, an early return before it, and the four forms of the super call (a statement, an arrow argument, and the right operand of \`&&\` or \`||\`). It has no super call in a method, a nested class, or a \`super.method()\` call, and no default parameter.`,
   },
