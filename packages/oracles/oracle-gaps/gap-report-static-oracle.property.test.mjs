@@ -373,6 +373,18 @@ async function driver(plan, observe) {
     const states = new Set(derived ? derivedReach(derived) : [])
     if (before.refusal && plan.fault !== `none`)
       states.add(`refused ${plan.fault}`)
+    if (before.refusal && plan.declaration === `neither`)
+      states.add(`refused without an oracle file`)
+    if (
+      before.refusal &&
+      plan.fault === `none` &&
+      plan.declaration !== `neither`
+    )
+      states.add(`refused without an owner`)
+    if (!before.refusal && plan.declaration === `oracleProperty`)
+      states.add(`owns read from oracleProperty`)
+    if (!before.refusal && plan.declaration === `both`)
+      states.add(`owns read from both declarations`)
     // The statement whose lines hold a mutant, by the model's layout.
     const statementAt = (m) =>
       plan.functions
@@ -766,6 +778,22 @@ const calibrations = [
 ]
 
 const faults = [`badEntry`, `missingSource`, `nonLiteral`, `outsideSource`]
+// Each constructed history builds from a generated history whose declaration
+// is `declareOracle` and whose first function is owned, the form the other
+// histories use, unless it names its own: a refusing declaration or an
+// ownerless run then reaches only the states that name it, and a run that
+// owns nothing is not refused for a state it does not name.
+const withDeclaration = (constructed) =>
+  constructed.map((item) => ({
+    ...item,
+    build: (generated) =>
+      item.build({
+        ...generated,
+        declaration: `declareOracle`,
+        ownerless: false,
+        owners: [`a`, ...generated.owners.slice(1)],
+      }),
+  }))
 const required = [
   ...Object.values(ownedStates),
   ...Object.values(derivedStates),
@@ -800,6 +828,10 @@ const required = [
   `production else judged`,
   `stability rerun`,
   ...faults.map((fault) => `refused ${fault}`),
+  `owns read from oracleProperty`,
+  `owns read from both declarations`,
+  `refused without an oracle file`,
+  `refused without an owner`,
 ]
 
 oracleProperty({
@@ -814,7 +846,7 @@ oracleProperty({
     states: required,
     runs: 40,
     fixedSeeds: [20261105],
-    constructed: [
+    constructed: withDeclaration([
       {
         name: `every static state`,
         enters: required.filter(
@@ -830,6 +862,10 @@ oracleProperty({
               derivedStates.and,
               derivedStates.or,
               ...faults.map((f) => `refused ${f}`),
+              `owns read from oracleProperty`,
+              `owns read from both declarations`,
+              `refused without an oracle file`,
+              `refused without an owner`,
             ].includes(s),
         ),
         build: (generated) => ({
@@ -973,7 +1009,49 @@ oracleProperty({
         enters: [`refused ${fault}`],
         build: (generated) => ({ ...generated, fault, steps: null }),
       })),
-    ],
+      {
+        name: `owns read from oracleProperty`,
+        enters: [`owns read from oracleProperty`],
+        build: (generated) => ({
+          ...generated,
+          declaration: `oracleProperty`,
+          fault: `none`,
+          steps: null,
+        }),
+      },
+      {
+        name: `owns read from both declarations`,
+        enters: [`owns read from both declarations`],
+        build: (generated) => ({
+          ...generated,
+          declaration: `both`,
+          fault: `none`,
+          steps: null,
+        }),
+      },
+      {
+        name: `no oracle file refuses the run`,
+        enters: [`refused without an oracle file`],
+        build: (generated) => ({
+          ...generated,
+          declaration: `neither`,
+          fault: `none`,
+          steps: null,
+        }),
+      },
+      {
+        name: `no owns entry refuses the run`,
+        enters: [`refused without an owner`],
+        build: (generated) => ({
+          ...generated,
+          declaration: `declareOracle`,
+          fault: `none`,
+          ownerless: true,
+          wholeFile: `none`,
+          steps: null,
+        }),
+      },
+    ]),
   },
   resolve: resolveHistory,
   model,

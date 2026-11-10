@@ -11,7 +11,8 @@
 //    (schemata.mjs) and serves that copy to Vitest through a plugin. Nothing
 //    is written to the source file. State-probe code is marked and left out.
 // 2. Finds every test file the package's Vitest config includes. A test file
-//    that calls `declareOracle({ owns })` is an oracle file; owning an entry
+//    that calls `oracleProperty({ owns })` (or `declareOracle({ owns })`) is
+//    an oracle file; owning an entry
 //    function owns its static call tree (owners.mjs). A declaration that
 //    names nothing or is not a literal list refuses the run, because it would
 //    hide gaps.
