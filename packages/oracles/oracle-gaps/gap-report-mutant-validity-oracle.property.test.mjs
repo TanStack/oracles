@@ -1,72 +1,74 @@
 /**
- * # The gap report never generates a mutant that no input can distinguish
+ * # The gap report's mutants are judged over the framework's data domain
  *
- * Law 1: every mutant that the CLI's instrumenter emits differs from the
+ * Law 1: every emitted mutant that is not marked dead code differs from the
  * original function on some input. Law 2: every site that the instrumenter
- * skips as undetectable equals the original function on every input. An
- * undetectable mutant is an invalid mutant. A report that counts one either
- * calls a non-gap a gap, or gives an agent a gap that no test can close.
+ * skips equals the original on every input. Dead code: a site is marked dead
+ * code exactly when no input distinguishes it, and no site is skipped as
+ * undetectable: an undetectable site is dead code, not a skip. Boundary: the
+ * boundary evidence appears exactly on an ordering swap whose two branches
+ * yield its two compared operands; it is a hint for the report, and the
+ * mutant stays.
  *
- * Authority: the frozen design v20's maintainer decision of 2026-11-10,
- * "anything an oracle can't possibly detect is an invalid mutant" (freeze.md,
- * "Undetectable mutants are invalid"), and its decision 5, that a reported
- * equivalent is a framework bug and not an answer.
+ * Authority: the frozen design v20's decision of 2026-11-10, "anything an
+ * oracle can't possibly detect is an invalid mutant" (freeze.md, "Undetectable
+ * mutants are invalid"), and its decision 5, that a reported equivalent is a
+ * framework bug and not an answer. The domain is the framework's data domain
+ * (maintainer, 2026-11-10, relayed by the coordinator): signed zero counts
+ * apart from zero, NaN is a value, and a string compares with coercion beside
+ * the number of its digits. A skip that the integers alone would justify is
+ * unsound on that domain, so no skip is made.
  *
  * Domain. Each program is one function `f(a, b, c)` run on every input in
- * {0,1,2}^3. Every ordering of three integers, ties included, is in that
- * domain, so an input cannot be missing that separates two orderings. Two
- * functions are equal when they return `Object.is`-equal values on all 27
- * inputs.
+ * VALUES^3, where VALUES is 0, -0, 1, 2, NaN, '1', '2'. Two functions are equal
+ * when they return `Object.is`-equal values on all 343 inputs. A site is
+ * distinguishable when some input separates the mutant from the original.
  *
  * Grammar. A program's body is one of: a comparison returned as a value; a
  * ternary; a guard, `if (C) return T; return F;` or the same with an `else`;
- * or a clamp, a ternary whose false branch is another ternary. A comparison
- * is of two operands, each a variable or the literal 1, in either written
- * order (`a > b` and `b < a` are both generated). A ternary's or guard's
- * branches are either the two compared operands, in either order, or the
- * third variable with one of them. The third variable stands in for a
- * literal branch: on this domain, a literal such as `2` in `if (a > 1)
- * return 2; return a` makes the `if-false` mutant equal the original on all
- * 27 inputs, although the integers distinguish it (a = 3). Equal branches
- * are not generated; they are a different family of undetectable mutants,
- * outside this grammar (see the limits).
+ * a clamp, a ternary whose false branch is another ternary; or a logical
+ * operator, `return X op Y` with `op` one of `&&`, `||`, `??`. A comparison is
+ * of two operands, each a variable or the literal 1, in either written order
+ * (`a > b` and `b < a` are both generated). A ternary's or guard's branches
+ * are the two compared operands in either order, the variable that is not an
+ * operand with one of them, or the same variable twice. A literal branch other
+ * than the operand 1 is not generated: on the small integers alone it can make
+ * an if-false mutant equal the original, although a larger value distinguishes
+ * it (`if (a > 1) return 2; return a`, at a = 3). The domain above has 3 and
+ * the strings, but a larger literal is still left out.
  *
- * Model. The model interprets the grammar on each input. A mutant is a
- * change to the program: a comparison's operator swapped to its boundary
- * partner (`>` with `>=`, `<` with `<=`), or an `if`'s condition forced to
- * true or to false. A site is distinguishable when some input gives the
- * changed program a different value from the original. The model reads the
- * grammar's own rendered text and its sites, never the instrumenter's text,
- * and it evaluates programs directly, so it does not share the emitter's
- * rules.
+ * Model. The model interprets the grammar on each input. A mutant is a change
+ * to the program: a comparison's operator swapped to its boundary partner
+ * (`>` with `>=`, `<` with `<=`), a logical operator swapped to its partner
+ * (`&&` with `||`, `??` with `&&`), or an `if`'s condition forced to true or
+ * to false. The model reads the grammar's own rendered text and its sites,
+ * never the instrumenter's text, and it evaluates programs directly.
  *
  * Production path. The CLI's `instrument` (schemata.mjs) instruments the
  * rendered text. The driver runs the instrumented function with no mutant
  * active, which must equal the original, and then with each emitted mutant
- * active, recording whether its outputs differ from the original's.
+ * active, recording whether its outputs differ from the original's and the
+ * evidence the instrumenter tags on it.
  *
- * Observations. `instrumented` reports the clean run's result and each
- * emitted mutant's operator, position, and whether it is distinguishable.
+ * Observations. `instrumented` reports the clean run's result and, for each
+ * emitted mutant, its operator, position, whether it differs, and its evidence.
  * `reach` reports the structural state of the program.
  *
- * Comparison, for each site the model names. An emitted site must be
- * distinguishable in the model and in its run (law 1). A site that is not
- * emitted is skipped, and must equal the original on every input (law 2).
- * Each emitted mutant must be a site of the grammar.
+ * Comparison, for each site the model names. An emitted site that is not dead
+ * code must be distinguishable in the model and in its run (law 1). A site
+ * marked dead code must be indistinguishable in the model (dead-code law). A
+ * site that is not emitted must equal the original on every input (law 2), and
+ * an indistinguishable one must be marked dead code, not skipped. The boundary
+ * evidence must appear exactly where the model says (boundary law). Each
+ * emitted mutant must be a site of the grammar.
  *
- * Limits. Integer inputs only: the law says nothing about signed zero (`0`
- * and `-0` differ under `Object.is`), NaN, or operands of mixed types (`'1'`
- * and `1` compare with coercion). A skipped `>`/`>=` or `<`/`<=` swap is
- * sound only for numbers, so a skipped swap can distinguish mixed-type or
- * signed-zero inputs, which this domain cannot reach. That is a maintainer
- * decision, not a passing check. Outside the grammar, and open: branches
- * that agree (`if (a > b) return a; return a`), arithmetic with a literal
- * zero (`a + 0`), the logical and nullish operators (`a ?? a`), and `!`
- * (see the report). Property reads, calls, and getters are not generated. A
- * skipped swap is judged by the model's evaluation, not by any run of the
- * emitter. The switch below restates the operator contract in
- * schemata.mjs for the operators the grammar uses. Programs are sampled from
- * the enumerated grammar, and each structural state is constructed.
+ * Limits. The domain is finite and the grammar is small: a property read, a
+ * call, a getter, equal branches with a non-operand expression (`a + 0`), and
+ * the equality operators are not generated. Dead code is judged for the grammar
+ * programs only. A skipped site is judged by the model, not by any run of the
+ * emitter. The switch below restates the operator contract in schemata.mjs for
+ * the operators the grammar uses. Programs are sampled from the enumerated
+ * grammar, and each structural state is constructed.
  */
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
@@ -79,8 +81,10 @@ import { instrument } from './schemata.mjs'
 const here = dirname(fileURLToPath(import.meta.url))
 const ts = createRequire(join(here, `../package.json`))(`typescript`)
 
-const LAW_1 = `every emitted mutant differs from the original on some input`
+const LAW_1 = `every emitted mutant that is not dead code differs from the original on some input`
 const LAW_2 = `every skipped site equals the original on every input`
+const LAW_DEAD = `a site is marked dead code exactly when no input distinguishes it`
+const LAW_BOUNDARY = `the boundary evidence appears exactly on an ordering swap whose branches yield its operands`
 const LAW_REFINE = `the mutant run agrees with the model`
 const LAW_KNOWN = `every emitted mutant is a site of the grammar`
 const LAW_INERT = `instrumentation with no mutant active is inert`
@@ -92,11 +96,14 @@ const LAW_INERT = `instrumentation with no mutant active is inert`
 // generated in both written orders.
 
 const VARIABLES = [`a`, `b`, `c`]
-const DOMAIN = [0, 1, 2].flatMap((a) =>
-  [0, 1, 2].flatMap((b) => [0, 1, 2].map((c) => [a, b, c])),
+const VALUES = [0, -0, 1, 2, NaN, `1`, `2`]
+const DOMAIN = VALUES.flatMap((a) =>
+  VALUES.flatMap((b) => VALUES.map((c) => [a, b, c])),
 )
 const environment = ([a, b, c]) => ({ a, b, c })
 const OPS = [`>`, `>=`, `<`, `<=`]
+const ORDERING = new Set(OPS)
+const LOGICAL = [`&&`, `||`, `??`]
 // `x op y` is the same test as `y reverse(op) x`.
 const REVERSE = { '>': `<`, '>=': `<=`, '<': `>`, '<=': `>=` }
 const ref = (name) => ({ kind: `ref`, name })
@@ -115,9 +122,9 @@ function comparisonsOf(left, right) {
   ])
 }
 
-// The branches of a ternary or guard: the two operands in either order, or
-// the variable that is not an operand with one of the operands, in either
-// position. Each pair is unequal as written.
+// The branches of a ternary or guard: the two operands in either order, the
+// variable that is not an operand with one of the operands in either position,
+// and the same variable twice (dead code, judged by the model).
 function branchesOf(test) {
   const [l, r] = [test.left, test.right]
   const others = VARIABLES.filter((v) => v !== l.name && v !== r.name).map(ref)
@@ -130,6 +137,7 @@ function branchesOf(test) {
       [l, x],
       [r, x],
     ]),
+    ...VARIABLES.map((v) => [ref(v), ref(v)]),
   ]
 }
 
@@ -168,6 +176,14 @@ for (const outer of comparisonsOf(`a`, `c`))
       kind: `return`,
       expr: ternary(outer, ref(`c`), ternary(inner, ref(`b`), ref(`a`))),
     })
+// A logical operator on two variables, the same variable twice included.
+for (const left of VARIABLES)
+  for (const right of VARIABLES)
+    for (const op of LOGICAL)
+      programs.push({
+        kind: `return`,
+        expr: { kind: `logic`, left: ref(left), op, right: ref(right) },
+      })
 
 // The structural states a program can enter. Each one has a constructed
 // history below, so every campaign reaches it.
@@ -176,14 +192,23 @@ const STATES = [
   `a clamp`,
   `a ternary whose branches are its operands`,
   `a ternary whose branches include a non-operand`,
+  `a ternary whose branches are identical`,
   `a guard whose branches are its operands`,
   `a guard whose branches include a non-operand`,
+  `a guard whose branches are identical`,
   `a guard with else whose branches are its operands`,
   `a guard with else whose branches include a non-operand`,
+  `a guard with else whose branches are identical`,
+  `a logical operator on one variable twice`,
+  `a logical operator on two variables`,
 ]
 
 function stateOf(program) {
   if (program.kind === `return` && program.expr.kind === `cmp`) return STATES[0]
+  if (program.kind === `return` && program.expr.kind === `logic`)
+    return program.expr.left.name === program.expr.right.name
+      ? STATES[11]
+      : STATES[12]
   if (
     program.kind === `return` &&
     program.expr.kind === `cond` &&
@@ -195,23 +220,26 @@ function stateOf(program) {
     program.kind === `guard`
       ? [program.then, program.rest]
       : [program.expr.then, program.expr.else]
-  const operands = new Set([test.left.name, test.right.name])
-  const onOperands =
-    operands.size === 2 &&
-    operands.has(then.name) &&
-    operands.has(otherwise.name)
   const shape =
     program.kind === `guard`
       ? program.form === `else`
         ? `a guard with else`
         : `a guard`
       : `a ternary`
+  if (then.name === otherwise.name)
+    return `${shape} whose branches are identical`
+  const operands = new Set([test.left.name, test.right.name])
+  const onOperands =
+    operands.size === 2 &&
+    operands.has(then.name) &&
+    operands.has(otherwise.name)
   return `${shape} whose branches ${onOperands ? `are its operands` : `include a non-operand`}`
 }
 
-// The source of a program, and its mutation sites. A comparison's site is its
-// operator token. An `if`'s sites are its condition's first character, as the
-// instrumenter reports them. A change says what the mutant does.
+// The source of a program, and its mutation sites. A comparison's or logical
+// operator's site is its operator token. An `if`'s sites are its condition's
+// first character, as the instrumenter reports them. A change says what the
+// mutant does.
 function render(program) {
   let text = `function f(a, b, c) {\n  `
   const sites = []
@@ -227,7 +255,7 @@ function render(program) {
       put(` : `)
       return expression(expr.else)
     }
-    if (expr.kind === `cmp`) {
+    if (expr.kind === `cmp` || expr.kind === `logic`) {
       expression(expr.left)
       put(` `)
       sites.push({
@@ -271,10 +299,12 @@ function render(program) {
 
 // ## Model
 //
-// The grammar's own semantics: a comparison's test, a ternary's branch, and a
-// guard's branch, evaluated on one input. A change flips one comparison's op
-// to its boundary partner, or forces one guard's condition.
+// The grammar's own semantics: a comparison's test, a ternary's branch, a
+// guard's branch, and a logical operator, evaluated on one input. A change
+// flips one comparison's or logical operator to its boundary partner, or forces
+// one guard's condition.
 const BOUNDARY = { '>': `>=`, '>=': `>`, '<': `<=`, '<=': `<` }
+const LOGIC_PARTNER = { '&&': `||`, '||': `&&`, '??': `&&` }
 const compare = (x, op, y) =>
   op === `>` ? x > y : op === `>=` ? x >= y : op === `<` ? x < y : x <= y
 
@@ -284,6 +314,12 @@ function evaluate(program, env, change) {
       return /^[0-9]$/.test(expr.name) ? Number(expr.name) : env[expr.name]
     if (expr.kind === `cond`)
       return outcome(expr.test) ? value(expr.then) : value(expr.else)
+    if (expr.kind === `logic`) {
+      const flipped = change?.kind === `flip` && change.node === expr
+      const op = flipped ? LOGIC_PARTNER[expr.op] : expr.op
+      const [x, y] = [value(expr.left), value(expr.right)]
+      return op === `&&` ? x && y : op === `||` ? x || y : (x ?? y)
+    }
     return outcome(expr)
   }
   const outcome = (cmp) => {
@@ -300,23 +336,59 @@ function evaluate(program, env, change) {
   return value(taken ? program.then : program.rest)
 }
 
+// The tests that decide a branch, with their two values, in the program.
+function decisionsOf(program) {
+  const found = []
+  const visit = (expr) => {
+    if (expr.kind !== `cond`) return
+    found.push({ test: expr.test, branches: [expr.then, expr.else] })
+    visit(expr.then)
+    visit(expr.else)
+  }
+  if (program.kind === `guard`)
+    found.push({ test: program.test, branches: [program.then, program.rest] })
+  else visit(program.expr)
+  return found
+}
+
+// Whether a site's ordering swap has branches that are the two compared
+// operands, one each: the boundary evidence's shape.
+function boundaryOf(program, node) {
+  if (node.kind !== `cmp` || !ORDERING.has(node.op)) return false
+  return decisionsOf(program).some(({ test, branches }) => {
+    if (test !== node || branches.some((b) => b.kind !== `ref`)) return false
+    const yielded = branches
+      .map((b) => b.name)
+      .sort()
+      .join()
+    return yielded === [test.left.name, test.right.name].sort().join()
+  })
+}
+
 // The model's expectation for a program: its source, and for each site
-// whether some input distinguishes its mutant from the original.
+// whether some input distinguishes its mutant from the original, and whether
+// the boundary evidence is owed.
 function model(program) {
   const { text, sites } = render(program)
   return {
     source: text,
-    sites: sites.map((site) => ({
-      operator: site.operator,
-      position: site.position,
-      distinct: DOMAIN.some((input) => {
+    sites: sites.map((site) => {
+      const distinct = DOMAIN.some((input) => {
         const env = environment(input)
         return !Object.is(
           evaluate(program, env, site.change),
           evaluate(program, env, null),
         )
-      }),
-    })),
+      })
+      return {
+        operator: site.operator,
+        position: site.position,
+        distinct,
+        dead: !distinct,
+        boundary:
+          site.change.kind === `flip` && boundaryOf(program, site.change.node),
+      }
+    }),
   }
 }
 
@@ -363,6 +435,7 @@ function driver(program, observe) {
     operator: mutant.operator,
     position: mutant.position,
     differs: !sameOutputs(outputsUnder(code, mutant.number), original),
+    evidence: mutant.evidence,
   }))
   observe(`instrumented`, { clean, emitted })
   observe(`reach`, stateOf(program))
@@ -370,6 +443,8 @@ function driver(program, observe) {
 
 // ## Comparison
 const keyOf = (site) => `${site.operator}@${site.position}`
+const DEAD = `dead code`
+const BOUNDARY_EVIDENCE = `boundary: -0`
 
 function check(program, observations, expected) {
   const found = observations.find((o) => o.checkpoint === `instrumented`)?.value
@@ -385,26 +460,45 @@ function check(program, observations, expected) {
   for (const site of expected.sites) {
     const where = `${site.operator} at offset ${site.position} of ${JSON.stringify(expected.source)}`
     const mutant = emitted.get(keyOf(site))
-    if (mutant) {
+    if (!mutant) {
       if (!site.distinct)
         return violation(
           `instrumented`,
-          `emitted ${where} equals the original on every input`,
-          LAW_1,
+          `skipped ${where}, which no input distinguishes: it is dead code, not a skip`,
+          LAW_DEAD,
         )
-      if (!mutant.differs)
-        return violation(
-          `instrumented`,
-          `emitted ${where}: its run matches the original on every input, but the model finds an input that distinguishes it`,
-          LAW_REFINE,
-        )
-    } else if (site.distinct) {
       return violation(
         `instrumented`,
         `skipped ${where}, but the model finds an input that distinguishes it`,
         LAW_2,
       )
     }
+    const marked = mutant.evidence === DEAD
+    if (!marked && !site.distinct)
+      return violation(
+        `instrumented`,
+        `emitted ${where}, which equals the original on every input, and is not marked dead code`,
+        LAW_1,
+      )
+    if (marked && site.distinct)
+      return violation(
+        `instrumented`,
+        `marked dead code ${where}, but the model finds an input that distinguishes it`,
+        LAW_DEAD,
+      )
+    if (!marked && !mutant.differs)
+      return violation(
+        `instrumented`,
+        `emitted ${where}: its run matches the original on every input, but the model finds an input that distinguishes it`,
+        LAW_REFINE,
+      )
+    const tagged = mutant.evidence === BOUNDARY_EVIDENCE
+    if (tagged !== site.boundary)
+      return violation(
+        `instrumented`,
+        `${tagged ? `tags` : `does not tag`} ${where} as boundary evidence, owed ${site.boundary ? `yes` : `no`}`,
+        LAW_BOUNDARY,
+      )
   }
   const known = new Set(expected.sites.map(keyOf))
   const stray = found.emitted.find((e) => !known.has(keyOf(e)))
@@ -423,8 +517,13 @@ declareOracle({
   grammar: [fc.constantFrom(...programs)],
 })
 
-// Two calibrations, each a wrong answer the check must reject. One hides a
-// distinguishable swap; the other keeps an undistinguishable one.
+// Four calibrations, each a wrong answer the check must reject: a
+// distinguishable swap hidden; an undistinguishable mutant not marked dead;
+// a distinguishable mutant marked dead; boundary evidence missing.
+const withEmitted = (trace, index, value, emitted) =>
+  trace.map((o, i) =>
+    i === index ? { ...o, value: { ...value, emitted } } : o,
+  )
 const calibrations = [
   {
     name: `a distinguishable swap is left out of the emitted mutants`,
@@ -438,34 +537,66 @@ const calibrations = [
         sites.some((s) => s.distinct && keyOf(s) === keyOf(e)),
       )
       if (at < 0) return undefined
-      const emitted = value.emitted.filter((_, i) => i !== at)
-      return trace.map((o, i) =>
-        i === index ? { ...o, value: { ...value, emitted } } : o,
+      return withEmitted(
+        trace,
+        index,
+        value,
+        value.emitted.filter((_, i) => i !== at),
       )
     },
   },
   {
-    name: `an undistinguishable swap is kept as an emitted mutant`,
+    name: `an undistinguishable mutant is emitted without the dead-code mark`,
     law: LAW_1,
     corrupt: (trace, program) => {
       const index = trace.findIndex((o) => o.checkpoint === `instrumented`)
       if (index < 0) return undefined
       const { value } = trace[index]
       const { sites } = model(program)
-      const site = sites.find(
-        (s) =>
-          !s.distinct &&
-          s.operator === `binary-swap` &&
-          !value.emitted.some((e) => keyOf(e) === keyOf(s)),
+      const at = value.emitted.findIndex((e) =>
+        sites.some((s) => s.dead && keyOf(s) === keyOf(e)),
       )
-      if (!site) return undefined
-      const emitted = [
-        ...value.emitted,
-        { operator: site.operator, position: site.position, differs: true },
-      ]
-      return trace.map((o, i) =>
-        i === index ? { ...o, value: { ...value, emitted } } : o,
+      if (at < 0) return undefined
+      const emitted = value.emitted.map((e, i) =>
+        i === at ? { ...e, evidence: undefined } : e,
       )
+      return withEmitted(trace, index, value, emitted)
+    },
+  },
+  {
+    name: `a distinguishable mutant is marked dead code`,
+    law: LAW_DEAD,
+    corrupt: (trace, program) => {
+      const index = trace.findIndex((o) => o.checkpoint === `instrumented`)
+      if (index < 0) return undefined
+      const { value } = trace[index]
+      const { sites } = model(program)
+      const at = value.emitted.findIndex((e) =>
+        sites.some((s) => s.distinct && !s.boundary && keyOf(s) === keyOf(e)),
+      )
+      if (at < 0) return undefined
+      const emitted = value.emitted.map((e, i) =>
+        i === at ? { ...e, evidence: DEAD } : e,
+      )
+      return withEmitted(trace, index, value, emitted)
+    },
+  },
+  {
+    name: `the boundary evidence is missing from an operand swap`,
+    law: LAW_BOUNDARY,
+    corrupt: (trace, program) => {
+      const index = trace.findIndex((o) => o.checkpoint === `instrumented`)
+      if (index < 0) return undefined
+      const { value } = trace[index]
+      const { sites } = model(program)
+      const at = value.emitted.findIndex((e) =>
+        sites.some((s) => s.boundary && keyOf(s) === keyOf(e)),
+      )
+      if (at < 0) return undefined
+      const emitted = value.emitted.map((e, i) =>
+        i === at ? { ...e, evidence: undefined } : e,
+      )
+      return withEmitted(trace, index, value, emitted)
     },
   },
 ]
@@ -481,9 +612,9 @@ const constructed = STATES.map((state) => {
 oracleProperty({
   id: `oracle-gaps.report-mutant-validity`,
   law: {
-    statement: `The gap report never emits a mutant that no input distinguishes from its original, and skips no comparison swap that some input distinguishes. Over the domain {0,1,2}^3, every emitted mutant of a grammar program differs from the program on some input (law 1), and every site the instrumenter skips equals the program on every input (law 2).`,
-    authority: `The frozen design v20's maintainer decision of 2026-11-10 that anything an oracle can't possibly detect is an invalid mutant (freeze.md, "Undetectable mutants are invalid"), and its decision 5, that an equivalent is a framework bug and not an answer. The boundary-swap skip rule is the first instance the design names: a swap whose two branches yield the two compared operands.`,
-    limits: `Integer inputs in {0,1,2}^3 only; signed zero, NaN, and mixed-type operands are outside the domain, where the skip is not sound (see the file's header). The grammar covers comparisons of variables and the literal 1 in ternaries, guards, guards with else, comparisons as values, and clamps, with branches that are the operands or the third variable. A literal branch other than the operand 1 is not generated: on {0,1,2}^3 it can make an if-false mutant equal the original on every input although the integers distinguish it (\`if (a > 1) return 2; return a\`, at a = 3), so a wider domain is a maintainer decision. Branches that agree, arithmetic with a zero operand, logical and nullish operators, and \`!\` are not generated, and are open families. Skipped swaps are judged by the model, not by a run of the emitter. Programs are sampled from the enumerated grammar.`,
+    statement: `Over the framework's data domain (0, -0, 1, 2, NaN, and the strings '1' and '2' in three variables), every emitted mutant of a grammar program that is not marked dead code differs from the program on some input (law 1). Every site the instrumenter skips equals the program on every input (law 2). A site is marked dead code exactly when no input distinguishes it, and no site is skipped as undetectable (dead-code law). The boundary evidence appears exactly on an ordering swap whose two branches yield its two compared operands.`,
+    authority: `The frozen design v20's maintainer decision of 2026-11-10 that anything an oracle can't possibly detect is an invalid mutant (freeze.md, "Undetectable mutants are invalid"), and its decision 5, that an equivalent is a framework bug and not an answer. The domain is the framework's data domain, which counts -0 apart from 0 and compares strings with coercion (maintainer, 2026-11-10, relayed by the coordinator). The dead-code and boundary evidence are the coordinator's revision of that decision.`,
+    limits: `A finite domain of seven values per variable, and a small grammar: no property reads, calls, getters, equality operators, or equal branches with a non-operand expression (for example \`a + 0\`). Literal branches other than the operand 1 are not generated. Dead code is judged for grammar programs only. A skipped site is judged by the model, not by a run of the emitter. Programs are sampled from the enumerated grammar.`,
     owner: `packages/oracles/oracle-gaps`,
   },
   histories: {
