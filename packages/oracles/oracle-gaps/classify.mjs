@@ -202,16 +202,17 @@ export function targetsOf(mutant, baseline, owners, oracleFiles) {
   }
 }
 
-// An `if` on a mutant's line that its owners' tests reached but never saw
-// take both outcomes.
+// The outcome that an `if` on a mutant's line, reached by its owners' tests,
+// never took: `true` or `false`, or undefined when every such `if` took both
+// (or no owner reached one). An `if` mutant's branch is never taken then.
 function outcomeMissing(mutant, owners, mutants, baseline) {
-  return mutants.some((m) => {
+  for (const m of mutants) {
     if (
       m.operator !== `if-true` ||
       m.source !== mutant.source ||
       m.line !== mutant.line
     )
-      return false
+      continue
     let truthy = false
     let falsy = false
     for (const [file, seen] of baseline.outcomeSeen.get(m.number) ?? [])
@@ -222,8 +223,41 @@ function outcomeMissing(mutant, owners, mutants, baseline) {
     const reached = (baseline.reachedBy.get(m.number) ?? []).some((k) =>
       owners.has(fileOf(k)),
     )
-    return reached && !(truthy && falsy)
-  })
+    if (reached && !(truthy && falsy)) return truthy ? `false` : `true`
+  }
+  return undefined
+}
+
+// The operators the capture measures: an `if`'s outcome, and a comparison's
+// operands (capture-setup.mjs). Every other operator infects on reach.
+const comparisonOps = new Set([`===`, `!==`, `<`, `<=`, `>`, `>=`])
+const isIf = (mutant) =>
+  mutant.operator === `if-true` || mutant.operator === `if-false`
+const isComparison = (mutant) =>
+  mutant.operator === `binary-swap` && comparisonOps.has(mutant.original)
+
+// The owner test that infected a mutant: for a comparison or `if`, the first
+// whose capture marked it infected (its mutated value differed there). Any
+// other mutant infects on reach, so the first owner test that reached it is
+// the one. Undefined when no test did.
+function infectionOf(mutant, targets, baseline) {
+  const id = mutant.number
+  // Code that ran outside any test has no infection of its own: a test
+  // owns the infection it records.
+  const tests = targets.oracleKeys.filter((k) => !k.endsWith(` > (background)`))
+  if (isIf(mutant) || isComparison(mutant))
+    return tests.find((k) => baseline.firstRows.get(k)?.infected?.includes(id))
+  return tests[0]
+}
+
+// The operand pairs that the owner tests' comparison recorded for a mutant:
+// distinct, in test order, up to three.
+function operandsOf(mutant, targets, baseline) {
+  const pairs = []
+  for (const k of targets.oracleKeys)
+    for (const [id, pair] of baseline.firstRows.get(k)?.operands ?? [])
+      if (id === mutant.number) pairs.push(pair.join(` and `))
+  return [...new Set(pairs)].slice(0, 3)
 }
 
 // A changed asserted value or a changed property observation, with no
@@ -238,8 +272,15 @@ const changedIn = (rows, keys, baseline) =>
 /**
  * An operator mutant's outcome from the units of its owner files. A mutant
  * with no owner is `unowned`, and one that no owner test reached is
- * `unreached`. A survivor is a `comparison-gap`, an `indeterminate` mutant,
- * a `generator-gap`, or `no-observed-difference`.
+ * `unreached`. A survivor gets one class from what the run measured (the
+ * classes are in the design's decision 11): `not-judged` (a changed value
+ * no law rejected), `indeterminate` (only nondeterministic tests reached
+ * it), `dead-code` (no input distinguishes it), `branch-never-taken` (an
+ * `if` one of whose outcomes never occurred; `wanted` names the missing
+ * one), `not-infected` (a comparison whose operators agreed on every
+ * operand the owners reached; `operands` names them), and `not-observed`
+ * (infected, and no recorded observation changed; `infectedBy` names the
+ * test that infected it).
  */
 export function judgeMutant(
   mutant,
@@ -267,14 +308,27 @@ export function judgeMutant(
       !baseline.nondeterministic.has(k),
   )
   result.changedTests = changedIn(rows, compared, baseline)
-  result.class =
-    result.changedTests.length > 0
-      ? `comparison-gap`
-      : compared.length === 0
-        ? `indeterminate`
-        : outcomeMissing(mutant, owners, mutants, baseline)
-          ? `generator-gap`
-          : `no-observed-difference`
+  const wanted = isIf(mutant)
+    ? outcomeMissing(mutant, owners, mutants, baseline)
+    : undefined
+  const infectedBy = infectionOf(mutant, targets, baseline)
+  if (result.changedTests.length > 0) result.class = `not-judged`
+  else if (compared.length === 0) {
+    result.class = `indeterminate`
+    result.nondeterministicBy = targets.oracleKeys.filter((k) =>
+      baseline.nondeterministic.has(k),
+    )
+  } else if (mutant.evidence === `dead code`) result.class = `dead-code`
+  else if (wanted !== undefined) {
+    result.class = `branch-never-taken`
+    result.wanted = wanted
+  } else if (isComparison(mutant) && infectedBy === undefined) {
+    result.class = `not-infected`
+    result.operands = operandsOf(mutant, targets, baseline)
+  } else {
+    result.class = `not-observed`
+    result.infectedBy = infectedBy
+  }
   return result
 }
 
@@ -292,8 +346,8 @@ export const judgeOrdinary = (units) =>
 
 /**
  * An authored mutant's outcome from its owners' units. Its copy is not
- * instrumented, so no `if` outcomes tell a generator gap from an equivalent
- * mutant: a survivor is a `comparison-gap` or stays `survived`.
+ * instrumented, so no `if` outcomes or infections are measured for it: a
+ * survivor is `not-judged` (a changed observation) or `not-observed`.
  */
 export function judgeAuthored(units, baseline) {
   const result = {
@@ -309,6 +363,8 @@ export function judgeAuthored(units, baseline) {
     ),
     baseline,
   )
-  if (result.changedTests.length > 0) result.class = `comparison-gap`
+  // An authored mutant is not instrumented, so only its changed observations
+  // are measured: the rest is `not-observed`, the patch changed the code.
+  result.class = result.changedTests.length > 0 ? `not-judged` : `not-observed`
   return result
 }

@@ -97,7 +97,7 @@ import {
   targetsOf,
 } from './classify.mjs'
 import { readSummary } from './gap-report-model-oracle.mjs'
-import { assignKeys, renderReport } from './report.mjs'
+import * as report from './report.mjs'
 
 const MUTANTS = 4
 
@@ -346,10 +346,12 @@ function modelOutcome(h, mi) {
     return sized(`not-infected`, {
       mention: [`Operands seen: ${operandsSeen(h, mi, owners)}.`],
     })
-  const infecting = infectingTest(h, mi, owners, targets)
+  const infecting = infectingTest(h, mi, owners)
   return sized(`not-observed`, {
     mention: [
-      `Observe the value this code changes in \`${infecting}\`, and assert on it.`,
+      infecting === undefined
+        ? `Observe the value this code changes in the owner tests, and assert on it.`
+        : `Observe the value this code changes in \`${infecting}\`, and assert on it.`,
     ],
   })
 }
@@ -394,15 +396,13 @@ function infectedIn(h, mi, owners, targets) {
     return targets.length > 0
   return reachingTests(h, mi, owners).some(({ t }) => infects(h, mi, t))
 }
-// The first test that infected the mutant, or the first that reached it; a
-// file's background stands for its tests when no test of it reached.
-function infectingTest(h, mi, owners, targets) {
+// The first test that infected the mutant, or the first that reached it when
+// no infection is measured. None when only a file's background reached it.
+function infectingTest(h, mi, owners) {
   const tests = reachingTests(h, mi, owners)
   const measured = isIf(h.mutants[mi]) || isCompare(h.mutants[mi])
-  const infected = tests.find(({ t }) => infects(h, mi, t))
-  if (measured && infected) return `t${infected.ti}`
-  if (!measured && tests.length > 0) return `t${tests[0].ti}`
-  return `(background)`
+  const hit = measured ? tests.find(({ t }) => infects(h, mi, t)) : tests[0]
+  return hit ? `t${hit.ti}` : undefined
 }
 // The operand pairs the owners' tests reached, distinct, in order, up to three.
 function operandsSeen(h, mi, owners) {
@@ -555,7 +555,7 @@ const directives = {
   'not-infected':
     /^Add a history whose operands are equal, where `[^`]+` and `[^`]+` disagree\. Operands seen: .+\.$/,
   'not-observed':
-    /^Observe the value this code changes in `[^`]+`, and assert on it\.$/,
+    /^Observe the value this code changes in (`[^`]+`|the owner tests), and assert on it\.$/,
   'not-judged': /^Make a law in `[^`]+` reject the changed value\.$/,
   indeterminate:
     /^(Make `[^`]+` deterministic: control its clock and its random seed, so its failures judge this code|Add an owner test that runs line \d+ and asserts on its result)\.$/,

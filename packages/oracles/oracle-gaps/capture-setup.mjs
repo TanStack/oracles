@@ -282,6 +282,10 @@ function spin() {
 // operand that is not a primitive might run code when compared, so it counts
 // as a change without a second comparison.
 let infected = new Set()
+// The first pair of operands each comparison saw in the running test, as
+// text (no mutant active: the unmutated runs classify with them). An operand
+// that is not a primitive is recorded as its type.
+let operands = new Map()
 const backgroundInfected = new Set()
 // The outcomes of the `if`s that ran outside any test, such as at module
 // load: code that runs when a file loads the module reaches every test of
@@ -290,6 +294,8 @@ const backgroundOutcomes = new Map()
 const infect = (id) => (inTest ? infected : backgroundInfected).add(id)
 const primitive = (value) =>
   value === null || (typeof value !== `object` && typeof value !== `function`)
+const shown = (value) =>
+  primitive(value) ? String(value).slice(0, 40) : typeof value
 
 // Temporary profiling (ORACLE_GAPS_PROFILE): how many fast-check histories
 // each test ran, and in how many of them each site was hit, to measure what
@@ -376,6 +382,8 @@ globalThis.__oracleGaps = {
   v: (value) => value,
   cmp(id, a, b, op) {
     hit(id)
+    if (active === null && inTest && !operands.has(id))
+      operands.set(id, [shown(a), shown(b)])
     if (
       active === null &&
       (!primitive(a) ||
@@ -655,6 +663,7 @@ beforeEach((context) => {
   identities = new Map()
   hits = new Set()
   infected = new Set()
+  operands = new Map()
   outcomes = new Map()
   verdicts = new Map()
   testStarted = performance.now()
@@ -695,6 +704,7 @@ function finishTest(context) {
       hits: [...hits],
       calls,
       infected: [...infected],
+      operands: [...operands],
       ...(sawIo ? { io: true } : {}),
       outcomes: [...outcomes],
       verdicts: [...verdicts.values()],
@@ -718,6 +728,7 @@ function finishTest(context) {
   )
   hits = new Set()
   infected = new Set()
+  operands = new Map()
 }
 
 const thisFile = globalThis.__vitest_worker__?.filepath
