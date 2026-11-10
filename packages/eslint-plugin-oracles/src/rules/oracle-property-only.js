@@ -28,13 +28,15 @@
  *
  * Entry checks. An entry without a reason exempts nothing and is reported
  * (`baselineWithoutReason`). An entry for a file that has no legacy use left is
- * reported as stale (`staleBaseline`). An entry that the rule can never judge
- * is a configuration error, and the rule throws when it reads the settings: a
- * malformed entry (not an object with a string `file`, and a `reason` that is
- * absent or a string), a file outside the oracle-file glob (its name has no
- * `oracle` and an extension of .ts, .tsx, .js, .jsx, or .mjs), or a framework
- * implementation module. The throw happens at rule creation, before any file is
- * judged, so ESLint stops the run with that one message.
+ * reported as stale (`staleBaseline`). The rule never throws on a program that
+ * parses (frozen design principle P8; maintainer decision 2026-11-09). An entry
+ * that it cannot judge is reported instead, at line 1 of each oracle file that
+ * the configuration reaches, since ESLint runs a rule once per file, and it
+ * exempts nothing: a malformed entry (not an object with a string `file`, and a
+ * `reason` that is absent or a string) is `malformedEntry`; a `legacyCampaigns`
+ * value that is not an array is `malformedList`, and it replaces the file's
+ * own list; a file outside the oracle-file glob, or a framework implementation
+ * module, is `refusedEntry`.
  *
  * What the rule cannot do. It sees one file's source and its settings, not the
  * base commit, so it cannot tell a new entry from an old one. It does not stop
@@ -85,41 +87,47 @@ function importOf(identifier, sourceCode) {
   }
 }
 
+/** Whether a file is in the oracle-file glob: its name has `oracle` and a source extension. */
+const isOracleFileName = (file) => {
+  const name = file.replaceAll(`\\`, `/`).split(`/`).at(-1)
+  return name.includes(`oracle`) && /\.(ts|tsx|js|jsx|mjs)$/.test(name)
+}
+
 /**
- * Throws, with the entry's index, when a `legacyCampaigns` entry is malformed or
- * can never be judged. Validation runs once per run, when the rule is created.
+ * Splits the configured entries into the ones the rule can judge, and the
+ * problems it reports for the rest. Nothing here throws.
  */
-function validateLegacyCampaigns(entries, implementationModules) {
+function judgeEntries(entries, implementationModules) {
   if (!Array.isArray(entries))
-    throw new Error(
-      `oracle/oracle-property-only: legacyCampaigns must be an array of { file, reason } entries.`,
-    )
+    return { judged: [], problems: [{ messageId: `malformedList`, data: {} }] }
+  const judged = []
+  const problems = []
   entries.forEach((entry, index) => {
-    const at = `oracle/oracle-property-only: legacyCampaigns entry ${index}`
+    const at = `legacyCampaigns entry ${index}`
     if (
       typeof entry !== `object` ||
       entry === null ||
       typeof entry.file !== `string` ||
       (entry.reason !== undefined && typeof entry.reason !== `string`)
     )
-      throw new Error(
-        `${at} is malformed: expected { file: string, reason?: string }.`,
-      )
-    if (!isOracleFileName(entry.file))
-      throw new Error(
-        `${at} is not an oracle file: ${entry.file} has no \`oracle\` in its name or no source extension. Remove the entry.`,
-      )
-    if (isModuleFile(entry.file, implementationModules))
-      throw new Error(
-        `${at} is a framework implementation module: ${entry.file} is never judged. Remove the entry.`,
-      )
+      problems.push({ messageId: `malformedEntry`, data: { at } })
+    else if (!isOracleFileName(entry.file))
+      problems.push({
+        messageId: `refusedEntry`,
+        data: { at, file: entry.file, why: `not an oracle file` },
+      })
+    else if (isModuleFile(entry.file, implementationModules))
+      problems.push({
+        messageId: `refusedEntry`,
+        data: {
+          at,
+          file: entry.file,
+          why: `a framework implementation module`,
+        },
+      })
+    else judged.push(entry)
   })
-}
-
-/** Whether a file is in the oracle-file glob: its name has `oracle` and a source extension. */
-const isOracleFileName = (file) => {
-  const name = file.replaceAll(`\\`, `/`).split(`/`).at(-1)
-  return name.includes(`oracle`) && /\.(ts|tsx|js|jsx|mjs)$/.test(name)
+  return { judged, problems }
 }
 
 /**
@@ -170,19 +178,23 @@ export default {
       legacyImport: `\`{{name}}\` is a legacy campaign API whose reach depends on the seed. Declare the law with \`oracleProperty\` and its constructed histories instead.`,
       baselineWithoutReason: `This file's \`legacyCampaigns\` entry has no reason, so it exempts nothing. Give the reason that the file keeps its raw campaigns, or move the file to \`oracleProperty\`.`,
       staleBaseline: `This file's \`legacyCampaigns\` entry is stale: the file runs no raw campaign and imports no legacy API. Remove the entry, so the baseline only shrinks.`,
+      malformedList: `\`legacyCampaigns\` must be an array of { file, reason } entries. The rule ignores it, so no file is exempt.`,
+      malformedEntry: `\`{{at}}\` is malformed: expected { file: string, reason?: string }. The rule ignores it, so it exempts nothing.`,
+      refusedEntry: `\`{{at}}\` names {{file}}, which is {{why}}. The rule never judges it, so the entry exempts nothing: remove it.`,
     },
   },
   create(context) {
     const { sourceCode } = context
     const settings = oracleSettings(context)
-    validateLegacyCampaigns(
+    const { judged, problems } = judgeEntries(
       settings.legacyCampaigns,
       settings.implementationModules,
     )
-    if (isModuleFile(context.filename, settings.implementationModules)) {
-      return {}
-    }
-    const entries = settings.legacyCampaigns.filter((entry) =>
+    const implementation = isModuleFile(
+      context.filename,
+      settings.implementationModules,
+    )
+    const entries = judged.filter((entry) =>
       isModuleFile(context.filename, [entry.file]),
     )
     const exempt = entries.some(
@@ -212,6 +224,10 @@ export default {
         }
       },
       'Program:exit'(program) {
+        for (const problem of problems)
+          context.report({ node: program, ...problem })
+        // A framework implementation module is exempt from its own uses.
+        if (implementation) return
         if (entries.length > 0) {
           if (!exempt)
             context.report({

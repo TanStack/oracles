@@ -48,10 +48,13 @@ settings: {
 An entry exempts its file's raw campaigns and legacy imports only with a
 non-empty `reason`. The rule also reports an entry that has no reason, and an
 entry whose file has no legacy use left (a stale entry). An entry for a deleted
-or renamed file is not reported, because no lint run sees that file. An entry
-the rule cannot judge is a configuration error: a malformed entry, or one that
-names a file outside the oracle-file glob or a framework implementation module.
-The rule throws when it reads the settings, so the run stops with that message.
+or renamed file is not reported, because no lint run sees that file. An entry the rule cannot judge is reported, never thrown: a malformed entry
+(`malformedEntry`), a `legacyCampaigns` value that is not an array
+(`malformedList`), or an entry that names a file outside the oracle-file glob,
+such as a README, or a framework implementation module (`refusedEntry`). The
+report sits at line 1 of each oracle file that the configuration reaches, since
+ESLint runs a rule once per file. Such an entry exempts nothing; the file's other
+entries are judged as usual.
 
 The rule sees one file at a time, so it cannot tell a new entry from an old
 one: a project that wants the baseline to shrink enforces that in its own diff
