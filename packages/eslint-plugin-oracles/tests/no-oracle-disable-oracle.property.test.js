@@ -18,9 +18,7 @@
  * covers its own line (and, when it is a block directive, every later line) and
  * so would hide a report placed there. Any other reported directive, and any
  * inline config comment, is reported on its own line, unless an earlier block
- * directive in the same production source covers that line: then it too sits
- * at the first token. An oracle file uses `noInlineConfig`, so no directive in
- * it covers anything, and every other report sits on its own line. The message
+ * directive covers that line: then it too sits at the first token. The message
  * names the directive's line whatever the report's location.
  *
  * Authority: P8 of the frozen v20 design grammar: lint rules cannot be disabled
@@ -57,7 +55,7 @@
  * silences an oracle rule, and where its report sits. The model does not read
  * the rule, and it does not call ESLint's suppression code. It models the
  * coverage that the law needs: a block directive that names this rule or has no
- * list covers the later lines of production source.
+ * list covers the later lines of the file.
  *
  * Driver: lints the program with the plugin's config for its location (the
  * `recommended` config for an oracle file, `production` for production source),
@@ -160,9 +158,12 @@ const suppresses = (item) =>
 /** Whether the site's comment gets a report at all. */
 const isReported = (item) => silencesOracle(item)
 
-/** Whether an earlier block directive covers this location: production source only, since oracle files use noInlineConfig. */
-const coveredBy = (earlier, location) =>
-  location === `productionSource` &&
+/**
+ * Whether an earlier block directive covers this site's comment. The rule cannot
+ * tell whether an oracle file's noInlineConfig is set, so coverage applies in
+ * both locations, and a report there moves to the first token.
+ */
+const coveredBy = (earlier) =>
   earlier.some((item) => item.form === `block` && suppresses(item))
 
 /** The lines a site's leading comment takes: a wrapped block next-line comment takes two. */
@@ -185,8 +186,7 @@ function expectedReports(drawn) {
     if (isReported(item)) {
       // A directive that names this rule or has no list sits at the first token.
       const atFirstToken =
-        suppresses(item) ||
-        coveredBy(drawn.sites.slice(0, index), drawn.location)
+        suppresses(item) || coveredBy(drawn.sites.slice(0, index))
       const ownLine = isLeading(item.form) ? line : line + leadingLines(item)
       reports.push({
         line: atFirstToken ? firstTokenLine(drawn) : ownLine,
@@ -219,7 +219,7 @@ const statesOf = (drawn) => {
     if (isReported(item)) {
       states.push(`reported`)
       const earlier = drawn.sites.slice(0, index)
-      if (coveredBy(earlier, drawn.location)) states.push(`covered`)
+      if (coveredBy(earlier)) states.push(`covered`)
       else if (!suppresses(item)) states.push(`ownLine`)
     }
   })
@@ -541,7 +541,7 @@ const constructed = [
 oracleProperty({
   id: `lint.no-oracle-disable`,
   law: {
-    statement: `Every ESLint directive that would silence an oracle/* rule is reported once, in an oracle file and in production source, whatever its spelling: the line, next-line, and block forms; a bare, single-quoted, or double-quoted rule name; names separated with or without a space; a description; a block split over two lines; a list that names only oracle rules, only other rules, or both, including oracle/no-oracle-disable itself; and a blanket directive with no list. An inline config comment that names an oracle rule is reported. A report sits on the directive's line, or at the file's first token when the directive names this rule, has no list, or lies under an earlier block directive in production source. A comment that ESLint does not read as a directive, and a description that names an oracle rule, are not reported. The rule never throws on a program that parses.`,
+    statement: `Every ESLint directive that would silence an oracle/* rule is reported once, in an oracle file and in production source, whatever its spelling: the line, next-line, and block forms; a bare, single-quoted, or double-quoted rule name; names separated with or without a space; a description; a block split over two lines; a list that names only oracle rules, only other rules, or both, including oracle/no-oracle-disable itself; and a blanket directive with no list. An inline config comment that names an oracle rule is reported. A report sits on the directive's line, or at the file's first token when the directive names this rule, has no list, or lies under an earlier block directive. A comment that ESLint does not read as a directive, and a description that names an oracle rule, are not reported. The rule never throws on a program that parses.`,
     authority: `P8 of the frozen v20 design grammar: lint rules cannot be disabled inline, and the maintainer chose option b, a plugin rule that reports a directive that would silence an oracle rule; blanket directives are reported wherever ESLint lets the report through, and a self-naming directive is reported at the first token. P10: a harness failure is never charged to the rule. The directive grammar is ESLint's.`,
     limits: `A directive written before the first token covers it, so the first token cannot carry its report; the grammar starts every program with code. Block directives that cover later lines are not followed by enable directives. Config comments are reported at every severity; the grammar writes only off.`,
     owner: `eslint-plugin-oracles lint rules`,
