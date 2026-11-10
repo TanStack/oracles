@@ -74,7 +74,7 @@
  * emitted mutant must be a site of the grammar.
  *
  * Limits. The domain is finite: the admitted values of each type, three
- * parameters, and one free name. The grammar has no property reads, calls,
+ * parameters, and one free name. A clamp at type bigint is left out: its outer swap is undetectable over bigint, because at a tie the inner ternary returns the same value (witness: `function f(a: bigint, b: bigint, c: bigint) { return a > c ? c : a === b ? b : a; }`, the swap at offset 57). No syntactic rule decides that, so it is an open family for the maintainer. The grammar has no property reads, calls,
  * getters beyond `g`, or equal branches with a non-operand expression (`a +
  * 0`). Dead code is judged for grammar programs only, and the production rule
  * requires a pure condition (local names, literals, comparisons, logical
@@ -299,8 +299,21 @@ for (const outer of comparisonsOf(`a`, `c`))
     })
 
 // Every shape at each parameter type: the history of the oracle.
+// A clamp at type bigint is left out, and is an open family (see the limits):
+// at a tie of the outer test, the inner ternary's value is the same as the
+// operand's, so the outer swap is undetectable over bigint without a semantic
+// argument that no syntactic rule here makes.
+const isClamp = (shape) =>
+  shape.kind === `return` &&
+  shape.expr.kind === `cond` &&
+  shape.expr.else.kind === `cond`
 const programs = shapes.flatMap((shape) =>
-  TYPES.map((type) => ({ ...shape, type })),
+  TYPES.filter((type) => !(type === `bigint` && isClamp(shape))).map(
+    (type) => ({
+      ...shape,
+      type,
+    }),
+  ),
 )
 
 // The structural state a program enters, derived from the grammar.
@@ -477,27 +490,37 @@ function evaluate(program, input, change) {
 }
 
 // The model's expectation for a program: its source, and for each site whether
-// some input distinguishes its mutant from the original, and whether a history
-// of 0 and -0 alone does (for an ordering comparison).
+// some admitted input of its own type distinguishes its mutant from the original
+// (`distinct`), whether no admitted input of any declared type does (`dead`:
+// the program is redundant, whatever its parameters' types), and whether a
+// history of 0 and -0 alone does (for an ordering comparison at its own type).
 function model(program) {
   const { text, sites } = render(program)
-  const differs = (domain, change) =>
-    domain.some(
+  const distinctAt = (type, index) => {
+    const copy = { ...program, type }
+    const change = render(copy).sites[index].change
+    return DOMAIN[type].some(
       (input) =>
-        !Object.is(
-          evaluate(program, input, change),
-          evaluate(program, input, null),
-        ),
+        !Object.is(evaluate(copy, input, change), evaluate(copy, input, null)),
     )
+  }
   return {
     source: text,
-    sites: sites.map((site) => {
-      const distinct = differs(DOMAIN[program.type], site.change)
+    sites: sites.map((site, index) => {
+      const distinct = distinctAt(program.type, index)
+      const differs = (domain, change) =>
+        domain.some(
+          (input) =>
+            !Object.is(
+              evaluate(program, input, change),
+              evaluate(program, input, null),
+            ),
+        )
       return {
         operator: site.operator,
         position: site.position,
         distinct,
-        dead: !distinct,
+        dead: TYPES.every((type) => !distinctAt(type, index)),
         zeroDistinct:
           site.change.kind === `flip` &&
           site.change.node.kind === `cmp` &&
@@ -607,29 +630,31 @@ function check(program, observations, expected) {
     const where = `${site.operator} at offset ${site.position} of ${JSON.stringify(expected.source)}`
     const mutant = emitted.get(keyOf(site))
     if (!mutant) {
-      if (!site.distinct)
+      if (site.distinct)
         return violation(
           `instrumented`,
-          `skipped ${where}, which no input distinguishes: it is dead code, not a skip`,
+          `skipped ${where}, but the model finds an input that distinguishes it`,
+          LAW_2,
+        )
+      if (site.dead)
+        return violation(
+          `instrumented`,
+          `skipped ${where}, which no declared type can distinguish: it is dead code, not a skip`,
           LAW_DEAD,
         )
-      return violation(
-        `instrumented`,
-        `skipped ${where}, but the model finds an input that distinguishes it`,
-        LAW_2,
-      )
+      continue
     }
     const marked = mutant.evidence === DEAD
     if (!marked && !site.distinct)
       return violation(
         `instrumented`,
-        `emitted ${where}, which equals the original on every input, and is not marked dead code`,
+        `emitted ${where}, which equals the original on every input of its type, and is not marked dead code`,
         LAW_1,
       )
-    if (marked && site.distinct)
+    if (marked !== site.dead)
       return violation(
         `instrumented`,
-        `marked dead code ${where}, but the model finds an input that distinguishes it`,
+        `${marked ? `marked dead code` : `left unmarked`} ${where}, but ${site.dead ? `no declared type can distinguish it` : `some declared type can distinguish it`}`,
         LAW_DEAD,
       )
     if (mutant.differs !== site.distinct)
