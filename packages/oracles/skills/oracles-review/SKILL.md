@@ -1,6 +1,6 @@
 ---
 name: oracles-review
-description: Review oracle work done with @tanstack/oracles - challenge whether an oracle enforces its law, whether it is the right law, and whether the work took a shortcut. Use for reviewing a new or changed oracle, a production change in code that an oracle owns, or a proposed change to what an oracle promises.
+description: Review oracle work done with @tanstack/oracles. Challenge whether an oracle enforces its law, whether it is the right law, and whether the work took a shortcut. Use for a new or changed oracle, or a production change in owned code. Also use for a proposed change to what an oracle promises.
 ---
 
 # Review oracle work
@@ -41,12 +41,14 @@ contains one is not ready.
 
 | Shortcut                          | What to look for                                                                                                                                                                                                 |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Law after code**                | No law sheet before the oracle was written, or a law with no authority.                                                                                                                                          |
+| **Law after code**                | No law sheet before the oracle was written, a law with no authority, or a law block that disagrees with the `law` option or the model.                                                                           |
 | **Production first**              | A production change in owned code without a RED result from the extended oracle on the code before the change. A later run does not count.                                                                       |
 | **Model hacking**                 | A model rule changed to match production output without an authority. Production output is evidence, not authority.                                                                                              |
 | **Unreachable claim**             | A claim about a state that no constructed history enters, or a reach count nobody measured.                                                                                                                      |
 | **Quiet exclusion**               | Any skip, narrowed grammar, added filter or validity predicate, relaxed comparison, or exemption, other than probe-only code and the `super()` region of a derived constructor. Adopters have no exclusion list. |
 | **Pinned only**                   | A fixed example where the law needs a generator dimension.                                                                                                                                                       |
+| **Lowered budget**                | Fewer `runs`, a removed fixed seed, or a removed constructed history, without a stated reason.                                                                                                                   |
+| **Inserted, not refactored**      | A production change that adds a branch, flag, or path beside a similar old one. Or a change that leaves code that no law needs.                                                                                  |
 | **Unit test in an oracle file**   | An ordinary test or a fixed expected answer in an oracle file.                                                                                                                                                   |
 | **"Pre-existing" as a dismissal** | A reachable counterexample labeled as older than the change, and then left without a fix or a decision from the user.                                                                                            |
 | **No mutant**                     | A claim that a defect is closed, without a mutant, such as the original defect, that fails the oracle.                                                                                                           |
@@ -124,7 +126,7 @@ Ask these questions of every model and grammar:
 - **What does each distinction contribute?** For each law, model field, and
   branch, is there a legal history that needs it? If not, it is a candidate
   for removal or for a simpler representation (ORC-008).
-- **Is the complexity in the right place?** Laws stay simple; generators may
+- **Is the complexity in the right place?** Laws stay simple, and generators may
   be elaborate (`oracles-design` §4).
 - **Did the domain shrink?** A changed filter, validity predicate, or grammar
   bound removes histories from the claim. That is a contract change, and it
@@ -164,3 +166,4 @@ Report the supported findings and the remaining uncertainty. Do not invent findi
 decisive.
 
 If the review leads to oracle edits, load `oracles-design` before you edit.
+To act on the findings, load `oracles-evaluate-review`.

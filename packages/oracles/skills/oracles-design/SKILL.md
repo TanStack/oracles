@@ -1,6 +1,6 @@
 ---
 name: oracles-design
-description: Design, write, or change an oracle with @tanstack/oracles - write a law sheet first, choose a model, build histories that reach the states the law needs, show RED on unchanged production, change production, and close every gap. Use for a new oracle, an oracle repair, any production change in code that an oracle owns, and any change to a model, history grammar, driver, or check.
+description: Design, write, or change an oracle with @tanstack/oracles. Write a law sheet first, choose a model, and build histories that reach the states the law needs. Show RED on unchanged production, change production, and close every gap. Use for a new oracle, an oracle repair, or a production change in owned code. Also use for any change to a model, history grammar, driver, or check.
 ---
 
 # Design an oracle
@@ -42,6 +42,12 @@ Before any code, write one row per law and give the sheet to the user.
   the [law discovery](../../docs/instruments/law-discovery.md) card.
 
 **Stop here.** Do not write the oracle until the user has reviewed the sheet.
+
+Once the user approves it, the sheet becomes the **law block**: the opening
+comment of the oracle file, beside the model that enacts it. Each row's law,
+authority, and limits also go in that property's `law` option. Keep the
+block, the `law` option, and the model in step: a change to one updates the
+others in the same change (ORC-003).
 
 ## 2. Freeze what the oracle must preserve
 
@@ -117,7 +123,7 @@ small example of each style.
 | ------------------------------------------------------------------------------- | ---------------------------------- |
 | B1: expected values captured from production (`toMatchSnapshot` and similar)    | review (lint pending)              |
 | B2: a raw campaign (`fc.assert`, `fc.check`, `.prop`) in an oracle file         | lint `oracle/oracle-property-only` |
-| B3: `fc.pre` in an oracle file; legality belongs in the grammar or `resolve`    | review (lint pending)              |
+| B3: `fc.pre` in an oracle file. Legality belongs in the grammar or `resolve`.   | review (lint pending)              |
 | B4: a model that imports runtime code from production                           | review (lint pending)              |
 | B6: a check whose only assertions are "does not throw", "defined", or "settles" | review (warning)                   |
 | B7: the same expression on both sides of a comparison                           | review (lint pending)              |
@@ -146,7 +152,7 @@ you move into helpers, adapters, or mappings. Moving it does not remove it.
 The [design grammar](../../docs/instruments/design-grammar.md) card shows how
 to compare a simplification with the model it replaces.
 
-**Laws stay simple; history generators may be elaborate.** Reaching a hard
+**Laws stay simple. History generators may be elaborate.** Reaching a hard
 state can need a sophisticated generator. Put that work in the histories, not
 in the model.
 
@@ -168,6 +174,26 @@ in the model.
   - ablation: what each axis or rule contributes
   - range: the bounded domains and marginal cases
   - exclusion: a nearby invalid history that the grammar rejects
+
+**Choose the run budget.** Random runs explore around the critical states.
+They do not reach them.
+
+- **Cover every critical state by construction.** Each state that a law
+  needs is a declared state with a constructed history, and a probe where
+  production decides to enter it. Never raise `runs` to reach a state.
+- **Need a state at least N times?** Give it N constructed histories.
+- **Start with one fixed seed** in `fixedSeeds`, beside the random campaign.
+- **Start `runs` at 100** for a fast, synchronous driver, and at 25 to 50
+  for a driver that awaits timers or I/O.
+- **Keep it fast.** The gap check runs every owning oracle once for each
+  mutant, so oracle time multiplies. Aim for each oracle file to finish in a
+  few seconds in a normal run. Lower `runs` before you remove a dimension.
+- **Read the reach counts.** If a measured state is rare, add a constructed
+  history or change the generator's weights. Do not only add runs.
+- **Run longer sweeps with the run multiplier** (`<PREFIX>_RUNS_MULTIPLIER`),
+  locally or on a schedule, not by raising `runs` in the file.
+- **Lowering `runs`, removing a fixed seed, or removing a constructed history
+  is a weakening.** Give its reason in the change.
 
 Techniques: [guide § Histories](../../docs/guide.md#histories).
 
@@ -194,6 +220,10 @@ Techniques: [guide § Histories](../../docs/guide.md#histories).
 Keep the law, its authority, and its limits in `law`, and prose beside each
 part that says why it predicts the promised result (ORC-003).
 
+**Lint as you go.** Run the repository's lint on each oracle file and each
+changed production file after you edit it, and again before you finish. Fix
+every report. Do not disable a rule.
+
 Techniques: [guide § The driver and the check](../../docs/guide.md#the-driver-and-the-check).
 
 ## 7. RED, change, GREEN, mutant
@@ -212,6 +242,17 @@ When the task changes production:
 
 Do not change production before step 1. A later run does not make up for a
 skipped RED.
+
+**Clean up production once GREEN.** The oracle now protects the law, so use
+it to simplify:
+
+- Refactor the code around the change. Do not insert a new branch beside an
+  old one that does almost the same thing.
+- Remove states, flags, branches, and recovery paths that no law needs. The
+  gap check shows which code no history can observe.
+- Prefer a change that shrinks the code, or leaves its size the same. If the
+  repository sets a size rule, such as a net-negative diff, follow it.
+- Rerun the oracle and the gap check after each cleanup.
 
 Techniques: [guide § Evidence](../../docs/guide.md#evidence).
 
@@ -255,6 +296,12 @@ The evidence counts only as a set. One item alone proves little.
 - **Gaps:** the gap check's totals, and any gap reported as a framework bug.
 - **Limits:** the states, paths, and observations that the evidence does not
   cover.
+
+Put the evidence block in the pull request description. When a change claims
+that an oracle is new, repaired, or fully audited (ORC-012), also keep the
+evidence in a versioned record tied to the reviewed commit.
+
+When review findings arrive, load `oracles-evaluate-review`.
 
 ## Instruments
 

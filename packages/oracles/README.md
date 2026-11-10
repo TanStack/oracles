@@ -26,17 +26,18 @@ coding agents, and walks through a first oracle and gap check.
 
 ## What ships in this package
 
-| Path                       | What it is                                                                                      |
-| -------------------------- | ----------------------------------------------------------------------------------------------- |
-| `skills/oracles-setup/`    | Setup, upgrade, and making the skills findable.                                                 |
-| `skills/oracles-design/`   | How to design, write, or change an oracle: law sheet first, model, histories, RED, GREEN, gaps. |
-| `skills/oracles-review/`   | How to review oracle work.                                                                      |
-| `docs/oracle-checklist.md` | The complete requirements, by ID (ORC-001 to ORC-016).                                          |
-| `docs/guide.md`            | Techniques for each design and review step.                                                     |
-| `docs/model-styles.md`     | One small example of each model style.                                                          |
-| `docs/glossary.md`         | The oracle terms.                                                                               |
-| `docs/instruments/`        | Short reasoning cards that the skills route to.                                                 |
-| `oracle-gaps/`             | The gap check (`oracle-gaps` binary).                                                           |
+| Path                              | What it is                                                                                         |
+| --------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `skills/oracles-setup/`           | Setup, upgrade, and making the skills findable.                                                    |
+| `skills/oracles-design/`          | How to design, write, or change an oracle: law sheet first, model, histories, RED, GREEN, gaps.    |
+| `skills/oracles-evaluate-review/` | How to act on a review: a lossless ledger, RED on unchanged production, and closing the bug class. |
+| `skills/oracles-review/`          | How to review oracle work.                                                                         |
+| `docs/oracle-checklist.md`        | The complete requirements, by ID (ORC-001 to ORC-016).                                             |
+| `docs/guide.md`                   | Techniques for each design and review step.                                                        |
+| `docs/model-styles.md`            | One small example of each model style.                                                             |
+| `docs/glossary.md`                | The oracle terms.                                                                                  |
+| `docs/instruments/`               | Short reasoning cards that the skills route to.                                                    |
+| `oracle-gaps/`                    | The gap check (`oracle-gaps` binary).                                                              |
 
 ## An oracle
 

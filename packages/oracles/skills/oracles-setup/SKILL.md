@@ -1,6 +1,6 @@
 ---
 name: oracles-setup
-description: Set up @tanstack/oracles in a repository - install the pinned packages, add the lint preset, write the AGENTS.md block, make the oracle skills findable by coding agents, and run a first oracle through the gap check. Use when a repository adopts @tanstack/oracles or upgrades its pinned commit.
+description: Set up @tanstack/oracles in a repository. Install the pinned packages, add the lint preset, and write the AGENTS.md block. Make the oracle skills findable by coding agents, and run a first oracle through the gap check. Use when a repository adopts @tanstack/oracles or upgrades its pinned commit.
 ---
 
 # Set up @tanstack/oracles
@@ -20,7 +20,7 @@ Find out, and tell the user:
   workspace. For a workspace, ask which package to start in.
 - The test runner. The framework runs on Vitest 4 or later, with fast-check 4.
   If the package uses another runner, oracles run in a separate Vitest config
-  beside it; do not change the existing suite.
+  beside it. Do not change the existing suite.
 - Where production source lives (for example `src/`), and whether ESLint
   parses TypeScript already.
 - Which coding agents the user works with. Look for `.claude/`, `.agents/`,
@@ -101,6 +101,11 @@ This repository tests its laws with `@tanstack/oracles`.
   in full and follow it.
 - Before you review oracle work, read
   `node_modules/@tanstack/oracles/skills/oracles-review/SKILL.md` in full.
+- Before you act on review findings, read
+  `node_modules/@tanstack/oracles/skills/oracles-evaluate-review/SKILL.md` in
+  full.
+- Lint each oracle file and each changed production file after you edit it.
+  Fix every report. Do not disable a rule.
 - Oracle files: `<oracle file glob>`. Gap check: `<gap check command>`.
 
 <!-- END @tanstack/oracles -->
@@ -121,7 +126,8 @@ pointer. Offer the user these choices. They can pick more than one.
 | **Global pointers**     | A pointer skill per skill in `~/.agents/skills/` and `~/.claude/skills/` (and any other skills directory the user's agents read) | The user wants the skills in every repository that uses `@tanstack/oracles`. |
 
 Write a pointer skill as `<directory>/<name>/SKILL.md` for each of
-`oracles-design`, `oracles-review`, and `oracles-setup`.
+`oracles-design`, `oracles-review`, `oracles-evaluate-review`, and
+`oracles-setup`.
 
 - Copy `name` and `description` exactly from the package's `SKILL.md`, so the
   agent selects it for the same requests.
