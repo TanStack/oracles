@@ -79,7 +79,8 @@ can state it:
    cite the contract clause for each choice. Never pick one outcome that the
    contract leaves open.
 
-Mixing styles is fine.
+Mixing styles is fine. [Model styles](../../docs/model-styles.md) shows a
+small example of each style.
 
 **Structure rules:**
 

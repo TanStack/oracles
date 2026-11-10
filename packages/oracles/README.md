@@ -33,6 +33,7 @@ coding agents, and walks through a first oracle and gap check.
 | `skills/oracles-review/`   | How to review oracle work.                                                                      |
 | `docs/oracle-checklist.md` | The complete requirements, by ID (ORC-001 to ORC-016).                                          |
 | `docs/guide.md`            | Techniques for each design and review step.                                                     |
+| `docs/model-styles.md`     | One small example of each model style.                                                          |
 | `docs/glossary.md`         | The oracle terms.                                                                               |
 | `docs/instruments/`        | Short reasoning cards that the skills route to.                                                 |
 | `oracle-gaps/`             | The gap check (`oracle-gaps` binary).                                                           |
