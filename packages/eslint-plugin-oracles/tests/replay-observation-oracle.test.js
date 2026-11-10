@@ -231,7 +231,16 @@ function source(program) {
 
 // This driver asks the actual rule for all reports, rather than classifying its
 // AST ourselves. Binding spelling must not change the observation.
+// A rule that throws aborts ESLint's run of the file: the law rejects it.
 function reports(program) {
+  try {
+    return reportsOf(program)
+  } catch (error) {
+    return [`threw: ${error?.message ?? error}`]
+  }
+}
+
+function reportsOf(program) {
   return new Linter({ cwd: '/repo' })
     .verify(
       source(program),
@@ -269,7 +278,7 @@ function reports(program) {
 }
 
 const LAW = {
-  statement: `A replay witness is reported only by the rule's own budget exemption: a finite replay observation is output data, so no-disabled reports each budget that a witness does not write, and nothing else.`,
+  statement: `A replay witness is reported only by the rule's own budget exemption: a finite replay observation is output data, so no-disabled reports each budget that a witness does not write, and nothing else. The rule never throws on a program that parses: an error it raises fails the predicted reports.`,
   authority: `The maintainer decisions of 2026-10-28 and 2026-11-08 on the typed OracleReplayWitness record and its guarded writer, as recorded in this file's header.`,
   limits: `The grammar varies location, annotation, value use, and writer shape; the serializer is the standard JSON.stringify, and the other serializers are outside the allowance. The finite list is exhaustive over its grammar, so it declares no reach states.`,
   owner: `eslint-plugin-oracles lint rules`,

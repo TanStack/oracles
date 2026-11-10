@@ -57,7 +57,7 @@ import replayableSeed from '../src/rules/replayable-seed.js'
 const PROPERTY = `lint.fixed-seed`
 const PROPERTY_CENSUS = `lint.fixed-seed.census`
 const LAW = {
-  statement: `A fixed-seed declaration is linted as the model predicts: a seed that a replay reproduces is a witness, and each rule reports exactly the sites that the model names.`,
+  statement: `A fixed-seed declaration is linted as the model predicts: a seed that a replay reproduces is a witness, and each rule reports exactly the sites that the model names. A rule never throws on a program that parses: an error it raises fails the predicted reports.`,
   authority: `The rules' documented witness and ambient-seed laws in src/rules/no-disabled.js and src/rules/replayable-seed.js, and oracleFixedSeed's declaration in packages/oracles/src/oracle-route.ts.`,
   limits: `Seeds and run counts are literals, constants, mutable bindings, parameters, or clocks; helpers and re-exported declarations are not generated.`,
   owner: `eslint-plugin-oracles lint rules`,
@@ -173,8 +173,25 @@ function renderProgram(program) {
 
 const linter = new Linter({ configType: `flat` })
 
+// A rule that throws aborts ESLint's run of the file: the error is an
+// observation that the law rejects (see LAW).
 function lintProgram(code) {
-  const messages = linter.verify(
+  let messages
+  try {
+    messages = lintMessages(code)
+  } catch (error) {
+    return { threw: String(error?.message ?? error) }
+  }
+  const fatal = messages.find((message) => message.fatal)
+  if (fatal)
+    throw new Error(`the rendered program does not parse: ${fatal.message}`)
+  return messages
+    .filter((message) => message.ruleId?.startsWith(`oracle/`))
+    .map(({ line, ruleId, messageId }) => ({ line, rule: ruleId, messageId }))
+}
+
+function lintMessages(code) {
+  return linter.verify(
     code,
     [
       {
@@ -197,18 +214,14 @@ function lintProgram(code) {
     ],
     { filename: `packages/example/tests/fixed-seed-scratch.test.ts` },
   )
-  const fatal = messages.find((message) => message.fatal)
-  if (fatal)
-    throw new Error(`the rendered program does not parse: ${fatal.message}`)
-  return messages
-    .filter((message) => message.ruleId?.startsWith(`oracle/`))
-    .map(({ line, ruleId, messageId }) => ({ line, rule: ruleId, messageId }))
 }
 
 // -- 4. Comparison ------------------------------------------------------------
 
 const reportKeys = (reports) =>
-  reports.map((r) => `${r.line}:${r.rule}:${r.messageId}`).sort()
+  reports.threw !== undefined
+    ? [`threw: ${reports.threw}`]
+    : reports.map((r) => `${r.line}:${r.rule}:${r.messageId}`).sort()
 
 // -- 5. Reach, campaigns, and calibrations ----------------------------------
 

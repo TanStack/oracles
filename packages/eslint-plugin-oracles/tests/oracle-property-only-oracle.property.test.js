@@ -305,24 +305,32 @@ function lintRendered(code, { setting, entry }) {
     ],
     legacyCampaigns: [...(own.legacyCampaigns ?? []), ...extra.legacyCampaigns],
   }
-  const messages = linter.verify(
-    code,
-    [
-      {
-        ...plugin.configs.recommended,
-        files: [`**/*.js`],
-        languageOptions: { parser: tsParser, sourceType: `module` },
-        settings: { oracles },
-      },
-    ],
-    { filename: FILE },
-  )
+  let messages
+  try {
+    messages = linter.verify(
+      code,
+      [
+        {
+          ...plugin.configs.recommended,
+          files: [`**/*.js`],
+          languageOptions: { parser: tsParser, sourceType: `module` },
+          settings: { oracles },
+        },
+      ],
+      { filename: FILE },
+    )
+  } catch (error) {
+    // A rule that throws aborts ESLint's run of the file: the law rejects it.
+    return { threw: String(error?.message ?? error) }
+  }
   const fatal = messages.find((message) => message.fatal)
   if (fatal)
     throw new Error(`the rendered program does not parse: ${fatal.message}`)
-  return messages
-    .filter((message) => message.ruleId === RULE)
-    .map(({ line, messageId }) => ({ line, messageId }))
+  return {
+    reports: messages
+      .filter((message) => message.ruleId === RULE)
+      .map(({ line, messageId }) => ({ line, messageId })),
+  }
 }
 
 // -- Check --------------------------------------------------------------------
@@ -333,6 +341,13 @@ const sortedReports = (reports) =>
 
 function check(plan, observations, expected) {
   const observed = observations.find((o) => o.checkpoint === `outcome`).value
+  if (observed.threw !== undefined)
+    return violation(
+      `outcome`,
+      `the rule threw, which aborts ESLint's run of the file: a rule never throws on a program that parses`,
+      `outcome`,
+      { actual: observed, expected },
+    )
   if (expected.configuration !== undefined) {
     return observed.configuration?.includes(expected.configuration)
       ? pass
@@ -356,7 +371,7 @@ function check(plan, observations, expected) {
 oracleProperty({
   id: `lint.oracle-property-only`,
   law: {
-    statement: `In an oracle file, a raw fast-check campaign (fc.assert, fc.check, or a .prop registration, through fast-check or @fast-check/vitest) and an import of createOracleReach or runOracleCampaign are reported, except in a file whose reasoned legacyCampaigns entry still matches a legacy use; a reasonless entry and a stale entry are reported; an implementation module is exempt; a malformed entry, or an entry outside the oracle glob or naming an implementation module, is a configuration error that stops the run.`,
+    statement: `In an oracle file, a raw fast-check campaign (fc.assert, fc.check, or a .prop registration, through fast-check or @fast-check/vitest) and an import of createOracleReach or runOracleCampaign are reported, except in a file whose reasoned legacyCampaigns entry still matches a legacy use; a reasonless entry and a stale entry are reported; an implementation module is exempt; a malformed entry, or an entry outside the oracle glob or naming an implementation module, is a configuration error that stops the run. The rule never throws on a program that parses: an error it raises fails the predicted outcome.`,
     authority: `Maintainer decision (2026-11-09): oracleProperty is the only campaign API in @tanstack/oracles. Its header in packages/oracles/src/oracle-property.ts: constructed histories make a state's reach required, and a raw campaign has none.`,
     limits: `Aliased campaigns, a campaign held in a helper, re-exported fast-check bindings, and import() of a legacy module are not generated. A stale entry for a deleted file is not reported, since no lint run sees that file.`,
     owner: `eslint-plugin-oracles lint rules`,
@@ -482,7 +497,7 @@ oracleProperty({
   model: predictOutcome,
   driver: (plan, observe) => {
     try {
-      observe(`outcome`, { reports: lintRendered(renderProgram(plan), plan) })
+      observe(`outcome`, lintRendered(renderProgram(plan), plan))
     } catch (error) {
       // Only a bad entry may stop the run. Any other error is a driver error.
       if (plan.entry === `none`) throw error
@@ -505,15 +520,14 @@ oracleProperty({
       },
     },
     {
-      name: `a configuration error hidden as no reports`,
+      name: `a rule's throw in a clean history`,
       law: `outcome`,
-      corrupt: (trace) => {
-        const observed = trace.find((o) => o.checkpoint === `outcome`)
-        if (observed.value.configuration === undefined) return undefined
-        return trace.map((o) =>
-          o.checkpoint === `outcome` ? { ...o, value: { reports: [] } } : o,
-        )
-      },
+      corrupt: (trace) =>
+        trace.map((o) =>
+          o.checkpoint === `outcome`
+            ? { ...o, value: { threw: `calibration: the rule threw` } }
+            : o,
+        ),
     },
   ],
 })
