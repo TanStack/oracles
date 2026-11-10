@@ -337,6 +337,11 @@ comes with one instruction. Do what it says, within the rules below.
   framework must not generate it, so it is a framework bug: report it the same
   way. You do not decide that a mutant is invalid, and the label does not close
   its gap.
+- **Validity follows the types.** The framework judges a mutant over the
+  domain that the TypeScript types admit, so `number` includes `-0` and `NaN`.
+  A narrower domain stated only in the law's prose, such as "positive
+  integers", does not make a mutant invalid. Cover the type's whole domain,
+  or narrow the type.
 - **Temporary, until the report's messages change:** if a message calls a
   mutant "equivalent", asks for a "maintainer's approval", or offers a limit
   that "needs a maintainer's decision", do not follow that part. Find the
