@@ -68,6 +68,8 @@
 //     [--ordinary]            (also run ordinary test files, for information)
 //     [--seed <n>] [--mutants <dir>] [--out <dir>] [--only <id,id>]
 //     [--diff-base <rev>]
+//     [--first-limit <ms>]    (a copy's first budget; default 2000)
+//     [--hang-limit <ms>]     (the full limit a cut copy gets again; default 10000)
 //     [--test-timeout <ms>]   (default 15000; also bounds hooks and teardown.
 //                              Each mutant run also has a wall-clock limit of
 //                              10 s plus three times its file's unmutated time.)
@@ -79,9 +81,10 @@
 //                              a native addon is anywhere in the package's
 //                              dependency tree)
 //   oracle-gaps --stop-daemon --package <dir>
+//   oracle-gaps --help      (prints the usage text, args.mjs)
 import { realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
-import { parseArgs } from './args.mjs'
+import { parseArgs, usage } from './args.mjs'
 import { openSession } from './check.mjs'
 import { requestDaemon, stopDaemon } from './daemon.mjs'
 import { memoryStore } from './evidence.mjs'
@@ -92,7 +95,8 @@ if (import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   let exitCode = 0
   try {
     const options = parseArgs(process.argv.slice(2))
-    if (options.stop) await stopDaemon(options.pkg)
+    if (options.help) console.log(usage)
+    else if (options.stop) await stopDaemon(options.pkg)
     else if (options.daemon) {
       const reply = await requestDaemon(options.pkg, process.argv.slice(2))
       if (reply.stderr) process.stderr.write(reply.stderr)
