@@ -38,7 +38,11 @@
  * `assert` or `check` through the default `fc` import or the alias. A prop site
  * registers through `fcTest` or `it`. A legacy import site names one of the two
  * APIs. A quiet site is a fast-check use that runs no campaign, a text, or a
- * binding that is not fast-check, and it must stay silent.
+ * binding that is not fast-check, and it must stay silent. A directive is
+ * one block comment written on the alias import's line, so the sites below it
+ * are inside it: `eslint-disable oracle/oracle-property-only` or a bare
+ * `eslint-disable`. P8 forbids a disable of an oracle rule, so the directive is
+ * inert: the reports are the same as without it.
  *
  * Model: the expected reports follow from the program alone. A configuration
  * entry owes its report at line 1, whatever the file, including an
@@ -124,6 +128,8 @@ const program = fc.record({
     `reasonNotString`,
     `notAList`,
   ),
+  // A block directive over the sites, or none. It must not change the reports.
+  directive: fc.constantFrom(`none`, `none`, `oracleBlock`, `allBlock`),
   sites: fc.array(site, { minLength: 1, maxLength: 6 }),
 })
 
@@ -187,6 +193,7 @@ const STATES = {
   malformed: `a malformed entry is reported`,
   notList: `a legacyCampaigns value that is not an array is reported`,
   vitest: `a campaign through @fast-check/vitest is reported`,
+  silenced: `a disable directive is written over a reported site, and it does not silence it`,
 }
 const MEASURED = {
   implementation: `an implementation module is exempt`,
@@ -217,6 +224,10 @@ function reachedStates(plan, _trace, expected) {
     ...(setting === `implementation` ? [MEASURED.implementation] : []),
     ...(setting === `otherFile` ? [MEASURED.otherFile] : []),
     ...(sites.some((item) => item.kind === `quiet`) ? [MEASURED.quiet] : []),
+    ...(plan.directive !== `none` &&
+    expected.reports.some((report) => report.line >= FIRST_SITE_LINE)
+      ? [STATES.silenced]
+      : []),
   ]
 }
 
@@ -258,10 +269,17 @@ function renderSite(item, alias, index) {
   return QUIET[item.variant].replaceAll(`{i}`, String(index))
 }
 
-function renderProgram({ alias, sites }) {
+// A block directive on the alias import's line covers every site below it.
+const DIRECTIVE = {
+  none: ``,
+  oracleBlock: ` /* eslint-disable oracle/oracle-property-only */`,
+  allBlock: ` /* eslint-disable */`,
+}
+
+function renderProgram({ alias, sites, directive }) {
   return [
     ...HEADER,
-    ALIAS_IMPORT[alias],
+    ALIAS_IMPORT[alias] + DIRECTIVE[directive],
     ...sites.map((item, index) => renderSite(item, alias, index)),
     ``,
   ].join(`\n`)
@@ -392,9 +410,9 @@ function check(plan, observations, expected) {
 oracleProperty({
   id: `lint.oracle-property-only`,
   law: {
-    statement: `In an oracle file, a raw fast-check campaign (fc.assert, fc.check, or a .prop registration, through fast-check or @fast-check/vitest) and an import of createOracleReach or runOracleCampaign are reported, except in a file whose reasoned legacyCampaigns entry still matches a legacy use; a reasonless entry and a stale entry are reported; an implementation module is exempt from its own uses; a malformed or refused entry, and a legacyCampaigns value that is not an array, are reported at line 1 and exempt nothing; and the rule never throws on a program that parses.`,
+    statement: `In an oracle file, a disable directive (eslint-disable, or a block for oracle/oracle-property-only) does not silence the rule: the reports are the same with or without it. A raw fast-check campaign (fc.assert, fc.check, or a .prop registration, through fast-check or @fast-check/vitest) and an import of createOracleReach or runOracleCampaign are reported, except in a file whose reasoned legacyCampaigns entry still matches a legacy use; a reasonless entry and a stale entry are reported; an implementation module is exempt from its own uses; a malformed or refused entry, and a legacyCampaigns value that is not an array, are reported at line 1 and exempt nothing; and the rule never throws on a program that parses.`,
     authority: `Maintainer decision (2026-11-09): oracleProperty is the only campaign API in @tanstack/oracles. Its header in packages/oracles/src/oracle-property.ts: constructed histories make a state's reach required, and a raw campaign has none.`,
-    limits: `Aliased campaigns, a campaign held in a helper, re-exported fast-check bindings, and import() of a legacy module are not generated. Only legacyCampaigns is generated as configuration; implementationModules is not. A stale entry for a deleted file is not reported, since no lint run sees that file.`,
+    limits: `Aliased campaigns, a campaign held in a helper, re-exported fast-check bindings, and import() of a legacy module are not generated. Only legacyCampaigns is generated as configuration; implementationModules is not. A one-line directive (eslint-disable-next-line) is not generated, since it moves the site lines; the block forms are. A stale entry for a deleted file is not reported, since no lint run sees that file.`,
     owner: `eslint-plugin-oracles lint rules`,
   },
   histories: {
@@ -448,6 +466,20 @@ oracleProperty({
           setting: `none`,
           entry: `none`,
           alias: `vitest`,
+          sites: [
+            { kind: `campaign`, method: `assert`, via: `alias` },
+            ...generated.sites.slice(1),
+          ],
+        }),
+      },
+      {
+        name: `a disable directive over a raw campaign`,
+        enters: [STATES.silenced],
+        build: (generated) => ({
+          ...generated,
+          setting: `none`,
+          entry: `none`,
+          directive: `oracleBlock`,
           sites: [
             { kind: `campaign`, method: `assert`, via: `alias` },
             ...generated.sites.slice(1),
