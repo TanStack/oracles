@@ -222,9 +222,12 @@ function roundTripHolds(
   value: Value,
 ): boolean {
   const back = parse(serialize(value))
+  // Compare element by element. Joining the tags would accept [''] -> [] and
+  // ['a\u0000b'] -> ['a', 'b'], which lose information.
   return (
     back.name === value.name &&
-    back.tags.join('\u0000') === value.tags.join('\u0000')
+    back.tags.length === value.tags.length &&
+    back.tags.every((tag, i) => tag === value.tags[i])
   )
 }
 ```
@@ -233,7 +236,9 @@ In an oracle, the driver records `value` and `parse(serialize(value))`, and the
 check compares them. A relation can hold for a useless implementation: a
 `serialize` that returns `""` and a `parse` that returns a fixed value
 satisfy many symmetries. So each relation needs a calibration that shows it
-fails, such as a trace whose parsed value drops a tag.
+fails. Good calibrations here are traces whose parsed tags lose an empty
+string (`['']` becomes `[]`) or split one tag in two (`['a\u0000b']` becomes
+`['a', 'b']`).
 
 Other useful relations: an incremental result equals a recompute from scratch,
 and the order of independent updates does not change the final state.
@@ -267,9 +272,11 @@ function noticesAllowed(observed: Array<Notice>): boolean {
 
 Never pick the order that production happens to use: that would reject a
 valid implementation. A mutant that only switches production to the other
-allowed order survives a sound oracle. Until the framework recognizes
-allowed sets in the gap check, treat such a survivor as a law question for
-the user (see the [mutant gap hunt](instruments/mutant-gap-hunt.md) card).
+allowed order survives a sound oracle. The law already answers the question,
+so report it as an allowed alternative: its key, the clause, and the history.
+Do not strengthen the law to kill it. Until the gap check recognizes allowed
+sets, it stays open in the report (see the
+[mutant gap hunt](instruments/mutant-gap-hunt.md) card).
 
 ## Mixing styles
 

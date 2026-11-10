@@ -3,7 +3,7 @@
 **Use when:** a recent refactor, a suspicious green oracle, a survivor whose
 missing history is not obvious, or an open review question leaves doubt that
 the oracle would reject a plausible wrong behavior. One carefully chosen
-mutant can answer a useful question; a campaign is optional.
+mutant can answer a useful question. A campaign is optional.
 
 **Inputs:**
 
@@ -23,7 +23,7 @@ Keep test bodies and assertions out of the design brief.
      a changed order, or a skipped callback.
    - Turn each open review question into a candidate.
    - If code is called dead, try removing it.
-   - Spread candidates across the affected files and boundaries; don't
+   - Spread candidates across the affected files and boundaries. Do not
      cluster them where edits are easy.
    - Hand-write candidates at boundaries a designer may miss, such as wrappers,
      lazy getters, and caches.
@@ -51,8 +51,14 @@ Keep test bodies and assertions out of the design brief.
      it. State the law and find its authority (use
      [law discovery](law-discovery.md)).
    - **Dead code:** no legal history can observe the decision. Remove the code.
-   - **A law question:** the observations differ, but the contract seems to
-     allow both. Do not record that as acceptable. Give the user the two
+   - **An allowed alternative:** the observations differ, and the adopted law
+     already allows both, as an allowed set with its clause. The mutant is a
+     valid implementation, so do not strengthen the law or change production
+     to kill it. Report it with the mutant's key, the clause, and the history,
+     separately from the kills. Until the gap check recognizes allowed sets,
+     it stays open in the report. Only the framework closes it.
+   - **A law question:** the observations differ, and the contract only seems
+     to allow both. Do not record that as acceptable. Give the user the two
      observations and the history that shows them, and ask whether the law
      should decide the choice.
    - **A framework bug:** none of the above fits, such as a mutant that no

@@ -43,7 +43,7 @@ lead, not evidence.
    from step 1 and makes the rival and boundary predictions from steps 3–4.
    Retain the source facts needed to examine any information gap from step 5,
    even when the production path has not received them.
-   For any proposed merge of model states, ask whether a legal next action can
+   For any proposed merge of model states, ask whether a legal continuation can
    distinguish them. Map model abstractions to the project vocabulary.
 
 The information check asks what production can receive. The model-state test

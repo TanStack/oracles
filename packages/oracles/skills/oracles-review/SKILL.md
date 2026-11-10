@@ -42,7 +42,9 @@ contains one is not ready.
 | Shortcut                          | What to look for                                                                                                                                                                                                 |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Law after code**                | No law sheet before the oracle was written, a law with no authority, or a law block that disagrees with the `law` option or the model.                                                                           |
-| **Production first**              | A production change in owned code without a RED result from the extended oracle on the code before the change. A later run does not count.                                                                       |
+| **Production first**              | A defect fix in owned code without a RED result from the extended oracle on the code before the change. A later run does not count.                                                                              |
+| **Unproven refactor**             | A refactor of owned code without the same oracle passing on old and new production, and kill sets compared before and after. A refactor needs no RED.                                                            |
+| **Re-asking an adopted law**      | Stopping for approval to strengthen enforcement of a law that is already adopted, or that the task already approved.                                                                                             |
 | **Model hacking**                 | A model rule changed to match production output without an authority. Production output is evidence, not authority.                                                                                              |
 | **Unreachable claim**             | A claim about a state that no constructed history enters, or a reach count nobody measured.                                                                                                                      |
 | **Quiet exclusion**               | Any skip, narrowed grammar, added filter or validity predicate, relaxed comparison, or exemption, other than probe-only code and the `super()` region of a derived constructor. Adopters have no exclusion list. |
@@ -54,7 +56,8 @@ contains one is not ready.
 | **No mutant**                     | A claim that a defect is closed, without a mutant, such as the original defect, that fails the oracle.                                                                                                           |
 | **An exit**                       | Any reasoning that calls a mutant "equivalent", an effect "unobservable", or a gap acceptable. A gap is closed only by a kill or by removing dead code. A gap that can be neither is a framework bug to report.  |
 
-The evidence counts only as a set: law, reach, RED, GREEN, mutant, gaps,
+The evidence counts only as a set, chosen by the kind of change
+(`oracles-design` step 7): law, reach, before-and-after runs, mutant, gaps,
 limits. A missing item is a finding, even when the rest is strong.
 
 ## 3. Hunt what the tools cannot see

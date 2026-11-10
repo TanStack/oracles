@@ -173,8 +173,9 @@ No requirement here can be met by declaring something out of reach.
 
 - **Trigger:** A change introduces, removes, combines, or splits state in a
   stateful model.
-- **Obligation:** The change MUST explain whether a legal next action can
-  distinguish states that the model proposes to treat as equal.
+- **Obligation:** The change MUST explain whether a legal continuation (one
+  or more actions) can distinguish states that the model proposes to treat as
+  equal, by a later observation or by which actions are legal.
 - **Acceptance evidence:** A distinguishing history justifies retained state.
   Removed state needs a reasoned argument that it cannot change a promised
   observation or the legality of an action.
@@ -307,15 +308,16 @@ No requirement here can be met by declaring something out of reach.
 Each change below keeps the requirement's purpose. A citation of the
 rubric's ID still names the same requirement.
 
-| ID      | Change                                                                  | Reason                                                                                                      |
-| ------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| All     | "Framework" and "Author" notes added                                    | Say what `@tanstack/oracles` enforces, so nobody re-implements or works around it.                          |
-| All     | Coverage-map owner entries replaced by the oracle's `limits`            | Adopters have no coverage map; code ownership belongs to tools such as CODEOWNERS (maintainer, 2026-11-10). |
-| ORC-004 | Narrowing a grammar, filter, or validity predicate is a contract change | Maintainer, 2026-11-10.                                                                                     |
-| ORC-006 | "Equivalence within the tested domain" removed from mutant outcomes     | There are no equivalent mutants (maintainer, 2026-11-10).                                                   |
-| ORC-007 | Rewritten as an enforced requirement                                    | `oracleProperty` runs the campaigns and prints the replay command.                                          |
-| ORC-009 | Oracle terms come from the package glossary                             | The project glossary keeps domain terms.                                                                    |
-| ORC-015 | Reach comes from constructed histories, not `createOracleReach`         | `oracleProperty` is the only campaign API (maintainer, 2026-11-09).                                         |
+| ID      | Change                                                                     | Reason                                                                                                      |
+| ------- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| All     | "Framework" and "Author" notes added                                       | Say what `@tanstack/oracles` enforces, so nobody re-implements or works around it.                          |
+| All     | Coverage-map owner entries replaced by the oracle's `limits`               | Adopters have no coverage map; code ownership belongs to tools such as CODEOWNERS (maintainer, 2026-11-10). |
+| ORC-004 | Narrowing a grammar, filter, or validity predicate is a contract change    | Maintainer, 2026-11-10.                                                                                     |
+| ORC-006 | "Equivalence within the tested domain" removed from mutant outcomes        | There are no equivalent mutants (maintainer, 2026-11-10).                                                   |
+| ORC-007 | Rewritten as an enforced requirement                                       | `oracleProperty` runs the campaigns and prints the replay command.                                          |
+| ORC-008 | "A legal next action" becomes "a legal continuation (one or more actions)" | Two states can agree after one action and differ after two, such as a FIFO queue's tail.                    |
+| ORC-009 | Oracle terms come from the package glossary                                | The project glossary keeps domain terms.                                                                    |
+| ORC-015 | Reach comes from constructed histories, not `createOracleReach`            | `oracleProperty` is the only campaign API (maintainer, 2026-11-09).                                         |
 
 TanStack DB adds its own requirements, such as its coverage map, on top of
 this checklist in its repository.

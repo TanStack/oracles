@@ -40,8 +40,9 @@ When the contract has independent laws, treat the oracle as a small graph:
 A failure then names the law that diverged, and a reviewer can inspect each
 rule alone. Plain functions and Maps are usually enough.
 
-Do not split state that a legal next action can observe only as a whole. If two
-states look equal to the proposed nodes, try one legal next action. If it can
+Do not split state that a legal continuation can observe only as a whole. If
+two states look equal to the proposed nodes, try a legal continuation of one
+or more actions. If it can
 produce different promised results, add the missing edge, or keep that state in
 one model. Decomposition does not mean one model per assertion. Group facts
 that form one state machine, and keep independent policies separate.

@@ -60,6 +60,9 @@ For each confirmed behavioral finding, decide which kind it is.
 A finding can contain both. Fix the enforcement part, and present the law
 question.
 
+An enforcement gap reuses the adopted law, so `oracles-design` step 1 does not
+stop for it. Name the law in the ledger and the evidence.
+
 ## 3. Plan the oracle changes for the whole review
 
 Before you work on single findings, look at all of them together. Findings

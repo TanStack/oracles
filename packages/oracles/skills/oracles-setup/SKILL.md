@@ -101,8 +101,10 @@ export default [
   production source lives elsewhere, add the `oracle/probe-form` rule with that
   glob.
 - If ESLint does not already parse TypeScript, add `@typescript-eslint/parser`
-  as a dev dependency and set it as `languageOptions.parser` for the oracle
-  files.
+  as a dev dependency. Set it as `languageOptions.parser` for every TypeScript
+  file that the presets cover: the oracle files and the production source.
+  Otherwise a typed production file fails to parse before the probe rule
+  runs.
 - Do not add `legacyCampaigns` or any other exemption. Adopters have none.
 
 **An older ESLint (7 or 8, `.eslintrc`).** Do not upgrade the repository's
@@ -111,7 +113,7 @@ lint. Lint the oracle files with a separate ESLint 9:
 1. Install the plugin with `--legacy-peer-deps` (npm), or the package
    manager's equivalent.
 2. Write a flat `eslint.oracle.config.mjs` with both presets and a TypeScript
-   parser for the oracle files.
+   parser for the oracle files and the production source.
 3. Run it as `npx -y -p eslint@9 eslint -c eslint.oracle.config.mjs <oracle
 files> <production source>`, and add a `lint:oracles` script.
 
@@ -155,7 +157,16 @@ Fill in the two placeholders in step 7, once their values exist. If the reposito
 ## 5. Make the skills findable
 
 The skills ship inside the package, so agents find them only through a
-pointer. Offer the user these choices. They can pick more than one.
+pointer. A pointer must read the copy that the chosen package installed:
+
+- **One package, or a workspace with a root install:**
+  `node_modules/@tanstack/oracles/skills/<name>/SKILL.md`.
+- **A package-local install in a workspace:**
+  `<package dir>/node_modules/@tanstack/oracles/skills/<name>/SKILL.md`,
+  for the package chosen in step 1. Check that the file exists there.
+
+Use that path in the `AGENTS.md` block (step 4) too. Offer the user these
+choices. They can pick more than one.
 
 | Choice                  | Writes                                                                                                                           | Use when                                                                     |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
@@ -177,11 +188,18 @@ name: oracles-design
 description: <copied exactly from node_modules/@tanstack/oracles/skills/oracles-design/SKILL.md>
 ---
 
-Read `node_modules/@tanstack/oracles/skills/oracles-design/SKILL.md` from the
-root of the current repository in full, and follow it. It matches the
-installed version of `@tanstack/oracles`. If that file does not exist, this
-repository does not have `@tanstack/oracles` installed: say so and stop.
+Read `<installed path>/skills/oracles-design/SKILL.md` in full, and follow it.
+It matches the installed version of `@tanstack/oracles`. If that file does not
+exist, `@tanstack/oracles` is not installed there: say so and stop.
 ```
+
+- In a **repository pointer**, `<installed path>` is the path above, relative
+  to the repository root, such as `packages/app/node_modules/@tanstack/oracles`.
+- In a **global pointer**, write instead: "Find the nearest `package.json` at
+  or above the files you are working on whose dependencies include
+  `@tanstack/oracles`. Use the `node_modules/@tanstack/oracles` in that
+  package's directory." Then the pointer loads the right version in every
+  workspace package.
 
 Use pointers, not copies or symbolic links: a pointer always reads the
 installed version, and never breaks before install.
@@ -230,9 +248,11 @@ pnpm exec oracle-gaps --package <package dir> --source <src/file.ts> \
 Run it after the oracle passes on production. Each gap in the report comes
 with one instruction. Follow
 that instruction, and follow `oracles-design` for what a gap means. There
-are no equivalent mutants and no exits. If the gap check shows dead code
-in an owned function, remove it: that is a production change, so tell the
-user, and rerun the oracle and the gap check. If a gap can be neither killed
+are no equivalent mutants and no exits. A surviving mutant shows only that
+the current histories did not expose that code. If you believe the code is
+dead, first follow `oracles-design` step 8 to rule out a missing history,
+observation, or law. Removing it is a production change, so tell the user,
+and rerun the oracle and the gap check. If a gap can be neither killed
 nor removed, stop work on that gap and report its key and evidence to the
 user.
 

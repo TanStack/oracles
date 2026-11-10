@@ -1,6 +1,6 @@
 ---
 name: oracles-design
-description: Design, write, or change an oracle with @tanstack/oracles. Write a law sheet first, choose a model, and build histories that reach the states the law needs. Show RED on unchanged production, change production, and close every gap. Use for a new oracle, an oracle repair, or a production change in owned code. Also use for any change to a model, history grammar, driver, or check.
+description: Design, write, or change an oracle with @tanstack/oracles. Choose the boundary, write a law sheet first, choose a model, and build histories that reach the states the law needs. Show the evidence the change needs, and close every gap. Use for a new oracle, an oracle repair, or a production change in owned code. Also use for any change to a model, history grammar, driver, or check.
 ---
 
 # Design an oracle
@@ -20,9 +20,40 @@ witness, and another round. The common shortcuts are changing production
 first, editing the model to match production, narrowing histories until a
 failure goes away, and pinning one example. `oracles-review` §2 lists them all.
 
-## 1. Write the law sheet, then stop
+## 1. Choose the boundary, then write the law sheet
 
-Before any code, write one row per law and give the sheet to the user.
+**Choose the boundary first.** An oracle maintains one caller-visible
+promise, not one file. Before the law sheet, establish:
+
+| Question                           | What to establish                                                              |
+| ---------------------------------- | ------------------------------------------------------------------------------ |
+| What promise belongs together?     | One caller-visible behavioral contract.                                        |
+| Where is it observed?              | The public entry points and the checkpoints where it is owed.                  |
+| What does it assume?               | What providers, the environment, and neighboring components must supply.       |
+| What else witnesses it?            | Other drivers for the same law: component, integration, end-to-end, or replay. |
+| Where does another contract begin? | A different authority, lifecycle, observation boundary, or composition rule.   |
+| Which source implements it?        | The `owns` list that the gap check uses.                                       |
+
+Example: an oracle for optimistic publication can hold several related laws
+(an optimistic write is visible at once, a confirmation keeps it, and a
+rollback removes it) and several drivers (an in-memory provider and a real one). It
+keeps its identity if the code moves between files. One source file can also
+serve several contracts. A new failure belongs to the oracle whose law covers
+its promise.
+
+**Decide whether the user must approve.**
+
+- **Strengthening an adopted law** (a missing history, observation, driver
+  path, or check) reuses the law as it is. Do not write a new sheet, and do
+  not stop. Name the law in the evidence.
+- **Changing a law** (its promise, domain, checkpoint, assumptions, or the
+  freedoms it allows) needs a law delta: the old and new row for each changed
+  law. Stop for the user's review.
+- **A new law, or missing or contradictory authority,** needs the full law
+  sheet below. Stop for the user's review.
+- **The task already approved these laws?** Do not ask again.
+
+Write one row per law and give the sheet to the user.
 
 | Field      | What to write                                                                                                         |
 | ---------- | --------------------------------------------------------------------------------------------------------------------- |
@@ -41,7 +72,8 @@ Before any code, write one row per law and give the sheet to the user.
 - When the promise is unclear, or two readings predict different behavior, use
   the [law discovery](../../docs/instruments/law-discovery.md) card.
 
-**Stop here.** Do not write the oracle until the user has reviewed the sheet.
+**Stop here** when the sheet or a law delta is needed. Do not write the oracle
+until the user has reviewed it.
 
 Once the user approves it, the sheet becomes the **law block**: the opening
 comment of the oracle file, beside the model that enacts it. Each row's law,
@@ -140,8 +172,11 @@ Show what each law, model field, and model branch contributes.
 
 - **A law:** give a legal history that the other laws allow and this law
   rejects.
-- **A model state or field:** give a legal next action where two states that
-  differ only in it must behave differently (ORC-008).
+- **A model state or field:** give a legal continuation (one or more
+  actions) after which two states that differ only in it must give different
+  observations, or allow different actions (ORC-008). A FIFO queue holding
+  `[1, 2]` and one holding `[1, 3]` agree after one dequeue and differ after
+  two.
 - **A branch or exception:** give the history that needs it. If none exists,
   remove it.
 
@@ -231,9 +266,20 @@ every report. Do not disable a rule.
 
 Techniques: [guide § The driver and the check](../../docs/guide.md#the-driver-and-the-check).
 
-## 7. RED, change, GREEN, mutant
+## 7. Show the evidence that fits the change
 
-When the task changes production:
+The evidence depends on the kind of work:
+
+| Work                                                    | Evidence                                                                                                                                                                                               |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Fix a defect**                                        | The extended oracle fails on unchanged production (RED). The repaired production passes (GREEN). Neighboring laws still pass. The original defect, as a mutant, fails the oracle.                      |
+| **Refactor without changing behavior**                  | Old and new production pass the same oracle: the same laws, histories, and checkpoints. The gap check on both kills at least the same mutants, compared by key with the same seed. No RED is expected. |
+| **Add or strengthen an oracle over correct production** | Production passes. A calibration (a wrong answer or a corrupted trace) and a mutant fail the intended law. No RED is expected.                                                                         |
+
+A refactor that needs a changed law, check, or history is not a pure
+refactor: treat the law change first (step 1).
+
+**To fix a defect:**
 
 1. Run the extended oracle file on **unchanged** production. It must fail on
    the defect. This is RED. A setup failure is not RED: fix the oracle first.
@@ -245,16 +291,20 @@ When the task changes production:
 4. Show that a mutant, such as the original defect, fails the
    oracle.
 
-Do not change production before step 1. A later run does not make up for a
-skipped RED.
+For a defect fix, do not change production before step 1. A later run does
+not make up for a skipped RED.
 
 **Clean up production once GREEN.** The oracle now protects the law, so use
 it to simplify:
 
 - Refactor the code around the change. Do not insert a new branch beside an
   old one that does almost the same thing.
-- Remove states, flags, branches, and recovery paths that no law needs. The
-  gap check shows which code no history can observe.
+- Remove states, flags, branches, and recovery paths that no law needs. A
+  surviving mutant shows only that the current histories did not expose the
+  code. Before you remove it, use the mutant gap hunt to rule out a missing
+  history, observation, or law, and give the contract's reason that no legal
+  history can observe it. A green rerun of the same oracle is not that
+  reason.
 - Prefer a change that shrinks the code, or leaves its size the same. If the
   repository sets a size rule, such as a net-negative diff, follow it.
 - Rerun the oracle and the gap check after each cleanup.
@@ -270,9 +320,11 @@ comes with one instruction. Do what it says, within the rules below.
   history, observation, or law, or it shows dead code.
 - **An effect that no check sees is one that the driver does not record.**
   Record it.
-- **Code whose removal no legal history can observe is dead.** Remove it in
-  the same change as the oracle. That is a production change, so say so in
-  the evidence, and rerun the oracle and the gap check.
+- **Code whose removal no legal history can observe is dead.** The gap check
+  alone cannot show this, because its histories are a sample. First rule out
+  a missing history, observation, or law. Then remove the code in the same
+  change, give the contract's reason in the evidence (it is a production
+  change), and rerun the oracle and the gap check.
 - **A law that kills nothing** owns no mutated code, or its witness never
   varies in the histories. Check its witness and its constructed history. If
   the law still kills nothing, it may restate another law: compare the two.
@@ -295,14 +347,18 @@ a survivor whose missing history is not obvious.
 
 ## 9. Report the evidence
 
-The evidence counts only as a set. One item alone proves little.
+The evidence counts only as a set. One item alone proves little. Give the
+items that fit the kind of change (step 7).
 
-- **Law:** the law and its authority.
+- **Law:** the law and its authority, and whether it was reused, changed, or
+  new.
 - **Reach:** each declared state and how many histories entered it.
-- **RED:** the command and the failure on unchanged production.
-- **GREEN:** the command and the result after the change.
-- **Mutant:** the mutant, such as the original defect, and the law that
-  rejected it.
+- **Before and after:** for a defect fix, RED on unchanged production and
+  GREEN after the change. For a refactor, the same oracle passing on old and
+  new production. For a new oracle over correct code, production passing.
+- **Mutant:** a mutant, such as the original defect, and the law that
+  rejected it, plus the calibrations that fail. For a refactor, the kill
+  sets before and after.
 - **Gaps:** the gap check's totals, and any gap reported as a framework bug.
 - **Limits:** the states, paths, and observations that the evidence does not
   cover.
