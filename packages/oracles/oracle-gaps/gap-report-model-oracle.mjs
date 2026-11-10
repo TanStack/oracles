@@ -2000,25 +2000,24 @@ function resolveHistory(history) {
           : []),
       ]
     : []
+  // A run that reaches its own check keeps an owner (see `reachesRun`).
+  const ownerless = history.ownerless === true && !reachesRun(history)
   return {
-    functions: history.ownerless
+    functions: ownerless
       ? functions.map((fn) => ({ ...fn, owners: [] }))
       : functions,
     tests,
     authored,
     authoredList,
     loadCalls,
-    wholeFile:
-      reachesRun(history) && history.wholeFile === `none`
-        ? `a`
-        : history.wholeFile,
+    wholeFile: history.wholeFile,
     // A fault injects an entry into an oracle file, so it needs one: only a
     // history with no fault can have no oracle file.
     declaration:
       history.declaration === `neither` && (history.fault ?? `none`) !== `none`
         ? `declareOracle`
         : (history.declaration ?? `declareOracle`),
-    ownerless: history.ownerless === true,
+    ownerless,
     template: history.template,
     fault: history.fault,
     stability: history.stability,

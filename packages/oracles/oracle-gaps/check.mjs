@@ -146,36 +146,14 @@ function lockfileOf(pkg) {
   }
 }
 
-// A bare import of a bundle stays external, but names the file its importer's
-// directory resolves it to, so the bundle does not need its importer's
-// directory to resolve it. `pluginData` marks the nested resolution, which
-// this plugin then leaves to esbuild.
-const absoluteImports = {
-  name: `oracle-gaps:absolute-imports`,
-  setup(build) {
-    build.onResolve({ filter: /^[^./]/ }, async (args) => {
-      if (args.pluginData?.absolute) return undefined
-      const resolved = await build.resolve(args.path, {
-        kind: args.kind,
-        resolveDir: args.resolveDir,
-        pluginData: { absolute: true },
-      })
-      if (resolved.errors.length > 0 || resolved.external) return undefined
-      return { path: resolved.path, external: true }
-    })
-  },
-}
-
 /**
  * One-file bundles of the package's workspace dependencies: the packages it
  * reaches by name through a node_modules link to a directory outside any
  * node_modules, and theirs in turn. Vitest otherwise fetches a dependency's
  * built files one at a time, about 150 for a large workspace dependency, in every context.
- * A bundle sits in the package's state directory (`.oracle-gaps/bundles`),
- * which no dependency's own directory has to hold. Its bare imports stay
- * external, but each is written as the file the dependency's own directory
- * resolves it to, so the bundle loads what the dependency loads; a dependency
- * of a dependency loads from its own bundle. It is outside node_modules, so
+ * A bundle sits in its package's own directory, so its bare imports resolve
+ * as the package's do; each bundle leaves them external, so a dependency of
+ * a dependency loads from its own bundle. It is outside node_modules, so
  * Vitest inlines it, and every copy evaluates it afresh after its module
  * reset (fresh module state, law 3). Its file name carries the hash of its
  * text, so evidence that read it is keyed by what it contains. The package
@@ -253,15 +231,13 @@ export async function workspaceBundles(pkg) {
         // the bundle keeps every package import as the built code has it.
         tsconfigRaw: `{}`,
         logLevel: `silent`,
-        plugins: [absoluteImports],
       })
       .catch(() => undefined)
     if (!built) continue
     const text = built.outputFiles[0].text
     const out = join(
-      pkg,
+      dir,
       `.oracle-gaps`,
-      `bundles`,
       `bundle-${sha1(text).slice(0, 16)}.mjs`,
     )
     if (!existsSync(out)) {
