@@ -9,10 +9,11 @@
 // Operators, in the order the sites are numbered:
 // - `binary-swap`: `===`↔`!==`, `<`↔`<=`, `>`↔`>=`, `&&`↔`||`, `??`→`&&`.
 //   Every site is emitted. Evidence (`evidenceOf`) marks two cases: `dead code`
-//   when the site's two values are the same operand (no input distinguishes
-//   it), and the hint `boundary: -0` on an ordering swap whose branches are
-//   its two operands (a signed zero distinguishes it, but never a skip).
-// - `drop-not`: `!x` → `x`.
+//   when no input distinguishes the mutant (a logical operator on one local
+//   name, or a site in a pure condition whose ternary or `if` has identical
+//   branches), and the hint `boundary: -0` on an ordering swap whose branches
+//   are its two operands and whose tie can be zero (never a skip).
+// - `drop-not`: `!x` → `x`, with the same evidence as a binary swap.
 // - `bool-flip`: a boolean literal `true` ↔ `false` (not a literal type).
 // - `arithmetic-swap`: `+` ↔ `-` where one operand is a numeric literal
 //   (so `count + 1`, not string concatenation of two values).
@@ -480,20 +481,39 @@ export function instrument(ts, path, text, source, offset = 0) {
   // value wherever it appears. Anything else has no text here.
   const operandText = (expression) => {
     const inner = expression && bare(expression)
-    return inner && (ts.isIdentifier(inner) || ts.isNumericLiteral(inner))
+    return inner &&
+      (ts.isIdentifier(inner) ||
+        ts.isNumericLiteral(inner) ||
+        ts.isBigIntLiteral(inner))
       ? inner.getText(file)
       : undefined
   }
+  // The type an operand admits, read from its declaration: `number` for a number
+  // literal or a parameter annotated `number`, `bigint` likewise, and `other` for
+  // anything else (a union with a string, `any`, `unknown`, or no annotation).
+  // The annotation is the parameter's own syntax: `instrument` takes the text
+  // alone, so no checker program is available here.
+  const typeOf = (expression) => {
+    const inner = bare(expression)
+    if (ts.isNumericLiteral(inner)) return `number`
+    if (ts.isBigIntLiteral(inner)) return `bigint`
+    if (!ts.isIdentifier(inner)) return `other`
+    const found = declarationOf(inner)
+    if (!found || !ts.isParameter(found) || !found.type) return `other`
+    if (found.type.kind === ts.SyntaxKind.NumberKeyword) return `number`
+    if (found.type.kind === ts.SyntaxKind.BigIntKeyword) return `bigint`
+    return `other`
+  }
   // The operand text a branch returns: the value of a `return` statement, or
-  // of a block of one such statement.
+  // of a block of one such statement. An empty `return` reads `void`, which no
+  // operand text equals.
   const returnedText = (statement) => {
     const only =
       statement && ts.isBlock(statement) && statement.statements.length === 1
         ? statement.statements[0]
         : statement
-    return only && ts.isReturnStatement(only)
-      ? operandText(only.expression)
-      : undefined
+    if (!only || !ts.isReturnStatement(only)) return undefined
+    return only.expression ? operandText(only.expression) : `void`
   }
   // The two values of a ternary, or of an `if` (its else, or the statement
   // after an `if` with no `else`, which must return), as operand texts. Any
@@ -515,31 +535,247 @@ export function instrument(ts, path, text, source, offset = 0) {
   // The ternary or `if` whose condition is `node`, through parentheses.
   const holderOf = (node) => {
     let test = node
-    while (ts.isParenthesizedExpression(test.parent)) test = test.parent
+    // Through parentheses and negations: a negated test selects the same
+    // branches, with the sense of the test flipped.
+    while (
+      ts.isParenthesizedExpression(test.parent) ||
+      (ts.isPrefixUnaryExpression(test.parent) &&
+        test.parent.operator === ts.SyntaxKind.ExclamationToken)
+    )
+      test = test.parent
     const holder = test.parent
     return (ts.isConditionalExpression(holder) && holder.condition === test) ||
       (ts.isIfStatement(holder) && holder.expression === test)
       ? holder
       : undefined
   }
-  // The evidence a binary swap or an `if` carries, for the report. A site
-  // whose two values are the same operand is dead code: no input distinguishes
-  // its mutant, because the program is redundant (identical branches, or a
-  // logical operator on one operand). An ordering swap whose two branches are
-  // its two compared operands gets the boundary hint: at a tie the other branch
-  // yields the same value, so the hint marks where a signed zero can tell them
-  // apart. The site is emitted either way.
-  const evidenceOf = (node) => {
+  // A local binding: a parameter, or a `let`, `const`, `var`, or loop or catch
+  // variable of an enclosing function, with no `with` statement between the
+  // name and its binding. A global, a module-level name, or a name in a `with`
+  // body can read an accessor, so reading it twice is not reading it once.
+  const enclosedByFunction = (node) => {
+    for (let n = node.parent; n; n = n.parent)
+      if (ts.isFunctionLike(n)) return true
+    return false
+  }
+  const localBinding = (identifier) => {
+    for (let n = identifier.parent; n; n = n.parent)
+      if (ts.isWithStatement(n)) return false
+    const found = declarationOf(identifier)
+    if (found === undefined) return false
+    return (
+      ts.isParameter(found) ||
+      (enclosedByFunction(found) &&
+        (ts.isVariableStatement(found) ||
+          ts.isForStatement(found) ||
+          ts.isForOfStatement(found) ||
+          ts.isForInStatement(found) ||
+          ts.isCatchClause(found)))
+    )
+  }
+  // A pure condition reads local names and numbers, and applies comparisons,
+  // logical operators, or `!`. Its mutants change which operands are read, but
+  // reading a local calls nothing, so the change is invisible.
+  const pureOperators = new Set([...comparisons.keys(), ...logical.keys()])
+  const pureCondition = (expression) => {
+    const inner = bare(expression)
+    if (ts.isIdentifier(inner)) return localBinding(inner)
+    if (ts.isNumericLiteral(inner) || ts.isBigIntLiteral(inner)) return true
+    if (ts.isPrefixUnaryExpression(inner))
+      return (
+        inner.operator === ts.SyntaxKind.ExclamationToken &&
+        pureCondition(inner.operand)
+      )
+    if (ts.isBinaryExpression(inner))
+      return (
+        pureOperators.has(inner.operatorToken.getText(file)) &&
+        pureCondition(inner.left) &&
+        pureCondition(inner.right)
+      )
+    return false
+  }
+  // Whether `node` sits in the pure condition of a ternary or `if` whose two
+  // values are identical. Both branches then yield the same value, so no change
+  // to the condition can show.
+  const deadUnderHolder = (node) => {
+    let child = node
+    for (let parent = node.parent; parent; parent = parent.parent) {
+      const condition = ts.isConditionalExpression(parent)
+        ? parent.condition
+        : ts.isIfStatement(parent)
+          ? parent.expression
+          : undefined
+      if (condition === child && pureCondition(condition)) {
+        const [yes, no] = valuesOf(parent)
+        if (yes !== undefined && yes === no) return true
+      }
+      child = parent
+    }
+    return false
+  }
+  // An operand that can hold a signed zero: a variable (of a type that admits
+  // numbers) or the literal 0. A bigint has no signed zero. 0 and -0 are equal
+  // and differ, so two such operands can tie on a signed zero.
+  const zeroable = (expression) => {
+    if (typeOf(expression) === `bigint`) return false
+    const inner = bare(expression)
+    return (
+      ts.isIdentifier(inner) ||
+      (ts.isNumericLiteral(inner) && Number(inner.text) === 0)
+    )
+  }
+  // Whether `node` sits inside a branch of another ternary or `if`. An outer
+  // test then decides whether `node` is reached, so a tie may never occur.
+  const inBranch = (node) => {
+    let child = node
+    for (let parent = node.parent; parent; parent = parent.parent) {
+      if (
+        ts.isConditionalExpression(parent) &&
+        (parent.whenTrue === child || parent.whenFalse === child)
+      )
+        return true
+      if (
+        ts.isIfStatement(parent) &&
+        (parent.thenStatement === child || parent.elseStatement === child)
+      )
+        return true
+      child = parent
+    }
+    return false
+  }
+  // Whether a ternary or `if` holder's two values are the two operands of the
+  // comparison that is its test, one each, in either order.
+  const yieldsOperands = (node, holder) => {
     const [left, right] = [operandText(node.left), operandText(node.right)]
-    if (!ordering.has(node.operatorToken.getText(file)))
-      return left !== undefined && left === right ? DEAD_CODE : undefined
-    const [yes, no] = valuesOf(holderOf(node) ?? node)
-    if (yes !== undefined && yes === no) return DEAD_CODE
-    return left !== undefined &&
+    const [yes, no] = valuesOf(holder)
+    return (
+      left !== undefined &&
       right !== undefined &&
       ((yes === left && no === right) || (yes === right && no === left))
+    )
+  }
+  // The boundary hint: an ordering swap at a top-level test, whose two branches
+  // are its two compared operands, both `number`, where a tie can be zero. Then a
+  // signed zero distinguishes the swap from the original on a history of 0 and
+  // -0 alone. An operand that admits strings or has no annotation gets no hint:
+  // the mutant is valid, and strings distinguish it.
+  const boundaryHint = (node) => {
+    const holder = holderOf(node)
+    if (holder === undefined || inBranch(holder)) return undefined
+    if (!yieldsOperands(node, holder)) return undefined
+    const numbers =
+      typeOf(node.left) === `number` && typeOf(node.right) === `number`
+    return numbers && zeroable(node.left) && zeroable(node.right)
       ? BOUNDARY_HINT
       : undefined
+  }
+  // The ternary or `if` whose condition holds `node` through parentheses, negations,
+  // and logical operators. The comparison's value then decides the branch alone
+  // (the rest of the condition is not changed by the swap), so at a tie both
+  // branches yield the same value: this is the skip's reach, not the hint's.
+  const conditionHolderOf = (node) => {
+    let test = node
+    while (
+      ts.isParenthesizedExpression(test.parent) ||
+      (ts.isPrefixUnaryExpression(test.parent) &&
+        test.parent.operator === ts.SyntaxKind.ExclamationToken) ||
+      (ts.isBinaryExpression(test.parent) &&
+        logical.has(test.parent.operatorToken.getText(file)))
+    )
+      test = test.parent
+    const holder = test.parent
+    return (ts.isConditionalExpression(holder) && holder.condition === test) ||
+      (ts.isIfStatement(holder) && holder.expression === test)
+      ? holder
+      : undefined
+  }
+  // An ordering swap whose two branches are its two operands is undetectable over
+  // the admitted domain, and is skipped, when no admitted input can tell the
+  // swapped tie from the original: both operands `bigint` (a tie yields equal
+  // values), or both `number` with a nonzero literal tie (no signed zero there).
+  // Operands that admit a string keep the mutant: a string distinguishes it.
+  const undetectableSwap = (node) => {
+    if (!ordering.has(node.operatorToken.getText(file))) return false
+    const holder = conditionHolderOf(node)
+    if (holder === undefined || !yieldsOperands(node, holder)) return false
+    const [left, right] = [node.left, node.right]
+    if (typeOf(left) === `bigint` && typeOf(right) === `bigint`) return true
+    return (
+      typeOf(left) === `number` &&
+      typeOf(right) === `number` &&
+      !(zeroable(left) && zeroable(right))
+    )
+  }
+  // A literal operand that is not zero: its tie can never be a signed zero, at
+  // any declared type.
+  const nonzeroLiteral = (expression) => {
+    const inner = bare(expression)
+    return (
+      (ts.isNumericLiteral(inner) || ts.isBigIntLiteral(inner)) &&
+      !/^0n?$/.test(inner.getText(file))
+    )
+  }
+  // The equality test whose operands must be equal for the condition to have the
+  // given truth: `a === b` for a true condition, `a !== b` for a false one. It
+  // looks through parentheses and negations, a `&&` (either side when true, both
+  // when false) and a `||` (the reverse). Returns that comparison, or undefined.
+  const impliedEquality = (expression, truth) => {
+    const inner = bare(expression)
+    if (
+      ts.isPrefixUnaryExpression(inner) &&
+      inner.operator === ts.SyntaxKind.ExclamationToken
+    )
+      return impliedEquality(inner.operand, !truth)
+    if (!ts.isBinaryExpression(inner)) return undefined
+    const op = inner.operatorToken.getText(file)
+    if (op === `===` || op === `!==`)
+      return (op === `===`) === truth ? inner : undefined
+    if (op !== `&&` && op !== `||`) return undefined
+    const left = impliedEquality(inner.left, truth)
+    const right = impliedEquality(inner.right, truth)
+    // Both sides must imply the tie when the condition's truth needs both.
+    return (op === `&&`) !== truth
+      ? left && right
+        ? left
+        : undefined
+      : (left ?? right)
+  }
+  // Forcing a guard's condition to `side` is undetectable when the condition's
+  // other truth implies a tie, and the branches yield the tied operands: then the
+  // forced branch is the one reached off the tie, and the tie yields the same
+  // value on both branches. The forced side is dead code when a nonzero literal
+  // makes the tie (no declared type has a signed zero there), and skipped when
+  // both operands are bigints (no signed zero at their type). Otherwise undefined.
+  const forcedOutcome = (node, side) => {
+    const eq = impliedEquality(node.expression, side === `false`)
+    if (!eq || !yieldsOperands(eq, node)) return undefined
+    if (nonzeroLiteral(eq.left) || nonzeroLiteral(eq.right)) return `dead`
+    if (typeOf(eq.left) === `bigint` && typeOf(eq.right) === `bigint`)
+      return `skip`
+    return undefined
+  }
+  // The evidence a mutation site carries for the report, never a reason to skip
+  // it. Dead code: no input distinguishes the mutant. That holds for a logical
+  // operator on one local name, and for a site in a pure condition whose
+  // ternary or `if` has identical branches. Otherwise an ordering swap may carry
+  // the boundary hint.
+  const evidenceOf = (node) => {
+    const op = ts.isBinaryExpression(node)
+      ? node.operatorToken.getText(file)
+      : undefined
+    if (op !== undefined && logical.has(op)) {
+      const [left, right] = [operandText(node.left), operandText(node.right)]
+      if (
+        left !== undefined &&
+        left === right &&
+        ts.isIdentifier(bare(node.left)) &&
+        localBinding(bare(node.left))
+      )
+        return DEAD_CODE
+    }
+    if (deadUnderHolder(node)) return DEAD_CODE
+    if (op !== undefined && ordering.has(op)) return boundaryHint(node)
+    return undefined
   }
 
   // Emit `node` with its children's instrumented text spliced in, then wrap
@@ -559,7 +795,7 @@ export function instrument(ts, path, text, source, offset = 0) {
     if (ts.isBinaryExpression(node)) {
       const op = node.operatorToken.getText(file)
       const swap = comparisons.get(op) ?? logical.get(op)
-      if (swap)
+      if (swap && !undetectableSwap(node))
         ids.binary = add(
           node.operatorToken,
           `binary-swap`,
@@ -585,7 +821,7 @@ export function instrument(ts, path, text, source, offset = 0) {
       ts.isPrefixUnaryExpression(node) &&
       node.operator === ts.SyntaxKind.ExclamationToken
     )
-      ids.not = add(node, `drop-not`, `!`, ``)
+      ids.not = add(node, `drop-not`, `!`, ``, evidenceOf(node))
     if (
       (ts.isPropertyAssignment(node) ||
         ts.isShorthandPropertyAssignment(node)) &&
@@ -637,15 +873,27 @@ export function instrument(ts, path, text, source, offset = 0) {
     if (ts.isIfStatement(node)) {
       const condition = node.expression.getText(file)
       const [yes, no] = valuesOf(node)
-      const evidence = yes !== undefined && yes === no ? DEAD_CODE : undefined
-      ids.ifTrue = add(node.expression, `if-true`, condition, `true`, evidence)
-      ids.ifFalse = add(
-        node.expression,
-        `if-false`,
-        condition,
-        `false`,
-        evidence,
-      )
+      const identical = yes !== undefined && yes === no
+      const outcomeTrue = forcedOutcome(node, `true`)
+      const outcomeFalse = forcedOutcome(node, `false`)
+      const evidenceFor = (side, outcome) =>
+        identical || outcome === `dead` ? DEAD_CODE : undefined
+      if (outcomeTrue !== `skip`)
+        ids.ifTrue = add(
+          node.expression,
+          `if-true`,
+          condition,
+          `true`,
+          evidenceFor(`true`, outcomeTrue),
+        )
+      if (outcomeFalse !== `skip`)
+        ids.ifFalse = add(
+          node.expression,
+          `if-false`,
+          condition,
+          `false`,
+          evidenceFor(`false`, outcomeFalse),
+        )
     }
     if (
       ts.isExpressionStatement(node) &&
@@ -702,10 +950,10 @@ export function instrument(ts, path, text, source, offset = 0) {
       const { text: condition, at } = emitted.get(loopCondition)
       return `${out.slice(0, at)}${G}.v(${G}.m(${ids.loop}) ? false : ${condition})${out.slice(at + condition.length)}`
     }
-    if (ids.ifTrue !== undefined) {
+    if (ids.ifTrue !== undefined || ids.ifFalse !== undefined) {
       // Replace only the condition; the rest of the `if` stays as emitted.
       const { text: condition, at } = emitted.get(node.expression)
-      return `${out.slice(0, at)}${G}.cond(${ids.ifTrue}, ${ids.ifFalse}, ${condition})${out.slice(at + condition.length)}`
+      return `${out.slice(0, at)}${G}.cond(${ids.ifTrue ?? `undefined`}, ${ids.ifFalse ?? `undefined`}, ${condition})${out.slice(at + condition.length)}`
     }
     if (ids.call !== undefined) {
       // `skip || call()` keeps the statement a single expression statement.
