@@ -43,20 +43,16 @@ export function outcomeOf(
   assertions = false,
 ) {
   // A run that timed out recorded nothing. A kill in another run still
-  // decides; failing that, the mutant is `timeout`. A copy cut off for
-  // spinning (`spin`) recorded its tests' rows before the cut: its law
-  // verdicts still decide, and its other failures are the cut itself.
+  // decides; failing that, the mutant is `timeout`.
   const timeout = units.some((unit) => unit.timedOut)
     ? { outcome: `timeout`, detail: `run time limit` }
     : undefined
   const failures = []
   for (const unit of units) {
-    if (unit.timedOut && !unit.spin) continue
-    const cut = unit.timedOut
+    if (unit.timedOut) continue
     const rows = new Map(unit.rows)
-    if (!cut)
-      for (const message of unit.setupErrors)
-        failures.push({ setup: true, message })
+    for (const message of unit.setupErrors)
+      failures.push({ setup: true, message })
     for (const test of unit.tests) {
       if (test.state !== `failed`) continue
       if (nondeterministic.has(test.key)) continue
@@ -66,7 +62,6 @@ export function outcomeOf(
         ...v,
         route: routeOf(v.route ?? row?.route),
       }))
-      if (cut && verdicts.length === 0) continue
       failures.push({
         test: test.fullName,
         route: routeOf(row?.route),
@@ -83,7 +78,7 @@ export function outcomeOf(
         ).slice(0, 300),
       })
     }
-    if (!cut) for (const message of unit.unhandled) failures.push({ message })
+    for (const message of unit.unhandled) failures.push({ message })
   }
   if (failures.length === 0) return timeout ?? { outcome: `survived` }
   const judged = (route) =>

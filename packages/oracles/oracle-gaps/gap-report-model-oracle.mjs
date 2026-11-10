@@ -238,99 +238,61 @@ const routes = [
   `probe calibration`,
   `determinism`,
 ]
-const testCase = fc
-  .record({
-    file: fc.constantFrom(`a`, `b`, `c`),
-    route: fc.constantFrom(...routes),
-    registered: fc.constantFrom(true, true, true, false),
-    name: fc.constantFrom(`route`, `plain`),
-    fn: fc.nat({ max: 7 }),
-    input: constant,
-    judges: fc.boolean(),
-    law: fc.constantFrom(`L`, `reach agreement`),
-    channel: fc.constantFrom(`observe`, `observe`, `expect`),
-    flaky: fc.constantFrom(false, false, false, true),
-    // A test may judge by an `expect` assertion instead of a verdict, as older
-    // oracles do; that is a kill under an unnamed law. A soft assertion
-    // (`expect.soft`) records its failure and lets the test go on to its next
-    // campaign.
-    judgeBy: fc.constantFrom(`verdict`, `verdict`, `assertion`, `soft`),
-    // A test may hang where it would judge: when the output differs, it waits
-    // on a promise that never settles. Rare, since each hang costs a run its
-    // whole time limit.
-    hangs: fc.constantFrom(
-      false,
-      false,
-      false,
-      false,
-      false,
-      false,
-      false,
-      true,
-    ),
-    // Slow tests cost seconds of real time each, so only a witness has one.
-    slow: fc.constant(false),
-    // Only a witness checks that fast-check shrinks an injected failure.
-    shrinks: fc.constant(false),
-    // Only a witness waits on a child process: seconds of real time.
-    ioWait: fc.constant(false),
-    // A test may import its owned module through a query (`?raw`, as a Vite
-    // worker's `?worker&url` import is), and must read the module's own text:
-    // the import is Vite's, not the instrumented copy's. The test judges nothing
-    // about the import; it fails only when the text differs.
-    rawImport: fc.constantFrom(
-      false,
-      false,
-      false,
-      false,
-      false,
-      false,
-      false,
-      true,
-    ),
-    // A test's own cleanup hook may throw once the test has failed, as a
-    // controlled clock's release does. The test's failure still judges.
-    cleanupThrows: fc.constantFrom(false, false, false, true),
-    // A test may be a property of @fast-check/vitest (`test.prop`), which
-    // runs the suite's `afterEach` and `beforeEach` hooks between its runs.
-    // It judges only in runs whose generated `n` is positive, so its last
-    // run, a shrink to 0, passes: the test fails by an earlier run.
-    asProp: fc.constantFrom(false, false, false, true),
-    // A test may run a second campaign, on its own route and input, as an
-    // oracle's second property does.
-    then: fc.option(
-      fc.record({ route: fc.constantFrom(...routes), input: constant }),
-      { nil: null },
-    ),
-    // A test may spin after its verdict: it records a law verdict where its
-    // output differs, then calls the function again until the output is the
-    // expected one. Under a mutant that never gets there, the copy spins, and
-    // the call budget cuts it off (capture-setup.mjs). The verdict it recorded
-    // before the cut is kept (`spinsAfter` in the judge below). Such a test
-    // judges by a law verdict, not an assertion, and is neither flaky nor a
-    // hang, so that its verdict is recorded and the spin follows it.
-    spinsAfter: fc.constantFrom(
-      false,
-      false,
-      false,
-      false,
-      false,
-      false,
-      false,
-      true,
-    ),
-  })
-  .filter(
-    // A spinning test is one that judges by a law verdict, neither flaky,
-    // hanging, nor a property (whose verdict a later run may not reach).
-    (t) =>
-      !t.spinsAfter ||
-      (t.judges &&
-        t.judgeBy === `verdict` &&
-        !t.flaky &&
-        !t.hangs &&
-        !t.asProp),
-  )
+const testCase = fc.record({
+  file: fc.constantFrom(`a`, `b`, `c`),
+  route: fc.constantFrom(...routes),
+  registered: fc.constantFrom(true, true, true, false),
+  name: fc.constantFrom(`route`, `plain`),
+  fn: fc.nat({ max: 7 }),
+  input: constant,
+  judges: fc.boolean(),
+  law: fc.constantFrom(`L`, `reach agreement`),
+  channel: fc.constantFrom(`observe`, `observe`, `expect`),
+  flaky: fc.constantFrom(false, false, false, true),
+  // A test may judge by an `expect` assertion instead of a verdict, as older
+  // oracles do; that is a kill under an unnamed law. A soft assertion
+  // (`expect.soft`) records its failure and lets the test go on to its next
+  // campaign.
+  judgeBy: fc.constantFrom(`verdict`, `verdict`, `assertion`, `soft`),
+  // A test may hang where it would judge: when the output differs, it waits
+  // on a promise that never settles. Rare, since each hang costs a run its
+  // whole time limit.
+  hangs: fc.constantFrom(false, false, false, false, false, false, false, true),
+  // Slow tests cost seconds of real time each, so only a witness has one.
+  slow: fc.constant(false),
+  // Only a witness checks that fast-check shrinks an injected failure.
+  shrinks: fc.constant(false),
+  // Only a witness waits on a child process: seconds of real time.
+  ioWait: fc.constant(false),
+  // A test may import its owned module through a query (`?raw`, as a Vite
+  // worker's `?worker&url` import is), and must read the module's own text:
+  // the import is Vite's, not the instrumented copy's. The test judges nothing
+  // about the import; it fails only when the text differs.
+  rawImport: fc.constantFrom(
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+  ),
+  // A test's own cleanup hook may throw once the test has failed, as a
+  // controlled clock's release does. The test's failure still judges.
+  cleanupThrows: fc.constantFrom(false, false, false, true),
+  // A test may be a property of @fast-check/vitest (`test.prop`), which
+  // runs the suite's `afterEach` and `beforeEach` hooks between its runs.
+  // It judges only in runs whose generated `n` is positive, so its last
+  // run, a shrink to 0, passes: the test fails by an earlier run.
+  asProp: fc.constantFrom(false, false, false, true),
+  // A test may run a second campaign, on its own route and input, as an
+  // oracle's second property does.
+  then: fc.option(
+    fc.record({ route: fc.constantFrom(...routes), input: constant }),
+    { nil: null },
+  ),
+})
 // Law 9's edits. Each content edit changes what some evidence depends on:
 // a test file, a source statement, the source's line numbers, an owns list,
 // the authored mutant, a helper module that only file b imports, the seed
@@ -564,7 +526,6 @@ const judging = (file, route, input, extra = {}) => ({
   shrinks: false,
   ioWait: false,
   rawImport: false,
-  spinsAfter: false,
   cleanupThrows: false,
   asProp: false,
   then: null,
@@ -1261,27 +1222,6 @@ const witness = [
     body: [{ kind: `until`, quote: `'` }],
     tests: [judging(`a`, `fixed seed`, 1)],
   },
-  // A spin after a verdict: the owner records its verdict, then the copy
-  // spins under the mutant and is cut off. The verdict it recorded before the
-  // cut kills, so the mutant is killed, not a timeout.
-  {
-    id: `w_spinalone`,
-    owners: [`a`],
-    body: [kill],
-    tests: [judging(`a`, `fixed seed`, 7, { spinsAfter: true })],
-  },
-  // The same spin in the first of two owners: its verdict kills, so the
-  // second owner's copy is skipped and the mutant is still killed. A
-  // skipped copy never aborts the run.
-  {
-    id: `w_spinkill`,
-    owners: [`a`, `b`],
-    body: [kill],
-    tests: [
-      judging(`a`, `fixed seed`, 7, { spinsAfter: true }),
-      judging(`b`, `fixed seed`, 7),
-    ],
-  },
   // A record that a judging test sees: each field drop and the arithmetic
   // swap change its JSON.
   {
@@ -1372,8 +1312,6 @@ const captureWitness = new Set([
   `w_fcprop`,
   `w_record`,
   `w_spin`,
-  `w_spinalone`,
-  `w_spinkill`,
 ])
 
 // ## Rendering and layout
@@ -2906,16 +2844,6 @@ function judge(plan, tests, sites, active) {
             route,
             law: t.judgeBy === `verdict` ? t.law : `(unnamed)`,
           })
-          // The copy spins after this verdict, and the verdict stands.
-          if (t.spinsAfter)
-            return {
-              t,
-              route,
-              spin: true,
-              hang: true,
-              verdicts: found,
-              changed: true,
-            }
           if (t.judgeBy !== `soft`)
             return { t, route, verdicts: found, changed: true }
         }
@@ -2928,40 +2856,28 @@ function judge(plan, tests, sites, active) {
       }
     })
   // A file's tests run in order, and a kill (a behavioral verdict on a
-  // reproducible route) stops the file. A hang that the clock cuts off
-  // cuts the file's run, and a run that was cut off records nothing, not
-  // even its earlier verdicts. A copy that spins is cut off too, but the
-  // verdicts it recorded before the cut stand (a spin is judged by its
-  // verdicts, not by its clock). A kill in another file still decides (a
-  // kill outranks a timeout); failing that, the mutant is a timeout.
+  // reproducible route) stops the file. A hang before that cuts the file's
+  // run off, and a run that was cut off records nothing, not even its
+  // earlier verdicts. A kill in another file still decides (a kill outranks
+  // a timeout); failing that, the mutant is a timeout.
   const kills = (r) =>
     r.verdicts.some(
       (v) => v.route === `reproducible` && v.law !== `reach agreement`,
     )
-  const cut = new Set()
-  const live = []
-  for (const file of new Set(runs.map((r) => r.t.file))) {
-    const ran = []
-    let clockCut = false
+  const hung = new Set()
+  for (const file of new Set(runs.map((r) => r.t.file)))
     for (const r of runs.filter((x) => x.t.file === file)) {
-      if (r.hang && !r.spin) {
-        clockCut = true
-        break
-      }
-      ran.push(r)
-      if (r.hang) break
-      if (kills(r)) break
+      if (r.hang) hung.add(file)
+      if (r.hang || kills(r)) break
     }
-    if (ran.some((r) => r.hang) || clockCut) cut.add(file)
-    if (!clockCut) live.push(...ran)
-  }
+  const live = runs.filter((r) => !hung.has(r.t.file))
   const verdicts = (route) =>
     live.flatMap((r) =>
       r.verdicts.filter((v) => v.route === route).map((v) => v.law),
     )
   const reproducible = verdicts(`reproducible`)
   if (reproducible.some((law) => law !== `reach agreement`)) return `killed`
-  if (cut.size > 0) return `timeout`
+  if (hung.size > 0) return `timeout`
   if (reproducible.length > 0) return `agreement-only-kill`
   if (verdicts(`random`).length > 0) return `random-only-kill`
   if (verdicts(`unknown`).length > 0) return `unregistered-kill`
@@ -3314,14 +3230,7 @@ function oracleTestFile(plan, file) {
             : [
                 `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) {`,
                 `      g.__oracleVerdict?.({ property: 'fixture-${file}', law: '${t.law}', checkpoint: 'trace' })`,
-                // A spinning test records its verdict and calls the function
-                // again until the output is the expected one: under a mutant
-                // that never gets there, the copy spins after its verdict.
-                ...(t.spinsAfter
-                  ? [
-                      `      for (;;) { const again: Array<string> = []; ${callFor(t.fn)}(${part.input}, again); if (JSON.stringify(again) === ${JSON.stringify(expected)}) break }`,
-                    ]
-                  : [`      throw new Error('violation')`]),
+                `      throw new Error('violation')`,
                 `    }`,
               ]),
       ]

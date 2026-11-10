@@ -35,8 +35,8 @@
  *   keys each selected mutant as the full run does: keys are numbered over
  *   the whole mutant list before any selection, so a partial run and a full
  *   run agree on every key they share.
- * - **Help.** `--help` prints the usage for any package, with no `--package`,
- *   and refuses nothing (authority: the CLI's usage text in args.mjs).
+ * - **Help.** `index.mjs --help` prints the usage text (args.mjs) for any
+ *   package directory, with no `--package`, and exits 0.
  * - **Key stability.** After the history's stability edit, every mutant
  *   that existed before keeps its key, its probe mark, and its ownership.
  *
@@ -83,6 +83,7 @@ import {
   symlinkSync,
 } from 'node:fs'
 import { createRequire } from 'node:module'
+import { spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { declareOracle } from '../src/oracle-declaration.ts'
@@ -109,7 +110,7 @@ import {
   writeFixture,
   written,
 } from './gap-report-model-oracle.mjs'
-import { parseArgs } from './args.mjs'
+import { parseArgs, usage } from './args.mjs'
 import { keyAndSelect } from './report.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -131,7 +132,7 @@ function analyzeFixture(dir, files, plan) {
   const tests = readdirSync(join(dir, `tests`))
     .filter((name) => name.endsWith(`.test.ts`) && !isRunnerCopy(name))
     .map((name) => join(dir, `tests`, name))
-  // `--help` names no package and is answered with the usage text (index.mjs).
+  // `--help` names no package; the CLI itself must print the usage text.
   const help = helpOf(dir)
   try {
     const { sources } = parseArgs(
@@ -179,13 +180,13 @@ function analyzeFixture(dir, files, plan) {
   }
 }
 
-/** What `--help` answers for a package: usage, or the refusal it gives. */
+/** What `index.mjs --help` prints when run in a directory, and its status. */
 function helpOf(dir) {
-  try {
-    return { usage: parseArgs([`--help`], dir).help === true }
-  } catch (error) {
-    return { refusal: String(error?.message ?? error) }
-  }
+  const run = spawnSync(process.execPath, [join(here, `index.mjs`), `--help`], {
+    cwd: dir,
+    encoding: `utf8`,
+  })
+  return { status: run.status, printed: run.stdout.trimEnd() }
 }
 
 // ## The derived class, run
@@ -596,10 +597,10 @@ function checkDerived(plan, observed) {
 function check(plan, observations, expected) {
   const got = observations.find((o) => o.checkpoint === `static`)?.value
   if (!got) return violation(`static`, `no analysis was observed`, `completion`)
-  if (!got.help?.usage)
+  if (got.help?.status !== 0 || got.help?.printed !== usage.trimEnd())
     return violation(
       `static`,
-      `--help did not print usage: ${got.help?.refusal ?? `no usage`}`,
+      `--help exited ${got.help?.status} and printed ${JSON.stringify(got.help?.printed)}, not the usage text`,
       `help`,
     )
   // An owner that fails, and a config the runner cannot honor, are found

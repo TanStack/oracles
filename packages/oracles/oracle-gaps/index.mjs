@@ -68,6 +68,8 @@
 //     [--ordinary]            (also run ordinary test files, for information)
 //     [--seed <n>] [--mutants <dir>] [--out <dir>] [--only <id,id>]
 //     [--diff-base <rev>]
+//     [--first-limit <ms>]    (a copy's first budget; default 2000)
+//     [--hang-limit <ms>]     (the full limit a cut copy gets again; default 10000)
 //     [--test-timeout <ms>]   (default 15000; also bounds hooks and teardown.
 //                              Each mutant run also has a wall-clock limit of
 //                              10 s plus three times its file's unmutated time.)
@@ -79,6 +81,7 @@
 //                              a native addon is anywhere in the package's
 //                              dependency tree)
 //   oracle-gaps --stop-daemon --package <dir>
+//   oracle-gaps --help      (prints the usage text, args.mjs)
 import { realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { parseArgs, usage } from './args.mjs'

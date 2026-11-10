@@ -100,37 +100,6 @@ function failureOf(unit) {
   return text.slice(0, 300)
 }
 
-/**
- * A unit from a copy's capture rows alone: its tests, as the rows record
- * them, and the rows. A copy cut off for spinning (`cut`) keeps the rows of
- * the tests it finished, so the verdicts it recorded before the cut still
- * judge (classify.mjs outcomeOf).
- */
-function unitOfRows(file, own, seconds, cut = false) {
-  return {
-    file,
-    timedOut: cut,
-    ...(cut ? { spin: true } : {}),
-    seconds,
-    setupErrors: [],
-    tests: own
-      .filter((row) => !row.background)
-      .map((row) => ({
-        key: row.key,
-        fullName: row.key.split(` > `).slice(1).join(` > `),
-        state:
-          row.state === `fail`
-            ? `failed`
-            : row.state === `skip`
-              ? `skipped`
-              : `passed`,
-        message: row.message ?? ``,
-      })),
-    unhandled: [],
-    rows: own.map((row) => [row.key, row]),
-  }
-}
-
 /** A hash of this CLI's own code and the framework it reads. */
 export function codeIdentity() {
   const hash = createHash(`sha1`)
@@ -342,13 +311,17 @@ export default async (env) => {
       return globalThis.__oracleGapsBundles?.get(source)
     },
     load(id) {
-      // A query import ('./x?worker&url', '?raw') is Vite's to load: only the
-      // module itself, by its plain id, is served instrumented.
-      if (id.includes('?')) return undefined
+      // Vite's own asset and worker queries ('?raw', '?url', '?worker&url', ...)
+      // are loaded as written, so their module is not instrumented (a stated
+      // limit: a worker's code is not mutated). Any other query is the module
+      // itself, served instrumented under its plain id.
+      const at = id.indexOf('?')
+      if (at >= 0 && [...new URLSearchParams(id.slice(at + 1)).keys()].every((key) => ['raw', 'url', 'worker', 'sharedworker', 'inline'].includes(key))) return undefined
+      const path = at < 0 ? id : id.slice(0, at)
       // This context's authored patch, or else the instrumented source of the
       // current check, both set by the runner in this process.
       try {
-        const real = realpathSync(id)
+        const real = realpathSync(path)
         return globalThis.__oracleGapsServe?.[${index}]?.get(real) ?? globalThis.__oracleGapsSchemata?.get(real)
       } catch { return undefined }
     },
@@ -583,31 +556,13 @@ export default async (env) => {
       running.catch(() => undefined)
       forceCancel(context)
       span(`run`, started, { ...profiled, timedOut: true })
-      if (!spun) {
-        rmSync(capture, { force: true })
-        return { file, timedOut: true, seconds }
-      }
+      rmSync(capture, { force: true })
+      return { file, timedOut: true, seconds, ...(spun ? { spin: true } : {}) }
     }
-    const rows = []
-    if (existsSync(capture)) {
-      for (const line of readFileSync(capture, `utf8`)
-        .split(`\n`)
-        .filter(Boolean)) {
-        const row = JSON.parse(line)
-        // A closing row marks the end of a file for a batch's watchdog.
-        if (!row.closed && !row.idle) rows.push([row.key, row])
-      }
-      rmSync(capture)
+    if (spun) {
+      rmSync(capture, { force: true })
+      return { file, timedOut: true, spin: true, seconds }
     }
-    // A copy cut off for spinning keeps the rows of the tests it finished:
-    // the verdicts it recorded before the cut still judge (unitOfRows).
-    if (spun)
-      return unitOfRows(
-        file,
-        rows.filter(([key]) => key !== undefined).map(([, row]) => row),
-        seconds,
-        true,
-      )
     // The result also lists test modules from earlier runs, with their old
     // results. Only this run's file counts.
     const modules = result.testModules.filter((m) => m.moduleId === file)
@@ -626,6 +581,17 @@ export default async (env) => {
         setup: Math.round(d.setupDuration ?? 0),
         testsMs: Math.round(d.duration ?? 0),
       })
+    }
+    const rows = []
+    if (existsSync(capture)) {
+      for (const line of readFileSync(capture, `utf8`)
+        .split(`\n`)
+        .filter(Boolean)) {
+        const row = JSON.parse(line)
+        // A closing row marks the end of a file for a batch's watchdog.
+        if (!row.closed && !row.idle) rows.push([row.key, row])
+      }
+      rmSync(capture)
     }
     const tests = modules.flatMap((module) =>
       [...module.children.allTests()].map((testCase) => {
@@ -815,17 +781,13 @@ export default async (env) => {
     const skippedUnit = (item) => ({ file: item.file, skipped: true })
     // A copy that ran past its call budget, even one whose throw ended the
     // loop and let it finish, is a timeout as it stands (a count, not a
-    // clock: no confirming run). Its rows stand too (unitOfRows).
-    const spunUnit = (i, item, rows) =>
-      unitOfRows(
-        item.file,
-        rows.get(copies[i]).map((row) => ({
-          ...row,
-          key: keyFor(copies[i], item.file)(row.key),
-        })),
-        seconds,
-        true,
-      )
+    // clock: no confirming run).
+    const spunUnit = (item) => ({
+      file: item.file,
+      timedOut: true,
+      spin: true,
+      seconds,
+    })
     try {
       if (result === undefined) {
         // Cancelled without waiting; the caller replaces the context (see
@@ -845,20 +807,36 @@ export default async (env) => {
           units: items.slice(0, current).map((item, i) => {
             if (!closed.has(copies[i])) return undefined
             if (skipped.has(copies[i])) return skippedUnit(item)
-            if (spun.has(copies[i])) return spunUnit(i, item, rows)
+            if (spun.has(copies[i])) return spunUnit(item)
             const map = keyFor(copies[i], item.file)
             const own = rows
               .get(copies[i])
               .map((row) => ({ ...row, key: map(row.key) }))
-            return unitOfRows(item.file, own, seconds / items.length)
+            return {
+              file: item.file,
+              timedOut: false,
+              seconds: seconds / items.length,
+              setupErrors: [],
+              tests: own
+                .filter((row) => !row.background)
+                .map((row) => ({
+                  key: row.key,
+                  fullName: row.key.split(` > `).slice(1).join(` > `),
+                  state:
+                    row.state === `fail`
+                      ? `failed`
+                      : row.state === `skip`
+                        ? `skipped`
+                        : `passed`,
+                  message: row.message ?? ``,
+                })),
+              unhandled: [],
+              rows: own.map((row) => [row.key, row]),
+            }
           }),
           timedOutAt: current,
           idle: idle.has(copies[current]),
           spin: spun.has(copies[current]),
-          // The copy cut off for spinning, with the rows it wrote before it.
-          hung: spun.has(copies[current])
-            ? spunUnit(current, items[current], rows)
-            : undefined,
         }
       }
       // Errors outside any test cannot be attributed to one copy, so the
@@ -871,7 +849,7 @@ export default async (env) => {
         units: items.map((item, i) => {
           const copy = copies[i]
           if (skipped.has(copy)) return skippedUnit(item)
-          if (spun.has(copy)) return spunUnit(i, item, rows)
+          if (spun.has(copy)) return spunUnit(item)
           const map = keyFor(copy, item.file)
           const modules = result.testModules.filter((m) => m.moduleId === copy)
           return {
@@ -1079,7 +1057,8 @@ export default async (env) => {
     // fresh context; a batch with
     // errors outside any test runs its items alone. `needed` says, from the
     // units found so far, whether a request must still run; a request that
-    // need not run, or whose copy skipped its tests, gets no unit.
+    // need not run, gets no unit; a copy that skipped its tests gets a
+    // skipped marker, which its caller runs again (runOwners).
     async function unitsBatch(slot, requests, needed = () => true) {
       const index = indexOf.get(slot.context)
       const got = new Array(requests.length)
@@ -1120,9 +1099,11 @@ export default async (env) => {
           break
         }
         batch.units.forEach((u, k) => {
-          if (u === undefined || u.skipped) return
-          if (u.spin) evidence.spin += 1
+          if (u === undefined) return
+          // A skipped copy keeps its marker, so the caller can run it again.
           got[rest[k].i] = u
+          if (u.skipped) return
+          if (u.spin) evidence.spin += 1
           remember(rest[k].id, rest[k].file, u, index)
           evidence.computed += 1
         })
@@ -1142,9 +1123,7 @@ export default async (env) => {
         if (hung.limitMs >= full || batch.idle || batch.spin)
           settle(
             hung,
-            batch.spin
-              ? batch.hung
-              : { file: hung.file, timedOut: true, seconds: full / 1000 },
+            { file: hung.file, timedOut: true, seconds: full / 1000 },
             index,
           )
         else
@@ -1195,19 +1174,8 @@ export default async (env) => {
         [{ ...hung, limitMs: full }],
         options.seed ?? null,
       )
-      if (alone.unattributed) {
-        const u = await unit(slot.context, hung.file, hung.spec, {
-          mutant: hung.mutant,
-          select: hung.select,
-          stopOnKill: hung.stopOnKill,
-          ignore: hung.ignore,
-          limitMs: full,
-          callBudget: hung.callBudget,
-        })
-        if (u.spin) evidence.spin += 1
-        if (u.timedOut) await replace(slot)
-        return { unit: u }
-      }
+      if (alone.unattributed)
+        return { unit: await runAlone(slot, { ...hung, limitMs: full }) }
       // The index of the context that ran it, before any replacement.
       const at = indexOf.get(slot.context)
       if (alone.timedOutAt === 0) {
@@ -1528,6 +1496,7 @@ export default async (env) => {
     // ordinary tier, when asked for, runs the same way afterwards.
     const GROUP = 4
     const kills = (u) =>
+      !u.skipped &&
       outcomeOf([u], baseline.nondeterministic).outcome === `killed`
     const runOwners = async (slot, states, filesOf, keysOf) => {
       const active = states.filter((st) => !st.done)
@@ -1572,14 +1541,20 @@ export default async (env) => {
       for (const st of active) {
         for (const [i, request] of requests.entries()) {
           if (request.st !== st) continue
-          // A kill earlier in the mutant's files leaves a file without a
-          // unit. Any other missing unit is a copy that its batch did not
-          // judge: skipped because an earlier copy killed the mutant, or
-          // replaced after a cut. It runs alone, so every mutant gets an
-          // outcome and no copy aborts the run.
-          if (got[i] === undefined) {
+          // A copy its batch skipped (an earlier copy killed the mutant)
+          // runs again through unitsBatch, so it is confirmed like any copy
+          // while no kill is in hand.
+          if (got[i]?.skipped) {
             if (st.units.some(kills)) break
-            got[i] = await runAlone(slot, request)
+            got[i] = (await unitsBatch(slot, [request], () => true))[0]
+          }
+          // A kill earlier in the mutant's files leaves a file without a
+          // unit. Any other missing unit stops the run.
+          if (got[i] === undefined || got[i].skipped) {
+            if (st.units.some(kills)) break
+            throw new Error(
+              `${st.mutant.id}: ${relative(request.file)} has no unit and no earlier kill`,
+            )
           }
           st.units.push(got[i])
           if (kills(got[i])) break
