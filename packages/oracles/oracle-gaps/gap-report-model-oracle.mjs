@@ -272,8 +272,8 @@ const testCase = fc.record({
   // It judges only in runs whose generated `n` is positive, so its last
   // run, a shrink to 0, passes: the test fails by an earlier run.
   asProp: fc.constantFrom(false, false, false, true),
-  // A test may run a second campaign, on its own route and input, as
-  // `runOracleCampaign` does.
+  // A test may run a second campaign, on its own route and input, as an
+  // oracle's second property does.
   then: fc.option(
     fc.record({ route: fc.constantFrom(...routes), input: constant }),
     { nil: null },

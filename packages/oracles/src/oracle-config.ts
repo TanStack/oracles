@@ -38,10 +38,7 @@ export interface OracleConfigurationOptions {
    * Three names stay fixed whatever the prefix, because tooling reads them
    * across projects rather than a project setting them: `ORACLE_MANIFEST`
    * (a collect-only run records each registration there), and the
-   * `ORACLE_SEED` and `ORACLE_REACH` tags that campaigns print in their logs.
-   * `runOracleCampaign` names its variables from the prefix its caller
-   * passes, so a package's own campaigns stay apart from the project's
-   * replay selection.
+   * `ORACLE_SEED` tag that campaigns print in their logs.
    */
   envPrefix?: string
   /**
@@ -158,7 +155,7 @@ export function readOracleRunConfig(
  * reporter and must still be replayable. This line records selection, not
  * execution; guarded replay witnesses remain the execution evidence.
  */
-export function oracleCampaignSeed(
+function oracleCampaignSeed(
   seed: number | undefined,
   property: string | undefined,
 ): number {

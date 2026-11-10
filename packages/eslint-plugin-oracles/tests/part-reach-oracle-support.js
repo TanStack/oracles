@@ -1,68 +1,19 @@
 /**
- * Law: every test registration in an oracle file reaches a declared part, or
- * the rule reports it. A declared part is a check, a model, a grammar, or a
- * type model. A registration reaches a part when its body uses one, directly
- * or through a binding that reaches one, through local functions, imports,
- * re-exports, and companion modules. A registration whose `.each` or `.for`
- * table has a function that reaches a part reaches it too.
+ * Shared fixtures for the part-reach oracles: the grammar of programs that
+ * the oracle file and its companion modules render, the model that predicts the
+ * `oracle/no-unit-test` reports from a program, the drivers that lint each
+ * program on each receiving path, and the fixed skeletons and on-disk edits
+ * that the laws use.
  *
- * A registration that reaches none is reported as a unit test. A file that
- * declares no part and has no reaching test gets one `undeclared` report. An
- * unparseable companion reaches nothing, and an oracle file that calls a helper
- * that registers tests of its own gets one report for the call, unless the
- * helper's module is linted on its own.
+ * Each oracle file imports this module and owns one family of the grammar's
+ * features and its declared reach states. The grammar here is the grammar of
+ * the original single file, moved unchanged: its laws are stated in the oracle
+ * files that use it, and the header of each oracle file names the law it owns.
  *
- * A call to `oracleProperty` from the framework module `oracle-property` is
- * an oracle property: it registers oracle tests whose parts are the functions
- * it is given. With an object-literal options argument that has a `check`, it
- * reaches a part and is neither a unit test nor an imported registration. Any
- * other call to it gets an `incompleteProperty` report. An `oracleProperty`
- * from any other module is an ordinary helper that registers its own tests.
- *
- * A binding is reached however it is bound: a named, namespace, or default
- * import; a `let` that a hook assigns; or a `for...of` loop variable, which
- * runs one test per element, so every element must reach. A helper that
- * registers its caller's body, directly or wrapped in a function of its own,
- * is judged at the call by the argument it registers. The test also reaches
- * when the wrapper itself uses a part. A generated property counts as its own
- * check when one of its arbitraries generates values and its predicate reads
- * its input. The arbitrary may be named, and the predicate may be imported.
- *
- * Authority: the header contract of `rules/no-unit-test.js`, which states the
- * reach rules and the report rules, and its laws L1 (reports are a pure
- * function of the source files), L2 (every registration form is checked), L3
- * (every declared part counts), and L6 (an oracle file registers only oracle
- * tests, including tests that its imported functions register), and its
- * oracle-property paragraph (maintainer decision, 2026-11-02);
- * docs/contributing/oracle-rubric.md "Name oracle files consistently", which
- * says that an oracle-named helper "is linted on its own"; and AGENTS.md "Name
- * Oracle Files for Discovery". `export *` does not re-export a default export
- * (ECMAScript, ExportDeclaration semantics), so a default import resolves only
- * a module's own default.
- *
- * Limits. The grammar does not generate function parameters other than a
- * helper's, `describe` placeholders, declared import bindings, type models
- * built from other models, a `let` assigned more than once, a `for...of` over
- * a named array, or a predicate or arbitrary from a package. It builds at most
- * three companion modules, three functions per module, and six registrations
- * per oracle file. Oracle-property options are an inline literal or a const
- * name; a spread of options, a computed `check` key, and a default import of
- * the framework are not generated. The receiving paths are a long-lived ESLint instance and
- * a single-file Linter call. The hook script's paths (the lint CLI and its
- * edit-hook form) belong to the repository that runs the script, and are not
- * checked here. The ESLint paths write scratch files in `part-reach-scratch-*`
- * directories under the repository root, which git ignores, and remove them
- * afterwards.
- *
- * Structure:
- *   1. The grammar draws a skeleton and builds a legal program from it.
- *   2. The model predicts the reports from the program, without the rule.
- *   3. The drivers render the program and lint it on each receiving path.
- *   4. The comparison checks that each path's reports equal the prediction.
- *   5. Campaigns run the comparison with fixed and random seeds, and check
- *      order invariance, rerun equality, and companion edits between lints.
+ * The file's name contains `oracle`, so the lint rules read it as an oracle
+ * file. It declares no oracleProperty and registers no test: the oracle files
+ * that import it own the properties, and their checks are at their call sites.
  */
-import { spawnSync } from 'node:child_process'
 import {
   mkdirSync,
   mkdtempSync,
@@ -76,27 +27,16 @@ import { fileURLToPath } from 'node:url'
 import tsParser from '@typescript-eslint/parser'
 import { ESLint, Linter } from 'eslint'
 import fc from 'fast-check'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import {
-  createOracleReach,
-  declareOracle,
-  oraclePropertyOptions,
-  oracleRuns,
-} from '@tanstack/oracles'
+import { afterAll, beforeAll } from 'vitest'
+import { differs, pass } from '@tanstack/oracles'
 import oraclePlugin from '../src/index.js'
 
-declareOracle({
-  check: [compareReports],
-  model: [predictReports],
-  grammar: [programArbitrary],
-})
-
-const RULE = `oracle/no-unit-test`
-const ORACLE = `case-oracle.test.ts`
-const PROPERTY = `lint.part-reach`
-const FIXED_SEED = 2234
-const BASE_RUNS = 30
-const repoRoot = fileURLToPath(new URL(`../../../`, import.meta.url))
+export const RULE = `oracle/no-unit-test`
+export const ORACLE = `case-oracle.test.ts`
+export const PROPERTY = `lint.part-reach`
+export const FIXED_SEED = 2234
+export const BASE_RUNS = 30
+export const repoRoot = fileURLToPath(new URL(`../../../`, import.meta.url))
 
 // -- 1. Grammar ---------------------------------------------------------------
 //
@@ -105,12 +45,12 @@ const repoRoot = fileURLToPath(new URL(`../../../`, import.meta.url))
 // program. A reference that has no target is dropped. Feature gates turn a
 // family of forms on, so each campaign studies one dimension at a time.
 
-const SLOTS = 3
-const REFS = 3
+export const SLOTS = 3
+export const REFS = 3
 
 // Local references are the most common, because mutual recursion among the
 // oracle's functions is the shape that the reach rule must get right.
-const refSkeleton = fc.record({
+export const refSkeleton = fc.record({
   kind: fc.oneof(
     { weight: 4, arbitrary: fc.constant(`local`) },
     { weight: 1, arbitrary: fc.constant(`import`) },
@@ -119,7 +59,7 @@ const refSkeleton = fc.record({
   index: fc.nat({ max: 9 }),
 })
 
-const slotSkeleton = fc.record({
+export const slotSkeleton = fc.record({
   present: fc.boolean(),
   exported: fc.boolean(),
   part: fc.constantFrom(`none`, `none`, `check`, `model`, `grammar`),
@@ -128,13 +68,13 @@ const slotSkeleton = fc.record({
 
 // A named import is the common form. A namespace import reads the same export
 // through a member, and a default import reads the target's default export.
-const importForm = fc.oneof(
+export const importForm = fc.oneof(
   { weight: 3, arbitrary: fc.constant(`named`) },
   { weight: 1, arbitrary: fc.constant(`namespace`) },
   { weight: 1, arbitrary: fc.constant(`default`) },
 )
 
-const linkSkeleton = fc.record({
+export const linkSkeleton = fc.record({
   target: fc.nat({ max: 9 }),
   slot: fc.nat({ max: SLOTS - 1 }),
   form: importForm,
@@ -142,13 +82,13 @@ const linkSkeleton = fc.record({
 
 // A re-export imports one name and exports it under another, drawn from the
 // same pool. That lets two modules re-export each other's names: a cycle.
-const reexportSkeleton = fc.record({
+export const reexportSkeleton = fc.record({
   target: fc.nat({ max: 9 }),
   slot: fc.nat({ max: SLOTS - 1 }),
   exportIndex: fc.nat({ max: 99 }),
 })
 
-const moduleSkeleton = fc.record({
+export const moduleSkeleton = fc.record({
   slots: fc.tuple(slotSkeleton, slotSkeleton, slotSkeleton),
   stars: fc.array(fc.nat({ max: 9 }), { maxLength: 2 }),
   reexports: fc.array(reexportSkeleton, { maxLength: 2 }),
@@ -165,7 +105,7 @@ const moduleSkeleton = fc.record({
   js: fc.boolean(),
 })
 
-const FORMS = [
+export const FORMS = [
   `plain`,
   `identifier`,
   `call`,
@@ -186,11 +126,11 @@ const FORMS = [
 // How a caller-passed-body helper registers the body: as its argument, with a
 // trailing timeout after it, or wrapped in a function of the helper's own,
 // which may await the body or use a declared part of a companion.
-const WRAPS = [`direct`, `timed`, `wrap`, `wrap-async`, `wrap-part`]
+export const WRAPS = [`direct`, `timed`, `wrap`, `wrap-async`, `wrap-part`]
 
 // The form index is taken modulo the forms that the feature set enables, so
 // each enabled form gets an equal share of the registrations.
-const registrationSkeleton = fc.record({
+export const registrationSkeleton = fc.record({
   formIndex: fc.nat({ max: FORMS.length - 1 }),
   constantArb: fc.boolean(),
   refs: fc.array(refSkeleton, { maxLength: REFS }),
@@ -220,7 +160,7 @@ const registrationSkeleton = fc.record({
   frameworkOptions: fc.constantFrom(`check-model`, `check`, `model`, `name`),
 })
 
-const programSkeleton = fc.record({
+export const programSkeleton = fc.record({
   companions: fc.array(moduleSkeleton, { maxLength: 3 }),
   broken: fc.boolean(),
   // An ordinary module, an oracle-named module that is linted on its own, and
@@ -252,7 +192,7 @@ const programSkeleton = fc.record({
 })
 
 /** The grammar's feature gates. A campaign turns on one family at a time. */
-const BASE = {
+export const BASE = {
   companions: true,
   forms: [`plain`, `identifier`, `each`],
   stars: false,
@@ -270,7 +210,7 @@ const BASE = {
   // Off: every oracle property comes from the framework module, by name.
   frameworkNames: false,
 }
-const ALL = {
+export const ALL = {
   companions: true,
   forms: FORMS,
   stars: true,
@@ -286,23 +226,30 @@ const ALL = {
   frameworkNames: true,
 }
 
+/** The base grammar with `forms` added, and `more` overriding any feature. */
+export const withForms = (forms, more = {}) => ({
+  ...BASE,
+  forms: [...BASE.forms, ...forms],
+  ...more,
+})
+
 /** A module that the lint selection lints as an oracle file. */
-const lintedOnItsOwn = (file) =>
+export const lintedOnItsOwn = (file) =>
   file.includes(`oracle`) && !file.startsWith(`oracle-`)
 
 /** The framework module, whose `oracleProperty` calls are oracle properties. */
-const isFrameworkModule = (file) =>
+export const isFrameworkModule = (file) =>
   file !== undefined && file.replace(/\.(ts|js)$/, ``) === `oracle-property`
 
-function programArbitrary(features) {
+export function programArbitrary(features) {
   return programSkeleton.map((skeleton) => buildProgram(skeleton, features))
 }
 
 // -- Program: the builder ----------------------------------------------------
 
-const stemOf = (file) => file.replace(/\.(ts|js)$/, ``)
-const specOf = (file) => `./${stemOf(file)}.js`
-const nodeKey = (file, name) => `${file}\0${name}`
+export const stemOf = (file) => file.replace(/\.(ts|js)$/, ``)
+export const specOf = (file) => `./${stemOf(file)}.js`
+export const nodeKey = (file, name) => `${file}\0${name}`
 
 /**
  * A program, as the model and the drivers read it:
@@ -311,7 +258,7 @@ const nodeKey = (file, name) => `${file}\0${name}`
  *   tests: the oracle's registrations, in source order
  *   calls: the calls that the oracle makes to imported helpers
  */
-function buildProgram(skeleton, features) {
+export function buildProgram(skeleton, features) {
   // A single-file program has no companion, so its recursion is only the
   // oracle's own functions.
   const companions = features.companions ? skeleton.companions : []
@@ -524,7 +471,7 @@ function buildProgram(skeleton, features) {
 }
 
 // The helper module's exports, in the order HELPER_TEXT defines them.
-const HELPER_EXPORTS = [
+export const HELPER_EXPORTS = [
   `regPlain`,
   `regTimed`,
   `regWrap`,
@@ -532,7 +479,7 @@ const HELPER_EXPORTS = [
   `regWrapPart`,
   `regProp`,
 ]
-const HELPER_OF_WRAP = {
+export const HELPER_OF_WRAP = {
   direct: `regPlain`,
   timed: `regTimed`,
   wrap: `regWrap`,
@@ -541,16 +488,16 @@ const HELPER_OF_WRAP = {
 }
 
 /** The prefix of a module's own function names: `ofn` in an oracle, `c0f` in c0. */
-function prefixOf(file, role) {
+export function prefixOf(file, role) {
   return role === `oracle` ? `ofn` : `${stemOf(file)}f`
 }
 
 /** The name that slot `index` of `file` exports, or the broken module's name. */
-function slotName(file, index) {
+export function slotName(file, index) {
   return file.startsWith(`broken`) ? `brokenFn` : `${stemOf(file)}f${index}`
 }
 
-function buildModule({
+export function buildModule({
   file,
   role,
   skeleton,
@@ -689,7 +636,7 @@ function buildModule({
   }
 }
 
-function resolveRef(ref, names, aliases) {
+export function resolveRef(ref, names, aliases) {
   if (ref.kind === `local`) {
     return names.length === 0
       ? undefined
@@ -708,7 +655,7 @@ function resolveRef(ref, names, aliases) {
  * falls back to a plain registration, so a gated form never appears by
  * accident.
  */
-function buildRegistration(skeleton, index, context) {
+export function buildRegistration(skeleton, index, context) {
   const { oracle, features, companionFiles } = context
   const title = `t${index}`
   const names = [...oracle.bindings.keys()]
@@ -849,7 +796,7 @@ function buildRegistration(skeleton, index, context) {
 // judged there, so its calls are not judged in the oracle file.
 
 /** The reports that the rule should give for a program, as sorted keys. */
-function predictReports(program) {
+export function predictReports(program) {
   const oracle = program.modules.get(program.oracle)
   const importNodes = new Map()
   // An explicit export of a name shadows the star exports, as in ES. Star
@@ -992,12 +939,12 @@ function predictReports(program) {
 // name, or the helper), so the comparison does not depend on line numbers.
 // The renderer records the line of each subject, and a report's line finds it.
 
-const REGISTRAR_TEXT = `import { it } from 'vitest'\nexport function regAll() { it('reg inner', () => { void 0 }) }\nexport default regAll\n`
-const BROKEN_TEXT = `export function brokenFn() {\n`
+export const REGISTRAR_TEXT = `import { it } from 'vitest'\nexport function regAll() { it('reg inner', () => { void 0 }) }\nexport default regAll\n`
+export const BROKEN_TEXT = `export function brokenFn() {\n`
 // The framework's and each lookalike's `oracleProperty` registers a test of its
 // own, as the real framework does.
-const FRAMEWORK_TEXT = `import { it } from 'vitest'\nexport function oracleProperty(options) {\n  it(options.id, () => {\n    void options\n  })\n}\n`
-const PRED_TEXT = `export function predReads(value) {\n  void value\n}\nexport function predIgnores(value) {\n  void 0\n}\n`
+export const FRAMEWORK_TEXT = `import { it } from 'vitest'\nexport function oracleProperty(options) {\n  it(options.id, () => {\n    void options\n  })\n}\n`
+export const PRED_TEXT = `export function predReads(value) {\n  void value\n}\nexport function predIgnores(value) {\n  void 0\n}\n`
 
 /**
  * Helpers that register the body their caller passes: directly, before a
@@ -1005,7 +952,7 @@ const PRED_TEXT = `export function predReads(value) {\n  void value\n}\nexport f
  * a companion's function, and as a curried fast-check property, as
  * serializerProp does. Their order is HELPER_EXPORTS.
  */
-function helperText(module) {
+export function helperText(module) {
   const lines = [
     `import { it } from 'vitest'`,
     `import { test as fcTest } from '@fast-check/vitest'`,
@@ -1029,12 +976,12 @@ function helperText(module) {
 }
 
 /** The text that uses an imported alias: a namespace import reads a member. */
-function useText(module, alias) {
+export function useText(module, alias) {
   const link = module.imports.get(alias)
   return link?.form === `namespace` ? `${alias}.${link.imported}` : alias
 }
 
-function importText(alias, link) {
+export function importText(alias, link) {
   const from = specOf(link.from)
   if (link.form === `namespace`) return `import * as ${alias} from '${from}'`
   if (link.form === `default`) return `import ${alias} from '${from}'`
@@ -1042,7 +989,7 @@ function importText(alias, link) {
 }
 
 /** The files for a program, and the subject that each line of the oracle names. */
-function renderProgram(program) {
+export function renderProgram(program) {
   const files = new Map()
   let subjects = new Map()
   for (const [file, module] of program.modules) {
@@ -1065,7 +1012,7 @@ function renderProgram(program) {
   return { files, subjects }
 }
 
-function renderModule(module, program) {
+export function renderModule(module, program) {
   const lines = []
   const subjects = new Map()
   // A text may span several lines, so a subject names the line where its text starts.
@@ -1144,7 +1091,7 @@ function renderModule(module, program) {
  * module with `spread` writes its first part list in a const object that the
  * declaration spreads.
  */
-function renderDeclaration(module, push) {
+export function renderDeclaration(module, push) {
   const partKey = (part) => (module.stringKeys ? `'${part}'` : part)
   const lists = []
   for (const part of [`check`, `model`, `grammar`]) {
@@ -1169,26 +1116,26 @@ function renderDeclaration(module, push) {
   push(`})`)
 }
 
-function statementsOf(refs, use = (alias) => alias) {
+export function statementsOf(refs, use = (alias) => alias) {
   return refs.map((ref, index) => {
     if (ref.kind === `type`) return `type _t${index} = ${ref.name}<number>`
     return `void ${ref.kind === `local` ? ref.name : use(ref.alias)}`
   })
 }
 
-function arrowText(refs, use) {
+export function arrowText(refs, use) {
   return `() => {\n    expect(1).toBe(1)\n    ${statementsOf(refs, use).join(`\n    `)}\n  }`
 }
 
 /** Renders one registration. The first line carries its subject. */
 // The helper that a registration calls, which names an importedRegistration report.
-function callHelper(test) {
+export function callHelper(test) {
   return test.body.kind === `call` && test.body.callee.kind === `import`
     ? test.body.callee.alias
     : undefined
 }
 
-function renderTest(test, push, use) {
+export function renderTest(test, push, use) {
   // The bindings that one registration uses are written just before it.
   const arbitrary = (constant) => (constant ? `fc.constant(1)` : `fc.integer()`)
   const named = test.property ?? (test.helper?.prop ? test.helper : undefined)
@@ -1236,7 +1183,7 @@ function renderTest(test, push, use) {
   if (test.wrapped) push(`})`)
 }
 
-function registrationText(test, use) {
+export function registrationText(test, use) {
   const { body, title } = test
   if (test.helper !== undefined) {
     const { helper } = test
@@ -1336,16 +1283,21 @@ function registrationText(test, use) {
   }
   return [`it('${title}', ${arrowText(body.refs, use)})`]
 }
-
 /**
  * The keys of a message list. Every message that is not a report of this rule
  * is a key too, so a configuration or parse failure cannot pass as no reports.
  */
-function keysOf(messages, subjects) {
-  return messages.map((message) => keyOf(message, subjects)).sort()
+export function keysOf(messages, subjects) {
+  // The fixtures are deliberately raw campaigns in oracle-named files, so
+  // oracle/oracle-property-only reports them. That rule has its own oracle
+  // (oracle-property-only-oracle.property.test.js); this law judges no-unit-test.
+  return messages
+    .filter((message) => message.ruleId !== `oracle/oracle-property-only`)
+    .map((message) => keyOf(message, subjects))
+    .sort()
 }
 
-function keyOf(message, subjects) {
+export function keyOf(message, subjects) {
   if (message.ruleId !== RULE) {
     return `other:${message.ruleId ?? `fatal`}@${message.line}:${message.message}`
   }
@@ -1362,7 +1314,7 @@ function keyOf(message, subjects) {
 }
 
 // Without `files`, flat config applies only to the default .js patterns.
-const linterConfig = [
+export const linterConfig = [
   {
     files: [`**/*.ts`],
     languageOptions: { parser: tsParser, sourceType: `module` },
@@ -1370,16 +1322,16 @@ const linterConfig = [
     rules: { [RULE]: `error` },
   },
 ]
-
 // -- Receiving paths ------------------------------------------------------------
 
-let root
-let eslint
-let linter
-let scratch
-let historySeq = 0
+export let root
+export let eslint
+export let linter
+export let scratch
+export let historySeq = 0
 
-beforeAll(() => {
+/** Creates the long-lived ESLint instance and the scratch directories. Call from beforeAll. */
+export function setupReceivingPaths() {
   root = mkdtempSync(join(tmpdir(), `part-reach-oracle-`))
   writeFileSync(join(root, `package.json`), JSON.stringify({ name: `scratch` }))
   // The long-lived path: one ESLint instance, configured as the CLI configures it.
@@ -1396,16 +1348,44 @@ beforeAll(() => {
   linter = new Linter({ configType: `flat`, cwd: repoRoot })
   // The CLI reads only files inside its repository.
   scratch = mkdtempSync(join(repoRoot, `part-reach-scratch-`))
-})
+}
 
-// Every history writes its own directory, so removing them can take a while.
-afterAll(() => {
+/** Removes the scratch directories. Call from afterAll. */
+export function teardownReceivingPaths() {
   rmSync(root, { recursive: true, force: true })
   rmSync(scratch, { recursive: true, force: true })
-}, 300_000)
+}
+
+/** Registers the receiving paths' setup and teardown for this test file. */
+// Setup starts one ESLint instance and writes scratch directories: a loaded
+// machine can exceed the default hook timeout, so the hooks allow a minute.
+export function usePartReachPaths() {
+  beforeAll(setupReceivingPaths, 60_000)
+  afterAll(teardownReceivingPaths, 60_000)
+}
+
+/** A fresh sequence number for a history's directory. */
+export function nextSeq() {
+  return historySeq++
+}
+
+/** A scratch directory that one edit history writes into. */
+export function editDirectory(seq) {
+  return join(root, `edit${seq}`)
+}
+
+/** A chain directory under the scratch root for a fixed history. */
+export function chainDirectory(seq) {
+  return join(root, `chain${seq}`)
+}
+
+/** The root directory of the receiving paths, which tests write under. */
+export function workspaceRoot() {
+  return root
+}
 
 /** Writes a program's files into `directory`; returns the oracle's path, text, and subjects. */
-function writeProgram(directory, program) {
+export function writeProgram(directory, program) {
   mkdirSync(directory, { recursive: true })
   const { files, subjects } = renderProgram(program)
   for (const [file, text] of files) writeFileSync(join(directory, file), text)
@@ -1417,16 +1397,11 @@ function writeProgram(directory, program) {
 }
 
 /** Path 1: a long-lived ESLint instance, linting a new directory each time. */
-async function lintWithEslint(program) {
+export async function lintWithEslint(program) {
   const { oracle, subjects } = writeProgram(
     join(root, `h${historySeq++}`),
     program,
   )
-  if (process.env.REACH_ORACLE_DEBUG) {
-    console.log(
-      `DEBUG ${oracle}\n${[...renderProgram(program).files].map(([f, t]) => `--- ${f}\n${t}`).join(`\n`)}`,
-    )
-  }
   const results = await eslint.lintFiles([oracle])
   return keysOf(
     results.flatMap((result) => result.messages),
@@ -1439,7 +1414,7 @@ async function lintWithEslint(program) {
  * config matches a file only inside the working directory, so the program is
  * written inside the worktree.
  */
-function lintWithLinter(program) {
+export function lintWithLinter(program) {
   const { oracle, text, subjects } = writeProgram(
     join(scratch, `l${historySeq++}`),
     program,
@@ -1450,83 +1425,11 @@ function lintWithLinter(program) {
   )
 }
 
-// -- 4. Comparison --------------------------------------------------------------
-
-/** The paths agree with the model. A mismatch names the path and the keys. */
-function compareReports(path, actual, expected) {
-  const observed = JSON.stringify(actual)
-  const predicted = JSON.stringify(expected)
-  if (observed !== predicted) {
-    throw new Error(`${path} reports ${observed}, predicted ${predicted}`)
-  }
-}
-
-// -- 5. Declared reach and campaigns -------------------------------------------
-//
-// A state is declared when a law depends on it, and the campaign fails when
-// generated programs enter it fewer times than `minimum`. Each state is read
-// from the program's structure: the grammar's own witness, not the model.
-
-const STATES = [
-  `export-star-cycle`,
-  `named-reexport-cycle`,
-  `mutual-recursion-reaches-part`,
-  `mutual-recursion-reaches-no-part`,
-  `form-each`,
-  `form-for`,
-  `form-call-body`,
-  `form-member-body`,
-  `form-options`,
-  `string-keyed-declaration`,
-  `type-model-declaration`,
-  `unparseable-companion`,
-  `imported-registration`,
-  `caller-passed-body-helper`,
-  `companion-edited-between-lints`,
-  // Import forms: a namespace member, a default, and a default import of a
-  // module whose only exports of that name come through `export *`.
-  `namespace-import`,
-  `default-import`,
-  `default-import-through-star`,
-  // ...whose star target does have a default, and that default is a part: the
-  // history that tells "`export *` carries no default" from its rival.
-  `default-import-star-target-has-part`,
-  // Registration helpers by import form and module name.
-  `member-callee-registration`,
-  `default-import-registration`,
-  `prefixed-oracle-registrar`,
-  `prefixed-oracle-helper`,
-  `oracle-named-helper`,
-  // Caller-passed-body layouts.
-  `caller-body-trailing-name`,
-  `caller-body-wrapper`,
-  `caller-body-wrapper-reaches-part`,
-  // Drivers and declarations.
-  `let-assigned-driver`,
-  `for-of-driver`,
-  `for-of-mixed-elements`,
-  `declaration-spread`,
-  // A test imports a declared part from a JavaScript companion.
-  `javascript-companion-import-reaches-part`,
-  // Generated properties.
-  `named-constant-arbitrary`,
-  `imported-predicate`,
-  `predicate-ignores-input`,
-  // Oracle properties: a complete one, one without a check, options the rule
-  // cannot read, a namespace import of the framework, and each lookalike.
-  `oracle-property-complete`,
-  `oracle-property-without-check`,
-  `oracle-property-named-options`,
-  `oracle-property-namespace-import`,
-  `oracle-property-machinery-lookalike`,
-  `oracle-property-ordinary-lookalike`,
-  `oracle-property-oracle-named-lookalike`,
-]
-const reach = createOracleReach(PROPERTY, STATES, { minimum: 1 })
-
-/** Marks every declared state that the program enters. */
-function recordStates(program) {
-  reach.beginHistory()
+/**
+ * The declared states that a program enters, read from its structure. A
+ * state is the grammar's own witness, not the model's prediction.
+ */
+export function statesOf(program) {
   const states = new Set()
   const starCycle = (file, edges) => {
     const stack = [...edges(file)]
@@ -1678,11 +1581,11 @@ function recordStates(program) {
     if (oracle.imports.get(`oracleProperty`)?.form === `namespace`)
       states.add(`oracle-property-namespace-import`)
   }
-  for (const state of states) reach.reach(state)
+  return states
 }
 
 /** Whether a binding reaches itself through at least one other binding. */
-function localCycle(module, name) {
+export function localCycle(module, name) {
   const stack = module.bindings
     .get(name)
     .refs.filter((ref) => ref.kind === `local`)
@@ -1702,7 +1605,7 @@ function localCycle(module, name) {
 }
 
 /** Whether a binding's local references lead to a declared part. */
-function localReachesPart(module, name) {
+export function localReachesPart(module, name) {
   const stack = [name]
   const seen = new Set()
   while (stack.length > 0) {
@@ -1718,253 +1621,13 @@ function localReachesPart(module, name) {
   return false
 }
 
-/** The comparison for one program, on every receiving path that it runs. */
-async function checkProgram(program, paths) {
-  recordStates(program)
-  const expected = predictReports(program)
-  for (const path of paths) {
-    const actual = await path.run(program)
-    compareReports(path.name, actual, expected)
-  }
-}
-
-const IN_PROCESS = [
-  { name: `eslint`, run: lintWithEslint },
-  { name: `linter`, run: (program) => lintWithLinter(program) },
-]
-
-/** One feature family: a fixed-seed campaign and a random-seed campaign. */
-function campaign(name, features, paths = IN_PROCESS, runs = BASE_RUNS) {
-  const arbitrary = programArbitrary(features)
-  const predicate = (program) => checkProgram(program, paths)
-  it(`${name}: fixed-seed campaign`, async () => {
-    await fc.assert(fc.asyncProperty(arbitrary, predicate), {
-      numRuns: oracleRuns(runs),
-      seed: FIXED_SEED,
-    })
-  }, 900_000)
-  it(`${name}: random-seed campaign`, async () => {
-    await fc.assert(
-      fc.asyncProperty(arbitrary, predicate),
-      oraclePropertyOptions(runs, PROPERTY),
-    )
-  }, 900_000)
-}
-
-describe(`declared reach in oracle files`, () => {
-  campaign(`base grammar`, BASE)
-  // Cycles are rare in random programs, so these campaigns run more histories.
-  campaign(`export-star cycles`, { ...BASE, stars: true }, IN_PROCESS, 400)
-  campaign(`named re-export cycles`, BASE, IN_PROCESS, 400)
-  campaign(`call-expression bodies`, {
-    ...BASE,
-    forms: [...BASE.forms, `call`],
-  })
-  campaign(`member-expression bodies`, {
-    ...BASE,
-    forms: [...BASE.forms, `member`],
-  })
-  campaign(`.for tables`, { ...BASE, forms: [...BASE.forms, `for`] })
-  campaign(`options before or after the body`, {
-    ...BASE,
-    forms: [...BASE.forms, `options-first`, `options-last`],
-  })
-  campaign(`string-keyed declarations`, {
-    ...BASE,
-    stringKeys: true,
-    typeModels: true,
-  })
-  campaign(`type models`, { ...BASE, typeModels: true })
-  campaign(`unparseable companion`, { ...BASE, broken: true })
-  campaign(`imported registration helper`, { ...BASE, registrar: true })
-  campaign(`caller-passed body helpers`, {
-    ...BASE,
-    forms: [...BASE.forms, `helper-plain`, `helper-prop`],
-  })
-  // A wrapper that uses a part needs a companion whose first function is one.
-  campaign(
-    `caller-passed body layouts: trailing arguments and wrappers`,
-    {
-      ...BASE,
-      forms: [...BASE.forms, `helper-plain`, `helper-prop`],
-      helperLayouts: true,
-    },
-    IN_PROCESS,
-    200,
-  )
-  campaign(`registration helpers by module name and import form`, {
-    ...BASE,
-    forms: [...BASE.forms, `call`, `helper-plain`, `helper-prop`],
-    registrar: true,
-    helperNames: true,
-    importForms: true,
-  })
-  // A default import through a star needs a star and a default link together.
-  campaign(
-    `namespace and default imports`,
-    { ...BASE, importForms: true, stars: true },
-    IN_PROCESS,
-    200,
-  )
-  // A loop over a reaching and an unreached function is what tells "every
-  // element" from "some element", and it needs two elements of each kind.
-  campaign(
-    `let and for...of drivers`,
-    { ...BASE, forms: [...BASE.forms, `let-driver`, `for-of`] },
-    IN_PROCESS,
-    300,
-  )
-  campaign(`declaration spreads`, { ...BASE, spreads: true })
-  // A test must import a part from a JavaScript companion, which is rare.
-  campaign(
-    `JavaScript companion modules`,
-    { ...BASE, jsCompanions: true },
-    IN_PROCESS,
-    300,
-  )
-  campaign(`generated properties: named arbitraries and predicates`, {
-    ...BASE,
-    forms: [...BASE.forms, `property`, `prop-named`, `helper-prop`],
-  })
-  // The framework module and its lookalikes need the module-name and
-  // import-form gates together.
-  campaign(
-    `oracle properties`,
-    {
-      ...BASE,
-      forms: [...BASE.forms, `framework-property`],
-      frameworkNames: true,
-      importForms: true,
-    },
-    IN_PROCESS,
-    200,
-  )
-  campaign(`all families`, ALL)
-})
-
-describe(`receiving paths`, () => {
-  it(`a long-lived ESLint instance and a single-file Linter agree with the model`, async () => {
-    for (const seed of [FIXED_SEED, FIXED_SEED + 1]) {
-      await fc.assert(
-        fc.property(programArbitrary(ALL), (program) => {
-          recordStates(program)
-          const expected = predictReports(program)
-          compareReports(`linter`, lintWithLinter(program), expected)
-        }),
-        { numRuns: oracleRuns(4), seed },
-      )
-    }
-  }, 900_000)
-})
-
-describe(`metamorphic laws`, () => {
-  // Identifier registrations of the oracle's functions, in a single file: the
-  // shape whose evaluation order the reach rule must not depend on. A program
-  // and a permutation of its registrations are drawn together.
-  const orderArbitrary = programArbitrary({
-    ...BASE,
-    companions: false,
-    forms: [`identifier`],
-  }).chain((program) =>
-    fc
-      .shuffledSubarray(
-        program.tests.map((_, index) => index),
-        { minLength: program.tests.length, maxLength: program.tests.length },
-      )
-      .map((order) => ({
-        program,
-        permuted: {
-          ...program,
-          tests: order.map((index) => program.tests[index]),
-        },
-      })),
-  )
-  const orderLaw = async ({ program, permuted }) => {
-    recordStates(program)
-    const original = await lintWithEslint(program)
-    const reordered = await lintWithEslint(permuted)
-    compareReports(`eslint, permuted`, reordered, predictReports(permuted))
-    // The same subjects, except for `undeclared`, which names the first
-    // unreached test in source order and so moves with the order.
-    const bySubject = (keys) =>
-      keys
-        .map((key) => (key.startsWith(`undeclared`) ? `undeclared` : key))
-        .sort()
-    expect(bySubject(reordered)).toEqual(bySubject(original))
-  }
-  it(`registration order does not change the reports: fixed-seed campaign`, async () => {
-    await fc.assert(fc.asyncProperty(orderArbitrary, orderLaw), {
-      numRuns: oracleRuns(3000),
-      seed: FIXED_SEED,
-    })
-  }, 900_000)
-  it(`registration order does not change the reports: random-seed campaign`, async () => {
-    await fc.assert(
-      fc.asyncProperty(orderArbitrary, orderLaw),
-      oraclePropertyOptions(3000, PROPERTY),
-    )
-  }, 900_000)
-
-  it(`linting the same program twice in one process gives the same reports`, async () => {
-    await fc.assert(
-      fc.asyncProperty(programArbitrary(ALL), async (program) => {
-        recordStates(program)
-        const first = await lintWithEslint(program)
-        const second = await lintWithEslint(program)
-        // Rerun equality only: the model is checked by the campaigns above.
-        expect(second).toEqual(first)
-      }),
-      { numRuns: oracleRuns(BASE_RUNS), seed: FIXED_SEED },
-    )
-  }, 900_000)
-
-  it(`a companion edit between lints gives the reports of a fresh process`, async () => {
-    await fc.assert(
-      // Only programs with such a dependency are drawn, so every run edits one.
-      fc.asyncProperty(
-        programArbitrary({ ...BASE, stars: true, acyclic: true }).filter(
-          (program) => dependencyOfReached(program) !== undefined,
-        ),
-        async (program) => {
-          const companion = dependencyOfReached(program)
-          recordStates(program)
-          const before = writeProgram(
-            join(root, `edit${historySeq++}`),
-            program,
-          )
-          await eslint.lintFiles([before.oracle])
-          // The companion gains or loses its declared part, with a new mtime.
-          // The same ESLint instance then lints the unchanged oracle file.
-          const edited = toggleDeclaration(program, companion.file)
-          reach.reach(`companion-edited-between-lints`)
-          rewriteCompanion(
-            join(root, `edit${historySeq - 1}`),
-            edited,
-            companion.file,
-          )
-          const relinted = keysOf(
-            (await eslint.lintFiles([before.oracle])).flatMap(
-              (result) => result.messages,
-            ),
-            before.subjects,
-          )
-          expect(relinted, `same instance after an edit`).toEqual(
-            predictReports(edited),
-          )
-        },
-      ),
-      { numRuns: oracleRuns(40), seed: FIXED_SEED },
-    )
-  }, 900_000)
-})
-
 /**
  * A companion that a binding reached by the oracle depends on through an import
  * in its body. The rule caches a binding's reach in the module that declares
  * it, so editing the companion leaves that cache stale unless the rule
  * recomputes it. Re-exports are not cached and so cannot show this.
  */
-function dependencyOfReached(program) {
+export function dependencyOfReached(program) {
   const oracle = program.modules.get(program.oracle)
   for (const test of program.tests) {
     for (const ref of test.refs ?? []) {
@@ -1986,7 +1649,7 @@ function dependencyOfReached(program) {
 }
 
 /** Adds or removes a declared check in one companion, as an edit would. */
-function toggleDeclaration(program, file) {
+export function toggleDeclaration(program, file) {
   const module = program.modules.get(file)
   const parts = new Map(module.parts)
   if (parts.size > 0) {
@@ -2006,7 +1669,7 @@ function toggleDeclaration(program, file) {
 }
 
 /** Rewrites one companion in place, with an mtime after the last write. */
-function rewriteCompanion(directory, program, file) {
+export function rewriteCompanion(directory, program, file) {
   const { files } = renderProgram(program)
   const path = join(directory, file)
   writeFileSync(path, files.get(file))
@@ -2020,7 +1683,7 @@ function rewriteCompanion(directory, program, file) {
 // the same builder, model, and paths as the generated programs, with the full
 // feature set, and carry no expected answers of their own.
 
-const slot = (
+export const slot = (
   present,
   refs = [],
   { exported = false, part = `none` } = {},
@@ -2030,7 +1693,7 @@ const slot = (
   part,
   refs,
 })
-const moduleOf = (fields = {}) => ({
+export const moduleOf = (fields = {}) => ({
   slots: [slot(false), slot(false), slot(false)],
   stars: [],
   reexports: [],
@@ -2044,7 +1707,7 @@ const moduleOf = (fields = {}) => ({
   js: false,
   ...fields,
 })
-const reg = (fields) => ({
+export const reg = (fields) => ({
   form: `plain`,
   refs: [],
   callee: 0,
@@ -2060,10 +1723,10 @@ const reg = (fields) => ({
   elements: [0],
   ...fields,
 })
-const local = (index) => ({ kind: `local`, index })
-const imported = (index) => ({ kind: `import`, index })
-const typeRef = (index) => ({ kind: `type`, index })
-const fixed = (fields) => ({
+export const local = (index) => ({ kind: `local`, index })
+export const imported = (index) => ({ kind: `import`, index })
+export const typeRef = (index) => ({ kind: `type`, index })
+export const fixed = (fields) => ({
   companions: [],
   broken: false,
   registrarName: `reg.ts`,
@@ -2084,7 +1747,7 @@ const fixed = (fields) => ({
 // Two companions that star-export each other, and that re-export the same
 // name from each other: a star cycle and a named re-export cycle. The oracle
 // imports a name that neither exports, so its registration reaches nothing.
-const exportCycle = fixed({
+export const exportCycle = fixed({
   companions: [
     moduleOf({
       stars: [0],
@@ -2108,7 +1771,7 @@ const exportCycle = fixed({
 
 // Two companions that re-export each other's names, and no star export: a
 // named re-export cycle. c0 exports c0f0 from c1, and c1 exports c1f0 from c0.
-const namedCycle = fixed({
+export const namedCycle = fixed({
   companions: [
     moduleOf({ reexports: [{ target: 0, slot: 0, exportIndex: 0 }] }),
     moduleOf({ reexports: [{ target: 0, slot: 0, exportIndex: 3 }] }),
@@ -2126,7 +1789,7 @@ const namedCycle = fixed({
 
 // Two functions that call each other, and reach the check through only one
 // of them. Each registration names one function. Both orders must agree.
-const mutualRecursion = fixed({
+export const mutualRecursion = fixed({
   oracle: {
     module: moduleOf({
       slots: [
@@ -2145,7 +1808,7 @@ const mutualRecursion = fixed({
 })
 
 // Each registration form, with one that reaches the check and one that does not.
-const forms = fixed({
+export const forms = fixed({
   oracle: {
     module: moduleOf({
       slots: [slot(false), slot(false), slot(true, [], { part: `check` })],
@@ -2165,7 +1828,7 @@ const forms = fixed({
 
 // An unparseable companion, a string-keyed type model, and a registration
 // helper from an ordinary module.
-const helpers = fixed({
+export const helpers = fixed({
   broken: true,
   companions: [moduleOf({})],
   registrarName: `reg.ts`,
@@ -2184,14 +1847,16 @@ const helpers = fixed({
 })
 
 // The second review's repros. The oracle's only function is the check `ofn2`.
-const checkOnly = moduleOf({
+export const checkOnly = moduleOf({
   slots: [slot(false), slot(false), slot(true, [], { part: `check` })],
 })
-const WRAP = Object.fromEntries(WRAPS.map((wrap, index) => [wrap, index]))
+export const WRAP = Object.fromEntries(
+  WRAPS.map((wrap, index) => [wrap, index]),
+)
 
 // A body before a trailing timeout: the body reaches through `ofn2`, and the
 // trailing argument is a literal. A unit body before a trailing `ofn2`.
-const trailingArguments = fixed({
+export const trailingArguments = fixed({
   oracle: {
     module: checkOnly,
     objectRefs: [],
@@ -2205,7 +1870,7 @@ const trailingArguments = fixed({
 
 // A helper that awaits its caller's body inside its own async wrapper, a
 // wrapper around a unit body, and a wrapper that uses the companion's check.
-const wrappedBody = fixed({
+export const wrappedBody = fixed({
   companions: [
     moduleOf({
       slots: [
@@ -2229,7 +1894,7 @@ const wrappedBody = fixed({
 
 // A registrar in an `oracle-` module through a namespace member call, and a
 // caller-passed-body helper in an `oracle-` module with a unit body.
-const machineryHelpers = fixed({
+export const machineryHelpers = fixed({
   registrarName: `oracle-reg.ts`,
   registrarImport: `namespace`,
   helperName: `oracle-reg-helper.ts`,
@@ -2242,7 +1907,7 @@ const machineryHelpers = fixed({
 })
 
 // A registrar through a default import.
-const defaultRegistrar = fixed({
+export const defaultRegistrar = fixed({
   registrarImport: `default`,
   oracle: {
     module: checkOnly,
@@ -2254,7 +1919,7 @@ const defaultRegistrar = fixed({
 
 // Drivers: a `let` that a hook assigns, a `for...of` over the check, and a
 // namespace import of a companion's exported check.
-const drivers = fixed({
+export const drivers = fixed({
   companions: [
     moduleOf({
       slots: [
@@ -2282,7 +1947,7 @@ const drivers = fixed({
 // A declaration that spreads its first part list, and generated properties:
 // a named constant arbitrary, and an imported predicate that reads or
 // ignores its input, through `fc.property` and through `.prop`.
-const declarationsAndProperties = fixed({
+export const declarationsAndProperties = fixed({
   oracle: {
     module: moduleOf({
       slots: [
@@ -2306,7 +1971,7 @@ const declarationsAndProperties = fixed({
 // A default import of c0, which has no default of its own and star-exports
 // c1, whose default is a check. `export *` carries no default, so the test
 // reaches nothing.
-const defaultThroughStar = fixed({
+export const defaultThroughStar = fixed({
   companions: [
     moduleOf({ stars: [0] }),
     moduleOf({
@@ -2323,7 +1988,7 @@ const defaultThroughStar = fixed({
 })
 
 // An oracle file whose only test imports the check from a JavaScript companion.
-const javascriptCompanion = fixed({
+export const javascriptCompanion = fixed({
   companions: [
     moduleOf({
       slots: [
@@ -2342,56 +2007,10 @@ const javascriptCompanion = fixed({
   },
 })
 
-describe(`fixed inputs through every receiving path`, () => {
-  const paths = [
-    { name: `eslint`, run: lintWithEslint },
-    { name: `linter`, run: (program) => lintWithLinter(program) },
-  ]
-  for (const [name, skeleton] of [
-    [`export-star and named re-export cycles`, exportCycle],
-    [`named re-export cycle only`, namedCycle],
-    [`mutual recursion, in both orders`, mutualRecursion],
-    [
-      `mutual recursion, reversed`,
-      {
-        ...mutualRecursion,
-        oracle: {
-          ...mutualRecursion.oracle,
-          tests: [...mutualRecursion.oracle.tests].reverse(),
-        },
-      },
-    ],
-    [`each registration form`, forms],
-    [`broken companion, string-keyed type model, registration helper`, helpers],
-    [`a caller-passed body before a trailing argument`, trailingArguments],
-    [`a caller-passed body inside the helper's wrapper`, wrappedBody],
-    [`helpers in oracle- machinery modules`, machineryHelpers],
-    [`a registrar through a default import`, defaultRegistrar],
-    [`let, for...of, and namespace drivers`, drivers],
-    [
-      `a spread declaration and generated properties`,
-      declarationsAndProperties,
-    ],
-    [`a check imported from a JavaScript companion`, javascriptCompanion],
-    [`a default import through a star export`, defaultThroughStar],
-  ]) {
-    it(`${name}`, async () => {
-      const program = buildProgram(skeleton, ALL)
-      await checkProgram(program, paths)
-    }, 300_000)
-  }
-})
-
-// The reach ledger is checked once every campaign above has run. A state that
-// no generated history entered fails the file, so its law is not claimed.
-afterAll(() => {
-  reach.assertReached()
-})
-
 // A dependency chain. The oracle imports `c1f0`, which imports the check
 // `c0f0`. Editing `c0` between two lints must change the oracle's reports,
 // although `c1` is unchanged: its reach was computed by the earlier lint.
-const chain = fixed({
+export const chain = fixed({
   companions: [
     moduleOf({
       slots: [
@@ -2417,34 +2036,608 @@ const chain = fixed({
   },
 })
 
-describe(`stale reach across a dependency chain`, () => {
-  it(`an edit to a transitive companion changes the reports of the next lint`, async () => {
-    const program = buildProgram(chain, ALL)
-    const before = writeProgram(join(root, `chain${historySeq++}`), program)
-    compareReports(
-      `eslint`,
-      await lintInstance(before.oracle, before.subjects),
-      predictReports(program),
-    )
-    const edited = toggleDeclaration(program, `c0.ts`)
-    rewriteCompanion(
-      before.oracle.slice(0, before.oracle.lastIndexOf(`/`)),
-      edited,
-      `c0.ts`,
-    )
-    compareReports(
-      `eslint after an edit`,
-      await lintInstance(before.oracle, before.subjects),
-      predictReports(edited),
-    )
-  }, 300_000)
-})
-
 /** Lints one file on the long-lived instance; returns its keys. */
-async function lintInstance(file, subjects) {
+export async function lintInstance(file, subjects) {
   const results = await eslint.lintFiles([file])
   return keysOf(
     results.flatMap((result) => result.messages),
     subjects,
   )
 }
+
+// -- Oracle properties: the shared parts -------------------------------------
+//
+// Each oracle file declares its properties from these parts. The history is a
+// skeleton (the fast-check value that `programSkeleton` generates), so it
+// shrinks like any generated value. Its plan is the program that its features
+// build from it, which the model and the drivers read.
+
+/** The law that every receiving path's reports must satisfy. */
+export const REPORTS_LAW = `part-reach reports`
+
+/** The authority and limits that every part-reach oracle file states. */
+export const PART_REACH_AUTHORITY = `The header contract of rules/no-unit-test.js (reach and report rules, laws L1, L2, L3, L6, and the oracle-property paragraph of maintainer decision 2026-11-02); docs/contributing/oracle-rubric.md, "Name oracle files consistently"; AGENTS.md, "Name Oracle Files for Discovery".`
+
+// -- Constructions ------------------------------------------------------------
+//
+// A construction changes only the fields that gate its state. Each is a write:
+// a dotted path into the generated skeleton and the value that gates the state
+// there, or a function of the features for a form index. Everything else is
+// the generated input's: its registrations, modules, and companions still vary
+// with the input, and a failing history shrinks through them. A write may create
+// an element that the input lacks (a companion, a registration, a slot); it is
+// created in its default shape, and the writes on it gate the state. The
+// framework checks each `enters` at run time, and the construction law (part-
+// reach-constructions-oracle.property.test.js) checks that nothing else changes.
+
+/** The default shape of an element that a write creates, by its array's name. */
+const FILL = {
+  companions: () => moduleOf(),
+  // A registration in the generated shape: a fixture's `form` name is not a
+  // generated field, so the default carries a form index instead.
+  tests: () => ({
+    formIndex: 0,
+    frameworkOptions: `check-model`,
+    refs: [],
+    callee: 0,
+    literalOptions: false,
+    wrapped: false,
+    rows: [{ value: 1 }],
+    wrap: 0,
+    trailing: `literal`,
+    constantArb: false,
+    arbNamed: false,
+    predicate: `inline`,
+    readsInput: true,
+    elements: [0],
+  }),
+  slots: () => slot(false),
+}
+
+/** `node` with `value` at the path `[head, ...rest]`, creating missing elements. */
+function setPath(node, [head, ...rest], value, name) {
+  const copy = Array.isArray(node) ? [...node] : { ...node }
+  const key = Array.isArray(copy) ? Number(head) : head
+  if (Array.isArray(copy)) while (copy.length <= key) copy.push(FILL[name]?.())
+  copy[key] = rest.length === 0 ? value : setPath(copy[key], rest, value, head)
+  return copy
+}
+
+/** `node` without the leaf at `path`: the gated field, which the law does not compare. */
+function unsetPath(node, [head, ...rest]) {
+  const copy = { ...node }
+  if (rest.length === 0) delete copy[head]
+  else copy[head] = unsetPath(copy[head], rest)
+  return copy
+}
+
+/** Applies a construction's writes to the generated skeleton. */
+const applyWrites = (writes, features) => (generated) =>
+  Object.entries(writes).reduce(
+    (skeleton, [path, value]) =>
+      setPath(
+        skeleton,
+        path.split(`.`),
+        typeof value === `function` ? value(features) : value,
+        undefined,
+      ),
+    generated,
+  )
+
+/** The form index of `form` under the features that enable it. */
+const formAt = (form) => (features) => features.forms.indexOf(form)
+
+/**
+ * The module-level scalars and lists at `prefix` that the fixtures leave at
+ * their neutral values: no imports, stars, or re-exports, no default, no
+ * JavaScript, spread, or string keys. A construction writes them so that its state's
+ * structure is the only one; its slots and registrations stay generated.
+ */
+const plain = (prefix) => ({
+  [`${prefix}.stars`]: [],
+  [`${prefix}.reexports`]: [],
+  [`${prefix}.defaultSlot`]: undefined,
+  [`${prefix}.js`]: false,
+  [`${prefix}.spread`]: false,
+  [`${prefix}.stringKeys`]: false,
+  [`${prefix}.missingPart`]: false,
+  [`${prefix}.imports`]: [],
+})
+
+/**
+ * The slots at `prefix` that the fixtures leave absent and unexported, except
+ * those in `keep`: a re-export or a companion that the state does not use is
+ * neutral, as a fixture's default one is.
+ */
+const neutralSlots = (prefix, keep = []) =>
+  Object.fromEntries(
+    [0, 1, 2]
+      .filter((index) => !keep.includes(index))
+      .flatMap((index) => [
+        [`${prefix}.slots.${index}.present`, false],
+        [`${prefix}.slots.${index}.exported`, false],
+        [`${prefix}.slots.${index}.part`, `none`],
+        [`${prefix}.slots.${index}.refs`, []],
+      ]),
+  )
+
+/**
+ * The registration fields at `test` that a plain, direct registration of the
+ * fixtures leaves at their defaults. Only the form index and the references
+ * stay generated: a body with a wrapper, a trailing argument, or a callee
+ * moves the reach that the state needs.
+ */
+const plainTest = (test) => ({
+  [`${test}.callee`]: 0,
+  [`${test}.wrapped`]: false,
+  [`${test}.wrap`]: 0,
+  [`${test}.trailing`]: `literal`,
+  [`${test}.constantArb`]: false,
+  [`${test}.arbNamed`]: false,
+  [`${test}.predicate`]: `inline`,
+  [`${test}.readsInput`]: true,
+  [`${test}.elements`]: [0],
+  [`${test}.literalOptions`]: false,
+  [`${test}.frameworkOptions`]: `check-model`,
+})
+
+/** The writes that gate each declared state, by path (see the note above). */
+export const WRITES = {
+  // Companions and modules.
+  'export-star-cycle': {
+    ...plain('companions.0'),
+    ...plain('companions.1'),
+    ...plain('oracle.module'),
+    'oracle.registrarCall': false,
+    'companions.0.stars': [0],
+    'companions.0.reexports': [{ target: 0, slot: 0, exportIndex: 3 }],
+    'companions.1.stars': [0],
+    'companions.1.reexports': [{ target: 0, slot: 0, exportIndex: 3 }],
+    'oracle.module.imports': [{ form: `named`, target: 0, slot: 0 }],
+    'oracle.module.slots.2.present': true,
+    'oracle.module.slots.2.part': `check`,
+    'oracle.tests.0.refs': [imported(0)],
+  },
+  'named-reexport-cycle': {
+    ...plain('companions.0'),
+    ...plain('companions.1'),
+    ...plain('oracle.module'),
+    ...neutralSlots('companions.0'),
+    ...neutralSlots('companions.1'),
+    'oracle.registrarCall': false,
+    'companions.0.js': false,
+    'companions.1.js': false,
+    'companions.0.reexports': [{ target: 0, slot: 0, exportIndex: 0 }],
+    'companions.1.reexports': [{ target: 0, slot: 0, exportIndex: 3 }],
+    'oracle.module.imports': [{ form: `named`, target: 0, slot: 0 }],
+    'oracle.module.slots.2.present': true,
+    'oracle.module.slots.2.part': `check`,
+    'oracle.tests.0.refs': [imported(0)],
+  },
+  'string-keyed-declaration': {
+    ...plain('oracle.module'),
+    'oracle.module.typeAliases': [true, false, false],
+    'oracle.module.typeNames': [0],
+    'oracle.module.stringKeys': true,
+    'oracle.module.slots.2.present': true,
+    'oracle.module.slots.2.part': `check`,
+    'oracle.tests.0.refs': [typeRef(0)],
+  },
+  'type-model-declaration': {
+    ...plain('oracle.module'),
+    'oracle.module.typeAliases': [true, false, false],
+    'oracle.module.typeNames': [0],
+    'oracle.module.stringKeys': true,
+    'oracle.module.slots.2.present': true,
+    'oracle.module.slots.2.part': `check`,
+    'oracle.tests.0.refs': [typeRef(0)],
+  },
+  'unparseable-companion': { broken: true },
+  'javascript-companion-import-reaches-part': {
+    ...plainTest('oracle.tests.0'),
+    'oracle.registrarCall': false,
+    'oracle.tests.0.formIndex': formAt(`plain`),
+    ...plain('companions.0'),
+    ...plain('oracle.module'),
+    ...neutralSlots('companions.0', [0]),
+    ...plain('companions.1'),
+    ...neutralSlots('companions.1'),
+    ...plain('companions.2'),
+    ...neutralSlots('companions.2'),
+    'companions.0.js': true,
+    'companions.0.stars': [],
+    'companions.0.slots.0.present': true,
+    'companions.0.slots.0.exported': true,
+    'companions.0.slots.0.part': `check`,
+    'oracle.module.imports': [{ target: 0, slot: 0, form: `named` }],
+    'oracle.tests.0.refs': [imported(0)],
+  },
+  'mutual-recursion-reaches-part': {
+    ...plain('oracle.module'),
+    'oracle.module.slots.0.present': true,
+    'oracle.module.slots.0.refs': [local(1), local(2)],
+    'oracle.module.slots.1.present': true,
+    'oracle.module.slots.1.refs': [local(0)],
+    'oracle.module.slots.2.present': true,
+    'oracle.module.slots.2.part': `check`,
+    'oracle.tests.0.formIndex': formAt(`identifier`),
+    'oracle.tests.0.callee': 0,
+    'oracle.tests.1.formIndex': formAt(`identifier`),
+    'oracle.tests.1.callee': 1,
+  },
+  'mutual-recursion-reaches-no-part': {
+    ...plain('oracle.module'),
+    'oracle.module.slots.0.present': true,
+    'oracle.module.slots.0.part': `none`,
+    'oracle.module.slots.0.refs': [local(1)],
+    'oracle.module.slots.1.present': true,
+    'oracle.module.slots.1.part': `none`,
+    'oracle.module.slots.1.refs': [local(0)],
+    'oracle.module.slots.2.present': true,
+    'oracle.module.slots.2.part': `check`,
+    'oracle.tests.0.formIndex': formAt(`identifier`),
+    'oracle.tests.0.callee': 0,
+  },
+  'declaration-spread': {
+    ...plain('oracle.module'),
+    'oracle.module.spread': true,
+    'oracle.module.slots.0.present': true,
+    'oracle.module.slots.0.part': `check`,
+  },
+  // Registration forms and drivers.
+  'form-each': { 'oracle.tests.0.formIndex': formAt(`each`) },
+  'form-call-body': { 'oracle.tests.0.formIndex': formAt(`call`) },
+  'form-member-body': { 'oracle.tests.0.formIndex': formAt(`member`) },
+  'form-for': {
+    'oracle.tests.0.formIndex': formAt(`for`),
+    'oracle.tests.0.rows': [{ value: 1 }],
+  },
+  'form-options': {
+    'oracle.tests.0.formIndex': formAt(`options-first`),
+    'oracle.tests.0.literalOptions': true,
+  },
+  'let-assigned-driver': {
+    'oracle.tests.0.formIndex': formAt(`let-driver`),
+    'oracle.tests.0.refs': [local(0)],
+  },
+  'for-of-driver': {
+    'oracle.tests.0.formIndex': formAt(`for-of`),
+    'oracle.tests.0.elements': [0],
+    'oracle.module.slots.2.present': true,
+    'oracle.module.slots.2.part': `check`,
+  },
+  'for-of-mixed-elements': {
+    ...plain('oracle.module'),
+    'oracle.tests.0.formIndex': formAt(`for-of`),
+    'oracle.tests.0.elements': [0, 1],
+    'oracle.module.slots.0.present': true,
+    'oracle.module.slots.0.part': `check`,
+    'oracle.module.slots.1.present': true,
+    'oracle.module.slots.1.part': `none`,
+    'oracle.module.slots.1.refs': [],
+    'oracle.module.slots.2.present': false,
+  },
+  // Generated properties.
+  'named-constant-arbitrary': {
+    'oracle.tests.0.formIndex': formAt(`property`),
+    'oracle.tests.0.constantArb': true,
+    'oracle.tests.0.arbNamed': true,
+  },
+  'imported-predicate': {
+    'oracle.tests.0.formIndex': formAt(`property`),
+    'oracle.tests.0.predicate': `imported`,
+  },
+  'predicate-ignores-input': {
+    'oracle.tests.0.formIndex': formAt(`property`),
+    'oracle.tests.0.constantArb': false,
+    'oracle.tests.0.readsInput': false,
+  },
+  // Registration helpers and their import forms.
+  'imported-registration': {
+    registrarName: `reg.ts`,
+    'oracle.registrarCall': true,
+  },
+  'prefixed-oracle-registrar': {
+    registrarName: `oracle-reg.ts`,
+    'oracle.registrarCall': true,
+  },
+  'default-import-registration': {
+    registrarImport: `default`,
+    'oracle.registrarCall': true,
+  },
+  'member-callee-registration': {
+    registrarImport: `namespace`,
+    'oracle.registrarCall': true,
+  },
+  'oracle-named-helper': {
+    helperName: `reg-helper-oracle.ts`,
+    'oracle.tests.0.formIndex': formAt(`helper-plain`),
+  },
+  'prefixed-oracle-helper': {
+    helperName: `oracle-reg-helper.ts`,
+    'oracle.tests.0.formIndex': formAt(`helper-plain`),
+  },
+  'default-import': {
+    ...plain('companions.0'),
+    ...plain('oracle.module'),
+    'oracle.registrarCall': false,
+    'companions.0.slots.0.present': true,
+    'companions.0.slots.0.exported': true,
+    'companions.0.slots.0.part': `check`,
+    'oracle.module.imports': [{ target: 0, slot: 0, form: `default` }],
+    'oracle.tests.0.refs': [imported(0)],
+  },
+  'namespace-import': {
+    ...plain('companions.0'),
+    ...plain('oracle.module'),
+    'oracle.registrarCall': false,
+    'companions.0.slots.0.present': true,
+    'companions.0.slots.0.exported': true,
+    'companions.0.slots.0.part': `check`,
+    'oracle.module.imports': [{ target: 0, slot: 0, form: `namespace` }],
+    'oracle.tests.0.refs': [imported(0)],
+  },
+  'default-import-through-star': {
+    ...plain('companions.0'),
+    ...plain('companions.1'),
+    ...plain('oracle.module'),
+    'oracle.registrarCall': false,
+    'companions.0.stars': [0],
+    'companions.1.slots.0.present': true,
+    'companions.1.slots.0.part': `check`,
+    'companions.1.defaultSlot': 0,
+    'oracle.module.imports': [{ target: 0, slot: 0, form: `default` }],
+    'oracle.tests.0.refs': [imported(0)],
+  },
+  'default-import-star-target-has-part': {
+    ...plain('companions.0'),
+    ...plain('companions.1'),
+    ...plain('oracle.module'),
+    'oracle.registrarCall': false,
+    'companions.0.stars': [0],
+    'companions.1.slots.0.present': true,
+    'companions.1.slots.0.part': `check`,
+    'companions.1.defaultSlot': 0,
+    'oracle.module.imports': [{ target: 0, slot: 0, form: `default` }],
+    'oracle.tests.0.refs': [imported(0)],
+  },
+  // Caller-passed bodies.
+  'caller-passed-body-helper': {
+    'oracle.tests.0.formIndex': formAt(`helper-plain`),
+  },
+  'caller-body-trailing-name': {
+    'oracle.module.slots.2.present': true,
+    'oracle.module.slots.2.part': `check`,
+    'oracle.tests.0.formIndex': formAt(`helper-plain`),
+    'oracle.tests.0.wrap': WRAP.timed,
+    'oracle.tests.0.trailing': `name`,
+  },
+  'caller-body-wrapper': {
+    'oracle.tests.0.formIndex': formAt(`helper-plain`),
+    'oracle.tests.0.wrap': WRAP.wrap,
+  },
+  'caller-body-wrapper-reaches-part': {
+    ...plain('companions.0'),
+    'companions.0.slots.0.present': true,
+    'companions.0.slots.0.exported': true,
+    'companions.0.slots.0.part': `check`,
+    'oracle.tests.0.formIndex': formAt(`helper-plain`),
+    'oracle.tests.0.wrap': WRAP[`wrap-part`],
+  },
+  // The framework module and its lookalikes.
+  'oracle-property-complete': {
+    frameworkName: `oracle-property.ts`,
+    'oracle.tests.0.formIndex': formAt(`framework-property`),
+    'oracle.tests.0.frameworkOptions': `check-model`,
+  },
+  'oracle-property-without-check': {
+    frameworkName: `oracle-property.ts`,
+    'oracle.tests.0.formIndex': formAt(`framework-property`),
+    'oracle.tests.0.frameworkOptions': `model`,
+  },
+  'oracle-property-named-options': {
+    frameworkName: `oracle-property.ts`,
+    'oracle.tests.0.formIndex': formAt(`framework-property`),
+    'oracle.tests.0.frameworkOptions': `name`,
+  },
+  'oracle-property-namespace-import': {
+    frameworkName: `oracle-property.ts`,
+    frameworkImport: `namespace`,
+    'oracle.tests.0.formIndex': formAt(`framework-property`),
+    'oracle.tests.0.frameworkOptions': `check-model`,
+  },
+  'oracle-property-machinery-lookalike': {
+    frameworkName: `oracle-propertyx.ts`,
+    'oracle.tests.0.formIndex': formAt(`framework-property`),
+    'oracle.tests.0.frameworkOptions': `check-model`,
+  },
+  'oracle-property-ordinary-lookalike': {
+    frameworkName: `property.ts`,
+    'oracle.tests.0.formIndex': formAt(`framework-property`),
+    'oracle.tests.0.frameworkOptions': `check-model`,
+  },
+  'oracle-property-oracle-named-lookalike': {
+    frameworkName: `property-oracle.ts`,
+    'oracle.tests.0.formIndex': formAt(`framework-property`),
+    'oracle.tests.0.frameworkOptions': `check-model`,
+  },
+  // A companion edited between lints: the chain's companions and module.
+  'companion-edited-between-lints': {
+    ...plainTest('oracle.tests.0'),
+    'oracle.registrarCall': false,
+    'oracle.tests.0.formIndex': formAt(`plain`),
+    ...plain('companions.0'),
+    ...plain('companions.1'),
+    ...plain('oracle.module'),
+    ...neutralSlots('companions.0', [0]),
+    ...neutralSlots('companions.1', [0]),
+    ...plain('companions.2'),
+    ...neutralSlots('companions.2'),
+    'companions.0.slots.0.present': true,
+    'companions.0.slots.0.exported': true,
+    'companions.0.slots.0.part': `check`,
+    'companions.1.slots.0.present': true,
+    'companions.1.slots.0.exported': true,
+    'companions.1.slots.0.refs': [imported(0)],
+    'companions.1.imports': [{ form: `named`, target: 0, slot: 0 }],
+    'oracle.module.imports': [{ form: `named`, target: 1, slot: 0 }],
+    'oracle.tests.0.refs': [imported(0)],
+  },
+}
+
+/** The gated paths of a state: the fields its construction writes. */
+export const gatesOf = (state) => Object.keys(WRITES[state])
+
+/** One construction factory per declared state, built from its writes. */
+export const CONSTRUCTIONS = Object.fromEntries(
+  Object.entries(WRITES).map(([state, writes]) => [
+    state,
+    (features) => applyWrites(writes, features),
+  ]),
+)
+
+/** The skeleton without the gated fields of `state`, padded as its construction pads it. */
+export function ungated(state, skeleton) {
+  const gates = gatesOf(state)
+  const padded = gates.reduce(
+    (node, path) => setPath(node, path.split(`.`), undefined, undefined),
+    skeleton,
+  )
+  return gates.reduce((node, path) => unsetPath(node, path.split(`.`)), padded)
+}
+
+/** The check: every receiving path's keys equal the model's, exactly. */
+export function checkPaths(_plan, observations, expected) {
+  const verdicts = observations.map((observation) =>
+    differs(observation.checkpoint, REPORTS_LAW, observation.value, expected),
+  )
+  return verdicts.find((verdict) => verdict !== undefined) ?? pass
+}
+
+/** The two receiving paths of the oracle file, each observed as its keys. */
+export async function lintDriver(plan, observe) {
+  observe(`eslint`, await lintWithEslint(plan))
+  observe(`linter`, lintWithLinter(plan))
+}
+
+/** Applies a change to the first observation it affects, or none applies. */
+function corruptFirst(trace, change) {
+  const index = trace.findIndex(
+    (observation) => change(observation.value) !== undefined,
+  )
+  if (index < 0) return undefined
+  return trace.map((observation, at) =>
+    at === index
+      ? { ...observation, value: change(observation.value) }
+      : observation,
+  )
+}
+
+/** Wrong answers that the check must reject (ORC-006). */
+export const reportCalibrations = [
+  {
+    name: `a report dropped from a receiving path`,
+    law: REPORTS_LAW,
+    corrupt: (trace) =>
+      corruptFirst(trace, (keys) =>
+        keys.length > 0 ? keys.slice(1) : undefined,
+      ),
+  },
+  {
+    name: `a spurious report on a receiving path`,
+    law: REPORTS_LAW,
+    corrupt: (trace) =>
+      corruptFirst(trace, (keys) => [...keys, `other:spurious@0:wrong`]),
+  },
+]
+
+/**
+ * The options of one feature family's oracle property: the generated skeletons,
+ * the states this property gates (each with a constructed history under its
+ * features), and every other state as measured. A state outside both would
+ * fail, so the declared lists are the whole grammar's states.
+ */
+export function familyOptions({
+  id,
+  statement,
+  features,
+  gated = [],
+  runs = BASE_RUNS,
+  fixedSeeds = [FIXED_SEED],
+  arbitrary = programSkeleton,
+  reached = (program) => [...statesOf(program)],
+  calibrations = reportCalibrations,
+}) {
+  return {
+    id,
+    law: {
+      statement,
+      authority: PART_REACH_AUTHORITY,
+      limits: `The grammar generates the features that \`features\` enables; the reach of each gated state is a constructed history under those features.`,
+      owner: `eslint-plugin-oracles lint rules`,
+    },
+    histories: {
+      arbitrary,
+      runs,
+      fixedSeeds,
+      states: gated,
+      measured: STATE_NAMES.filter((state) => !gated.includes(state)),
+      constructed: gated.map((state) => ({
+        name: state,
+        enters: [state],
+        build: CONSTRUCTIONS[state](features),
+      })),
+    },
+    resolve: (skeleton) => buildProgram(skeleton, features),
+    reached,
+    model: predictReports,
+    driver: lintDriver,
+    calibrations,
+  }
+}
+
+/** The 42 declared states of the grammar, in the order of the original file. */
+export const STATE_NAMES = [
+  `export-star-cycle`,
+  `named-reexport-cycle`,
+  `mutual-recursion-reaches-part`,
+  `mutual-recursion-reaches-no-part`,
+  `form-each`,
+  `form-for`,
+  `form-call-body`,
+  `form-member-body`,
+  `form-options`,
+  `string-keyed-declaration`,
+  `type-model-declaration`,
+  `unparseable-companion`,
+  `imported-registration`,
+  `caller-passed-body-helper`,
+  `companion-edited-between-lints`,
+  `namespace-import`,
+  `default-import`,
+  `default-import-through-star`,
+  `default-import-star-target-has-part`,
+  `oracle-property-ordinary-lookalike`,
+  `oracle-property-oracle-named-lookalike`,
+  `default-import-registration`,
+  `member-callee-registration`,
+  `prefixed-oracle-registrar`,
+  `prefixed-oracle-helper`,
+  `oracle-named-helper`,
+  `caller-body-trailing-name`,
+  `caller-body-wrapper`,
+  `caller-body-wrapper-reaches-part`,
+  `let-assigned-driver`,
+  `for-of-driver`,
+  `for-of-mixed-elements`,
+  `declaration-spread`,
+  `javascript-companion-import-reaches-part`,
+  `named-constant-arbitrary`,
+  `imported-predicate`,
+  `predicate-ignores-input`,
+  `oracle-property-complete`,
+  `oracle-property-without-check`,
+  `oracle-property-named-options`,
+  `oracle-property-namespace-import`,
+  `oracle-property-machinery-lookalike`,
+]

@@ -1,5 +1,6 @@
 import noDisabled from './rules/no-disabled.js'
 import noUnitTest from './rules/no-unit-test.js'
+import oraclePropertyOnly from './rules/oracle-property-only.js'
 import probeForm from './rules/probe-form.js'
 import pureModel from './rules/pure-model.js'
 import replayableSeed from './rules/replayable-seed.js'
@@ -30,6 +31,7 @@ const plugin = {
   rules: {
     'no-disabled': noDisabled,
     'no-unit-test': noUnitTest,
+    'oracle-property-only': oraclePropertyOnly,
     'pure-model': pureModel,
     'probe-form': probeForm,
     'replayable-seed': replayableSeed,
@@ -44,6 +46,7 @@ plugin.configs = {
     rules: {
       'oracle/no-disabled': `error`,
       'oracle/no-unit-test': `error`,
+      'oracle/oracle-property-only': `error`,
       'oracle/pure-model': `error`,
       'oracle/replayable-seed': `error`,
     },

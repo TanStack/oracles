@@ -67,26 +67,20 @@ import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import tsParser from '@typescript-eslint/parser'
 import { ESLint, Linter } from 'eslint'
-import fc from 'fast-check'
-import { afterAll, describe, expect, it } from 'vitest'
-import {
-  createOracleReach,
-  declareOracle,
-  oraclePropertyOptions,
-  oracleRuns,
-} from '@tanstack/oracles'
+import { differs, oracleProperty, pass } from '@tanstack/oracles'
 import oraclePlugin from '../src/index.js'
 import {
-  MESSAGE_ID,
+  LEGAL_CONDITIONS,
   MODEL,
   censusProgram,
   isLegal,
   predictReports,
   programArbitrary,
   renderProgram,
-} from './probe-form-grammar.js'
+} from './probe-form-oracle-grammar.js'
 
 const PROPERTY = `lint.probe-form`
+const PROPERTY_CENSUS = `lint.probe-form.census`
 const RULE = `oracle/probe-form`
 const FIXED_SEED = 2234
 const BASE_RUNS = 40
@@ -148,21 +142,20 @@ async function severityInRepository(filePath) {
   return severity === 2 || severity === `error` ? `error` : `off`
 }
 
-// -- 4. Comparison ------------------------------------------------------------
+// -- 4. Comparison and reach --------------------------------------------------
 
 const reportKeys = (reports) =>
   reports.map((report) => `${report.line}:${report.messageId}`).sort()
 
-function compareReports(path, actual, expected) {
-  expect(reportKeys(actual), path).toEqual(reportKeys(expected))
+const LAW = {
+  statement: `A state probe in production source is reported exactly where the form is broken, and only in production source: each near-miss kind reports each mention of __oracleProbe on its line, a legal probe reports nothing, and the root config enables the rule for production source alone.`,
+  authority: `The maintainer's decisions of 2026-11-08 on the probe form (the function-local probing guard) and the state probe entry in docs/contributing/glossary.md, as recorded in this file's header.`,
+  limits: `The guard is generated at the top of the function only; a module-level guard, a parameter named probing, and a guard after its probe are not generated. A call inside a condition is allowed, as the form allows it.`,
+  owner: `eslint-plugin-oracles lint rules`,
 }
 
-function compareSeverity(path, actual, expected) {
-  expect(actual, path).toBe(expected)
-}
-
-// -- 5. Reach and campaigns ---------------------------------------------------
-
+// The site kinds that declare a state (every kind), the legal sub-states of
+// a probe, and the undeclared guard.
 const LEGAL_SUBSTATES = [
   `legal:guard-quote-double`,
   `legal:guard-quote-backtick`,
@@ -173,103 +166,202 @@ const LEGAL_SUBSTATES = [
   `legal:call-condition`,
   `legal:arrow-condition`,
 ]
-const STATES = [...Object.keys(MODEL), ...LEGAL_SUBSTATES, `undeclared-guard`]
-const reach = createOracleReach(PROPERTY, STATES, { minimum: 1 })
+const KINDS = Object.keys(MODEL)
+const STATES = [...KINDS, ...LEGAL_SUBSTATES, `undeclared-guard`]
 
-function recordStates(program) {
+/** The states a program enters, from the grammar and the model alone. */
+function statesOf(program) {
+  const states = []
   if (program.sites.some((site) => MODEL[site.kind].legal)) {
-    if (program.guardQuote === `"`) reach.reach(`legal:guard-quote-double`)
-    if (program.guardQuote === '`') reach.reach(`legal:guard-quote-backtick`)
+    if (program.guardQuote === `"`) states.push(`legal:guard-quote-double`)
+    if (program.guardQuote === '`') states.push(`legal:guard-quote-backtick`)
   }
   if (
     program.header === `none` &&
-    program.sites.some((s) => s.kind === `probe`)
+    program.sites.some((site) => site.kind === `probe`)
   )
-    reach.reach(`undeclared-guard`)
+    states.push(`undeclared-guard`)
   for (const site of program.sites) {
-    reach.reach(site.kind)
+    states.push(site.kind)
     if (!isLegal(site, program)) continue
-    if (site.cast) reach.reach(`legal:cast`)
-    if (site.cast && site.paren) reach.reach(`legal:parenthesized-cast`)
-    if (site.quote === '`') reach.reach(`legal:template-name`)
-    if (site.guardParens) reach.reach(`legal:guard-parens`)
-    if (site.cond.calls) reach.reach(`legal:call-condition`)
-    if (site.cond.arrow) reach.reach(`legal:arrow-condition`)
+    if (site.cast) states.push(`legal:cast`)
+    if (site.cast && site.paren) states.push(`legal:parenthesized-cast`)
+    if (site.quote === '`') states.push(`legal:template-name`)
+    if (site.guardParens) states.push(`legal:guard-parens`)
+    if (site.cond.calls) states.push(`legal:call-condition`)
+    if (site.cond.arrow) states.push(`legal:arrow-condition`)
   }
+  return states
 }
 
-async function checkProgram(program) {
-  reach.beginHistory()
-  recordStates(program)
-  const code = renderProgram(program)
-  compareReports(
-    `production file, production config`,
-    lintWithProductionConfig(code, PRODUCTION_FILE),
-    predictReports(program),
-  )
-  // The root config enables the rule for production source and nowhere else.
-  compareSeverity(
-    `production file, root config`,
-    await severityInRepository(PRODUCTION_FILE),
-    predictSeverity(PRODUCTION_FILE),
-  )
-  compareSeverity(
-    `test file, root config: the rule covers production source only`,
-    await severityInRepository(TEST_FILE),
-    predictSeverity(TEST_FILE),
-  )
-}
-
-function campaign(name) {
-  it(`${name}: fixed-seed campaign`, async () => {
-    await fc.assert(fc.asyncProperty(programArbitrary, checkProgram), {
-      numRuns: oracleRuns(BASE_RUNS),
-      seed: FIXED_SEED,
-    })
-  }, 600_000)
-  it(`${name}: random-seed campaign`, async () => {
-    await fc.assert(
-      fc.asyncProperty(programArbitrary, checkProgram),
-      oraclePropertyOptions(BASE_RUNS, PROPERTY),
-    )
-  }, 600_000)
-}
-
-describe(`probe form in production source`, () => {
-  it(`census: every kind and every pool value is linted as predicted`, async () => {
-    await checkProgram(censusProgram())
-    // The same census in a function with no guard of its own.
-    await checkProgram({ ...censusProgram(), header: `none` })
-  }, 600_000)
-  campaign(`random programs`)
-  afterAll(() => {
-    if (process.env.TANSTACK_DB_ORACLE_REACH_REPORT)
-      console.log(`REACH`, JSON.stringify([...reach.counts()]))
-    reach.assertReached()
-  })
+// The file's own predictions: the reports, and the severity that the root
+// config gives each file name. Production source has the rule; a test does not.
+const expectationOf = (program) => ({
+  reports: predictReports(program),
+  productionSeverity: predictSeverity(PRODUCTION_FILE),
+  testSeverity: predictSeverity(TEST_FILE),
 })
 
-// The comparison must reject a wrong observation: a report on the wrong line,
-// and a missing report. Both feed the same check that the campaigns use.
-describe(`the comparison rejects wrong reports`, () => {
-  it(`rejects a report on a neighboring line`, () => {
-    expect(() =>
-      compareReports(
-        `calibration`,
-        [{ line: 3, messageId: MESSAGE_ID }],
-        [{ line: 2, messageId: MESSAGE_ID }],
-      ),
-    ).toThrow()
-  })
-  it(`rejects a missing report`, () => {
-    expect(() =>
-      compareReports(`calibration`, [], [{ line: 2, messageId: MESSAGE_ID }]),
-    ).toThrow()
-  })
+function check(_program, observations, expected) {
+  const observed = new Map(observations.map((o) => [o.checkpoint, o.value]))
+  return (
+    differs(
+      `production reports`,
+      `probe-form reports`,
+      reportKeys(observed.get(`production reports`)),
+      reportKeys(expected.reports),
+    ) ??
+    differs(
+      `production severity`,
+      `probe-form severity`,
+      observed.get(`production severity`),
+      expected.productionSeverity,
+    ) ??
+    differs(
+      `test severity`,
+      `probe-form severity`,
+      observed.get(`test severity`),
+      expected.testSeverity,
+    ) ??
+    pass
+  )
+}
+
+async function driver(program, observe) {
+  observe(
+    `production reports`,
+    lintWithProductionConfig(renderProgram(program), PRODUCTION_FILE),
+  )
+  // The root config also lints the same program under a test file name, which
+  // must report nothing: the rule covers production source only.
+  observe(`production severity`, await severityInRepository(PRODUCTION_FILE))
+  observe(`test severity`, await severityInRepository(TEST_FILE))
+}
+
+// -- 5. Constructed histories -------------------------------------------------
+
+/** A history whose first site is `patch` applied to the generated first site. */
+const withSite = (patch, header) => (generated) => ({
+  ...generated,
+  ...(header === undefined ? {} : { header }),
+  sites: [{ ...generated.sites[0], ...patch }, ...generated.sites.slice(1)],
 })
 
-declareOracle({
-  model: [predictReports, predictSeverity],
-  check: [compareReports, compareSeverity],
-  grammar: [programArbitrary],
+const legalCondition = (arrow) =>
+  LEGAL_CONDITIONS.find((c) => c.calls && (c.arrow === true) === arrow)
+
+// One constructed history for each site kind, and for each state of a probe.
+const constructed = [
+  ...KINDS.map((kind) => ({
+    name: kind,
+    enters: [kind],
+    build: withSite({ kind }),
+  })),
+  ...[`"`, '`'].map((quote) => ({
+    name: `legal:guard-quote-${quote === '`' ? 'backtick' : 'double'}`,
+    enters: [`legal:guard-quote-${quote === '`' ? 'backtick' : 'double'}`],
+    build: (generated) => ({
+      ...withSite({ kind: `probe` }, `guard`)(generated),
+      guardQuote: quote,
+    }),
+  })),
+  {
+    name: `legal:cast`,
+    enters: [`legal:cast`],
+    build: withSite({ kind: `probe`, cast: true }, `guard`),
+  },
+  {
+    name: `legal:parenthesized-cast`,
+    enters: [`legal:parenthesized-cast`],
+    build: withSite({ kind: `probe`, cast: true, paren: true }, `guard`),
+  },
+  {
+    name: `legal:template-name`,
+    enters: [`legal:template-name`],
+    build: withSite({ kind: `probe`, quote: '`' }, `guard`),
+  },
+  {
+    name: `legal:guard-parens`,
+    enters: [`legal:guard-parens`],
+    build: withSite({ kind: `probe`, guardParens: true }, `guard`),
+  },
+  {
+    name: `legal:call-condition`,
+    enters: [`legal:call-condition`],
+    build: withSite({ kind: `probe`, cond: legalCondition(false) }, `guard`),
+  },
+  {
+    name: `legal:arrow-condition`,
+    enters: [`legal:arrow-condition`],
+    build: withSite({ kind: `probe`, cond: legalCondition(true) }, `guard`),
+  },
+  {
+    name: `undeclared-guard`,
+    enters: [`undeclared-guard`],
+    build: withSite({ kind: `probe` }, `none`),
+  },
+]
+
+// The census gives every kind every pool value once. It is a fixed list of
+// two histories, one with a guard and one without, and runs through the same
+// model, driver, and check.
+oracleProperty({
+  id: PROPERTY_CENSUS,
+  law: LAW,
+  histories: [censusProgram(), { ...censusProgram(), header: `none` }],
+  label: (program) =>
+    program.header === `none`
+      ? `census without a guard`
+      : `census with a guard`,
+  model: expectationOf,
+  driver,
+  check,
+})
+
+oracleProperty({
+  id: PROPERTY,
+  law: LAW,
+  histories: {
+    arbitrary: programArbitrary,
+    runs: BASE_RUNS,
+    fixedSeeds: [FIXED_SEED],
+    states: STATES,
+    constructed,
+  },
+  reached: (program) => statesOf(program),
+  model: expectationOf,
+  driver,
+  check,
+  calibrations: [
+    {
+      name: `a report on a neighboring line`,
+      law: `probe-form reports`,
+      corrupt: (trace) => {
+        const observed = trace.find(
+          (o) => o.checkpoint === `production reports`,
+        )
+        if (observed.value.length === 0) return undefined
+        return trace.map((o) =>
+          o.checkpoint === `production reports`
+            ? { ...o, value: o.value.map((r) => ({ ...r, line: r.line + 1 })) }
+            : o,
+        )
+      },
+    },
+    {
+      name: `a missing report`,
+      law: `probe-form reports`,
+      corrupt: (trace) => {
+        const observed = trace.find(
+          (o) => o.checkpoint === `production reports`,
+        )
+        if (observed.value.length === 0) return undefined
+        return trace.map((o) =>
+          o.checkpoint === `production reports`
+            ? { ...o, value: o.value.slice(1) }
+            : o,
+        )
+      },
+    },
+  ],
 })

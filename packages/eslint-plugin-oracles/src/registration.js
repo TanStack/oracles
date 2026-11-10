@@ -168,6 +168,9 @@ export function callsFrameworkExport(node, name, sourceCode) {
  *   selected through them.
  * - `replayWitnessModules`: paths of the module that writes a replay witness,
  *   whose record is serialized by the standard JSON serializer.
+ * - `legacyCampaigns`: `[{ file, reason }]`, the files that still run raw
+ *   campaigns or import a legacy campaign API while they migrate to
+ *   `oracleProperty`. An entry counts only with a non-empty reason.
  *
  * A path names a file by its end at a path boundary, relative to the
  * repository (`packages/app/tests/oracle-config.ts`). Paths are not patterns,
@@ -185,6 +188,7 @@ export function oracleSettings(context) {
     },
     implementationModules: configured.implementationModules ?? [],
     replayWitnessModules: configured.replayWitnessModules ?? [],
+    legacyCampaigns: configured.legacyCampaigns ?? [],
   }
 }
 

@@ -25,7 +25,6 @@ export default [
     settings: {
       oracles: {
         implementationModules: [
-          `packages/oracles/src/oracle-campaign.ts`,
           `packages/oracles/src/oracle-config.ts`,
           `packages/oracles/src/oracle-property.ts`,
         ],

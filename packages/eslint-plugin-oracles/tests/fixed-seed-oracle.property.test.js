@@ -43,23 +43,25 @@
  *   3. The driver renders one function per site, one site per line, and
  *      lints the program with both rules.
  *   4. The comparison checks the sorted (line, rule, message) reports.
- *   5. A census lints every combination once; campaigns draw programs.
+ *   5. Two oracleProperty parts: the census lints every combination once, and
+ *      the generated campaign runs a fixed and a random seed, where each
+ *      declared state has a constructed history that enters it.
  */
 import tsParser from '@typescript-eslint/parser'
 import { Linter } from 'eslint'
 import fc from 'fast-check'
-import { afterAll, describe, expect, it } from 'vitest'
-import {
-  createOracleReach,
-  declareOracle,
-  oracleFixedSeed,
-  oraclePropertyOptions,
-  oracleRuns,
-} from '@tanstack/oracles'
+import { differs, oracleProperty, pass } from '@tanstack/oracles'
 import noDisabled from '../src/rules/no-disabled.js'
 import replayableSeed from '../src/rules/replayable-seed.js'
 
 const PROPERTY = `lint.fixed-seed`
+const PROPERTY_CENSUS = `lint.fixed-seed.census`
+const LAW = {
+  statement: `A fixed-seed declaration is linted as the model predicts: a seed that a replay reproduces is a witness, and each rule reports exactly the sites that the model names.`,
+  authority: `The rules' documented witness and ambient-seed laws in src/rules/no-disabled.js and src/rules/replayable-seed.js, and oracleFixedSeed's declaration in packages/oracles/src/oracle-route.ts.`,
+  limits: `Seeds and run counts are literals, constants, mutable bindings, parameters, or clocks; helpers and re-exported declarations are not generated.`,
+  owner: `eslint-plugin-oracles lint rules`,
+}
 const FIXED_SEED = 3117
 const BASE_RUNS = 30
 
@@ -208,11 +210,7 @@ function lintProgram(code) {
 const reportKeys = (reports) =>
   reports.map((r) => `${r.line}:${r.rule}:${r.messageId}`).sort()
 
-function compareReports(actual, expected, code) {
-  expect(reportKeys(actual), code).toEqual(reportKeys(expected))
-}
-
-// -- 5. Reach and campaigns ---------------------------------------------------
+// -- 5. Reach, campaigns, and calibrations ----------------------------------
 
 const STATES = [
   ...FORMS.flatMap((form) => [`${form}: witness`, `${form}: reported`]),
@@ -221,24 +219,79 @@ const STATES = [
   `a let holder spread`,
   `a single run in a witness`,
 ]
-const reach = createOracleReach(PROPERTY, STATES, { minimum: 1 })
 
-function check(program) {
-  reach.beginHistory()
-  reach.reach(`binding ${program.binding}`)
+/** The states a program enters, from the grammar and the model alone. */
+function statesOf(program) {
+  const states = [`binding ${program.binding}`]
   for (const site of program.sites) {
     const witness = isWitness(site, program.binding)
-    reach.reach(`${site.form}: ${witness ? `witness` : `reported`}`)
+    states.push(`${site.form}: ${witness ? `witness` : `reported`}`)
     if (site.seed === `clock` && declaresWithCall(site.form))
-      reach.reach(`a clock seed in a declaration`)
+      states.push(`a clock seed in a declaration`)
     if (site.form === `spreadHeld` && site.holder === `let`)
-      reach.reach(`a let holder spread`)
+      states.push(`a let holder spread`)
     if (witness && site.runs !== `many`)
-      reach.reach(`a single run in a witness`)
+      states.push(`a single run in a witness`)
   }
-  const code = renderProgram(program)
-  compareReports(lintProgram(code), predictReports(program), code)
+  return states
 }
+
+/** A history whose first site is `site` and whose binding is `binding`. */
+const withFirstSite = (site, binding) => (generated) => ({
+  binding: binding ?? generated.binding,
+  sites: [site, ...generated.sites.slice(1)],
+})
+
+// Each state gets a constructed history: its first site or binding forces it.
+const constructed = [
+  ...FORMS.flatMap((form) => [
+    {
+      name: `${form}: witness`,
+      enters: [`${form}: witness`],
+      build: withFirstSite(
+        { form, seed: `literal`, runs: `many`, holder: `const` },
+        `imported`,
+      ),
+    },
+    {
+      name: `${form}: reported`,
+      enters: [`${form}: reported`],
+      build: withFirstSite(
+        { form, seed: `mutable`, runs: `many`, holder: `const` },
+        `imported`,
+      ),
+    },
+  ]),
+  ...BINDINGS.map((binding) => ({
+    name: `binding ${binding}`,
+    enters: [`binding ${binding}`],
+    build: (generated) => ({ ...generated, binding }),
+  })),
+  {
+    name: `a clock seed in a declaration`,
+    enters: [`a clock seed in a declaration`],
+    build: withFirstSite(
+      { form: `call`, seed: `clock`, runs: `many`, holder: `const` },
+      `imported`,
+    ),
+  },
+  {
+    name: `a let holder spread`,
+    enters: [`a let holder spread`],
+    build: withFirstSite(
+      { form: `spreadHeld`, seed: `literal`, runs: `many`, holder: `let` },
+      `imported`,
+    ),
+  },
+  {
+    name: `a single run in a witness`,
+    enters: [`a single run in a witness`],
+    build: withFirstSite(
+      { form: `object`, seed: `literal`, runs: `one`, holder: `const` },
+      `imported`,
+    ),
+  },
+]
 
 /** Every combination of a site's choices, under each binding. */
 function censusPrograms() {
@@ -252,48 +305,82 @@ function censusPrograms() {
   return BINDINGS.map((binding) => ({ binding, sites }))
 }
 
-describe(`fixed-seed declarations`, () => {
-  it(`census: every form, seed, run count, and binding is linted as predicted`, () => {
-    for (const program of censusPrograms()) check(program)
-  })
-  it(`fixed-seed campaign`, () => {
-    fc.assert(
-      fc.property(programArbitrary, check),
-      oracleFixedSeed(FIXED_SEED, { numRuns: oracleRuns(BASE_RUNS) }),
-    )
-  })
-  it(`random-seed campaign`, () => {
-    fc.assert(
-      fc.property(programArbitrary, check),
-      oraclePropertyOptions(BASE_RUNS, PROPERTY),
-    )
-  })
-  afterAll(() => reach.assertReached())
+const reportsCheck = (plan, observations, expected) => {
+  const observed = observations.find((o) => o.checkpoint === `reports`)
+  return (
+    differs(
+      `reports`,
+      `reports`,
+      reportKeys(observed.value),
+      reportKeys(expected),
+    ) ?? pass
+  )
+}
+
+const driver = (program, observe) => {
+  observe(`reports`, lintProgram(renderProgram(program)))
+}
+
+// The census lints every combination once; it is a fixed list, not generated.
+oracleProperty({
+  id: PROPERTY_CENSUS,
+  law: LAW,
+  histories: censusPrograms(),
+  label: (program) => `census: binding ${program.binding}`,
+  model: predictReports,
+  driver,
+  check: reportsCheck,
 })
 
-// The comparison must reject a wrong observation: a missing report and a
-// report under the other rule. Both feed the same check that the campaigns
-// use.
-describe(`the comparison rejects wrong reports`, () => {
-  const expected = [
-    { line: 4, rule: `oracle/no-disabled`, messageId: `singleRun` },
-  ]
-  it(`rejects a missing report`, () => {
-    expect(() => compareReports([], expected, `calibration`)).toThrow()
-  })
-  it(`rejects a report under the other rule`, () => {
-    expect(() =>
-      compareReports(
-        [{ line: 4, rule: `oracle/replayable-seed`, messageId: `singleRun` }],
-        expected,
-        `calibration`,
-      ),
-    ).toThrow()
-  })
-})
-
-declareOracle({
-  model: [predictReports],
-  check: [compareReports],
-  grammar: [programArbitrary],
+oracleProperty({
+  id: PROPERTY,
+  law: LAW,
+  histories: {
+    arbitrary: programArbitrary,
+    runs: BASE_RUNS,
+    fixedSeeds: [FIXED_SEED],
+    states: STATES,
+    constructed,
+  },
+  reached: (program) => statesOf(program),
+  model: predictReports,
+  driver,
+  check: reportsCheck,
+  // The comparison must reject a wrong observation: a missing report, and a
+  // report under the other rule. Both feed the same check that the campaigns use.
+  calibrations: [
+    {
+      name: `a report dropped from the rule's output`,
+      law: `reports`,
+      corrupt: (trace) => {
+        const observed = trace.find((o) => o.checkpoint === `reports`)
+        if (observed.value.length === 0) return undefined
+        return trace.map((o) =>
+          o.checkpoint === `reports` ? { ...o, value: o.value.slice(1) } : o,
+        )
+      },
+    },
+    {
+      name: `a report under the other rule`,
+      law: `reports`,
+      corrupt: (trace) => {
+        const observed = trace.find((o) => o.checkpoint === `reports`)
+        if (observed.value.length === 0) return undefined
+        return trace.map((o) =>
+          o.checkpoint === `reports`
+            ? {
+                ...o,
+                value: o.value.map((r) => ({
+                  ...r,
+                  rule:
+                    r.rule === `oracle/no-disabled`
+                      ? `oracle/replayable-seed`
+                      : `oracle/no-disabled`,
+                })),
+              }
+            : o,
+        )
+      },
+    },
+  ],
 })
