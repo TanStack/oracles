@@ -103,6 +103,7 @@ if (import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
       const session = await openSession(options.pkg)
       try {
         console.log(await session.check(options, memoryStore()))
+        console.log(`output: ${options.out}`)
       } finally {
         await session.close()
       }
