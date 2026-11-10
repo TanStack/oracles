@@ -9,8 +9,12 @@ every commit with [pkg.pr.new](https://pkg.pr.new).
 
 ## Packages
 
-- `packages/oracles` (`@tanstack/oracles`): the oracle framework, and the
-  `oracle-gaps` CLI. The CLI lists the production behaviour that a
+To adopt it, start with [`packages/oracles/README.md`](packages/oracles/README.md):
+the package ships setup, design, and review skills for coding agents, the
+oracle checklist, and a glossary.
+
+- `packages/oracles` (`@tanstack/oracles`): the oracle framework, its skills
+  and docs, and the `oracle-gaps` CLI. The CLI lists the production behavior that a
   project's owning oracles leave unexercised or unjudged. A project runs it as
   `oracle-gaps --package <dir> --source <src/x.ts,...>`, with
   `--env-prefix` set to the prefix that the project passes to
@@ -33,7 +37,9 @@ required. The rule reports:
 
 A framework implementation module is exempt.
 
-A file that still migrates can be listed in `settings.oracles.legacyCampaigns`:
+A TanStack DB file that still migrates can be listed in
+`settings.oracles.legacyCampaigns`. The setting exists only for that
+migration and will be removed; other repositories must not use it:
 
 ```js
 settings: {
