@@ -6,7 +6,7 @@
  * report owes before any test runs: which operator mutants exist, which are
  * probe-only code, which oracle files own each function's call tree, which
  * declarations refuse the run, and each mutant's key. The CLI computes all of
- * them in `analyze` (analysis.mjs) and `assignKeys` (report.mjs), from files
+ * them in `analyze` (analysis.mjs) and `keyAndSelect` (report.mjs), from files
  * alone. This oracle writes each generated fixture to a scratch package and
  * calls those functions directly, without Vitest or a child process, so a
  * history costs tens of milliseconds and a campaign a few seconds. The
@@ -31,6 +31,12 @@
  * - **Ownership.** A mutant's function has an owner exactly when the model
  *   says it is not `unowned`.
  * - **Keys.** Each mutant's key is the model's anchor.
+ * - **Selected keys.** A run that selects mutants (`--only`, `--sample`)
+ *   keys each selected mutant as the full run does: keys are numbered over
+ *   the whole mutant list before any selection, so a partial run and a full
+ *   run agree on every key they share.
+ * - **Help.** `index.mjs --help` prints the usage text (args.mjs) for any
+ *   package directory, with no `--package`, and exits 0.
  * - **Key stability.** After the history's stability edit, every mutant
  *   that existed before keeps its key, its probe mark, and its ownership.
  *
@@ -77,6 +83,7 @@ import {
   symlinkSync,
 } from 'node:fs'
 import { createRequire } from 'node:module'
+import { spawnSync } from 'node:child_process'
 import { dirname, join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { declareOracle } from '../src/oracle-declaration.ts'
@@ -103,8 +110,8 @@ import {
   writeFixture,
   written,
 } from './gap-report-model-oracle.mjs'
-import { parseArgs } from './args.mjs'
-import { assignKeys } from './report.mjs'
+import { parseArgs, usage } from './args.mjs'
+import { keyAndSelect } from './report.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const ts = createRequire(join(here, `../package.json`))(`typescript`)
@@ -116,7 +123,7 @@ const ts = createRequire(join(here, `../package.json`))(`typescript`)
 // less the runner copies, as the CLI's discovery does (`isRunnerCopy`; the
 // end-to-end oracle checks that discovery), reads the source files from a
 // `--source` argument in the history's spelling as the CLI does
-// (`parseArgs`), and calls `analyze` and `assignKeys`. It records a
+// (`parseArgs`), and calls `analyze` and `keyAndSelect`. It records a
 // refusal's message, or each mutant's site, probe mark, ownership, and key,
 // and the instrumented text of the Svelte module, if there is one. For a
 // stability history it rewrites the source and records the same again.
@@ -125,6 +132,8 @@ function analyzeFixture(dir, files, plan) {
   const tests = readdirSync(join(dir, `tests`))
     .filter((name) => name.endsWith(`.test.ts`) && !isRunnerCopy(name))
     .map((name) => join(dir, `tests`, name))
+  // `--help` names no package; the CLI itself must print the usage text.
+  const help = helpOf(dir)
   try {
     const { sources } = parseArgs(
       [`--package`, dir, `--source`, sourceArgument(plan, `${dir}.link`)],
@@ -132,18 +141,30 @@ function analyzeFixture(dir, files, plan) {
     )
     const outputs = defaultOutputsOf(dir, sources)
     const { mutants, owned, instrumented } = analyze(ts, dir, sources, tests)
-    assignKeys(mutants)
+    // A run's keys come from the whole mutant list, whatever its selection
+    // (--only, --sample). The full run's keys are the reference, read before
+    // any selection runs; a selected run must key each mutant it selects the
+    // same way.
+    const full = keyAndSelect(mutants, { sources }).map((m) => ({
+      id: m.id,
+      source: m.source,
+      function: m.function,
+      line: m.line,
+      operator: m.operator,
+      probe: m.probeGuard === true,
+      owned: owned.at(m.source, m.position).owners.size > 0,
+      key: m.key,
+    }))
+    const only = new Set(mutants.filter((_, i) => i % 2 === 0).map((m) => m.id))
+    const keyed = (selected) => selected.map((m) => ({ id: m.id, key: m.key }))
     return {
       outputs,
-      mutants: mutants.map((m) => ({
-        source: m.source,
-        function: m.function,
-        line: m.line,
-        operator: m.operator,
-        probe: m.probeGuard === true,
-        owned: owned.at(m.source, m.position).owners.size > 0,
-        key: m.key,
-      })),
+      help,
+      selection: {
+        only: keyed(keyAndSelect(mutants, { only, sources })),
+        sample: keyed(keyAndSelect(mutants, { sample: 1, sources })),
+      },
+      mutants: full,
       runes: plan.runesSource
         ? instrumented.get(realpathSync(join(dir, RUNES)))
         : undefined,
@@ -157,7 +178,7 @@ function analyzeFixture(dir, files, plan) {
         : undefined,
     }
   } catch (error) {
-    return { refusal: String(error?.message ?? error) }
+    return { help, refusal: String(error?.message ?? error) }
   }
 }
 
@@ -199,6 +220,15 @@ function outputNamespace({ contained, same }) {
       `output namespace`,
     )
   return undefined
+}
+
+/** What `index.mjs --help` prints when run in a directory, and its status. */
+function helpOf(dir) {
+  const run = spawnSync(process.execPath, [join(here, `index.mjs`), `--help`], {
+    cwd: dir,
+    encoding: `utf8`,
+  })
+  return { status: run.status, printed: run.stdout.trimEnd() }
 }
 
 // ## The derived class, run
@@ -625,6 +655,12 @@ function check(plan, observations, expected) {
     const namespace = outputNamespace(got.outputs)
     if (namespace) return namespace
   }
+  if (got.help?.status !== 0 || got.help?.printed !== usage.trimEnd())
+    return violation(
+      `static`,
+      `--help exited ${got.help?.status} and printed ${JSON.stringify(got.help?.printed)}, not the usage text`,
+      `help`,
+    )
   // An owner that fails, and a config the runner cannot honor, are found
   // only when the runner starts.
   const runtime = [`brokenOwner`, `projects`, `brokenVitest`].includes(
@@ -706,6 +742,17 @@ function check(plan, observations, expected) {
         `${siteOf(m)}: key ${JSON.stringify(m.key)}, owed ${JSON.stringify(owed.key)}`,
         `keys`,
       )
+  // A selected run's keys are the full run's, for each mutant it selects.
+  for (const run of Object.values(got.selection ?? {}))
+    for (const selected of run) {
+      const full = got.mutants.find((m) => m.id === selected.id)
+      if (full?.key !== selected.key)
+        return violation(
+          `static`,
+          `${selected.id}: key ${JSON.stringify(selected.key)} in a selected run, ${JSON.stringify(full?.key)} in the full run`,
+          `selection keys`,
+        )
+    }
   const moved = observations.find((o) => o.checkpoint === `stability`)?.value
   if (moved) {
     if (moved.refusal)
