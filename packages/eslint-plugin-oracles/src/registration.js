@@ -156,6 +156,9 @@ export function callsFrameworkExport(node, name, sourceCode) {
   )
 }
 
+/** The settings whose value is a list of module paths. */
+const MODULE_LISTS = [`implementationModules`, `replayWitnessModules`]
+
 /**
  * The project's settings for these rules, from `settings.oracles` in the flat
  * config. Every field is optional:
@@ -179,6 +182,12 @@ export function callsFrameworkExport(node, name, sourceCode) {
 export function oracleSettings(context) {
   const configured = context.settings?.oracles ?? {}
   const envPrefix = configured.envPrefix ?? `ORACLE`
+  // A module list that is not an array is read as an empty list, and its name is
+  // reported (malformedSetting), since no module of it can be judged.
+  const malformed = MODULE_LISTS.filter(
+    (name) =>
+      configured[name] !== undefined && !Array.isArray(configured[name]),
+  )
   return {
     envNames: {
       seed: `${envPrefix}_SEED`,
@@ -186,10 +195,17 @@ export function oracleSettings(context) {
       property: `${envPrefix}_PROPERTY`,
       runsMultiplier: `${envPrefix}_RUNS_MULTIPLIER`,
     },
-    implementationModules: configured.implementationModules ?? [],
-    replayWitnessModules: configured.replayWitnessModules ?? [],
+    implementationModules: moduleList(configured, `implementationModules`),
+    replayWitnessModules: moduleList(configured, `replayWitnessModules`),
     legacyCampaigns: configured.legacyCampaigns ?? [],
+    malformed,
   }
+}
+
+/** The module paths of a setting, or no paths when the value is not an array. */
+function moduleList(configured, name) {
+  const value = configured[name] ?? []
+  return Array.isArray(value) ? value : []
 }
 
 /** Whether `filename` is one of the module paths in `modules`. */
