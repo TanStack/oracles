@@ -66,6 +66,11 @@ import {
 const FAST_CHECK_MODULES = new Set([`fast-check`, `@fast-check/vitest`])
 const CAMPAIGN_METHODS = new Set([`assert`, `check`])
 const LEGACY_NAMES = new Set([`createOracleReach`, `runOracleCampaign`])
+// The file's start, where the configuration reports sit: no directive can precede it.
+const FILE_START = {
+  start: { line: 1, column: 0 },
+  end: { line: 1, column: 0 },
+}
 
 /** The name an import specifier takes from its module, by its identifier or string form. */
 const importedName = (specifier) =>
@@ -180,6 +185,7 @@ export default {
       baselineWithoutReason: `This file's \`legacyCampaigns\` entry has no reason, so it exempts nothing. Give the reason that the file keeps its raw campaigns, or move the file to \`oracleProperty\`.`,
       staleBaseline: `This file's \`legacyCampaigns\` entry is stale: the file runs no raw campaign and imports no legacy API. Remove the entry, so the baseline only shrinks.`,
       malformedList: `\`legacyCampaigns\` must be an array of { file, reason } entries. The rule ignores it, so no file is exempt.`,
+      malformedSetting: `\`settings.oracles.{{name}}\` must be an array of paths. The rule reads it as empty, so no module is exempt.`,
       malformedEntry: `\`{{at}}\` is malformed: expected { file: string, reason?: string }. The rule ignores it, so it exempts nothing.`,
       refusedEntry: `\`{{at}}\` names {{file}}, which is {{why}}. The rule never judges it, so the entry exempts nothing: remove it.`,
     },
@@ -191,6 +197,8 @@ export default {
       settings.legacyCampaigns,
       settings.implementationModules,
     )
+    for (const name of settings.malformed)
+      problems.push({ messageId: `malformedSetting`, data: { name } })
     const implementation = isModuleFile(
       context.filename,
       settings.implementationModules,
@@ -221,17 +229,17 @@ export default {
       },
       'Program:exit'(program) {
         for (const problem of problems)
-          context.report({ node: program, ...problem })
+          context.report({ loc: FILE_START, ...problem })
         // A framework implementation module is exempt from its own uses.
         if (implementation) return
         if (entries.length > 0) {
           if (!exempt)
             context.report({
-              node: program,
+              loc: FILE_START,
               messageId: `baselineWithoutReason`,
             })
           if (uses.length === 0)
-            context.report({ node: program, messageId: `staleBaseline` })
+            context.report({ loc: FILE_START, messageId: `staleBaseline` })
         }
         if (exempt) return
         for (const use of uses) context.report(use)
