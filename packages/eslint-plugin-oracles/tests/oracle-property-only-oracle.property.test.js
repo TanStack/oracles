@@ -130,14 +130,20 @@ const program = fc.record({
   ),
   // A block directive over the sites, or none. It must not change the reports.
   directive: fc.constantFrom(`none`, `none`, `oracleBlock`, `allBlock`),
+  // The parser decides where ESLint's Program node begins: a leading comment, or the first statement.
+  parser: fc.constantFrom(`typescript`, `espree`),
+  // A header comment before the imports, so the program opens with a comment.
+  header: fc.boolean(),
+  // `implementationModules` as a non-array value, which the rule must report, not throw on.
+  modules: fc.constantFrom(`none`, `none`, `notAnArray`),
   sites: fc.array(site, { minLength: 1, maxLength: 6 }),
 })
 
 // -- Model --------------------------------------------------------------------
 
-const usesOf = (sites) =>
+const usesOf = (sites, header) =>
   sites.flatMap((item, index) => {
-    const line = index + FIRST_SITE_LINE
+    const line = index + FIRST_SITE_LINE + (header ? 1 : 0)
     if (item.kind === `campaign`) return [{ line, messageId: `rawCampaign` }]
     if (item.kind === `prop`) return [{ line, messageId: `rawProperty` }]
     if (item.kind === `legacyImport`)
@@ -165,13 +171,17 @@ function configurationReports(entry) {
   return []
 }
 
-function expectedReports({ setting, entry, sites }) {
-  const configuration = configurationReports(entry)
+function expectedReports({ setting, entry, sites, modules, header }) {
+  // A non-array implementationModules is reported at line 1 and read as an empty list.
+  const moduleReports =
+    modules === `notAnArray` ? [{ line: 1, messageId: `malformedSetting` }] : []
+  const configuration = [...moduleReports, ...configurationReports(entry)]
   // The configuration report is owed whatever the file, implementation or not.
-  if (setting === `implementation`) return configuration
+  // An empty list exempts nothing, so the implementation exemption needs a list.
+  if (setting === `implementation` && modules === `none`) return configuration
   // A list that is not an array is ignored whole, so the file's own entry is void.
   const effective = entry === `notAList` ? `none` : setting
-  const uses = usesOf(sites)
+  const uses = usesOf(sites, header)
   const reports = [...configuration]
   if (effective === `reasonless`)
     reports.push({ line: 1, messageId: `baselineWithoutReason` })
@@ -191,6 +201,8 @@ const STATES = {
   stale: `a stale baseline is reported`,
   refused: `an entry the rule refuses (outside the oracle glob, a README, or an implementation module) is reported`,
   malformed: `a malformed entry is reported`,
+  moduleNotArray: `an implementationModules value that is not an array is reported and exempts nothing`,
+  openComment: `a program under espree opens with a comment, so its first statement is not its first line`,
   notList: `a legacyCampaigns value that is not an array is reported`,
   vitest: `a campaign through @fast-check/vitest is reported`,
   silenced: `a disable directive is written over a reported site, and it does not silence it`,
@@ -202,7 +214,7 @@ const MEASURED = {
 }
 
 function reachedStates(plan, _trace, expected) {
-  const { setting, sites, alias, entry } = plan
+  const { setting, sites, alias, entry, header, modules, parser } = plan
   const messages = new Set(expected.reports.map((report) => report.messageId))
   return [
     ...(messages.has(`rawCampaign`) ? [STATES.campaign] : []),
@@ -218,6 +230,8 @@ function reachedStates(plan, _trace, expected) {
     ...(messages.has(`refusedEntry`) ? [STATES.refused] : []),
     ...(messages.has(`malformedEntry`) ? [STATES.malformed] : []),
     ...(messages.has(`malformedList`) ? [STATES.notList] : []),
+    ...(messages.has(`malformedSetting`) ? [STATES.moduleNotArray] : []),
+    ...(parser === `espree` && header ? [STATES.openComment] : []),
     ...(alias === `vitest` && messages.has(`rawCampaign`)
       ? [STATES.vitest]
       : []),
@@ -276,8 +290,9 @@ const DIRECTIVE = {
   allBlock: ` /* eslint-disable */`,
 }
 
-function renderProgram({ alias, sites, directive }) {
+function renderProgram({ alias, sites, directive, header }) {
   return [
+    ...(header ? [`/* a header comment */`] : []),
     ...HEADER,
     ALIAS_IMPORT[alias] + DIRECTIVE[directive],
     ...sites.map((item, index) => renderSite(item, alias, index)),
@@ -341,15 +356,19 @@ const settingsFor = {
 const linter = new Linter({ configType: `flat` })
 
 /** The rule's reports for a rendered program, or the error the run threw. */
-function lintRendered(code, { setting, entry }) {
+function lintRendered(code, { setting, entry, modules, parser }) {
   const own = settingsFor[setting]
   const extra = entryFor[entry]
   const oracles = {
     ...own,
-    implementationModules: [
-      ...(own.implementationModules ?? []),
-      ...extra.implementationModules,
-    ],
+    // A non-array value replaces the list, so no module is exempt.
+    implementationModules:
+      modules === `notAnArray`
+        ? `tests/a-oracle.test.js`
+        : [
+            ...(own.implementationModules ?? []),
+            ...extra.implementationModules,
+          ],
     legacyCampaigns: Array.isArray(extra.legacyCampaigns)
       ? [...(own.legacyCampaigns ?? []), ...extra.legacyCampaigns]
       : extra.legacyCampaigns,
@@ -362,7 +381,10 @@ function lintRendered(code, { setting, entry }) {
         {
           ...plugin.configs.recommended,
           files: [`**/*.js`],
-          languageOptions: { parser: tsParser, sourceType: `module` },
+          languageOptions: {
+            ...(parser === `typescript` ? { parser: tsParser } : {}),
+            sourceType: `module`,
+          },
           settings: { oracles },
         },
       ],
@@ -410,9 +432,9 @@ function check(plan, observations, expected) {
 oracleProperty({
   id: `lint.oracle-property-only`,
   law: {
-    statement: `In an oracle file, a disable directive (eslint-disable, or a block for oracle/oracle-property-only) does not silence the rule: the reports are the same with or without it. A raw fast-check campaign (fc.assert, fc.check, or a .prop registration, through fast-check or @fast-check/vitest) and an import of createOracleReach or runOracleCampaign are reported, except in a file whose reasoned legacyCampaigns entry still matches a legacy use; a reasonless entry and a stale entry are reported; an implementation module is exempt from its own uses; a malformed or refused entry, and a legacyCampaigns value that is not an array, are reported at line 1 and exempt nothing; and the rule never throws on a program that parses.`,
+    statement: `In an oracle file, a disable directive (eslint-disable, or a block for oracle/oracle-property-only) does not silence the rule: the reports are the same with or without it. A raw fast-check campaign (fc.assert, fc.check, or a .prop registration, through fast-check or @fast-check/vitest) and an import of createOracleReach or runOracleCampaign are reported, except in a file whose reasoned legacyCampaigns entry still matches a legacy use; a reasonless entry and a stale entry are reported; an implementation module is exempt from its own uses; a malformed or refused entry, a legacyCampaigns value that is not an array, and an implementationModules value that is not an array are reported at line 1, and the rule never throws on a program that parses. A refused entry never exempts the file under test: it names another file, or an implementation module that is exempt whatever its entries.`,
     authority: `Maintainer decision (2026-11-09): oracleProperty is the only campaign API in @tanstack/oracles. Its header in packages/oracles/src/oracle-property.ts: constructed histories make a state's reach required, and a raw campaign has none.`,
-    limits: `Aliased campaigns, a campaign held in a helper, re-exported fast-check bindings, and import() of a legacy module are not generated. Only legacyCampaigns is generated as configuration; implementationModules is not. A one-line directive (eslint-disable-next-line) is not generated, since it moves the site lines; the block forms are. A stale entry for a deleted file is not reported, since no lint run sees that file.`,
+    limits: `Refused-entry exemption is not separately observable: a refused entry names another file (only the file under test is affected by its own entries), or an implementation module, which is exempt whatever its entries, so no history tells a refused entry that exempts from one that does not. Aliased campaigns, a campaign held in a helper, re-exported fast-check bindings, and import() of a legacy module are not generated. Only legacyCampaigns and a non-array implementationModules are generated as configuration; a string entry in implementationModules is not. A one-line directive (eslint-disable-next-line) is not generated, since it moves the site lines; the block forms are. A stale entry for a deleted file is not reported, since no lint run sees that file.`,
     owner: `eslint-plugin-oracles lint rules`,
   },
   histories: {
@@ -447,6 +469,28 @@ oracleProperty({
           ...generated,
           setting: `none`,
           entry: `bareString`,
+        }),
+      },
+      {
+        name: `a program under espree that opens with a comment`,
+        enters: [STATES.openComment, STATES.malformed],
+        build: (generated) => ({
+          ...generated,
+          setting: `none`,
+          entry: `bareString`,
+          modules: `none`,
+          parser: `espree`,
+          header: true,
+        }),
+      },
+      {
+        name: `an implementationModules value that is not an array`,
+        enters: [STATES.moduleNotArray],
+        build: (generated) => ({
+          ...generated,
+          setting: `none`,
+          entry: `none`,
+          modules: `notAnArray`,
         }),
       },
       {
