@@ -53,7 +53,7 @@ the new commit at once, then do step 4 again and rerun the gap check (step 7).
 accept every property id. Call `configureOracles` only to change that, in a
 Vitest setup file that runs before any oracle module is imported.
 
-**Lint.** Add the preset to the ESLint flat config:
+**Lint.** Add both presets to the ESLint flat config:
 
 ```js
 import oracles from '@tanstack/eslint-plugin-oracles'
@@ -61,22 +61,15 @@ import oracles from '@tanstack/eslint-plugin-oracles'
 export default [
   // ...the repository's existing config
   oracles.configs.recommended,
-  {
-    // Oracle files: the rules must not be switched off inline.
-    files: ['**/*oracle*.{ts,tsx,js,jsx,mjs}'],
-    linterOptions: { noInlineConfig: true },
-  },
-  {
-    // The probe form, on this repository's production source.
-    files: ['src/**/*.{ts,tsx,js,jsx,mjs}'],
-    plugins: { oracle: oracles },
-    rules: { 'oracle/probe-form': 'error' },
-  },
+  oracles.configs.production,
 ]
 ```
 
-- Change the `src/**` glob to the production source you found in step 1. The
-  preset's own `production` config matches only `packages/*/src/**`.
+- `recommended` applies to oracle files and turns off inline directives there,
+  so a disable comment has no effect.
+- `production` checks the probe form in `src/**` and `packages/*/src/**`. If
+  production source lives elsewhere, add the `oracle/probe-form` rule with that
+  glob.
 - If ESLint does not already parse TypeScript, add `@typescript-eslint/parser`
   as a dev dependency and set it as `languageOptions.parser` for the oracle
   files.

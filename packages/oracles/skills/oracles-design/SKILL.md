@@ -182,7 +182,9 @@ They do not reach them.
   needs is a declared state with a constructed history, and a probe where
   production decides to enter it. Never raise `runs` to reach a state.
 - **Need a state at least N times?** Give it N constructed histories.
-- **Start with one fixed seed** in `fixedSeeds`, beside the random campaign.
+- **Give at least one fixed seed** in `fixedSeeds`. The random campaign always
+  runs beside it. A kill that only the random campaign finds is a gap until you
+  keep its history as a fixed or constructed history.
 - **Start `runs` at 100** for a fast, synchronous driver, and at 25 to 50
   for a driver that awaits timers or I/O.
 - **Keep it fast.** The gap check runs every owning oracle once for each

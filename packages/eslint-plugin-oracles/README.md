@@ -10,33 +10,17 @@ Install it at the same pkg.pr.new commit as `@tanstack/oracles`. The
 
 ## Configs
 
-| Config                | Files                                                                     | Rules                                                                                  |
-| --------------------- | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `configs.recommended` | Files whose names contain `oracle` (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`) | `no-disabled`, `no-unit-test`, `oracle-property-only`, `pure-model`, `replayable-seed` |
-| `configs.production`  | `packages/*/src/**`                                                       | `probe-form`                                                                           |
+| Config                | Files                                                                     | Rules                                                                                                       |
+| --------------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `configs.recommended` | Files whose names contain `oracle` (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`) | `no-disabled`, `no-oracle-disable`, `no-unit-test`, `oracle-property-only`, `pure-model`, `replayable-seed` |
+| `configs.production`  | `src/**` and `packages/*/src/**`                                          | `probe-form`                                                                                                |
 
-The `production` config matches only a workspace layout. For a single package
-with `src/`, add the rule with your own glob:
+The `recommended` config also sets `linterOptions.noInlineConfig` for oracle
+files, so a directive comment cannot switch a rule off there. Fix a report;
+do not disable the rule.
 
-```js
-import oracles from '@tanstack/eslint-plugin-oracles'
-
-export default [
-  oracles.configs.recommended,
-  {
-    files: ['**/*oracle*.{ts,tsx,js,jsx,mjs}'],
-    linterOptions: { noInlineConfig: true },
-  },
-  {
-    files: ['src/**/*.{ts,tsx,js,jsx,mjs}'],
-    plugins: { oracle: oracles },
-    rules: { 'oracle/probe-form': 'error' },
-  },
-]
-```
-
-`noInlineConfig` stops a directive comment from switching a rule off in an
-oracle file. Fix a report; do not disable the rule.
+The `production` config covers `src/**` and `packages/*/src/**`. For source
+elsewhere, add `oracle/probe-form` with your own glob.
 
 ## Rules
 
@@ -44,6 +28,7 @@ oracle file. Fix a report; do not disable the rule.
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `oracle/no-disabled`          | An oracle test that stops running: `.only`, a skipped body, a switch-off condition, or one run with no fixed history.                                                   |
 | `oracle/no-unit-test`         | A test in an oracle file that reaches no declared check or model: an ordinary unit test.                                                                                |
+| `oracle/no-oracle-disable`    | A directive comment that would silence an oracle rule. Oracle rules cannot be disabled inline.                                                                          |
 | `oracle/oracle-property-only` | A raw campaign (`fc.assert`, `fc.check`, or a `.prop` registration) or a legacy campaign API in an oracle file. Only `oracleProperty` declares a generated-history law. |
 | `oracle/pure-model`           | A model, check, or reach classifier that reads a clock, ambient randomness, or a timer.                                                                                 |
 | `oracle/probe-form`           | A state probe in production code that is not in the one form the production build strips.                                                                               |
