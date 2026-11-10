@@ -29,13 +29,13 @@ describe(`gap report ownership through the call trees`, () => {
       join(pkg, `src`, `b.ts`),
       `export function helper(): number {\n  return 1\n}\n`,
     )
-    const test = join(pkg, `tests`, `a.test.ts`)
-    writeFileSync(test, `oracleProperty({ owns: ['src/a.ts#run'] })\n`)
+    const testFile = join(pkg, `tests`, `a.test.ts`)
+    writeFileSync(testFile, `oracleProperty({ owns: ['src/a.ts#run'] })\n`)
 
-    const { owned } = analyze(ts, pkg, [`src/b.ts`], [test])
+    const { owned } = analyze(ts, pkg, [`src/b.ts`], [testFile])
     const position = readFileSync(join(pkg, `src`, `b.ts`), `utf8`).indexOf(
       `return 1`,
     )
-    expect(owned.at(`src/b.ts`, position).owners).toEqual(new Set([test]))
+    expect(owned.at(`src/b.ts`, position).owners).toEqual(new Set([testFile]))
   })
 })
