@@ -240,8 +240,8 @@ oracleProperty({
             { queue: `storage`, rejects: false },
             { queue: `provider`, rejects: false },
           ],
-          // eslint-disable-next-line no-sparse-arrays
-          choices: [, 0],
+          // A hole at index 0, written without an array literal hole.
+          choices: Object.assign(new Array<number>(2), { 1: 0 }),
         },
         enters: [rejectedChoice],
       },

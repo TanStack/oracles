@@ -54,9 +54,11 @@
  *   3. The drivers render the program as one TypeScript function, one site per
  *      line, and lint it on two receiving paths: the repository's root ESLint
  *      config, which is what CI and `pnpm lint` use, and the plugin's
- *      `production` config alone. The root config also lints the same program
- *      under a test file name, which must report nothing: the rule covers
- *      production source only.
+ *      `production` config alone. The file is named for the program's layout:
+ *      a package's `src` in a monorepo, or `src` at the root of a single-package
+ *      repository. The root config also lints the same program under a test
+ *      file name, which must report nothing: the rule covers production source
+ *      only.
  *   4. The comparison checks that each path's reports equal the prediction,
  *      as sorted (line, message) pairs.
  *   5. A census lints every kind and every pool value once. Random campaigns
@@ -69,6 +71,7 @@ import tsParser from '@typescript-eslint/parser'
 import { ESLint, Linter } from 'eslint'
 import { differs, oracleProperty, pass } from '@tanstack/oracles'
 import oraclePlugin from '../src/index.js'
+import { lintCharged } from './lint-observation.js'
 import {
   LEGAL_CONDITIONS,
   MODEL,
@@ -88,19 +91,21 @@ const repoRoot = fileURLToPath(new URL(`../../../`, import.meta.url))
 // Neither file has to exist: ESLint lints the text under this name. The
 // production name must match the production glob, and the test name must not.
 // Both sit under packages/oracles, whose tsconfig includes `src` and `tests`, so
-// the typed rules of the root config can parse them.
-const PRODUCTION_FILE = join(
-  repoRoot,
-  `packages/oracles/src/probe-form-scratch.ts`,
-)
+// the typed rules of the root config can parse them. A single-package layout
+// names a `src` file at the repository root.
+const PRODUCTION_FILES = {
+  monorepo: join(repoRoot, `packages/oracles/src/probe-form-scratch.ts`),
+  singlePackage: join(repoRoot, `src/probe-form-scratch.ts`),
+}
+const productionFileOf = (program) => PRODUCTION_FILES[program.layout]
 const TEST_FILE = join(
   repoRoot,
   `packages/oracles/tests/probe-form-scratch.test.ts`,
 )
 
 // The root config's scope: production source has the rule as an error, and a
-// test file has it off. Production source is `packages/*/src`, as the
-// production config's globs say.
+// test file has it off. Production source is `src` under a package or at the
+// root, as the production config's globs say.
 function predictSeverity(filePath) {
   return filePath.includes(`/src/`) ? `error` : `off`
 }
@@ -122,8 +127,10 @@ function probeReports(messages) {
     .map((message) => ({ line: message.line, messageId: message.messageId }))
 }
 
+// A rule that throws aborts ESLint's run of the file. That is an observation
+// the law rejects, not a harness failure, so the error is recorded as one.
 function lintWithProductionConfig(code, filePath) {
-  return probeReports(
+  const run = lintCharged(() =>
     linter.verify(
       code,
       [
@@ -133,6 +140,7 @@ function lintWithProductionConfig(code, filePath) {
       { filename: filePath },
     ),
   )
+  return run.threw === undefined ? probeReports(run.messages) : run
 }
 
 async function severityInRepository(filePath) {
@@ -145,10 +153,12 @@ async function severityInRepository(filePath) {
 // -- 4. Comparison and reach --------------------------------------------------
 
 const reportKeys = (reports) =>
-  reports.map((report) => `${report.line}:${report.messageId}`).sort()
+  reports.threw !== undefined
+    ? [`threw: ${reports.threw}`]
+    : reports.map((report) => `${report.line}:${report.messageId}`).sort()
 
 const LAW = {
-  statement: `A state probe in production source is reported exactly where the form is broken, and only in production source: each near-miss kind reports each mention of __oracleProbe on its line, a legal probe reports nothing, and the root config enables the rule for production source alone.`,
+  statement: `A state probe in production source is reported exactly where the form is broken, and only in production source (src under a package in a monorepo, or src at the root of a single-package repository): each near-miss kind reports each mention of __oracleProbe on its line, a legal probe reports nothing, and the root config enables the rule for production source alone. The rule never throws on a program that parses: an error it raises fails the predicted reports.`,
   authority: `The maintainer's decisions of 2026-11-08 on the probe form (the function-local probing guard) and the state probe entry in docs/contributing/glossary.md, as recorded in this file's header.`,
   limits: `The guard is generated at the top of the function only; a module-level guard, a parameter named probing, and a guard after its probe are not generated. A call inside a condition is allowed, as the form allows it.`,
   owner: `eslint-plugin-oracles lint rules`,
@@ -167,7 +177,12 @@ const LEGAL_SUBSTATES = [
   `legal:arrow-condition`,
 ]
 const KINDS = Object.keys(MODEL)
-const STATES = [...KINDS, ...LEGAL_SUBSTATES, `undeclared-guard`]
+const STATES = [
+  ...KINDS,
+  ...LEGAL_SUBSTATES,
+  `undeclared-guard`,
+  `single-package layout`,
+]
 
 /** The states a program enters, from the grammar and the model alone. */
 function statesOf(program) {
@@ -181,6 +196,7 @@ function statesOf(program) {
     program.sites.some((site) => site.kind === `probe`)
   )
     states.push(`undeclared-guard`)
+  if (program.layout === `singlePackage`) states.push(`single-package layout`)
   for (const site of program.sites) {
     states.push(site.kind)
     if (!isLegal(site, program)) continue
@@ -198,7 +214,7 @@ function statesOf(program) {
 // config gives each file name. Production source has the rule; a test does not.
 const expectationOf = (program) => ({
   reports: predictReports(program),
-  productionSeverity: predictSeverity(PRODUCTION_FILE),
+  productionSeverity: predictSeverity(productionFileOf(program)),
   testSeverity: predictSeverity(TEST_FILE),
 })
 
@@ -230,11 +246,14 @@ function check(_program, observations, expected) {
 async function driver(program, observe) {
   observe(
     `production reports`,
-    lintWithProductionConfig(renderProgram(program), PRODUCTION_FILE),
+    lintWithProductionConfig(renderProgram(program), productionFileOf(program)),
   )
   // The root config also lints the same program under a test file name, which
   // must report nothing: the rule covers production source only.
-  observe(`production severity`, await severityInRepository(PRODUCTION_FILE))
+  observe(
+    `production severity`,
+    await severityInRepository(productionFileOf(program)),
+  )
   observe(`test severity`, await severityInRepository(TEST_FILE))
 }
 
@@ -300,6 +319,11 @@ const constructed = [
     enters: [`undeclared-guard`],
     build: withSite({ kind: `probe` }, `none`),
   },
+  {
+    name: `a single-package layout`,
+    enters: [`single-package layout`],
+    build: (generated) => ({ ...generated, layout: `singlePackage` }),
+  },
 ]
 
 // The census gives every kind every pool value once. It is a fixed list of
@@ -308,11 +332,20 @@ const constructed = [
 oracleProperty({
   id: PROPERTY_CENSUS,
   law: LAW,
-  histories: [censusProgram(), { ...censusProgram(), header: `none` }],
+  histories: [
+    censusProgram(),
+    { ...censusProgram(), header: `none` },
+    { ...censusProgram(), layout: `singlePackage` },
+  ],
   label: (program) =>
-    program.header === `none`
-      ? `census without a guard`
-      : `census with a guard`,
+    [
+      program.header === `none`
+        ? `census without a guard`
+        : `census with a guard`,
+      program.layout === `singlePackage`
+        ? `single-package layout`
+        : `monorepo layout`,
+    ].join(`, `),
   model: expectationOf,
   driver,
   check,
@@ -340,7 +373,8 @@ oracleProperty({
         const observed = trace.find(
           (o) => o.checkpoint === `production reports`,
         )
-        if (observed.value.length === 0) return undefined
+        if (!Array.isArray(observed.value) || observed.value.length === 0)
+          return undefined
         return trace.map((o) =>
           o.checkpoint === `production reports`
             ? { ...o, value: o.value.map((r) => ({ ...r, line: r.line + 1 })) }
@@ -355,7 +389,8 @@ oracleProperty({
         const observed = trace.find(
           (o) => o.checkpoint === `production reports`,
         )
-        if (observed.value.length === 0) return undefined
+        if (!Array.isArray(observed.value) || observed.value.length === 0)
+          return undefined
         return trace.map((o) =>
           o.checkpoint === `production reports`
             ? { ...o, value: o.value.slice(1) }

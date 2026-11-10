@@ -186,9 +186,13 @@ const siteArbitrary = fc.record({
 // the function's guard, whose strings take one quote style.
 // A program's function declares the guard at its top, or does not, so a
 // probe that relies on it names an undeclared `probing`.
+// The layout is where the file sits: under a package's `src` in a monorepo, or
+// under `src` at the root of a single-package repository. Production source is
+// either; the reports do not depend on the layout, only the config's globs do.
 export const programArbitrary = fc.record({
   guardQuote: quoteArb,
   header: fc.constantFrom(`guard`, `guard`, `guard`, `none`),
+  layout: fc.constantFrom(`monorepo`, `singlePackage`),
   sites: fc.array(siteArbitrary, { minLength: 1, maxLength: 6 }),
 })
 
@@ -222,7 +226,7 @@ export function censusProgram() {
       })
     }
   }
-  return { guardQuote: `'`, header: `guard`, sites }
+  return { guardQuote: `'`, header: `guard`, layout: `monorepo`, sites }
 }
 
 // -- 2. Model -----------------------------------------------------------------
