@@ -107,9 +107,16 @@
  *    2026-11-06): a run that ends within the full limit is judged as if it
  *    had never been cut off, so a slow kill is a kill. An owner test that
  *    does not end within the full limit cuts its file's run off, and the
- *    cut-off run records nothing, not even its earlier verdicts; a kill in another
- *    owner still decides (a kill outranks a timeout, v19), and failing one,
- *    the mutant is a `timeout`, whatever any other owner reported. A mutant
+ *    clock-cut run records nothing, not even its earlier verdicts; a kill in
+ *    another owner still decides (a kill outranks a timeout, v19), and failing
+ *    one, the mutant is a `timeout`, whatever any other owner reported. A copy
+ *    cut off for spinning (its call budget ran out, not its clock) is a
+ *    timeout as it stands: its rows are not judged, so a verdict it recorded
+ *    before the cut does not kill. (The framework's `bounded work` law, which
+ *    would judge such a verdict, is not built.) A copy that a batch skipped
+ *    because an earlier copy killed the mutant runs again, through the batch,
+ *    only while no kill is in hand, so every mutant gets an outcome and no
+ *    other missing unit is rerun. A mutant
  *    that no owner test fails is a survivor: a `comparison-gap` when an owner
  *    test's observation or asserted value changed, a `generator-gap` when an
  *    `if` on its line never took one of its outcomes in an owner test, and
@@ -173,7 +180,14 @@
  *    (one with a space and `#` included), for any spelling of `--source`
  *    (`./`, a redundant segment, an absolute path through a symbolic link
  *    to the package), the run completes and reports the same result; a
- *    source outside the package refuses the run. A source that imports
+ *    source outside the package refuses the run. An owned module imported
+ *    through one of Vite's asset or worker queries (`?raw`, `?url`, or the
+ *    `?worker&url` a worker is imported with) is loaded by Vite as written,
+ *    so the query import reads the module's own text (a test's `?raw` import
+ *    is checked against the file). A worker's code that Vite loads this way
+ *    is not instrumented: a stated limit, with no witness for `?worker&url`.
+ *    Any other query on an owned module (`?t=`, `?import`) is served the
+ *    instrumented copy. A source that imports
  *    a subpath of a workspace dependency sees one instance of that
  *    dependency, as Vitest gives it; a devDependency that no test loads and
  *    that cannot be built does not refuse the run; and a package with a
@@ -1119,7 +1133,9 @@ async function driver(plan, observe) {
       states.add(`ordinary tests left out by default`)
     if (plan.stability !== `none` && cli.exit === 0) {
       const moved = { ...files, [SOURCE]: edited(plan) }
-      observe(`stability`, runCli(dir, moved, how))
+      // The evidence counts are not observed, as for `cli`: they depend on
+      // timing (oracles-followups.md G1). Verdicts and keys are.
+      observe(`stability`, { ...runCli(dir, moved, how), evidence: undefined })
       states.add(`stability rerun`)
     }
     if (plan.steps.length > 0)

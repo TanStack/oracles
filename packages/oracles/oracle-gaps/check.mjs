@@ -36,7 +36,7 @@ import { createRequire } from 'node:module'
 import { basename, dirname, join, relative as relativePath } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { applyAuthored, loadAuthored } from './authored.mjs'
-import { assignKeys, renderReport } from './report.mjs'
+import { authoredKey, keyAndSelect, renderReport } from './report.mjs'
 import { analyze, isRunnerCopy } from './analysis.mjs'
 import {
   baselineOf,
@@ -311,7 +311,13 @@ export default async (env) => {
       return globalThis.__oracleGapsBundles?.get(source)
     },
     load(id) {
-      const path = id.split('?')[0]
+      // Vite's own asset and worker queries ('?raw', '?url', '?worker&url', ...)
+      // are loaded as written, so their module is not instrumented (a stated
+      // limit: a worker's code is not mutated). Any other query is the module
+      // itself, served instrumented under its plain id.
+      const at = id.indexOf('?')
+      if (at >= 0 && [...new URLSearchParams(id.slice(at + 1)).keys()].every((key) => ['raw', 'url', 'worker', 'sharedworker', 'inline'].includes(key))) return undefined
+      const path = at < 0 ? id : id.slice(0, at)
       // This context's authored patch, or else the instrumented source of the
       // current check, both set by the runner in this process.
       try {
@@ -1051,7 +1057,8 @@ export default async (env) => {
     // fresh context; a batch with
     // errors outside any test runs its items alone. `needed` says, from the
     // units found so far, whether a request must still run; a request that
-    // need not run, or whose copy skipped its tests, gets no unit.
+    // need not run, gets no unit; a copy that skipped its tests gets a
+    // skipped marker, which its caller runs again (runOwners).
     async function unitsBatch(slot, requests, needed = () => true) {
       const index = indexOf.get(slot.context)
       const got = new Array(requests.length)
@@ -1088,24 +1095,15 @@ export default async (env) => {
         )
         if (batch.unattributed) {
           for (const r of rest)
-            if (needed(r, got)) {
-              got[r.i] = await unit(slot.context, r.file, r.spec, {
-                mutant: r.mutant,
-                select: r.select,
-                stopOnKill: r.stopOnKill,
-                ignore: r.ignore,
-                limitMs: r.limitMs,
-                callBudget: r.callBudget,
-              })
-              if (got[r.i].spin) evidence.spin += 1
-              if (got[r.i].timedOut) await replace(slot)
-            }
+            if (needed(r, got)) got[r.i] = await runAlone(slot, r)
           break
         }
         batch.units.forEach((u, k) => {
-          if (u === undefined || u.skipped) return
-          if (u.spin) evidence.spin += 1
+          if (u === undefined) return
+          // A skipped copy keeps its marker, so the caller can run it again.
           got[rest[k].i] = u
+          if (u.skipped) return
+          if (u.spin) evidence.spin += 1
           remember(rest[k].id, rest[k].file, u, index)
           evidence.computed += 1
         })
@@ -1150,6 +1148,21 @@ export default async (env) => {
       await Promise.all(confirming)
       return got
     }
+    // A request run alone in the slot's context: a copy that a batch did not
+    // judge, or one whose errors outside any test cannot be attributed.
+    async function runAlone(slot, r) {
+      const u = await unit(slot.context, r.file, r.spec, {
+        mutant: r.mutant,
+        select: r.select,
+        stopOnKill: r.stopOnKill,
+        ignore: r.ignore,
+        limitMs: r.limitMs,
+        callBudget: r.callBudget,
+      })
+      if (u.spin) evidence.spin += 1
+      if (u.timedOut) await replace(slot)
+      return u
+    }
     // A hung copy's confirming run: alone, in a clean context, with the full
     // limit. Only a run cut off there too is a timeout. An idle copy in a
     // file with no I/O is final at once (see unitsBatch): it waits on
@@ -1161,19 +1174,8 @@ export default async (env) => {
         [{ ...hung, limitMs: full }],
         options.seed ?? null,
       )
-      if (alone.unattributed) {
-        const u = await unit(slot.context, hung.file, hung.spec, {
-          mutant: hung.mutant,
-          select: hung.select,
-          stopOnKill: hung.stopOnKill,
-          ignore: hung.ignore,
-          limitMs: full,
-          callBudget: hung.callBudget,
-        })
-        if (u.spin) evidence.spin += 1
-        if (u.timedOut) await replace(slot)
-        return { unit: u }
-      }
+      if (alone.unattributed)
+        return { unit: await runAlone(slot, { ...hung, limitMs: full }) }
       // The index of the context that ran it, before any replacement.
       const at = indexOf.get(slot.context)
       if (alone.timedOutAt === 0) {
@@ -1316,21 +1318,8 @@ export default async (env) => {
       }
     }
     const ownersOf = (mutant) => owned.at(mutant.source, mutant.position).owners
-    let queue = mutants.filter((m) => !options.only || options.only.has(m.id))
-    if (options.sample !== undefined) {
-      // A fixed-seed shuffle, so a survey samples the same mutants every run.
-      let seed = 20251102
-      const random = () =>
-        (seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31
-      queue = options.sources.flatMap((source) => {
-        const own = queue.filter((m) => m.source === source)
-        for (let i = own.length - 1; i > 0; i -= 1) {
-          const j = Math.floor(random() * (i + 1))
-          ;[own[i], own[j]] = [own[j], own[i]]
-        }
-        return own.slice(0, options.sample)
-      })
-    }
+    // Keys are numbered over every mutant before the selection (report.mjs).
+    let queue = keyAndSelect(mutants, options)
     // The tests of a file that a mutant must run: every test from the first
     // one that reached its site. A later test can see the mutant through
     // state that a reaching test changed, so only the tests before the
@@ -1507,6 +1496,7 @@ export default async (env) => {
     // ordinary tier, when asked for, runs the same way afterwards.
     const GROUP = 4
     const kills = (u) =>
+      !u.skipped &&
       outcomeOf([u], baseline.nondeterministic).outcome === `killed`
     const runOwners = async (slot, states, filesOf, keysOf) => {
       const active = states.filter((st) => !st.done)
@@ -1551,9 +1541,16 @@ export default async (env) => {
       for (const st of active) {
         for (const [i, request] of requests.entries()) {
           if (request.st !== st) continue
-          // Only a kill earlier in the mutant's files leaves a file without
-          // a unit.
-          if (got[i] === undefined) {
+          // A copy its batch skipped (an earlier copy killed the mutant)
+          // runs again through unitsBatch, so it is confirmed like any copy
+          // while no kill is in hand.
+          if (got[i]?.skipped) {
+            if (st.units.some(kills)) break
+            got[i] = (await unitsBatch(slot, [request], () => true))[0]
+          }
+          // A kill earlier in the mutant's files leaves a file without a
+          // unit. Any other missing unit stops the run.
+          if (got[i] === undefined || got[i].skipped) {
             if (st.units.some(kills)) break
             throw new Error(
               `${st.mutant.id}: ${relative(request.file)} has no unit and no earlier kill`,
@@ -1676,6 +1673,7 @@ export default async (env) => {
         authored: true,
         authoredId: mutant.id,
         source: mutant.source,
+        key: authoredKey(mutant.source, mutant.id),
         operator: `authored`,
         function: `authored mutants`,
         intent: mutant.intent,
@@ -1750,9 +1748,6 @@ export default async (env) => {
       )
     }
     endPhase(`authored mutants`, { mutants: authored.length })
-    // Keys go into every output, so an agent reads them from the JSON
-    // results.
-    assignKeys(results)
     const mutantSeconds = (Date.now() - started) / 1000
     log(
       `mutant phase: ${results.length} mutants in ${mutantSeconds.toFixed(1)}s`,

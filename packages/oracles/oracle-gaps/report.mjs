@@ -29,18 +29,44 @@ export const gapOutcomes = new Set([
   `does-not-apply`,
 ])
 
-export function assignKeys(results) {
+/** An authored mutant's key: its source and its id. */
+export const authoredKey = (source, id) => `${source}#authored:${id}`
+
+/**
+ * Numbers each operator mutant's key over the list it is given: a repeat of
+ * one anchor in one function gets `~n`. Call it on the whole mutant list,
+ * before any selection, so a key does not depend on what a run selects.
+ */
+export function assignKeys(mutants) {
   const seen = new Map()
-  for (const result of results) {
-    if (result.authored) {
-      result.key = `${result.source}#authored:${result.authoredId}`
-      continue
-    }
-    const base = `${result.source}#${result.function ?? `<module>`}:${result.operator}:${result.anchor}`
+  for (const mutant of mutants) {
+    const base = `${mutant.source}#${mutant.function ?? `<module>`}:${mutant.operator}:${mutant.anchor}`
     const count = (seen.get(base) ?? 0) + 1
     seen.set(base, count)
-    result.key = count === 1 ? base : `${base}~${count}`
+    mutant.key = count === 1 ? base : `${base}~${count}`
   }
+}
+
+/**
+ * The mutants a run selects, keyed over the whole list first: keys are the
+ * same in a partial run (`only`, a set of ids, or `sample`, a fixed-seed
+ * count per source) and in a full one.
+ */
+export function keyAndSelect(mutants, { only, sample, sources }) {
+  assignKeys(mutants)
+  const queue = mutants.filter((m) => !only || only.has(m.id))
+  if (sample === undefined) return queue
+  // A fixed-seed shuffle, so a survey samples the same mutants every run.
+  let seed = 20251102
+  const random = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31
+  return sources.flatMap((source) => {
+    const own = queue.filter((m) => m.source === source)
+    for (let i = own.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(random() * (i + 1))
+      ;[own[i], own[j]] = [own[j], own[i]]
+    }
+    return own.slice(0, sample)
+  })
 }
 
 // What each gap shows, phrased as the question the author answers.
