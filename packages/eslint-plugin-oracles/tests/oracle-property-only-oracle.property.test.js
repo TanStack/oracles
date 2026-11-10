@@ -10,29 +10,41 @@
  * with a reason keeps its raw campaigns and imports until it migrates. An entry
  * without a reason exempts nothing and is reported. An entry whose file has no
  * legacy use is reported as stale. A framework implementation module is exempt
- * from every report. An entry the rule cannot judge (malformed, or naming a
- * file outside the oracle-file glob or an implementation module) is a
- * configuration error: the rule throws when it reads the settings, so the run
- * stops with the message, and nothing else is reported.
+ * from every report about its own uses. A configuration entry the rule cannot
+ * judge is reported, never thrown: the rule never throws on a program that
+ * parses (frozen design principle P8; maintainer decision 2026-11-09). A
+ * reported entry exempts nothing, and the file's other entries are judged as
+ * usual.
+ *
+ * Configuration reports, at line 1. A malformed entry (not an object with a
+ * string `file`, and a `reason` that is absent or a string) is `malformedEntry`.
+ * A `legacyCampaigns` value that is not an array is `malformedList`, and it
+ * replaces the file's own list. An entry that names a file outside the
+ * oracle-file glob (its name has no `oracle` and an extension of .ts, .tsx,
+ * .js, .jsx, or .mjs), or a framework implementation module, is `refusedEntry`.
+ * ESLint runs a rule once per file, so each oracle file that the configuration
+ * reaches reports the entry.
  *
  * Authority: the maintainer decision of 2026-11-09 that `oracleProperty` is the
  * only campaign API in `@tanstack/oracles`. The header of
  * `packages/oracles/src/oracle-property.ts` gives the reason: only a
  * constructed history makes a state's reach required, so a raw campaign's
- * reach depends on the seed.
+ * reach depends on the seed. The never-throws law rests on P8 and the same
+ * maintainer decision of 2026-11-09 ("lint rules never throw").
  *
  * Grammar: a program is one module with a fast-check import in one of three
- * forms (`setting` says which legacy-list entry, if any, names this file), and
- * one site per line. A campaign site calls `assert` or `check` through the
- * default `fc` import or the alias. A prop site registers through `fcTest` or
- * `it`. A legacy import site names one of the two APIs. A quiet site is a
- * fast-check use that runs no campaign, a text, or a binding that is not
- * fast-check, and it must stay silent.
+ * forms (`alias`), one configuration entry for the file (`entry`), a file's own
+ * legacy-list setting (`setting`), and one site per line. A campaign site calls
+ * `assert` or `check` through the default `fc` import or the alias. A prop site
+ * registers through `fcTest` or `it`. A legacy import site names one of the two
+ * APIs. A quiet site is a fast-check use that runs no campaign, a text, or a
+ * binding that is not fast-check, and it must stay silent.
  *
- * Model: the expected outcome follows from the program alone. A bad entry is a
- * configuration error, whatever the file, and the expected outcome names the
- * message's phrase. Otherwise an implementation module reports nothing. A
- * reasonless entry reports `baselineWithoutReason`. A matching entry with no
+ * Model: the expected reports follow from the program alone. A configuration
+ * entry owes its report at line 1, whatever the file, including an
+ * implementation module. A non-array list owes `malformedList` and voids the
+ * file's own entry. An implementation module is otherwise exempt from its uses.
+ * A reasonless entry reports `baselineWithoutReason`. A matching entry with no
  * legacy use reports `staleBaseline`. A file with a reasoned entry exempts its
  * raw uses and imports; any other setting reports each use at its line.
  *
@@ -40,14 +52,15 @@
  * config, so the rule must be enabled there. The outcome is the rule's reports,
  * or the message of the error that the run threw.
  *
- * Check: the outcome is the configuration error the model owes (its message
- * contains the phrase), or else the sorted reports equal the model's, exactly.
+ * Check: a throw is a violation of the never-throws law. Otherwise the sorted
+ * reports equal the model's, exactly.
  *
  * Limits: an alias of a campaign (`const run = fc.assert`), a campaign held
  * in a helper, a fast-check import through a re-export, and `import()` of a
- * legacy module are not generated. The rule reads only the forms above. A
- * baseline entry for a deleted or renamed file is not reported, because no
- * lint run sees that file.
+ * legacy module are not generated. The rule reads only the forms above. Only
+ * `legacyCampaigns` is generated as configuration; `implementationModules` is
+ * not. A baseline entry for a deleted or renamed file is not reported, because
+ * no lint run sees that file.
  */
 import tsParser from '@typescript-eslint/parser'
 import { Linter } from 'eslint'
@@ -97,15 +110,19 @@ const program = fc.record({
     `reasonless`,
     `otherFile`,
   ),
-  // The configuration entry that the rule must refuse, or none.
+  // The configuration entry that the rule must report, or none. Each kind is a
+  // way that an entry, or the list itself, cannot be judged.
   entry: fc.constantFrom(
     `none`,
     `none`,
     `outsideGlob`,
+    `readme`,
     `implementationModule`,
     `bareString`,
+    `missingFile`,
     `fileNotString`,
     `reasonNotString`,
+    `notAList`,
   ),
   sites: fc.array(site, { minLength: 1, maxLength: 6 }),
 })
@@ -126,34 +143,36 @@ const usesOf = (sites) =>
 const entryMatches = (setting) =>
   setting === `reasoned` || setting === `reasonless`
 
-function predictReports({ setting, sites }) {
-  if (setting === `implementation`) return []
+const MALFORMED = new Set([
+  `bareString`,
+  `missingFile`,
+  `fileNotString`,
+  `reasonNotString`,
+])
+const REFUSED = new Set([`outsideGlob`, `readme`, `implementationModule`])
+
+/** The report that a configuration entry owes at line 1, or none. */
+function configurationReports(entry) {
+  if (entry === `notAList`) return [{ line: 1, messageId: `malformedList` }]
+  if (MALFORMED.has(entry)) return [{ line: 1, messageId: `malformedEntry` }]
+  if (REFUSED.has(entry)) return [{ line: 1, messageId: `refusedEntry` }]
+  return []
+}
+
+function expectedReports({ setting, entry, sites }) {
+  const configuration = configurationReports(entry)
+  // The configuration report is owed whatever the file, implementation or not.
+  if (setting === `implementation`) return configuration
+  // A list that is not an array is ignored whole, so the file's own entry is void.
+  const effective = entry === `notAList` ? `none` : setting
   const uses = usesOf(sites)
-  const reports = []
-  if (setting === `reasonless`)
+  const reports = [...configuration]
+  if (effective === `reasonless`)
     reports.push({ line: 1, messageId: `baselineWithoutReason` })
-  if (entryMatches(setting) && uses.length === 0)
+  if (entryMatches(effective) && uses.length === 0)
     reports.push({ line: 1, messageId: `staleBaseline` })
-  if (setting !== `reasoned`) reports.push(...uses)
+  if (effective !== `reasoned`) reports.push(...uses)
   return reports
-}
-
-// The phrase of the configuration error that each bad entry owes. A bad entry
-// is refused whatever the file, so it is judged before the implementation case.
-const REFUSED = {
-  outsideGlob: `is not an oracle file`,
-  implementationModule: `is a framework implementation module`,
-  bareString: `is malformed`,
-  fileNotString: `is malformed`,
-  reasonNotString: `is malformed`,
-}
-
-/** The outcome the model owes: a configuration error, or the reports. */
-function predictOutcome(plan) {
-  const phrase = REFUSED[plan.entry]
-  return phrase === undefined
-    ? { reports: predictReports(plan) }
-    : { configuration: phrase }
 }
 
 // The states a history enters, read from the program and the model's answer.
@@ -164,8 +183,9 @@ const STATES = {
   exempt: `a reasoned baseline exempts its uses`,
   reasonless: `a reasonless baseline is reported`,
   stale: `a stale baseline is reported`,
-  refused: `an entry outside the oracle glob is a configuration error`,
-  malformed: `a malformed entry is a configuration error`,
+  refused: `an entry the rule refuses (outside the oracle glob, a README, or an implementation module) is reported`,
+  malformed: `a malformed entry is reported`,
+  notList: `a legacyCampaigns value that is not an array is reported`,
   vitest: `a campaign through @fast-check/vitest is reported`,
 }
 const MEASURED = {
@@ -175,26 +195,22 @@ const MEASURED = {
 }
 
 function reachedStates(plan, _trace, expected) {
-  const { setting, sites, alias } = plan
-  const reports = expected.reports ?? []
-  const messages = new Set(reports.map((report) => report.messageId))
+  const { setting, sites, alias, entry } = plan
+  const messages = new Set(expected.reports.map((report) => report.messageId))
   return [
     ...(messages.has(`rawCampaign`) ? [STATES.campaign] : []),
     ...(messages.has(`rawProperty`) ? [STATES.property] : []),
     ...(messages.has(`legacyImport`) ? [STATES.legacy] : []),
-    ...(setting === `reasoned` && usesOf(sites).length > 0
+    ...(setting === `reasoned` &&
+    entry !== `notAList` &&
+    usesOf(sites).length > 0
       ? [STATES.exempt]
       : []),
     ...(messages.has(`baselineWithoutReason`) ? [STATES.reasonless] : []),
     ...(messages.has(`staleBaseline`) ? [STATES.stale] : []),
-    ...(plan.entry === `outsideGlob` || plan.entry === `implementationModule`
-      ? [STATES.refused]
-      : []),
-    ...(plan.entry === `bareString` ||
-    plan.entry === `fileNotString` ||
-    plan.entry === `reasonNotString`
-      ? [STATES.malformed]
-      : []),
+    ...(messages.has(`refusedEntry`) ? [STATES.refused] : []),
+    ...(messages.has(`malformedEntry`) ? [STATES.malformed] : []),
+    ...(messages.has(`malformedList`) ? [STATES.notList] : []),
     ...(alias === `vitest` && messages.has(`rawCampaign`)
       ? [STATES.vitest]
       : []),
@@ -258,6 +274,10 @@ const entryFor = {
     legacyCampaigns: [{ file: `packages/example/src/app.ts`, reason: `x` }],
     implementationModules: [],
   },
+  readme: {
+    legacyCampaigns: [{ file: `packages/example/README.md`, reason: `x` }],
+    implementationModules: [],
+  },
   implementationModule: {
     legacyCampaigns: [
       { file: `packages/oracles/src/oracle-config.ts`, reason: `x` },
@@ -268,12 +288,21 @@ const entryFor = {
     legacyCampaigns: [`tests/a-oracle.test.js`],
     implementationModules: [],
   },
-  fileNotString: {
+  missingFile: {
     legacyCampaigns: [{ reason: `x` }],
+    implementationModules: [],
+  },
+  fileNotString: {
+    legacyCampaigns: [{ file: 3, reason: `x` }],
     implementationModules: [],
   },
   reasonNotString: {
     legacyCampaigns: [{ file: FILE, reason: 3 }],
+    implementationModules: [],
+  },
+  // The list itself is not an array: it is a string, and it replaces the file's own list.
+  notAList: {
+    legacyCampaigns: `tests/a-oracle.test.js`,
     implementationModules: [],
   },
 }
@@ -303,7 +332,9 @@ function lintRendered(code, { setting, entry }) {
       ...(own.implementationModules ?? []),
       ...extra.implementationModules,
     ],
-    legacyCampaigns: [...(own.legacyCampaigns ?? []), ...extra.legacyCampaigns],
+    legacyCampaigns: Array.isArray(extra.legacyCampaigns)
+      ? [...(own.legacyCampaigns ?? []), ...extra.legacyCampaigns]
+      : extra.legacyCampaigns,
   }
   let messages
   try {
@@ -348,21 +379,11 @@ function check(plan, observations, expected) {
       `outcome`,
       { actual: observed, expected },
     )
-  if (expected.configuration !== undefined) {
-    return observed.configuration?.includes(expected.configuration)
-      ? pass
-      : violation(
-          `outcome`,
-          `the rule should refuse the entry with a configuration error that says "${expected.configuration}"`,
-          `outcome`,
-          { actual: observed, expected },
-        )
-  }
   return (
     differs(
       `outcome`,
       `outcome`,
-      sortedReports(observed.reports ?? []),
+      sortedReports(observed.reports),
       sortedReports(expected.reports),
     ) ?? pass
   )
@@ -371,9 +392,9 @@ function check(plan, observations, expected) {
 oracleProperty({
   id: `lint.oracle-property-only`,
   law: {
-    statement: `In an oracle file, a raw fast-check campaign (fc.assert, fc.check, or a .prop registration, through fast-check or @fast-check/vitest) and an import of createOracleReach or runOracleCampaign are reported, except in a file whose reasoned legacyCampaigns entry still matches a legacy use; a reasonless entry and a stale entry are reported; an implementation module is exempt; a malformed entry, or an entry outside the oracle glob or naming an implementation module, is a configuration error that stops the run. The rule never throws on a program that parses: an error it raises fails the predicted outcome.`,
+    statement: `In an oracle file, a raw fast-check campaign (fc.assert, fc.check, or a .prop registration, through fast-check or @fast-check/vitest) and an import of createOracleReach or runOracleCampaign are reported, except in a file whose reasoned legacyCampaigns entry still matches a legacy use; a reasonless entry and a stale entry are reported; an implementation module is exempt from its own uses; a malformed or refused entry, and a legacyCampaigns value that is not an array, are reported at line 1 and exempt nothing; and the rule never throws on a program that parses.`,
     authority: `Maintainer decision (2026-11-09): oracleProperty is the only campaign API in @tanstack/oracles. Its header in packages/oracles/src/oracle-property.ts: constructed histories make a state's reach required, and a raw campaign has none.`,
-    limits: `Aliased campaigns, a campaign held in a helper, re-exported fast-check bindings, and import() of a legacy module are not generated. A stale entry for a deleted file is not reported, since no lint run sees that file.`,
+    limits: `Aliased campaigns, a campaign held in a helper, re-exported fast-check bindings, and import() of a legacy module are not generated. Only legacyCampaigns is generated as configuration; implementationModules is not. A stale entry for a deleted file is not reported, since no lint run sees that file.`,
     owner: `eslint-plugin-oracles lint rules`,
   },
   histories: {
@@ -393,12 +414,30 @@ oracleProperty({
         }),
       },
       {
+        name: `a README entry`,
+        enters: [STATES.refused],
+        build: (generated) => ({
+          ...generated,
+          setting: `none`,
+          entry: `readme`,
+        }),
+      },
+      {
         name: `a malformed entry`,
         enters: [STATES.malformed],
         build: (generated) => ({
           ...generated,
           setting: `none`,
           entry: `bareString`,
+        }),
+      },
+      {
+        name: `a legacy list that is not an array`,
+        enters: [STATES.notList],
+        build: (generated) => ({
+          ...generated,
+          setting: `reasoned`,
+          entry: `notAList`,
         }),
       },
       {
@@ -494,16 +533,9 @@ oracleProperty({
     ],
   },
   reached: reachedStates,
-  model: predictOutcome,
-  driver: (plan, observe) => {
-    try {
-      observe(`outcome`, lintRendered(renderProgram(plan), plan))
-    } catch (error) {
-      // Only a bad entry may stop the run. Any other error is a driver error.
-      if (plan.entry === `none`) throw error
-      observe(`outcome`, { configuration: String(error.message) })
-    }
-  },
+  model: (plan) => ({ reports: expectedReports(plan) }),
+  driver: (plan, observe) =>
+    observe(`outcome`, lintRendered(renderProgram(plan), plan)),
   check,
   calibrations: [
     {
