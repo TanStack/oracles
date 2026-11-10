@@ -66,6 +66,8 @@ import {
 const FAST_CHECK_MODULES = new Set([`fast-check`, `@fast-check/vitest`])
 const CAMPAIGN_METHODS = new Set([`assert`, `check`])
 const LEGACY_NAMES = new Set([`createOracleReach`, `runOracleCampaign`])
+// The shared end of the two raw-campaign messages, so their advice cannot drift apart.
+const RAW_HINT = `declares no constructed histories, so the states its law needs are reached only where the seed draws them. Declare the law with \`oracleProperty\` from \`@tanstack/oracles\`: its \`histories.constructed\` build each required state, so that reach is required.`
 // The file's start, where the configuration reports sit: no directive can precede it.
 const FILE_START = {
   start: { line: 1, column: 0 },
@@ -179,8 +181,8 @@ export default {
     },
     schema: [],
     messages: {
-      rawCampaign: `\`{{call}}\` runs a raw property campaign, which declares no constructed histories, so the states its law needs are reached only where the seed draws them. Declare the law with \`oracleProperty\` from \`@tanstack/oracles\`: its \`histories.constructed\` build each required state, so that reach is required.`,
-      rawProperty: `\`{{call}}\` registers a raw fast-check property, which declares no constructed histories, so the states its law needs are reached only where the seed draws them. Declare the law with \`oracleProperty\` from \`@tanstack/oracles\`: its \`histories.constructed\` build each required state, so that reach is required.`,
+      rawCampaign: `\`{{call}}\` runs a raw property campaign, which ${RAW_HINT}`,
+      rawProperty: `\`{{call}}\` registers a raw fast-check property, which ${RAW_HINT}`,
       legacyImport: `\`{{name}}\` is a legacy campaign API whose reach depends on the seed. Declare the law with \`oracleProperty\` and its constructed histories instead.`,
       baselineWithoutReason: `This file's \`legacyCampaigns\` entry has no reason, so it exempts nothing. Give the reason that the file keeps its raw campaigns, or move the file to \`oracleProperty\`.`,
       staleBaseline: `This file's \`legacyCampaigns\` entry is stale: the file runs no raw campaign and imports no legacy API. Remove the entry, so the baseline only shrinks.`,
