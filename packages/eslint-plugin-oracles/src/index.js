@@ -1,5 +1,6 @@
 import noDisabled from './rules/no-disabled.js'
 import noUnitTest from './rules/no-unit-test.js'
+import noOracleDisable from './rules/no-oracle-disable.js'
 import oraclePropertyOnly from './rules/oracle-property-only.js'
 import probeForm from './rules/probe-form.js'
 import pureModel from './rules/pure-model.js'
@@ -35,6 +36,7 @@ const plugin = {
   meta: { name: `eslint-plugin-oracle` },
   rules: {
     'no-disabled': noDisabled,
+    'no-oracle-disable': noOracleDisable,
     'no-unit-test': noUnitTest,
     'oracle-property-only': oraclePropertyOnly,
     'pure-model': pureModel,
@@ -51,6 +53,7 @@ plugin.configs = {
     linterOptions: { noInlineConfig: true },
     rules: {
       'oracle/no-disabled': `error`,
+      'oracle/no-oracle-disable': `error`,
       'oracle/no-unit-test': `error`,
       'oracle/oracle-property-only': `error`,
       'oracle/pure-model': `error`,
@@ -68,6 +71,7 @@ plugin.configs = {
     ),
     plugins: { oracle: plugin },
     rules: {
+      'oracle/no-oracle-disable': `error`,
       'oracle/probe-form': `error`,
     },
   },

@@ -20,6 +20,16 @@ every commit with [pkg.pr.new](https://pkg.pr.new).
   specifier and by a relative module with its file name. A project names its
   variable prefix and its replay-selection modules in `settings.oracles`.
 
+## The `oracle/no-oracle-disable` rule
+
+An ESLint disable directive that names an `oracle/*` rule is reported, in an
+oracle file and in production source, in the `eslint-disable`,
+`eslint-disable-line`, and `eslint-disable-next-line` forms, as a line or block
+comment, with or without a `-- description`. Oracle rules cannot be disabled
+inline, so the directive is the report. A blanket `eslint-disable` with no rule
+list is not seen: ESLint suppresses the report itself. A directive that names
+`oracle/no-oracle-disable` can hide the report on the line below it.
+
 ## The `oracle/oracle-property-only` rule
 
 In an oracle file, a generated-history campaign must run through

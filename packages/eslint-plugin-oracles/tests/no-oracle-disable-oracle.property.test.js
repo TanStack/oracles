@@ -110,9 +110,9 @@ function expectedReports({ sites }) {
 }
 
 // The states a program enters, read from the grammar alone.
-const statesOf = (program) => {
-  const states = [`location:${program.location}`]
-  for (const item of program.sites) {
+const statesOf = (drawn) => {
+  const states = [`location:${drawn.location}`]
+  for (const item of drawn.sites) {
     if (item.form !== `none`) states.push(`form:${item.form}`)
     states.push(`list:${item.list}`)
     if (item.described) states.push(`described`)
