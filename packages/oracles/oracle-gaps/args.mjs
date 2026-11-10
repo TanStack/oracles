@@ -10,7 +10,17 @@ import {
 import { availableParallelism } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
-const flags = new Set([`daemon`, `stop-daemon`, `ordinary`])
+const flags = new Set([`daemon`, `stop-daemon`, `ordinary`, `help`])
+// The usage text `--help` prints (index.mjs).
+export const usage = `Usage: oracle-gaps --package <dir> --source <src/x.ts,...>
+  [--env-prefix <name>] [--daemon] [--ordinary] [--seed <n>] [--mutants <dir>]
+  [--out <dir>] [--only <id,id>] [--diff-base <rev>] [--test-timeout <ms>]
+  [--sample <n>] [--contexts <n>] [--pool threads|forks]
+  [--first-limit <ms>] [--hang-limit <ms>]
+  oracle-gaps --stop-daemon --package <dir>
+  oracle-gaps --help
+
+The paths in --source are relative to --package. Run the CLI from any directory.`
 /**
  * The options in `argv`. Paths are resolved against `cwd`, the caller's
  * working directory, which the daemon receives with each request.
@@ -21,6 +31,7 @@ export function parseArgs(argv, cwd = process.cwd()) {
     const [key, inline] = argv[i].replace(/^--/, ``).split(`=`)
     args[key] = flags.has(key) ? true : (inline ?? argv[++i])
   }
+  if (args.help) return { help: true }
   if (!args.package) throw new Error(`--package is required`)
   // Test reports name files by their real path (on macOS, /tmp is
   // /private/tmp), so the package path is resolved the same way.

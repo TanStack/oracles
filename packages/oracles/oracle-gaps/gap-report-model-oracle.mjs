@@ -264,6 +264,20 @@ const testCase = fc.record({
   shrinks: fc.constant(false),
   // Only a witness waits on a child process: seconds of real time.
   ioWait: fc.constant(false),
+  // A test may import its owned module through a query (`?raw`, as a Vite
+  // worker's `?worker&url` import is), and must read the module's own text:
+  // the import is Vite's, not the instrumented copy's. The test judges nothing
+  // about the import; it fails only when the text differs.
+  rawImport: fc.constantFrom(
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+  ),
   // A test's own cleanup hook may throw once the test has failed, as a
   // controlled clock's release does. The test's failure still judges.
   cleanupThrows: fc.constantFrom(false, false, false, true),
@@ -511,6 +525,7 @@ const judging = (file, route, input, extra = {}) => ({
   slow: false,
   shrinks: false,
   ioWait: false,
+  rawImport: false,
   cleanupThrows: false,
   asProp: false,
   then: null,
@@ -1091,6 +1106,19 @@ const witness = [
   // Hangs. A test that hangs where it would judge cuts its file's run off
   // at the time limit. Alone, the mutant is a timeout; a kill in another
   // owner still decides, and a survivor in another owner does not.
+  // A module imported through a query is loaded by Vite as written: the
+  // owner's test reads it with `?raw` and must see the module's own text,
+  // which the instrumented copy does not change. The judging test kills the
+  // mutant as usual, so a run that refused for the import shows as a change.
+  {
+    id: `w_rawimport`,
+    owners: [`a`],
+    body: [kill],
+    tests: [
+      judging(`a`, `fixed seed`, 1, { judges: false, rawImport: true }),
+      judging(`a`, `fixed seed`, 7),
+    ],
+  },
   {
     id: `w_hang`,
     owners: [`a`],
@@ -1267,6 +1295,7 @@ const captureWitness = new Set([
   `w_memo`,
   `w_load`,
   `w_loaded`,
+  `w_rawimport`,
   `w_hang`,
   `w_hangkill`,
   `w_hangsurvive`,
@@ -3079,6 +3108,13 @@ function oracleTestFile(plan, file) {
     ...(plan.tests.some((t) => t.file === file && t.ioWait)
       ? [`import { spawn } from 'node:child_process'`]
       : []),
+    // A module's text through a query import, which Vite loads (see rawImport).
+    ...(plan.tests.some((t) => t.file === file && t.rawImport)
+      ? [
+          `import rawSource from '../src/sut.ts?raw'`,
+          `import { readFileSync } from 'node:fs'`,
+        ]
+      : []),
     ...(plan.tests.some((t) => t.file === file && t.asProp)
       ? [`import { fc as fcv, test as fcTest } from '@fast-check/vitest'`]
       : []),
@@ -3122,6 +3158,11 @@ function oracleTestFile(plan, file) {
             ? `    ${out}.push(...stored.value)`
             : `    ${callFor(t.fn)}(${part.input}, ${out})`,
         ...(t.storesShared ? [`    stored.value = [...${out}]`] : []),
+        ...(t.rawImport
+          ? [
+              `    if (rawSource !== readFileSync(new URL('../src/sut.ts', import.meta.url), 'utf8')) throw new Error('the raw import is not the module text')`,
+            ]
+          : []),
         ...(t.caughtVerdict
           ? [
               `    try {`,
