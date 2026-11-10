@@ -164,9 +164,12 @@ const MALFORMED = new Set([
 const REFUSED = new Set([`outsideGlob`, `readme`, `implementationModule`])
 
 /** The report that a configuration entry owes at line 1, or none. */
-function configurationReports(entry) {
+// A non-array implementationModules is read as an empty list (the setting is reported
+// on its own), so an entry that would name an implementation module is judged instead.
+function configurationReports(entry, modules) {
   if (entry === `notAList`) return [{ line: 1, messageId: `malformedList` }]
   if (MALFORMED.has(entry)) return [{ line: 1, messageId: `malformedEntry` }]
+  if (entry === `implementationModule` && modules === `notAnArray`) return []
   if (REFUSED.has(entry)) return [{ line: 1, messageId: `refusedEntry` }]
   return []
 }
@@ -175,7 +178,10 @@ function expectedReports({ setting, entry, sites, modules, header }) {
   // A non-array implementationModules is reported at line 1 and read as an empty list.
   const moduleReports =
     modules === `notAnArray` ? [{ line: 1, messageId: `malformedSetting` }] : []
-  const configuration = [...moduleReports, ...configurationReports(entry)]
+  const configuration = [
+    ...moduleReports,
+    ...configurationReports(entry, modules),
+  ]
   // The configuration report is owed whatever the file, implementation or not.
   // An empty list exempts nothing, so the implementation exemption needs a list.
   if (setting === `implementation` && modules === `none`) return configuration
