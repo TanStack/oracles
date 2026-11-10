@@ -429,6 +429,17 @@ function cliArgs(
 }
 
 /**
+ * A CLI result without the two timing-dependent counts, `cut` (copies cut off
+ * by the clock) and `rerun` (batches rerun after a cut). Two runs of one
+ * history vary in them (oracles-followups.md G1); verdicts and keys do not.
+ */
+function withoutTiming(result) {
+  if (!result?.evidence) return result
+  const { cut, rerun, ...evidence } = result.evidence
+  return { ...result, evidence }
+}
+
+/**
  * Writes the fixture's files and runs the CLI on it. A file of an earlier
  * state that this state lacks is removed.
  */
@@ -1133,7 +1144,7 @@ async function driver(plan, observe) {
       states.add(`ordinary tests left out by default`)
     if (plan.stability !== `none` && cli.exit === 0) {
       const moved = { ...files, [SOURCE]: edited(plan) }
-      observe(`stability`, runCli(dir, moved, how))
+      observe(`stability`, withoutTiming(runCli(dir, moved, how)))
       states.add(`stability rerun`)
     }
     if (plan.steps.length > 0)
