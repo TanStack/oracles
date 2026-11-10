@@ -74,6 +74,7 @@ import { Linter } from 'eslint'
 import fc from 'fast-check'
 import { differs, oracleProperty, pass, violation } from '@tanstack/oracles'
 import plugin from '../src/index.js'
+import { lintCharged } from './lint-observation.js'
 
 const RULE = `oracle/no-oracle-disable`
 const repoRoot = fileURLToPath(new URL(`../../../`, import.meta.url))
@@ -351,17 +352,13 @@ function lintProgram(item) {
         { languageOptions: { ...parser, sourceType: `module` } },
         plugin.configs.recommended,
       ]
-  let messages
-  try {
-    messages = linter.verify(renderProgram(item), configs, {
+  const run = lintCharged(() =>
+    linter.verify(renderProgram(item), configs, {
       filename: production ? PRODUCTION_FILE : ORACLE_FILE,
-    })
-  } catch (error) {
-    // ESLint tags an error that a rule threw with the rule's id. Any other
-    // error is a harness failure: it propagates, and it is not charged to the rule.
-    if (error?.ruleId === undefined) throw error
-    return { threw: String(error) }
-  }
+    }),
+  )
+  if (run.threw !== undefined) return run
+  const messages = run.messages
   const fatal = messages.find((message) => message.fatal)
   if (fatal)
     throw new Error(`the rendered program does not parse: ${fatal.message}`)

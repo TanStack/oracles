@@ -71,6 +71,7 @@ import tsParser from '@typescript-eslint/parser'
 import { ESLint, Linter } from 'eslint'
 import { differs, oracleProperty, pass } from '@tanstack/oracles'
 import oraclePlugin from '../src/index.js'
+import { lintCharged } from './lint-observation.js'
 import {
   LEGAL_CONDITIONS,
   MODEL,
@@ -129,20 +130,17 @@ function probeReports(messages) {
 // A rule that throws aborts ESLint's run of the file. That is an observation
 // the law rejects, not a harness failure, so the error is recorded as one.
 function lintWithProductionConfig(code, filePath) {
-  let messages
-  try {
-    messages = linter.verify(
+  const run = lintCharged(() =>
+    linter.verify(
       code,
       [
         { languageOptions: { parser: tsParser } },
         oraclePlugin.configs.production,
       ],
       { filename: filePath },
-    )
-  } catch (error) {
-    return { threw: String(error?.message ?? error) }
-  }
-  return probeReports(messages)
+    ),
+  )
+  return run.threw === undefined ? probeReports(run.messages) : run
 }
 
 async function severityInRepository(filePath) {

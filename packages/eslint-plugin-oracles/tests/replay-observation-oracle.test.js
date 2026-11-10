@@ -36,6 +36,7 @@ import tsParser from '@typescript-eslint/parser'
 import { Linter } from 'eslint'
 import { differs, oracleProperty, pass } from '@tanstack/oracles'
 import noDisabled from '../src/rules/no-disabled.js'
+import { lintCharged } from './lint-observation.js'
 
 const writer = '/repo/packages/db/tests/oracle-replay-witness.ts'
 const flows = [
@@ -233,11 +234,8 @@ function source(program) {
 // AST ourselves. Binding spelling must not change the observation.
 // A rule that throws aborts ESLint's run of the file: the law rejects it.
 function reports(program) {
-  try {
-    return reportsOf(program)
-  } catch (error) {
-    return [`threw: ${error?.message ?? error}`]
-  }
+  const run = lintCharged(() => reportsOf(program))
+  return run.threw === undefined ? run.messages : [`threw: ${run.threw}`]
 }
 
 function reportsOf(program) {

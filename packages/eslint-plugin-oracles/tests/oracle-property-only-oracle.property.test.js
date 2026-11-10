@@ -71,6 +71,7 @@ import { Linter } from 'eslint'
 import fc from 'fast-check'
 import { differs, oracleProperty, pass, violation } from '@tanstack/oracles'
 import plugin from '../src/index.js'
+import { lintCharged } from './lint-observation.js'
 
 const RULE = `oracle/oracle-property-only`
 const FILE = `packages/example/tests/a-oracle.test.js`
@@ -379,9 +380,8 @@ function lintRendered(code, { setting, entry, modules, parser }) {
       ? [...(own.legacyCampaigns ?? []), ...extra.legacyCampaigns]
       : extra.legacyCampaigns,
   }
-  let messages
-  try {
-    messages = linter.verify(
+  const run = lintCharged(() =>
+    linter.verify(
       code,
       [
         {
@@ -395,11 +395,10 @@ function lintRendered(code, { setting, entry, modules, parser }) {
         },
       ],
       { filename: FILE },
-    )
-  } catch (error) {
-    // A rule that throws aborts ESLint's run of the file: the law rejects it.
-    return { threw: String(error?.message ?? error) }
-  }
+    ),
+  )
+  if (run.threw !== undefined) return run
+  const messages = run.messages
   const fatal = messages.find((message) => message.fatal)
   if (fatal)
     throw new Error(`the rendered program does not parse: ${fatal.message}`)
