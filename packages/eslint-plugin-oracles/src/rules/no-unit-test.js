@@ -15,8 +15,9 @@ import {
  * person wrote down is a unit test. Its expectation has no independent
  * source, so it is not oracle coverage, even in a file named for an oracle.
  *
- * Each oracle file declares its parts with `declareOracle` from
- * oracle-declaration:
+ * An oracle file declares its parts in its `oracleProperty` call (below). A
+ * legacy file, one that registers its tests through a driver in another
+ * module, declares them with `declareOracle`, which the rule still reads:
  *
  *   declareOracle({ check: [checkHistory], model: [modelHistory] })
  *
@@ -84,6 +85,15 @@ import {
  * to an ordinary test file, where it stays as supplemental coverage. A file
  * whose tests reach no part, and that declares none itself, gets one report
  * that asks for the declaration.
+ *
+ * A test whose body is an empty function, such as `it('x', () => {})` or
+ * `test('x', async function () {})`, checks nothing, so the rule reports it
+ * as an empty test, whatever the file declares: remove it, or register it
+ * with `it.todo` (maintainer decision, 2026-11-10). A todo given an empty
+ * body is told to drop the body. An empty test reaches no part, and no
+ * other report counts it. Only a function whose block holds no statement is
+ * empty: a body passed by name (`it('x', noop)`) or one holding an empty
+ * statement (`() => { ; }`) is judged as any other body.
  *
  * Files whose names start with `oracle-`, such as `oracle-replay.test.ts`,
  * test the shared oracle machinery, and the rule skips them.
@@ -1299,7 +1309,7 @@ function tableFunctionReaches(module, table) {
   return reaches
 }
 
-function isPlaceholder(body) {
+function isEmpty(body) {
   return (
     isFunction(body) &&
     body.body.type === `BlockStatement` &&
@@ -1310,8 +1320,8 @@ function isPlaceholder(body) {
 /**
  * The test module that a relative specifier names in `fromFile`, as this rule
  * resolves it: undefined for production source, a package, or a missing file.
- * The lint selection in scripts/agent-lint-feedback.mjs follows these edges, so
- * an edit reaches the oracle files that this rule reads.
+ * A project's lint selection can follow these edges, so that an edit reaches
+ * the oracle files that this rule reads.
  */
 const selectionSession = new LintSession()
 export function resolveImportedTestModule(fromFile, specifier) {
@@ -1326,12 +1336,14 @@ export default {
     },
     schema: [],
     messages: {
-      unitTest: `This test reaches no part that this file declares with declareOracle, so its expected result has no independent source. A unit test belongs in an ordinary test file: move it there. A fixed history runs through the declared check, a model-rule expectation uses the declared model, and a grammar calibration uses the declared grammar.`,
+      emptyTest: `This test's body is empty, so it checks nothing. Remove it, or use it.todo.`,
+      emptyTodo: `it.todo takes no body; remove the body.`,
+      unitTest: `This test reaches no part that this file declares, so its expected result has no independent source. A unit test belongs in an ordinary test file: move it there. A fixed history runs through the declared check, a model-rule expectation uses the declared model, and a grammar calibration uses the declared grammar.`,
       unknownTypeModel: `This typeModel name is not a type alias or interface in this file. A type model is the expected type that type-level tests compare with, so it must be declared here.`,
       incompleteProperty: `This oracleProperty call does not pass an object literal with a check, so the rule cannot see that the property has one. Pass its options inline as \`oracleProperty({ id, law, histories, driver, model, check })\`.`,
       importedRegistration: `This oracle file calls a helper that registers tests. An oracle file registers only oracle tests, so register those tests from an ordinary test file and keep this file to its checks and model.`,
       unparsedModule: `This file's parser cannot parse {{module}} ({{error}}), so no test reaches a part through it. Lint this file with a parser that reads the module, or fix the module's syntax.`,
-      undeclared: `This oracle file registers tests and declares no oracle part. Name its check, model, and grammar with \`declareOracle({ check: [...], model: [...], grammar: [...] })\` from \`@tanstack/oracles\`. Then move each test that reaches none of them to an ordinary test file.`,
+      undeclared: `This oracle file registers tests and declares no oracle part. Register it through \`oracleProperty({ id, law, histories, driver, model, check })\` from \`@tanstack/oracles\`, which names its parts. Then move each test that reaches none of them to an ordinary test file.`,
     },
   },
   create(context) {
@@ -1386,7 +1398,13 @@ export default {
           return
         }
         const test = registeredTest(node, sourceCode)
-        if (test === undefined || isPlaceholder(test.body)) return
+        if (test === undefined) return
+        if (isEmpty(test.body)) {
+          // `it.todo` with a body contradicts itself: a todo takes none.
+          const todo = test.modifiers.includes(`todo`)
+          context.report({ node, messageId: todo ? `emptyTodo` : `emptyTest` })
+          return
+        }
         // An `.each(table)` row can carry a function that the test body calls,
         // such as a mutant observation each check must reject. A function in
         // the table that uses a declared part makes the test use it. Plain

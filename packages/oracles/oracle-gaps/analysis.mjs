@@ -60,8 +60,8 @@ function hostFor(ts) {
  */
 export function analyze(ts, pkg, sources, testFiles) {
   const relative = (file) => file.slice(pkg.length + 1)
-  // An oracle file is a test file that calls `oracleProperty` or
-  // `declareOracle`.
+  // An oracle file is a test file that calls `oracleProperty`, or the legacy
+  // `declareOracle`, which the CLI still reads.
   const declarations = new Map()
   for (const file of testFiles) {
     const declared = readOwns(ts, file, readFileSync(file, `utf8`))
@@ -96,8 +96,8 @@ export function analyze(ts, pkg, sources, testFiles) {
   // refused here, once (maintainer decision, 2026-11-10).
   if (declarations.size === 0)
     throw new Refusal(
-      `no oracle file: no test file calls oracleProperty or declareOracle, so no file owns any selected source`,
-      `Declare owns: ['src/x.ts#fn'] in the oracleProperty or declareOracle call of the oracle that judges these sources.`,
+      `no oracle file: no test file calls oracleProperty, so no file owns any selected source`,
+      `Declare owns: ['src/x.ts#fn'] in the oracleProperty call of the oracle that judges these sources.`,
     )
   const instrumented = new Map()
   const mutants = []

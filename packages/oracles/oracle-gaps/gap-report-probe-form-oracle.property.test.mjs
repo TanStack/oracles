@@ -51,7 +51,9 @@ import {
 import { instrument } from './schemata.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const ts = createRequire(join(here, `../package.json`))(`typescript`)
+const ts = createRequire(join(here, `../package.json`))(
+  `typescript-for-tanstack-oracles`,
+)
 // The guard's line in the rendered function.
 const GUARD_LINE = 2
 

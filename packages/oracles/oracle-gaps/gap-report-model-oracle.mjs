@@ -23,7 +23,7 @@ import fc from 'fast-check'
 // TypeScript is the authority on what a token is (law 6), not the CLI.
 const ts = createRequire(
   join(dirname(fileURLToPath(import.meta.url)), `../package.json`),
-)(`typescript`)
+)(`typescript-for-tanstack-oracles`)
 
 // The prefix of the framework's environment variables that the fixtures read
 // and the end-to-end oracle passes to the CLI (`--env-prefix`).
@@ -3188,7 +3188,10 @@ function refusal(plan) {
   // A run with no oracle file, or with no owns entry, owns no selected
   // source, so every mutant would read as unowned. The analysis refuses it
   // (maintainer decision, 2026-11-10).
-  if (plan.declaration === `neither`) return { cause: `no oracle file` }
+  // Its directive names only oracleProperty: declareOracle is legacy, and an
+  // author who reads it would call it (maintainer decision, 2026-11-10: F25).
+  if (plan.declaration === `neither`)
+    return { cause: `no oracle file`, withheld: `declareOracle` }
   if (ownsNothing(plan)) return { cause: `owns any selected source` }
   // A setup file that throws fails every oracle file before any test runs,
   // so the run refuses as for a failing owner, naming the setup's error.

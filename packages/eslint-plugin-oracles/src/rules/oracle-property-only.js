@@ -14,8 +14,8 @@
  * Why. Only a constructed history makes a state's reach required. A raw
  * campaign has no constructed histories, so the states its law needs are
  * reached only where the seed happens to draw them, and a passing run shows
- * no reach (maintainer decision, 2026-11-09; packages/oracles/src/oracle-property.ts
- * header).
+ * no reach (maintainer decision, 2026-11-09; the `oracleProperty` contract of
+ * `@tanstack/oracles`).
  *
  * Exemptions:
  *

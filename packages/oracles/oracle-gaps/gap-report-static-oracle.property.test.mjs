@@ -131,7 +131,9 @@ import { parseArgs, usage } from './args.mjs'
 import { keyAndSelect } from './report.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const ts = createRequire(join(here, `../package.json`))(`typescript`)
+const ts = createRequire(join(here, `../package.json`))(
+  `typescript-for-tanstack-oracles`,
+)
 
 // ## Production driver
 //
@@ -993,6 +995,13 @@ function check(plan, observations, expected) {
       return violation(
         `static`,
         `the refusal does not name ${refused.cause}: ${got.refusal}`,
+        `refusal`,
+      )
+    // A refusal never directs the author to a legacy API.
+    if (refused.withheld && got.refusal.includes(refused.withheld))
+      return violation(
+        `static`,
+        `the refusal names ${refused.withheld}, which is legacy: ${got.refusal}`,
         `refusal`,
       )
     return pass
