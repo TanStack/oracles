@@ -150,7 +150,11 @@ model of that law would be the same code, so it could not catch a defect.
 
 Keep the law block to about 40 lines of prose, plus the contract code block.
 It never mentions a review or an open question: a point the user has not
-decided appears only as a limit, with its reason.
+decided appears only as a limit, with its reason. Nor does it tell the story
+of the session: no "the maintainer approved", "the engineer deferred", or
+"as the probe showed". A user's decision is stated as the rule it made, and
+a limit's reason is about the code ("`klona` calls the constructor with no
+arguments"), not about who has not decided yet.
 
 **Then write the code under it.** Each boundary condition from the probes
 and the law worksheet becomes a constructed history. If there was no first
