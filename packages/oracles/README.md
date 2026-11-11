@@ -54,8 +54,8 @@ Until you choose to ship it, the agent changes nothing in your repository
 except the minimal installs, the oracle file, and the gap check's working
 directory, if it runs.
 
-The package needs Node 20 or later. The setup skill installs Vitest and
-fast-check if the repository does not have them.
+The package needs Node 20 or later. The first session installs Vitest 4.1
+and fast-check 4 if the repository does not have them.
 
 ## What ships in this package
 

@@ -16,7 +16,9 @@ the oracle file. Do not explain what oracles are unless they ask.
 
 The session ends at one moment: an oracle that runs on their code, has found
 a bug, and has pushed them to settle some design questions. Then you present
-what you built, and explain how to take it to production.
+what you built, and explain how to take it to production. If no oracle and no
+gap check finds a bug, the session ends when the engineer wants no further
+oracle, and you present the same way.
 
 Probes are how you learn what reading the code does not tell you: its
 dynamics, boundary conditions, and constraints. You need that understanding
@@ -66,7 +68,7 @@ Until the engineer chooses to take an oracle to production, change only
 these:
 
 - the minimal installs that an oracle needs to run: `@tanstack/oracles`,
-  `fast-check`, and `vitest` when they are missing
+  `fast-check`, and `vitest` when `package.json` does not list them
 - a minimal Vitest config that picks up the oracle file, only when the
   repository's own config does not
 - oracle files, with their prose
@@ -178,7 +180,8 @@ decide it, it becomes a potential law, and the oracle can find where the
 code breaks it, just as with a law from the docs. In a repository with few
 docs, this is the usual way to a bug: ask the question, and let the oracle
 check the answer. The oracle file records the decision with the
-engineer's name and GitHub login, so that their team knows whom to ask.
+engineer's name, their GitHub login, and the date, so that their team knows
+whom to ask.
 Find the login with `gh api user --jq .login`. If that fails, ask for it
 together with the first decision.
 
@@ -399,8 +402,8 @@ plainly first, and show what held. The gap check makes small changes to a
 copy of the production code that the oracle owns, and shows each change
 that no law catches. Each one points at a bug the oracle has not reached, a
 design question, or a law nobody has stated yet. Take the command and its
-flags from `oracles-setup` step 7, and put its `--out` directory in your
-scratch directory, outside the repository. Read each surviving change, probe
+flags from `oracles-setup` step 7, with its `--out` in the package's
+`.oracle-gaps/` directory, as that step says. Read each surviving change, probe
 it when it is unclear, and present what it shows as a finding: a possible
 bug, or a design question for the engineer. Do not try to close every gap:
 that is production work.
@@ -421,13 +424,15 @@ bug and the engineer does not want another one:
 - an invitation to ask questions
 
 When they take the walk-through, follow one bug the oracle found through
-the file: the history that produced it, what the driver did and saw, what
+the file (with no bug, one change the gap check showed, or one history that
+held): the history that produced it, what the driver did and saw, what
 the model expected, and how the check reported the difference and shrank it.
 Show a few lines of the file at each part, not a description of it.
 
 Then explain how to take the oracle to production: a lint preset that keeps
 oracle files honest, a block in `AGENTS.md` (or `CLAUDE.md`) so every agent
-follows the same rules, and the gap check in CI, which makes small changes
+follows the same rules, and the gap check run over all the owned code, which
+makes small changes
 to a copy of the production code and shows each change that no law catches.
 Closing those gaps is how the oracle grows toward full coverage. If they want to go ahead, load
 `oracles-setup`.

@@ -12,8 +12,9 @@ your report, and continue. That default covers setup questions only.
 Potential laws have no default: propose them, report them, and stop.
 
 This skill has two uses. A first session (`oracles-start`) uses only its
-install section and its "where oracle files go" section, and only for the
-minimal setup that an oracle needs to run. Taking an oracle to production
+install section and its "where oracle files go" section, for the minimal
+setup that an oracle needs to run, and step 7's command, when its oracle
+passes and it runs the gap check. Taking an oracle to production
 uses all of it. That usually starts after a first session, once the
 engineer has an oracle that found a bug and chooses to ship it. If there is
 no oracle yet, load `oracles-start` first.
@@ -28,7 +29,7 @@ Find out, and tell the user:
 
 - The package manager, and whether the repository is one package or a
   workspace. For a workspace, ask which package to start in.
-- The test runner. The framework runs on Vitest 4 or later, with fast-check 4.
+- The test runner. The framework runs on Vitest 4.1 or later, with fast-check 4.
   If the package uses another runner, oracles run in a separate Vitest config
   beside it. Do not change the existing suite.
 - Where production source lives (for example `src/`).
@@ -57,7 +58,7 @@ Tell the user which commit you pinned.
 pnpm add -D \
   https://pkg.pr.new/TanStack/oracles/@tanstack/oracles@<sha> \
   https://pkg.pr.new/TanStack/oracles/@tanstack/eslint-plugin-oracles@<sha> \
-  fast-check vitest
+  fast-check@^4 vitest@^4.1
 ```
 
 Add `fast-check` and `vitest` beside them. The framework needs Vitest 4.1 or
@@ -377,7 +378,8 @@ call tree, including the module-level data it reads. A default export is
 If the gap check refuses with "no oracle file", the oracle is not
 declared: that is a setup failure.
 
-In an oracle file, only `oracleProperty` registers tests. A plain Vitest test
+In an oracle file, only `oracleProperty` registers tests, directly or
+through a project helper that forwards a literal `owns` list to it. A plain Vitest test
 there is not a kill, and the gap check reports it. Lint also reports an empty test
 there: it checks nothing and looks like coverage. Remove it, or use `it.todo`. The driver records
 production errors as observations: a mutant that crashes production is not a

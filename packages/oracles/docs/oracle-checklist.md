@@ -59,7 +59,7 @@ No requirement here can be met by declaring something out of reach.
   required fields.
 - **Acceptance evidence:** A reviewer can trace the expected result to an
   approved API, contract document and section, or a maintainer decision
-  with its maintainer and date,
+  with its maintainer (name and GitHub login) and date,
   and can say what the oracle does not establish. Production output is
   evidence; it is never authority.
 - **Not required:** A complete list of every behavior outside the subsystem.
