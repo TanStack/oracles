@@ -167,7 +167,9 @@
  *    killed (its socket and lock left behind), after a reboot (its socket
  *    gone), after its process id went to a live process, two checks at
  *    once after a crash, a check started during a stop, two checks at
- *    once after the CLI's code changed, a check after a native addon was
+ *    once after the CLI's code changed, a check from a second install of
+ *    the CLI at another path with other code (the daemon serves only its
+ *    own code), a check after a native addon was
  *    installed into the dependency tree (the pool follows it), and a
  *    check whose daemon cannot open its session (it reports the cold
  *    run's error), two checks at once on a session whose failure is
@@ -202,6 +204,19 @@
  * 11. **Streaming.** The CLI prints each gap as its mutant is judged, one line
  *    each (stream.mjs), and the summary repeats those gap lines: the streamed
  *    gap lines are the report's gaps, each printed once, none missing.
+ * 12. **A report-shaped ending.** A run never ends with a bare stack trace
+ *    (gap-report-model-oracle.mjs states the law beside its check). Every
+ *    refusal of laws 3 and 10 (a broken owns declaration, no oracle file, no
+ *    owner, a source outside the package, `test.projects`, a Vitest that
+ *    does not load, a config that throws when it loads or has no default
+ *    export, a setup file that throws, an owner that fails with no mutant
+ *    active) exits 2 and
+ *    prints `refused: <cause>` and then `fix: <directive>`, with no stack
+ *    frames; the directive offers no way around the fix. The block names the
+ *    run's output directory, which holds a results.json with status
+ *    `refused`, the same cause and directive, and a summary.md. A refusal
+ *    through the daemon ends the same way, in the output directory of the
+ *    CLI that asked.
  *
  * Authority: the maintainer's decisions in the gap-check design runs v11, v14,
  * and v19 (2026-11-04 and 2026-11-05; the design notes are kept by the project
@@ -230,7 +245,9 @@
  * load, the one-daemon clause, and the builtin-spy clause of law 3 come
  * from the review of the CLI's pull request and TanStack DB's conversion
  * (2026-11-08); the refusal of `test.projects` is the maintainer's choice
- * of that date over running each project.
+ * of that date over running each project. Law 12 is the maintainer's
+ * decision of 2026-11-10: "we should never just crash -- the cli should also
+ * return something sensible".
  *
  * Limits. Sources are one file of exported functions and classes over one
  * number. A hang is generated only as an owner test that waits on a promise
@@ -350,6 +367,8 @@ import {
   written,
   writeFixture,
   applyEdit,
+  endingOf,
+  refusalBreach,
   readSummary,
   removePath,
   sourceArgument,
@@ -533,13 +552,11 @@ const streamedGap =
 function readRun(dir, out, status, stderr, cli) {
   // The output names the CLI directory that ran and the package, as scratch
   // directories do, before it is cut to its last characters.
-  const named =
-    status === 0
-      ? undefined
-      : namedScratch(`${stderr}`, [
-          [cli, `<cli>`],
-          [dir, `<package>`],
-        ])
+  const scratch = [
+    [cli, `<cli>`],
+    [dir, `<package>`],
+  ]
+  const named = status === 0 ? undefined : namedScratch(`${stderr}`, scratch)
   let results
   let report
   let summary = ``
@@ -560,7 +577,15 @@ function readRun(dir, out, status, stderr, cli) {
       return id === undefined ? [] : [keyById.get(id) ?? `unknown id ${id}`]
     })
     .sort()
+  // A refused run's results.json holds the refusal, not results (law 12).
+  if (results === undefined) report = undefined
   return {
+    // How a run that did not complete ended, read from the whole of its
+    // stderr and its output directory (law 12).
+    ending:
+      status === 0
+        ? undefined
+        : endingOf(status, stderr, out, (text) => namedScratch(text, scratch)),
     exit: status,
     stderr: named === undefined ? undefined : named.slice(-1500),
     reported: results !== undefined,
@@ -584,7 +609,7 @@ function readRun(dir, out, status, stderr, cli) {
       ),
     evidence: report?.evidence,
     // A refused run is compared by the cause it names.
-    refusal: named?.match(/^Error: (.*)$/m)?.[1],
+    refusal: named?.match(/^refused: (.*)$/m)?.[1],
     mutants: (results ?? []).map((r) => ({
       key: r.key,
       source: r.source,
@@ -657,8 +682,8 @@ async function incremental(dir, plan, cli, copy, observe, states) {
   if (!reportText.includes(RUN_LINE))
     throw new Error(`the cli edit no longer finds the summary's run line`)
   const cold = new Map()
-  const fingerprint = (files, state) =>
-    JSON.stringify([files, state.seed, state.cliEdited])
+  const fingerprint = (files, state, other = false) =>
+    JSON.stringify([files, state.seed, state.cliEdited, other])
   cold.set(fingerprint(fixtureFiles(plan), initialState(plan)), cli)
   // A cold result without the run identity, which every edit changes, so
   // that two states compare by what they report.
@@ -678,6 +703,22 @@ async function incremental(dir, plan, cli, copy, observe, states) {
   const made = []
   let reverted
   let previous = cli
+  // A second install of the CLI, at another path, whose summary reads
+  // otherwise, so its code differs from the first install's (`otherInstall`).
+  let other
+  const otherCli = () => {
+    if (other === undefined) {
+      other = copyCli({ cliPath: `plain` })
+      writeFileSync(
+        join(other, `report.mjs`),
+        reportText.replace(
+          RUN_LINE,
+          '`Run ${run.id} (other install). Inputs: ${run.inputs}.`',
+        ),
+      )
+    }
+    return other
+  }
   const checkAt = async (step) => {
     const state = trail.at(-1)
     writeFileSync(
@@ -690,10 +731,10 @@ async function incremental(dir, plan, cli, copy, observe, states) {
         : reportText,
     )
     const files = fixtureFiles(resolveHistory(state.history), state)
-    const key = fingerprint(files, state)
+    const key = fingerprint(files, state, step === `otherInstall`)
     const how = {
       seed: state.seed,
-      cli: copy,
+      cli: step === `otherInstall` ? otherCli() : copy,
       ordinary: plan.ordinary,
       sources: sourceArgument(plan, `${dir}.link`),
       budget: plan.budget,
@@ -726,6 +767,7 @@ async function incremental(dir, plan, cli, copy, observe, states) {
         daemon: {
           exit: run.exit,
           refusal: run.refusal,
+          ending: run.ending,
           report: run.report,
           // The first line of a failure, for the message; readRun has named
           // the scratch package and CLI copy in it.
@@ -757,6 +799,7 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       dieMidCheck: `a check whose daemon died during it`,
       resetBeforeRead: `a check whose connection was reset`,
       fixSession: `a check after the session's failure was fixed`,
+      otherInstall: `a check from another install of the CLI`,
     }[step]
     if (after && [daemon, ...others].every((run) => run.reported))
       states.add(after)
@@ -787,6 +830,9 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       computed === 0
     )
       states.add(`a revert of a file edit reran nothing`)
+    // The other install's summary reads otherwise by construction, so its
+    // check is no edit, and the next edit is compared with the state before.
+    if (step === `otherInstall`) return
     // An edit that changes the cold result is one a stale cache could miss.
     if (step !== `start` && result(previous) !== result(coldRun))
       states.add(`edit ${step} changed the cold result`)
@@ -887,6 +933,8 @@ async function incremental(dir, plan, cli, copy, observe, states) {
         await checkAt(step)
         await stopping
         continue
+      } else if (step === `otherInstall`) {
+        // The check runs from the other install; no file changes.
       } else if (step === `revert`) {
         if (trail.length > 1) trail.pop()
         reverted = made.pop()
@@ -898,6 +946,7 @@ async function incremental(dir, plan, cli, copy, observe, states) {
     }
   } finally {
     stop()
+    if (other !== undefined) rmSync(other, { recursive: true, force: true })
     // One daemon serves a package, so once it is stopped none is left. A
     // daemon that exits takes a moment to close its contexts.
     let left = daemonsOf(dir)
@@ -950,6 +999,15 @@ async function driver(plan, observe) {
     // a history that depends on it.
     if (plan.fault !== `none` && cli.exit !== 0)
       states.add(`refused ${plan.fault}`)
+    // A config fault in a run that owns nothing: the config loads before the
+    // analysis reads ownership, so the config fault is the one named.
+    if (
+      configFaults.includes(plan.fault) &&
+      cli.exit !== 0 &&
+      plan.wholeFile === `none` &&
+      plan.functions.every((fn) => fn.owners.length === 0)
+    )
+      states.add(`a config fault in a run that owns nothing`)
     if (analyzedFaults.includes(plan.fault) && cli.exit === 0)
       states.add(`analyzed ${plan.fault}`)
     const kindAt = new Map(
@@ -1237,6 +1295,17 @@ function incrementalCheck(observations) {
         `incremental equals cold`,
         { actual: daemon, expected: cold },
       )
+    // A refusal through the daemon ends as a cold refusal does (law 12):
+    // the CLI that asked the daemon writes it to its own output directory.
+    if (cold.refusal !== undefined) {
+      const breach = refusalBreach(daemon.ending, { outKnown: true })
+      if (breach)
+        return violation(
+          `incremental`,
+          `after ${step}, through the daemon, ${breach}`,
+          `report-shaped ending`,
+        )
+    }
     if (!cold.report) continue
     if (JSON.stringify(daemon.report) === JSON.stringify(cold.report)) continue
     const at = cold.report.results.findIndex(
@@ -1303,6 +1372,15 @@ function check(plan, observations, expected) {
         `the refusal does not give the failing test's error, ${expected.refused.detail}: ${cli.stderr}`,
         `ownership`,
       )
+    // Law 12: the refusal is one block with its fix, and the output
+    // directory the run was given holds it.
+    // Every e2e run names its output directory (`--out`), so even a
+    // refusal of its arguments is written there.
+    const breach = refusalBreach(cli.ending, {
+      cause: expected.refused.cause,
+      outKnown: true,
+    })
+    if (breach) return violation(`cli`, breach, `report-shaped ending`)
     return incrementalCheck(observations) ?? daemonCheck(observations) ?? pass
   }
   if (cli.exit !== 0 || !cli.reported)
@@ -1460,7 +1538,7 @@ function check(plan, observations, expected) {
 }
 
 declareOracle({
-  check: [check, incrementalCheck, daemonCheck],
+  check: [check, incrementalCheck, daemonCheck, refusalBreach],
   model: [model, interpret, ownersOf, probeHelpers],
   grammar: [histories],
 })
@@ -1615,6 +1693,7 @@ const incrementalStates = [
   `two checks at once after a crash`,
   `a check during a stop`,
   `two checks at once after a code change`,
+  `a check from another install of the CLI`,
   `two checks started the daemon at once`,
   `the daemon ran from a path with a space and #`,
 ]
@@ -1721,14 +1800,26 @@ const required = [
   `analyzed noTypescript`,
   `analyzed apiLessTypescript`,
   `refused brokenVitest`,
+  `refused configThrows`,
+  `refused configNoDefault`,
+  `refused setupThrows`,
   `edit fixSession changed the cold result`,
   `a check after the session's failure was fixed`,
   `two checks at once on a session that cannot open`,
   `a session failure larger than a socket buffer`,
+  `a config fault in a run that owns nothing`,
   ...incrementalStates,
 ]
 // The faults the CLI analyzes anyway: a package's TypeScript is no input.
 const analyzedFaults = [`noTypescript`, `apiLessTypescript`]
+// The faults found when the package's Vitest and config load, before the
+// analysis.
+const configFaults = [
+  `brokenVitest`,
+  `projects`,
+  `configThrows`,
+  `configNoDefault`,
+]
 const faults = [
   `badEntry`,
   `missingSource`,
@@ -1737,6 +1828,9 @@ const faults = [
   `projects`,
   `outsideSource`,
   `brokenVitest`,
+  `configThrows`,
+  `configNoDefault`,
+  `setupThrows`,
   ...analyzedFaults,
 ]
 const separate = [
@@ -1755,6 +1849,7 @@ const separate = [
   `a check after the session's failure was fixed`,
   `two checks at once on a session that cannot open`,
   `a session failure larger than a socket buffer`,
+  `a config fault in a run that owns nothing`,
   ...incrementalStates,
 ]
 const witnessed = required.filter((s) => !separate.includes(s))
@@ -1780,9 +1875,9 @@ const withDeclaration = (constructed) =>
 oracleProperty({
   id: `oracle-gaps.report`,
   law: {
-    statement: `The gap report enumerates the promised operator mutants, leaves out exactly the probe-only code, discovers every oracle that owns a function's call tree and refuses broken ownership, judges each mutant only by its owners' tests on their registered routes and counts only law verdicts on reproducible routes as kills, which outrank a run that never ends, anchors each mutant by its function and normalized statement, lists every gap and unowned mutant once with consistent counts, keeps keys stable under unrelated edits, reports through one daemon per package what a cold run reports at every state of a sequence of edits, and runs the package as Vitest does from any install path and any --source spelling: one instance of each workspace dependency, no refusal over an unbuildable devDependency, child processes for a native addon anywhere in the tree, a capture that a test's builtin spies cannot see, and a refusal of test.projects.`,
+    statement: `The gap report enumerates the promised operator mutants, leaves out exactly the probe-only code, discovers every oracle that owns a function's call tree and refuses broken ownership, judges each mutant only by its owners' tests on their registered routes and counts only law verdicts on reproducible routes as kills, which outrank a run that never ends, anchors each mutant by its function and normalized statement, lists every gap and unowned mutant once with consistent counts, keeps keys stable under unrelated edits, reports through one daemon per package what a cold run reports at every state of a sequence of edits, and runs the package as Vitest does from any install path and any --source spelling: one instance of each workspace dependency, no refusal over an unbuildable devDependency, child processes for a native addon anywhere in the tree, a capture that a test's builtin spies cannot see, and a refusal of test.projects; and every run that does not complete ends, cold or through the daemon, with a refusal that exits 2, prints a refused: block and one fix: directive with no stack trace, and writes the refusal to the run's output directory.`,
     authority: `The maintainer's decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), not in this package's records, including that a kill by reach agreement alone is a gap and that an incremental run through the daemon equals a cold one (v19.3); the project's oracle guide on quiet exclusions; the oracle rubric's outcome kinds (ORC-006); the CLI's documented operator list in schemata.mjs.`,
-    limits: `Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 6 s full limit, and a slow run only as one witness that waits 3 s before it judges; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; no --only, --sample, or --diff-base; a derived class's file is instrumented and its sites are judged as unowned, but no test imports or constructs the class, so its no-mutant and super-region behavior is the static oracle's (in-process), not this oracle's; package configs only in vite.config.ts, vitest.config.ts, or vite.config.mjs, as an object or a sync or async function, with no plugins of their own and test.projects only as a refusal; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9's edits leave out files read through fs, other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; cut-off charging judged only under one budget; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages; daemon races (two CLIs reading one error file, a CLI hearing closing from the failing daemon it started, a reset connection on macOS) fixed by inspection; a workspace dependency's one-file bundle is written in that dependency's own .oracle-gaps folder, a known stray write (date-fns report), which the stray-write check excludes; the runner's copies and Vitest configs (.oracle-gaps-PID*) sit at the package root and are removed when the run closes, so a killed run leaves them there, and the stray-write check runs after close and cannot see them.`,
+    limits: `Law 12 judges refusals only: no legal history reaches an internal error, so its shape (exit 3, the stack in error.log) is not judged; argument refusals are the static oracle's; the check's rejection of a stack trace, a missing fix, and a wrong exit code is calibrated in the static oracle, through the same refusalBreach, and here only a refused run reported as complete is calibrated, because each calibration here runs real CLI histories. Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 6 s full limit, and a slow run only as one witness that waits 3 s before it judges; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; no --only, --sample, or --diff-base; a derived class's file is instrumented and its sites are judged as unowned, but no test imports or constructs the class, so its no-mutant and super-region behavior is the static oracle's (in-process), not this oracle's; package configs only in vite.config.ts, vitest.config.ts, or vite.config.mjs, as an object or a sync or async function, with no plugins of their own and test.projects only as a refusal; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9's edits leave out files read through fs, other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; cut-off charging judged only under one budget; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages; daemon races (two CLIs reading one error file, a CLI hearing closing from the failing daemon it started, a reset connection on macOS) fixed by inspection; a workspace dependency's one-file bundle is written in that dependency's own .oracle-gaps folder, a known stray write (date-fns report), which the stray-write check excludes; the runner's copies and Vitest configs (.oracle-gaps-PID*) sit at the package root and are removed when the run closes, so a killed run leaves them there, and the stray-write check runs after close and cannot see them.`,
   },
   histories: {
     arbitrary: histories,
@@ -1948,6 +2043,9 @@ oracleProperty({
             `newOracle`,
             `cli`,
             `cliAtOnce`,
+            // A second install's check, then the first install's again.
+            `otherInstall`,
+            `test`,
             `restart`,
             // The daemon this check's CLI starts dies during the check.
             `dieMidCheck`,
@@ -2022,6 +2120,27 @@ oracleProperty({
           fault: `none`,
           stability: `none`,
           ordinary: false,
+          steps: null,
+        }),
+      },
+      {
+        // test.projects in a run whose owns entries own no selected source:
+        // the run refuses for the config, which loads before the analysis.
+        name: `a config fault in a run that owns nothing`,
+        enters: [`a config fault in a run that owns nothing`],
+        build: (generated) => ({
+          ...generated,
+          fault: `projects`,
+          // Nothing owns anything: no function owners, no library owners,
+          // no whole-file entry.
+          owners: [],
+          library: [],
+          libraryOwners: [],
+          containers: [],
+          overloads: [],
+          wholeFile: `none`,
+          witness: false,
+          authored: null,
           steps: null,
         }),
       },
