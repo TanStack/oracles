@@ -1115,6 +1115,17 @@ export default async (env) => {
       const inputs = paths.map((path) => [path, servedHash(path, index)])
       store.put(id, { inputs, unit: result })
     }
+    // A batch run in a slot's context. Each copy loads the modules its
+    // file's unmutated run read, so the context records them as served:
+    // the next check then invalidates any of them that changed, also after
+    // the context that ran the unmutated run was replaced.
+    function batchIn(slot, items) {
+      const index = indexOf.get(slot.context)
+      for (const { file } of items)
+        for (const path of fileInputs.get(file) ?? [])
+          servedBy(index).set(path, servedHash(path, index))
+      return runBatch(slot.context, options.out, items, options.seed ?? null)
+    }
     async function unit(context, file, spec, runOptions = {}) {
       const index = indexOf.get(context)
       const id = idOf(file, spec, runOptions.select, runOptions.ignore)
@@ -1183,12 +1194,7 @@ export default async (env) => {
       for (;;) {
         rest = rest.filter((r) => needed(r, got))
         if (rest.length === 0) break
-        const batch = await runBatch(
-          slot.context,
-          options.out,
-          rest,
-          options.seed ?? null,
-        )
+        const batch = await batchIn(slot, rest)
         if (batch.unattributed) {
           for (const r of rest)
             if (needed(r, got)) got[r.i] = await runAlone(slot, r)
@@ -1264,12 +1270,7 @@ export default async (env) => {
     // file with no I/O is final at once (see unitsBatch): it waits on
     // nothing that can come.
     async function confirmAlone(slot, hung, full) {
-      const alone = await runBatch(
-        slot.context,
-        options.out,
-        [{ ...hung, limitMs: full }],
-        options.seed ?? null,
-      )
+      const alone = await batchIn(slot, [{ ...hung, limitMs: full }])
       if (alone.unattributed)
         return { unit: await runAlone(slot, { ...hung, limitMs: full }) }
       // The index of the context that ran it, before any replacement.
