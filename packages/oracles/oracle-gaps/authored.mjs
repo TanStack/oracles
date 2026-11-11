@@ -33,7 +33,15 @@ export function loadAuthored(directory) {
   const mutants = []
   for (const name of readdirSync(directory).sort()) {
     if (!name.endsWith(`.json`)) continue
-    const parsed = JSON.parse(readFileSync(join(directory, name), `utf8`))
+    let parsed
+    try {
+      parsed = JSON.parse(readFileSync(join(directory, name), `utf8`))
+    } catch (error) {
+      throw new Refusal(
+        `${name}: authored mutants file is not JSON: ${error.message}`,
+        `Write ${name} as one authored mutant object, or an array of them, in JSON.`,
+      )
+    }
     for (const mutant of Array.isArray(parsed) ? parsed : [parsed]) {
       const missing = fields.filter(
         (field) => typeof mutant[field] !== `string` || mutant[field] === ``,

@@ -16,7 +16,8 @@
 // the lock only after that, so the next daemon reads what it wrote.
 //
 // The CLI talks to it over a Unix socket named by the package's path. Each
-// request is one line of JSON, the CLI's arguments; the reply is one line of
+// request is one line of JSON, the CLI's arguments and the identity of its
+// code (codeIdentity), which must be the daemon's; the reply is one line of
 // JSON with the summary a cold run would have printed and its log, or the
 // error that ended the check, which the CLI ends the run with as a cold run
 // does (ending.mjs). One check runs at a time. The daemon exits when asked,
@@ -132,7 +133,7 @@ function startDaemon(pkg) {
  * time a daemon holds the request, queued or checking, is the check's and is
  * not counted.
  */
-export async function requestDaemon(pkg, argv) {
+export async function requestDaemon(pkg, argv, code) {
   const began = Date.now()
   let held = 0
   // When this CLI last started a daemon, and whether it may start another
@@ -145,7 +146,7 @@ export async function requestDaemon(pkg, argv) {
     let reply
     const sent = Date.now()
     try {
-      reply = await send(pkg, { argv, cwd: process.cwd() })
+      reply = await send(pkg, { argv, cwd: process.cwd(), code })
       held += Date.now() - sent
     } catch (error) {
       if (!absent(error)) throw error
@@ -164,12 +165,22 @@ export async function requestDaemon(pkg, argv) {
     }
     if (reply?.died) {
       deaths += 1
+      // A test that ends its process, or a native addon that crashes it,
+      // can end the daemon too; which test did is not known here.
       if (deaths > 2)
         throw new Error(
-          `the package's daemon exited during the check ${deaths} times; its log is ${join(stateDirOf(pkg), `daemon.log`)}`,
+          `the package's daemon process ended during the check ${deaths} times; its log is ${join(stateDirOf(pkg), `daemon.log`)}`,
         )
     }
-    if (reply && !reply.closing && !reply.restart && !reply.died) return reply
+    if (reply && !reply.closing && !reply.restart && !reply.died) {
+      // A daemon of this code answers with its code, or with the error that
+      // ended its session. Any other reply is one this CLI cannot read.
+      if (reply.failed === undefined && reply.code !== code)
+        throw new Error(
+          `the package's daemon runs another version of oracle-gaps and sent a reply this CLI cannot read; stop it with oracle-gaps --stop-daemon --package ${pkg}`,
+        )
+      return reply
+    }
     if (reply) mayStart = true
     if (Date.now() - began - held > WAIT_MS)
       throw new Error(
@@ -322,14 +333,17 @@ async function serve(pkg) {
         // A request queued before the session failed hears why.
         if (failure)
           return reply(connection, {
+            code,
             stdout: ``,
             stderr: ``,
             failed: sent(failure),
           })
         if (closing) return reply(connection, { closing: true })
-        // A daemon whose code changed declines this check and closes after
-        // the requests already queued, each of which hears `closing`.
-        if (codeIdentity() !== code) {
+        // A daemon whose code changed, or that a CLI of other code asks (a
+        // second install), declines this check and closes after the
+        // requests already queued, each of which hears `closing`; the CLI
+        // then starts a daemon of its own code.
+        if (codeIdentity() !== code || message.code !== code) {
           closing = true
           queue = queue.then(() => shutdown(connection, { restart: true }))
           return
@@ -349,7 +363,12 @@ async function serve(pkg) {
         } catch (error) {
           failed = sent(error)
         }
-        await reply(connection, { stdout, stderr: stderr.join(``), failed })
+        await reply(connection, {
+          code,
+          stdout,
+          stderr: stderr.join(``),
+          failed,
+        })
         closeAfter(idleMs)
       })
     })

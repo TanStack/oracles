@@ -10,6 +10,7 @@ import {
 import { randomBytes } from 'node:crypto'
 import { availableParallelism } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { loadAuthored } from './authored.mjs'
 import { Refusal } from './ending.mjs'
 
 const flags = new Set([`daemon`, `stop-daemon`, `ordinary`, `help`])
@@ -51,24 +52,37 @@ const help = `as \`oracle-gaps --help\` shows`
 /**
  * The options in `argv`. Paths are resolved against `cwd`, the caller's
  * working directory, which the daemon receives with each request. Arguments
- * that break the usage text refuse the run, naming the option or path.
+ * that break the usage text refuse the run, naming the option or path; a
+ * refusal carries the `--out` directory as `out` when the arguments name
+ * one, so it is written there (ending.mjs).
  */
 export function parseArgs(argv, cwd = process.cwd()) {
   const args = {}
+  // The first option that is unknown or has no value, refused once `--out`
+  // is read.
+  let problem
   for (let i = 0; i < argv.length; i += 1) {
     const [key, inline] = argv[i].replace(/^--/, ``).split(`=`)
     if (!flags.has(key) && !valued.has(key))
-      throw new Refusal(
-        `unknown option ${argv[i]}`,
-        `Use only the options ${help}.`,
-      )
-    args[key] = flags.has(key) ? true : (inline ?? argv[++i])
-    if (args[key] === undefined)
-      throw new Refusal(
-        `--${key} has no value`,
-        `Give --${key} a value, ${help}.`,
-      )
+      problem ??= [`unknown option ${argv[i]}`, `Use only the options ${help}.`]
+    else args[key] = flags.has(key) ? true : (inline ?? argv[++i])
+    if (valued.has(key) && args[key] === undefined)
+      problem ??= [`--${key} has no value`, `Give --${key} a value, ${help}.`]
   }
+  try {
+    if (problem) throw new Refusal(...problem)
+    return optionsOf(args, cwd)
+  } catch (error) {
+    if (error instanceof Refusal && args.out) error.out = resolve(cwd, args.out)
+    throw error
+  }
+}
+
+/**
+ * The options of parsed arguments `args`, or the refusal of the first that
+ * breaks the usage text.
+ */
+function optionsOf(args, cwd) {
   if (args.help) return { help: true }
   if (!args.package)
     throw new Refusal(
@@ -120,11 +134,25 @@ export function parseArgs(argv, cwd = process.cwd()) {
       `Pass --pool threads, or --pool forks for a package with a native addon.`,
     )
   const mutants = args.mutants && resolve(cwd, args.mutants)
-  if (mutants && !existsSync(mutants))
+  if (mutants && !statSync(mutants, { throwIfNoEntry: false })?.isDirectory())
     throw new Refusal(
-      `--mutants ${args.mutants} does not exist`,
+      `--mutants ${args.mutants} is not a directory`,
       `Pass --mutants the directory that holds the authored mutants' JSON files.`,
     )
+  // Authored mutants are the author's files: one that cannot be read
+  // refuses the run before any work.
+  if (mutants) loadAuthored(mutants)
+  // Each source as the package names it (packagePath), a file of the
+  // package.
+  const sources = args.source.split(`,`).map((source) => {
+    const named = packagePath(pkg, source)
+    if (!statSync(join(pkg, named), { throwIfNoEntry: false })?.isFile())
+      throw new Refusal(
+        `--source ${source} is not a file of the package`,
+        `Pass --source files that exist under --package, relative to it.`,
+      )
+    return named
+  })
   return {
     pkg,
     envPrefix,
@@ -138,8 +166,7 @@ export function parseArgs(argv, cwd = process.cwd()) {
     contexts: Number(
       args.contexts ?? Math.min(16, Math.max(2, availableParallelism() - 2)),
     ),
-    // Each source as the package names it (packagePath).
-    sources: args.source.split(`,`).map((source) => packagePath(pkg, source)),
+    sources,
     seed: args.seed,
     diffBase: args[`diff-base`],
     // Each run's output is a directory of its own under the package's state

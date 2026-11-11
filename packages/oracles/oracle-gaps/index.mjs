@@ -97,7 +97,7 @@
 import { realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { parseArgs, usage } from './args.mjs'
-import { openSession } from './check.mjs'
+import { codeIdentity, openSession } from './check.mjs'
 import { received, requestDaemon, stopDaemon } from './daemon.mjs'
 import { endRun } from './ending.mjs'
 import { memoryStore } from './evidence.mjs'
@@ -114,7 +114,11 @@ async function checkCold(options) {
 
 /** The summary of a check run by the package's daemon. */
 async function checkThroughDaemon(options) {
-  const reply = await requestDaemon(options.pkg, process.argv.slice(2))
+  const reply = await requestDaemon(
+    options.pkg,
+    process.argv.slice(2),
+    codeIdentity(),
+  )
   if (reply.stderr) process.stderr.write(reply.stderr)
   if (reply.failed) throw received(reply.failed)
   return reply.stdout
@@ -123,10 +127,30 @@ async function checkThroughDaemon(options) {
 // A file URL escapes a space, `#`, and the like, so the script's own URL is
 // compared with the URL of the path it was started as.
 if (import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
-  let exitCode = 0
   // The run's options, once its arguments parse; a refusal or an error is
   // written to their output directory.
   let options
+  let ended = false
+  // Ends the run once. A write to a pipe is asynchronous on macOS, and
+  // exiting at once cuts it off at the pipe's buffer, so the process exits
+  // once both streams have written everything before it.
+  const end = (exitCode) => {
+    if (ended) return
+    ended = true
+    process.stdout.write(``, () =>
+      process.stderr.write(``, () => process.exit(exitCode)),
+    )
+  }
+  const fail = (error) => {
+    if (ended) return
+    const ending = endRun(error, options?.out)
+    process.stderr.write(ending.stderr)
+    end(ending.exitCode)
+  }
+  // An error thrown outside the awaited check, by a timer or a promise no
+  // one awaits, ends the run the same way.
+  process.on(`uncaughtException`, fail)
+  process.on(`unhandledRejection`, fail)
   try {
     options = parseArgs(process.argv.slice(2))
     if (options.help) console.log(usage)
@@ -137,15 +161,8 @@ if (import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
       )
       console.log(`output: ${options.out}`)
     }
+    end(0)
   } catch (error) {
-    const ended = endRun(error, options?.out)
-    process.stderr.write(ended.stderr)
-    exitCode = ended.exitCode
+    fail(error)
   }
-  // A write to a pipe is asynchronous on macOS, and exiting at once cuts it
-  // off at the pipe's buffer, so the process exits once both streams have
-  // written everything before it.
-  process.stdout.write(``, () =>
-    process.stderr.write(``, () => process.exit(exitCode)),
-  )
 }
