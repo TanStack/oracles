@@ -81,7 +81,7 @@ and nothing else:
       - when several laws share one call, write the call once, and put one
         `// → result` line under it for each law.
 
-      Keep it to about five lines. Never write an assertion, a test helper,
+      Keep it to about five results. A call may span several lines. Never write an assertion, a test helper,
       or a checkpoint expression there: those belong in the code. The block
       never shows how production computes the answer. For example:
 
