@@ -19,7 +19,21 @@ export function lintCharged(lint) {
   try {
     return { messages: lint() }
   } catch (error) {
-    if (error?.ruleId === undefined) throw error
-    return { threw: String(error) }
+    return charged(error)
   }
+}
+
+/** `lintCharged` for a lint run that returns a promise, as `ESLint#lintFiles` does. */
+export async function lintChargedAsync(lint) {
+  try {
+    return { messages: await lint() }
+  } catch (error) {
+    return charged(error)
+  }
+}
+
+/** The observation of a rule's throw; any other error propagates. */
+function charged(error) {
+  if (error?.ruleId === undefined) throw error
+  return { threw: String(error) }
 }
