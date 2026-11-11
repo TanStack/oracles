@@ -1,0 +1,11 @@
+---
+'@tanstack/oracles': patch
+---
+
+A generated source now registers each part of a campaign as its own test, so a runner can shard a long campaign across jobs. For each fixed seed N, `oracleProperty` registers `fixed seed N: <name>` for each constructed history and `fixed seed N: generated` for the generated histories. The random campaign registers `random seed: <name>` and `random seed: generated` in the same way. The determinism test becomes one test per history: `determinism: fixed history: <name>`, `determinism: constructed history: <name>`, and `determinism: generated 0` to `2`. The units of a seed run exactly the histories that the campaign ran. Each unit decides its own first failure, shrinks within its own timeout, and prints its own reach line, `<id> <unit> reach {...}`. A campaign's reach is the sum of its units' lines. A unit that fails or times out prints no reach line. An enumerated source keeps its one `determinism` test.
+
+Test names change. A `-t "fixed seed"` filter still selects the fixed-seed units, and `-t "random seed"` the random units. A filter that names the old `determinism` test of a generated source now selects all its determinism units. The random units of a property share one seed, which the first random unit that runs selects and logs in the one `ORACLE_SEED` line.
+
+A path replay now names its unit in the new `${prefix}_UNIT` variable, such as `ORACLE_UNIT='random seed: generated'`. `UNIT` requires `PROPERTY`. During a path replay, only the random unit of that name runs. A path replay of a generated source without `UNIT` fails when the property registers, with "`ORACLE_PATH` of a generated source requires `ORACLE_UNIT`". A `UNIT` that names no random unit of the replayed property also fails its registration. A failing unit prints its replay command, with the seed, the path, the property, the unit, and its `-t` pattern, under the configured prefix. A failing fixed-seed unit also prints `Rerun: -t '...'`, which reruns it. The retired-variable message names `${prefix}_UNIT`.
+
+A generated source fails to load when two of its tests would share a name: a constructed history named `generated`, two constructed histories of one name, or two fixed histories of one name.
