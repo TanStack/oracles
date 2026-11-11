@@ -1587,6 +1587,124 @@ for (const [spelling, lang] of [
       inputs: `scoped`,
     })
   }
+// A direct eval through a local binding named `eval` (the eighth review): a
+// sloppy call of the identifier `eval` holding the real `eval` is direct,
+// whatever binding holds it.
+const EVAL_BINDINGS = {
+  parameter: [
+    `function f(a, code, o, eval = globalThis.eval) {\n`,
+    `  eval(code);\n  return T;\n}`,
+  ],
+  destructured: [
+    `function f(a, code, o) {\n  var { eval } = globalThis;\n`,
+    `  eval(code);\n  return T;\n}`,
+  ],
+  caught: [
+    `function f(a, code, o) {\n  try {\n    throw globalThis.eval;\n  } catch (eval) {\n`,
+    `  eval(code);\n  return T;\n  }\n}`,
+  ],
+}
+for (const [binding, [open, close]] of Object.entries(EVAL_BINDINGS))
+  for (const [target, expression] of Object.entries(SCOPE_TARGETS)) {
+    const head = target === `constant` ? `const s = 'x';\n` : ``
+    const text = `${head}${open}${close.replace(`T`, expression)}`
+    const returned = text.indexOf(`return `) + `return `.length
+    const sites = [
+      {
+        operator: `delete-call`,
+        position: text.indexOf(`eval(code);`),
+        marker: `eval(code);`,
+      },
+      { operator: `return-undefined`, position: returned, marker: expression },
+    ]
+    if (target === `constant`)
+      sites.push({
+        operator: `optional-chain`,
+        position: returned,
+        marker: `s?.length`,
+      })
+    if (target === `local`)
+      sites.push(textSite(text, `binary-swap`, `&&`, returned))
+    textPrograms.push({
+      kind: `text`,
+      lang: `js`,
+      family: `scope`,
+      name: `eval as a ${binding} ${target}`,
+      text,
+      sites,
+      inputs: `scoped`,
+    })
+  }
+// The generator witness of the eighth review: a yield that reads a `let`
+// before its declaration.
+for (const op of [`&&`, `||`, `??`]) {
+  const text = `function f(c) {\n  yield (c ${op} x ? 1 : 1);\n  let x = 1;\n}`
+  textPrograms.push({
+    kind: `text`,
+    lang: `js`,
+    family: `zone`,
+    name: `let before a yield ${op}`,
+    text,
+    sites: [textSite(text, `binary-swap`, op)],
+    inputs: `zone`,
+    generatorOnly: true,
+  })
+}
+// Each program of the dead-zone, scope, binding, and returned-call
+// dimensions again as an async function, a generator, and an async
+// generator (the eighth review: a rejected promise or a throwing iterator
+// is a result too). The first `function` keyword is the one rewritten, and
+// every site after it moves by what the rewrite inserts.
+const KINDS = {
+  async: [`async `, 0],
+  generator: [`*`, 8],
+  asyncGenerator: [`async *`, 0],
+}
+for (const program of textPrograms.splice(0)) {
+  const at = program.text.indexOf(`function `)
+  const kinds = [
+    `sync`,
+    ...(at < 0 || ![`zone`, `scope`, `binds`, `called`].includes(program.family)
+      ? []
+      : Object.keys(KINDS)),
+  ]
+  for (const kind of kinds) {
+    if (program.generatorOnly && !kind.toLowerCase().includes(`generator`))
+      continue
+    if (kind === `sync`) {
+      if (!program.generatorOnly) textPrograms.push(program)
+      continue
+    }
+    const [insert, offset] = KINDS[kind]
+    const pieces =
+      insert === `async *`
+        ? [
+            [`async `, 0],
+            [`*`, 8],
+          ]
+        : [[insert, offset]]
+    let text = program.text
+    let sites = program.sites
+    let shift = 0
+    for (const [piece, after] of pieces) {
+      const where = at + after + shift
+      text = `${text.slice(0, where)}${piece}${text.slice(where)}`
+      sites = sites.map((site) =>
+        site.position >= where
+          ? { ...site, position: site.position + piece.length }
+          : site,
+      )
+      shift += piece.length
+    }
+    textPrograms.push({
+      ...program,
+      name: `${program.name}, ${kind}`,
+      text,
+      sites,
+      generatorOnly: undefined,
+    })
+  }
+}
 const CHAIN_FORMS = {
   number: [`number`, `a < 5 && p < q ? a : 5`],
   bigint: [`bigint`, `a < b && p < q ? a : b`],
@@ -1665,8 +1783,8 @@ const TEXT_INPUTS = {
       ),
     ),
   chainBigint: () =>
-    [4n, 5n, 5].flatMap((a) =>
-      [5n, 5].flatMap((b) =>
+    [4n, 5n, 5, null].flatMap((a) =>
+      [5n, 5, 0n].flatMap((b) =>
         [1, 2, VALUED, {}].flatMap((p) =>
           [1, 2, VALUED, {}].map((q) => [a, b, p, q]),
         ),
@@ -1724,14 +1842,94 @@ const loadText = (text) => {
   }).outputText
   return new Function(`${js}\nreturn f`)()
 }
-const textCache = new Map()
-function evaluateText(program, input, change) {
-  const text = change?.kind === `text` ? change.text : program.text
-  if (!textCache.has(text)) textCache.set(text, loadText(text))
-  try {
-    return encoded(textCache.get(text)(...input))
-  } catch (error) {
-    return `threw ${error.name}`
+// A result as it settles (the eighth review: a promise, or an iterator, is
+// a result only once it settles). A promise is awaited: fulfilled with an
+// encoded value, or rejected with an error's name. An iterator is driven,
+// eight steps at most: each yield, the return, or a throw.
+const ITERATION_BOUND = 8
+async function settled(value) {
+  if (typeof value?.then === `function`) {
+    try {
+      return `fulfilled ${encoded(await value)}`
+    } catch (error) {
+      return `rejected ${error?.name}`
+    }
+  }
+  if (
+    typeof value?.next === `function` &&
+    (Symbol.iterator in value || Symbol.asyncIterator in value)
+  ) {
+    const steps = []
+    try {
+      for (let i = 0; i < ITERATION_BOUND; i += 1) {
+        const step = await value.next()
+        steps.push(`${step.done ? `return` : `yield`} ${encoded(step.value)}`)
+        if (step.done) break
+      }
+    } catch (error) {
+      steps.push(`threw ${error?.name}`)
+    }
+    return `iterated ${steps.join(`, `)}`
+  }
+  return encoded(value)
+}
+// Each run of a function over a domain, settled, with its effects.
+async function settledRuns(f, domain) {
+  const runs = []
+  for (const input of domain) {
+    const before = effects.count
+    let result
+    try {
+      result = await settled(f(...input))
+    } catch (error) {
+      result = `threw ${error.name}`
+    }
+    runs.push({ result, reads: effects.count - before })
+  }
+  return runs
+}
+// The model of a text program: the runs of its text and of each site's
+// mutant text, settled. They are computed when this file loads, since a
+// settled run is asynchronous and the model is not.
+const textRuns = new Map()
+const textKey = (program, text) =>
+  `${program.family}\u0000${program.name}\u0000${text}`
+for (const program of textPrograms)
+  for (const text of [
+    program.text,
+    ...program.sites.map((site) => mutateSite(program.text, site)),
+  ])
+    textRuns.set(
+      textKey(program, text),
+      await settledRuns(loadText(text), TEXT_INPUTS[program.inputs]()),
+    )
+const sameRun = (x, y) => x.result === y.result && x.reads === y.reads
+// The model's expectation for a text program, from its settled runs: a
+// site is distinct where some input's run differs, and labelled where no
+// input of the declared types does.
+function textModel(program) {
+  const original = textRuns.get(textKey(program, program.text))
+  const typed = textTypedMask(program)
+  return {
+    source: program.text,
+    sites: program.sites.map((site) => {
+      const runs = textRuns.get(
+        textKey(program, mutateSite(program.text, site)),
+      )
+      const distinct = runs.some((run, i) => !sameRun(run, original[i]))
+      return {
+        operator: site.operator,
+        position: site.position,
+        distinct,
+        label:
+          typed !== undefined &&
+          distinct &&
+          runs.every((run, i) => !typed[i] || sameRun(run, original[i])),
+        dead: !distinct,
+        zeroDistinct: false,
+        ...(site.operator === `return-undefined` ? { runs: digest(runs) } : {}),
+      }
+    }),
   }
 }
 function renderText(program) {
@@ -1745,6 +1943,15 @@ function renderText(program) {
   }
 }
 const textDomain = (program) => TEXT_INPUTS[program.inputs]()
+// Which inputs of a text program's domain its declared types admit, where
+// an annotation declares them.
+const textTypedMask = (program) => {
+  const typed = textTypedDomain(program)
+  if (typed === undefined) return undefined
+  const domain = TEXT_INPUTS[program.inputs]()
+  const admitted = new Set(typed.map((input) => input.map(encoded).join()))
+  return domain.map((input) => admitted.has(input.map(encoded).join()))
+}
 const textTypedDomain = (program) => {
   if (program.family === `coerced` && program.annotation !== undefined)
     return textDomain(program).filter(
@@ -1753,7 +1960,9 @@ const textTypedDomain = (program) => {
         COERCED_TYPED[program.annotation](q),
     )
   if (program.family === `chain`) {
-    const operand = (v) => typeof v === program.operandType
+    // Without strict null checks an annotated operand admits `null`, and the
+    // CLI does not know the package's strictness (the eighth review).
+    const operand = (v) => typeof v === program.operandType || v === null
     const other = COERCED_TYPED[program.annotation]
     return textDomain(program).filter((input) => {
       const [p, q] = input.slice(-2)
@@ -2852,9 +3061,9 @@ const families = {
     evaluate: evaluateReturned,
     domain: returnDomain,
   },
+  // A text program's model is its settled runs (`textModel`).
   text: {
     render: renderText,
-    evaluate: evaluateText,
     domain: textDomain,
     typedDomain: textTypedDomain,
   },
@@ -2879,10 +3088,16 @@ const shows = (program, input, change) => {
 // law applies (the first family's annotations, and an annotated receiver).
 const domainOf = (program) =>
   familyOf(program)?.domain(program) ?? JS_DOMAIN[program.type]
+// The first family's declared inputs admit `null` and `undefined` too: the
+// CLI does not know whether the package has strict null checks, so a label
+// holds only where it holds without them (the eighth review).
+const LOOSE_DOMAIN = Object.fromEntries(
+  TYPES.map((t) => [t, cube([...VALUES[t], null, undefined])]),
+)
 const typedDomainOf = (program) =>
   familyOf(program)
     ? familyOf(program).typedDomain?.(program)
-    : DOMAIN[program.type]
+    : LOOSE_DOMAIN[program.type]
 const zeroDomainOf = (program) =>
   familyOf(program)
     ? domainOf(program).filter(([, a]) => a === 0)
@@ -2915,6 +3130,7 @@ function modelRuns(program, change) {
 
 function model(program) {
   if (program.kind === `escape`) return { source: program.text, sites: [] }
+  if (program.kind === `text`) return textModel(program)
   const { text, sites } = sourceOf(program)
   const distinctIn = (copy, index) => {
     const change = sourceOf(copy).sites[index].change
@@ -2986,9 +3202,7 @@ function switchFor(active) {
 // The free global `g`, whose getter counts the reads of one call.
 let globalReads = 0
 // Each input's result and the reads it made, with `g` installed as a counter.
-// A text program's run neither copies its inputs (a getter would run in the
-// copy) nor keeps a result's identity (`encoded`).
-function runAll(f, domain, plain = false) {
+function runAll(f, domain) {
   Object.defineProperty(globalThis, FREE, {
     configurable: true,
     get: () => ++globalReads,
@@ -3004,15 +3218,11 @@ function runAll(f, domain, plain = false) {
       try {
         result = f(
           ...input.map((value) =>
-            !plain &&
-            typeof value === `object` &&
-            value !== null &&
-            value !== VALUED
+            typeof value === `object` && value !== null && value !== VALUED
               ? { ...value }
               : value,
           ),
         )
-        if (plain) result = encoded(result)
       } catch (error) {
         result = `threw ${error.name}`
       }
@@ -3026,11 +3236,11 @@ const sameRuns = (xs, ys) =>
   xs.every(
     (x, i) => Object.is(x.result, ys[i].result) && x.reads === ys[i].reads,
   )
-function runsUnder(code, active, domain, plain = false) {
+function runsUnder(code, active, domain) {
   const previous = globalThis.__oracleGaps
   globalThis.__oracleGaps = switchFor(active)
   try {
-    return runAll(load(code), domain, plain)
+    return runAll(load(code), domain)
   } finally {
     globalThis.__oracleGaps = previous
   }
@@ -3117,12 +3327,49 @@ function escapeDriver(program, observe) {
   })
 }
 
+// A text program's driver awaits each run's settling, as its model does.
+async function textDriver(program, observe) {
+  const domain = domainOf(program)
+  const original = await settledRuns(loadText(program.text), domain)
+  const ext = program.lang === `js` ? `js` : `ts`
+  const path = `/mutant-validity.${ext}`
+  const { code, mutants } = instrument(
+    ts,
+    path,
+    program.text,
+    `src/mutant-validity.${ext}`,
+  )
+  const under = async (active) => {
+    const previous = globalThis.__oracleGaps
+    globalThis.__oracleGaps = switchFor(active)
+    try {
+      return await settledRuns(load(code), domainOf(program))
+    } finally {
+      globalThis.__oracleGaps = previous
+    }
+  }
+  const same = (runs) => runs.every((run, i) => sameRun(run, original[i]))
+  const clean = same(await under(null))
+  const emitted = []
+  for (const mutant of mutants) {
+    const runs = await under(mutant.number)
+    emitted.push({
+      operator: mutant.operator,
+      position: mutant.position,
+      differs: !same(runs),
+      evidence: mutant.evidence,
+      ...(mutant.outside ? { outside: mutant.outside } : {}),
+      ...(mutant.operator === `return-undefined` ? { runs: digest(runs) } : {}),
+    })
+  }
+  observe(`instrumented`, { clean, emitted })
+}
 function driver(program, observe) {
   if (program.kind === `escape`) return escapeDriver(program, observe)
+  if (program.kind === `text`) return textDriver(program, observe)
   const { text } = sourceOf(program)
   const domain = domainOf(program)
-  const plain = program.kind === `text`
-  const original = runAll(load(text), domain, plain)
+  const original = runAll(load(text), domain)
   const ext = program.lang === `js` ? `js` : `ts`
   const path = `/mutant-validity.${ext}`
   const { code, mutants } = instrument(
@@ -3131,9 +3378,9 @@ function driver(program, observe) {
     text,
     `src/mutant-validity.${ext}`,
   )
-  const clean = sameRuns(runsUnder(code, null, domain, plain), original)
+  const clean = sameRuns(runsUnder(code, null, domain), original)
   const emitted = mutants.map((mutant) => {
-    const runs = runsUnder(code, mutant.number, domain, plain)
+    const runs = runsUnder(code, mutant.number, domain)
     return {
       operator: mutant.operator,
       position: mutant.position,
