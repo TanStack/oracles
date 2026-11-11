@@ -33,10 +33,11 @@
  *   says it is not `unowned`. Module-level data is a unit of its own, named
  *   by its variable: owned through the functions that read it, by an owns
  *   entry that names it, or by a whole-file entry, and what its initializer
- *   holds is in its tree (F10). An `owns` key inside an expectation's
- *   arguments (`expect(x).toEqual({ owns: [...] })`) is data that the test
- *   compares: it makes no oracle file and refuses nothing, literal or not
- *   (review of remove/declare-oracle, 2026-11-11, finding 6).
+ *   holds is in its tree (F10). An `owns` key inside an assertion's
+ *   arguments (`expect(x).toEqual({ owns: [...] })`, `assert.deepEqual`,
+ *   `chai.expect`, `expectTypeOf`, and the other forms of ASSERTION_FORMS)
+ *   is data that the test compares: it makes no oracle file and refuses
+ *   nothing, literal or not (review of remove/declare-oracle, 2026-11-11).
  * - **Keys.** Each mutant's key is the model's anchor.
  * - **Selected keys.** A run that selects mutants (`--only`, `--sample`)
  *   keys each selected mutant as the full run does: keys are numbered over
@@ -90,6 +91,7 @@
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   readdirSync,
   realpathSync,
   rmSync,
@@ -104,6 +106,7 @@ import fc from 'fast-check'
 import { oracleProperty, pass, violation } from '../src/oracle-property.ts'
 import { analyze, isRunnerCopy } from './analysis.mjs'
 import {
+  ASSERTION_FORMS,
   DERIVED,
   DERIVED_INPUTS,
   LIB,
@@ -327,10 +330,21 @@ const badArguments = fc.record({
   // Whether the arguments name an output directory (`--out`).
   out: fc.boolean(),
 })
-// An `owns` key in an expectation's arguments in the ordinary test file
-// (`expect(x).toEqual({ owns: [...] })`): none, a literal list, or a list
-// that is not a literal. It declares no ownership, so the model ignores it.
-const matcherOwns = fc.constantFrom(`none`, `none`, `literal`, `nonLiteral`)
+// An `owns` key in an assertion's arguments in the ordinary test file, such
+// as `expect(x).toEqual({ owns: [...] })`: none, or an assertion form of
+// ASSERTION_FORMS with a literal list or a list that is not a literal. It
+// declares no ownership, so the model ignores it.
+const assertionForms = Object.keys(ASSERTION_FORMS)
+const matcherOwns = fc.oneof(
+  { weight: 2, arbitrary: fc.constant(`none`) },
+  {
+    weight: 1,
+    arbitrary: fc.record({
+      form: fc.constantFrom(...assertionForms),
+      list: fc.constantFrom(`literal`, `nonLiteral`),
+    }),
+  },
+)
 // Each history of the shared grammar, with its argument fault and its
 // matcher's `owns`.
 const argumentHistories = fc.tuple(histories, badArguments, matcherOwns).map(
@@ -753,10 +767,12 @@ async function driver(plan, observe) {
       states.add(`owns read from a wrapper call`)
     if (!before.refusal && plan.declaration === `both`)
       states.add(`owns read from both declarations`)
-    if (plan.matcherOwns === `literal`)
-      states.add(`a literal owns in an expectation ignored`)
-    if (plan.matcherOwns === `nonLiteral`)
-      states.add(`an owns that is not a literal in an expectation ignored`)
+    // The assertion that the ordinary file holds, read from the file on disk
+    // that the analysis read, not from the plan.
+    for (const state of assertionStates(
+      readFileSync(join(dir, `tests/c.test.ts`), `utf8`),
+    ))
+      states.add(state)
     // The statement whose lines hold a mutant, by the model's layout.
     const statementAt = (m) =>
       plan.functions
@@ -1271,6 +1287,31 @@ const calibrations = [
   },
 ]
 
+// The states of an `owns` key in an assertion, read from a test file's
+// text: the assertion's form, each spelled as ASSERTION_FORMS writes it for
+// an object, and whether its list is a literal.
+const assertionState = (form) =>
+  `an owns in an assertion of form ${form} read as data`
+const literalAssertionState = `a literal owns in an assertion read as data`
+const computedAssertionState = `an owns that is not a literal in an assertion read as data`
+function assertionStates(text) {
+  const states = []
+  for (const [form, write] of Object.entries(ASSERTION_FORMS)) {
+    const [before] = write(`\u0000`).split(`\u0000`)
+    for (const line of text.split(`\n`)) {
+      const at = line.indexOf(`${before}{ owns: `)
+      if (at < 0 || line.slice(0, at).trim() !== ``) continue
+      states.push(assertionState(form))
+      states.push(
+        line.includes(`{ owns: [`)
+          ? literalAssertionState
+          : computedAssertionState,
+      )
+    }
+  }
+  return states
+}
+
 const faults = [`badEntry`, `missingSource`, `nonLiteral`, `outsideSource`]
 // Each constructed history builds from a generated history whose `owns` is
 // on a wrapper's call and whose first function is owned, the form the other
@@ -1329,8 +1370,9 @@ const required = [
   `owns read from oracleProperty`,
   `owns read from a wrapper call`,
   `owns read from both declarations`,
-  `a literal owns in an expectation ignored`,
-  `an owns that is not a literal in an expectation ignored`,
+  ...assertionForms.map(assertionState),
+  literalAssertionState,
+  computedAssertionState,
   `refused without an oracle file`,
   `refused without an owner`,
   `refused badEntry with no owner`,
@@ -1340,7 +1382,7 @@ const required = [
 oracleProperty({
   id: `oracle-gaps.report-static`,
   law: {
-    statement: `The gap report's static half keeps every Svelte rune where Svelte allows it, gives each run's default output a directory of its own under its package's state, so runs of one package and of two packages never collide, enumerates the promised operator mutants, marks exactly the probe-only code, refuses broken owns declarations, reads no owns from an expectation's arguments, gives each function the owners whose call trees contain it, anchors each mutant's key, keeps keys, probe marks, and ownership stable under unrelated edits, and keeps each derived class's \`super(...)\` call unconditional. In a derived constructor, no mutant site lies before the first statement that calls super or inside that statement (an arrow inherits super, so an arrow's call counts), and statements after it keep their sites. So no mutant, when active, prevents or delays the super call. With no mutant active the instrumented class behaves as its source does, and under every mutant the constructor completes with its base class's tag unless an early return ends it first. Bad arguments (a missing --package or --source, a --package that does not exist, a source outside the package, a bad --env-prefix, --seed, count, or limit, an unknown --pool, a --mutants directory that does not exist, an option with no value, an unknown option, one long past a pipe's buffer included, a --source that is missing or is a directory, a --config that is missing or is a directory, and a --mutants file that is not JSON, lacks a field, or repeats an id) refuse the real CLI, cold or with --daemon, with exit 2 and a refused: block that names the cause, then one fix: directive that offers no way around the fix, and no stack trace; with --out, the refusal replaces an earlier run's results.json there and removes its error.log.`,
+    statement: `The gap report's static half keeps every Svelte rune where Svelte allows it, gives each run's default output a directory of its own under its package's state, so runs of one package and of two packages never collide, enumerates the promised operator mutants, marks exactly the probe-only code, refuses broken owns declarations, reads no owns from an assertion's arguments (an expect chain, Vitest's assert or chai, or expectTypeOf), gives each function the owners whose call trees contain it, anchors each mutant's key, keeps keys, probe marks, and ownership stable under unrelated edits, and keeps each derived class's \`super(...)\` call unconditional. In a derived constructor, no mutant site lies before the first statement that calls super or inside that statement (an arrow inherits super, so an arrow's call counts), and statements after it keep their sites. So no mutant, when active, prevents or delays the super call. With no mutant active the instrumented class behaves as its source does, and under every mutant the constructor completes with its base class's tag unless an early return ends it first. Bad arguments (a missing --package or --source, a --package that does not exist, a source outside the package, a bad --env-prefix, --seed, count, or limit, an unknown --pool, a --mutants directory that does not exist, an option with no value, an unknown option, one long past a pipe's buffer included, a --source that is missing or is a directory, a --config that is missing or is a directory, and a --mutants file that is not JSON, lacks a field, or repeats an id) refuse the real CLI, cold or with --daemon, with exit 2 and a refused: block that names the cause, then one fix: directive that offers no way around the fix, and no stack trace; with --out, the refusal replaces an earlier run's results.json there and removes its error.log.`,
     authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the frozen design's plan for an oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); for rune placement, Svelte 5's placement rule for runes (state_invalid_placement, effect_invalid_placement) and the maintainer's report of svelte-db's useLiveQuery.svelte.ts failing to compile under instrumentation (2026-11-08); for derived classes, the gap report's contract that instrumentation with no mutant active does not change behavior and that a mutant is a legal program variant (the operator contract in schemata.mjs), ECMAScript's rule that a derived constructor calls \`super\` before it reads \`this\` and before it returns, the maintainer's report of TanStack DB's subscription.ts failing with no mutant active (G11, 2026-11-09), and the maintainer's decision of 2026-11-09 on the derived constructor's site region (every shape of super, including an early return before it, is covered by the one rule); for the report-shaped ending, the maintainer's decision of 2026-11-10 ("we should never just crash -- the cli should also return something sensible") and the usage text in args.mjs, the CLI's documented interface.`,
     limits: `The grammar and model of oracle-gaps.report, with its limits. Outcomes that need test runs, and the failing-owner refusal, belong to oracle-gaps.report. Same-named functions, accessors, and field arrows are judged for ownership only; runes only as $state, $state.raw, $derived, $derived.by, $effect, and $effect.pre in a .svelte.ts module, judged by a restatement of Svelte's placement rule rather than the compiler. A derived class is judged in this oracle's in-process run and in the end-to-end oracle's static half: the end-to-end oracle instruments its file and judges its sites as unowned, but no test imports or constructs the class, so no test runs it. The in-process run transpiles the file to CommonJS at ES2022; other downlevel targets and Vitest's own transform are not exercised. The mutant switch (switchFor) is a hand copy of the switch's contract in schemata.mjs, not the capture setup's runtime: the capture setup imports Vitest and installs timers and globals when it loads, so it cannot run in-process. The derived grammar has one derived class per history, with parameter properties, a field, statements before and after super, an early return before it, and the four forms of the super call (a statement, an arrow argument, and the right operand of \`&&\` or \`||\`). It has no super call in a method, a nested class, or a \`super.method()\` call, and no default parameter. Module-level data is four \`const\` declarations of the main source (an object literal, an array that holds \`devBuild\` as a value, a boolean, and an object of two methods), and a top-level loop of the \`..gen/\` file whose variable is no unit, each read in place by generated or witness functions or named by an owns entry; data imported from another file, \`let\` data, enums, and default exports are not generated. A destructured declaration (\`const { a } = obj\`) stays \`<module>\`, and a function made by a call (\`const h = memo(() => …)\`) now belongs to the unit \`h\`; neither is generated. Unnamed exports are seven files of a helper and one exported function each (an ES default function, a default arrow bare and in parentheses, CommonJS \`module.exports\` alone and chained through \`exports\`, \`exports.default\`, and \`exports.run\`), each calling its helper, owned through an owns entry that names them or through an importer that imports and calls each but \`exports.default\` (a default import of a CommonJS module resolves to the module, not its \`default\`, so a reference to \`exports.default\` through an import is not judged). TypeScript's \`export = <function>\` is named \`default\` by the same rule but is not generated, nor is \`export default class {}\` or \`module.exports = { ... }\` (whose methods are named by their properties). A mutant of these forms was keyed \`<module>\` before and is keyed \`default\` (or its export's name) now: a one-time change of saved keys. A method that module data holds references nothing, so whether a method's references stay out of the declaration's tree is not judged. The ending law is judged here only for argument refusals, one fault per history; refusals from the analysis and the runner, and the daemon's own path, are the end-to-end oracle's. No legal history reaches an internal error, so its shape (exit 3, the stack in error.log) is not judged; a calibration shows that the check rejects a stack trace on stderr.`,
   },
@@ -1367,8 +1409,9 @@ oracleProperty({
               ...faults.map((f) => `refused ${f}`),
               `owns read from oracleProperty`,
               `owns read from both declarations`,
-              `a literal owns in an expectation ignored`,
-              `an owns that is not a literal in an expectation ignored`,
+              ...assertionForms.map(assertionState),
+              literalAssertionState,
+              computedAssertionState,
               `refused without an oracle file`,
               `refused without an owner`,
               `refused badEntry with no owner`,
@@ -1662,33 +1705,34 @@ oracleProperty({
           steps: null,
         }),
       })),
-      // An expectation's `owns` makes no oracle file: with no other
+      // An assertion's `owns` makes no oracle file: with no other
       // declaration the run refuses for want of one, and a list that is not
-      // a literal refuses nothing.
+      // a literal refuses nothing. One history for each assertion form.
       {
-        name: `a literal owns in an expectation makes no oracle file`,
+        name: `a literal owns in an assertion makes no oracle file`,
         enters: [
-          `a literal owns in an expectation ignored`,
+          assertionState(`expect`),
+          literalAssertionState,
           `refused without an oracle file`,
         ],
         build: (generated) => ({
           ...generated,
           declaration: `neither`,
           fault: `none`,
-          matcherOwns: `literal`,
+          matcherOwns: { form: `expect`, list: `literal` },
           steps: null,
         }),
       },
-      {
-        name: `an owns that is not a literal in an expectation refuses nothing`,
-        enters: [`an owns that is not a literal in an expectation ignored`],
+      ...assertionForms.map((form) => ({
+        name: `an owns that is not a literal in a ${form} assertion refuses nothing`,
+        enters: [assertionState(form), computedAssertionState],
         build: (generated) => ({
           ...generated,
           fault: `none`,
-          matcherOwns: `nonLiteral`,
+          matcherOwns: { form, list: `nonLiteral` },
           steps: null,
         }),
-      },
+      })),
       {
         name: `a bad entry in a run with no owner names the bad entry`,
         enters: [`refused badEntry with no owner`],

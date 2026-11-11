@@ -2438,8 +2438,8 @@ function resolveHistory(history) {
     stability: history.stability,
     steps: history.steps ?? [],
     ordinary: history.ordinary === true,
-    // An `owns` key in an expectation's arguments, in the ordinary file:
-    // none, a literal list, or a list that is not a literal.
+    // An `owns` key in an assertion's arguments, in the ordinary file: its
+    // assertion form and whether its list is a literal, or none.
     matcherOwns: history.matcherOwns ?? `none`,
     config: history.config ?? `object`,
     ...configOf(history),
@@ -3938,6 +3938,26 @@ function oracleTestFile(plan, file) {
   return `${out.join(`\n`)}\n`
 }
 
+/**
+ * The assertions that may hold an `owns` key in their arguments, each as the
+ * statement it writes for an object: every form of `expect` that Vitest
+ * offers (a matcher, a negated or soft one, one read by a computed member,
+ * and an aliased `expect`), Vitest's `assert` and `chai`, and
+ * `expectTypeOf`.
+ */
+export const ASSERTION_FORMS = {
+  expect: (object) => `expect(compared).toEqual(${object})`,
+  'expect-not': (object) => `expect(compared).not.toEqual(${object})`,
+  'expect-soft': (object) => `expect.soft(compared).toEqual(${object})`,
+  'expect-computed': (object) => `expect(compared)['toEqual'](${object})`,
+  'expect-aliased': (object) => `check(compared).toEqual(${object})`,
+  'expect-argument': (object) => `expect(${object}).toBeDefined()`,
+  assert: (object) => `assert.deepEqual(compared, ${object})`,
+  chai: (object) => `chai.expect(compared).to.deep.equal(${object})`,
+  'expect-type-of': (object) =>
+    `expectTypeOf(compared).toEqualTypeOf(${object})`,
+}
+
 function ordinaryTestFile(plan) {
   const sites = sitesOf(plan)
   const out = [
@@ -3957,24 +3977,25 @@ function ordinaryTestFile(plan) {
   })
   if (!plan.tests.some((t) => t.file === `c`))
     out.push(`test.skip('no tests', () => {})`)
-  // An `owns` key in an expectation's arguments is data that the test
+  // An `owns` key in an assertion's arguments is data that the test
   // compares, so it declares no ownership: the file stays an ordinary test
   // file, and a list that is not a literal refuses nothing (review of
-  // remove/declare-oracle, 2026-11-11, finding 6). The model's ownership
-  // and refusals never read it.
-  if (plan.matcherOwns === `literal`)
-    out.push(
-      `test('owns in a matcher', () => {`,
-      `  expect({ owns: ['${SOURCE}'] }).toEqual({ owns: ['${SOURCE}'] })`,
-      `})`,
-    )
-  if (plan.matcherOwns === `nonLiteral`)
+  // remove/declare-oracle, 2026-11-11). The model's ownership and refusals
+  // never read it.
+  const assertion = ASSERTION_FORMS[plan.matcherOwns?.form]
+  if (assertion !== undefined) {
+    const list =
+      plan.matcherOwns.list === `literal`
+        ? `['${SOURCE}']`
+        : `compared.owns.slice(1)`
+    out[0] = `import { assert, chai, expect, expect as check, expectTypeOf, test } from 'vitest'`
     out.push(
       `const compared = { owns: ['${SOURCE}'] }`,
-      `test('owns in a matcher', () => {`,
-      `  expect(compared).not.toEqual({ owns: compared.owns.slice(1) })`,
+      `test('owns in an assertion', () => {`,
+      `  ${assertion(`{ owns: ${list} }`)}`,
       `})`,
     )
+  }
   return `${out.join(`\n`)}\n`
 }
 
