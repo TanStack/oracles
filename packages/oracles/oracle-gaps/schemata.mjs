@@ -566,8 +566,9 @@ export function instrument(ts, path, text, source, offset = 0) {
       : undefined
   }
   // A local binding: a name that resolves to a parameter, a variable, or a
-  // caught error of a function (a binding element of one included), in a
-  // file with no `with`, which reads names through an object. A global or a
+  // caught error of a function (a binding element of one included). The
+  // binder resolves no name inside a `with`, which reads names through an
+  // object, so a name there is no local binding. A global or a
   // module-level name can read an accessor, so reading it twice is not
   // reading it once. Dead zones, one rule: a parameter, a caught error, a
   // `let`, or a `const` read before its declaration ends (inside its own
@@ -586,7 +587,6 @@ export function instrument(ts, path, text, source, offset = 0) {
     return n
   }
   const localBinding = (identifier) => {
-    if (dynamicScope.with) return false
     const found = bindingOf(identifier)
     if (found === undefined) return false
     const declared = root(found)
