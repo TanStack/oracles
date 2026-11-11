@@ -65,7 +65,12 @@
  *    (its helper infects on reach).
  * 7. Every survivor's message is one directive from its class's fixed set,
  *    built from the run's data (the test that infected it, the operands
- *    seen, the outcome an `if` took). A message never offers an exit:
+ *    seen, the outcome an `if` took). A message that names a test names the
+ *    first one that the class's condition holds for, in the order of the
+ *    baseline run's records, so the same records give the same message. The
+ *    driver gives the records in file order. That a real run records its
+ *    tests in the same order each time is the end-to-end oracle's
+ *    determinism test's. A message never offers an exit:
  *    no equivalence, approval, limit, choice, or question. A mutant with the
  *    `boundary: -0` hint adds "Add a boundary history with -0 and 0." to its
  *    message. The summary's message is read as an author reads it.
@@ -507,7 +512,8 @@ function modelOutcome(h, mi) {
       ? { ...result, testOutcome: ordinaryOutcome(h, mi, ordinary) }
       : result
   if (owners.size === 0) return { outcome: `unowned` }
-  const targets = [...owners].filter(reachingIn)
+  // In file order, the order of the baseline records (law 7).
+  const targets = [...owners].sort((a, b) => a - b).filter(reachingIn)
   if (targets.length === 0)
     return withOrdinary({
       outcome: `unreached`,
@@ -1226,6 +1232,8 @@ async function driver(h, observe) {
     }
     if (result.outcome === `killed` && units.some((u) => u.timedOut))
       states.add(`killed beside a timeout`)
+    if (new Set(result.changedTests?.map((k) => k.split(` > `)[0])).size > 1)
+      states.add(`a value changed in two owner files`)
     if (needsOrdinary(result, targets))
       result.testOutcome = judgeOrdinary(
         targets.testTargets.map((file) => unitOf(h, fileIndex(file), mi)),
@@ -1879,6 +1887,7 @@ const required = [
   `timeout`,
   `killed`,
   `killed beside a timeout`,
+  `a value changed in two owner files`,
   `agreement-only-kill`,
   `random-only-kill`,
   `unregistered-kill`,
@@ -2055,6 +2064,27 @@ const constructed = [
   single(`a changed value`, [`not-judged`], {
     effect: { kind: `changed` },
   }),
+  {
+    // Two owner files' tests changed a value, and the mutant names its
+    // owners against file order. The message names the first file's test.
+    name: `a value changed in two owner files`,
+    enters: [`not-judged`, `a value changed in two owner files`],
+    build: () => {
+      const base = single(`x`, [], { effect: { kind: `changed` } }).build()
+      return {
+        ...base,
+        // The tests' names differ, so the message shows which one it named.
+        files: [
+          base.files[0],
+          {
+            ...base.files[0],
+            tests: [{ ...base.files[0].tests[0], label: `it's ` }],
+          },
+        ],
+        mutants: [{ ...base.mutants[0], owners: [1, 0] }],
+      }
+    },
+  },
   single(`a changed observation`, [`not-judged`], {
     effect: { kind: `observedChanged` },
   }),
