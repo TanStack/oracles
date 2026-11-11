@@ -68,10 +68,19 @@ and nothing else:
    Write it as continuous prose in this order. Do not label the parts with
    the names below ("The hook", "The mechanism"): they are for you, not the
    reader.
-   1. **The contract at a glance:** a short code block, first, that shows the
-      public API promises this oracle maintains. A reader takes it in at one
-      look. Give it no title, and no sentence that introduces
-      it. Write each line as `call // → result`:
+   1. **What this oracle owns**, in one or two plain sentences: the
+      concrete promise it maintains, the public entry point and checkpoints
+      where the promise is owed, and the owned code. A reader who stops here
+      knows what the file is for. Name the promise itself. "The stylesheet
+      matches the options the README documents" names no promise. For
+      example: "This oracle owns `klona`'s deep-copy promise for the default
+      mode, checked on the value that `klona(x)` returns. It owns
+      `src/index.js#klona`."
+
+   2. **The contract at a glance:** a short code block, right after those
+      sentences, that shows the public API promises this oracle maintains. A
+      reader takes it in at one look. Give it no title, and no sentence that
+      introduces it. Write each line as `call // → result`:
       - the call is the public API, written the way a user writes it, with
         concrete values where they make the promise clear.
       - the result is what the user gets back or sees: a value, or a short
@@ -81,9 +90,10 @@ and nothing else:
       - when several laws share one call, write the call once, and put one
         `// → result` line under it for each law.
 
-      Keep it to about five results. A call may span several lines. Never write an assertion, a test helper,
-      or a checkpoint expression there: those belong in the code. The block
-      never shows how production computes the answer. For example:
+      Keep it to about five results. A call may span several lines. Never write
+      an assertion, a test helper, or a checkpoint expression there: those
+      belong in the code. The block never shows how production computes the
+      answer. For example:
 
       ```ts
       klona(x) // → a deep copy: same kind, prototype, and values as x, sharing no object with it
@@ -91,14 +101,6 @@ and nothing else:
       typography({ scaleRatio: 2, baseFontSize: '15.5px' }) // → h1 font size 31px (open)
       ```
 
-   2. **What this oracle owns**, in one or two plain sentences: the
-      concrete promise it maintains, the public entry point and checkpoints
-      where the promise is owed, and the owned code. A reader who stops here
-      knows what the file is for. Name the promise itself. "The stylesheet
-      matches the options the README documents" names no promise. For
-      example: "This oracle owns `klona`'s deep-copy promise for the default
-      mode, checked on the value that `klona(x)` returns. It owns
-      `src/index.js#klona`."
    3. **The hook:** the one concrete case that shows where the promise is
       easy to get wrong. Write it as code where you can. Choose its form by
       the oracle's shape:
@@ -225,8 +227,9 @@ Say in the evidence which trigger fired, or that none did.
 
 - From the prose alone, a reader can predict one observation of each law.
   For a no-throw law, the observation is that the call returns.
-- The law block starts with the contract code block: public API calls and
-  their results, with no assertion or helper. Each line states the same law
+- The law block starts with one or two sentences on what the oracle owns,
+  then the contract code block: public API calls and their results, with no
+  assertion or helper. Each line states the same law
   as its sentence.
 - The opening names the promise that the oracle owns.
 - No law restates the code.
