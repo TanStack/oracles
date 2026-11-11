@@ -19,7 +19,7 @@
 // innermost statement that holds the site, joined by single spaces and kept in
 // full, with `~n` for the nth repeat of one anchor in a function. An authored
 // mutant's key is its source and id (`source#authored:id`).
-import { change, codeSpan, gapLine, kindOf } from './stream.mjs'
+import { change, codeSpan, escapeControls, gapLine, kindOf } from './stream.mjs'
 
 /** Outcomes that are gaps. Only a law verdict on a reproducible route kills. */
 export const gapOutcomes = new Set([
@@ -80,9 +80,11 @@ const BOUNDARY = `boundary: -0`
 const BOUNDARY_SENTENCE = `Add a boundary history with -0 and 0.`
 
 // The name of the test a key names: its path after the file.
+// A test's name prints on one line: a control character as its escape.
 const testName = (key) =>
-  key ? key.split(` > `).slice(1).join(` > `) : `(background)`
-const first = (names) => names?.[0] ?? `(none)`
+  key ? escapeControls(key.split(` > `).slice(1).join(` > `)) : `(background)`
+const first = (names) =>
+  names?.[0] === undefined ? `(none)` : escapeControls(names[0])
 // The error a crash threw, as one short line that fits a code span.
 const errorText = (text = `(no message)`) =>
   text.replace(/`/g, `'`).split(`\n`)[0].slice(0, 120)
@@ -96,10 +98,10 @@ const directive = {
     `Add an owner history where the condition on line ${g.line} is ${g.wanted}, so the branch it guards runs.`,
   'not-infected': (g) =>
     `Add a history whose operands are equal, where \`${g.original}\` and \`${g.replacement}\` disagree. Operands seen: ${g.operands?.length ? g.operands.join(`; `) : `none recorded`}.`,
+  // Infected, and no observation changed: a value nothing observed, or a
+  // forced branch that computed the same result as the original (F22).
   'not-observed': (g) =>
-    g.infectedBy === undefined
-      ? `Observe the value this code changes in the owner tests, and assert on it.`
-      : `Observe the value this code changes in \`${testName(g.infectedBy)}\`, and assert on it.`,
+    `Observe the value this code changes in ${g.infectedBy === undefined ? `the owner tests` : `\`${testName(g.infectedBy)}\``}, and assert on it. Where the mutated code computes the same result as the original, add a history where it computes something different.`,
   'not-distinguished': (g) => distinguishingDirective(g),
   'not-judged': (g) =>
     `Make a law in \`${testName(g.changedTests?.[0])}\` reject the changed value.`,
