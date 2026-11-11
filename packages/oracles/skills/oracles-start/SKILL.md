@@ -297,8 +297,10 @@ the implementation, look for the public promise that the code serves.
 [design grammar](../../docs/instruments/design-grammar.md) card fires (the
 list is in `oracles-design` step 1: for example, more than five laws, or a
 law with no new case that it predicts), work through the card. Then show
-the engineer the design it produced: its parts, and any choice between two
-designs. Ask them to approve it with the laws.
+the engineer the design it produced, in a few plain lines: what the model
+keeps, how the laws share it, and any choice between two designs, with your
+recommendation. Leave out the card's own terms (preservation relation,
+primitives, ablation). Ask them to approve it with the laws.
 
 Then ask the engineer to approve the potential laws that the authority
 decides. An approved potential law is an adopted law. Potential laws have no
