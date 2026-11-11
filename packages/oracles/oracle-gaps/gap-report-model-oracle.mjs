@@ -3942,8 +3942,8 @@ function oracleTestFile(plan, file) {
  * The assertions that may hold an `owns` key in their arguments, each as the
  * statement it writes for an object: every form of `expect` that Vitest
  * offers (a matcher, a negated or soft one, one read by a computed member,
- * and an aliased `expect`), Vitest's `assert` and `chai`, and
- * `expectTypeOf`.
+ * and an aliased `expect`), Vitest's `assert` and `chai`, `expectTypeOf`,
+ * and Node's `assert` by a named, a default, and a namespace import.
  */
 export const ASSERTION_FORMS = {
   expect: (object) => `expect(compared).toEqual(${object})`,
@@ -3956,6 +3956,12 @@ export const ASSERTION_FORMS = {
   chai: (object) => `chai.expect(compared).to.deep.equal(${object})`,
   'expect-type-of': (object) =>
     `expectTypeOf(compared).toEqualTypeOf(${object})`,
+  // Node's `assert`, by a named, a default, and a namespace import.
+  'node-assert-named': (object) => `deepStrictEqual(compared, ${object})`,
+  'node-assert-default': (object) =>
+    `nodeAssert.deepStrictEqual(compared, ${object})`,
+  'node-assert-namespace': (object) =>
+    `strictAssert.deepEqual(compared, ${object})`,
 }
 
 function ordinaryTestFile(plan) {
@@ -3989,6 +3995,12 @@ function ordinaryTestFile(plan) {
         ? `['${SOURCE}']`
         : `compared.owns.slice(1)`
     out[0] = `import { assert, chai, expect, expect as check, expectTypeOf, test } from 'vitest'`
+    out.splice(
+      1,
+      0,
+      `import nodeAssert, { deepStrictEqual } from 'node:assert'`,
+      `import * as strictAssert from 'node:assert/strict'`,
+    )
     out.push(
       `const compared = { owns: ['${SOURCE}'] }`,
       `test('owns in an assertion', () => {`,
