@@ -133,8 +133,9 @@ They can redirect you.
 Read the spot's docs, code, tests, and fix history. Then ask yourself: what
 do I not know about this code that I need to know to build its oracle? How
 does the state change with each call? Where are the boundaries? What holds
-whatever happens? Write those questions down for yourself, and build a probe
-for each one.
+whatever happens? Show the engineer those questions in the chat, a short
+list, before you probe: it shows them how an oracle gets built. Then build a
+probe for each one, and answer each question with what its probe showed.
 
 **A probe** is a small script that calls the real public API with chosen
 inputs and prints what happens. Import the code the way the repository's own
