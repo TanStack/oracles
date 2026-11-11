@@ -1,9 +1,9 @@
 ---
 name: oracles-setup
-description: Take an oracle to production with @tanstack/oracles. Pin the packages, add the lint preset and the Vitest config, write the AGENTS.md block, make the oracle skills findable by coding agents, and run the oracle through the gap check. Use when the developer chooses to ship an oracle from a first session, when a repository adopts @tanstack/oracles, or when it upgrades its pinned commit. Its install and file-placement sections also cover the minimal setup that a first session needs.
+description: Finish setting up a repository for oracles with @tanstack/oracles. Pin the packages, add the lint preset and the Vitest config, write the AGENTS.md block, make the oracle skills findable by coding agents, and run the oracle through the gap check. Use when the developer wants to keep the work of a first session (a commit, or a pull request), when a repository adopts @tanstack/oracles, or when it upgrades its pinned commit. Its install and file-placement sections also cover the minimal setup that a first session needs.
 ---
 
-# Take an oracle to production
+# Finish setting up a repository for oracles
 
 You are setting up oracle testing in this repository. Do the steps in order.
 Ask the developer before each step that writes outside the repository. When no
@@ -14,9 +14,9 @@ Potential laws have no default: propose them, report them, and stop.
 This skill has two uses. A first session (`oracles-start`) uses only its
 install section and its "where oracle files go" section, for the minimal
 setup that an oracle needs to run, and step 7's command, when its oracle
-passes and it runs the gap check. Taking an oracle to production
-uses all of it. That usually starts after a first session, once the
-developer has an oracle that found a bug and chooses to ship it. If there is
+passes and it runs the gap check. Finishing the setup uses all of it. That
+usually starts after a first session, when the developer wants to keep the
+work: to commit it, or to open a pull request. If there is
 no oracle yet, load `oracles-start` first.
 
 Setup ends when one oracle passes on production and the gap check leaves no
@@ -357,9 +357,9 @@ continue with its gap check. If there is none, build it from the potential
 laws that the developer approved: load `oracles-design`, and follow it from
 its first step.
 
-In a first session, stop at the RED: present the bug, and leave the fix for
-production. A first session runs the gap check only when its oracle passes
-(`oracles-start` step 5). When taking the oracle to production:
+A first session fixes each bug the developer confirms right away, oracle
+first, and runs the gap check only when its oracle passes (`oracles-start`
+step 5). When finishing the setup:
 
 If the first oracle fails on unchanged production under an adopted law, it
 found a defect. The RED is the finding: report it with its replay line, and

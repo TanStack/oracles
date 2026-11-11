@@ -22,15 +22,22 @@ of `@tanstack/oracles` without listing them. Check `package.json`, not
 
 **Which Vitest.** Install `vitest@^4.1`. It runs on Node 20 and later, and
 Vitest 5 needs Node 22.12 or later. Which Node versions CI runs is a
-question for production: do not raise it now.
+question for when the repository's setup is finished: do not raise it
+now.
 
 **An install fails.** Show the error in a line or two, say what you think
 caused it, and ask before you try anything that changes more than the
 packages the oracle needs.
 
-**Lint.** The oracles lint plugin waits for production. If the
+**Lint.** The oracles lint plugin comes when the repository's setup is
+finished. If the
 repository's own lint already covers the oracle file's folder, run it on
 the file, as `oracles-design` says.
+
+**The repository's lint picks up the oracle file.** If its lint (xo, ESLint
+over every file) now fails on the oracle file or the Vitest config, tell the
+developer in one line. Leaving them out of that lint is part of finishing
+the setup. Do not change their lint config in a first session.
 
 ## Probes
 
