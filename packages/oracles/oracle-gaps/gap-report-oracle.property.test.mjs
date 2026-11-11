@@ -48,7 +48,11 @@
  *    an outer function's guard covers, and the older
  *    `if (devBuild() && …) probe(name)` form and its `devBuild()` helper.
  * 3. **Ownership.** The CLI discovers every oracle file in the package: a
- *    test file that calls `declareOracle({ owns })`. Each entry names a source
+ *    test file that calls `oracleProperty`, or passes a literal `owns` list
+ *    in an object-literal argument of any call, such as a wrapper's
+ *    (`registerX('id', { owns })`), which forwards it to `oracleProperty`.
+ *    An `owns` key inside an assertion's arguments is not read. The
+ *    file's owns is the union of its lists. Each entry names a source
  *    file (`src/x.ts`, owning all of it) or a function in it
  *    (`src/x.ts#run`, `src/x.ts#Class.method`, `src/x.ts#Class.#private`,
  *    the file ending at the first `#`), in any spelling that names the
@@ -368,7 +372,6 @@ import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import fc from 'fast-check'
-import { declareOracle } from '../src/oracle-declaration.ts'
 import { socketOf, stateDirOf } from './daemon.mjs'
 import { oracleProperty, pass, violation } from '../src/oracle-property.ts'
 
@@ -615,15 +618,23 @@ async function runClisAtOnce(dir, files, hows) {
 }
 
 // Output with each scratch directory named, as a path or as the file URL the
-// stack spells it by (its escapes included).
+// stack spells it by (its escapes included). A scratch package lies inside
+// the CLI's directory (`.scratch-*` beside the CLI), so the longest path is
+// named first, whatever the order of `names`: naming the CLI first would
+// leave `<cli>/.scratch-XXXX`, a random name, in the trace. The runner's own
+// files in the package carry the CLI's process id
+// (`.oracle-gaps-<pid>-<n>.vitest.config.mts`, check.mjs), and Vitest names
+// such a config when it fails to load, so the id is named too.
 function namedScratch(text, names) {
   let named = text
-  for (const [path, name] of names)
-    if (path !== undefined)
-      named = named
-        .replaceAll(pathToFileURL(path).href, name)
-        .replaceAll(path, name)
-  return named
+  const longestFirst = names
+    .filter(([path]) => path !== undefined)
+    .sort(([a], [b]) => b.length - a.length)
+  for (const [path, name] of longestFirst)
+    named = named
+      .replaceAll(pathToFileURL(path).href, name)
+      .replaceAll(path, name)
+  return named.replaceAll(/\.oracle-gaps-\d+/g, `.oracle-gaps-<pid>`)
 }
 
 /** What one run of the CLI reported, from its exit status and its files. */
@@ -1096,6 +1107,11 @@ async function driver(plan, observe) {
     // a history that depends on it.
     if (plan.fault !== `none` && cli.exit !== 0)
       states.add(`refused ${plan.fault}`)
+    // A refused run's output is recorded with its scratch paths named, and
+    // this package lies inside the CLI's directory: the case in which the
+    // naming order decides whether a random name stays in the trace.
+    if (cli.exit !== 0 && dir.startsWith(`${how.cli}/`))
+      states.add(`a refused run whose package lies inside the CLI's directory`)
     // A failing owner's replay printed in a package whose config only
     // `--config` names, beside a discovered config that includes no test.
     if (
@@ -1695,12 +1711,6 @@ function check(plan, observations, expected) {
   return incrementalCheck(observations) ?? daemonCheck(observations) ?? pass
 }
 
-declareOracle({
-  check: [check, incrementalCheck, daemonCheck, refusalBreach],
-  model: [model, interpret, ownersOf, probeHelpers],
-  grammar: [histories],
-})
-
 // ## Calibrations
 //
 // Each one hands the check a wrong report, so a check that cannot see the
@@ -1782,9 +1792,22 @@ const calibrations = [
   {
     name: `the summary omits a gap`,
     law: `report completeness`,
+    // A CLI that never prints one gap: the summary drops it from its keys,
+    // its entries, and its count, and the stream drops its line, while
+    // results.json keeps the mutant as a gap. The report agrees with itself,
+    // so streaming (law 11, which compares the stream with the summary) holds,
+    // and only law 7, which compares the summary with the model, can see it.
+    // Dropping the key from the summary alone, as this calibration first did,
+    // is a law 11 violation too, and since the streaming check was added
+    // (#12) that check rejects it first, so law 7 was never calibrated.
     corrupt: corruptCli((cli) => {
       if (cli.exit !== 0 || cli.gaps.length === 0) return undefined
-      cli.gaps.shift()
+      // Keys are unique (law 6), so filtering by the key drops one gap.
+      const [key] = cli.gaps
+      cli.gaps = cli.gaps.filter((k) => k !== key)
+      cli.streamed = cli.streamed.filter((k) => k !== key)
+      cli.entries = cli.entries.filter((e) => e.key !== key)
+      if (cli.counts) cli.counts.gaps -= 1
       return cli
     }),
   },
@@ -1963,6 +1986,7 @@ const required = [
   `a setup error beside a timeout under one budget`,
   `refused projects`,
   `refused outsideSource`,
+  `a refused run whose package lies inside the CLI's directory`,
   `analyzed noTypescript`,
   `analyzed apiLessTypescript`,
   `refused brokenVitest`,
@@ -2016,6 +2040,7 @@ const separate = [
   `two checks at once on a session that cannot open`,
   `a session failure larger than a socket buffer`,
   `a config fault in a run that owns nothing`,
+  `a refused run whose package lies inside the CLI's directory`,
   // The config and contexts states have constructed histories of their own.
   `a config that --config names ran`,
   `a package with no config ran`,
@@ -2030,17 +2055,17 @@ const witnessed = required.filter((s) => !separate.includes(s))
 
 // A constructed history builds from a generated base whose first function is
 // owned by file a (one owned function, not a whole file), so a random
-// `ownerless` or an all-unowned base cannot refuse a state it names. Its declaration
-// alternates between `declareOracle` and `oracleProperty` across the list, so
-// both forms reach the states they name; a build that names a declaration
-// (`neither`, `both`) keeps it.
+// `ownerless` or an all-unowned base cannot refuse a state it names. Where
+// its `owns` is written alternates between a wrapper's call and
+// `oracleProperty` across the list, so both forms reach the states they name;
+// a build that names a declaration (`neither`, `both`) keeps it.
 const withDeclaration = (constructed) =>
   constructed.map((item, index) => ({
     ...item,
     build: (generated) =>
       item.build({
         ...generated,
-        declaration: index % 2 === 0 ? `declareOracle` : `oracleProperty`,
+        declaration: index % 2 === 0 ? `wrapper` : `oracleProperty`,
         ownerless: false,
         owners: [`a`, ...generated.owners.slice(1)],
       }),
@@ -2384,6 +2409,7 @@ oracleProperty({
         enters: [
           `a failing owner replayed under a config that --config names`,
           `refused brokenOwner`,
+          `a refused run whose package lies inside the CLI's directory`,
         ],
         build: (generated) => ({
           ...generated,
@@ -2399,6 +2425,9 @@ oracleProperty({
           configPlace: `named`,
           stability: `none`,
           steps: null,
+          // The CLI runs from this directory, so the scratch package lies
+          // inside it.
+          cliPath: `plain`,
         }),
       },
       {

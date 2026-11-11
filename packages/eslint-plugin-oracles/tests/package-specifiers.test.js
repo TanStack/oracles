@@ -16,34 +16,22 @@ const ruleTester = new RuleTester({
   languageOptions: { parser: tsParser, sourceType: `module` },
 })
 
-const packageHeader = `import { declareOracle } from '@tanstack/oracles'
+const packageHeader = `import { oracleProperty } from '@tanstack/oracles'
 function checkHistory(history) { return history }
-function modelHistory(history) { return history }
-declareOracle({ check: [checkHistory], model: [modelHistory] })
-`
-
-const shimHeader = `import { declareOracle } from './oracle-config.js'
-function checkHistory(history) { return history }
-function modelHistory(history) { return history }
-declareOracle({ check: [checkHistory], model: [modelHistory] })
 `
 
 ruleTester.run(`oracle/no-unit-test`, noUnitTest, {
   valid: [
     {
-      code: `${packageHeader}fcTest.prop([history])('checks generated histories', (h) => checkHistory(h))`,
-      filename: `/repo/tests/checks-oracle.test.ts`,
-    },
-    {
-      code: `${shimHeader}fcTest.prop([history])('checks generated histories', (h) => checkHistory(h))`,
+      code: `${packageHeader}oracleProperty({ id: 'p', check: checkHistory })`,
       filename: `/repo/tests/checks-oracle.test.ts`,
     },
   ],
   invalid: [
     {
-      code: `${packageHeader}it('checks a fixed value', () => { expect(1).toBe(1) })`,
+      code: `${packageHeader}oracleProperty({ id: 'p' })`,
       filename: `/repo/tests/checks-oracle.test.ts`,
-      errors: [{ messageId: `unitTest` }],
+      errors: [{ messageId: `incompleteProperty` }],
     },
   ],
 })

@@ -60,8 +60,8 @@ function hostFor(ts) {
  */
 export function analyze(ts, pkg, sources, testFiles) {
   const relative = (file) => file.slice(pkg.length + 1)
-  // An oracle file is a test file that calls `oracleProperty`, or the legacy
-  // `declareOracle`, which the CLI still reads.
+  // An oracle file is a test file that calls `oracleProperty`, or passes a
+  // literal `owns` list to any call, such as a wrapper's (owners.mjs).
   const declarations = new Map()
   for (const file of testFiles) {
     const declared = readOwns(ts, file, readFileSync(file, `utf8`))

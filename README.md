@@ -54,15 +54,68 @@ preset's, so merge them:
 
 ## The `oracle/no-unit-test` rule
 
-Each test in an oracle file must reach a part that the file declares: its
-check, model, or grammar. A test that reaches none compares production with a
-hand-written value, so the rule reports it as a unit test that belongs in an
-ordinary test file.
+An oracle file registers its tests only through `oracleProperty`. Its
+histories hold its fixed regressions and enumerated cases, its calibrations
+show that the check rejects wrong answers, and its declared states hold its
+reach. The rule reports every other test registration in an oracle file as a
+unit test, whatever its body calls. Move such a test to an ordinary test file.
+
+A registration is a call of a test function, with members such as `.each`,
+`.skip`, or `.concurrent`. A call to an imported helper that registers its
+caller's body is a registration too. `oracle/no-unit-test`,
+`oracle/no-disabled`, and `oracle/oracle-property-only` share one account of
+a test function, so they agree on every call. A callee's root is a test
+function when its binding resolves to `it`, `test`, `describe`, `suite`, or
+`bench` imported from any package or subpath alias (`vitest`,
+`@playwright/test`, `node:test`, `#test/fixtures`), or to a fixture of one
+(`test.extend(fixtures)`). The rules cannot read a package, so they fail
+closed there, because a false negative would switch an oracle off. A
+library function with one of those names (for example Ramda's `test` or
+mitata's `bench`) is therefore reported in an oracle file and its relative
+helpers. A rename does not help, because the rules resolve the imported
+name. Use another function there, for example `re.test(s)` in place of
+`R.test(re, s)`. The rules follow these bindings:
+
+- a named, aliased, or namespace import (`vitest.it`), and an unbound name
+  that Vitest's `globals` declares;
+- a variable's initializer, a destructuring (`const { it: t } = vitest`),
+  and each plain assignment (`let t; t = it`);
+- a cast (`as`, `!`, `satisfies`), and either branch of a conditional or
+  logical expression (`flag ? it.skip : it`), so a callee that may be a
+  test function is reported;
+- a fixture, a tagged-template `.each`, and `oracleReplayTest(it)`;
+- an export of a relative test module: a constant, a re-export, `export *
+as`, a default export, and a relay of an imported binding, through star
+  exports. A cycle of modules or of variables resolves to nothing, and each
+  export is resolved once per lint.
+
+A binding that resolves to anything else is no test function, whatever its
+name: a local function named `bench`, or a namespace of an ordinary relative
+module (`patterns.test(...)`). A member that is no registration, such as
+Playwright's `test.step`, registers nothing, bound or not. A `describe` or
+`suite` is exempt by the function that it resolves to, not by its local
+name. In a cycle of modules, the answer does not depend on which binding
+the lint reads first.
+
+The rules do not recognize these forms:
+
+- a test function passed as a parameter to a local helper
+  (`function reg(t) { t('n', fn) }`). `oracle/no-disabled` reports the
+  `reg(it)` call instead;
+- a fixture or test function that a package exports under another name,
+  because the rules read only relative test modules;
+- a computed member whose name is not a string literal, and a variable that
+  a destructuring assignment (not a declaration) writes;
+- a modifier call, such as `.skipIf(flag)`, that another module binds and
+  exports. A relayed `.skip` is counted at the call.
+  A call to an imported helper that registers a test of its own is reported
+  too, because that test would appear under the oracle file. An
+  `oracleProperty` call whose options are not an object literal with a `check`
+  is reported, because the rule cannot see its check.
 
 A test whose body is empty, such as `it('x', () => {})`, `test('x', async
 () => {})`, or a skipped placeholder `it.skip('x', () => {})`, checks
-nothing. The rule reports it whatever the file declares: remove it, or use
-`it.todo`.
+nothing. The rule reports it: remove it, or use `it.todo`.
 
 ## The `oracle/no-oracle-disable` rule
 

@@ -1,0 +1,5 @@
+---
+'@tanstack/oracles': patch
+---
+
+A calibration can now require the violation's difference as well as its law. Give it `difference`, a string that the violation's difference must contain, or a `RegExp` that it must match. The check must then reject the wrong answer for that reason. Before, a calibration could require only the law. An oracle that judged several faults under one law then had to put the fault in the law's name. The calibration test judges the law first. A corrupted trace that fails with another difference fails the calibration and names the difference that the check reported. A mutant driver goes on to the next candidate history, as it does for another law. A pattern matches anywhere in the difference, and a sticky (`y`) pattern matches only at its start. The empty difference holds `''` and `/(?:)/`, so such a requirement would reject any difference. It now fails the property's load. A check that gives a difference that is not text fails the calibration with an error that names the calibration and the law. A calibration without `difference` works as before.
