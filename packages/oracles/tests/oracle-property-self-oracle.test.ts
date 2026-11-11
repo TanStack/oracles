@@ -49,8 +49,14 @@
  *   source that declares `states` or `measured` registers a `reach` test after its histories:
  *   it fails when no enumerated history entered a required state, and otherwise reports how
  *   many entered each declared state. A history counts when it was judged, passing or
- *   violating its law; the reach test runs any history that no earlier test of the run judged,
- *   and one that fails before a verdict counts for nothing. A judged enumerated history that
+ *   violating its law. The reach test reuses what each history's test recorded, and runs again
+ *   only a history whose own test never started in the run: in a full run it runs none. A
+ *   history whose test started and failed before a verdict (a driver, model, or data error, or
+ *   a timeout) counts for nothing; a judgment that arrives after its test timed out is not
+ *   recorded. A history the reach test runs that enters an undeclared state fails the reach
+ *   test. An enumerated source fails to load when its object holds keys other than
+ *   `enumerated`, `states`, and `measured`, when it declares a state as anything but a name,
+ *   or when a `label` names a history `reach` or `determinism`, the framework's own tests. A judged enumerated history that
  *   enters an undeclared state fails its test, before its law violation, as a campaign's
  *   history does (maintainer decision, 2026-11-10, F23: every enumerated history runs, so a
  *   required state needs no constructed history). Run alone, under a `-t` pattern that selects
@@ -241,7 +247,10 @@ type Draft = {
   deepCheck: boolean
   domThrow: boolean
   emptyMessage: boolean
-  labelStyle: `plain` | `shell` | `default`
+  labelStyle:
+    `plain` | `shell` | `default` | `reserved-reach` | `reserved-determinism`
+  /** An enumerated declaration that adds a generated source's key, or a probe-bound state. */
+  enumeratedShape: `ok` | `extra key` | `probe state`
   nested: boolean
   strictModel: boolean
 }
@@ -418,10 +427,24 @@ const draft: fc.Arbitrary<Draft> = fc.record({
   ),
   // An enumerated property's labels.
   labelStyle: fc.oneof(
-    { weight: 4, arbitrary: fc.constant(`plain` as const) },
+    { weight: 8, arbitrary: fc.constant(`plain` as const) },
+    {
+      weight: 2,
+      arbitrary: fc.constantFrom(`shell` as const, `default` as const),
+    },
     {
       weight: 1,
-      arbitrary: fc.constantFrom(`shell` as const, `default` as const),
+      arbitrary: fc.constantFrom(
+        `reserved-reach` as const,
+        `reserved-determinism` as const,
+      ),
+    },
+  ),
+  enumeratedShape: fc.oneof(
+    { weight: 8, arbitrary: fc.constant(`ok` as const) },
+    {
+      weight: 1,
+      arbitrary: fc.constantFrom(`extra key` as const, `probe state` as const),
     },
   ),
   zeroNoise: fc.oneof(
@@ -560,6 +583,12 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
                 measured: allStates.filter(
                   (_, at) => d.enumeratedStates![at] === `measured`,
                 ),
+                // A probe-bound state needs a declared state to bind.
+                ...(d.enumeratedShape === `extra key` ||
+                (d.enumeratedShape === `probe state` &&
+                  d.enumeratedStates.some((role) => role !== `undeclared`))
+                  ? { enumeratedShape: d.enumeratedShape }
+                  : {}),
               },
             }
           : {}),
@@ -891,6 +920,21 @@ const declaredOf = (spec: SyntheticSpec) =>
     ...spec.enumeratedStates.states,
     ...spec.enumeratedStates.measured,
   ]
+// The reach test run alone runs every history itself, in order: a judged
+// one that enters an undeclared state fails it first.
+const reachAloneOutcome = (spec: SyntheticSpec, full: Outcome): Outcome =>
+  spec.source.kind === `enumerated` &&
+  // A driver that observes a value outside the data domain judges nothing.
+  dataOutcome(spec) === undefined &&
+  spec.source.histories.some(
+    (history) =>
+      judgedKind(verdictOf(history, spec)) &&
+      reachedOf(spec, history).some(
+        (state) => !declaredOf(spec)!.includes(state),
+      ),
+  )
+    ? { kind: `undeclared-state` }
+    : full
 const judgedKind = (outcome: Outcome) =>
   outcome.kind === `pass` || outcome.kind === `violation`
 const enumeratedReach = (
@@ -976,6 +1020,10 @@ type SpecExpectation =
       loadCause?: string
       /** A constructed history's build threw at registration. */
       buildError?: boolean
+      /** An enumerated declaration with a foreign key or a probe-bound state. */
+      shapeError?: boolean
+      /** A label that names a framework test. */
+      reservedLabel?: boolean
       dataError?: boolean
       /** Which history failed law `membership`. */
       membership?: `fixed` | `constructed`
@@ -1027,12 +1075,32 @@ function predictSpec(
       loads: false,
       loadError: `${spec.id}: \`predict\` needs probe-bound states, which only a generated source declares.`,
     }
+  // An enumerated declaration takes only its own keys, and states by name.
+  if (spec.enumeratedStates?.enumeratedShape)
+    return {
+      loads: false,
+      loadError:
+        spec.enumeratedStates.enumeratedShape === `extra key`
+          ? `${spec.id}: an enumerated source takes \`enumerated\`, \`states\`, and \`measured\`; \`constructed\``
+          : `${spec.id}: an enumerated source declares its states by name`,
+      shapeError: true,
+    }
   const historyFailure =
     spec.source.kind === `enumerated` && spec.form
       ? historyFailures[spec.form]
       : undefined
   if (historyFailure)
     return { loads: false, loadError: historyFailure, dataError: true }
+  // A label may not name a framework test: its rerun would select both.
+  if (
+    spec.labelStyle === `reserved-reach` ||
+    spec.labelStyle === `reserved-determinism`
+  )
+    return {
+      loads: false,
+      loadError: `${spec.id}: label "${spec.labelStyle.slice(`reserved-`.length)}" names a framework test`,
+      reservedLabel: true,
+    }
   // `predict` and a probe-bound state come together, and only a generated
   // source declares states.
   if (
@@ -1109,7 +1177,7 @@ function predictSpec(
   // history at once.
   const data = dataOutcome(spec)
   // Every history fails before a verdict, so an enumerated source's reach
-  // test, which runs the histories no test judged, counts none.
+  // test counts none.
   if (data && spec.source.kind === `enumerated` && declaredOf(spec)) {
     for (const name of all) tests.set(name, data)
     const { outcome, counts } = enumeratedReach(
@@ -1136,6 +1204,13 @@ function predictSpec(
   }
   if (spec.slow) {
     for (const name of all) tests.set(name, { kind: `timeout` })
+    // Every history's test started and timed out, so the reach test runs
+    // none again, and a judgment that arrives late is not recorded.
+    if (spec.source.kind === `enumerated` && declaredOf(spec))
+      tests.set(
+        `reach`,
+        enumeratedReach(spec, spec.source.histories, () => false).outcome,
+      )
     return { loads: true, tests, reach: new Map(), replays: [] }
   }
   // A calibration needs a candidate whose clean trace passes; it skips the
@@ -1408,8 +1483,12 @@ const frameworkStates = [
   `enumerated-reach-counted`,
   `enumerated-reach-failure`,
   `enumerated-undeclared-state`,
-  `enumerated-reach-reruns`,
   `enumerated-reach-alone`,
+  `enumerated-reach-alone-undeclared`,
+  `enumerated-unjudged-not-rerun`,
+  `enumerated-timed-out-not-rerun`,
+  `enumerated-shape-error`,
+  `reserved-label-error`,
 ] as const
 
 function frameworkReach(
@@ -1424,6 +1503,8 @@ function frameworkReach(
     const owed = expected.get(spec.id)!
     if (!owed.loads) {
       reached.add(`registration-error`)
+      if (owed.shapeError) reached.add(`enumerated-shape-error`)
+      if (owed.reservedLabel) reached.add(`reserved-label-error`)
       if (owed.dataError) reached.add(`history-out-of-domain`)
       if (owed.buildError) reached.add(`constructed-build-load-error`)
       if (owed.membership === `fixed`) reached.add(`fixed-membership-failure`)
@@ -1541,9 +1622,21 @@ function frameworkReach(
       if (spec.form === `error`) reached.add(`error-history`)
       if (spec.form === `errors`) reached.add(`errors-history`)
     }
-    // The reach test ran a history that no earlier test judged.
-    if (logged.some(({ test }) => test === `${spec.id} > reach`))
-      reached.add(`enumerated-reach-reruns`)
+    // The reach test did not run again a history whose own test started
+    // but reached no verdict.
+    if (
+      spec.source.kind === `enumerated` &&
+      declaredOf(spec) &&
+      owed.tests.get(`reach`)?.kind !== `timeout`
+    ) {
+      if (spec.slow) reached.add(`enumerated-timed-out-not-rerun`)
+      else if (
+        spec.source.histories.some(
+          (history) => !judgedKind(verdictOf(history, spec)),
+        )
+      )
+        reached.add(`enumerated-unjudged-not-rerun`)
+    }
     if (
       spec.strictModel &&
       logged.some(({ history }) => {
@@ -1593,6 +1686,12 @@ function frameworkReach(
       reached.add(`over-reported-reach`)
   if (trace.some(({ checkpoint }) => checkpoint === `reach-alone`))
     reached.add(`enumerated-reach-alone`)
+  for (const { checkpoint, value } of trace)
+    if (
+      checkpoint === `reach-alone` &&
+      (value as ReachAlone).failure?.kind === `undeclared-state`
+    )
+      reached.add(`enumerated-reach-alone-undeclared`)
   if (trace.some(({ checkpoint }) => checkpoint === `replay`))
     reached.add(`replay-probe`)
   const seedless = trace.find(({ checkpoint }) => checkpoint === `seedless`)
@@ -2358,8 +2457,24 @@ function checkSuite(
           { actual: seedless[spec.id], expected: owedRoutes },
         )
     }
+  // In a full run, every history's test starts, so the reach test runs
+  // none of them again: it reuses what their tests recorded.
+  for (const spec of plan.specs) {
+    if (!expected.get(spec.id)!.loads || spec.slow) continue
+    const reruns = run.log.filter(
+      (entry) => entry.id === spec.id && entry.test === `${spec.id} > reach`,
+    )
+    if (reruns.length > 0)
+      return violation(
+        `run`,
+        `${spec.id}: the reach test ran ${reruns.length} histories again in a full run, owed none`,
+        `reach`,
+        { actual: reruns.map(({ history }) => history), expected: [] },
+      )
+  }
   // A reach test run alone judges every history itself, and owes the same
-  // outcome and counts as in the full run.
+  // outcome and counts as in the full run, except that a history it runs
+  // that enters an undeclared state fails it.
   for (const spec of plan.specs) {
     const owed = expected.get(spec.id)!
     if (!spec.enumeratedStates || spec.slow || !owed.loads) continue
@@ -2367,7 +2482,7 @@ function checkSuite(
       ({ checkpoint, value }) =>
         checkpoint === `reach-alone` && (value as ReachAlone).id === spec.id,
     )?.value as ReachAlone | undefined
-    const outcome = owed.tests.get(`reach`)!
+    const outcome = reachAloneOutcome(spec, owed.tests.get(`reach`)!)
     const kind =
       alone?.state === `passed` ? `pass` : (alone?.failure?.kind ?? `other`)
     if (!alone || alone.others.length > 0 || kind !== outcome.kind)
@@ -2377,7 +2492,7 @@ function checkSuite(
         `reach`,
         { actual: alone ?? null, expected: outcome },
       )
-    const counts = owed.reach.get(`enumerated`)
+    const counts = outcome.kind === `pass` && owed.reach.get(`enumerated`)
     if (counts && JSON.stringify(alone.reach) !== JSON.stringify(counts))
       return violation(
         `reach-alone`,
@@ -2484,6 +2599,7 @@ const generatedDraft = (overrides: Partial<Draft>): Draft => ({
   arbitraryMap: `none`,
   mapAt: `history`,
   enumeratedStates: null,
+  enumeratedShape: `ok`,
   throwingBuild: false,
   nondeterministic: false,
   reachVia: `reached`,
@@ -2913,7 +3029,7 @@ oracleProperty({
       ),
       fixedHistory(
         `an enumerated history that enters an undeclared state fails before its violation`,
-        [`enumerated-undeclared-state`],
+        [`enumerated-undeclared-state`, `enumerated-reach-alone-undeclared`],
         {
           ...generatedDraft({
             enumeratedStates: [`required`, `undeclared`, `measured`],
@@ -2921,16 +3037,74 @@ oracleProperty({
           source: { kind: `enumerated`, histories: [[0], [3, 1], [2]] },
         },
       ),
-      // A driver error leaves its history unjudged; the reach test runs it
-      // again and counts nothing for it.
+      // A driver error leaves its history unjudged; its own test reports
+      // it, and the reach test counts nothing for it without running it again.
       fixedHistory(
-        `the reach test runs a history no earlier test judged and counts nothing for it`,
-        [`enumerated-reach-reruns`, `enumerated-reach-counted`],
+        `the reach test does not run again a history whose driver threw`,
+        [`enumerated-unjudged-not-rerun`, `enumerated-reach-counted`],
         {
           ...generatedDraft({
             enumeratedStates: [`required`, `measured`, `undeclared`],
           }),
           source: { kind: `enumerated`, histories: [[6, 0], [0]] },
+        },
+      ),
+      // Every history times out; the reach test runs none again, so it fails
+      // on its own counts at once. The first history's late judgment, which
+      // enters the required state, arrives before the reach test starts and
+      // must not be recorded.
+      fixedHistory(
+        `the reach test does not run again a history whose test timed out`,
+        [`enumerated-timed-out-not-rerun`],
+        {
+          ...generatedDraft({
+            timing: `slow`,
+            enumeratedStates: [`required`, `measured`, `measured`],
+          }),
+          // Four histories, the most the grammar draws: the first's
+          // judgment arrives about 100 ms before the reach test starts.
+          source: { kind: `enumerated`, histories: [[0], [1], [2], [1, 1]] },
+        },
+      ),
+      fixedHistory(
+        `an enumerated source with a generated source's key fails to load`,
+        [`registration-error`, `enumerated-shape-error`],
+        {
+          ...generatedDraft({
+            enumeratedStates: [`required`, `measured`, `measured`],
+            enumeratedShape: `extra key`,
+          }),
+          source: { kind: `enumerated`, histories: [[0]] },
+        },
+      ),
+      fixedHistory(
+        `an enumerated source with a probe-bound state fails to load`,
+        [`registration-error`, `enumerated-shape-error`],
+        {
+          ...generatedDraft({
+            enumeratedStates: [`required`, `measured`, `measured`],
+            enumeratedShape: `probe state`,
+          }),
+          source: { kind: `enumerated`, histories: [[0]] },
+        },
+      ),
+      fixedHistory(
+        `a label that names the reach test fails to load`,
+        [`registration-error`, `reserved-label-error`],
+        {
+          ...generatedDraft({
+            enumeratedStates: [`required`, `measured`, `measured`],
+            labelStyle: `reserved-reach`,
+          }),
+          source: { kind: `enumerated`, histories: [[0], [1]] },
+        },
+      ),
+      fixedHistory(
+        `a label that names the determinism test fails to load`,
+        [`registration-error`, `reserved-label-error`],
+        {
+          ...generatedDraft({ labelStyle: `reserved-determinism` }),
+          source: { kind: `enumerated`, histories: [[0], [1]] },
         },
       ),
       fixedHistory(

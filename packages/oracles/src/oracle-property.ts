@@ -91,13 +91,17 @@
  *   constructed history (maintainer decision, 2026-11-10): its `reach` test,
  *   after its histories, fails when no history entered a state in `states`,
  *   and otherwise prints the counts as `<id> enumerated reach {...}`. A history
- *   counts once it is judged, passing or violating its law; the reach test runs
- *   any history that no earlier test of the run judged, such as one that a
- *   `-t` filter left out, and one that fails before a verdict counts for
- *   nothing. A judged history that enters a state outside `states` and
- *   `measured` fails its test, before its law violation, as a campaign's
- *   history does. An enumerated source declares its states by name; only a
- *   generated source binds a probe.
+ *   counts once it is judged in time, passing or violating its law. The
+ *   reach test reuses what each history's test recorded and runs again only a
+ *   history whose test never started in the run, such as one that a `-t`
+ *   filter left out. A history whose test started and failed before a
+ *   verdict, or timed out, counts for nothing; its own test reports it. A
+ *   judged history that enters a state outside `states` and `measured` fails
+ *   its test, before its law violation, as a campaign's history does, and one
+ *   the reach test runs fails the reach test. An enumerated source declares
+ *   its states by name and takes no other keys; only a generated source binds
+ *   a probe. A `label` may not name a history `reach` or `determinism`, the
+ *   framework's own tests.
  * - A **state probe** binds a declared state, written `{ name, probe }` in
  *   `states` or `measured`, to a production probe. The function where
  *   production decides whether it enters that state guards the probe with
@@ -673,7 +677,7 @@ interface PropertyTest {
    */
   route: OracleRoute
   /** Runs the test; `task` is Vitest's record of it, for its full name. */
-  run: (task: NamedTask) => Promise<void>
+  run: (task: NamedTask, signal: AbortSignal) => Promise<void>
   /** Path replays this test runs during; empty stands aside during every one. */
   replays: ReadonlyArray<string>
 }
@@ -707,6 +711,22 @@ export function oracleProperty<THistory, TExpected, TPlan = THistory>(
     throw new Error(
       `${id}: \`predict\` needs probe-bound states, which only a generated source declares.`,
     )
+  // A union's excess keys type-check, and plain JavaScript can pass anything.
+  const foreign = Object.keys(enumerated ?? {}).filter(
+    (key) => ![`enumerated`, `states`, `measured`].includes(key),
+  )
+  if (foreign.length > 0)
+    throw new Error(
+      `${id}: an enumerated source takes \`enumerated\`, \`states\`, and \`measured\`; \`${foreign.join(`\`, \``)}\` belongs to a generated source.`,
+    )
+  if (
+    [...(enumerated?.states ?? []), ...(enumerated?.measured ?? [])].some(
+      (state) => typeof state !== `string`,
+    )
+  )
+    throw new Error(
+      `${id}: an enumerated source declares its states by name; a probe-bound state needs a generated source.`,
+    )
   const generated = histories as GeneratedHistories<THistory>
   recordRegistration(id, options.law, enumerated?.enumerated ?? generated)
   // The tests are built as data first, so every one registers unconditionally
@@ -718,9 +738,9 @@ export function oracleProperty<THistory, TExpected, TPlan = THistory>(
     for (const test of tests)
       oracleReplayTest(it, ...test.replays)(
         test.name,
-        ({ task }) => {
+        ({ task, signal }) => {
           oracleRoute(test.route)
-          return test.run(task)
+          return test.run(task, signal)
         },
         options.timeout ?? 120_000,
       )
@@ -765,20 +785,33 @@ function enumeratedTests<THistory, TExpected, TPlan>(
   const histories = source.enumerated
   const spacing = Math.max(1, Math.ceil(histories.length / 8))
   const declared = declaredOf(source)
-  // What each judged history entered, by its index, in this run.
+  // What each history whose test started in this run entered, by its index:
+  // nothing until it is judged in time.
   const entries = new Map<number, ReadonlySet<string>>()
   // Every enumerated history is data; one that is not fails registration.
   const named = histories.map((history, index) => {
     const text = encodeData(history, `history ${index}`, `history`)
     return { name: options.label?.(history) ?? text, history }
   })
+  // A rerun's `-t` pattern would also select a framework test of that name.
+  const reserved = named.find(
+    ({ name }) => name === `reach` || name === `determinism`,
+  )
+  if (reserved)
+    throw new Error(
+      `${id}: label "${reserved.name}" names a framework test of the property, so its rerun would select both; choose another label.`,
+    )
   const historyTests = named.map(({ name, history }, index): PropertyTest => ({
     name,
     route: `case`,
     replays: [],
-    run: async (task) => {
+    run: async (task, signal) => {
+      // A history whose test started is never run again by the reach test,
+      // which would overlap a driver still running after a timeout.
+      entries.set(index, new Set())
       const { verdict, reached } = await runOne(options, history)
-      entries.set(index, reached)
+      // A judgment that arrives after its test timed out is not this run's.
+      if (!signal.aborted) entries.set(index, reached)
       assertDeclared(id, declared, reached)
       if (verdict.kind === `violation`)
         throw failure(options, verdict, history, rerunOf(task))
@@ -794,13 +827,17 @@ function enumeratedTests<THistory, TExpected, TPlan>(
       const counts = new Map([...(declared ?? [])].map((state) => [state, 0]))
       for (const [index, { history }] of named.entries()) {
         let reached = entries.get(index)
-        if (reached === undefined)
+        // A history whose test never started, such as one a `-t` filter
+        // left out.
+        if (reached === undefined) {
           try {
             reached = (await runOne(options, history)).reached
           } catch {
             // A history that fails before a verdict fails its own test.
             reached = new Set()
           }
+          assertDeclared(id, declared, reached)
+        }
         for (const state of reached)
           if (counts.has(state)) counts.set(state, counts.get(state)! + 1)
       }

@@ -119,7 +119,7 @@ import {
   useOracleClock,
   violation,
 } from '../src/index.js'
-import type { Calibration } from '../src/index.js'
+import type { Calibration, EnumeratedHistories } from '../src/index.js'
 
 export const syntheticIds = [
   `self-oracle.synthetic-0`,
@@ -202,6 +202,8 @@ export type SyntheticSpec = {
   enumeratedStates?: {
     states: ReadonlyArray<string>
     measured: ReadonlyArray<string>
+    /** Adds a generated source's `constructed`, or binds the first declared state to a probe. */
+    enumeratedShape?: `extra key` | `probe state`
   }
   /** The first constructed history's build throws `synthetic build failed`. */
   throwingBuild?: boolean
@@ -231,8 +233,8 @@ export type SyntheticSpec = {
   clock?: boolean
   /** How the property holds a history's items; the array itself when absent. */
   form?: `bigint` | `map` | `lossy` | `error` | `errors` | `boxed` | `trap`
-  /** An enumerated label with shell characters, or no label at all. */
-  labelStyle?: `shell` | `default`
+  /** An enumerated label with shell characters, no label at all, or one that names a framework test for the first history. */
+  labelStyle?: `shell` | `default` | `reserved-reach` | `reserved-determinism`
   /** Registers the property inside `describe(outerSuite)`. */
   nested?: boolean
   /** Records -0 and 0 on alternate runs, last. */
@@ -781,6 +783,36 @@ const ownsOf = (spec: SyntheticSpec) =>
                 : [`src/x.ts`, 3 as unknown as string],
       }
 
+/**
+ * An enumerated source's declaration. A malformed one is what plain
+ * JavaScript, or a cast, can pass: a generated source's `constructed`, or a
+ * probe-bound state.
+ */
+function declaredEnumerated(
+  enumerated: Array<Formed>,
+  {
+    enumeratedShape,
+    states,
+    measured,
+  }: NonNullable<SyntheticSpec[`enumeratedStates`]>,
+): EnumeratedHistories<Formed> {
+  if (enumeratedShape === `extra key`)
+    return { enumerated, states, measured, constructed: [] } as never
+  if (enumeratedShape === `probe state`) {
+    const [bound] = [...states, ...measured]
+    const bind = (state: string) =>
+      (state === bound
+        ? { name: state, probe: syntheticProbe }
+        : state) as unknown as string
+    return {
+      enumerated,
+      states: states.map(bind),
+      measured: measured.map(bind),
+    }
+  }
+  return { enumerated, states, measured }
+}
+
 export function syntheticProperty(spec: SyntheticSpec): void {
   const id = spec.unregistered ? `self-oracle.unregistered` : spec.id
   const form = formOf(spec)
@@ -864,18 +896,22 @@ export function syntheticProperty(spec: SyntheticSpec): void {
   const register = () => {
     if (spec.source.kind === `enumerated`) {
       const enumerated = spec.source.histories.map(form)
+      const first = JSON.stringify(spec.source.histories[0])
       oracleProperty({
         id,
         law,
         histories: spec.enumeratedStates
-          ? { enumerated, ...spec.enumeratedStates }
+          ? declaredEnumerated(enumerated, spec.enumeratedStates)
           : enumerated,
         // A label with `|`, which a rerun command must escape.
         ...(spec.labelStyle === `default`
           ? {}
           : {
               label: (history: Formed) =>
-                `items ${items(history).join(` | `)}${spec.labelStyle === `shell` ? ` ${shellText}` : ``}`,
+                spec.labelStyle?.startsWith(`reserved-`) &&
+                JSON.stringify(items(history)) === first
+                  ? spec.labelStyle.slice(`reserved-`.length)
+                  : `items ${items(history).join(` | `)}${spec.labelStyle === `shell` ? ` ${shellText}` : ``}`,
             }),
         ...parts,
       })
