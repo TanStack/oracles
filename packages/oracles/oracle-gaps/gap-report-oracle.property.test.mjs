@@ -298,6 +298,13 @@
  * reach agreement kills every probe mutant is not checked. Gap answers and
  * the gate are not part of the CLI until answers become evidence-log events,
  * which waits on the maintainer's decision about how an answer maps to a law.
+ * Law 9 judges the witness module's outcome classes along one edit
+ * sequence only, the constructed history "an edit sequence over the witness
+ * module" (a test edit, a helper edit, and a revert): a generated history
+ * with the witness module takes no steps, so longer or other edit sequences
+ * over those classes are not drawn. Each such step costs a cold run of the
+ * witness module, and one campaign in six drew a history that ran past the
+ * test's limit (maintainer decision, 2026-11-11; this oracle owns the gap).
  * Law 9's edits do not include a file that a test reads through `fs`, an
  * environment variable other than the seed, a new file that changes how an
  * unchanged import resolves, a change to the Vite config or the installed
@@ -380,6 +387,7 @@ import {
   edits,
   daemonEvents,
   histories,
+  witnessSteps,
   push,
   judging,
   witness,
@@ -914,6 +922,18 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       states.add(`incremental check reused some evidence and recomputed some`)
     if (step === `restart` && reused > 0)
       states.add(`evidence reused after a daemon restart`)
+    // The witness module's hangs are cut off in every cold run. A daemon
+    // check after an edit that cut off fewer runs than the cold run of the
+    // same state reused a timed-out run, so law 9 judged a timeout that came
+    // from the store.
+    if (
+      plan.witness !== false &&
+      step !== `start` &&
+      !daemonEvents.has(step) &&
+      reused > 0 &&
+      (daemon.evidence?.cut ?? 0) < (coldRun.evidence?.cut ?? 0)
+    )
+      states.add(`a timed-out run reused after an edit`)
     // Undoing an edit to a file returns to a state the daemon has seen, so
     // it reruns nothing.
     if (
@@ -2002,6 +2022,7 @@ const required = [
   `a session failure larger than a socket buffer`,
   `a config fault in a run that owns nothing`,
   ...incrementalStates,
+  `a timed-out run reused after an edit`,
 ]
 // The faults the CLI analyzes anyway: a package's TypeScript is no input.
 const analyzedFaults = [`noTypescript`, `apiLessTypescript`]
@@ -2053,6 +2074,7 @@ const separate = [
   `a run with eleven contexts`,
   `a failing owner replayed under a config that --config names`,
   ...incrementalStates,
+  `a timed-out run reused after an edit`,
 ]
 const witnessed = required.filter((s) => !separate.includes(s))
 
@@ -2079,7 +2101,7 @@ oracleProperty({
   law: {
     statement: `The gap report enumerates the promised operator mutants, leaves out exactly the probe-only code, discovers every oracle that owns a function's call tree and refuses broken ownership, judges each mutant only by its owners' tests on their registered routes and counts only law verdicts on reproducible routes as kills, which outrank a run that never ends, anchors each mutant by its function and normalized statement, lists every gap and unowned mutant once with consistent counts, keeps keys stable under unrelated edits, reports through one daemon per package what a cold run reports at every state of a sequence of edits, and runs the package as Vitest does from any install path and any --source spelling: one instance of each workspace dependency, no refusal over an unbuildable devDependency, child processes for a native addon anywhere in the tree, a capture that a test's builtin spies cannot see, and a refusal of test.projects; and every run that does not complete ends, cold or through the daemon, with a refusal that exits 2, prints a refused: block and one fix: directive with no stack trace, and writes the refusal to the run's output directory.`,
     authority: `The maintainer's decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), not in this package's records, including that a kill by reach agreement alone is a gap and that an incremental run through the daemon equals a cold one (v19.3); the project's oracle guide on quiet exclusions; the oracle rubric's outcome kinds (ORC-006); the CLI's documented operator list in schemata.mjs.`,
-    limits: `Law 12 judges refusals only: no legal history reaches an internal error, so its shape (exit 3, the stack in error.log) is not judged; argument refusals are the static oracle's; the check's rejection of a stack trace, a missing fix, and a wrong exit code is calibrated in the static oracle, through the same refusalBreach, and here only a refused run reported as complete is calibrated, because each calibration here runs real CLI histories. Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 6 s full limit, and a slow run only as one witness that waits 3 s before it judges; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; no --only, --sample, or --diff-base; a derived class's file is instrumented and its sites are judged as unowned, but no test imports or constructs the class, so its no-mutant and super-region behavior is the static oracle's (in-process), not this oracle's; package configs only as vite.config or vitest.config with one of the extensions .ts, .mts, .cts, .js, .mjs, and .cjs (not every pair), as config/gap-vitest with the same extension through --config, or none, as an object or a sync or async function, with no plugins of their own and test.projects only as a refusal, and only under the package's own package.json; a top-level await only in an ES module config and require only in a CommonJS one, as Vitest itself loads no other; a --config outside the package is refused by design, through the rule for paths outside the package (args.mjs), and no history generates one; contexts only four or eleven, and process warnings judged only as MaxListenersExceededWarning on the CLI's own stderr (a daemon's process warnings go to its log); a context that fails to open gives back its listener allowance, which no observation shows (a kept allowance only raises the limit, so no warning follows), so that accounting is fixed by inspection; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9's edits leave out files read through fs, other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; cut-off charging judged only under one budget; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages; daemon races (two CLIs reading one error file, a CLI hearing closing from the failing daemon it started, a reset connection on macOS) fixed by inspection; a workspace dependency's one-file bundle is written in that dependency's own .oracle-gaps folder, a known stray write (date-fns report), which the stray-write check excludes; the runner's copies and Vitest configs (.oracle-gaps-PID*) sit at the package root and are removed when the run closes, so a killed run leaves them there, and the stray-write check runs after close and cannot see them; a counterexample shrinks through at most six histories, so it can be larger than the smallest that fails; module-level data only as four \`const\` declarations of the main source (an object literal, an array that holds a function, a boolean, and an object of two methods), read in place, with no data imported from another file, destructured, reassigned, or declared as an enum or a default export.`,
+    limits: `Law 12 judges refusals only: no legal history reaches an internal error, so its shape (exit 3, the stack in error.log) is not judged; argument refusals are the static oracle's; the check's rejection of a stack trace, a missing fix, and a wrong exit code is calibrated in the static oracle, through the same refusalBreach, and here only a refused run reported as complete is calibrated, because each calibration here runs real CLI histories. Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 6 s full limit, and a slow run only as one witness that waits 3 s before it judges; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; no --only, --sample, or --diff-base; a derived class's file is instrumented and its sites are judged as unowned, but no test imports or constructs the class, so its no-mutant and super-region behavior is the static oracle's (in-process), not this oracle's; package configs only as vite.config or vitest.config with one of the extensions .ts, .mts, .cts, .js, .mjs, and .cjs (not every pair), as config/gap-vitest with the same extension through --config, or none, as an object or a sync or async function, with no plugins of their own and test.projects only as a refusal, and only under the package's own package.json; a top-level await only in an ES module config and require only in a CommonJS one, as Vitest itself loads no other; a --config outside the package is refused by design, through the rule for paths outside the package (args.mjs), and no history generates one; contexts only four or eleven, and process warnings judged only as MaxListenersExceededWarning on the CLI's own stderr (a daemon's process warnings go to its log); a context that fails to open gives back its listener allowance, which no observation shows (a kept allowance only raises the limit, so no warning follows), so that accounting is fixed by inspection; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9 judges the witness module's outcome classes along one constructed edit sequence only (a test edit, a helper edit, and a revert), because a generated history with the witness module takes no steps (maintainer decision, 2026-11-11; this oracle owns the gap); law 9's edits leave out files read through fs, other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; cut-off charging judged only under one budget; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages; daemon races (two CLIs reading one error file, a CLI hearing closing from the failing daemon it started, a reset connection on macOS) fixed by inspection; a workspace dependency's one-file bundle is written in that dependency's own .oracle-gaps folder, a known stray write (date-fns report), which the stray-write check excludes; the runner's copies and Vitest configs (.oracle-gaps-PID*) sit at the package root and are removed when the run closes, so a killed run leaves them there, and the stray-write check runs after close and cannot see them; a counterexample shrinks through at most six histories, so it can be larger than the smallest that fails; module-level data only as four \`const\` declarations of the main source (an object literal, an array that holds a function, a boolean, and an object of two methods), read in place, with no data imported from another file, destructured, reassigned, or declared as an enum or a default export.`,
   },
   histories: {
     // A failing history shrinks through at most six smaller ones. Each runs
@@ -2481,10 +2503,74 @@ oracleProperty({
           ...generated,
           fault,
           ...(fault === `brokenVitest`
-            ? { steps: [`restart`, `fixSession`], concurrentStart: true }
+            ? {
+                steps: [`restart`, `fixSession`],
+                concurrentStart: true,
+                // A history with the witness module takes no other steps.
+                witness: false,
+              }
             : {}),
         }),
       })),
+      {
+        // Law 9 over the witness module's outcome classes: its hangs are
+        // recomputed after the test edit and reused after the helper edit,
+        // which changes only file b. Generated histories with the witness
+        // module take no steps, so this is the one sequence that judges
+        // them (maintainer decision, 2026-11-11). Everything else is the
+        // cheapest legal setting, so that the history costs about two cold
+        // runs and four daemon checks of the witness module.
+        name: `an edit sequence over the witness module`,
+        enters: [`a timed-out run reused after an edit`],
+        build: (generated) => ({
+          ...generated,
+          functions: [
+            [{ kind: `if`, op: `>`, k: 4, not: false, quote: `'` }],
+            [{ kind: `push`, quote: `'` }],
+          ],
+          containers: [],
+          overloads: [],
+          owners: [`a`, `b`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          derived: null,
+          dotGen: false,
+          dataOwners: [],
+          exportOwners: [],
+          importer: `none`,
+          wholeFile: `none`,
+          template: false,
+          tests: [
+            { ...judging(`a`, `fixed seed`, 5), fn: 0 },
+            { ...judging(`b`, `fixed seed`, 1), fn: 1 },
+          ],
+          witness: `capture`,
+          authored: null,
+          secondAuthored: false,
+          fault: `none`,
+          stability: `none`,
+          ordinary: false,
+          config: `object`,
+          configEnv: false,
+          setupGlobal: false,
+          native: `none`,
+          depSubpath: false,
+          unbuiltDep: false,
+          boot: false,
+          budget: `two`,
+          cliPath: `plain`,
+          concurrentStart: false,
+          configFile: `vite.config.ts`,
+          configPlace: `discovered`,
+          packageType: `module`,
+          configAwait: false,
+          configRequire: false,
+          contexts: 4,
+          sourceSpelling: `plain`,
+          steps: witnessSteps,
+        }),
+      },
     ]),
   },
   resolve: resolveHistory,
