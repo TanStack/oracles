@@ -19,6 +19,10 @@ type OraclePart =
  * value: it is a unit test, and belongs in an ordinary test file. The
  * `oracle/no-unit-test` lint rule reads this call. It does nothing at run
  * time.
+ *
+ * @deprecated Use oracleProperty, which takes owns and its parts.
+ * declareOracle remains only for files that register through a driver in
+ * another module.
  */
 export function declareOracle(_parts: {
   check?: ReadonlyArray<OraclePart>

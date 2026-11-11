@@ -54,8 +54,8 @@
 //
 // The rules are the maintainer's gap-check decisions, recorded in the design
 // notes of the project that adopted this CLI (design runs 11, 14, and 19).
-// Those notes are not part of this package. The CLI's own oracle is
-// gap-report-oracle.property.test.mjs.
+// Those notes are not part of this package, and neither are the CLI's own
+// oracles, which live in its repository.
 //
 // A run that does not complete never ends with a bare stack trace
 // (ending.mjs; maintainer decision, 2026-11-10). A problem the author can

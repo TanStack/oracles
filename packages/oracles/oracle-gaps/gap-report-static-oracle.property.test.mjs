@@ -918,6 +918,13 @@ function check(plan, observations, expected) {
         `the refusal does not name ${refused.cause}: ${got.refusal}`,
         `refusal`,
       )
+    // A refusal never directs the author to a legacy API.
+    if (refused.withheld && got.refusal.includes(refused.withheld))
+      return violation(
+        `static`,
+        `the refusal names ${refused.withheld}, which is legacy: ${got.refusal}`,
+        `refusal`,
+      )
     return pass
   }
   if (got.refusal)

@@ -164,8 +164,8 @@
  *   error does, by where it happens: only a violation at a checkpoint
  *   recorded before it still decides, and a driver error after it does not.
  *
- * `oracle-property-self-oracle.test.ts` checks these promises the way an
- * oracle checks production: it runs synthetic properties under real Vitest
+ * The framework's self-oracle, in its repository, checks these promises the
+ * way an oracle checks production: it runs synthetic properties under real Vitest
  * and compares what Vitest reports with an independent model.
  *
  * The `oracle/no-unit-test` lint rule treats an `oracleProperty` call as an

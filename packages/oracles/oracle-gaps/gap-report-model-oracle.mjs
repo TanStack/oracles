@@ -2996,7 +2996,10 @@ function refusal(plan) {
   // A run with no oracle file, or with no owns entry, owns no selected
   // source, so every mutant would read as unowned. The analysis refuses it
   // (maintainer decision, 2026-11-10).
-  if (plan.declaration === `neither`) return { cause: `no oracle file` }
+  // Its directive names only oracleProperty: declareOracle is legacy, and an
+  // author who reads it would call it (maintainer decision, 2026-11-10: F25).
+  if (plan.declaration === `neither`)
+    return { cause: `no oracle file`, withheld: `declareOracle` }
   if (
     plan.wholeFile === `none` &&
     plan.functions.every((fn) => fn.owners.length === 0)

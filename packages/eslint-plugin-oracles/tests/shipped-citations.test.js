@@ -1,7 +1,7 @@
 /**
- * The plugin's published files cite only what they ship. An agent that reads
- * a rule's source, as installed in a consumer's node_modules, follows each
- * file the source names; a file of this repository that the package does not
+ * Each published package (the plugin and `@tanstack/oracles`) cites only
+ * what it ships. An agent that reads a package's source, as installed in a
+ * consumer's node_modules, follows each file the source names; a file of this repository that the package does not
  * ship is one the consumer does not have, and an agent read one such
  * citation as an instruction to look for it (maintainer finding F16,
  * 2026-11-10).
@@ -10,9 +10,11 @@
  * so the manifest's `files` decides them):
  *
  * - A path: directory segments and a file name with an extension
- *   (`dir/file.js`, `../file.js`). It must name a shipped file, from the
- *   citing file's directory or the package's root. A path that names no file
- *   of the repository and does not start with one of its top-level
+ *   (`dir/file.js`, `../file.js`). It must name a file its package ships,
+ *   from the citing file's directory or the package's root (a `.js` import
+ *   names its `.ts` source). A path that names no file of the repository
+ *   (from the citing file, the package, the repository's root, or another
+ *   package or its `src`) and does not start with one of its top-level
  *   directories (an example of a consumer's path, such as `src/x.ts`) is
  *   not a citation.
  * - A bare name, with or without its extension, such as
@@ -29,7 +31,7 @@ import { fileURLToPath } from 'node:url'
 import { expect, test } from 'vitest'
 
 const repo = fileURLToPath(new URL(`../../../`, import.meta.url))
-const own = fileURLToPath(new URL(`..`, import.meta.url))
+const own = join(repo, `packages`, `eslint-plugin-oracles`)
 const packages = readdirSync(join(repo, `packages`)).map((name) =>
   join(repo, `packages`, name),
 )
@@ -52,52 +54,74 @@ function shippedFiles(dir) {
 const stemOf = (name) => name.replace(/(\.property)?(\.test)?\.[\w]+$/, ``)
 const namesOf = (path) => [basename(path), stemOf(basename(path))]
 
-const shipped = shippedFiles(own)
-const shippedNames = new Set(
-  packages.flatMap((dir) => shippedFiles(dir).flatMap(namesOf)),
-)
+const shippedOf = new Map(packages.map((dir) => [dir, shippedFiles(dir)]))
+const shippedNames = new Set([...shippedOf.values()].flat().flatMap(namesOf))
 const tracked = spawnSync(`git`, [`ls-files`], { cwd: repo, encoding: `utf8` })
   .stdout.split(`\n`)
   .filter(Boolean)
-// The names of the repository's files that no package ships.
+// The names of the repository's files that no package ships, except the
+// conventional names that a consumer's package has too (a lockfile the CLI
+// reads, a manifest).
+const conventional = new Set([
+  `pnpm-lock.yaml`,
+  `package-lock.json`,
+  `yarn.lock`,
+  `package.json`,
+  `tsconfig.json`,
+])
 const repoOnlyNames = new Set(
-  tracked.flatMap(namesOf).filter((name) => !shippedNames.has(name)),
+  tracked
+    .flatMap(namesOf)
+    .filter((name) => !shippedNames.has(name) && !conventional.has(name)),
 )
 
-/** The citations of `text`, in the shipped file `file`, that it does not ship. */
-function strays(file, text) {
+/**
+ * The citations of `text`, in the file `file` that package `dir` ships, of
+ * files the package does not ship. A `.js` path names its `.ts` source too.
+ */
+function strays(dir, file, text) {
+  const shipped = shippedOf.get(dir)
   const paths = [...text.matchAll(PATH)]
     .map((match) => match[1])
     .filter((cited) => {
       const ships = [dirname(file), `.`].some((base) =>
-        shipped.includes(join(base, cited)),
+        [cited, cited.replace(/\.js$/, `.ts`)].some((name) =>
+          shipped.includes(join(base, name)),
+        ),
       )
       const names =
         topLevel.test(cited) ||
-        [dirname(join(own, file)), own, repo].some((base) =>
+        [dirname(join(dir, file)), dir, repo, ...packages].some((base) =>
           existsSync(join(base, cited)),
-        )
+        ) ||
+        packages.some((other) => existsSync(join(other, `src`, cited)))
       return names && !ships
     })
   const names = [...text.matchAll(NAME)]
     .map((match) => match[1])
     .filter((name) => repoOnlyNames.has(name))
-  return [...paths, ...names].map((cited) => `${file}: ${cited}`)
+  return [...paths, ...names].map(
+    (cited) => `${relative(repo, join(dir, file))}: ${cited}`,
+  )
 }
 
-test(`every file a shipped file cites is a shipped file`, () => {
-  const sources = shipped.filter((file) => /\.(m?[jt]s|c[jt]s)$/.test(file))
-  expect(sources.length).toBeGreaterThan(0)
-  expect(
-    sources.flatMap((file) =>
-      strays(file, readFileSync(join(own, file), `utf8`)),
-    ),
-  ).toEqual([])
+test(`every file a shipped file cites is a file its package ships`, () => {
+  const found = packages.flatMap((dir) => {
+    const sources = shippedOf
+      .get(dir)
+      .filter((file) => /\.(m?[jt]s|c[jt]s)$/.test(file))
+    expect(sources.length).toBeGreaterThan(0)
+    return sources.flatMap((file) =>
+      strays(dir, file, readFileSync(join(dir, file), `utf8`)),
+    )
+  })
+  expect(found).toEqual([])
 })
 
-test(`the check rejects a citation of a test file, a repository script, and a bare oracle name`, () => {
+test(`the check rejects a citation of a test file, a repository script, another package's file, and a bare oracle name`, () => {
   expect(
     strays(
+      own,
       `src/rules/probe-form.js`,
       [
         `// See tests/no-unit-test.test.js for the cases.`,
@@ -107,8 +131,15 @@ test(`the check rejects a citation of a test file, a repository script, and a ba
       ].join(`\n`),
     ),
   ).toEqual([
-    `src/rules/probe-form.js: tests/no-unit-test.test.js`,
-    `src/rules/probe-form.js: scripts/eslint-plugin-oracle/probe-form-oracle.property.test.js`,
-    `src/rules/probe-form.js: gap-report-probe-form-oracle`,
+    `packages/eslint-plugin-oracles/src/rules/probe-form.js: tests/no-unit-test.test.js`,
+    `packages/eslint-plugin-oracles/src/rules/probe-form.js: scripts/eslint-plugin-oracle/probe-form-oracle.property.test.js`,
+    `packages/eslint-plugin-oracles/src/rules/probe-form.js: gap-report-probe-form-oracle`,
   ])
+  expect(
+    strays(
+      join(repo, `packages`, `oracles`),
+      `oracle-gaps/schemata.mjs`,
+      `// The probe form is the lint rule's (rules/probe-form.js), read by ./analysis.mjs.`,
+    ),
+  ).toEqual([`packages/oracles/oracle-gaps/schemata.mjs: rules/probe-form.js`])
 })
