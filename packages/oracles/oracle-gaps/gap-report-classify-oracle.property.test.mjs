@@ -883,7 +883,7 @@ function model(h) {
 // sentence after its directive.
 const boundaryLine = `Add a boundary history with -0 and 0.`
 // The kills-by-law section's one next step for a law that rejects no mutant.
-const killsDirective = `To find a law that rejects no mutant, add a history that varies the input the law judges, and run the check again.`
+const killsDirective = `Each count credits only the first law that rejected a history: a later law on the same history is not checked. To test a law with no count, add a history that varies the input the law judges, and run the check again.`
 const exits =
   /equivalen|maintainer|approv|allowance|either|whether|\bor\b|\bif no\b|limit|accept|\?|\bsay\b/i
 const directives = {
@@ -1295,7 +1295,9 @@ async function driver(h, observe) {
     streamed: printer
       ? [...report.gapsOf(results)].reverse().map((r) => printer.gapLine(r))
       : undefined,
-    killsSection: summary.slice(summary.indexOf(`## Kills by law`)),
+    killsSection: summary.slice(
+      summary.indexOf(`## First law to reject, by law`),
+    ),
     // What results.json keeps of each mutant's change, after the printing.
     kept: results.map((r) =>
       r.authored ? r.intent : [String(r.original), String(r.replacement)],
