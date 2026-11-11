@@ -35,17 +35,20 @@ const valued = new Set([
   `only`,
   `diff-base`,
   `pool`,
+  `config`,
 ])
 // The usage text `--help` prints (index.mjs).
 export const usage = `Usage: oracle-gaps --package <dir> --source <src/x.ts,...>
   [--env-prefix <name>] [--daemon] [--ordinary] [--seed <n>] [--mutants <dir>]
   [--out <dir>] [--only <id,id>] [--diff-base <rev>] [--test-timeout <ms>]
-  [--sample <n>] [--contexts <n>] [--pool threads|forks]
+  [--sample <n>] [--contexts <n>] [--pool threads|forks] [--config <file>]
   [--first-limit <ms>] [--hang-limit <ms>]
   oracle-gaps --stop-daemon --package <dir>
   oracle-gaps --help
 
-The paths in --source are relative to --package. Run the CLI from any directory.
+The paths in --source and --config are relative to --package. Without
+--config, the run loads the Vitest config that Vitest discovers in the
+package. Run the CLI from any directory.
 Exit codes: 0 the check completed; 2 refused, with the fix on stderr;
 3 an internal error of oracle-gaps.`
 const help = `as \`oracle-gaps --help\` shows`
@@ -133,6 +136,18 @@ function optionsOf(args, cwd) {
       `--pool must be threads or forks, not "${args.pool}"`,
       `Pass --pool threads, or --pool forks for a package with a native addon.`,
     )
+  // The Vitest config the run loads, a file of the package (`--config`); by
+  // default the one Vitest discovers there (check.mjs).
+  const config =
+    args.config === undefined ? undefined : packagePath(pkg, args.config)
+  if (
+    config !== undefined &&
+    !statSync(join(pkg, config), { throwIfNoEntry: false })?.isFile()
+  )
+    throw new Refusal(
+      `--config ${args.config} is not a file of the package`,
+      `Pass --config the package's Vitest config file, relative to --package.`,
+    )
   const mutants = args.mutants && resolve(cwd, args.mutants)
   if (mutants && !statSync(mutants, { throwIfNoEntry: false })?.isDirectory())
     throw new Refusal(
@@ -191,6 +206,7 @@ function optionsOf(args, cwd) {
     pool: args.pool ?? defaultPool(pkg),
     // A directory of authored mutants (see loadAuthored).
     mutants,
+    config,
   }
 }
 

@@ -91,6 +91,9 @@
 //     [--pool threads|forks]  (Vitest's pool; default threads, or forks when
 //                              a native addon is anywhere in the package's
 //                              dependency tree)
+//     [--config <file>]       (the Vitest config, relative to <dir>; default
+//                              the one Vitest discovers; the baseline names
+//                              the config it loaded, or says it found none)
 //   oracle-gaps --stop-daemon --package <dir>
 //   oracle-gaps --help      (prints the usage text, args.mjs)
 // Exit codes: 0 the check completed, 2 refused, 3 an internal error.

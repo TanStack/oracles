@@ -520,6 +520,30 @@ const histories = fc.record({
     `vitest.config.ts`,
     `vite.config.mjs`,
   ),
+  // Where the config is (maintainer finding F12, 2026-11-10): where Vitest
+  // discovers it; under a name it does not discover, which `--config`
+  // names; or nowhere, so Vitest's defaults apply. The run names the config
+  // it used, or says that it found none.
+  configPlace: fc.constantFrom(
+    `discovered`,
+    `discovered`,
+    `discovered`,
+    `named`,
+    `none`,
+  ),
+  // The package's module type: `module`, or none, in which Node and Vite
+  // read a `.js` or `.ts` file as CommonJS (F13). Vitest still loads an
+  // `.mjs` config as ES modules there.
+  packageType: fc.constantFrom(`module`, `module`, `module`, `commonjs`),
+  // The config awaits at its top level, which only an ES module can.
+  configAwait: fc.constantFrom(false, false, true),
+  // The runner's warm contexts (`--contexts`): each is a Vitest instance,
+  // which listens on the process (F15). Past ten, a listener that the
+  // runner does not account for warns.
+  contexts: fc.oneof(
+    { weight: 29, arbitrary: fc.constant(4) },
+    { weight: 1, arbitrary: fc.constant(11) },
+  ),
   steps: fc.oneof(
     { weight: 5, arbitrary: fc.constant(null) },
     {
@@ -1668,6 +1692,44 @@ export function derivedExpected(spec, x) {
   }
 }
 
+/**
+ * The package's config and module type, and the runner's contexts. A plan
+ * whose config a fault, the environment, or a setup file needs has a config
+ * file. A package with no module type has an `.mjs` config, which Vitest
+ * loads as an ES module there; a `.ts` one it would load as CommonJS.
+ */
+function configOf(history) {
+  const needsConfig =
+    [`configThrows`, `configNoDefault`, `projects`, `setupThrows`].includes(
+      history.fault,
+    ) ||
+    history.configEnv === true ||
+    history.setupGlobal === true
+  const place =
+    history.configPlace === `none` && needsConfig
+      ? `discovered`
+      : (history.configPlace ?? `discovered`)
+  const packageType = history.packageType ?? `module`
+  const discovered =
+    packageType === `commonjs`
+      ? `vite.config.mjs`
+      : (history.configFile ?? `vite.config.ts`)
+  const configPath =
+    place === `none`
+      ? undefined
+      : place === `named`
+        ? `config/gap-vitest.${discovered.split(`.`).at(-1)}`
+        : discovered
+  return {
+    configFile: discovered,
+    configPath,
+    configPlace: place,
+    packageType,
+    configAwait: history.configAwait === true,
+    contexts: history.contexts ?? 4,
+  }
+}
+
 function resolveHistory(history) {
   let label = 0
   const containerOf = (index) => history.containers[index] ?? `free`
@@ -2075,7 +2137,7 @@ function resolveHistory(history) {
     steps: history.steps ?? [],
     ordinary: history.ordinary === true,
     config: history.config ?? `object`,
-    configFile: history.configFile ?? `vite.config.ts`,
+    ...configOf(history),
     configEnv: history.configEnv === true,
     native: history.native ?? `none`,
     // A prebuilt addon in the workspace dependency's build/Release
@@ -2987,12 +3049,12 @@ function refusal(plan) {
   // file and its error.
   if (plan.fault === `configThrows`)
     return {
-      cause: plan.configFile,
+      cause: plan.configPath,
       detail: `the fixture config broke`,
       runtime: true,
     }
   if (plan.fault === `configNoDefault`)
-    return { cause: plan.configFile, runtime: true }
+    return { cause: plan.configPath, runtime: true }
   // A run with no oracle file, or with no owns entry, owns no selected
   // source, so every mutant would read as unowned. The analysis refuses it
   // (maintainer decision, 2026-11-10).
@@ -3033,7 +3095,12 @@ const reachesRun = (history) =>
 
 function model(plan) {
   const refused = refusal(plan)
-  if (refused) return { refused }
+  // The config the run names (F12): the file it loads, or none.
+  const configLine =
+    plan.configPath === undefined
+      ? `no config file: Vitest's default discovery`
+      : `config: ${plan.configPath}`
+  if (refused) return { refused, configLine }
   const sites = sitesOf(plan)
   const owners = ownersOf(plan)
   const ownerTests = (id) =>
@@ -3182,6 +3249,7 @@ function model(plan) {
   ].sort((a, b) => (a.key < b.key ? -1 : 1))
   const gaps = entries.map((e) => e.key)
   return {
+    configLine,
     // A native addon can crash the whole process from a worker thread, so a
     // package that depends on one runs its tests in child processes.
     pool:
@@ -3503,6 +3571,11 @@ const initialState = (plan) => ({
 function fixtureFiles(plan, state = initialState(plan)) {
   const manifest = (fields) =>
     `${JSON.stringify({ private: true, type: `module`, ...fields })}\n`
+  // The package's own manifest has its module type, or none (F13).
+  const ownManifest = (fields) =>
+    plan.packageType === `module`
+      ? manifest(fields)
+      : `${JSON.stringify({ private: true, ...fields })}\n`
   // A symbolic link, as a package manager links a workspace package.
   const link = (target) => ({ link: target })
   const test = `{ include: ${
@@ -3514,7 +3587,7 @@ function fixtureFiles(plan, state = initialState(plan)) {
   // start, beside a scoped package already installed in its scope.
   const scoped = plan.steps.includes(`addScopedAddon`)
   const files = {
-    'package.json': manifest({
+    'package.json': ownManifest({
       name: `gap-fixture`,
       dependencies: { 'state-dep': `*` },
       ...(plan.unbuiltDep || scoped
@@ -3563,17 +3636,26 @@ function fixtureFiles(plan, state = initialState(plan)) {
           ].join(`\n`),
         }
       : {}),
-    [plan.configFile]: `import { defineConfig } from 'vitest/config'\n${
-      plan.fault === `configThrows`
-        ? `throw new Error('the fixture config broke')\n`
-        : ``
-    }export ${plan.fault === `configNoDefault` ? `const config =` : `default`} defineConfig(${
-      { object: ``, function: `() => (`, async: `async () => (` }[plan.config]
-    }{ test: ${
-      plan.fault === `projects`
-        ? `{ projects: [{ test: { name: 'unit', ...${test} } }] }`
-        : test
-    } }${plan.config === `object` ? `` : `)`})\n`,
+    ...(plan.configPath === undefined
+      ? {}
+      : {
+          [plan.configPath]: `import { defineConfig } from 'vitest/config'\n${
+            plan.fault === `configThrows`
+              ? `throw new Error('the fixture config broke')\n`
+              : ``
+          }${
+            // A top-level await, which only an ES module config can hold.
+            plan.configAwait ? `await Promise.resolve()\n` : ``
+          }export ${plan.fault === `configNoDefault` ? `const config =` : `default`} defineConfig(${
+            { object: ``, function: `() => (`, async: `async () => (` }[
+              plan.config
+            ]
+          }{ test: ${
+            plan.fault === `projects`
+              ? `{ projects: [{ test: { name: 'unit', ...${test} } }] }`
+              : test
+          } }${plan.config === `object` ? `` : `)`})\n`,
+        }),
     [SOURCE]: state.prepend
       ? edited({ ...plan, stability: `prepend` })
       : plan.source,
