@@ -213,7 +213,8 @@ draw the boundary), name the second one in a sentence, say what it would
 own instead, and recommend one.
 
 - What it would own, in one or two sentences.
-- The contract, as a few lines of public calls and their results:
+- The contract, as a few lines of public calls and their results. Always
+  include it: it is the quickest way for the engineer to see what you mean.
 
   ```ts
   klona(x) // → a deep copy: same kind, prototype, and values as x, sharing no object with it
@@ -221,7 +222,8 @@ own instead, and recommend one.
 
 - Each potential law, as one "For every …" sentence, with its authority
   quoted, and what the probes showed about it. Nothing else from your
-  worksheet: no backing or status line, no rival, no witness.
+  worksheet: no backing word (`stated`, `observed`, `open`), no rival, no
+  witness.
 - The laws people forget, or one line on why each does not apply:
   - **No throw on valid input.** When the contract says a call returns a
     value, it promises not to throw for valid input.
@@ -324,8 +326,10 @@ default: with no engineer present, propose them and stop.
 
 ## 5. Build and run
 
-1. **Install what is missing**, and nothing more: `fast-check` and `vitest`
-   when the repository does not have them. Use the repository's own package
+1. **Install what is missing**, and nothing more: `fast-check@^4` and
+   `vitest@^4.1` when the repository does not have them. Vitest 4.1 runs on
+   Node 20 and later, and Vitest 5 needs Node 22.12 or later. Which Node
+   versions CI runs is a question for production: do not raise it now. Use the repository's own package
    manager. If the repository's own Vitest config would not pick up the oracle
    file, add a minimal config for it (or add its glob to the existing
    `include`). Add no scripts, lint, or other config yet. The `oracles-setup`

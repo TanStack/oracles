@@ -160,8 +160,10 @@ rule>", the same way in the `law` option's `authority`.
 
 **Then write the code under it.** Each boundary condition from the probes
 and the law worksheet becomes a constructed history. If there was no first
-session, fill in the worksheet from `oracles-start` for each law first. Each law's sentence, authority, and limits go
-in that property's `law` option. Put prose beside the model, the histories,
+session, fill in the worksheet from `oracles-start` for each law first. Each `oracleProperty` carries one law: give
+each law its own property, so a failure names the law it breaks. The
+properties can share one model, grammar, and driver. Each law's sentence,
+authority, and limits go in that property's `law` option. Put prose beside the model, the histories,
 the driver, and the check that says why each one predicts or tests the
 promised result.
 
