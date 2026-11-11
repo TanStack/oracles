@@ -446,6 +446,8 @@ The options of `oracleProperty` are typed in
 **Lint as you go.** Run the repository's lint on each oracle file and each
 changed production file after you edit it, and again before you finish. Fix
 every report. Do not disable a rule.
+In a first session, the oracles lint plugin is not installed yet: run the
+repository's own lint, if it covers the oracle file, and go on.
 
 Techniques: [guide § The driver and the check](../../docs/guide.md#the-driver-and-the-check).
 
