@@ -96,8 +96,9 @@ is for later, not a reason to stop.
 
 ## 1. Open
 
-Before your first message, read the block in `oracles-setup` step 4 that
-production adds to `AGENTS.md`. It governs you from the start of this
+Before your first message, read the block that production adds to
+`AGENTS.md`: it is in [`oracles-setup` step 4](../oracles-setup/SKILL.md),
+under "Write the AGENTS.md block". It governs you from the start of this
 session, though nobody has added it to the repository yet: who owns the
 laws and who owns the code, which skill to read before each kind of oracle
 work, and the lint rule.
