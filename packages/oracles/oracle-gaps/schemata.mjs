@@ -371,16 +371,11 @@ export function instrument(ts, path, text, source, offset = 0) {
     )
       return false
     const guard = bare(expression.left)
-    const found = ts.isIdentifier(guard) && declarationOf(guard, true)
+    const found = ts.isIdentifier(guard) ? bindingOf(guard) : undefined
     return (
       guard.text === `probing` &&
-      found !== undefined &&
-      ts.isVariableStatement(found) &&
-      isGuardDeclarator(
-        found.declarationList.declarations.find((d) =>
-          bindsName(d.name, `probing`),
-        ),
-      ) &&
+      isGuardDeclarator(found) &&
+      functionOf(found) === functionOf(guard) &&
       isHook(expression.right)
     )
   }
@@ -395,7 +390,7 @@ export function instrument(ts, path, text, source, offset = 0) {
     return (
       target !== undefined &&
       ts.isIdentifier(target) &&
-      helpers.has(declarationOf(target))
+      helpers.has(bindingOf(target))
     )
   }
   const isProbeOnly = (node) =>
@@ -408,101 +403,51 @@ export function instrument(ts, path, text, source, offset = 0) {
     (ts.isBlock(node) &&
       node.statements.length > 0 &&
       node.statements.every(isProbeOnly))
-  // Whether a binding name (an identifier, or a destructuring pattern)
-  // binds `name`.
-  const bindsName = (binding, name) =>
-    ts.isIdentifier(binding)
-      ? binding.text === name
-      : (ts.isObjectBindingPattern(binding) ||
-          ts.isArrayBindingPattern(binding)) &&
-        binding.elements.some(
-          (element) =>
-            !ts.isOmittedExpression(element) && bindsName(element.name, name),
+  // Scope questions come from TypeScript's binder: which declaration a name
+  // resolves to, through every scope boundary JavaScript has (hoisting,
+  // blocks, static blocks, catch clauses, patterns, imports). Only symbols
+  // and declarations are read, never types (maintainer decisions,
+  // 2026-11-11). The program holds this one file, so it binds it alone.
+  let checker
+  const symbolOf = (identifier) => {
+    if (checker === undefined) {
+      const named = (name) => ts.normalizePath(name) === file.fileName
+      const host = {
+        getSourceFile: (name) => (named(name) ? file : undefined),
+        fileExists: named,
+        readFile: () => undefined,
+        writeFile: () => undefined,
+        getDefaultLibFileName: () => `lib.d.ts`,
+        getCurrentDirectory: () => `/`,
+        getCanonicalFileName: (name) => name,
+        useCaseSensitiveFileNames: () => true,
+        getNewLine: () => `\n`,
+      }
+      checker = ts
+        .createProgram(
+          [file.fileName],
+          { noLib: true, noResolve: true, allowJs: true, noEmit: true },
+          host,
         )
-  const declaresName = (statement, name) =>
-    (ts.isVariableStatement(statement) &&
-      statement.declarationList.declarations.some((d) =>
-        bindsName(d.name, name),
-      )) ||
-    // An overload signature names the function its implementation declares.
-    (((ts.isFunctionDeclaration(statement) && statement.body !== undefined) ||
-      ts.isClassDeclaration(statement)) &&
-      statement.name?.text === name)
-  // What declares `identifier`'s name, found from the innermost scope
-  // outward as JavaScript resolves it: a statement (a variable, function, or
-  // class declaration; case clauses share their switch's scope), the loop
-  // statement or catch clause that binds it, or a parameter; undefined when
-  // nothing in the file declares it. `withinFunction` stops at the nearest
-  // function, returning its parameter of that name or undefined.
-  function declarationOf(identifier, withinFunction = false) {
-    const name = identifier.text
-    for (let node = identifier.parent; node; node = node.parent) {
-      const statements = ts.isCaseBlock(node)
-        ? node.clauses.flatMap((clause) => clause.statements)
-        : ts.isBlock(node) || ts.isSourceFile(node) || ts.isModuleBlock(node)
-          ? node.statements
-          : []
-      const found = statements.find((statement) =>
-        declaresName(statement, name),
-      )
-      if (found) return found
-      // A loop's own variables, and a caught error.
-      const own =
-        (ts.isForStatement(node) ||
-          ts.isForOfStatement(node) ||
-          ts.isForInStatement(node)) &&
-        node.initializer !== undefined &&
-        ts.isVariableDeclarationList(node.initializer)
-          ? node.initializer.declarations.some((d) => bindsName(d.name, name))
-          : ts.isCatchClause(node) &&
-            node.variableDeclaration !== undefined &&
-            bindsName(node.variableDeclaration.name, name)
-      if (own) return node
-      // A `var` in a nested block belongs to the function or the module,
-      // and an import binds a name for the module.
-      if (ts.isFunctionLike(node) || ts.isSourceFile(node)) {
-        const hoisted = varOf(node, name)
-        if (hoisted) return hoisted
-      }
-      if (ts.isSourceFile(node)) {
-        const imported = node.statements.find(
-          (statement) =>
-            ts.isImportDeclaration(statement) &&
-            statement.importClause !== undefined &&
-            importsName(statement.importClause, name),
-        )
-        if (imported) return imported
-      }
-      if (ts.isFunctionLike(node)) {
-        const parameter = node.parameters?.find((p) => bindsName(p.name, name))
-        if (parameter || withinFunction) return parameter
-      }
+        .getTypeChecker()
     }
-    return undefined
+    return checker.getSymbolAtLocation(identifier)
   }
-  // The `var` statement in `scope`, outside its nested functions, that binds
-  // `name`.
-  function varOf(scope, name) {
-    let found
-    const visit = (node) => {
-      if (found || (node !== scope && ts.isFunctionLike(node))) return
-      if (
-        ts.isVariableStatement(node) &&
-        (node.declarationList.flags & ts.NodeFlags.BlockScoped) === 0 &&
-        node.declarationList.declarations.some((d) => bindsName(d.name, name))
-      )
-        found = node
-      ts.forEachChild(node, visit)
-    }
-    ts.forEachChild(scope, visit)
-    return found
+  // The declaration a name resolves to: a function's implementation over its
+  // overload signatures, and otherwise its value's declaration.
+  const bindingOf = (identifier) => {
+    const symbol = symbolOf(identifier)
+    return (
+      symbol?.declarations?.find((d) => ts.isFunctionLike(d) && d.body) ??
+      symbol?.valueDeclaration ??
+      symbol?.declarations?.[0]
+    )
   }
-  const importsName = (clause, name) =>
-    clause.name?.text === name ||
-    (clause.namedBindings !== undefined &&
-      (ts.isNamespaceImport(clause.namedBindings)
-        ? clause.namedBindings.name.text === name
-        : clause.namedBindings.elements.some((e) => e.name.text === name)))
+  const functionOf = (node) => {
+    let n = node.parent
+    while (n && !ts.isFunctionLike(n)) n = n.parent
+    return n
+  }
   const declarations = []
   const collect = (node) => {
     if (ts.isFunctionDeclaration(node) && node.name && node.body)
@@ -546,7 +491,7 @@ export function instrument(ts, path, text, source, offset = 0) {
   const annotationOf = (expression) => {
     const inner = bare(expression)
     if (!typeScript || !ts.isIdentifier(inner)) return undefined
-    const found = declarationOf(inner)
+    const found = bindingOf(inner)
     return found && ts.isParameter(found) && ts.isIdentifier(found.name)
       ? found.type
       : undefined
@@ -620,46 +565,50 @@ export function instrument(ts, path, text, source, offset = 0) {
       ? holder
       : undefined
   }
-  // A local binding: a parameter, or a `var`, loop, or catch variable of an
-  // enclosing function, with no `with` statement between the name and its
-  // binding. A global, a module-level name, or a name in a `with` body can
-  // read an accessor, so reading it twice is not reading it once. A `let` or
-  // `const` is left out: a closure can read it before its assignment, and
-  // the read throws.
-  const enclosedByFunction = (node) => {
-    for (let n = node.parent; n; n = n.parent)
-      if (ts.isFunctionLike(n)) return true
-    return false
+  // A local binding: a name that resolves to a parameter, a variable, or a
+  // caught error of a function (a binding element of one included), in a
+  // file with no `with`, which reads names through an object. A global or a
+  // module-level name can read an accessor, so reading it twice is not
+  // reading it once. Dead zones, one rule: a parameter, a caught error, a
+  // `let`, or a `const` read before its declaration ends (inside its own
+  // initializer or pattern, or before it) is in its dead zone, where a read
+  // throws. A `let` or `const` read from another function, which may run
+  // before the declaration, or from a `switch` case past it, may be too. A
+  // `var` has no dead zone.
+  const root = (declaration) => {
+    let n = declaration
+    while (
+      ts.isBindingElement(n) ||
+      ts.isObjectBindingPattern(n) ||
+      ts.isArrayBindingPattern(n)
+    )
+      n = n.parent
+    return n
   }
   const localBinding = (identifier) => {
-    for (let n = identifier.parent; n; n = n.parent)
-      if (ts.isWithStatement(n)) return false
-    const found = declarationOf(identifier)
+    if (dynamicScope.with) return false
+    const found = bindingOf(identifier)
     if (found === undefined) return false
-    // A parameter read before its own declaration ends (in its default, or
-    // an earlier one's), and a loop's lexical variable read in its own head,
-    // are in their dead zone, where a read throws (the sixth review).
-    if (ts.isParameter(found)) return identifier.getStart(file) >= found.end
-    const head = ts.isForStatement(found) ? found.initializer : found.expression
-    if (
-      (ts.isForStatement(found) ||
-        ts.isForOfStatement(found) ||
-        ts.isForInStatement(found)) &&
-      found.initializer !== undefined &&
-      ts.isVariableDeclarationList(found.initializer) &&
-      (found.initializer.flags & ts.NodeFlags.BlockScoped) !== 0 &&
-      identifier.getStart(file) >= head.getStart(file) &&
-      identifier.end <= head.end
-    )
-      return false
+    const declared = root(found)
+    const scope = functionOf(declared)
+    if (scope === undefined) return false
+    if (ts.isParameter(declared)) return identifier.getStart(file) >= found.end
+    if (!ts.isVariableDeclaration(declared)) return false
+    const lexical =
+      ts.isCatchClause(declared.parent) ||
+      (declared.parent.flags & ts.NodeFlags.BlockScoped) !== 0
+    // A `for…of` or `for…in` head's iterated value runs in its variables'
+    // dead zone too.
+    const loop = declared.parent.parent
+    const ends =
+      ts.isForOfStatement(loop) || ts.isForInStatement(loop)
+        ? loop.expression.end
+        : found.end
     return (
-      enclosedByFunction(found) &&
-      ((ts.isVariableStatement(found) &&
-        (found.declarationList.flags & ts.NodeFlags.BlockScoped) === 0) ||
-        ts.isForStatement(found) ||
-        ts.isForOfStatement(found) ||
-        ts.isForInStatement(found) ||
-        ts.isCatchClause(found))
+      !lexical ||
+      (identifier.getStart(file) >= ends &&
+        functionOf(identifier) === scope &&
+        !ts.isCaseClause(declared.parent.parent?.parent))
     )
   }
   // A pure condition reads local names and numbers, and applies comparisons,
@@ -862,6 +811,12 @@ export function instrument(ts, path, text, source, offset = 0) {
     const holder = conditionHolderOf(node)
     if (holder === undefined || !yieldsOperands(node, holder)) return undefined
     if (!annotationOf(node.left) && !annotationOf(node.right)) return undefined
+    // Every comparison in the condition compares primitives, or an admitted
+    // object's `valueOf` would distinguish the swap (the seventh review).
+    const condition = ts.isIfStatement(holder)
+      ? holder.expression
+      : holder.condition
+    if (!primitiveComparisons(condition)) return undefined
     const [left, right] = [typeOf(node.left), typeOf(node.right)]
     if (left === `bigint` && right === `bigint`)
       return `a number in place of a bigint`
@@ -927,7 +882,11 @@ export function instrument(ts, path, text, source, offset = 0) {
       (exactLiteral(eq.right) && local(eq.left))
     )
       return `dead`
-    if (typeOf(eq.left) === `bigint` && typeOf(eq.right) === `bigint`)
+    if (
+      typeOf(eq.left) === `bigint` &&
+      typeOf(eq.right) === `bigint` &&
+      primitiveComparisons(node.expression)
+    )
       return `\`-0\` and \`0\` in place of the bigints`
     return undefined
   }
@@ -937,58 +896,46 @@ export function instrument(ts, path, text, source, offset = 0) {
   // ternary or `if` has identical branches. Otherwise an ordering swap may carry
   // the boundary hint.
   // Whether a returned expression is `undefined` by its syntax alone: `void
-  // x`, or the global `undefined`, where nothing in the file binds the name
-  // and its scopes are static. Its mutant then returns the same `undefined`
-  // after the same evaluation. A type proves nothing here.
-  //
-  // A name binds where it is the name of a declaration: a variable, a
-  // parameter or binding element, a function, a class (an expression's own
-  // name included), an import, an enum, or a namespace. A method's name, a
-  // property's, a label, and an export specifier's do not bind it. A
-  // direct `eval` can declare a `var` at run time, and a `with` reads names
-  // through an object, so either one in the file makes its scopes dynamic.
-  const declaring = (node) =>
-    ts.isVariableDeclaration(node) ||
-    ts.isParameter(node) ||
-    ts.isBindingElement(node) ||
-    ts.isFunctionDeclaration(node) ||
-    ts.isFunctionExpression(node) ||
-    ts.isClassDeclaration(node) ||
-    ts.isClassExpression(node) ||
-    ts.isImportClause(node) ||
-    ts.isImportSpecifier(node) ||
-    ts.isNamespaceImport(node) ||
-    ts.isImportEqualsDeclaration(node) ||
-    ts.isEnumDeclaration(node) ||
-    ts.isModuleDeclaration(node)
-  let bindsUndefined = false
-  let dynamicScope = false
+  // x`, or the global `undefined`, which the binder resolves to no
+  // declaration, in a file whose scopes are static. Its mutant then returns
+  // the same `undefined` after the same evaluation. A type proves nothing
+  // here. A direct `eval` (a call of the global `eval`, through parentheses
+  // or a type's wrapper) can declare a `var` at run time, and a `with` reads
+  // names through an object, so either one makes the file's scopes dynamic.
+  const unwrapped = (node) => {
+    let n = node
+    while (
+      ts.isParenthesizedExpression(n) ||
+      ts.isAsExpression(n) ||
+      ts.isNonNullExpression(n) ||
+      ts.isSatisfiesExpression(n) ||
+      ts.isTypeAssertionExpression(n)
+    )
+      n = n.expression
+    return n
+  }
+  const global = (identifier) =>
+    (symbolOf(identifier)?.declarations?.length ?? 0) === 0
+  const dynamicScope = { eval: false, with: false }
   const scan = (node) => {
-    if (
-      ts.isIdentifier(node) &&
-      node.text === `undefined` &&
-      declaring(node.parent) &&
-      node.parent.name === node
-    )
-      bindsUndefined = true
-    if (
-      ts.isWithStatement(node) ||
-      (ts.isCallExpression(node) &&
-        ts.isIdentifier(node.expression) &&
-        node.expression.text === `eval`)
-    )
-      dynamicScope = true
+    if (ts.isWithStatement(node)) dynamicScope.with = true
+    if (ts.isCallExpression(node)) {
+      const callee = unwrapped(node.expression)
+      if (ts.isIdentifier(callee) && callee.text === `eval` && global(callee))
+        dynamicScope.eval = true
+    }
     ts.forEachChild(node, scan)
   }
   scan(file)
+  const staticScopes = () => !dynamicScope.eval && !dynamicScope.with
   const undefinedAlready = (expression) => {
     const inner = bare(expression)
     if (ts.isVoidExpression(inner)) return true
     return (
       ts.isIdentifier(inner) &&
       inner.text === `undefined` &&
-      !bindsUndefined &&
-      !dynamicScope
+      staticScopes() &&
+      global(inner)
     )
   }
   // A receiver that is never nullish, whatever the inputs: a string or
@@ -1000,25 +947,24 @@ export function instrument(ts, path, text, source, offset = 0) {
   const constantReceiver = (expression) => {
     const inner = bare(expression)
     if (ts.isStringLiteral(inner) || ts.isNumericLiteral(inner)) return true
-    if (!ts.isIdentifier(inner) || dynamicScope) return false
-    for (let n = inner.parent; n; n = n.parent)
-      if (ts.isWithStatement(n)) return false
-    const found = declarationOf(inner)
+    if (!ts.isIdentifier(inner) || !staticScopes()) return false
+    const found = bindingOf(inner)
+    const statement = found?.parent?.parent
     if (
       !found ||
-      !ts.isVariableStatement(found) ||
-      (found.declarationList.flags & ts.NodeFlags.Const) === 0 ||
-      found.modifiers?.some(
+      !ts.isVariableDeclaration(found) ||
+      !ts.isIdentifier(found.name) ||
+      (found.parent.flags & ts.NodeFlags.Const) === 0 ||
+      !ts.isVariableStatement(statement) ||
+      statement.modifiers?.some(
         (m) =>
           m.kind === ts.SyntaxKind.ExportKeyword ||
           m.kind === ts.SyntaxKind.DeclareKeyword,
       ) ||
-      !ts.isSourceFile(found.parent)
+      !ts.isSourceFile(statement.parent)
     )
       return false
-    const init = found.declarationList.declarations.find(
-      (d) => ts.isIdentifier(d.name) && d.name.text === inner.text,
-    )?.initializer
+    const init = found.initializer
     return (
       init !== undefined &&
       (ts.isStringLiteral(init) ||
