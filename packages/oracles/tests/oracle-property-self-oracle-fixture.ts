@@ -185,6 +185,11 @@ export type SyntheticSpec = {
     history: SyntheticHistory
     enters?: ReadonlyArray<string>
   }>
+  /**
+   * A `.map` the arbitrary applies, with or without an unmapper, to the whole
+   * history or to each item; absent, only a form maps, with an unmapper.
+   */
+  arbitraryMap?: { unmapper: boolean; at: `history` | `item` }
   nondeterministic: boolean
   calibrations: ReadonlyArray<{
     name: string
@@ -248,14 +253,42 @@ export type SyntheticSpec = {
   deepCheck?: boolean
 }
 
-/** The synthetic language: one to three items, mostly ordinary ones. */
-export const syntheticArbitrary: fc.Arbitrary<SyntheticHistory> = fc.array(
-  fc.oneof(
-    { arbitrary: fc.integer({ min: 0, max: 2 }), weight: 6 },
-    { arbitrary: fc.constantFrom(3, 4, 6, 7), weight: 1 },
-  ),
-  { minLength: 1, maxLength: 3 },
+/** One item of the synthetic language, mostly an ordinary one. */
+const syntheticItem: fc.Arbitrary<number> = fc.oneof(
+  { arbitrary: fc.integer({ min: 0, max: 2 }), weight: 6 },
+  { arbitrary: fc.constantFrom(3, 4, 6, 7), weight: 1 },
 )
+const historyOf = (item: fc.Arbitrary<number>) =>
+  fc.array(item, { minLength: 1, maxLength: 3 })
+/** The synthetic language: one to three items, mostly ordinary ones. */
+export const syntheticArbitrary: fc.Arbitrary<SyntheticHistory> =
+  historyOf(syntheticItem)
+const same = (item: number) => item
+// An unmapper sees any value; the item arbitrary judges whether it is an item.
+const unmapItem = (value: unknown) => value as number
+
+/**
+ * A spec's arbitrary: the language, with an item `.map` when the spec maps
+ * items, then a history `.map` when it holds a form or maps whole histories.
+ * Each map is the identity on items, so the language stays the same; only an
+ * unmapper decides whether a fixed or constructed history can be taken back.
+ */
+function arbitraryOf(spec: SyntheticSpec): fc.Arbitrary<Formed> {
+  const map = spec.arbitraryMap
+  const language =
+    map?.at === `item`
+      ? historyOf(
+          map.unmapper
+            ? syntheticItem.map(same, unmapItem)
+            : syntheticItem.map(same),
+        )
+      : syntheticArbitrary
+  if (spec.form === undefined && map?.at !== `history`) return language
+  const form = formOf(spec)
+  return map?.at === `history` && !map.unmapper
+    ? language.map(form)
+    : language.map(form, (value) => itemsOf(spec)(value))
+}
 
 const allStates = [`saw-0`, `saw-1`, `saw-2`]
 // The clock a `clock` spec's driver runs on. A 7's spin would fire about a
@@ -835,10 +868,7 @@ export function syntheticProperty(spec: SyntheticSpec): void {
       spec.probe && state === `saw-0`
         ? { name: state, probe: syntheticProbe }
         : state
-    const arbitrary =
-      spec.form === undefined
-        ? (syntheticArbitrary as fc.Arbitrary<Formed>)
-        : syntheticArbitrary.map(form, (value) => items(value))
+    const arbitrary = arbitraryOf(spec)
     oracleProperty({
       id,
       law,
