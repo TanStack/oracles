@@ -993,29 +993,14 @@ export function instrument(ts, path, text, source, offset = 0) {
   }
   // A receiver that is never nullish, whatever the inputs: a string or
   // number literal, or a `const` that holds one and that nothing outside the
-  // function can change (not exported, by a modifier or an export list, not
-  // in a namespace, not ambient, with no `var` of its name in between, and
-  // in a file with static scopes). Its site is dead code.
-  const exportedNames = new Set(
-    file.statements.flatMap((statement) =>
-      ts.isExportDeclaration(statement) &&
-      statement.exportClause &&
-      ts.isNamedExports(statement.exportClause)
-        ? statement.exportClause.elements.map(
-            (e) => (e.propertyName ?? e.name).text,
-          )
-        : [],
-    ),
-  )
+  // function can change (not exported by a modifier, whose CommonJS emit
+  // reads `exports.s`; an export list keeps the local read), not in a
+  // namespace, not ambient, with no `var` of its name in between, and in a
+  // file with static scopes. Its site is dead code.
   const constantReceiver = (expression) => {
     const inner = bare(expression)
     if (ts.isStringLiteral(inner) || ts.isNumericLiteral(inner)) return true
-    if (
-      !ts.isIdentifier(inner) ||
-      dynamicScope ||
-      exportedNames.has(inner.text)
-    )
-      return false
+    if (!ts.isIdentifier(inner) || dynamicScope) return false
     for (let n = inner.parent; n; n = n.parent)
       if (ts.isWithStatement(n)) return false
     const found = declarationOf(inner)
