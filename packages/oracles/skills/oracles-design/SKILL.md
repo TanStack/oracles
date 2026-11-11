@@ -154,7 +154,9 @@ decided appears only as a limit, with its reason. Nor does it tell the story
 of the session: no "the maintainer approved", "the engineer deferred", or
 "as the probe showed". A user's decision is stated as the rule it made, and
 a limit's reason is about the code ("`klona` calls the constructor with no
-arguments"), not about who has not decided yet.
+arguments"), not about who has not decided yet. When a user's decision is
+the authority for a law, write it as "Maintainer decision, <date>: <the
+rule>", the same way in the `law` option's `authority`.
 
 **Then write the code under it.** Each boundary condition from the probes
 and the law worksheet becomes a constructed history. If there was no first

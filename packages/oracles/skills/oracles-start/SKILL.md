@@ -217,7 +217,8 @@ own instead, and recommend one.
   ```
 
 - Each potential law, as one "For every …" sentence, with its authority
-  quoted, and what the probes showed about it.
+  quoted, and what the probes showed about it. Nothing else from your
+  worksheet: no backing or status line, no rival, no witness.
 - The laws people forget, or one line on why each does not apply:
   - **No throw on valid input.** When the contract says a call returns a
     value, it promises not to throw for valid input.
@@ -247,7 +248,7 @@ a few examples to a general law:
 - Constraints: <what holds in every history>
 - Boundary conditions: <each edge; each one gets a constructed history>
 - Authority: <document and section, or a dated maintainer decision>
-- Status: adopted | observed | open
+- Backing: stated | observed | open
 - Rival: <a plausible different law>
 - Witness: <a legal history where the law and the rival predict different observations>
 - Checkpoint: <where the contract owes the observation>
@@ -279,10 +280,11 @@ How to fill in the fields:
   the last item, keys that shadow prototype names, cleanup. A boundary that
   the law does not decide goes under open questions. Do not leave it out of
   the grammar.
-- **Status:** `adopted` if it has an authority, `observed` if production does
-  it but nobody adopted it, `open` if it is a question. Only `adopted` laws
-  become expected results. An `observed` or `open` law goes to the user as a
-  question.
+- **Backing:** `stated` if an authority states it, `observed` if production
+  does it but nothing states it, `open` if it is a question. A `stated` law
+  is what you ask the engineer to approve. It becomes adopted only when they
+  do, and only adopted laws become expected results. An `observed` or `open`
+  law goes to the engineer as a question.
 - **Production output is evidence, never authority.** A rule that you write
   only because production does it is model hacking. Mark that rule
   `observed`, and ask the user. An analogy to another documented rule is not
