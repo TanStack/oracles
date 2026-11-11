@@ -830,6 +830,9 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       computed === 0
     )
       states.add(`a revert of a file edit reran nothing`)
+    // The other install's summary reads otherwise by construction, so its
+    // check is no edit, and the next edit is compared with the state before.
+    if (step === `otherInstall`) return
     // An edit that changes the cold result is one a stale cache could miss.
     if (step !== `start` && result(previous) !== result(coldRun))
       states.add(`edit ${step} changed the cold result`)
