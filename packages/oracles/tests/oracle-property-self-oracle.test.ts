@@ -68,7 +68,12 @@
  *   matches that pattern. The law is judged first: a wrong law fails the
  *   calibration as a wrong law whatever its difference. A mutant driver's
  *   candidate that reports another difference is passed over as one that
- *   reports another law is (maintainer decision, 2026-11-11, F27).
+ *   reports another law is, so a later candidate whose difference matches
+ *   passes it (maintainer decision, 2026-11-11, F27). A required difference
+ *   that the empty difference holds, the empty text or a pattern that
+ *   matches the empty string, fails the property's load, naming the
+ *   calibration. A check that gives a difference that is not text, where a
+ *   calibration requires one, fails that calibration naming it and the law.
  * - `determinism`: the determinism test runs every fixed and constructed history
  *   and three generated ones, and fails for a driver whose trace changes,
  *   compared by their data encoding: `-0` is not `0`, and key order and
@@ -159,10 +164,11 @@
  * the items they hold, so the shrink and replay checks cannot read it back
  * and skip it. Only generated sources bind a probe, and only
  * `saw-0`; an enumerated source declares its states by name. A late probe is judged by whether the run reports it, not by which
- * test Vitest blames. A calibration's required difference is drawn only as two texts and two
- * patterns, judged against the one difference a corrupted or mutant trace reports (`item is 3`);
- * a pattern with the global or sticky flag is not drawn. A calibration's failure message is judged
- * by its kind, not by its text.
+ * test Vitest blames. A calibration's required difference is drawn only as four texts and
+ * four patterns, including the empty ones, judged against the difference a wrong answer
+ * reports, `item k is 3`, where k is the first item or a `driver-last` candidate's last item. A
+ * pattern with the global or sticky flag is not drawn. A difference that is not text is drawn
+ * only as a number. A calibration's failure message is judged by its kind, not by its text.
  */
 import { spawnSync } from 'node:child_process'
 import {
@@ -203,12 +209,20 @@ import type {
 const allStates = [`saw-0`, `saw-1`, `saw-2`]
 const stateRoles = [`required`, `measured`, `undeclared`] as const
 type StateRole = (typeof stateRoles)[number]
-const calibrationKinds = [`right`, `wrong-law`, `no-op`, `driver`] as const
+const calibrationKinds = [
+  `right`,
+  `wrong-law`,
+  `no-op`,
+  `driver`,
+  `driver-last`,
+] as const
 const calibrationDifferences = [
   `text match`,
   `text mismatch`,
   `pattern match`,
   `pattern mismatch`,
+  `later text`,
+  `later pattern`,
 ] as const
 /** A calibration's kind and the difference it requires; `none` requires none. */
 type CalibrationDraft = {
@@ -243,6 +257,8 @@ type Draft = {
   /** `slow`: 300 ms per history under a 100 ms timeout. */
   timing: `normal` | `slow`
   calibrations: Array<CalibrationDraft>
+  /** The check reports a number as its difference. */
+  numberDifference: boolean
   /** An id no oracle configuration registers. */
   unregistered: boolean
   /** How the driver calls the probe bound to `saw-0`; `none` binds no probe. */
@@ -382,11 +398,23 @@ const draft: fc.Arbitrary<Draft> = fc.record({
     fc.record({
       kind: fc.constantFrom(...calibrationKinds),
       difference: fc.oneof(
-        { weight: 3, arbitrary: fc.constant(`none` as const) },
-        { weight: 2, arbitrary: fc.constantFrom(...calibrationDifferences) },
+        // Rare: an empty difference fails the whole property's load.
+        { weight: 9, arbitrary: fc.constant(`none` as const) },
+        { weight: 9, arbitrary: fc.constantFrom(...calibrationDifferences) },
+        {
+          weight: 1,
+          arbitrary: fc.constantFrom(
+            `empty text` as const,
+            `empty pattern` as const,
+          ),
+        },
       ),
     }),
     { maxLength: 3 },
+  ),
+  numberDifference: fc.oneof(
+    { weight: 5, arbitrary: fc.constant(false) },
+    { weight: 1, arbitrary: fc.constant(true) },
   ),
   // Rare: a property under an id no oracle configuration registers.
   unregistered: fc.oneof(
@@ -628,6 +656,7 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
         nondeterministic: d.nondeterministic,
         reachVia: d.reachVia,
         ...(d.unregistered ? { unregistered: true } : {}),
+        ...(d.numberDifference ? { numberDifference: true } : {}),
         ...(generated && d.probe !== `none` ? { probe: d.probe } : {}),
         ...(d.overReport ? { overReport: true } : {}),
         ...(d.noisyProbe ? { noisyProbe: true } : {}),
@@ -720,6 +749,7 @@ type Kind =
   | `calibration-passed`
   | `calibration-wrong-law`
   | `calibration-wrong-difference`
+  | `calibration-odd-difference`
   | `calibration-none`
   | `timeout`
   | `model-not-total`
@@ -937,6 +967,50 @@ function enumeratedName(
     ? ran.test.slice(spec.id.length + 3)
     : `(never ran) ${JSON.stringify(history)}`
 }
+// The candidates a calibration tries, in order (the contract's rule): an
+// enumerated source's histories; or a generated source's fixed histories,
+// its constructed histories built from the first fixed seed (constructed
+// history k from seed + k), and 100 histories sampled with that seed. A `.map`
+// draws no randomness, so a spec's form samples the same items.
+const calibrationCandidates = (
+  spec: SyntheticSpec,
+): ReadonlyArray<SyntheticHistory> => {
+  if (spec.source.kind === `enumerated`) return spec.source.histories
+  const { seed } = spec.source
+  return [
+    ...spec.fixed.map(({ history }) => history),
+    ...spec.constructed.map(({ prefix }, at) =>
+      [
+        ...prefix,
+        ...fc.sample(syntheticArbitrary, { seed: seed + at, numRuns: 1 })[0]!,
+      ].slice(0, 3),
+    ),
+    ...fc.sample(syntheticArbitrary, { seed, numRuns: 100 }),
+  ]
+}
+// What a required difference holds, stated apart from the fixture's values:
+// text by containment, a pattern by a match anywhere. The empty ones never
+// register.
+const differenceHolds: Record<
+  CalibrationDifference,
+  (difference: string) => boolean
+> = {
+  'text match': (difference) => difference.includes(`is 3`),
+  'text mismatch': (difference) => difference.includes(`is 4`),
+  'pattern match': (difference) => /^item \d is 3$/.test(difference),
+  'pattern mismatch': (difference) => /^item \d is 4$/.test(difference),
+  'later text': (difference) => difference.includes(`item 2 is 3`),
+  'later pattern': (difference) => difference.startsWith(`item 2 `),
+  'empty text': () => true,
+  'empty pattern': () => true,
+}
+// The difference a wrong answer reports for a clean candidate.
+const mutatedDifference = (
+  kind: (typeof calibrationKinds)[number],
+  history: SyntheticHistory,
+) => `item ${kind === `driver-last` ? history.length - 1 : 0} is 3`
+const emptyDifference = (difference: CalibrationDifference | undefined) =>
+  difference === `empty text` || difference === `empty pattern`
 const isCampaign = (name: string) =>
   name.startsWith(`fixed seed`) || name === `random seed`
 
@@ -1052,6 +1126,8 @@ type SpecExpectation =
       loadCause?: string
       /** A constructed history's build threw at registration. */
       buildError?: boolean
+      /** A calibration requires a difference that the empty difference holds. */
+      emptyDifference?: boolean
       /** An enumerated declaration with a foreign key or a probe-bound state. */
       shapeError?: boolean
       /** A label that names a framework test. */
@@ -1184,6 +1260,17 @@ function predictSpec(
         }
     }
   }
+  // A required difference that the empty difference holds rejects any
+  // difference, so the property fails to load, naming the calibration.
+  const empty = spec.calibrations.find(({ difference }) =>
+    emptyDifference(difference),
+  )
+  if (empty)
+    return {
+      loads: false,
+      loadError: `${spec.id}: calibration "${empty.name}" requires difference`,
+      emptyDifference: true,
+    }
   const names =
     spec.source.kind === `enumerated`
       ? spec.source.histories.map((history) =>
@@ -1247,28 +1334,35 @@ function predictSpec(
   }
   // A calibration needs a candidate whose clean trace passes; it skips the
   // others (maintainer decision, 2026-11-03). Every history has an item, so
-  // the corruption applies to every candidate. A corrupted or mutant trace
-  // violates law `three` with difference `item is 3`, which a required
-  // difference matches or not, by its mode. The law is judged first. A
-  // corruption decides at its first candidate; a mutant driver passes over a
-  // candidate with another difference, and every candidate has the same one.
+  // the corruption applies to every candidate. A wrong answer violates law
+  // `three`, and its difference names the item it changed: the first item
+  // for a corruption or a `driver` mutant, the candidate's last item for a
+  // `driver-last` mutant. The law is judged first. A corruption decides at
+  // its first clean candidate; a mutant driver passes over a candidate whose
+  // difference does not hold, so it passes when any clean candidate it tried
+  // holds it. A difference that is not text fails at the first clean
+  // candidate. The candidates come from the contract's rule, not from the
+  // log, which stops where the framework stopped.
   const calibrate = (
     name: string,
     kind: (typeof calibrationKinds)[number],
     difference?: CalibrationDifference,
   ): Outcome => {
-    const used = ran(`calibration: ${name}`).find(
+    const clean = calibrationCandidates(spec).filter(
       (history) => judged(spec, history).kind === `pass`,
     )
-    if (!used) return { kind: `calibration-none` }
+    if (clean.length === 0) return { kind: `calibration-none` }
     if (kind === `no-op`) return { kind: `calibration-passed` }
     if (kind === `wrong-law`) return { kind: `calibration-wrong-law` }
-    if (difference === undefined || difference.endsWith(` match`))
-      return { kind: `pass` }
-    return {
-      kind:
-        kind === `driver` ? `calibration-none` : `calibration-wrong-difference`,
-    }
+    if (difference === undefined) return { kind: `pass` }
+    if (spec.numberDifference) return { kind: `calibration-odd-difference` }
+    const holds = (history: SyntheticHistory) =>
+      differenceHolds[difference](mutatedDifference(kind, history))
+    if (kind === `right`)
+      return holds(clean[0]!)
+        ? { kind: `pass` }
+        : { kind: `calibration-wrong-difference` }
+    return clean.some(holds) ? { kind: `pass` } : { kind: `calibration-none` }
   }
   // A generated property's determinism test also runs three generated
   // histories (maintainer decision, 2026-11-03), so a nondeterministic driver
@@ -1486,6 +1580,9 @@ const frameworkStates = [
   `calibration-skipped-candidate`,
   `calibration-difference-applied`,
   `calibration-difference-rejected`,
+  `calibration-difference-later`,
+  `calibration-empty-difference-error`,
+  `calibration-odd-difference`,
   `determinism-caught`,
   `observed-reach`,
   `timeout`,
@@ -1552,6 +1649,8 @@ function frameworkReach(
       if (owed.reservedLabel) reached.add(`reserved-label-error`)
       if (owed.dataError) reached.add(`history-out-of-domain`)
       if (owed.buildError) reached.add(`constructed-build-load-error`)
+      if (owed.emptyDifference)
+        reached.add(`calibration-empty-difference-error`)
       if (owed.membership === `fixed`) reached.add(`fixed-membership-failure`)
       if (owed.membership === `constructed`)
         reached.add(`constructed-membership-failure`)
@@ -1641,6 +1740,25 @@ function frameworkReach(
       )
       if (calibration?.difference && outcome.kind === `pass`)
         reached.add(`calibration-difference-applied`)
+      if (outcome.kind === `calibration-odd-difference`)
+        reached.add(`calibration-odd-difference`)
+      // A mutant driver passed over a clean candidate whose difference did not
+      // hold, then passed at a later one.
+      if (calibration?.difference && outcome.kind === `pass`) {
+        const first = (run?.log ?? []).find(
+          (entry) =>
+            entry.test === `${spec.id} > ${name}` &&
+            judged(spec, entry.history).kind === `pass`,
+        )
+        if (
+          first &&
+          calibration.kind !== `right` &&
+          !differenceHolds[calibration.difference](
+            mutatedDifference(calibration.kind, first.history),
+          )
+        )
+          reached.add(`calibration-difference-later`)
+      }
       if (
         calibration?.kind === `driver` &&
         calibration.difference?.endsWith(`mismatch`) &&
@@ -1938,18 +2056,22 @@ function classify(error: ReportedError | undefined): Failure {
                       ? `undeclared-state`
                       : text.includes(`two runs of`)
                         ? `determinism`
-                        : text.includes(`but the check passed it`)
-                          ? `calibration-passed`
-                          : text.includes(`but the check reported law`)
-                            ? `calibration-wrong-law`
-                            : text.includes(`but the check reported difference`)
-                              ? `calibration-wrong-difference`
-                              : text.includes(`found no history`)
-                                ? `calibration-none`
-                                : text.includes(`synthetic driver failed`) ||
-                                    text.includes(`cannot read a 7`)
-                                  ? `setup`
-                                  : `other`
+                        : text.includes(`a difference that is not text`)
+                          ? `calibration-odd-difference`
+                          : text.includes(`but the check passed it`)
+                            ? `calibration-passed`
+                            : text.includes(`but the check reported law`)
+                              ? `calibration-wrong-law`
+                              : text.includes(
+                                    `but the check reported difference`,
+                                  )
+                                ? `calibration-wrong-difference`
+                                : text.includes(`found no history`)
+                                  ? `calibration-none`
+                                  : text.includes(`synthetic driver failed`) ||
+                                      text.includes(`cannot read a 7`)
+                                    ? `setup`
+                                    : `other`
   return {
     kind,
     // A model error that quotes a machine path, such as an inspected stack.
@@ -2504,15 +2626,14 @@ function checkSuite(
       )
   }
   // In a run without a seed, every history of a random campaign runs under
-  // `random seed`, and a loaded campaign runs at least one.
+  // `random seed`, and a loaded campaign runs at least one. A slow campaign
+  // times out, but its first history starts before it does.
   const seedless = trace.find(({ checkpoint }) => checkpoint === `seedless`)
     ?.value as Record<string, Array<string | null>> | undefined
   if (seedless)
     for (const spec of plan.specs) {
       const owedRoutes =
-        expected.get(spec.id)!.loads &&
-        spec.source.kind === `generated` &&
-        !spec.slow
+        expected.get(spec.id)!.loads && spec.source.kind === `generated`
           ? [`random seed`]
           : []
       if (JSON.stringify(seedless[spec.id]) !== JSON.stringify(owedRoutes))
@@ -2672,6 +2793,7 @@ const generatedDraft = (overrides: Partial<Draft>): Draft => ({
   timing: `normal`,
   calibrations: [],
   unregistered: false,
+  numberDifference: false,
   probe: `none`,
   overReport: false,
   noisyProbe: false,
@@ -2871,6 +2993,52 @@ oracleProperty({
             ],
           }),
         ),
+      ),
+      // The driver passes over the first candidate, whose last item is item
+      // 0, and passes at the second, whose last item is item 2.
+      fixedHistory(
+        `a mutant driver passes at a later candidate whose difference holds`,
+        [`calibration-difference-applied`, `calibration-difference-later`],
+        generatedDraft({
+          fixed: [at([0]), at([1, 1, 0])],
+          calibrations: [
+            cal(`driver-last`, `later text`),
+            cal(`driver-last`, `later pattern`),
+            cal(`driver-last`, `text match`),
+          ],
+        }),
+      ),
+      fixedHistory(
+        `a calibration that requires the empty text fails to load`,
+        [`registration-error`, `calibration-empty-difference-error`],
+        generatedDraft({
+          fixed: [at([0])],
+          calibrations: [
+            cal(`right`, `text match`),
+            cal(`driver`, `empty text`),
+          ],
+        }),
+      ),
+      fixedHistory(
+        `a calibration that requires a pattern matching the empty string fails to load`,
+        [`registration-error`, `calibration-empty-difference-error`],
+        {
+          ...generatedDraft({ calibrations: [cal(`right`, `empty pattern`)] }),
+          source: { kind: `enumerated`, histories: [[0], [1]] },
+        },
+      ),
+      fixedHistory(
+        `a difference that is not text fails a calibration that requires one`,
+        [`calibration-odd-difference`, `calibration-applied`],
+        generatedDraft({
+          numberDifference: true,
+          fixed: [at([0])],
+          calibrations: [
+            cal(`right`, `text match`),
+            cal(`driver-last`, `pattern match`),
+            cal(`driver`),
+          ],
+        }),
       ),
       fixedHistory(
         `a calibration's wrong law decides before its difference`,
@@ -3442,6 +3610,13 @@ oracleProperty({
         `a probe called after a throwing driver's history ended is an error`,
         [`late-probe-after-driver-error`, `late-probe-error`],
         generatedDraft({ probe: `late`, fixed: [at([0, 6])] }),
+      ),
+      // A slow random campaign times out, but its first history still runs
+      // under the route of an ordinary run.
+      seedlessHistory(
+        `a slow random campaign runs under random seed in an ordinary run`,
+        [`seedless-route`, `timeout`],
+        generatedDraft({ timing: `slow` }),
       ),
       fixedHistory(
         `a property timeout limits every test it registers`,

@@ -105,10 +105,17 @@
  * arbitrary through an identity `.map`, with or without an unmapper, at the
  * whole history or at each item.
  *
- * A calibration may require a difference, as text (`is 3` or `is 4`) or as a
- * pattern (`/^item is \d$/` or `/^item is 4$/`). A corrupted or mutant trace
- * reports `item is 3`, which the first of each pair matches and the second
- * does not; only containment matches the text `is 3`.
+ * The check's difference names the item, as `item 2 is 3`; a
+ * `numberDifference` spec's check reports the item's value, a number, as its
+ * difference instead. A `driver` calibration's mutant records a 3 in place of
+ * the first item, so its difference is `item 0 is 3`, the same as a
+ * corruption's; a `driver-last` mutant records it in place of the last item,
+ * so its difference names the candidate's last item. A calibration may
+ * require a difference: `is 3` or `is 4` as text, `/^item \d is 3$/` or
+ * `/^item \d is 4$/` as a pattern, `item 2 is 3` as text or `/^item 2 /` as a
+ * pattern (which only a three-item candidate's `driver-last` difference
+ * holds), or the empty text or the empty pattern. Only containment matches
+ * the text `is 3`.
  *
  * The synthetic ids come from a fixed pool, which this fixture registers with
  * `configureOracles`. The framework's own id, `self-oracle.framework`, is
@@ -218,7 +225,7 @@ export type SyntheticSpec = {
   nondeterministic: boolean
   calibrations: ReadonlyArray<{
     name: string
-    kind: `right` | `wrong-law` | `no-op` | `driver`
+    kind: `right` | `wrong-law` | `no-op` | `driver` | `driver-last`
     /** The difference the calibration requires, as text or a pattern, matching or not; absent, none. */
     difference?: CalibrationDifference
   }>
@@ -227,6 +234,8 @@ export type SyntheticSpec = {
   /** Each history takes about 300 ms; with `timeout`, tests outlive it. */
   slow?: boolean
   timeout?: number
+  /** The check reports the item's value, a number, as its difference. */
+  numberDifference?: boolean
   /** Registers under an id no oracle configuration knows. */
   unregistered?: boolean
   /** How the driver calls the probe bound to `saw-0`; absent, no probe. */
@@ -650,7 +659,7 @@ function lateProbe() {
  * The synthetic driver. `mutant` records a 3 in place of the first item, the
  * wrong answer a driver calibration supplies.
  */
-function syntheticDriver(spec: SyntheticSpec, mutant = false) {
+function syntheticDriver(spec: SyntheticSpec, mutant?: `first` | `last`) {
   return async (
     formed: Formed,
     observe: (checkpoint: string, value: unknown) => void,
@@ -683,7 +692,11 @@ function syntheticDriver(spec: SyntheticSpec, mutant = false) {
     const clock = spec.clock ? controlledClock() : undefined
     try {
       for (const [index, item] of history.entries()) {
-        observe(`item ${index}`, mutant && index === 0 ? 3 : item)
+        const mutated =
+          mutant === `first`
+            ? index === 0
+            : mutant === `last` && index === history.length - 1
+        observe(`item ${index}`, mutated ? 3 : item)
         if (item === 6)
           throw spec.oddThrow
             ? // A thrown value that is no Error and cannot become a string.
@@ -750,6 +763,7 @@ function syntheticDriver(spec: SyntheticSpec, mutant = false) {
 }
 
 function syntheticCheck(
+  spec: SyntheticSpec,
   history: SyntheticHistory,
   trace: ReadonlyArray<{ checkpoint: string; value: unknown }>,
 ) {
@@ -757,8 +771,13 @@ function syntheticCheck(
   for (const { checkpoint, value } of trace) {
     // Only items carry the law; a nonce is not an item.
     if (!checkpoint.startsWith(`item`)) continue
-    if (value === 3) return violation(checkpoint, `item is 3`, `three`)
-    if (value === 4) return violation(checkpoint, `item is 4`, `four`)
+    // A difference that is not text, as a check written in JavaScript can give.
+    const difference = (item: number) =>
+      spec.numberDifference
+        ? (item as unknown as string)
+        : `${checkpoint} is ${item}`
+    if (value === 3) return violation(checkpoint, difference(3), `three`)
+    if (value === 4) return violation(checkpoint, difference(4), `four`)
   }
   const items = trace.filter(({ checkpoint }) => checkpoint.startsWith(`item`))
   if (items.length !== history.length)
@@ -772,19 +791,28 @@ function syntheticCheck(
 
 /**
  * A required difference: text that a violation's difference must contain, or
- * a pattern that it must match, chosen to match `item is 3` or not.
+ * a pattern that it must match.
  */
 export type CalibrationDifference =
-  `text match` | `text mismatch` | `pattern match` | `pattern mismatch`
-const differenceOf = (mode: CalibrationDifference): string | RegExp =>
-  mode === `text match`
-    ? // Part of `item is 3`, so only containment matches it.
-      `is 3`
-    : mode === `text mismatch`
-      ? `is 4`
-      : mode === `pattern match`
-        ? /^item is \d$/
-        : /^item is 4$/
+  | `text match`
+  | `text mismatch`
+  | `pattern match`
+  | `pattern mismatch`
+  | `later text`
+  | `later pattern`
+  | `empty text`
+  | `empty pattern`
+const differences: Record<CalibrationDifference, string | RegExp> = {
+  // Part of `item 0 is 3`, so only containment matches it.
+  'text match': `is 3`,
+  'text mismatch': `is 4`,
+  'pattern match': /^item \d is 3$/,
+  'pattern mismatch': /^item \d is 4$/,
+  'later text': `item 2 is 3`,
+  'later pattern': /^item 2 /,
+  'empty text': ``,
+  'empty pattern': /(?:)/,
+}
 
 function syntheticCalibrations(
   spec: SyntheticSpec,
@@ -792,14 +820,14 @@ function syntheticCalibrations(
   return spec.calibrations.map(
     ({ name, kind, difference }): Calibration<Formed, Formed> => {
       const required =
-        difference === undefined ? {} : { difference: differenceOf(difference) }
-      // A mutant driver records a 3 in place of the first item.
-      if (kind === `driver`)
+        difference === undefined ? {} : { difference: differences[difference] }
+      // A mutant driver records a 3 in place of the first or the last item.
+      if (kind === `driver` || kind === `driver-last`)
         return {
           name,
           law: `three`,
           ...required,
-          driver: syntheticDriver(spec, true),
+          driver: syntheticDriver(spec, kind === `driver` ? `first` : `last`),
         }
       return {
         name,
@@ -932,7 +960,7 @@ export function syntheticProperty(spec: SyntheticSpec): void {
             { a: 2 },
             new Map([[1, 2]]),
           ])) ??
-        syntheticCheck(items(history), trace)
+        syntheticCheck(spec, items(history), trace)
       )
     },
     ...(spec.timeout !== undefined ? { timeout: spec.timeout } : {}),

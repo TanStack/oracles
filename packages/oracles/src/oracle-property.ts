@@ -169,7 +169,11 @@
  *   the check must reject the wrong answer for the reason the calibration
  *   names, not only under its law (maintainer decision, 2026-11-11). The law
  *   is judged first. A mutant driver's candidate that reports another law or
- *   another difference is passed over for the next candidate.
+ *   another difference is passed over for the next candidate. A pattern
+ *   matches anywhere in the difference, and a sticky (`y`) one only at its
+ *   start. A required difference that the empty difference holds, the empty
+ *   text or a pattern that matches the empty string, fails registration, and
+ *   a difference that is not text fails the calibration.
  * - **Determinism.** A `determinism` test runs some histories twice and
  *   requires the same trace: every fixed and constructed history of a generated
  *   source and three generated histories, or up to eight evenly spaced
@@ -546,8 +550,9 @@ export type Calibration<THistory, TPlan> = {
   law: string
   /**
    * Text that the violation's difference must contain, or a pattern that it
-   * must match. Without it, any difference under `law` rejects the wrong
-   * answer.
+   * must match anywhere in it; a sticky (`y`) pattern matches only at its
+   * start. Without it, any difference under `law` rejects the wrong answer.
+   * Text or a pattern that the empty difference holds fails registration.
    */
   difference?: string | RegExp
 } & (
@@ -1615,6 +1620,18 @@ function calibrationTests<THistory, TExpected, TPlan>(
         forced: { probe, entered },
       })),
   )
+  // A required difference that the empty difference holds rejects any
+  // difference under its law, so it would pass silently.
+  for (const { name, difference } of options.calibrations ?? [])
+    if (
+      difference !== undefined &&
+      (typeof difference === `string`
+        ? difference === ``
+        : ``.search(difference) !== -1)
+    )
+      throw new Error(
+        `${id}: calibration "${name}" requires difference ${typeof difference === `string` ? `""` : String(difference)}, which the empty difference holds, so it rejects any difference. Require text or a pattern that only the owed difference holds.`,
+      )
   return [...(options.calibrations ?? []), ...forcedCalibrations].map(
     (calibration) => ({
       name: `calibration: ${calibration.name}`,
@@ -1626,12 +1643,19 @@ function calibrationTests<THistory, TExpected, TPlan>(
         const owed = `law "${calibration.law}"${required === undefined ? `` : ` with a difference that ${typeof required === `string` ? `contains ${JSON.stringify(required)}` : `matches ${String(required)}`}`}`
         // Whether a violation is the one owed: the law, then the difference.
         // `search` ignores a pattern's `lastIndex`.
-        const rejects = (wrong: Extract<Verdict, { kind: `violation` }>) =>
-          lawOf(wrong) === calibration.law &&
-          (required === undefined ||
-            (typeof required === `string`
-              ? wrong.difference.includes(required)
-              : wrong.difference.search(required) !== -1))
+        const rejects = (wrong: Extract<Verdict, { kind: `violation` }>) => {
+          if (lawOf(wrong) !== calibration.law || required === undefined)
+            return lawOf(wrong) === calibration.law
+          // A check in JavaScript can give any value.
+          const difference: unknown = wrong.difference
+          if (typeof difference !== `string`)
+            throw new Error(
+              `${id}: calibration "${calibration.name}" requires a difference under law "${calibration.law}", and the check gave a difference that is not text: ${reportText(difference)}. A violation's difference is text.`,
+            )
+          return typeof required === `string`
+            ? difference.includes(required)
+            : difference.search(required) !== -1
+        }
         // What a violation reported, where it differs from what is owed.
         const reported = (wrong: Extract<Verdict, { kind: `violation` }>) =>
           lawOf(wrong) === calibration.law
