@@ -628,10 +628,13 @@ const histories = fc.record({
   configRequire: fc.constantFrom(false, false, true),
   // The runner's warm contexts (`--contexts`): each is a Vitest instance,
   // which listens on the process (F15). Past ten, a listener that the
-  // runner does not account for warns.
+  // runner does not account for warns. With one, every run of a check takes
+  // the same context in a fixed order, so a hang replaces the context that
+  // read every file (law 9 must still invalidate what it read).
   contexts: fc.oneof(
-    { weight: 29, arbitrary: fc.constant(4) },
+    { weight: 28, arbitrary: fc.constant(4) },
     { weight: 1, arbitrary: fc.constant(11) },
+    { weight: 1, arbitrary: fc.constant(1) },
   ),
   steps: fc.oneof(
     { weight: 5, arbitrary: fc.constant(null) },
