@@ -1403,6 +1403,221 @@ for (const type of COERCED_TYPES) {
     inputs: `coerced`,
   })
 }
+// The seventh review's dimensions (2026-11-11): every binding form crossed
+// with every position of a read, so that a dead zone, a scope boundary, or
+// a spelling of `eval` is generated, not found one construct at a time.
+//
+// - `zone`: a read of `x` in `c OP x ? 1 : 1`, under identical branches,
+//   where `x` is bound by a parameter, a destructured parameter, a `let`, a
+//   `const`, a class, a caught error's pattern, a `for…of` or `for…in`
+//   declaration's pattern, a nested pattern, or a `var` (in a nested block,
+//   or in a class's static block, which keeps it from the function). The
+//   read sits before the binding's declaration ends, inside its own
+//   initializer or pattern, after it, or in a hoisted function that runs
+//   before it. A read in the dead zone throws, so the swap shows there.
+// - `scope` gains `(eval)(code)`, `(eval as any)(code)` (both direct), and
+//   `(0, eval)(code)` (indirect, which declares nothing in the function).
+// - `chain`: an ordering swap beside a second comparison in the same `&&`
+//   chain (`a < 5 && p < q ? a : 5`, and the bigint form), with `p` and `q`
+//   annotated with a primitive or with `object`. An admitted object's
+//   `valueOf` distinguishes the swap, so the label belongs only where every
+//   comparison in the chain compares primitives.
+const ZONE = [
+  [
+    `param before`,
+    `function f(c, b = (c OP x ? 1 : 1), x) {\n  return b;\n}`,
+    `zoneDefault`,
+  ],
+  [
+    `param inside`,
+    `function f(c, x = (c OP x ? 1 : 1)) {\n  return x;\n}`,
+    `zone`,
+  ],
+  [
+    `param after`,
+    `function f(c, x, b = (c OP x ? 1 : 1)) {\n  return b;\n}`,
+    `zonePairs`,
+  ],
+  [
+    `destructured before`,
+    `function f(c, { p = (c OP x ? 1 : 1), x } = o) {\n  return p;\n}`,
+    `zone`,
+  ],
+  [
+    `destructured after`,
+    `function f(c, { x, p = (c OP x ? 1 : 1) } = o) {\n  return p;\n}`,
+    `zone`,
+  ],
+  [
+    `let before`,
+    `function f(c) {\n  const r = (c OP x ? 1 : 1);\n  let x = 1;\n  return r;\n}`,
+    `zone`,
+  ],
+  [
+    `let inside`,
+    `function f(c) {\n  let x = (c OP x ? 1 : 1);\n  return x;\n}`,
+    `zone`,
+  ],
+  [
+    `let after`,
+    `function f(c) {\n  let x = 1;\n  return (c OP x ? 1 : 1);\n}`,
+    `zone`,
+  ],
+  [
+    `const hoisted`,
+    `function f(c) {\n  const r = g();\n  const x = 1;\n  return r;\n  function g() {\n    return (c OP x ? 1 : 1);\n  }\n}`,
+    `zone`,
+  ],
+  [
+    `class before`,
+    `function f(c) {\n  const r = (c OP x ? 1 : 1);\n  class x {}\n  return r;\n}`,
+    `zone`,
+  ],
+  [
+    `caught before`,
+    `function f(c) {\n  try {\n    throw o;\n  } catch ({ p = (c OP x ? 1 : 1), x }) {\n    return p;\n  }\n}`,
+    `zone`,
+  ],
+  [
+    `caught after`,
+    `function f(c) {\n  try {\n    throw o;\n  } catch ({ x, p = (c OP x ? 1 : 1) }) {\n    return p;\n  }\n}`,
+    `zone`,
+  ],
+  [
+    `for-of pattern`,
+    `function f(c) {\n  for (const [p = (c OP x ? 1 : 1), x] of rows) return p;\n}`,
+    `zone`,
+  ],
+  [
+    `for-in pattern`,
+    `function f(c) {\n  for (const [p = (c OP x ? 1 : 1), x] in o) return p;\n}`,
+    `zone`,
+  ],
+  [
+    `for-of body`,
+    `function f(c) {\n  for (const x of rows) return (c OP x ? 1 : 1);\n}`,
+    `zone`,
+  ],
+  [
+    `nested pattern`,
+    `function f(c) {\n  for (const [[p = (c OP x ? 1 : 1)], x] of nested) return p;\n}`,
+    `zone`,
+  ],
+  [
+    `var nested`,
+    `function f(c) {\n  {\n    var x = 1;\n  }\n  return (c OP x ? 1 : 1);\n}`,
+    `zone`,
+  ],
+  [
+    `var before`,
+    `function f(c) {\n  const r = (c OP x ? 1 : 1);\n  var x = 1;\n  return r;\n}`,
+    `zone`,
+  ],
+  [
+    `static block`,
+    `function f(c) {\n  class K {\n    static {\n      var x = 1;\n    }\n  }\n  return (c OP x ? 1 : 1);\n}`,
+    `zone`,
+  ],
+]
+for (const [name, template, inputs] of ZONE)
+  for (const op of [`&&`, `||`, `??`]) {
+    const text = template.replace(`OP`, op)
+    const sites = [textSite(text, `binary-swap`, op, text.indexOf(`c ${op}`))]
+    for (
+      let at = text.indexOf(`return `);
+      at >= 0;
+      at = text.indexOf(`return `, at + 1)
+    ) {
+      const start = at + `return `.length
+      sites.push({
+        operator: `return-undefined`,
+        position: start,
+        marker: text.slice(start, text.indexOf(`;`, start)),
+      })
+    }
+    if (text.includes(`g()`))
+      sites.push(textSite(text, `value-undefined`, `g()`))
+    textPrograms.push({
+      kind: `text`,
+      lang: `js`,
+      family: `zone`,
+      name: `${name} ${op}`,
+      text,
+      sites,
+      inputs,
+    })
+  }
+for (const [spelling, lang] of [
+  [`(eval)(code)`, `js`],
+  [`(eval as any)(code)`, `ts`],
+  [`(0, eval)(code)`, `js`],
+])
+  for (const [target, expression] of Object.entries(SCOPE_TARGETS)) {
+    const head = target === `constant` ? `const s = 'x';\n` : ``
+    const text = `${head}function f(a${lang === `ts` ? `: any` : ``}, code${lang === `ts` ? `: any` : ``}, o${lang === `ts` ? `: any` : ``}) {\n  ${spelling};\n  return ${expression};\n}`
+    const direct = !spelling.startsWith(`(0,`)
+    const returned = text.indexOf(`return `) + `return `.length
+    const sites = [
+      {
+        operator: `delete-call`,
+        position: text.indexOf(spelling),
+        marker: `${spelling};`,
+      },
+    ]
+    if (target !== `undefined` || direct)
+      sites.push({
+        operator: `return-undefined`,
+        position: returned,
+        marker: expression,
+      })
+    if (target === `constant`)
+      sites.push({
+        operator: `optional-chain`,
+        position: returned,
+        marker: `s?.length`,
+      })
+    if (target === `local`)
+      sites.push(textSite(text, `binary-swap`, `&&`, returned))
+    textPrograms.push({
+      kind: `text`,
+      lang,
+      family: `scope`,
+      name: `${spelling} ${target}`,
+      text,
+      sites,
+      inputs: `scoped`,
+    })
+  }
+const CHAIN_FORMS = {
+  number: [`number`, `a < 5 && p < q ? a : 5`],
+  bigint: [`bigint`, `a < b && p < q ? a : b`],
+}
+for (const [form, [type, expression]] of Object.entries(CHAIN_FORMS))
+  for (const other of [`number`, `object`]) {
+    const params = form === `number` ? `a: number` : `a: bigint, b: bigint`
+    const text = `function f(${params}, p: ${other}, q: ${other}) {\n  return ${expression};\n}`
+    const returned = text.indexOf(`return `) + `return `.length
+    textPrograms.push({
+      kind: `text`,
+      family: `chain`,
+      name: `${form} beside ${other}`,
+      lang: `ts`,
+      annotation: other,
+      operandType: type,
+      text,
+      sites: [
+        {
+          operator: `return-undefined`,
+          position: returned,
+          marker: expression,
+        },
+        textSite(text, `binary-swap`, `<`, returned),
+        textSite(text, `binary-swap`, `&&`, returned),
+        textSite(text, `binary-swap`, `<`, text.indexOf(`p <`)),
+      ],
+      inputs: form === `number` ? `chainNumber` : `chainBigint`,
+    })
+  }
 // A getter read through `with`, counted as an effect.
 const READ_ONCE = () => ({
   get a() {
@@ -1414,7 +1629,50 @@ const READ_ONCE = () => ({
     return 5
   },
 })
+// The names the zone programs read from outside: a thrown object, whose
+// one key is empty (so a `for…in` pattern destructures `''`), rows to
+// iterate, and a global `x` whose getter counts its reads (a static block's
+// `var` is not the function's, so its `x` is this global).
+function installZone() {
+  globalThis.o = { '': 1 }
+  globalThis.rows = [[]]
+  globalThis.nested = [[[]]]
+  Object.defineProperty(globalThis, `x`, {
+    configurable: true,
+    get() {
+      effects.count += 1
+      return 1
+    },
+  })
+}
+const ZONE_C = [true, false, 0, 1, null, undefined]
 const TEXT_INPUTS = {
+  zone: () => {
+    installZone()
+    return ZONE_C.map((c) => [c])
+  },
+  zoneDefault: () => {
+    installZone()
+    return ZONE_C.map((c) => [c, undefined, 1])
+  },
+  zonePairs: () => {
+    installZone()
+    return ZONE_C.map((c) => [c, 1])
+  },
+  chainNumber: () =>
+    [4, 5, 6, `5`].flatMap((a) =>
+      [1, 2, VALUED, {}].flatMap((p) =>
+        [1, 2, VALUED, {}].map((q) => [a, p, q]),
+      ),
+    ),
+  chainBigint: () =>
+    [4n, 5n, 5].flatMap((a) =>
+      [5n, 5].flatMap((b) =>
+        [1, 2, VALUED, {}].flatMap((p) =>
+          [1, 2, VALUED, {}].map((q) => [a, b, p, q]),
+        ),
+      ),
+    ),
   pairs: () =>
     [true, false, 0, 1, null, undefined].flatMap((c) =>
       [0, 1, null].map((a) => [c, a]),
@@ -1430,6 +1688,7 @@ const TEXT_INPUTS = {
     [1, `var undefined = 5`, {}],
     [1, `var s = null`, {}],
     [1, `a = 2`, {}],
+    [1, `throw 1`, {}],
     [1, ``, READ_ONCE()],
     [0, ``, { s: null }],
   ],
@@ -1487,14 +1746,23 @@ function renderText(program) {
   }
 }
 const textDomain = (program) => TEXT_INPUTS[program.inputs]()
-const textTypedDomain = (program) =>
-  program.family === `coerced` && program.annotation !== undefined
-    ? textDomain(program).filter(
-        ([, p, q]) =>
-          COERCED_TYPED[program.annotation](p) &&
-          COERCED_TYPED[program.annotation](q),
-      )
-    : undefined
+const textTypedDomain = (program) => {
+  if (program.family === `coerced` && program.annotation !== undefined)
+    return textDomain(program).filter(
+      ([, p, q]) =>
+        COERCED_TYPED[program.annotation](p) &&
+        COERCED_TYPED[program.annotation](q),
+    )
+  if (program.family === `chain`) {
+    const operand = (v) => typeof v === program.operandType
+    const other = COERCED_TYPED[program.annotation]
+    return textDomain(program).filter((input) => {
+      const [p, q] = input.slice(-2)
+      return input.slice(0, -2).every(operand) && other(p) && other(q)
+    })
+  }
+  return undefined
+}
 
 // ## Hostile programs
 //
