@@ -213,8 +213,17 @@ export type SyntheticSpec = {
   nondeterministic: boolean
   calibrations: ReadonlyArray<{
     name: string
-    kind: `right` | `wrong-law` | `no-op` | `driver`
+    kind: `right` | `wrong-law` | `no-op` | `driver` | `inapplicable` | `throws`
   }>
+  /** The proposed binding, passed structurally so the unchanged framework can be judged. */
+  calibrationHistory?:
+    | { constructed: string }
+    | { fixed: string }
+    | { enumerated: number | string }
+  /** Preserve generated variation while testing builder identity and consumed plans. */
+  isolatedPlans?: boolean
+  probeBinding?: `inferred` | `explicit` | `no-absence`
+  duplicateHistoryNames?: boolean
   /** `observe`: the driver reports reach itself, the framework's default. */
   reachVia: `reached` | `observe`
   /** Each history takes about 300 ms; with `timeout`, tests outlive it. */
@@ -644,11 +653,20 @@ function lateProbe() {
  * wrong answer a driver calibration supplies.
  */
 function syntheticDriver(spec: SyntheticSpec, mutant = false) {
+  const consumed = new WeakSet<object>()
   return async (
     formed: Formed,
     observe: (checkpoint: string, value: unknown) => void,
   ) => {
     const history = itemsOf(spec)(formed)
+    if (
+      spec.isolatedPlans &&
+      expect.getState().currentTestName?.includes(`calibration:`)
+    ) {
+      if (consumed.has(formed as object))
+        throw new Error(`driver received a consumed plan`)
+      consumed.add(formed as object)
+    }
     const log = process.env.SELF_ORACLE_LOG
     if (log)
       appendFileSync(
@@ -769,12 +787,26 @@ function syntheticCalibrations(
   return spec.calibrations.map(
     ({ name, kind }): Calibration<Formed, Formed> => {
       // A mutant driver records a 3 in place of the first item.
-      if (kind === `driver`)
-        return { name, law: `three`, driver: syntheticDriver(spec, true) }
+      const history = spec.calibrationHistory
+      if (kind === `driver` || kind === `throws`)
+        return {
+          name,
+          history,
+          law: `three`,
+          driver:
+            kind === `throws`
+              ? async (plan, observe) => {
+                  await syntheticDriver(spec, true)(plan, observe)
+                  throw new Error(`mutant setup failed`)
+                }
+              : syntheticDriver(spec, true),
+        }
       return {
         name,
+        history,
         law: kind === `wrong-law` ? `four` : `three`,
         corrupt: (trace) => {
+          if (kind === `inapplicable`) return undefined
           const at = trace.findIndex(({ checkpoint }) =>
             checkpoint.startsWith(`item`),
           )
@@ -838,7 +870,33 @@ export function syntheticProperty(spec: SyntheticSpec): void {
   const id = spec.unregistered ? `self-oracle.unregistered` : spec.id
   const form = formOf(spec)
   const items = itemsOf(spec)
+  // A builder may attach metadata by object identity. A plan may own consumed
+  // resources. Neither cloning a built history nor resolving it twice preserves
+  // that contract. These sets record those premises, not expected observations.
+  const built = new WeakSet<object>()
+  const resolved = new WeakSet<object>()
+  const resolve = spec.isolatedPlans
+    ? (history: Formed) => {
+        if (
+          expect.getState().currentTestName?.includes(`calibration:`) &&
+          ((spec.calibrationHistory &&
+            `constructed` in spec.calibrationHistory) ||
+            (spec.probeBinding &&
+              expect
+                .getState()
+                .currentTestName?.includes(`forced not entered`)))
+        ) {
+          if (!built.has(history as object) || resolved.has(history as object))
+            throw new Error(
+              `calibration lost builder metadata or reused a built history`,
+            )
+          resolved.add(history as object)
+        }
+        return form([...items(history)])
+      }
+    : undefined
   const parts = {
+    ...(resolve ? { resolve } : {}),
     model: spec.strictModel
       ? (history: Formed, trace: ReadonlyArray<{ checkpoint: string }>) => {
           const recorded = trace.filter(({ checkpoint }) =>
@@ -875,6 +933,21 @@ export function syntheticProperty(spec: SyntheticSpec): void {
           predict: (history: Formed) => ({
             'saw-0': items(history).includes(0),
           }),
+        }
+      : {}),
+    ...(spec.probeBinding
+      ? {
+          probeHistories: {
+            'saw-0':
+              spec.probeBinding === `no-absence`
+                ? ({} as never)
+                : {
+                    notEntered: { fixed: `fixed-0` },
+                    ...(spec.probeBinding === `explicit`
+                      ? { entered: { constructed: `constructed-0` } }
+                      : {}),
+                  },
+          },
         }
       : {}),
     driver: spec.slow
@@ -915,7 +988,7 @@ export function syntheticProperty(spec: SyntheticSpec): void {
   // The last history's late probe call comes after its test; the file waits
   // for it, so the run still reports it.
   if (spec.probe === `late`)
-    afterAll(() => new Promise((resolve) => setTimeout(resolve, 50)))
+    afterAll(() => new Promise((settle) => setTimeout(settle, 50)))
   const register = () => {
     if (spec.source.kind === `enumerated`) {
       const enumerated = spec.source.histories.map(form)
@@ -931,10 +1004,15 @@ export function syntheticProperty(spec: SyntheticSpec): void {
           ? {}
           : {
               label: (history: Formed) =>
-                spec.labelStyle?.startsWith(`reserved-`) &&
-                JSON.stringify(items(history)) === first
-                  ? spec.labelStyle.slice(`reserved-`.length)
-                  : `items ${items(history).join(` | `)}${spec.labelStyle === `shell` ? ` ${shellText}` : ``}`,
+                spec.duplicateHistoryNames &&
+                spec.calibrationHistory &&
+                `enumerated` in spec.calibrationHistory &&
+                typeof spec.calibrationHistory.enumerated === `string`
+                  ? `items ${spec.source.kind === `enumerated` ? spec.source.histories[0]!.join(` | `) : ``}`
+                  : spec.labelStyle?.startsWith(`reserved-`) &&
+                      JSON.stringify(items(history)) === first
+                    ? spec.labelStyle.slice(`reserved-`.length)
+                    : `items ${items(history).join(` | `)}${spec.labelStyle === `shell` ? ` ${shellText}` : ``}`,
             }),
         ...parts,
       })
@@ -965,7 +1043,12 @@ export function syntheticProperty(spec: SyntheticSpec): void {
           build: (generated: Formed) => {
             if (at === 0 && spec.throwingBuild)
               throw new Error(`synthetic build failed`)
-            return form([...prefix, ...items(generated)].slice(0, 3))
+            const tail = spec.isolatedPlans
+              ? items(generated).map((item) => item % 3)
+              : items(generated)
+            const history = form([...prefix, ...tail].slice(0, 3))
+            built.add(history as object)
+            return history
           },
         })),
         fixed: spec.fixed.map((fixed) => ({

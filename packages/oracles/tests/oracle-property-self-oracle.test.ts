@@ -61,9 +61,13 @@
  *   history does (maintainer decision, 2026-11-10, F23: every enumerated history runs, so a
  *   required state needs no constructed history). Run alone, under a `-t` pattern that selects
  *   only it, the reach test judges every history itself and owes the same outcome and counts.
- * - `calibration`: a calibration uses the first candidate whose clean trace
- *   passes, and passes only when its wrong answer (a corrupted trace or a
- *   mutant driver) fails with the named law.
+ * - `calibration`: a bound calibration runs only its selected history. Its clean
+ *   run must pass and enter the history's declared states, then its wrong answer
+ *   must fail under exactly the named law. An observation mutant uses one driver
+ *   call; a driver mutant uses two fresh builds and plans from the same seed.
+ *   Invalid selectors fail registration before any driver runs. These are the
+ *   maintainer-approved history-binding contract (2026-11-11). During migration,
+ *   unbound calibrations retain the first-passing-candidate search.
  * - `determinism`: the determinism test runs every fixed and constructed history
  *   and three generated ones, and fails for a driver whose trace changes,
  *   compared by their data encoding: `-0` is not `0`, and key order and
@@ -192,7 +196,14 @@ import type {
 const allStates = [`saw-0`, `saw-1`, `saw-2`]
 const stateRoles = [`required`, `measured`, `undeclared`] as const
 type StateRole = (typeof stateRoles)[number]
-const calibrationKinds = [`right`, `wrong-law`, `no-op`, `driver`] as const
+const calibrationKinds = [
+  `right`,
+  `wrong-law`,
+  `no-op`,
+  `driver`,
+  `inapplicable`,
+  `throws`,
+] as const
 type Draft = {
   source:
     | { kind: `generated`; runs: number; seed: number }
@@ -220,7 +231,11 @@ type Draft = {
   reachVia: `reached` | `observe`
   /** `slow`: 300 ms per history under a 100 ms timeout. */
   timing: `normal` | `slow`
-  calibrations: Array<(typeof calibrationKinds)[number]>
+  calibrations: Array<SyntheticSpec[`calibrations`][number][`kind`]>
+  calibrationHistory: NonNullable<SyntheticSpec[`calibrationHistory`]> | null
+  isolatedPlans: boolean
+  probeBinding: `unbound` | `inferred` | `explicit` | `no-absence`
+  duplicateHistoryNames: boolean
   /** An id no oracle configuration registers. */
   unregistered: boolean
   /** How the driver calls the probe bound to `saw-0`; `none` binds no probe. */
@@ -275,6 +290,37 @@ const insideOrOutside = (insideWeight: number) =>
     { arbitrary: outside, weight: 1 },
   )
 const draft: fc.Arbitrary<Draft> = fc.record({
+  calibrationHistory: fc.option(
+    fc.oneof(
+      fc.record({
+        fixed: fc.constantFrom(`fixed-0`, `fixed-1`, `unknown`, `missing`),
+      }),
+      fc.record({
+        constructed: fc.constantFrom(`constructed-0`, `unknown`, `missing`),
+      }),
+      fc.record({
+        enumerated: fc.oneof(
+          fc.integer({ min: -1, max: 4 }),
+          fc.constant(1.5),
+          fc.constant(`items 0 | 1`),
+        ),
+      }),
+    ),
+    { freq: 20 },
+  ),
+  isolatedPlans: fc.boolean(),
+  probeBinding: fc.oneof(
+    { weight: 20, arbitrary: fc.constant(`unbound` as const) },
+    {
+      weight: 1,
+      arbitrary: fc.constantFrom(
+        `inferred` as const,
+        `explicit` as const,
+        `no-absence` as const,
+      ),
+    },
+  ),
+  duplicateHistoryNames: fc.boolean(),
   source: fc.oneof(
     fc.record({
       kind: fc.constant(`generated` as const),
@@ -540,7 +586,7 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
       const generated = d.source.kind === `generated`
       const constructed = generated
         ? d.constructed.map((construction, at) => ({
-            name: `constructed-${at}`,
+            name: `constructed-${d.duplicateHistoryNames && d.calibrationHistory ? 0 : at}`,
             ...construction,
           }))
         : []
@@ -561,7 +607,7 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
         constructed,
         fixed: generated
           ? d.fixed.map((fixedHistory, at) => ({
-              name: `fixed-${at}`,
+              name: `fixed-${d.duplicateHistoryNames && d.calibrationHistory ? 0 : at}`,
               history: fixedHistory.history,
               ...(fixedHistory.enters ? { enters: fixedHistory.enters } : {}),
             }))
@@ -656,6 +702,14 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
           : {}),
         ...(d.nested ? { nested: true } : {}),
         ...(d.strictModel ? { strictModel: true } : {}),
+        ...(d.calibrationHistory
+          ? { calibrationHistory: d.calibrationHistory }
+          : {}),
+        ...(d.isolatedPlans ? { isolatedPlans: true } : {}),
+        ...(d.probeBinding !== `unbound`
+          ? { probeBinding: d.probeBinding }
+          : {}),
+        ...(d.duplicateHistoryNames ? { duplicateHistoryNames: true } : {}),
         calibrations: d.calibrations.map((kind, at) => ({
           name: `cal-${at}`,
           kind,
@@ -689,6 +743,10 @@ type Kind =
   | `calibration-passed`
   | `calibration-wrong-law`
   | `calibration-none`
+  | `calibration-clean`
+  | `calibration-reach`
+  | `calibration-inapplicable`
+  | `calibration-mutant-error`
   | `timeout`
   | `model-not-total`
   | `data`
@@ -1152,6 +1210,62 @@ function predictSpec(
         }
     }
   }
+  // The synthetic namespace is deliberately small: names identify the fixed
+  // or constructed index; enumerated names state their items. This model judges
+  // selection independently of the framework's resolver.
+  const binding = spec.calibrationHistory
+  const selected =
+    binding &&
+    (`fixed` in binding
+      ? spec.fixed.find(({ name }) => name === binding.fixed)
+      : `constructed` in binding
+        ? spec.constructed.find(({ name }) => name === binding.constructed)
+        : spec.source.kind === `enumerated`
+          ? spec.source.histories.find((history, index) =>
+              typeof binding.enumerated === `number`
+                ? index === binding.enumerated
+                : `items ${history.join(` | `)}` === binding.enumerated,
+            )
+          : undefined)
+  const duplicates =
+    binding &&
+    (`fixed` in binding
+      ? spec.fixed.filter(({ name }) => name === binding.fixed).length > 1
+      : `constructed` in binding
+        ? spec.constructed.filter(({ name }) => name === binding.constructed)
+            .length > 1
+        : typeof binding.enumerated === `string` &&
+            spec.source.kind === `enumerated`
+          ? (spec.duplicateHistoryNames &&
+              binding.enumerated ===
+                `items ${spec.source.histories[0]!.join(` | `)}` &&
+              spec.source.histories.length > 1) ||
+            spec.source.histories.filter(
+              (history) =>
+                `items ${history.join(` | `)}` === binding.enumerated,
+            ).length > 1
+          : false)
+  if (
+    binding &&
+    spec.calibrations.length &&
+    (!selected ||
+      duplicates ||
+      (spec.source.kind === `enumerated`
+        ? !(`enumerated` in binding)
+        : `enumerated` in binding))
+  )
+    return { loads: false, loadError: `calibration history selector` }
+  if (
+    spec.probeBinding &&
+    (!spec.probe ||
+      spec.probeBinding === `no-absence` ||
+      !spec.fixed.some(({ name }) => name === `fixed-0`) ||
+      (spec.probeBinding === `inferred`
+        ? spec.constructed.filter(({ enters }) => enters.includes(`saw-0`))
+            .length !== 1
+        : !spec.constructed.some(({ name }) => name === `constructed-0`)))
+  )
+    return { loads: false, loadError: `calibration history selector` }
   const names =
     spec.source.kind === `enumerated`
       ? spec.source.histories.map((history) =>
@@ -1216,12 +1330,36 @@ function predictSpec(
   // A calibration needs a candidate whose clean trace passes; it skips the
   // others (maintainer decision, 2026-11-03). Every history has an item, so
   // the corruption applies to every candidate.
-  const calibrate = (name: string, kind: (typeof calibrationKinds)[number]) => {
+  const calibrate = (
+    name: string,
+    kind: SyntheticSpec[`calibrations`][number][`kind`],
+  ) => {
+    if (binding) {
+      const clean = ran(`calibration: ${name}`)[0]
+      if (!clean || judged(spec, clean).kind !== `pass`)
+        return { kind: `calibration-clean` } as Outcome
+      const enters =
+        selected && !Array.isArray(selected) && `enters` in selected
+          ? (selected.enters ?? [])
+          : []
+      if (!reaches(spec, clean, enters))
+        return { kind: `calibration-reach` } as Outcome
+      if (kind === `inapplicable`)
+        return { kind: `calibration-inapplicable` } as Outcome
+      if (kind === `throws`)
+        return { kind: `calibration-mutant-error` } as Outcome
+      if (kind === `driver` || kind === `right`)
+        return { kind: `pass` } as Outcome
+      return {
+        kind: kind === `no-op` ? `calibration-passed` : `calibration-wrong-law`,
+      } as Outcome
+    }
     const used = ran(`calibration: ${name}`).find(
       (history) => judged(spec, history).kind === `pass`,
     )
-    if (!used) return { kind: `calibration-none` } as Outcome
-    if (kind === `right` || kind === `driver`)
+    if (!used || kind === `inapplicable`)
+      return { kind: `calibration-none` } as Outcome
+    if (kind === `right` || kind === `driver` || kind === `throws`)
       return { kind: `pass` } as Outcome
     return {
       kind: kind === `no-op` ? `calibration-passed` : `calibration-wrong-law`,
@@ -1308,6 +1446,18 @@ function predictSpec(
   // reach agreement.
   for (const [at, name] of forcedCalibrationNames(spec).entries()) {
     const forced = at === 0
+    if (spec.probeBinding) {
+      const clean = ran(name)[0]
+      tests.set(
+        name,
+        !clean || judged(spec, clean).kind !== `pass`
+          ? { kind: `calibration-clean` }
+          : predictsZero(clean) === forced
+            ? { kind: `calibration-reach` }
+            : { kind: `pass` },
+      )
+      continue
+    }
     tests.set(
       name,
       ran(name).some(
@@ -1441,6 +1591,9 @@ const frameworkStates = [
   `calibration-applied`,
   `calibration-rejected`,
   `calibration-skipped-candidate`,
+  `bound-calibration`,
+  `bound-constructed-driver`,
+  `bound-calibration-registration-error`,
   `determinism-caught`,
   `observed-reach`,
   `timeout`,
@@ -1503,6 +1656,8 @@ function frameworkReach(
     const owed = expected.get(spec.id)!
     if (!owed.loads) {
       reached.add(`registration-error`)
+      if (spec.calibrationHistory)
+        reached.add(`bound-calibration-registration-error`)
       if (owed.shapeError) reached.add(`enumerated-shape-error`)
       if (owed.reservedLabel) reached.add(`reserved-label-error`)
       if (owed.dataError) reached.add(`history-out-of-domain`)
@@ -1520,6 +1675,15 @@ function frameworkReach(
       continue
     }
     const named = spec.fixed.length + spec.constructed.length > 0
+    if (spec.calibrationHistory || spec.probeBinding)
+      reached.add(`bound-calibration`)
+    if (
+      spec.isolatedPlans &&
+      spec.calibrationHistory &&
+      `constructed` in spec.calibrationHistory &&
+      spec.calibrations.some(({ kind }) => kind === `driver`)
+    )
+      reached.add(`bound-constructed-driver`)
     if (spec.arbitraryMap?.unmapper === true && named)
       reached.add(`unmapper-history-loads`)
     if (spec.arbitraryMap?.unmapper === false && !named)
@@ -1742,6 +1906,7 @@ type ReportedFile = {
 type Report = {
   files: Array<ReportedFile>
   stdout: string
+  warnings: Array<string>
   unhandled: Array<ReportedError>
 }
 type Failure = {
@@ -1781,6 +1946,7 @@ type SuiteRun = {
     }
   >
   log: Array<LogEntry>
+  warnings: Array<string>
   /** The run's unhandled errors, by message. */
   unhandled: Array<string>
 }
@@ -1850,40 +2016,50 @@ function classify(error: ReportedError | undefined): Failure {
       : undefined
   // A data error names the value's path, then its kind.
   const data = /^(.*): (.*) is not (?:observation|history) data$/.exec(text)
-  const kind: Kind | `other` =
-    inner.name === `OracleDataError`
-      ? `data`
-      : text.includes(`the framework's encoding limit`)
-        ? `limit`
-        : inner.name === `OracleModelError`
-          ? `model-not-total`
-          : inner.name === `OracleViolation`
-            ? `violation`
-            : /timed out in \d+ms/.test(text) ||
-                /timed out in \d+ms/.test(outer)
-              ? `timeout`
-              : text.includes(`did not enter`) &&
-                  text.includes(`: fixed history "`)
-                ? `fixed-reach`
-                : text.includes(`did not enter`) &&
-                    text.includes(`: constructed history "`)
-                  ? `constructed-reach`
-                  : text.includes(`no enumerated history entered`)
-                    ? `enumerated-reach`
-                    : text.includes(`which the property does not declare`)
-                      ? `undeclared-state`
-                      : text.includes(`two runs of`)
-                        ? `determinism`
-                        : text.includes(`but the check passed it`)
-                          ? `calibration-passed`
-                          : text.includes(`but the check reported law`)
-                            ? `calibration-wrong-law`
-                            : text.includes(`found no history`)
-                              ? `calibration-none`
-                              : text.includes(`synthetic driver failed`) ||
-                                  text.includes(`cannot read a 7`)
-                                ? `setup`
-                                : `other`
+  const kind: Kind | `other` = text.includes(`selected clean run failed`)
+    ? `calibration-clean`
+    : text.includes(`selected history did not enter`)
+      ? `calibration-reach`
+      : text.includes(`selected corruption did not apply`)
+        ? `calibration-inapplicable`
+        : text.includes(`selected mutant run failed`)
+          ? `calibration-mutant-error`
+          : inner.name === `OracleDataError`
+            ? `data`
+            : text.includes(`the framework's encoding limit`)
+              ? `limit`
+              : inner.name === `OracleModelError`
+                ? `model-not-total`
+                : inner.name === `OracleViolation`
+                  ? `violation`
+                  : /timed out in \d+ms/.test(text) ||
+                      /timed out in \d+ms/.test(outer)
+                    ? `timeout`
+                    : text.includes(`did not enter`) &&
+                        text.includes(`: fixed history "`)
+                      ? `fixed-reach`
+                      : text.includes(`did not enter`) &&
+                          text.includes(`: constructed history "`)
+                        ? `constructed-reach`
+                        : text.includes(`no enumerated history entered`)
+                          ? `enumerated-reach`
+                          : text.includes(`which the property does not declare`)
+                            ? `undeclared-state`
+                            : text.includes(`two runs of`)
+                              ? `determinism`
+                              : text.includes(`but the check passed it`)
+                                ? `calibration-passed`
+                                : text.includes(`but the check reported law`)
+                                  ? `calibration-wrong-law`
+                                  : text.includes(`found no history`)
+                                    ? `calibration-none`
+                                    : text.includes(
+                                          `synthetic driver failed`,
+                                        ) ||
+                                        text.includes(`cannot read a 7`) ||
+                                        text.includes(`mutant setup failed`)
+                                      ? `setup`
+                                      : `other`
   return {
     kind,
     // A model error that quotes a machine path, such as an inspected stack.
@@ -1972,10 +2148,21 @@ function runVitest(
     )
   // The framework prints reach counts straight to stdout, past Vitest's
   // console capture, so they arrive in the child's own output.
-  const { files: reported, unhandled } = JSON.parse(
-    readFileSync(report, `utf8`),
-  ) as { files: Array<ReportedFile>; unhandled?: Array<ReportedError> }
-  return { files: reported, stdout: run.stdout, unhandled: unhandled ?? [] }
+  const {
+    files: reported,
+    unhandled,
+    warnings,
+  } = JSON.parse(readFileSync(report, `utf8`)) as {
+    files: Array<ReportedFile>
+    unhandled?: Array<ReportedError>
+    warnings?: Array<string>
+  }
+  return {
+    files: reported,
+    stdout: run.stdout,
+    warnings: warnings ?? [],
+    unhandled: unhandled ?? [],
+  }
 }
 
 // A test's name within its property, without a nested spec's outer suite.
@@ -1993,6 +2180,10 @@ const readLog = (log: string): Array<LogEntry> =>
           const entry = JSON.parse(line) as LogEntry
           return { ...entry, test: unnested(entry.test) }
         })
+        // Vitest may run files concurrently. Each property's call order is
+        // observable; interleaving independent properties is not a framework
+        // promise. Stable grouping retains every call and each local order.
+        .sort((a, b) => a.id.localeCompare(b.id))
     : []
 // The items of a counterexample that fast-check printed, in any form: the
 // first bracketed list of integers, where the lossy form's `Number.NaN` is a
@@ -2019,7 +2210,7 @@ const statesIn = (report: Report, plan: Plan, files: Array<string>) =>
     ),
   )
 
-async function driveSuite(
+function driveSuite(
   plan: Plan,
   observe: (checkpoint: string, value: unknown) => void,
 ) {
@@ -2042,6 +2233,7 @@ async function driveSuite(
     const run: SuiteRun = {
       files: {},
       log: readLog(log),
+      warnings: [...report.warnings].sort(),
       unhandled: report.unhandled.map((error) => error.message ?? ``),
     }
     for (const [index, spec] of plan.specs.entries()) {
@@ -2090,6 +2282,45 @@ async function driveSuite(
       }
     }
     observe(`run`, run)
+    // Adding a calibration ahead of another must not change the latter's seed
+    // or built history. This is a metamorphic comparison of driver inputs,
+    // independent of the framework's particular seed hash.
+    for (const [index, spec] of plan.specs.entries()) {
+      if (
+        !spec.calibrationHistory ||
+        !(`constructed` in spec.calibrationHistory) ||
+        !run.files[spec.id]!.loaded
+      )
+        continue
+      const file = files[index]!
+      const original = readFileSync(file, `utf8`)
+      const reorderedLog = join(directory, `reordered-${index}.jsonl`)
+      try {
+        const reordered = {
+          ...spec,
+          calibrations: [
+            { name: `unrelated calibration`, kind: `right` },
+            ...[...spec.calibrations].reverse(),
+          ],
+        }
+        writeFileSync(
+          file,
+          `import { syntheticProperty } from ${JSON.stringify(join(here, `oracle-property-self-oracle-fixture.ts`))}\nsyntheticProperty(${JSON.stringify(reordered)})\n`,
+        )
+        runVitest(
+          directory,
+          [file],
+          { SELF_ORACLE_LOG: reorderedLog },
+          `-t 'calibration:'`,
+        )
+        observe(`binding-reordered`, {
+          id: spec.id,
+          log: readLog(reorderedLog),
+        })
+      } finally {
+        writeFileSync(file, original)
+      }
+    }
     if (plan.seedless) {
       const seedlessLog = join(directory, `seedless-${runCount}.jsonl`)
       runVitest(
@@ -2263,6 +2494,15 @@ function checkSuite(
     const owed = expected.get(spec.id)!
     const seen = run.files[spec.id]!
     if (!owed.loads) {
+      if (
+        (spec.calibrationHistory || spec.probeBinding) &&
+        run.log.some((entry) => entry.id === spec.id)
+      )
+        return violation(
+          `run`,
+          `${spec.id} ran a driver despite an invalid calibration selector`,
+          `calibration`,
+        )
       const law = owed.membership ? `membership` : `registration`
       if (seen.loaded)
         return violation(
@@ -2292,6 +2532,70 @@ function checkSuite(
     }
     if (!seen.loaded)
       return violation(`run`, `${spec.id} failed to load`, `registration`)
+    const reordered = trace.find(
+      ({ checkpoint, value }) =>
+        checkpoint === `binding-reordered` &&
+        (value as { id: string }).id === spec.id,
+    )?.value as { log: Array<LogEntry> } | undefined
+    if (reordered) {
+      const tests = new Set(
+        spec.calibrations.map(
+          ({ name }) => `${spec.id} > calibration: ${name}`,
+        ),
+      )
+      const selected = (log: ReadonlyArray<LogEntry>) =>
+        log
+          .filter(({ test }) => tests.has(test))
+          .map(({ test, history }) => ({ test, history }))
+          .sort((a, b) => a.test.localeCompare(b.test))
+      if (
+        JSON.stringify(selected(run.log)) !==
+        JSON.stringify(selected(reordered.log))
+      )
+        return violation(
+          `run`,
+          `${spec.id} changed bound histories after calibration insertion/reordering`,
+          `calibration`,
+        )
+    }
+    // The compatibility route must be visible before any selected test runs,
+    // including automatic controls; bound calibrations must never warn search.
+    const unbound = [
+      ...(!spec.calibrationHistory
+        ? spec.calibrations.map(({ name }) => name)
+        : []),
+      ...(!spec.probeBinding
+        ? forcedCalibrationNames(spec).map((name) =>
+            name.slice(`calibration: `.length),
+          )
+        : []),
+    ]
+    for (const name of unbound)
+      if (
+        run.warnings.filter((warning) =>
+          warning.includes(
+            `${spec.id}: calibration "${name}" has no history binding`,
+          ),
+        ).length !== 1
+      )
+        return violation(
+          `run`,
+          `${spec.id} did not warn once at registration for unbound calibration "${name}"`,
+          `calibration`,
+        )
+    if (
+      (spec.calibrationHistory || spec.probeBinding) &&
+      run.warnings.some(
+        (warning) =>
+          warning.startsWith(`${spec.id}:`) &&
+          !unbound.some((name) => warning.includes(`calibration "${name}"`)),
+      )
+    )
+      return violation(
+        `run`,
+        `${spec.id} warned about search for a bound calibration`,
+        `calibration`,
+      )
     const placed = seen.tests.find((test) =>
       test.name.includes(packageDirectory),
     )
@@ -2313,6 +2617,84 @@ function checkSuite(
     for (const test of seen.tests) {
       const outcome = owed.tests.get(test.name)!
       const failure = test.failure
+      if (
+        spec.probeBinding &&
+        forcedCalibrationNames(spec).includes(test.name)
+      ) {
+        const calls = run.log.filter(
+          (entry) =>
+            entry.id === spec.id && entry.test === `${spec.id} > ${test.name}`,
+        )
+        const expectedCalls =
+          outcome.kind === `calibration-clean` ||
+          outcome.kind === `calibration-reach`
+            ? 1
+            : 2
+        if (
+          calls.length !== expectedCalls ||
+          calls.some(
+            ({ history }) =>
+              JSON.stringify(history) !== JSON.stringify(calls[0]!.history),
+          )
+        )
+          return violation(
+            `run`,
+            `${spec.id} forced control did not run ${expectedCalls} equivalent selected histories`,
+            `calibration`,
+          )
+      }
+      if (spec.calibrationHistory && test.name.startsWith(`calibration:`)) {
+        const calibration = spec.calibrations.find(
+          ({ name }) => test.name === `calibration: ${name}`,
+        )!
+        const calls = run.log.filter(
+          (entry) =>
+            entry.id === spec.id && entry.test === `${spec.id} > ${test.name}`,
+        )
+        const expectedCalls =
+          (calibration.kind === `driver` || calibration.kind === `throws`) &&
+          outcome.kind !== `calibration-clean` &&
+          outcome.kind !== `calibration-reach`
+            ? 2
+            : 1
+        if (calls.length !== expectedCalls)
+          return violation(
+            `run`,
+            `${spec.id} "${test.name}" used ${calls.length} driver calls; binding owes ${expectedCalls}`,
+            `calibration`,
+          )
+        const binding = spec.calibrationHistory
+        const first = calls[0]!.history
+        const selected =
+          `fixed` in binding
+            ? spec.fixed.find(({ name }) => name === binding.fixed)?.history
+            : `enumerated` in binding && spec.source.kind === `enumerated`
+              ? spec.source.histories.find((history, index) =>
+                  typeof binding.enumerated === `number`
+                    ? index === binding.enumerated
+                    : `items ${history.join(` | `)}` === binding.enumerated,
+                )
+              : undefined
+        const prefix =
+          `constructed` in binding
+            ? spec.constructed.find(({ name }) => name === binding.constructed)!
+                .prefix
+            : undefined
+        if (
+          (selected && JSON.stringify(first) !== JSON.stringify(selected)) ||
+          (prefix &&
+            JSON.stringify(first.slice(0, prefix.length)) !==
+              JSON.stringify(prefix)) ||
+          calls.some(
+            ({ history }) => JSON.stringify(history) !== JSON.stringify(first),
+          )
+        )
+          return violation(
+            `run`,
+            `${spec.id} "${test.name}" did not run equivalent selected histories`,
+            `calibration`,
+          )
+      }
       const observedKind =
         test.state === `passed` ? `pass` : (failure?.kind ?? `other`)
       if (
@@ -2605,6 +2987,10 @@ const generatedDraft = (overrides: Partial<Draft>): Draft => ({
   reachVia: `reached`,
   timing: `normal`,
   calibrations: [],
+  calibrationHistory: null,
+  isolatedPlans: false,
+  probeBinding: `unbound`,
+  duplicateHistoryNames: false,
   unregistered: false,
   probe: `none`,
   overReport: false,
@@ -2653,11 +3039,248 @@ oracleProperty({
   },
   histories: {
     arbitrary: suite,
-    states: [],
-    measured: frameworkStates,
+    states: [
+      `bound-calibration`,
+      `bound-calibration-registration-error`,
+      `bound-constructed-driver`,
+    ],
+    measured: frameworkStates.filter((state) => !state.startsWith(`bound-`)),
     runs: 3,
     fixedSeeds: [1],
+    constructed: [
+      {
+        name: `bound constructed drivers rebuild seeded plans`,
+        enters: [`bound-constructed-driver`],
+        build: (generated) => ({
+          ...generated,
+          drafts: [
+            generatedDraft({
+              fixed: [at([6])],
+              constructed: [{ prefix: [0], enters: [`saw-0`] }],
+              isolatedPlans: true,
+              calibrations: [`driver`],
+              calibrationHistory: { constructed: `constructed-0` },
+            }),
+          ],
+        }),
+      },
+      {
+        name: `bound calibrations bypass unrelated histories`,
+        enters: [`bound-calibration`],
+        build: (generated) => ({
+          ...generated,
+          drafts: [
+            generatedDraft({
+              // The decoy fails if scanned. The selected construction keeps a
+              // generated tail; builder identity and fresh resolution are checked.
+              fixed: [at([6])],
+              constructed: [{ prefix: [0], enters: [`saw-0`] }],
+              isolatedPlans: true,
+              calibrations: [generated.drafts[0]!.clock ? `driver` : `right`],
+              calibrationHistory: { constructed: `constructed-0` },
+            }),
+          ],
+        }),
+      },
+      {
+        name: `invalid bindings fail before execution`,
+        enters: [`bound-calibration-registration-error`],
+        build: (generated) => ({
+          ...generated,
+          drafts: [
+            generatedDraft({
+              fixed: [at([0])],
+              calibrations: [`right`],
+              calibrationHistory: { fixed: `unknown` },
+            }),
+          ],
+        }),
+      },
+      {
+        name: `bound forced controls retain both clean premises`,
+        enters: [`bound-calibration`],
+        build: (generated) => ({
+          ...generated,
+          drafts: [
+            generatedDraft({
+              fixed: [at([1])],
+              constructed: [{ prefix: [0], enters: [`saw-0`] }],
+              isolatedPlans: true,
+              probe: `agree`,
+              probeBinding: generated.drafts[0]!.clock
+                ? `inferred`
+                : `explicit`,
+            }),
+          ],
+        }),
+      },
+    ],
     fixed: [
+      fixedHistory(
+        `selected clean driver errors cannot search for another history`,
+        [`bound-calibration`],
+        generatedDraft({
+          fixed: [at([6]), at([0])],
+          calibrations: [`driver`],
+          calibrationHistory: { fixed: `fixed-0` },
+        }),
+      ),
+      fixedHistory(
+        `bound constructed drivers rebuild seeded plans`,
+        [`bound-constructed-driver`],
+        generatedDraft({
+          fixed: [at([6])],
+          constructed: [{ prefix: [0], enters: [`saw-0`] }],
+          isolatedPlans: true,
+          calibrations: [`driver`],
+          calibrationHistory: { constructed: `constructed-0` },
+        }),
+      ),
+      fixedHistory(
+        `duplicate enumerated labels fail before execution`,
+        [`bound-calibration-registration-error`],
+        generatedDraft({
+          source: {
+            kind: `enumerated`,
+            histories: [
+              [0, 1],
+              [1, 0],
+            ],
+          },
+          duplicateHistoryNames: true,
+          calibrations: [`right`],
+          calibrationHistory: { enumerated: `items 0 | 1` },
+        }),
+      ),
+      ...([`inferred`, `explicit`] as const).map((probeBinding) =>
+        fixedHistory(
+          `bound forced controls use ${probeBinding} entered history`,
+          [`bound-calibration`],
+          generatedDraft({
+            fixed: [at([1])],
+            constructed: [{ prefix: [0], enters: [`saw-0`] }],
+            isolatedPlans: true,
+            probe: `agree`,
+            probeBinding,
+          }),
+        ),
+      ),
+      fixedHistory(
+        `probe inference rejects ambiguous and missing constructions`,
+        [`registration-error`],
+        generatedDraft({
+          fixed: [at([1])],
+          constructed: [
+            { prefix: [0], enters: [`saw-0`] },
+            { prefix: [0], enters: [`saw-0`] },
+          ],
+          probe: `agree`,
+          probeBinding: `inferred`,
+        }),
+        generatedDraft({
+          fixed: [at([1])],
+          probe: `agree`,
+          probeBinding: `inferred`,
+        }),
+      ),
+      fixedHistory(
+        `a bound probe control needs an absent history`,
+        [`registration-error`],
+        generatedDraft({ probe: `agree`, probeBinding: `no-absence` }),
+      ),
+      fixedHistory(
+        `fixed and constructed duplicate selectors fail before execution`,
+        [`bound-calibration-registration-error`],
+        generatedDraft({
+          fixed: [at([0]), at([1])],
+          duplicateHistoryNames: true,
+          calibrations: [`right`],
+          calibrationHistory: { fixed: `fixed-0` },
+        }),
+        generatedDraft({
+          constructed: [
+            { prefix: [0], enters: [] },
+            { prefix: [1], enters: [] },
+          ],
+          duplicateHistoryNames: true,
+          calibrations: [`right`],
+          calibrationHistory: { constructed: `constructed-0` },
+        }),
+      ),
+      fixedHistory(
+        `bound calibrations use only their selected histories`,
+        [`bound-calibration`],
+        generatedDraft({
+          fixed: [at([6]), at([0, 1])],
+          calibrations: [`right`],
+          calibrationHistory: { fixed: `fixed-1` },
+        }),
+        generatedDraft({
+          source: { kind: `enumerated`, histories: [[6], [0, 2]] },
+          calibrations: [`driver`],
+          calibrationHistory: { enumerated: 1 },
+        }),
+      ),
+      ...(
+        [`right`, `no-op`, `wrong-law`, `inapplicable`, `throws`] as const
+      ).map((kind) =>
+        fixedHistory(
+          `bound ${kind} requires the designated rejection`,
+          [`bound-calibration`],
+          generatedDraft({
+            fixed: [at([6]), at([0])],
+            calibrations: [kind],
+            calibrationHistory: { fixed: `fixed-1` },
+          }),
+        ),
+      ),
+      fixedHistory(
+        `a failed selected clean run cannot search for another`,
+        [`bound-calibration`],
+        generatedDraft({
+          fixed: [at([3]), at([0])],
+          calibrations: [`right`],
+          calibrationHistory: { fixed: `fixed-0` },
+        }),
+      ),
+      fixedHistory(
+        `a selected history must prove its declared reach`,
+        [`bound-calibration`],
+        generatedDraft({
+          fixed: [{ history: [0], enters: [`saw-1`] }],
+          calibrations: [`right`],
+          calibrationHistory: { fixed: `fixed-0` },
+        }),
+      ),
+      ...(
+        [
+          { fixed: `missing` },
+          { constructed: `missing` },
+          { enumerated: -1 },
+          { enumerated: 1.5 },
+          { enumerated: 2 },
+          { fixed: `fixed-0` },
+        ] as const
+      ).map((binding, index) =>
+        fixedHistory(
+          `invalid binding ${index} fails at registration`,
+          [`bound-calibration-registration-error`],
+          generatedDraft({
+            source: { kind: `enumerated`, histories: [[0], [1]] },
+            calibrations: [`right`],
+            calibrationHistory: binding,
+          }),
+        ),
+      ),
+      fixedHistory(
+        `enumerated histories can be selected by label`,
+        [`bound-calibration`],
+        generatedDraft({
+          source: { kind: `enumerated`, histories: [[6], [0, 1]] },
+          calibrations: [`right`],
+          calibrationHistory: { enumerated: `items 0 | 1` },
+        }),
+      ),
       fixedHistory(`a rerun command escapes a label with |`, [`rerun-probe`], {
         ...generatedDraft({}),
         source: {
@@ -3337,6 +3960,7 @@ oracleProperty({
   reached: frameworkReach,
   driver: driveSuite,
   check: checkSuite,
+  owns: [`src/oracle-property.ts`],
   // Each history spawns one to five child Vitest runs.
   timeout: 600_000,
 })
