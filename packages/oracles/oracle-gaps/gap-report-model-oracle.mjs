@@ -325,6 +325,9 @@ const edits = [
   // A change to the CLI's code followed by two checks at once, and a native
   // addon installed into the dependency tree (or removed) between checks.
   `cliAtOnce`,
+  // A check from a second install of the CLI, at another path and with
+  // other code, while the first install's daemon serves the package.
+  `otherInstall`,
   `addAddon`,
   // A daemon killed while it runs a check (under a seed no other step uses,
   // so that the check has work to do), a daemon killed before it reads
@@ -348,6 +351,7 @@ const daemonEvents = new Set([
   `crashAtOnce`,
   `stopAtOnce`,
   `resetBeforeRead`,
+  `otherInstall`,
 ])
 const histories = fc.record({
   functions: fc.array(fc.array(statement, { minLength: 1, maxLength: 5 }), {
@@ -450,6 +454,12 @@ const histories = fc.record({
     // The package's Vitest fails the same way, after waiting on I/O, so a
     // daemon has read its requests when its session fails.
     `brokenVitest`,
+    // The package's own files fail under Vitest: its config throws when it
+    // loads, its config has no default export, or a setup file throws when
+    // it loads. Each is the author's to fix, so each refuses the run.
+    `configThrows`,
+    `configNoDefault`,
+    `setupThrows`,
   ),
   stability: fc.constantFrom(
     `none`,
@@ -2950,16 +2960,39 @@ function judge(plan, tests, sites, active) {
 }
 
 /**
- * Which fault, if any, must make the run fail, and its cause. The analysis
- * reads files before any test runs, so its refusals come first: a broken
- * declaration, then a run with no oracle file or no owner. A fault that only
- * the runner can find (`runtime`) is named only when the analysis passes.
+ * Which fault, if any, must make the run fail, and its cause, in the order the
+ * run finds them. The analysis reads the test files that the loaded Vitest
+ * config includes (check.mjs warms the contexts, then calls `analyze` with
+ * their specs), so a Vitest or config that cannot load or be honored is named
+ * first. The analysis's refusals come next: a broken declaration, then a run
+ * with no oracle file or no owner. A fault that the baseline run finds (a
+ * failing setup or owner) comes last. A fault found only at run time is
+ * tagged `runtime`, so the static oracle, which runs only the analysis, does
+ * not expect it.
  */
 function refusal(plan) {
+  // A Vitest that does not load, and a config the runner cannot honor, refuse
+  // the run rather than leave every mutant unreached (maintainer decision,
+  // 2026-11-08).
+  if (plan.fault === `brokenVitest`) return { cause: `vitest`, runtime: true }
+  if (plan.fault === `projects`)
+    return { cause: `test.projects`, runtime: true }
   if (plan.fault === `badEntry`) return { cause: `${SOURCE}#nope` }
   if (plan.fault === `missingSource`) return { cause: `src/missing.ts` }
   if (plan.fault === `nonLiteral`) return { cause: `b.test.ts` }
   if (plan.fault === `outsideSource`) return { cause: `outside the package` }
+  // The analysis reads the test files that the package's Vitest config
+  // includes (index.mjs, step 2), so a config that does not load is named
+  // before anything the analysis would find. The cause names the config
+  // file and its error.
+  if (plan.fault === `configThrows`)
+    return {
+      cause: plan.configFile,
+      detail: `the fixture config broke`,
+      runtime: true,
+    }
+  if (plan.fault === `configNoDefault`)
+    return { cause: plan.configFile, runtime: true }
   // A run with no oracle file, or with no owns entry, owns no selected
   // source, so every mutant would read as unowned. The analysis refuses it
   // (maintainer decision, 2026-11-10).
@@ -2969,11 +3002,10 @@ function refusal(plan) {
     plan.functions.every((fn) => fn.owners.length === 0)
   )
     return { cause: `owns any selected source` }
-  // A config the runner cannot honor refuses the run rather than leave every
-  // mutant unreached (maintainer decision, 2026-11-08).
-  if (plan.fault === `projects`)
-    return { cause: `test.projects`, runtime: true }
-  if (plan.fault === `brokenVitest`) return { cause: `vitest`, runtime: true }
+  // A setup file that throws fails every oracle file before any test runs,
+  // so the run refuses as for a failing owner, naming the setup's error.
+  if (plan.fault === `setupThrows`)
+    return { cause: `the fixture setup broke`, runtime: true }
   // A failing owner is named with its test's error, so the author can fix it.
   if (plan.fault === `brokenOwner`)
     return {
@@ -3477,7 +3509,7 @@ function fixtureFiles(plan, state = initialState(plan)) {
     plan.configEnv
       ? `process.env.VITEST === 'true' && process.env.TEST === 'true' && process.env.NODE_ENV === 'test' ? ['tests/**/*.test.ts'] : []`
       : `['tests/**/*.test.ts']`
-  }${plan.setupGlobal ? `, setupFiles: ['./tests/setup.ts']` : ``} }`
+  }${plan.setupGlobal || plan.fault === `setupThrows` ? `, setupFiles: ['./tests/setup.ts']` : ``} }`
   // A history that installs a scoped addon later declares it from the
   // start, beside a scoped package already installed in its scope.
   const scoped = plan.steps.includes(`addScopedAddon`)
@@ -3531,7 +3563,11 @@ function fixtureFiles(plan, state = initialState(plan)) {
           ].join(`\n`),
         }
       : {}),
-    [plan.configFile]: `import { defineConfig } from 'vitest/config'\nexport default defineConfig(${
+    [plan.configFile]: `import { defineConfig } from 'vitest/config'\n${
+      plan.fault === `configThrows`
+        ? `throw new Error('the fixture config broke')\n`
+        : ``
+    }export ${plan.fault === `configNoDefault` ? `const config =` : `default`} defineConfig(${
       { object: ``, function: `() => (`, async: `async () => (` }[plan.config]
     }{ test: ${
       plan.fault === `projects`
@@ -3559,9 +3595,17 @@ function fixtureFiles(plan, state = initialState(plan)) {
     // as a duplicate-instance check does in a browser window:
     // each copy must load it as a fresh worker would.
     'deps/state-dep/index.js': `const marker = Symbol.for('state-dep/loaded')\nif (globalThis[marker]) throw new Error('state-dep loaded twice in one realm')\nglobalThis[marker] = true\nconst log = []\nexport function note(entry) {\n  log.push(entry)\n}\nexport function seen() {\n  return [...log]\n}\n`,
-    ...(plan.setupGlobal
+    ...(plan.setupGlobal || plan.fault === `setupThrows`
       ? {
-          'tests/setup.ts': `Object.defineProperty(globalThis, 'fixtureStore', { value: { ready: true } })\n`,
+          'tests/setup.ts': `${
+            plan.fault === `setupThrows`
+              ? `throw new Error('the fixture setup broke')\n`
+              : ``
+          }${
+            plan.setupGlobal
+              ? `Object.defineProperty(globalThis, 'fixtureStore', { value: { ready: true } })\n`
+              : ``
+          }`,
         }
       : {}),
     // A subpath that reads the dependency's main module, so a runner that
@@ -3799,6 +3843,98 @@ function applyEdit(state, edit) {
   return state
 }
 
+// ## How a run that does not complete ends (law 12)
+//
+// Every invocation of the CLI ends with a result shaped like a report, never
+// with a bare stack trace (maintainer decision, 2026-11-10: "we should never
+// just crash -- the cli should also return something sensible"). A run that
+// does not complete is either refused or an internal error.
+//
+// A refusal is a problem the author can fix: a bad argument, a broken owns
+// declaration, no oracle file or no owner, a config the runner cannot honor,
+// a Vitest that does not load, an owner that fails with no mutant active. It
+// exits 2 and prints one block on stderr with no stack frames: `refused:
+// <cause>`, then `fix: <directive>`. The directive is one next step, and it
+// offers no way around the fix (no "ignore it", no "mark it equivalent").
+// When the run knows its output directory, the block ends with `output:
+// <dir>`, and the directory holds a results.json, `{ status: "refused",
+// cause, directive }`, whose cause and directive are the block's, and a
+// summary.md, and no error.log: every ending removes the other ending's
+// files. Arguments the CLI cannot parse know their output directory only
+// when they name it (`--out`).
+//
+// An internal error is a bug in the CLI. It exits 3, says so, and keeps the
+// stack in an error.log rather than on stderr. No legal history reaches one,
+// so this law's check judges refusals only (see each oracle's limits).
+
+/**
+ * What a run that ended without completing printed and wrote, as the
+ * author reads it: its exit code, its `refused:` block (the cause up to its
+ * `fix:` line, cut to 2,000 characters), its `fix:` line, whether it named
+ * its output directory `out`, whether stderr holds a stack frame, and the
+ * status, cause, and directive of the results.json in `out`, if there is
+ * one. `name` replaces the scratch paths in a text, so two runs of one
+ * history in different directories record the same ending.
+ */
+function endingOf(exit, stderr, out, name = (text) => text) {
+  const text = `${stderr ?? ``}`
+  const line = (label) => text.match(new RegExp(`^${label}: (.*)$`, `m`))?.[1]
+  const cause = text.match(/^refused: ([\s\S]*?)\nfix: /m)?.[1]
+  let written
+  try {
+    const parsed = JSON.parse(readFileSync(join(out, `results.json`), `utf8`))
+    written = {
+      status: parsed.status,
+      cause: parsed.cause && name(parsed.cause).slice(0, 2000),
+      directive: parsed.directive && name(parsed.directive),
+      summary: existsSync(join(out, `summary.md`)),
+    }
+  } catch {
+    // No output directory is known, or the run wrote no results.json.
+  }
+  return {
+    exit,
+    cause: cause && name(cause).slice(0, 2000),
+    fix: line(`fix`) && name(line(`fix`)),
+    namesOutput: out !== undefined && line(`output`) === out,
+    // An internal error's log beside a refusal would be another run's.
+    errorLog: out !== undefined && existsSync(join(out, `error.log`)),
+    stackFrames: /^\s+at /m.test(text),
+    written,
+  }
+}
+
+/**
+ * The first way a run's ending breaks the refusal law, or undefined. The
+ * cause must name `cause`; with `outKnown`, the run knew its output
+ * directory, so the block names it and the directory holds the refusal.
+ */
+function refusalBreach(ending, { cause, outKnown }) {
+  if (ending.exit !== 2) return `the refusal exited ${ending.exit}, not 2`
+  if (ending.stackFrames) return `the refusal printed a stack trace`
+  if (ending.cause === undefined)
+    return `the refusal printed no \`refused:\` line followed by a \`fix:\` line`
+  if (cause !== undefined && !ending.cause.includes(cause))
+    return `the refusal's cause does not name ${cause}: ${ending.cause}`
+  if (!ending.fix?.trim()) return `the refusal's \`fix:\` line is empty`
+  // A directive that offers a way around the fix lets the author leave the
+  // problem in place.
+  if (/\b(ignore|equivalent|skip)/i.test(ending.fix))
+    return `the refusal's fix offers a way around it: ${ending.fix}`
+  if (!outKnown) return undefined
+  if (!ending.namesOutput)
+    return `the refusal does not name its output directory`
+  const { written } = ending
+  if (written?.status !== `refused`)
+    return `the output's results.json has status ${written?.status ?? `(none)`}, not refused`
+  if (written.cause !== ending.cause || written.directive !== ending.fix)
+    return `the output's results.json gives another cause or directive than stderr`
+  if (!written.summary) return `the refusal wrote no summary.md`
+  if (ending.errorLog)
+    return `the refusal left an earlier run's error.log in its output directory`
+  return undefined
+}
+
 /**
  * The summary's counts, gap keys, unowned keys, and each listed gap's kind
  * and line, read from its text as the author reads it.
@@ -3865,6 +4001,8 @@ function readSummary(summary) {
 
 export {
   captureWitness,
+  endingOf,
+  refusalBreach,
   readSummary,
   SOURCE,
   LIB,

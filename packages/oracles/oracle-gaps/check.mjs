@@ -45,6 +45,7 @@ import {
 } from './report.mjs'
 import { baselineLines, gapLine, progressLine } from './stream.mjs'
 import { analyze, isRunnerCopy } from './analysis.mjs'
+import { Refusal } from './ending.mjs'
 import {
   baselineOf,
   judgeAuthored,
@@ -84,6 +85,7 @@ const ownFiles = [
   `capture-setup.mjs`,
   `evidence.mjs`,
   `daemon.mjs`,
+  `ending.mjs`,
   `../src/oracle-property.ts`,
 ].map((file) => join(here, file))
 
@@ -269,13 +271,22 @@ export async function openSession(pkg) {
   // refused before any work.
   const ts = createRequire(import.meta.url)(`typescript`)
   if (typeof ts.createSourceFile !== `function`)
-    throw new Error(
-      `oracle-gaps: the TypeScript this CLI depends on (${ts.version}) has no compiler API. Reinstall @tanstack/oracles, which depends on TypeScript 5.`,
+    throw new Refusal(
+      `the TypeScript this CLI depends on (${ts.version}) has no compiler API`,
+      `Reinstall @tanstack/oracles, which depends on TypeScript 5.`,
     )
   const requireTarget = createRequire(join(pkg, `package.json`))
-  const { createVitest } = await import(
-    pathToFileURL(requireTarget.resolve(`vitest/node`)).href
-  )
+  let createVitest
+  try {
+    ;({ createVitest } = await import(
+      pathToFileURL(requireTarget.resolve(`vitest/node`)).href
+    ))
+  } catch (error) {
+    throw new Refusal(
+      `the package's Vitest failed to load: ${error?.message ?? error}`,
+      `Install a working Vitest in the package, so that vitest/node loads from it.`,
+    )
+  }
   // Each process uses its own harness files, so a cold run beside the daemon
   // cannot remove the daemon's.
   // Vitest's CLI sets these before it loads a config, and a config may read
@@ -377,41 +388,58 @@ export default async (env) => {
   const contextSpecs = new Map()
   let runCounter = 0
 
-  async function warmContext(settings, index) {
-    const context = await createVitest(`test`, {
-      root: pkg,
-      config: wrapperFor(index),
-      watch: false,
-      maxWorkers: 1,
-      // Every test in a file runs, so a kill is attributed to each route
-      // that produces it (see routeOf). A property still stops at its first
-      // failure.
-      bail: settings.bail,
-      testTimeout: settings.testTimeout,
-      hookTimeout: settings.testTimeout,
-      teardownTimeout: settings.testTimeout,
-      typecheck: { enabled: false },
-      coverage: { enabled: false },
-      // Vitest 5 caches transformed modules on disk by default, keyed by
-      // the file, not by what this runner's plugin serves for it, so a
-      // patched or instrumented source could come back as an earlier text.
-      // Vitest 4 caches nothing unless asked.
-      fsModuleCache: false,
-      // Every module each test file imports, which a unit records as its
-      // inputs.
-      experimental: { importDurations: { limit: 1_000_000 } },
-      // A batch runs copies of test files in one worker, sharing its
-      // environment (runBatch), in the order given, so a hang is attributed
-      // to the copy that was running.
-      isolate: false,
-      // Worker threads start much faster than child processes, and each
-      // batch starts one (`--pool`; see args.mjs).
-      pool: settings.pool,
-      sequence: { sequencer: KeepOrder },
-      reporters: [{}],
+  // A context loads the package's own config through its wrapper, so an
+  // error there is the author's: the run refuses, naming the config file
+  // where the error names the wrapper.
+  const fromConfig = (index, loading) =>
+    loading.catch((error) => {
+      const name = config ?? `the default Vitest config`
+      throw new Refusal(
+        `the package's Vitest config (${name}) failed to load: ${String(error?.message ?? error).replaceAll(basename(wrapperFor(index)), name)}`,
+        `Make ${name} load under Vitest: run vitest --run in the package and fix the error it reports.`,
+      )
     })
+  async function warmContext(settings, index) {
+    const context = await fromConfig(
+      index,
+      createVitest(`test`, {
+        root: pkg,
+        config: wrapperFor(index),
+        watch: false,
+        maxWorkers: 1,
+        // Every test in a file runs, so a kill is attributed to each route
+        // that produces it (see routeOf). A property still stops at its first
+        // failure.
+        bail: settings.bail,
+        testTimeout: settings.testTimeout,
+        hookTimeout: settings.testTimeout,
+        teardownTimeout: settings.testTimeout,
+        typecheck: { enabled: false },
+        coverage: { enabled: false },
+        // Vitest 5 caches transformed modules on disk by default, keyed by
+        // the file, not by what this runner's plugin serves for it, so a
+        // patched or instrumented source could come back as an earlier text.
+        // Vitest 4 caches nothing unless asked.
+        fsModuleCache: false,
+        // Every module each test file imports, which a unit records as its
+        // inputs.
+        experimental: { importDurations: { limit: 1_000_000 } },
+        // A batch runs copies of test files in one worker, sharing its
+        // environment (runBatch), in the order given, so a hang is attributed
+        // to the copy that was running.
+        isolate: false,
+        // Worker threads start much faster than child processes, and each
+        // batch starts one (`--pool`; see args.mjs).
+        pool: settings.pool,
+        sequence: { sequencer: KeepOrder },
+        reporters: [{}],
+      }),
+    )
     // Vitest 3 calls this step `init`; Vitest 4 renamed it `standalone`.
-    await (context.standalone ? context.standalone() : context.init())
+    await fromConfig(
+      index,
+      context.standalone ? context.standalone() : context.init(),
+    )
     // Each project of a `test.projects` config has its own environment and
     // setup files, which the runner's copies would not run under, so every
     // mutant would read as unreached. The run refuses instead.
@@ -419,8 +447,9 @@ export default async (env) => {
       context.projects.some((project) => project !== context.getRootProject())
     ) {
       await context.close()
-      throw new Error(
-        `the package's Vitest config defines test.projects, which the gap report does not run: run it on a package whose config has no projects`,
+      throw new Refusal(
+        `the package's Vitest config defines test.projects, which the gap report does not run`,
+        `Run the gap report on a package whose Vitest config has no test.projects.`,
       )
     }
     indexOf.set(context, index)
@@ -905,6 +934,9 @@ export default async (env) => {
     const authored = options.mutants ? loadAuthored(options.mutants) : []
     seedVariable = `${options.envPrefix}_SEED`
     mkdirSync(options.out, { recursive: true })
+    // An earlier run's internal error; a completed check writes the other
+    // files of an ending over the earlier ones (ending.mjs).
+    rmSync(join(options.out, `error.log`), { force: true })
     profileFile = process.env.ORACLE_GAPS_PROFILE
       ? join(options.out, `profile.jsonl`)
       : undefined
@@ -1322,8 +1354,9 @@ export default async (env) => {
       oracleFiles.has(file),
     )
     if (failingOwners.length > 0)
-      throw new Error(
+      throw new Refusal(
         `oracle files fail with no mutant active, so their owned code cannot be judged: ${failingOwners.map((file) => `${relative(file)} (${first.failed.get(file)})`).join(`, `)}`,
+        `Make these oracle files pass with no mutant active, then check again.`,
       )
     const excluded = [...first.failed.keys()]
     if (excluded.length > 0) {
