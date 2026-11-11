@@ -10,8 +10,31 @@ import {
 import { randomBytes } from 'node:crypto'
 import { availableParallelism } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { Refusal } from './ending.mjs'
 
 const flags = new Set([`daemon`, `stop-daemon`, `ordinary`, `help`])
+// The options that take a positive whole number.
+const counts = [
+  `contexts`,
+  `sample`,
+  `test-timeout`,
+  `hang-limit`,
+  `first-limit`,
+]
+// Every option that takes a value. Any other option refuses the run, so a
+// misspelled option is not silently ignored.
+const valued = new Set([
+  ...counts,
+  `package`,
+  `source`,
+  `env-prefix`,
+  `seed`,
+  `mutants`,
+  `out`,
+  `only`,
+  `diff-base`,
+  `pool`,
+])
 // The usage text `--help` prints (index.mjs).
 export const usage = `Usage: oracle-gaps --package <dir> --source <src/x.ts,...>
   [--env-prefix <name>] [--daemon] [--ordinary] [--seed <n>] [--mutants <dir>]
@@ -21,30 +44,87 @@ export const usage = `Usage: oracle-gaps --package <dir> --source <src/x.ts,...>
   oracle-gaps --stop-daemon --package <dir>
   oracle-gaps --help
 
-The paths in --source are relative to --package. Run the CLI from any directory.`
+The paths in --source are relative to --package. Run the CLI from any directory.
+Exit codes: 0 the check completed; 2 refused, with the fix on stderr;
+3 an internal error of oracle-gaps.`
+const help = `as \`oracle-gaps --help\` shows`
 /**
  * The options in `argv`. Paths are resolved against `cwd`, the caller's
- * working directory, which the daemon receives with each request.
+ * working directory, which the daemon receives with each request. Arguments
+ * that break the usage text refuse the run, naming the option or path.
  */
 export function parseArgs(argv, cwd = process.cwd()) {
   const args = {}
   for (let i = 0; i < argv.length; i += 1) {
     const [key, inline] = argv[i].replace(/^--/, ``).split(`=`)
+    if (!flags.has(key) && !valued.has(key))
+      throw new Refusal(
+        `unknown option ${argv[i]}`,
+        `Use only the options ${help}.`,
+      )
     args[key] = flags.has(key) ? true : (inline ?? argv[++i])
+    if (args[key] === undefined)
+      throw new Refusal(
+        `--${key} has no value`,
+        `Give --${key} a value, ${help}.`,
+      )
   }
   if (args.help) return { help: true }
-  if (!args.package) throw new Error(`--package is required`)
+  if (!args.package)
+    throw new Refusal(
+      `--package is required`,
+      `Pass --package <dir>, the package whose sources to check.`,
+    )
+  const at = resolve(cwd, args.package)
+  if (!existsSync(at))
+    throw new Refusal(
+      `--package ${args.package} does not exist`,
+      `Pass --package the directory of an existing package.`,
+    )
   // Test reports name files by their real path (on macOS, /tmp is
   // /private/tmp), so the package path is resolved the same way.
-  const pkg = realpathSync.native(resolve(cwd, args.package))
+  const pkg = realpathSync.native(at)
   if (args[`stop-daemon`]) return { stop: true, pkg }
-  if (!args.source) throw new Error(`--package and --source are required`)
+  if (!args.source)
+    throw new Refusal(
+      `--source is required`,
+      `Pass --source with the files to mutate, relative to --package, such as --source src/x.ts.`,
+    )
   // The prefix of the framework's environment variables (`${envPrefix}_SEED`
   // and the rest), as the project passes it to configureOracles. The CLI sets
   // the seed under this name, so it must match the project's.
   const envPrefix = args[`env-prefix`] ?? `ORACLE`
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(envPrefix))
-    throw new Error(`--env-prefix must be an environment variable prefix`)
+    throw new Refusal(
+      `--env-prefix must be an environment variable prefix, not ${envPrefix}`,
+      `Pass --env-prefix the prefix your project gives configureOracles, such as ORACLE.`,
+    )
+  // The framework reads the seed as an integer (oracle-environment.ts).
+  if (
+    args.seed !== undefined &&
+    (args.seed.trim() === `` || !Number.isSafeInteger(Number(args.seed)))
+  )
+    throw new Refusal(
+      `--seed must be an integer, not "${args.seed}"`,
+      `Pass --seed a whole number, such as --seed 1.`,
+    )
+  for (const name of counts)
+    if (args[name] !== undefined && !/^[1-9]\d*$/.test(args[name]))
+      throw new Refusal(
+        `--${name} must be a positive whole number, not "${args[name]}"`,
+        `Pass --${name} a positive whole number, ${help}.`,
+      )
+  if (args.pool !== undefined && ![`threads`, `forks`].includes(args.pool))
+    throw new Refusal(
+      `--pool must be threads or forks, not "${args.pool}"`,
+      `Pass --pool threads, or --pool forks for a package with a native addon.`,
+    )
+  const mutants = args.mutants && resolve(cwd, args.mutants)
+  if (mutants && !existsSync(mutants))
+    throw new Refusal(
+      `--mutants ${args.mutants} does not exist`,
+      `Pass --mutants the directory that holds the authored mutants' JSON files.`,
+    )
   return {
     pkg,
     envPrefix,
@@ -83,7 +163,7 @@ export function parseArgs(argv, cwd = process.cwd()) {
     // a package with a native addon in its tree runs with `forks`.
     pool: args.pool ?? defaultPool(pkg),
     // A directory of authored mutants (see loadAuthored).
-    mutants: args.mutants ? resolve(cwd, args.mutants) : undefined,
+    mutants,
   }
 }
 
@@ -104,7 +184,11 @@ export function packagePath(pkg, path) {
     pkg,
     existsSync(absolute) ? realpathSync.native(absolute) : absolute,
   )
-  if (isOutside(named)) throw new Error(`${path} is outside the package`)
+  if (isOutside(named))
+    throw new Refusal(
+      `${path} is outside the package`,
+      `Name a file inside the package, relative to --package.`,
+    )
   return named
 }
 

@@ -17,8 +17,9 @@
 //
 // The CLI talks to it over a Unix socket named by the package's path. Each
 // request is one line of JSON, the CLI's arguments; the reply is one line of
-// JSON with the exit code and the output a cold run would have printed. One
-// check runs at a time. The daemon exits when asked, or after 30 idle
+// JSON with the summary a cold run would have printed and its log, or the
+// error that ended the check, which the CLI ends the run with as a cold run
+// does (ending.mjs). One check runs at a time. The daemon exits when asked, or after 30 idle
 // minutes.
 //
 // The CLI starts it: node daemon.mjs --package <dir>. Each check's evidence is
@@ -42,6 +43,7 @@ import { connect, createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { Refusal } from './ending.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const idleMs = 30 * 60_000
@@ -54,6 +56,20 @@ export const socketOf = (pkg) =>
   )
 /** Where a package's daemon keeps its evidence and its log. */
 export const stateDirOf = (pkg) => join(pkg, `.oracle-gaps`)
+
+// An error that ended a check, as the daemon sends it, and as the CLI
+// receives it: a refusal stays a refusal.
+const sent = (error) => ({
+  message: String(error?.message ?? error),
+  fix: error?.fix,
+  stack: error?.stack,
+})
+/** The error that ended a check in the daemon, to end the CLI's run with. */
+export const received = ({ message, fix, stack }) =>
+  Object.assign(
+    fix === undefined ? new Error(message) : new Refusal(message, fix),
+    { stack },
+  )
 
 function send(pkg, message) {
   return new Promise((resolvePromise, reject) => {
@@ -110,8 +126,9 @@ function startDaemon(pkg) {
 /**
  * Sends a check to the package's daemon, starting one when none listens.
  * The CLI gets the daemon's reply, or the error of a daemon that could not
- * load or open its session since this CLI started one, or a fresh daemon in
- * place of one that died; a closing daemon is waited for. It waits at most
+ * load or open its session since this CLI started one (as a reply's
+ * `failed`), or a fresh daemon in place of one that died; a closing daemon
+ * is waited for. It waits at most
  * 60 s for a daemon to answer or start; the time a daemon holds the
  * request, queued or checking, is the check's and is not counted.
  */
@@ -137,7 +154,7 @@ export async function requestDaemon(pkg, argv) {
       const failed =
         startedAt === undefined ? undefined : errorSince(pkg, startedAt)
       if (failed !== undefined)
-        return { exitCode: 1, stdout: ``, stderr: failed }
+        return { stdout: ``, stderr: ``, failed: JSON.parse(failed) }
       // A daemon this CLI started has the grace period to listen.
       if (mayStart || Date.now() - startedAt > GRACE_MS * 2) {
         startDaemon(pkg)
@@ -305,9 +322,9 @@ async function serve(pkg) {
         // A request queued before the session failed hears why.
         if (failure)
           return reply(connection, {
-            exitCode: 1,
             stdout: ``,
-            stderr: `${failure.stack ?? failure}\n`,
+            stderr: ``,
+            failed: sent(failure),
           })
         if (closing) return reply(connection, { closing: true })
         // A daemon whose code changed declines this check and closes after
@@ -319,19 +336,20 @@ async function serve(pkg) {
         }
         const stderr = []
         let stdout = ``
-        let exitCode = 0
+        let failed
         try {
           // Paths are the caller's, so they resolve against its directory.
           const options = parseArgs(message.argv, message.cwd)
           if (options.pkg !== pkg)
             throw new Error(`this daemon serves ${pkg}, not ${options.pkg}`)
-          stdout = `${await session.check(options, store, (line) => stderr.push(`${line}\n`))}\n`
+          stdout = await session.check(options, store, (line) =>
+            stderr.push(`${line}\n`),
+          )
           await store.flush()
         } catch (error) {
-          stderr.push(`${error?.stack ?? error}\n`)
-          exitCode = 1
+          failed = sent(error)
         }
-        await reply(connection, { exitCode, stdout, stderr: stderr.join(``) })
+        await reply(connection, { stdout, stderr: stderr.join(``), failed })
         closeAfter(idleMs)
       })
     })
@@ -370,7 +388,7 @@ async function serve(pkg) {
     // released; then the daemon closes, so the next request starts a fresh
     // one rather than hearing this error again.
     failure = error
-    writeFileSync(errorFileOf(pkg), `${error?.stack ?? error}\n`)
+    writeFileSync(errorFileOf(pkg), JSON.stringify(sent(error)))
     opened()
     close()
     return

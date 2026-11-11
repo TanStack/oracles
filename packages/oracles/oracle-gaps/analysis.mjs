@@ -7,6 +7,7 @@
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { packagePath } from './args.mjs'
+import { Refusal } from './ending.mjs'
 import { ownership, readOwns, splitEntry } from './owners.mjs'
 import { instrument } from './schemata.mjs'
 
@@ -66,7 +67,10 @@ export function analyze(ts, pkg, sources, testFiles) {
     const declared = readOwns(ts, file, readFileSync(file, `utf8`))
     if (!declared.declares) continue
     if (declared.problem)
-      throw new Error(`${relative(file)}: ${declared.problem}`)
+      throw new Refusal(
+        `${relative(file)}: ${declared.problem}`,
+        `Write the owns list as a literal array of strings, such as owns: ['src/x.ts#run'].`,
+      )
     // Each entry's file as the package names it, as `--source` is.
     const entries = declared.entries.map((entry) => {
       const [source, fn] = splitEntry(entry)
@@ -74,13 +78,15 @@ export function analyze(ts, pkg, sources, testFiles) {
       try {
         named = packagePath(pkg, source)
       } catch (error) {
-        throw new Error(
+        throw new Refusal(
           `${relative(file)}: owns entry ${entry}: ${error.message}`,
+          `Name a file inside the package in this owns entry.`,
         )
       }
       if (!existsSync(join(pkg, named)))
-        throw new Error(
+        throw new Refusal(
           `${relative(file)}: owns entry ${entry} names a missing file, ${source}`,
+          `Correct the file in this owns entry, relative to the package.`,
         )
       return fn === undefined ? named : `${named}#${fn}`
     })
@@ -89,8 +95,9 @@ export function analyze(ts, pkg, sources, testFiles) {
   // A run that owns nothing would read every mutant as unowned, so it is
   // refused here, once (maintainer decision, 2026-11-10).
   if (declarations.size === 0)
-    throw new Error(
+    throw new Refusal(
       `no oracle file: no test file calls oracleProperty or declareOracle, so no file owns any selected source`,
+      `Declare owns: ['src/x.ts#fn'] in the oracleProperty or declareOracle call of the oracle that judges these sources.`,
     )
   const instrumented = new Map()
   const mutants = []
@@ -128,15 +135,17 @@ export function analyze(ts, pkg, sources, testFiles) {
     for (const entry of entries) {
       const [source, fn] = splitEntry(entry)
       if (fn !== undefined && !owned.has(source, fn))
-        throw new Error(
+        throw new Refusal(
           `${relative(file)}: owns entry ${entry} names no function in ${source}`,
+          `Name a function that ${source} defines in this owns entry, such as ${source}#run or ${source}#Class.method.`,
         )
     }
   // Owned through the call trees, which may reach a selected source from an
   // entry in another file.
   if (!sources.some((source) => owned.ownsAny(source)))
-    throw new Error(
+    throw new Refusal(
       `no file owns any selected source: no function of a --source file has an owner`,
+      `Add an owns entry for a function of a --source file to the oracle that judges it.`,
     )
   // Each mutant belongs to the innermost function whose text holds its
   // site; its key reads that function's name, and its owners are that

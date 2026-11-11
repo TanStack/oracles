@@ -25,6 +25,7 @@
 // reported as `does-not-apply`.
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { Refusal } from './ending.mjs'
 
 const fields = [`id`, `source`, `find`, `replace`, `intent`, `author`]
 
@@ -38,8 +39,9 @@ export function loadAuthored(directory) {
         (field) => typeof mutant[field] !== `string` || mutant[field] === ``,
       )
       if (missing.length > 0)
-        throw new Error(
+        throw new Refusal(
           `${name}: authored mutant ${mutant.id ?? `(no id)`} lacks ${missing.join(`, `)}`,
+          `Give the mutant a non-empty string for each of ${fields.join(`, `)}.`,
         )
       mutants.push({ ...mutant, file: name })
     }
@@ -47,7 +49,10 @@ export function loadAuthored(directory) {
   const ids = mutants.map((m) => m.id)
   const repeated = ids.filter((id, index) => ids.indexOf(id) !== index)
   if (repeated.length > 0)
-    throw new Error(`authored mutant ids repeat: ${repeated.join(`, `)}`)
+    throw new Refusal(
+      `authored mutant ids repeat: ${repeated.join(`, `)}`,
+      `Give each authored mutant an id of its own.`,
+    )
   return mutants
 }
 

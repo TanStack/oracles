@@ -1,0 +1,7 @@
+---
+'@tanstack/oracles': minor
+---
+
+The `oracle-gaps` CLI no longer ends a run with a bare stack trace. A problem the author can fix (bad arguments, a broken `owns` declaration, no oracle file or no owner, a Vitest config with `test.projects`, a Vitest that does not load, an oracle file that fails with no mutant active, a bad authored mutant) refuses the run: it exits 2 and prints `refused: <cause>` and `fix: <one step>`. When the arguments name an output directory, the refusal is also written there as `results.json` (`{ "status": "refused", "cause", "directive" }`) and `summary.md`, and the CLI prints `output: <dir>`. Any other error is a bug in the CLI: it exits 3, says so, and writes its stack to `error.log` in the output directory (or the system's temporary directory when none is known), with `results.json` status `internal-error`. A check through `--daemon` ends the same way, and now also prints `output: <dir>` when it completes.
+
+Exit code 1 is no longer used: scripts that treated any non-zero exit as a failure keep working, and scripts that matched exit 1 must match 2 or 3. Arguments are now checked: an unknown option, an option with no value, a `--package` or `--mutants` directory that does not exist, a `--seed` that is not an integer, a count or limit that is not a positive whole number, and a `--pool` other than `threads` or `forks` each refuse the run instead of being ignored or failing later.

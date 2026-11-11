@@ -57,6 +57,16 @@
 // Those notes are not part of this package. The CLI's own oracle is
 // gap-report-oracle.property.test.mjs.
 //
+// A run that does not complete never ends with a bare stack trace
+// (ending.mjs; maintainer decision, 2026-11-10). A problem the author can
+// fix (bad arguments, a broken owns declaration, no oracle file or owner,
+// `test.projects`, a Vitest that does not load, an owner that fails with no
+// mutant active) refuses the run: exit 2, `refused: <cause>` and `fix:
+// <directive>` on stderr, and results.json and summary.md in the output
+// directory once the arguments name one. Any other error is a bug in the
+// CLI: exit 3, and its stack in error.log. A check through the daemon ends
+// the same way: the daemon sends the error, and this process ends with it.
+//
 // --seed sets `${envPrefix}_SEED` in every test run, where envPrefix is
 // --env-prefix (default ORACLE), so random campaigns run the same histories
 // every time and captured values stay comparable. The project's oracle
@@ -83,38 +93,54 @@
 //                              dependency tree)
 //   oracle-gaps --stop-daemon --package <dir>
 //   oracle-gaps --help      (prints the usage text, args.mjs)
+// Exit codes: 0 the check completed, 2 refused, 3 an internal error.
 import { realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { parseArgs, usage } from './args.mjs'
 import { openSession } from './check.mjs'
-import { requestDaemon, stopDaemon } from './daemon.mjs'
+import { received, requestDaemon, stopDaemon } from './daemon.mjs'
+import { endRun } from './ending.mjs'
 import { memoryStore } from './evidence.mjs'
+
+/** The summary of a check run in this process. */
+async function checkCold(options) {
+  const session = await openSession(options.pkg)
+  try {
+    return await session.check(options, memoryStore())
+  } finally {
+    await session.close()
+  }
+}
+
+/** The summary of a check run by the package's daemon. */
+async function checkThroughDaemon(options) {
+  const reply = await requestDaemon(options.pkg, process.argv.slice(2))
+  if (reply.stderr) process.stderr.write(reply.stderr)
+  if (reply.failed) throw received(reply.failed)
+  return reply.stdout
+}
 
 // A file URL escapes a space, `#`, and the like, so the script's own URL is
 // compared with the URL of the path it was started as.
 if (import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   let exitCode = 0
+  // The run's options, once its arguments parse; a refusal or an error is
+  // written to their output directory.
+  let options
   try {
-    const options = parseArgs(process.argv.slice(2))
+    options = parseArgs(process.argv.slice(2))
     if (options.help) console.log(usage)
     else if (options.stop) await stopDaemon(options.pkg)
-    else if (options.daemon) {
-      const reply = await requestDaemon(options.pkg, process.argv.slice(2))
-      if (reply.stderr) process.stderr.write(reply.stderr)
-      if (reply.stdout) process.stdout.write(reply.stdout)
-      exitCode = reply.exitCode
-    } else {
-      const session = await openSession(options.pkg)
-      try {
-        console.log(await session.check(options, memoryStore()))
-        console.log(`output: ${options.out}`)
-      } finally {
-        await session.close()
-      }
+    else {
+      console.log(
+        await (options.daemon ? checkThroughDaemon : checkCold)(options),
+      )
+      console.log(`output: ${options.out}`)
     }
   } catch (error) {
-    console.error(error)
-    exitCode = 1
+    const ended = endRun(error, options?.out)
+    process.stderr.write(ended.stderr)
+    exitCode = ended.exitCode
   }
   process.exit(exitCode)
 }

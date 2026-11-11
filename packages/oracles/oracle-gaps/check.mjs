@@ -38,6 +38,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { applyAuthored, loadAuthored } from './authored.mjs'
 import { authoredKey, keyAndSelect, renderReport } from './report.mjs'
 import { analyze, isRunnerCopy } from './analysis.mjs'
+import { Refusal } from './ending.mjs'
 import {
   baselineOf,
   judgeAuthored,
@@ -76,6 +77,7 @@ const ownFiles = [
   `capture-setup.mjs`,
   `evidence.mjs`,
   `daemon.mjs`,
+  `ending.mjs`,
   `../src/oracle-property.ts`,
 ].map((file) => join(here, file))
 
@@ -261,13 +263,22 @@ export async function openSession(pkg) {
   // refused before any work.
   const ts = createRequire(import.meta.url)(`typescript`)
   if (typeof ts.createSourceFile !== `function`)
-    throw new Error(
-      `oracle-gaps: the TypeScript this CLI depends on (${ts.version}) has no compiler API. Reinstall @tanstack/oracles, which depends on TypeScript 5.`,
+    throw new Refusal(
+      `the TypeScript this CLI depends on (${ts.version}) has no compiler API`,
+      `Reinstall @tanstack/oracles, which depends on TypeScript 5.`,
     )
   const requireTarget = createRequire(join(pkg, `package.json`))
-  const { createVitest } = await import(
-    pathToFileURL(requireTarget.resolve(`vitest/node`)).href
-  )
+  let createVitest
+  try {
+    ;({ createVitest } = await import(
+      pathToFileURL(requireTarget.resolve(`vitest/node`)).href
+    ))
+  } catch (error) {
+    throw new Refusal(
+      `the package's Vitest failed to load: ${error?.message ?? error}`,
+      `Install a working Vitest in the package, so that vitest/node loads from it.`,
+    )
+  }
   // Each process uses its own harness files, so a cold run beside the daemon
   // cannot remove the daemon's.
   // Vitest's CLI sets these before it loads a config, and a config may read
@@ -411,8 +422,9 @@ export default async (env) => {
       context.projects.some((project) => project !== context.getRootProject())
     ) {
       await context.close()
-      throw new Error(
-        `the package's Vitest config defines test.projects, which the gap report does not run: run it on a package whose config has no projects`,
+      throw new Refusal(
+        `the package's Vitest config defines test.projects, which the gap report does not run`,
+        `Run the gap report on a package whose Vitest config has no test.projects.`,
       )
     }
     indexOf.set(context, index)
@@ -1303,8 +1315,9 @@ export default async (env) => {
       oracleFiles.has(file),
     )
     if (failingOwners.length > 0)
-      throw new Error(
+      throw new Refusal(
         `oracle files fail with no mutant active, so their owned code cannot be judged: ${failingOwners.map((file) => `${relative(file)} (${first.failed.get(file)})`).join(`, `)}`,
+        `Make these oracle files pass with no mutant active, then check again.`,
       )
     const excluded = [...first.failed.keys()]
     if (excluded.length > 0) {
