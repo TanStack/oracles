@@ -68,18 +68,30 @@ and nothing else:
    Write it as continuous prose in this order. Do not label the parts with
    the names below ("The hook", "The mechanism"): they are for you, not the
    reader.
-   1. **What this oracle owns**, in two or three plain sentences: the
+   1. **The contract at a glance:** a short code block, first, that a reader
+      takes in at one look. One line, or two, for each main law: the real
+      call to the public entry point, the checkpoint as an expression, and
+      the relation that must hold. Use plain operators (`===`, `<=`) or a
+      standard assertion. A helper name (`sharesNoObject`) is fine when the
+      next sentence says what it means. Mark an open law `// open`. The
+      block states the promise, not the implementation: it never shows how
+      production computes the answer. For example:
+
+      ```ts
+      // For every x in the domain below:
+      assert.deepStrictEqual(klona(x), x) // same kind, prototype, and values
+      sharesNoObject(klona(x), x) // no object of x is reachable from the copy
+      ```
+
+   2. **What this oracle owns**, in one or two plain sentences: the
       concrete promise it maintains, the public entry point and checkpoints
       where the promise is owed, and the owned code. A reader who stops here
       knows what the file is for. Name the promise itself. "The stylesheet
-      matches the options the README documents" names no promise. "`klona`
-      returns a copy with the source's kind, prototype, and values at every
-      depth, sharing no object with it" does. For example: "This oracle owns
-      `klona`'s deep-copy promise for the default mode: the copy has the
-      source's kind, prototype, and values at every depth, and shares no
-      object with it. It checks the value that `klona(x)` returns. It owns
+      matches the options the README documents" names no promise. For
+      example: "This oracle owns `klona`'s deep-copy promise for the default
+      mode, checked on the value that `klona(x)` returns. It owns
       `src/index.js#klona`."
-   2. **The hook:** the one concrete case that shows where the promise is
+   3. **The hook:** the one concrete case that shows where the promise is
       easy to get wrong. Write it as code where you can. Choose its form by
       the oracle's shape:
 
@@ -92,19 +104,19 @@ and nothing else:
       When two forms fit, choose the one whose case a reader is most likely
       to get wrong.
 
-   3. **The mechanism:** the two or three moving parts that make the
+   4. **The mechanism:** the two or three moving parts that make the
       behavior necessary, in plain sentences. Give each a short name (the
       window, the head, the applied receipt), and use the same name in the
       law names. When you write the code, use it in the `states` and the
       calibrations too.
-   4. **The laws:** each one sentence over its domain ("For every ..."), with
+   5. **The laws:** each one sentence over its domain ("For every ..."), with
       the source of its promise in the documentation's own words where you
       can. Then the edges where it is easy to get wrong, and what a caller
       sees when the law breaks.
-   5. **How the oracle knows:** what the model reads to predict each law,
+   6. **How the oracle knows:** what the model reads to predict each law,
       which histories reach the edges, what the driver observes and does not
       observe and why, and where the check compares.
-   6. **Limits and open questions**, last, each with its reason.
+   7. **Limits and open questions**, last, each with its reason.
 
    Avoid the two generic openings: a summary that says the code does what
    its documentation promises, and a law that restates the implementation. A
@@ -205,6 +217,8 @@ Say in the evidence which trigger fired, or that none did.
 
 - From the prose alone, a reader can predict one observation of each law.
   For a no-throw law, the observation is that the call returns.
+- The law block starts with the contract code block, and each line in it
+  states the same law as its sentence.
 - The opening names the promise that the oracle owns.
 - No law restates the code.
 - Each law sentence matches its block in the review notes. If they disagree,
