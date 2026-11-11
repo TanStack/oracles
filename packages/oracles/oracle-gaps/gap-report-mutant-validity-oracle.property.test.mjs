@@ -1155,7 +1155,8 @@ const returnDomain = () => [...VALUES.number, undefined, null].map((a) => [a])
 // with `any`; the conditions of an exhaustive-switch skip, each broken
 // once; a comparison beside a call; overloads; ambient constants; and the
 // fifth review's nested `var`s, imports, zero literals, changed constants,
-// coercions, and type-only merges. Each program's inputs include one that
+// coercions, and type-only merges; and a closure that reads a `let` before
+// its assignment. Each program's inputs include one that
 // distinguishes a mutant there, which its reach state records.
 //
 // Laws (see `checkEscape`): erasing the types changes no emitted site and no
@@ -1779,6 +1780,11 @@ const ESCAPE_PROGRAMS = [
         [0, 1, 2],
       ]
     },
+  },
+  {
+    name: `a closure that reads a let before its assignment`,
+    text: `export function f(c: boolean): number {\n  const read = () => (c && x ? 1 : 1)\n  const r = read()\n  let x = 1\n  return r + x\n}`,
+    inputs: () => [[false], [true]],
   },
   {
     name: `an overloaded default export`,
