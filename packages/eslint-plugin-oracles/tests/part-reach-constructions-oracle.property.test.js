@@ -80,7 +80,6 @@ oracleProperty({
     statement: `Each part-reach construction changes only the fields that gate its state: outside those paths, its constructed history equals the generated skeleton, padded as the construction pads it.`,
     authority: `Round-2 review, Q-2 (maintainer direction: reach keeps randomness); packages/oracles/src/oracle-property.ts "Constructed history".`,
     limits: `Checks the non-gated parts of each construction; whether each construction enters its state is checked by the families' constructed histories at run time.`,
-    owner: `eslint-plugin-oracles lint rules`,
   },
   histories: {
     arbitrary: programSkeleton,

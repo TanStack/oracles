@@ -1,6 +1,7 @@
 // Ownership: which oracle files judge a function.
 //
-// An oracle file names what it owns in `declareOracle({ owns: [...] })`. Each
+// An oracle file names what it owns in `oracleProperty({ owns: [...] })` (or
+// the older `declareOracle({ owns: [...] })`). Each
 // entry is a source path relative to the package, in any spelling that
 // names the package's file (args.mjs, packagePath), either alone (the whole
 // file) or with an entry function after the first `#` (`src/x.ts#run`,
@@ -41,11 +42,15 @@ export function splitEntry(entry) {
   return at < 0 ? [entry, undefined] : [entry.slice(0, at), entry.slice(at + 1)]
 }
 
+// The calls that declare a test file an oracle file, each with its `owns`.
+const declaringCalls = new Set([`oracleProperty`, `declareOracle`])
+
 /**
- * Whether a test file calls `declareOracle` (which makes it an oracle file),
- * the `owns` entries it names, and a problem when the list cannot be read
- * statically: it must be a literal list of strings or plain template
- * literals, because an entry the CLI cannot read would hide gaps.
+ * Whether a test file calls `oracleProperty` or `declareOracle` (which makes
+ * it an oracle file), the `owns` entries it names, and a problem when the
+ * list cannot be read statically: it must be a literal list of strings or
+ * plain template literals, because an entry the CLI cannot read would hide
+ * gaps.
  */
 export function readOwns(ts, path, text) {
   const file = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true)
@@ -54,7 +59,7 @@ export function readOwns(ts, path, text) {
     if (
       ts.isCallExpression(node) &&
       ts.isIdentifier(node.expression) &&
-      node.expression.text === `declareOracle`
+      declaringCalls.has(node.expression.text)
     ) {
       result.declares = true
       const parts = node.arguments[0]
@@ -216,6 +221,9 @@ export function ownership(ts, program, pkg, oracles) {
     }
   return {
     has: (source, name) => functionsOf(source).some((fn) => fn.name === name),
+    /** Whether a function of the source, or the whole source, has an owner. */
+    ownsAny: (source) =>
+      owners.has(source) || functionsOf(source).some((fn) => owners.has(fn)),
     /**
      * The innermost function whose text holds a position (an offset in the
      * source), by its name (`<module>` for none), and its owners. A

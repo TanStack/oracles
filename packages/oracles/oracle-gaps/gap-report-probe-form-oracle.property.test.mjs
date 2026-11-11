@@ -170,7 +170,6 @@ oracleProperty({
     statement: `The gap report leaves out as probe-only code exactly the probe statements, and the guard declaration, that the lint rule's probe form accepts.`,
     authority: `The maintainer's probe-form decisions (2026-11-05; the function-local guard, 2026-11-08) and the round-2 review of PR #2 (R2b-5, R2b-7: one definition for the CLI and the rule).`,
     limits: `The rule's reports are judged by its own oracle; probe helpers and probe-only blocks by the static oracle. Lines without a mutation site say nothing.`,
-    owner: `packages/oracles/oracle-gaps`,
   },
   histories: {
     arbitrary: programArbitrary,

@@ -61,7 +61,6 @@ const LAW = {
   statement: `A fixed-seed declaration is linted as the model predicts: a seed that a replay reproduces is a witness, and each rule reports exactly the sites that the model names. A rule never throws on a program that parses: an error it raises fails the predicted reports.`,
   authority: `The rules' documented witness and ambient-seed laws in src/rules/no-disabled.js and src/rules/replayable-seed.js, and oracleFixedSeed's declaration in packages/oracles/src/oracle-route.ts.`,
   limits: `Seeds and run counts are literals, constants, mutable bindings, parameters, or clocks; helpers and re-exported declarations are not generated.`,
-  owner: `eslint-plugin-oracles lint rules`,
 }
 const FIXED_SEED = 3117
 const BASE_RUNS = 30
