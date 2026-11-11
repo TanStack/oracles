@@ -30,6 +30,16 @@
  *   names the model (maintainer decision, 2026-11-08).
  * - `shrink`: a campaign's reported failure keeps the kind and law of its first
  *   failure, and its counterexample still has them.
+ * - `shrink budget`: a campaign whose first failure is judged in time reports
+ *   that failure's kind and law, with a counterexample that replays, before
+ *   its timeout, however long shrinking would take: it starts no shrink run
+ *   once half its timeout has passed, so a run shorter than half the timeout
+ *   still ends in time (maintainer decision, 2026-11-11, F31; the half is
+ *   analyst-chosen). A path replay runs its counterexample and shrinks no
+ *   further, so it reports the counterexample it replays. A `timeout` of 0
+ *   or less is no timeout, as Vitest reads it, so it sets no budget: a
+ *   constructed history's failure then shrinks to the counterexample that
+ *   fast-check's shrinking without a limit reaches over the language.
  * - `membership`: a fixed history, or the history a constructed history builds from the first fixed
  *   seed's sample (seed 0's when there is none), that the arbitrary cannot take back (`canShrinkWithoutContext` is false) fails
  *   the property's load, with an error that names the property, the history (a fixed history's
@@ -139,9 +149,10 @@
  * that work which never goes quiet on a controlled clock fails its history; the maintainer
  * decision of 2026-11-10 (F20) that a fixed or constructed history the arbitrary cannot take back
  * fails at registration, naming the history and the fix; and the oracle rubric's replay
- * (ORC-007), calibration (ORC-006), and declared-reach (ORC-015) rules; and the
+ * (ORC-007), calibration (ORC-006), and declared-reach (ORC-015) rules; the
  * maintainer decision of 2026-11-11 (F27) that a calibration can require its
- * violation's difference.
+ * violation's difference; and the maintainer decision of 2026-11-11 (F31) that
+ * a law violation is reported before the timeout, however slow shrinking would be.
  *
  * Limits: synthetic properties with histories of one to three integers, held
  * as an array, a bigint-tagged object, or a Map, one or two per run. An
@@ -164,7 +175,16 @@
  * the items they hold, so the shrink and replay checks cannot read it back
  * and skip it. Only generated sources bind a probe, and only
  * `saw-0`; an enumerated source declares its states by name. A late probe is judged by whether the run reports it, not by which
- * test Vitest blames. A calibration's required difference is drawn only as four texts and
+ * test Vitest blames. A slow-shrink spec is slow only in its campaigns and only on histories
+ * that hold a 4, so one slow history at most comes before a campaign's first failure. Whether a
+ * campaign's shrinking was cut is not observed. Under a timeout, how far a campaign shrinks is
+ * not judged (maintainer decision, 2026-11-11). Only without a timeout does the model owe a
+ * counterexample, so only there does a framework that never shrinks fail: fast-check's shrink without a limit of a constructed history in the array form,
+ * computed by the model's own fast-check run. A counterexample under a budget depends on the
+ * machine's speed, so a seed-only rerun can report another one; a path replay reports the same.
+ * A driver that leaves fake timers installed that fake `performance` freezes the deadline; no
+ * history leaves them.
+ * A calibration's required difference is drawn only as four texts and
  * four patterns, including the empty ones, judged against the difference a wrong answer
  * reports, `item k is 3`, where k is the first item or a `driver-last` candidate's last item. A
  * pattern with the global or sticky flag is not drawn. A difference that is not text is drawn
@@ -254,8 +274,13 @@ type Draft = {
   throwingBuild: boolean
   nondeterministic: boolean
   reachVia: `reached` | `observe`
-  /** `slow`: 300 ms per history under a 100 ms timeout. */
-  timing: `normal` | `slow`
+  /**
+   * `slow`: 300 ms per history under a 100 ms timeout. `slow shrink`: 2 s on
+   * each history that holds a 4 in a campaign, under a 5 s timeout.
+   */
+  timing: `normal` | `slow` | `slow shrink`
+  /** A normal-timing spec's `timeout`: the default, 0, or -1 (both no timeout). */
+  timeoutMode: `default` | `zero` | `negative`
   calibrations: Array<CalibrationDraft>
   /** The check reports a number as its difference. */
   numberDifference: boolean
@@ -391,7 +416,17 @@ const draft: fc.Arbitrary<Draft> = fc.record({
   ),
   timing: fc.oneof(
     { arbitrary: fc.constant(`normal` as const), weight: 12 },
-    { arbitrary: fc.constant(`slow` as const), weight: 1 },
+    {
+      arbitrary: fc.constantFrom(`slow` as const, `slow shrink` as const),
+      weight: 2,
+    },
+  ),
+  timeoutMode: fc.oneof(
+    { arbitrary: fc.constant(`default` as const), weight: 2 },
+    {
+      arbitrary: fc.constantFrom(`zero` as const, `negative` as const),
+      weight: 1,
+    },
   ),
   // A calibration may require its violation's difference, matching or not.
   calibrations: fc.array(
@@ -663,6 +698,12 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
         ...(d.predictMode !== `match` ? { predictMode: d.predictMode } : {}),
         ...(d.ownsMode !== `none` ? { ownsMode: d.ownsMode } : {}),
         ...(d.timing === `slow` ? { slow: true, timeout: 100 } : {}),
+        ...(d.timing === `slow shrink`
+          ? { slowShrink: true, timeout: 5_000 }
+          : {}),
+        ...(d.timing === `normal` && d.timeoutMode !== `default`
+          ? { timeout: d.timeoutMode === `zero` ? 0 : -1 }
+          : {}),
         ...(d.clock ? { clock: true } : {}),
         // fast-check cannot print a history whose getter throws, so only an
         // enumerated source holds one.
@@ -767,6 +808,8 @@ type Outcome = {
   /** For a data error: the value's path and its kind. */
   dataPath?: string
   dataKind?: string
+  /** A campaign's owed counterexample, where the model knows it. */
+  counterexample?: SyntheticHistory
 }
 type LogEntry = {
   id: string
@@ -859,6 +902,50 @@ function verdictOf(history: SyntheticHistory, spec: SyntheticSpec): Outcome {
     if (clock && item === 7) return { ...clockOutcome, ...carried }
   }
   return { kind: `pass` }
+}
+// A spec without a timeout: Vitest reads 0 or less as none, so a campaign
+// has no shrink budget.
+const unbudgeted = (spec: SyntheticSpec) =>
+  spec.timeout !== undefined && spec.timeout <= 0
+// The kind a shrink must keep, as the framework classifies a failure.
+const shrinkKind = (spec: SyntheticSpec, history: SyntheticHistory) => {
+  const outcome = judged(spec, history)
+  return outcome.kind === `pass`
+    ? undefined
+    : outcome.kind === `violation`
+      ? `law:${outcome.law}`
+      : outcome.kind
+}
+// The model shrinks only items in the array form, without a `.map` or an
+// observation outside the data domain.
+const shrinkModelled = (spec: SyntheticSpec) =>
+  spec.form === undefined &&
+  spec.arbitraryMap === undefined &&
+  dataOutcome(spec) === undefined &&
+  spec.deepCheck !== true
+// Shrinking without a limit, as fast-check searches after a failure: from
+// the example, the first smaller history in the arbitrary's shrink tree that
+// fails the example's way becomes the next one, until none does.
+function unboundedShrink(
+  spec: SyntheticSpec,
+  example: SyntheticHistory,
+): SyntheticHistory | undefined {
+  if (!shrinkModelled(spec)) return undefined
+  const first = shrinkKind(spec, example)
+  let current = new fc.Value<SyntheticHistory>(example, undefined)
+  for (;;) {
+    let next: fc.Value<SyntheticHistory> | undefined
+    for (const candidate of syntheticArbitrary.shrink(
+      current.value,
+      current.context,
+    ))
+      if (shrinkKind(spec, candidate.value) === first) {
+        next = candidate
+        break
+      }
+    if (next === undefined) return current.value
+    current = next
+  }
 }
 const statesOf = (history: SyntheticHistory) =>
   allStates.filter((state) => history.includes(Number(state.slice(4))))
@@ -1396,10 +1483,21 @@ function predictSpec(
   const campaign = (test: string): Outcome => {
     for (const [at, history] of ran(test).entries()) {
       const { cause: _shrinkable, ...verdict } = judged(spec, history)
-      if (verdict.kind !== `pass`) return verdict
       const construction = spec.constructed[at]
+      // Without a budget, a constructed history's failure shrinks to the
+      // end. No smaller history is a constructed one, so a missed state
+      // keeps the constructed history itself.
+      const shrunk = (example: SyntheticHistory | undefined) =>
+        construction && unbudgeted(spec) && example
+          ? { counterexample: example }
+          : {}
+      if (verdict.kind !== `pass`)
+        return { ...verdict, ...shrunk(unboundedShrink(spec, history)) }
       if (construction && !reaches(spec, history, construction.enters))
-        return { kind: `constructed-reach` }
+        return {
+          kind: `constructed-reach`,
+          ...shrunk(shrinkModelled(spec) ? history : undefined),
+        }
     }
     return { kind: `pass` }
   }
@@ -1563,6 +1661,8 @@ const frameworkStates = [
   `registration-error`,
   `campaign-violation`,
   `campaign-setup-failure`,
+  `slow-shrink-campaign-failure`,
+  `unbudgeted-campaign-shrunk`,
   `replay-probe`,
   `rerun-probe`,
   `cause-attached`,
@@ -1692,6 +1792,9 @@ function frameworkReach(
         reached.add(`campaign-violation`)
       if (isCampaign(name) && outcome.kind === `setup`)
         reached.add(`campaign-setup-failure`)
+      if (spec.slowShrink && isCampaign(name) && outcome.kind !== `pass`)
+        reached.add(`slow-shrink-campaign-failure`)
+      if (outcome.counterexample) reached.add(`unbudgeted-campaign-shrunk`)
       if (outcome.cause) reached.add(`cause-attached`)
       if (outcome.kind === `timeout`) reached.add(`timeout`)
       if (outcome.kind === `model-not-total`) reached.add(`model-not-total`)
@@ -2516,10 +2619,15 @@ function checkSuite(
         return violation(
           `run`,
           `${spec.id} "${test.name}" ${test.state} as ${JSON.stringify(failure ?? null)}, owed ${JSON.stringify(outcome)}`,
-          lawOfKind(
-            outcome.kind === `pass` ? observedKind : outcome.kind,
-            test.name,
-          ),
+          // A campaign that owes a failure and times out shrank too long.
+          isCampaign(test.name) &&
+            observedKind === `timeout` &&
+            ![`pass`, `timeout`].includes(outcome.kind)
+            ? `shrink budget`
+            : lawOfKind(
+                outcome.kind === `pass` ? observedKind : outcome.kind,
+                test.name,
+              ),
           { actual: failure ?? { kind: `pass` }, expected: outcome },
         )
       // A model error quotes the driver's error without this machine's paths.
@@ -2576,6 +2684,18 @@ function checkSuite(
             `run`,
             `${spec.id} determinism ran ${runs / 2} histories, owed ${owed.determinismRuns}`,
             `determinism`,
+          )
+      }
+      // Without a timeout, a campaign shrinks without a budget.
+      if (outcome.counterexample) {
+        const shrunk =
+          failure?.counterexample && counterexampleItems(failure.counterexample)
+        if (JSON.stringify(shrunk) !== JSON.stringify(outcome.counterexample))
+          return violation(
+            `run`,
+            `${spec.id} "${test.name}" (timeout ${spec.timeout}) reported counterexample ${failure?.counterexample ?? `none`}, owed the unbounded shrink ${JSON.stringify(outcome.counterexample)}`,
+            `shrink budget`,
+            { actual: shrunk, expected: outcome.counterexample },
           )
       }
       if (failure?.counterexample && outcome.law) {
@@ -2791,6 +2911,7 @@ const generatedDraft = (overrides: Partial<Draft>): Draft => ({
   nondeterministic: false,
   reachVia: `reached`,
   timing: `normal`,
+  timeoutMode: `default`,
   calibrations: [],
   unregistered: false,
   numberDifference: false,
@@ -2893,6 +3014,33 @@ oracleProperty({
         [`replay-probe`],
         generatedDraft({
           constructed: [{ prefix: [1, 3], enters: [`saw-1`] }],
+        }),
+      ),
+      // Unbounded, the shrink of [4,2,2] runs [4,2] and [4,0] for 2 s each
+      // after the first failure's 2 s, past the 5 s timeout.
+      fixedHistory(
+        `a campaign whose shrinking would outlast its timeout reports its law in time`,
+        [`slow-shrink-campaign-failure`, `campaign-violation`, `replay-probe`],
+        generatedDraft({
+          timing: `slow shrink`,
+          constructed: [{ prefix: [4, 2, 2], enters: [] }],
+        }),
+      ),
+      // A timeout of 0 or less is none: the deadline must not be now.
+      fixedHistory(
+        `a campaign without a timeout shrinks without a budget`,
+        [`unbudgeted-campaign-shrunk`, `campaign-violation`],
+        generatedDraft({
+          timeoutMode: `zero`,
+          constructed: [{ prefix: [4, 2, 2], enters: [] }],
+        }),
+      ),
+      fixedHistory(
+        `a campaign with a negative timeout shrinks without a budget`,
+        [`unbudgeted-campaign-shrunk`, `campaign-setup-failure`],
+        generatedDraft({
+          timeoutMode: `negative`,
+          constructed: [{ prefix: [2, 6, 4], enters: [] }],
         }),
       ),
       fixedHistory(
