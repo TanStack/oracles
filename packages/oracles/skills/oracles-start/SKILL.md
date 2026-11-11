@@ -330,8 +330,10 @@ default: with no engineer present, propose them and stop.
    file, add a minimal config for it (or add its glob to the existing
    `include`). Add no scripts, lint, or other config yet. The `oracles-setup`
    skill's install and "where oracle files go" sections have the details:
-   from them, take only what these packages and the config need. The lint
-   plugin waits for production.
+   from them, take only what these packages and the config need. The
+   oracles lint plugin waits for production. If the repository's own lint
+   already covers the oracle file's folder, run it on the file, as
+   `oracles-design` says.
 
    Check `package.json`, not `node_modules`: npm installs the peers of
    `@tanstack/oracles` without listing them, so add `fast-check` and
