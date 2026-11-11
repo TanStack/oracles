@@ -63,8 +63,12 @@ function when its binding resolves to `it`, `test`, `describe`, `suite`, or
 `bench` imported from any package or subpath alias (`vitest`,
 `@playwright/test`, `node:test`, `#test/fixtures`), or to a fixture of one
 (`test.extend(fixtures)`). The rules cannot read a package, so they fail
-closed there: a false positive costs a rename, and a false negative would
-switch an oracle off. The rules follow these bindings:
+closed there, because a false negative would switch an oracle off. A
+library function with one of those names (for example Ramda's `test` or
+mitata's `bench`) is therefore reported in an oracle file and its relative
+helpers. A rename does not help, because the rules resolve the imported
+name. Use another function there, for example `re.test(s)` in place of
+`R.test(re, s)`. The rules follow these bindings:
 
 - a named, aliased, or namespace import (`vitest.it`), and an unbound name
   that Vitest's `globals` declares;

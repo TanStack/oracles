@@ -244,7 +244,7 @@ function fanOutChain(depth) {
 // A chain of `depth` modules, each of whose constants `a` and `b` is one of
 // the next module's constants, chosen by a flag. The last module's constants
 // are no test functions.
-const BRANCH_DEPTH = 22
+const BRANCH_DEPTH = 26
 function branchingChain(depth) {
   const modules = {}
   for (let at = 0; at < depth; at++) {

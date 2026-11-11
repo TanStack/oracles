@@ -93,8 +93,9 @@ export function isFunction(node) {
 
 // The names of the test functions. An import of one of these names from any
 // package or subpath alias is a test function: the rules cannot read a
-// package, so they fail closed there (coordinator decision, 2026-11-11). A
-// false positive costs a rename, and a false negative switches a law off.
+// package, so they fail closed there (coordinator decision, 2026-11-11): a
+// false negative switches a law off. A library function with one of these
+// names is reported in an oracle file whatever local name it takes.
 const frameworkRoots = new Set([`it`, `test`, `describe`, `suite`, `bench`])
 // Unbound names, as Vitest's `globals` declares them. `fcTest` is the name
 // that `@fast-check/vitest`'s `test` takes in an oracle file.
