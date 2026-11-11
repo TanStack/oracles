@@ -4,9 +4,10 @@
  *
  * - `.only` on a test or suite, which silences every other law in the file.
  * - `.skip`, `.todo`, or Playwright's `.fixme` on a test or suite that has a
- *   body, inline or passed by name. An empty body is a placeholder that
- *   disables nothing, such as the test that a replay registers when it does
- *   not select its property.
+ *   body, inline or passed by name. An empty body disables nothing, so this
+ *   rule does not report it; `oracle/no-unit-test` reports it as an empty
+ *   test (maintainer decision, 2026-11-10). A replay that does not select a
+ *   property registers it with `it.todo` and no body.
  * - A test that skips itself through its context, as in `ctx.skip()`.
  * - `.skipIf(condition)` or `.runIf(condition)`, unless the call is
  *   `.skipIf(oracleReplayRequested())` or `.skipIf(oracleReplaySkips(...))`.

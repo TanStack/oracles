@@ -17,9 +17,10 @@
  *
  * - `law` states the promise, its authority, and its limits. A failure names it.
  * - `histories` is either an enumerated list, which runs in full (bounded
- *   exhaustiveness, glossary), or a generated source: a fast-check arbitrary
- *   with a run budget, fixed seeds, constructed histories, and fixed histories
- *   (below).
+ *   exhaustiveness, glossary), the same list with declared states,
+ *   `{ enumerated, states, measured }`, or a generated source: a fast-check
+ *   arbitrary with a run budget, fixed seeds, constructed histories, and fixed
+ *   histories (below).
  * - `model` gives the expected result of a history and its recorded trace,
  *   without production. A model that answers from the history alone ignores
  *   the trace; a model of an environment the driver observes reads it, and
@@ -85,7 +86,22 @@
  *   reports them with `observe("reach", state)`. A state that only the model
  *   can name, such as "a failure while the seed is active", comes from
  *   `reached(history, trace, expected)` instead. Each campaign prints how many
- *   histories entered each declared state, including none (ORC-015).
+ *   histories entered each declared state, including none (ORC-015). An
+ *   enumerated source runs every history, so its required states need no
+ *   constructed history (maintainer decision, 2026-11-10): its `reach` test,
+ *   after its histories, fails when no history entered a state in `states`,
+ *   and otherwise prints the counts as `<id> enumerated reach {...}`. A history
+ *   counts once it is judged in time, passing or violating its law. The
+ *   reach test reuses what each history's test recorded and runs again only a
+ *   history whose test never started in the run, such as one that a `-t`
+ *   filter left out. A history whose test started and failed before a
+ *   verdict, or timed out, counts for nothing; its own test reports it. A
+ *   judged history that enters a state outside `states` and `measured` fails
+ *   its test, before its law violation, as a campaign's history does, and one
+ *   the reach test runs fails the reach test. An enumerated source declares
+ *   its states by name and takes no other keys; only a generated source binds
+ *   a probe. A `label` may not name a history `reach` or `determinism`, the
+ *   framework's own tests.
  * - A **state probe** binds a declared state, written `{ name, probe }` in
  *   `states` or `measured`, to a production probe. The function where
  *   production decides whether it enters that state guards the probe with
@@ -122,10 +138,20 @@
  *   state are explored, not visited once.
  * - A **fixed history** is a named history, such as a fixed regression. It may
  *   name the states it `enters`, which its run must reach. Fixed and
- *   constructed histories must be histories the arbitrary could generate
+ *   constructed histories must be histories the arbitrary can take back
  *   (`canShrinkWithoutContext`), so they shrink like generated ones and cannot
  *   cover a dimension that the grammar lacks; such a dimension belongs in the
- *   grammar, or in the property's stated limits.
+ *   grammar, or in the property's stated limits. The property checks this when
+ *   it registers, for every fixed history and for the constructed histories
+ *   built from the first fixed seed (or seed 0 when there is none), so a
+ *   constructed history's `build` runs when the test file loads. It fails to
+ *   load naming the history, and a `build` that throws there fails to load
+ *   naming its constructed history
+ *   (maintainer decision, 2026-11-10); a campaign checks the constructed
+ *   histories its own seed builds. In fast-check 4, a `.map` without an
+ *   unmapper, at the whole history or anywhere inside it, takes no value
+ *   back, so a history inside the language fails too until its `.map` gets
+ *   an unmapper.
  * - **Resolution.** A history can name its actions indirectly, such as "settle
  *   the second active transaction". `resolve(history)` turns it into the plan
  *   of concrete actions that the driver runs and that the model and check read.
@@ -164,8 +190,8 @@
  *   error does, by where it happens: only a violation at a checkpoint
  *   recorded before it still decides, and a driver error after it does not.
  *
- * `oracle-property-self-oracle.test.ts` checks these promises the way an
- * oracle checks production: it runs synthetic properties under real Vitest
+ * The framework's self-oracle, in its repository, checks these promises the
+ * way an oracle checks production: it runs synthetic properties under real Vitest
  * and compares what Vitest reports with an independent model.
  *
  * The `oracle/no-unit-test` lint rule treats an `oracleProperty` call as an
@@ -485,6 +511,22 @@ export interface GeneratedHistories<THistory> {
   fixed?: ReadonlyArray<FixedHistory<THistory>>
 }
 
+/**
+ * Every legal history in a fixed order, with the states the laws depend on.
+ * Every history runs, so each state in `states` must be entered by at least
+ * one of them; the `reach` test checks that and reports how many histories
+ * entered each declared state (ORC-015).
+ */
+export interface EnumeratedHistories<THistory> {
+  enumerated: ReadonlyArray<THistory>
+  states?: ReadonlyArray<string>
+  /**
+   * States that are counted but not required. A reached state outside
+   * `states` and `measured` fails, so a misspelled state cannot pass unseen.
+   */
+  measured?: ReadonlyArray<string>
+}
+
 /** A named fixed history, such as a fixed regression, and the states it must enter. */
 export interface FixedHistory<THistory> {
   name: string
@@ -515,8 +557,11 @@ export interface OraclePropertyOptions<THistory, TExpected, TPlan = THistory> {
   /** A stable identifier, used in failures, the manifest, and replay. */
   id: string
   law: OracleLaw
-  /** Every legal history in a fixed order, or a generated source. */
-  histories: ReadonlyArray<THistory> | GeneratedHistories<THistory>
+  /** Every legal history in a fixed order, with or without declared states, or a generated source. */
+  histories:
+    | ReadonlyArray<THistory>
+    | EnumeratedHistories<THistory>
+    | GeneratedHistories<THistory>
   /** A short, unique test name for an enumerated history. */
   label?: (history: THistory) => string
   /** The plan of concrete actions; required when Plan is not History. */
@@ -632,7 +677,7 @@ interface PropertyTest {
    */
   route: OracleRoute
   /** Runs the test; `task` is Vitest's record of it, for its full name. */
-  run: (task: NamedTask) => Promise<void>
+  run: (task: NamedTask, signal: AbortSignal) => Promise<void>
   /** Path replays this test runs during; empty stands aside during every one. */
   replays: ReadonlyArray<string>
 }
@@ -655,63 +700,165 @@ export function oracleProperty<THistory, TExpected, TPlan = THistory>(
     throw new Error(
       `${id}: \`owns\` must be a non-empty literal list of strings, which the gap report reads statically.`,
     )
-  if (Array.isArray(histories) && options.predict)
+  const enumerated: EnumeratedHistories<THistory> | undefined = Array.isArray(
+    histories,
+  )
+    ? { enumerated: histories as ReadonlyArray<THistory> }
+    : `enumerated` in histories
+      ? histories
+      : undefined
+  if (enumerated && options.predict)
     throw new Error(
       `${id}: \`predict\` needs probe-bound states, which only a generated source declares.`,
     )
-  recordRegistration(id, options.law, histories)
+  // A union's excess keys type-check, and plain JavaScript can pass anything.
+  const foreign = Object.keys(enumerated ?? {}).filter(
+    (key) => ![`enumerated`, `states`, `measured`].includes(key),
+  )
+  if (foreign.length > 0)
+    throw new Error(
+      `${id}: an enumerated source takes \`enumerated\`, \`states\`, and \`measured\`; \`${foreign.join(`\`, \``)}\` belongs to a generated source.`,
+    )
+  if (
+    [...(enumerated?.states ?? []), ...(enumerated?.measured ?? [])].some(
+      (state) => typeof state !== `string`,
+    )
+  )
+    throw new Error(
+      `${id}: an enumerated source declares its states by name; a probe-bound state needs a generated source.`,
+    )
+  const generated = histories as GeneratedHistories<THistory>
+  recordRegistration(id, options.law, enumerated?.enumerated ?? generated)
   // The tests are built as data first, so every one registers unconditionally
   // (oracle/no-disabled).
-  const tests = Array.isArray(histories)
-    ? enumeratedTests(options, histories as ReadonlyArray<THistory>)
-    : generatedTests(options, histories as GeneratedHistories<THistory>)
+  const tests = enumerated
+    ? enumeratedTests(options, enumerated)
+    : generatedTests(options, generated)
   describe(id, () => {
     for (const test of tests)
       oracleReplayTest(it, ...test.replays)(
         test.name,
-        ({ task }) => {
+        ({ task, signal }) => {
           oracleRoute(test.route)
-          return test.run(task)
+          return test.run(task, signal)
         },
         options.timeout ?? 120_000,
       )
   })
 }
 
+/** The declared states, when the source declares any. */
+const declaredOf = (source: {
+  states?: ReadonlyArray<DeclaredState>
+  measured?: ReadonlyArray<DeclaredState>
+}): ReadonlySet<string> | undefined =>
+  source.states || source.measured
+    ? new Set(
+        [...(source.states ?? []), ...(source.measured ?? [])].map(stateName),
+      )
+    : undefined
+
+/** Throws for a reached state that the property does not declare. */
+function assertDeclared(
+  id: string,
+  declared: ReadonlySet<string> | undefined,
+  reached: Iterable<string>,
+): void {
+  for (const state of reached)
+    if (declared !== undefined && !declared.has(state))
+      throw new Error(
+        `${id}: a history entered "${state}", which the property does not declare.`,
+      )
+}
+
+/** Reach counts as printed, in state order. */
+const countsText = (counts: Map<string, number>) =>
+  JSON.stringify(
+    Object.fromEntries([...counts].sort(([a], [b]) => (a < b ? -1 : 1))),
+  )
+
 function enumeratedTests<THistory, TExpected, TPlan>(
   options: OraclePropertyOptions<THistory, TExpected, TPlan>,
-  histories: ReadonlyArray<THistory>,
+  source: EnumeratedHistories<THistory>,
 ): Array<PropertyTest> {
+  const { id } = options
+  const histories = source.enumerated
   const spacing = Math.max(1, Math.ceil(histories.length / 8))
+  const declared = declaredOf(source)
+  // What each history whose test started in this run entered, by its index:
+  // nothing until it is judged in time.
+  const entries = new Map<number, ReadonlySet<string>>()
   // Every enumerated history is data; one that is not fails registration.
   const named = histories.map((history, index) => {
     const text = encodeData(history, `history ${index}`, `history`)
     return { name: options.label?.(history) ?? text, history }
   })
+  // A rerun's `-t` pattern would also select a framework test of that name.
+  const reserved = named.find(
+    ({ name }) => name === `reach` || name === `determinism`,
+  )
+  if (reserved)
+    throw new Error(
+      `${id}: label "${reserved.name}" names a framework test of the property, so its rerun would select both; choose another label.`,
+    )
+  const historyTests = named.map(({ name, history }, index): PropertyTest => ({
+    name,
+    route: `case`,
+    replays: [],
+    run: async (task, signal) => {
+      // A history whose test started is never run again by the reach test,
+      // which would overlap a driver still running after a timeout.
+      entries.set(index, new Set())
+      const { verdict, reached } = await runOne(options, history)
+      // A judgment that arrives after its test timed out is not this run's.
+      if (!signal.aborted) entries.set(index, reached)
+      assertDeclared(id, declared, reached)
+      if (verdict.kind === `violation`)
+        throw failure(options, verdict, history, rerunOf(task))
+    },
+  }))
+  // A check of the declaration, not of production, so its route is
+  // `calibration`.
+  const reachTest: PropertyTest = {
+    name: `reach`,
+    route: `calibration`,
+    replays: [],
+    run: async () => {
+      const counts = new Map([...(declared ?? [])].map((state) => [state, 0]))
+      for (const [index, { history }] of named.entries()) {
+        let reached = entries.get(index)
+        // A history whose test never started, such as one a `-t` filter
+        // left out.
+        if (reached === undefined) {
+          try {
+            reached = (await runOne(options, history)).reached
+          } catch {
+            // A history that fails before a verdict fails its own test.
+            reached = new Set()
+          }
+          assertDeclared(id, declared, reached)
+        }
+        for (const state of reached)
+          if (counts.has(state)) counts.set(state, counts.get(state)! + 1)
+      }
+      const missed = (source.states ?? []).filter(
+        (state) => counts.get(state) === 0,
+      )
+      if (missed.length > 0)
+        throw new Error(
+          `${id}: no enumerated history entered ${missed.join(`, `)}. Every enumerated history runs, so a required state must be entered by at least one of them; a state that is only counted belongs in \`measured\`. Reach: ${countsText(counts)}`,
+        )
+      process.stdout.write(`${id} enumerated reach ${countsText(counts)}\n`)
+    },
+  }
   return [
-    ...named.map(({ name, history }) => enumeratedTest(options, name, history)),
+    ...historyTests,
+    ...(declared ? [reachTest] : []),
     ...calibrationTests(options, () => named),
     determinismTest(options, () =>
       named.filter((_, index) => index % spacing === 0),
     ),
   ]
-}
-
-function enumeratedTest<THistory, TExpected, TPlan>(
-  options: OraclePropertyOptions<THistory, TExpected, TPlan>,
-  name: string,
-  history: THistory,
-): PropertyTest {
-  return {
-    name,
-    route: `case`,
-    replays: [],
-    run: async (task) => {
-      const { verdict } = await runOne(options, history)
-      if (verdict.kind === `violation`)
-        throw failure(options, verdict, history, rerunOf(task))
-    },
-  }
 }
 
 // The running history's trace, and where in it a controlled clock passed its
@@ -1573,6 +1720,17 @@ function rerunOf(task: NamedTask): string {
   return `-t '${pattern.replace(/'/g, `'\\''`)}'`
 }
 
+/**
+ * A fixed or constructed history whose arbitrary's `canShrinkWithoutContext`
+ * is false, so fast-check could not shrink it. fast-check 4 answers false
+ * without saying why: for a history outside the language, and for every value
+ * of a `.map` without an unmapper or of a `.chain`.
+ */
+const untakeable = (id: string, history: string) =>
+  new Error(
+    `${id}: ${history} a history the arbitrary cannot take back (its \`canShrinkWithoutContext\` is false), so its failures could not shrink. Either the arbitrary cannot generate it, or the history passes through a combinator that cannot map it back. \`.map\` needs an unmapper (its second argument). \`fc.constant\`/\`fc.constantFrom\` take back only primitives or the same object reference, so build objects with \`fc.record\`/\`fc.tuple\` over primitive leaves. \`.chain\`, \`fc.func\`, and \`fc.commands\` cannot take a value back.`,
+  )
+
 function generatedTests<THistory, TExpected, TPlan>(
   unbound: OraclePropertyOptions<THistory, TExpected, TPlan>,
   source: GeneratedHistories<THistory>,
@@ -1592,10 +1750,7 @@ function generatedTests<THistory, TExpected, TPlan>(
     probes.size > 0 ? { ...unbound, probes } : unbound
   const required = (source.states ?? []).map(stateName)
   const constructions = source.constructed ?? []
-  const declared =
-    source.states || source.measured
-      ? new Set(declaredStates.map(stateName))
-      : undefined
+  const declared = declaredOf(source)
   const named = new Set(
     constructions.flatMap((construction) => construction.enters),
   )
@@ -1655,13 +1810,9 @@ function generatedTests<THistory, TExpected, TPlan>(
         return
       }
       const { verdict, reached } = outcome
-      for (const state of reached) {
-        if (declared !== undefined && !declared.has(state))
-          throw new Error(
-            `${id}: a history entered "${state}", which the property does not declare.`,
-          )
+      assertDeclared(id, declared, reached)
+      for (const state of reached)
         counts.set(state, (counts.get(state) ?? 0) + 1)
-      }
       // A law violation outranks a constructed history that missed its state.
       if (verdict.kind === `pass`) {
         const construction = constructionOf.get(history)
@@ -1684,23 +1835,39 @@ function generatedTests<THistory, TExpected, TPlan>(
   // Each campaign runs every constructed history, built from histories its own
   // seed draws.
   // fast-check passes example inputs by reference, which identifies them.
-  const examplesFor = (seed: number) => {
+  // At registration, an error from sampling or building names its
+  // constructed history: it would otherwise fail the file's load unnamed.
+  const examplesFor = (seed: number, registering = false) => {
     const constructionOf = new Map<THistory, ConstructedHistory<THistory>>()
     const examples = constructions.map((construction, index) => {
-      const [generated] = fc.sample(source.arbitrary, {
-        seed: seed + index,
-        numRuns: 1,
-      })
-      const history = construction.build(generated!)
-      if (!source.arbitrary.canShrinkWithoutContext(history))
+      let history: THistory
+      try {
+        const [generated] = fc.sample(source.arbitrary, {
+          seed: seed + index,
+          numRuns: 1,
+        })
+        history = construction.build(generated!)
+      } catch (error) {
+        if (!registering) throw error
         throw new Error(
-          `${id}: constructed history "${construction.name}" built a history the arbitrary cannot generate. A constructed history must stay inside the generated language so that its failures shrink.`,
+          `oracleProperty ${id}: constructed history "${construction.name}" threw while it was built for registration: ${error instanceof Error ? error.message : reportText(error)}`,
+          { cause: error },
         )
+      }
+      if (!source.arbitrary.canShrinkWithoutContext(history))
+        throw untakeable(id, `constructed history "${construction.name}" built`)
       constructionOf.set(history, construction)
       return [history] as [THistory]
     })
     return { examples, constructionOf }
   }
+  // Registration checks every fixed history, then the constructed histories
+  // built from the first fixed seed (or seed 0 when there is none), so a
+  // history that cannot shrink fails the load rather than a full run.
+  for (const [index, fixed] of (source.fixed ?? []).entries())
+    if (!source.arbitrary.canShrinkWithoutContext(fixed.history))
+      throw untakeable(id, `fixed history ${index} ("${fixed.name}") is`)
+  examplesFor(source.fixedSeeds[0] ?? 0, true)
 
   // A campaign reports its reach counts after it passes; a failing campaign
   // reports its counterexample instead.
@@ -1720,9 +1887,7 @@ function generatedTests<THistory, TExpected, TPlan>(
       parameters(examples),
     )
     // Vitest hides console output from a passing test; stdout reaches the log.
-    process.stdout.write(
-      `${id} ${name} reach ${JSON.stringify(Object.fromEntries([...counts].sort(([a], [b]) => (a < b ? -1 : 1))))}\n`,
-    )
+    process.stdout.write(`${id} ${name} reach ${countsText(counts)}\n`)
   }
   const fixedCampaigns = source.fixedSeeds.map((seed): PropertyTest => ({
     name: `fixed seed ${seed}`,
@@ -1760,10 +1925,6 @@ function generatedTests<THistory, TExpected, TPlan>(
     route: `fixed history`,
     replays: [],
     run: async (task) => {
-      if (!source.arbitrary.canShrinkWithoutContext(fixed.history))
-        throw new Error(
-          `${id}: fixed history "${fixed.name}" is not a history the arbitrary can generate. A fixed history must stay inside the generated language, or the property must declare the missing dimension as a limit.`,
-        )
       const { verdict, reached } = await runOne(options, fixed.history)
       if (verdict.kind === `violation`)
         throw failure(options, verdict, fixed.history, rerunOf(task))
@@ -1776,8 +1937,9 @@ function generatedTests<THistory, TExpected, TPlan>(
         )
     },
   }))
-  // Fixed histories and the constructed histories of the first fixed seed, so
-  // these checks are reproducible; they are built when a test runs, like a
+  // Fixed histories and the constructed histories of the first fixed seed (or
+  // seed 0), so these checks are reproducible. Registration built them once to
+  // check them; they are built again when a test runs, like a
   // campaign's.
   const namedHistories = () => {
     const { examples, constructionOf } = examplesFor(source.fixedSeeds[0] ?? 0)

@@ -221,8 +221,8 @@ export function instrument(ts, path, text, source, offset = 0) {
   //   statements all are.
   // Code beside a probe, and any other probe shape, is production code.
   const helpers = new Set()
-  // The probe form is the lint rule's (packages/eslint-plugin-oracles,
-  // rules/probe-form.js), clause by clause, read over TypeScript's tree, in
+  // The probe form is the one that @tanstack/eslint-plugin-oracles's
+  // `oracle/probe-form` rule defines, clause by clause, read over TypeScript's tree, in
   // which parentheses are nodes of their own: `bare` removes them where the
   // rule's tree has none.
   const bare = (node) => {
