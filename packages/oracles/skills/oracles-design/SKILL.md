@@ -65,27 +65,38 @@ and nothing else:
 1. **The law block**, the file's opening comment. The oracle file is a
    literate program (ORC-003), so write it as prose for a reader who has not
    seen the review. Do not paste the template's fields or a list of law IDs.
-   In this order:
+   Write it as continuous prose in this order. Do not label the parts with
+   the names below ("The hook", "The mechanism"): they are for you, not the
+   reader.
    1. **What this oracle owns**, in two or three plain sentences: the
-      promise it maintains, the public entry point and checkpoints where the
-      promise is owed, and the owned code. A reader who stops here knows what
-      the file is for. For example: "This oracle owns `klona`'s deep-copy
-      promise for the default mode: the copy has the source's kind,
-      prototype, and values at every depth, and shares no object with it. It
-      checks the value that `klona(x)` returns. It owns `src/index.js#klona`."
-   2. **The hook:** one concrete case where the obvious reading of the
-      promise is wrong. Choose it by the oracle's shape:
+      concrete promise it maintains, the public entry point and checkpoints
+      where the promise is owed, and the owned code. A reader who stops here
+      knows what the file is for. Name the promise itself. "The stylesheet
+      matches the options the README documents" names no promise. "`klona`
+      returns a copy with the source's kind, prototype, and values at every
+      depth, sharing no object with it" does. For example: "This oracle owns
+      `klona`'s deep-copy promise for the default mode: the copy has the
+      source's kind, prototype, and values at every depth, and shares no
+      object with it. It checks the value that `klona(x)` returns. It owns
+      `src/index.js#klona`."
+   2. **The hook:** the one concrete case that shows where the promise is
+      easy to get wrong. Write it as code where you can. Choose its form by
+      the oracle's shape:
 
-      | Shape                                          | Hook                                                                                                    |
-      | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-      | State, timing, or order with a surprising rule | A question that names the surprise: "Why does a ready transaction wait?"                                |
-      | A pure function with documented examples       | The documented example as code, then what in it can vary and what decides the answer                    |
-      | The obvious implementation is wrong            | The plausible implementation and the one input where it fails: why a deep copy is not a JSON round trip |
+      | Shape                                          | Hook                                                                                                                                             |
+      | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+      | State, timing, or order with a surprising rule | A question that names the surprise: "Why does a ready transaction wait?"                                                                         |
+      | A pure function with documented examples       | The documented example, then the nearby case that a careless reading gets wrong: ratio 2 and base 16px give 32px, so what does base 15.5px give? |
+      | The obvious implementation is wrong            | The plausible implementation and the one input where it fails: why a deep copy is not a JSON round trip                                          |
+
+      When two forms fit, choose the one whose case a reader is most likely
+      to get wrong.
 
    3. **The mechanism:** the two or three moving parts that make the
       behavior necessary, in plain sentences. Give each a short name (the
       window, the head, the applied receipt), and use the same name in the
-      law names, the `states`, and the calibrations.
+      law names. When you write the code, use it in the `states` and the
+      calibrations too.
    4. **The laws:** each one sentence over its domain ("For every ..."), with
       the source of its promise in the documentation's own words where you
       can. Then the edges where it is easy to get wrong, and what a caller
@@ -95,10 +106,9 @@ and nothing else:
       observe and why, and where the check compares.
    6. **Limits and open questions**, last, each with its reason.
 
-   Avoid the two generic openings: a title or summary that asks whether the
-   code does what its documentation promises, and a law that restates the
-   implementation. A model of that law would be the same code, so it could
-   not catch a defect.
+   Avoid the two generic openings: a summary that says the code does what
+   its documentation promises, and a law that restates the implementation. A
+   model of that law would be the same code, so it could not catch a defect.
 
 2. **Review notes**, a second comment headed "Review notes (delete when
    approved)". Docs, tests, and bug reports give examples. A law is a
@@ -191,18 +201,22 @@ list at the sheet, and again after each gap check:
 
 Say in the evidence which trigger fired, or that none did.
 
-**Stop here** when the sheet or a law delta is needed. Do not stop with an
-empty field: each law has a filled block first. Before you stop, check the
-law block:
+**Check the law block before you stop:**
 
 - From the prose alone, a reader can predict one observation of each law.
-- Each name from the mechanism appears in the law names, the states, and the
-  calibrations.
-- The opening says what the oracle owns, and no law restates the code. Do not add code to the file
-  until the user has reviewed it. With no user present, write the file and
-  stop. A law sheet has no default. Until it has code, the file fails Vitest
-  with "No test suite found", so keep it off a branch whose CI must pass, or
-  say in the review request that it will fail.
+  For a no-throw law, the observation is that the call returns.
+- The opening names the promise that the oracle owns.
+- No law restates the code.
+- Each law sentence matches its block in the review notes. If they disagree,
+  the review notes decide: fix the prose, and tell the user. A new heading
+  for a law is not a law change. A changed sentence, domain, or checkpoint is.
+
+**Stop here** when the sheet or a law delta is needed. Do not stop with an
+empty field: each law has a filled block first. Do not add code to the file
+until the user has reviewed it. With no user present, write the file and
+stop. A law sheet has no default. Until it has code, the file fails Vitest
+with "No test suite found", so keep it off a branch whose CI must pass, or
+say in the review request that it will fail.
 
 **Once the user approves it:**
 
@@ -448,9 +462,10 @@ function`, `export default () => ...`, `module.exports = fn`):
     initializer refers to. An entry can also name it: `src/index.ts#UNIT_MS`.
     A destructured declaration (`const { a, b } = ...`) is not a unit: if a law
     depends on one, own the whole file.
-  - When a whole-file entry pulls in another contract (for example a batching
-    API in the same file), write that contract's own oracle, or report its
-    gaps as outside this oracle's scope.
+  - When an entry pulls in another contract (a batching API in the same
+    file, or a helper in a default export's call tree that serves another
+    promise), write that contract's own oracle, or report its gaps as
+    outside this oracle's scope.
   - Owned code that serves another module's contract belongs to that module's
     oracle. Owned code with no behavior anyone observes is possible dead code:
     investigate it as step 8 says.
