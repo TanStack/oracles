@@ -103,7 +103,9 @@ behavior that nothing documents, unless the engineer wants to decide it.
 
 Tell them about two or three spots, a short paragraph each: what the code
 seems to promise, where that is stated, and why it would make a good oracle.
-Recommend one, and let them choose.
+Recommend one, and let them choose. If they asked you to choose ("surprise
+me"), say in a line which spot you picked and why, and go on to probe it.
+They can redirect you.
 
 ## 3. Probe
 
@@ -112,7 +114,9 @@ Read the spot's docs, code, tests, and fix history. Then probe it.
 **A probe** is a small script that calls the real public API with chosen
 inputs and prints what happens. Import the code the way the repository's own
 tests do, and run the probe from a scratch directory against the unchanged
-code. Keep each probe and its output.
+code, with `node` (or `npx tsx` for TypeScript). If Node warns about the
+module type, give the scratch directory a `package.json` with
+`"type": "module"`. Keep each probe and its output.
 
 **Every finding needs a probe.** A claim without one is a suspicion: say so,
 or leave it out.
