@@ -15,6 +15,9 @@ permissions:
   contents: read
 
 jobs:
+  # The test suites run as parallel jobs. The workflow's wall time is then
+  # its slowest job, about 8 minutes (the framework self-oracle), not the
+  # sum of every suite, about 21 minutes when they ran as one job.
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -29,21 +32,73 @@ jobs:
       - run: pnpm run lint:check
       - run: pnpm run format:check
       - run: pnpm run typecheck
-      - run: pnpm run test
+      - run: pnpm --filter @tanstack/oracles run test
+      - run: pnpm run test:publint
+      - run: pnpm run test:sherif
+  test-eslint-plugin:
+    name: Test eslint-plugin-oracles
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Tools
+        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
+      # The plugin's tests import @tanstack/oracles, which resolves to its
+      # build output.
+      - run: pnpm run build
+      - run: pnpm --filter @tanstack/eslint-plugin-oracles run test
+  test-oracle-framework:
+    name: Framework self-oracle
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Tools
+        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
       # The oracleProperty self-oracle spawns real Vitest runs, so the
       # default test run leaves it out; it runs here on its own.
       - run: pnpm --filter @tanstack/oracles run test:oracle-framework
-      # The gap report's own oracles also run real Vitest runs on fixture
-      # packages: the static and classify oracles, then the end-to-end
-      # oracle's fixed seed (its random campaign runs locally).
-      - run: pnpm --filter @tanstack/oracles run test:oracle-gaps:fast
-      - run: pnpm --filter @tanstack/oracles exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "fixed seed"
-      - run: pnpm run test:publint
-      - run: pnpm run test:sherif
-  test-vitest-5:
-    name: Test on Vitest 5
-    # The package's vitest peer range includes 5; this job is the evidence.
+  test-oracle-gaps-fast:
+    name: Gap report oracles
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Tools
+        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
+      # The gap report's own oracles also run real Vitest runs on fixture
+      # packages: the static, classify, probe-form, and mutant-validity
+      # oracles.
+      - run: pnpm --filter @tanstack/oracles run test:oracle-gaps:fast
+  test-oracle-gaps-end-to-end:
+    name: Gap report end-to-end oracle (fixed seed)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Tools
+        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
+      # The end-to-end oracle's fixed seed. Its random campaign, calibrations,
+      # and determinism check run locally.
+      - run: pnpm --filter @tanstack/oracles exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "fixed seed"
+  test-vitest-5:
+    name: Test on Vitest 5 (${{ matrix.suite }})
+    # The package's vitest peer range includes 5; this job is the evidence.
+    # Each suite is its own job, so the self-oracle does not wait for the
+    # unit tests.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [test, test:oracle-framework]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -53,12 +108,19 @@ jobs:
         uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
       - run: pnpm --filter @tanstack/oracles add --save-dev vitest@^5.0.5
       - run: pnpm --filter @tanstack/oracles exec vitest --version
-      - run: pnpm --filter @tanstack/oracles run test
-      - run: pnpm --filter @tanstack/oracles run test:oracle-framework
+      - run: pnpm --filter @tanstack/oracles run "$SUITE"
+        env:
+          SUITE: ${{ matrix.suite }}
   preview:
     name: Publish preview
     # Only a commit that passes every check gets an installable preview.
-    needs: [test, test-vitest-5]
+    needs:
+      - test
+      - test-eslint-plugin
+      - test-oracle-framework
+      - test-oracle-gaps-fast
+      - test-oracle-gaps-end-to-end
+      - test-vitest-5
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
