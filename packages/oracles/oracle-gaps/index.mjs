@@ -142,5 +142,10 @@ if (import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
     process.stderr.write(ended.stderr)
     exitCode = ended.exitCode
   }
-  process.exit(exitCode)
+  // A write to a pipe is asynchronous on macOS, and exiting at once cuts it
+  // off at the pipe's buffer, so the process exits once both streams have
+  // written everything before it.
+  process.stdout.write(``, () =>
+    process.stderr.write(``, () => process.exit(exitCode)),
+  )
 }
