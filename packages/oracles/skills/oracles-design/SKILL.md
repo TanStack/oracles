@@ -45,7 +45,11 @@ written with its law block and its code together.
 - **A new law, or missing or contradictory authority,** needs the user's
   approval of that potential law. An analogy to another documented rule is
   not authority.
-- **The task already approved these laws?** Do not ask again.
+- **The user's answer to an open question is its review.** Rewrite the law
+  block in the same step, and continue. A change the user did not ask for
+  (you found that a law is wrong) needs the delta and a stop.
+- **The task already approved these laws?** Do not ask again. An approved
+  potential law is an adopted law.
 
 **Production output is evidence, never authority.** A rule that exists only
 because production does it is model hacking. When the law and the code
@@ -65,7 +69,9 @@ list when you propose the laws, and again after each gap check:
 - the work changes or simplifies an existing model
 - the gap check leaves three or more gaps in one function
 
-Say in the evidence which trigger fired, or that none did.
+Say in the evidence which trigger fired, or that none did. When a trigger
+fires before the oracle is written, show the user the design the card
+produced, and get their approval with the laws.
 
 **Write the law block.** The law block is the file's opening comment. The oracle file is a literate
 program (ORC-003), so write it as prose. That reader is a maintainer or a serious user who knows
@@ -146,7 +152,8 @@ It never mentions a review or an open question: a point the user has not
 decided appears only as a limit, with its reason.
 
 **Then write the code under it.** Each boundary condition from the probes
-and the law worksheet becomes a constructed history. Each law's sentence, authority, and limits go
+and the law worksheet becomes a constructed history. If there was no first
+session, fill in the worksheet from `oracles-start` for each law first. Each law's sentence, authority, and limits go
 in that property's `law` option. Put prose beside the model, the histories,
 the driver, and the check that says why each one predicts or tests the
 promised result.

@@ -11,11 +11,12 @@ user is available, choose the default this skill gives, record each choice in
 your report, and continue. That default covers setup questions only.
 Potential laws have no default: propose them, report them, and stop.
 
-Setup takes an oracle to production. It usually starts after a first
-session (`oracles-start`), once the engineer has an oracle that found a bug
-and chooses to ship it. If there is no oracle yet, load `oracles-start`
-first. A first session needs only this skill's install section and its
-"where oracle files go" section.
+This skill has two uses. A first session (`oracles-start`) uses only its
+install section and its "where oracle files go" section, and only for the
+minimal setup that an oracle needs to run. Taking an oracle to production
+uses all of it. That usually starts after a first session, once the
+engineer has an oracle that found a bug and chooses to ship it. If there is
+no oracle yet, load `oracles-start` first.
 
 Setup ends when one oracle passes on production and the gap check leaves no
 gap open in that oracle's own contract, unless the user decides otherwise. A
@@ -353,6 +354,9 @@ Usually the oracle already exists from the first session. Keep it, and
 continue with its gap check. If there is none, build it from the potential
 laws that the engineer approved: load `oracles-design`, and follow it from
 its first step.
+
+In a first session, stop at the RED: present the bug, and leave the fix and
+the gap check for production. When taking the oracle to production:
 
 If the first oracle fails on unchanged production under an adopted law, it
 found a defect. The RED is the finding: report it with its replay line, and

@@ -75,9 +75,12 @@ or should you look around?
 
 ## 2. Look around
 
-Make it quick. Read the public API and its docs (the README, the API docs,
-the JSDoc), the existing tests, and the git history of fixes. The files that
-fixes change most often tell you more than a search for "fix".
+If the engineer named a part of the code, look closely there. Otherwise,
+look around the repository, and make it quick. Read the public API and its
+docs (the README, the API docs, the JSDoc), the existing tests, and the git
+history of fixes. The files that fixes change most often tell you more than
+a search for "fix":
+`git log -i --grep fix --name-only --format= | sort | uniq -c | sort -rn | head`.
 
 Look for behavior that is easy to break, and whose right answer is simpler
 to state than the code that produces it. Good signs:
@@ -104,6 +107,9 @@ Read the spot's docs, code, tests, and fix history. Then probe it.
 inputs and prints what happens. Import the code the way the repository's own
 tests do, and run the probe from a scratch directory against the unchanged
 code. Keep each probe and its output.
+
+**Every finding needs a probe.** A claim without one is a suspicion: say so,
+or leave it out.
 
 **Probe to find the design, not only bugs.** Look for:
 
@@ -146,6 +152,20 @@ Give each finding its kind:
 | Test gap        | A probe shows behavior that no existing test checks.                    |
 | Design question | Nothing decides the behavior: give two readings and what each predicts. |
 
+For example:
+
+> **Column names with a digit don't round-trip.**
+>
+> ```ts
+> camelToSnake(snakeToCamel('address2_line')) // expected 'address2_line', got 'address2line'
+> ```
+>
+> **Why I think it's wrong:** the JSDoc of `snakeToCamel` says the transform
+> is "round-trippable via `camelToSnake`" (`src/column-mapper.ts:71`).
+> **Why the tests miss it:** they check `user_id` and `created_at`, which
+> have no digits and no single-letter parts. **How often:** 3,518 of the
+> 21,844 names I tried.
+
 For a possible bug, ask: "Is this a bug, or is it intended?"
 
 If the probes find nothing, say so plainly: "No confirmed defect in what I
@@ -158,7 +178,10 @@ sequences, not a few probes, states the rule that the probes point at, and
 holds the answer for every later change.
 
 Then present it in the chat: "Here's a potential oracle that owns
-<the public behavior>, and its potential laws as I see them."
+<the public behavior>, and its potential laws as I see them." If two
+potential oracles fit the spot well (two public behaviors, or two ways to
+draw the boundary), name the second one in a sentence, say what it would
+own instead, and recommend one.
 
 - What it would own, in one or two sentences.
 - The contract, as a few lines of public calls and their results:
@@ -202,26 +225,77 @@ a few examples to a general law:
 - Checkpoint: <where the contract owes the observation>
 ```
 
+How to fill in the fields:
+
+- **Examples** and **What varies, what stays:** for example, `ms('2 hrs')`
+  is `7200000` (README, Examples). The number, the spelling, and the spacing
+  can change. The unit's length decides the answer.
+- **Law:** one sentence over the domain. For example: "For every finite
+  number `n` and every unit name `u` in the table, in any case and with or
+  without a space, `parse(n + u)` is `n` times the length of `u`."
+- **New case:** if you cannot write one, the law is still a list of
+  examples. Write it again. A new case that only renames a value in the
+  example (`/:id` for `/:foo`) does not count.
+- **Domain edges:** wider than the examples. A block whose domain is only its
+  own examples is not a law. Keep those examples as `fixed` histories, and as
+  rebuilt examples of the general law that explains them.
+- **Rebuilt examples:** an example that the law gets wrong shows a missing
+  condition, a second law, or a source that disagrees. Say which.
+- **Dynamics** are the model's rules, and the histories vary them. For a pure
+  function, write "none: one call", and put the variation into the domain.
+- **Constraints** hold whatever happens: a count never above its limit, an
+  equality that is symmetric, a read that returns the last write. The check
+  tests them at every checkpoint.
+- **Boundary conditions** are the edges, where real behavior and most
+  defects live: empty, zero, `-0`, the size limit, at capacity, the first and
+  the last item, keys that shadow prototype names, cleanup. A boundary that
+  the law does not decide goes under open questions. Do not leave it out of
+  the grammar.
+- **Status:** `adopted` if it has an authority, `observed` if production does
+  it but nobody adopted it, `open` if it is a question. Only `adopted` laws
+  become expected results. An `observed` or `open` law goes to the user as a
+  question.
+- **Production output is evidence, never authority.** A rule that you write
+  only because production does it is model hacking. Mark that rule
+  `observed`, and ask the user. An analogy to another documented rule is not
+  authority either: mark that law `open`.
+
+Settle these privately too:
+
+- **What it assumes:** what providers, the environment, or neighboring code
+  must supply.
+- **What else witnesses it:** other ways to observe the same law (a
+  component, an integration, a replay).
+- **What public state it exposes:** each readable field or getter needs a
+  law or a stated limit.
+- **What each probe found:** each constraint, dynamic, or boundary becomes a
+  law, a history dimension, or a constructed history. Keep a pointer to the
+  probe that showed it.
+
 The law must say more than the code does. If a model of it would only repeat
 the implementation, look for the public promise that the code serves.
 
-**A more complex design needs sign-off.** If the potential oracle has more
-than five laws, or a law has no new case that it predicts, or the model
-needs more than one branch per law, work through the
-[design grammar](../../docs/instruments/design-grammar.md) card. Then show
+**A more complex design needs sign-off.** When a trigger for the
+[design grammar](../../docs/instruments/design-grammar.md) card fires (the
+list is in `oracles-design` step 1: for example, more than five laws, or a
+law with no new case that it predicts), work through the card. Then show
 the engineer the design it produced: its parts, and any choice between two
 designs. Ask them to approve it with the laws.
 
 Then ask the engineer to approve the potential laws that the authority
-decides.
+decides. An approved potential law is an adopted law. Potential laws have no
+default: with no engineer present, propose them and stop.
 
 ## 5. Build and run
 
 1. **Install what is missing**, and nothing more: `fast-check` and `vitest`
    when the repository does not have them. Use the repository's own package
-   manager. Add a minimal Vitest config only if the repository's own config
-   would not pick up the oracle file. The `oracles-setup` skill's install and
-   "where oracle files go" sections have the details.
+   manager. If the repository's own Vitest config would not pick up the oracle
+   file, add a minimal config for it (or add its glob to the existing
+   `include`). Add no scripts, lint, or other config yet. The `oracles-setup`
+   skill's install and "where oracle files go" sections have the details:
+   from them, take only what these packages and the config need. The lint
+   plugin waits for production.
 2. **Write the oracle file.** Follow `oracles-design` from its first step:
    the law block's prose, then the model, the histories, the driver, and the
    check. As you build, tell the engineer briefly what each part is for: the
