@@ -9,7 +9,9 @@ every commit with [pkg.pr.new](https://pkg.pr.new).
 
 ## Packages
 
-To adopt it, start with [`packages/oracles/README.md`](packages/oracles/README.md):
+To try it, paste the prompt in [Try it](packages/oracles/README.md#try-it)
+into your coding agent. To adopt it, start with
+[`packages/oracles/README.md`](packages/oracles/README.md):
 the package ships setup, design, and review skills for coding agents, the
 oracle checklist, and a glossary.
 

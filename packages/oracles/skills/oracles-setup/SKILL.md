@@ -41,8 +41,10 @@ Find out, and tell the user:
 ## 2. Install two pinned packages
 
 The packages are not on npm yet. Install both from pkg.pr.new, pinned to the
-same commit of TanStack/oracles. Ask the user for the commit if you were not
-given one.
+same commit of TanStack/oracles. If you were not given one, use the current
+commit on main: the first 7 characters of the hash that
+`git ls-remote https://github.com/TanStack/oracles refs/heads/main` prints.
+Tell the user which commit you pinned.
 
 ```sh
 pnpm add -D \

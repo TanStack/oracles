@@ -8,21 +8,43 @@ Oracle testing for TypeScript on Vitest and fast-check:
 
 The gap check then lists the owned production behavior that no law judges.
 
-Not on npm yet. Install a commit from pkg.pr.new (see [Start](#start)).
+Not on npm yet. Install a commit from pkg.pr.new (see [Try it](#try-it)).
 
-## Start
+## Try it
 
-Give your coding agent this prompt in the repository:
+Paste this prompt into your coding agent at the root of the repository you
+want to test. Any agent that can run shell commands works.
 
-> Install `https://pkg.pr.new/TanStack/oracles/@tanstack/oracles@<sha>` as a
-> dev dependency, then read
-> `node_modules/@tanstack/oracles/skills/oracles-setup/SKILL.md` in full and
-> follow it.
+```text
+Set up oracle testing in this repository with @tanstack/oracles.
 
-The setup skill installs this package and `@tanstack/eslint-plugin-oracles`
-at the same commit, adds the lint preset, and writes a block in `AGENTS.md`.
-It offers to make the skills findable, in the repository or globally for your
-coding agents, and walks through a first oracle and gap check.
+1. Find the current commit of TanStack/oracles. Run
+   `git ls-remote https://github.com/TanStack/oracles refs/heads/main`, and use
+   the first 7 characters of the hash as <sha>.
+2. Install https://pkg.pr.new/TanStack/oracles/@tanstack/oracles@<sha> as a dev
+   dependency, with this repository's package manager.
+3. Read node_modules/@tanstack/oracles/skills/oracles-setup/SKILL.md in full,
+   and follow it. Use <sha> wherever it asks for the commit to pin.
+4. When the skill asks me to review the laws for the first oracle, stop and
+   show me the oracle file.
+```
+
+What happens next:
+
+1. The agent installs this package and `@tanstack/eslint-plugin-oracles` at
+   the same commit. It adds the lint preset, writes a block in `AGENTS.md`,
+   and offers to make the skills findable for your coding agents.
+2. It chooses one documented function and writes the first oracle file as
+   prose only: what the code promises, with the source of each promise. Then
+   it stops.
+3. You review the laws. This is the one step that needs you: you decide what
+   the code promises, and the agent does the rest.
+4. The agent adds the model, the histories, the driver, and the check. It runs
+   the oracle on your unchanged code and reports any defect with a replay
+   line. Then it runs the gap check and reports what is left.
+
+The package needs Node 20 or later. The setup skill installs Vitest and
+fast-check if the repository does not have them.
 
 ## What ships in this package
 
