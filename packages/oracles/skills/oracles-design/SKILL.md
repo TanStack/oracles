@@ -436,9 +436,9 @@ Keep the law, its authority, and its limits in `law`, and prose beside each
 part that says why it predicts the promised result (ORC-003).
 
 Put `owns`, the law, the model, the histories, the driver, and the check on
-`oracleProperty`. Do not call `declareOracle`: it is legacy, kept only for
-TanStack DB's migration. If a repository's existing oracles already use it,
-leave them as they are.
+`oracleProperty`. An oracle file registers its tests only through
+`oracleProperty`, or through a project helper that forwards a literal `owns`
+list to it.
 
 The options of `oracleProperty` are typed in
 `node_modules/@tanstack/oracles/src/oracle-property.ts`

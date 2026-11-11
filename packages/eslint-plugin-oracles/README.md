@@ -38,5 +38,5 @@ The decided bans on snapshot matchers (B1), `fc.pre` (B3), production imports
 in a model (B4), and identical comparison operands (B7) are not rules yet.
 Reviews check them until they ship.
 
-`settings.oracles.legacyCampaigns` exists only for TanStack DB's migration,
-and it will be removed. Do not use it in another repository.
+`settings.oracles.legacyCampaigns` is removed. A configuration that still
+sets it exempts nothing.
