@@ -9,11 +9,9 @@ every commit with [pkg.pr.new](https://pkg.pr.new).
 
 ## Packages
 
-To try it, paste the prompt in [Try it](packages/oracles/README.md#try-it)
-into your coding agent. To adopt it, start with
-[`packages/oracles/README.md`](packages/oracles/README.md):
-the package ships setup, design, and review skills for coding agents, the
-oracle checklist, and a glossary.
+To try it, paste the prompt in
+[`packages/oracles/README.md`](packages/oracles/README.md) into your coding
+agent.
 
 - `packages/oracles` (`@tanstack/oracles`): the oracle framework, its skills
   and docs, and the `oracle-gaps` CLI. The CLI lists the production behavior that a
