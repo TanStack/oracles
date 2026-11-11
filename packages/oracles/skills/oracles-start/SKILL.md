@@ -367,6 +367,12 @@ questions, stop and present:
 - an offer to walk through how it works: how the reference model was built,
   how the histories are generated, and how the driver calls their code.
   Engineers often want this, and it is the best part to teach.
+
+When they take the walk-through, follow one bug the oracle found through
+the file: the history that produced it, what the driver did and saw, what
+the model expected, and how the check reported the difference and shrank it.
+Show a few lines of the file at each part, not a description of it.
+
 - an invitation to ask questions
 
 Then explain how to take the oracle to production: a lint preset that keeps
