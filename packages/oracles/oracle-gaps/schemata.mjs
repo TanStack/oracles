@@ -29,10 +29,10 @@
 //   `false` (a `for` with no condition, `for...of`, and `for...in` have none).
 // - `delete-call`: skip a call statement (`switch || call()`).
 // - `return-undefined`: a returned expression is evaluated, and `undefined`
-//   is returned in its place. Not a call, which `value-undefined` already
-//   makes `undefined`, and not `return undefined` or `return void x`, which
-//   already return `undefined` after the same evaluation. A type never
-//   removes a site: an input from JavaScript need not have it.
+//   is returned in its place. A returned call or `import()` is a site too:
+//   a test that checks only a call's effect kills `value-undefined`, never
+//   this. Not `return undefined` or `return void x`, which already return
+//   `undefined` after the same evaluation. A type never removes a site.
 // - `optional-chain`: `a?.b` → `a.b` and `a?.[k]` → `a[k]`, which throw where
 //   `a` is nullish (an optional call `f?.()` is no site).
 //
@@ -636,15 +636,30 @@ export function instrument(ts, path, text, source, offset = 0) {
       if (ts.isWithStatement(n)) return false
     const found = declarationOf(identifier)
     if (found === undefined) return false
+    // A parameter read before its own declaration ends (in its default, or
+    // an earlier one's), and a loop's lexical variable read in its own head,
+    // are in their dead zone, where a read throws (the sixth review).
+    if (ts.isParameter(found)) return identifier.getStart(file) >= found.end
+    const head = ts.isForStatement(found) ? found.initializer : found.expression
+    if (
+      (ts.isForStatement(found) ||
+        ts.isForOfStatement(found) ||
+        ts.isForInStatement(found)) &&
+      found.initializer !== undefined &&
+      ts.isVariableDeclarationList(found.initializer) &&
+      (found.initializer.flags & ts.NodeFlags.BlockScoped) !== 0 &&
+      identifier.getStart(file) >= head.getStart(file) &&
+      identifier.end <= head.end
+    )
+      return false
     return (
-      ts.isParameter(found) ||
-      (enclosedByFunction(found) &&
-        ((ts.isVariableStatement(found) &&
-          (found.declarationList.flags & ts.NodeFlags.BlockScoped) === 0) ||
-          ts.isForStatement(found) ||
-          ts.isForOfStatement(found) ||
-          ts.isForInStatement(found) ||
-          ts.isCatchClause(found)))
+      enclosedByFunction(found) &&
+      ((ts.isVariableStatement(found) &&
+        (found.declarationList.flags & ts.NodeFlags.BlockScoped) === 0) ||
+        ts.isForStatement(found) ||
+        ts.isForOfStatement(found) ||
+        ts.isForInStatement(found) ||
+        ts.isCatchClause(found))
     )
   }
   // A pure condition reads local names and numbers, and applies comparisons,
@@ -684,6 +699,36 @@ export function instrument(ts, path, text, source, offset = 0) {
       coercing(inner.right)
     )
   }
+  // Whether every ordering comparison in a condition compares literals and
+  // names whose annotations admit primitives only, which no `valueOf` of
+  // theirs can run: the coercion label's claim, that the annotation
+  // excludes the distinguishing object.
+  const primitive = new Set([
+    ts.SyntaxKind.NumberKeyword,
+    ts.SyntaxKind.BigIntKeyword,
+    ts.SyntaxKind.StringKeyword,
+    ts.SyntaxKind.BooleanKeyword,
+  ])
+  const primitiveType = (type) =>
+    type !== undefined &&
+    (primitive.has(type.kind) ||
+      ts.isLiteralTypeNode(type) ||
+      (ts.isUnionTypeNode(type) && type.types.every(primitiveType)))
+  const primitiveComparisons = (expression) => {
+    const inner = bare(expression)
+    if (ts.isPrefixUnaryExpression(inner))
+      return primitiveComparisons(inner.operand)
+    if (!ts.isBinaryExpression(inner)) return true
+    if (!ordering.has(inner.operatorToken.getText(file)))
+      return (
+        primitiveComparisons(inner.left) && primitiveComparisons(inner.right)
+      )
+    return [inner.left, inner.right].every(
+      (operand) =>
+        literalValue(operand) !== undefined ||
+        primitiveType(annotationOf(operand)),
+    )
+  }
   const isLogical = (node) =>
     ts.isBinaryExpression(node) && logical.has(node.operatorToken.getText(file))
   const unseenIn = (node, condition) => {
@@ -713,7 +758,11 @@ export function instrument(ts, path, text, source, offset = 0) {
       if (condition === child && pureCondition(condition)) {
         const [yes, no] = valuesOf(parent)
         if (yes !== undefined && yes === no)
-          return unseenIn(node, condition) ? `dead` : `coerced`
+          return unseenIn(node, condition)
+            ? `dead`
+            : primitiveComparisons(condition)
+              ? `coerced`
+              : undefined
       }
       child = parent
     }
@@ -812,6 +861,7 @@ export function instrument(ts, path, text, source, offset = 0) {
     if (!ordering.has(node.operatorToken.getText(file))) return undefined
     const holder = conditionHolderOf(node)
     if (holder === undefined || !yieldsOperands(node, holder)) return undefined
+    if (!annotationOf(node.left) && !annotationOf(node.right)) return undefined
     const [left, right] = [typeOf(node.left), typeOf(node.right)]
     if (left === `bigint` && right === `bigint`)
       return `a number in place of a bigint`
@@ -888,42 +938,84 @@ export function instrument(ts, path, text, source, offset = 0) {
   // the boundary hint.
   // Whether a returned expression is `undefined` by its syntax alone: `void
   // x`, or the global `undefined`, where nothing in the file binds the name
-  // (a nested `var`, an import, or a destructured parameter included) and no
-  // `with` can hide it. Its mutant then returns the same `undefined` after
-  // the same evaluation. A type proves nothing here.
-  const bindsUndefined = (() => {
-    let found = /\bwith\s*\(/.test(text)
-    const visit = (node) => {
-      if (found) return
-      if (
-        ts.isIdentifier(node) &&
-        node.text === `undefined` &&
-        node.parent &&
-        !ts.isExpression(node.parent) &&
-        !ts.isExpressionStatement(node.parent) &&
-        !ts.isReturnStatement(node.parent)
-      )
-        found = true
-      ts.forEachChild(node, visit)
-    }
-    visit(file)
-    return found
-  })()
+  // and its scopes are static. Its mutant then returns the same `undefined`
+  // after the same evaluation. A type proves nothing here.
+  //
+  // A name binds where it is the name of a declaration: a variable, a
+  // parameter or binding element, a function, a class (an expression's own
+  // name included), an import, an enum, or a namespace. A method's name, a
+  // property's, a label, and an export specifier's do not bind it. A
+  // direct `eval` can declare a `var` at run time, and a `with` reads names
+  // through an object, so either one in the file makes its scopes dynamic.
+  const declaring = (node) =>
+    ts.isVariableDeclaration(node) ||
+    ts.isParameter(node) ||
+    ts.isBindingElement(node) ||
+    ts.isFunctionDeclaration(node) ||
+    ts.isFunctionExpression(node) ||
+    ts.isClassDeclaration(node) ||
+    ts.isClassExpression(node) ||
+    ts.isImportClause(node) ||
+    ts.isImportSpecifier(node) ||
+    ts.isNamespaceImport(node) ||
+    ts.isImportEqualsDeclaration(node) ||
+    ts.isEnumDeclaration(node) ||
+    ts.isModuleDeclaration(node)
+  let bindsUndefined = false
+  let dynamicScope = false
+  const scan = (node) => {
+    if (
+      ts.isIdentifier(node) &&
+      node.text === `undefined` &&
+      declaring(node.parent) &&
+      node.parent.name === node
+    )
+      bindsUndefined = true
+    if (
+      ts.isWithStatement(node) ||
+      (ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === `eval`)
+    )
+      dynamicScope = true
+    ts.forEachChild(node, scan)
+  }
+  scan(file)
   const undefinedAlready = (expression) => {
     const inner = bare(expression)
     if (ts.isVoidExpression(inner)) return true
     return (
-      ts.isIdentifier(inner) && inner.text === `undefined` && !bindsUndefined
+      ts.isIdentifier(inner) &&
+      inner.text === `undefined` &&
+      !bindsUndefined &&
+      !dynamicScope
     )
   }
   // A receiver that is never nullish, whatever the inputs: a string or
   // number literal, or a `const` that holds one and that nothing outside the
-  // function can change (not exported, not in a namespace, not ambient, and
-  // with no `var` of its name in between). Its site is dead code.
+  // function can change (not exported, by a modifier or an export list, not
+  // in a namespace, not ambient, with no `var` of its name in between, and
+  // in a file with static scopes). Its site is dead code.
+  const exportedNames = new Set(
+    file.statements.flatMap((statement) =>
+      ts.isExportDeclaration(statement) &&
+      statement.exportClause &&
+      ts.isNamedExports(statement.exportClause)
+        ? statement.exportClause.elements.map(
+            (e) => (e.propertyName ?? e.name).text,
+          )
+        : [],
+    ),
+  )
   const constantReceiver = (expression) => {
     const inner = bare(expression)
     if (ts.isStringLiteral(inner) || ts.isNumericLiteral(inner)) return true
-    if (!ts.isIdentifier(inner)) return false
+    if (
+      !ts.isIdentifier(inner) ||
+      dynamicScope ||
+      exportedNames.has(inner.text)
+    )
+      return false
     for (let n = inner.parent; n; n = n.parent)
       if (ts.isWithStatement(n)) return false
     const found = declarationOf(inner)
@@ -947,28 +1039,6 @@ export function instrument(ts, path, text, source, offset = 0) {
       (ts.isStringLiteral(init) ||
         ts.isNumericLiteral(init) ||
         ts.isBigIntLiteral(init))
-    )
-  }
-  // A receiver whose own annotation admits no nullish value: a parameter
-  // annotated with an object type, a reference, or a primitive keyword, with
-  // no `?`, default, or union. Its site is labelled `null`.
-  const nullish = new Set([
-    ts.SyntaxKind.AnyKeyword,
-    ts.SyntaxKind.UnknownKeyword,
-    ts.SyntaxKind.UndefinedKeyword,
-    ts.SyntaxKind.NullKeyword,
-    ts.SyntaxKind.VoidKeyword,
-  ])
-  const annotatedPresent = (expression) => {
-    const type = annotationOf(expression)
-    const parameter = type?.parent
-    return (
-      type !== undefined &&
-      !parameter.questionToken &&
-      !parameter.initializer &&
-      !nullish.has(type.kind) &&
-      !ts.isUnionTypeNode(type) &&
-      !(ts.isLiteralTypeNode(type) && nullish.has(type.literal.kind))
     )
   }
   const evidenceOf = (node) => {
@@ -1135,7 +1205,6 @@ export function instrument(ts, path, text, source, offset = 0) {
     if (
       ts.isReturnStatement(node) &&
       node.expression !== undefined &&
-      !ts.isCallExpression(bare(node.expression)) &&
       !undefinedAlready(node.expression)
     )
       ids.returned = add(
@@ -1156,7 +1225,6 @@ export function instrument(ts, path, text, source, offset = 0) {
         `?.`,
         `.`,
         constant ? DEAD_CODE : undefined,
-        !constant && annotatedPresent(node.expression) ? `\`null\`` : undefined,
       )
     }
 

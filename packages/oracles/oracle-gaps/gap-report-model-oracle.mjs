@@ -2747,8 +2747,10 @@ function sitesOf(plan) {
         at(`delete-call`, `push`, stmt.line + 1, call)
         at(`value-undefined`, `string`, stmt.line + 1, call)
       }
+      // A returned call is a `return-undefined` site too (the sixth review).
       if (stmt.kind === `getterReturn`) {
         at(`value-undefined`, `string`, stmt.line, whole)
+        at(`return-undefined`, `returned`, stmt.line, whole)
         at(`bool-flip`, `flag`, stmt.line, whole)
       }
       // `$derived` is an ordinary name outside a Svelte module.
@@ -2756,8 +2758,10 @@ function sitesOf(plan) {
         at(`delete-call`, `push`, stmt.line, whole)
         at(`value-undefined`, `value`, stmt.line, whole)
       }
-      if (stmt.kind === `dollarReturn`)
+      if (stmt.kind === `dollarReturn`) {
         at(`value-undefined`, `string`, stmt.line, whole)
+        at(`return-undefined`, `returned`, stmt.line, whole)
+      }
       // A rune call stays where Svelte requires it, so it is no site of its
       // own (its value is not replaced, nor its statement skipped); the code
       // in its argument is.
