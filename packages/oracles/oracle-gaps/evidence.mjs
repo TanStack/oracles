@@ -60,6 +60,8 @@ export async function diskStore(dir) {
     },
     async flush() {
       if (!dirty) return
+      // The OS may have cleaned the temp directory that holds the store.
+      mkdirSync(dir, { recursive: true })
       const temporary = `${file}.${process.pid}.tmp`
       writeFileSync(temporary, JSON.stringify([...rows.values()]))
       renameSync(temporary, file)

@@ -49,14 +49,20 @@ import { Refusal } from './ending.mjs'
 const here = dirname(fileURLToPath(import.meta.url))
 const idleMs = 30 * 60_000
 
+// A package's key: its real path, which names the repository checkout too.
+const keyOf = (pkg) => createHash(`sha1`).update(pkg).digest(`hex`).slice(0, 12)
 /** The socket of a package's daemon. A socket path must stay short. */
 export const socketOf = (pkg) =>
-  join(
-    tmpdir(),
-    `oracle-gaps-${createHash(`sha1`).update(pkg).digest(`hex`).slice(0, 12)}.sock`,
-  )
-/** Where a package's daemon keeps its evidence and its log. */
-export const stateDirOf = (pkg) => join(pkg, `.oracle-gaps`)
+  join(tmpdir(), `oracle-gaps-${keyOf(pkg)}.sock`)
+/**
+ * A package's state: the daemon's lock, log, and evidence, the workspace
+ * dependencies' one-file bundles, and the default output directories. It is
+ * in the OS temp directory, which the OS cleans, keyed by the package, never
+ * in the repository (maintainer decision, 2026-11-11) and never a shared
+ * directory (the v20 freeze's namespacing decision). A state the OS removed
+ * is a cold start.
+ */
+export const stateDirOf = (pkg) => join(tmpdir(), `oracle-gaps-${keyOf(pkg)}`)
 
 // An error that ended a check, as the daemon sends it, and as the CLI
 // receives it: a refusal stays a refusal.

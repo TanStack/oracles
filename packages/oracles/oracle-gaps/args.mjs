@@ -11,6 +11,7 @@ import { randomBytes } from 'node:crypto'
 import { availableParallelism } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { loadAuthored } from './authored.mjs'
+import { stateDirOf } from './daemon.mjs'
 import { Refusal } from './ending.mjs'
 
 const flags = new Set([`daemon`, `stop-daemon`, `ordinary`, `help`])
@@ -189,9 +190,10 @@ function optionsOf(args, cwd) {
     seed: args.seed,
     diffBase: args[`diff-base`],
     // Each run's output is a directory of its own under the package's state
-    // (`.oracle-gaps/out`), so runs of one package and of two packages never
-    // collide (maintainer decision, 2026-11-10: namespacing).
-    out: resolve(cwd, args.out ?? join(pkg, `.oracle-gaps`, `out`, runName())),
+    // in the OS temp directory (`stateDirOf`), so runs of one package and of
+    // two packages never collide (maintainer decision, 2026-11-10:
+    // namespacing), and nothing is left in the repository (2026-11-11).
+    out: resolve(cwd, args.out ?? join(stateDirOf(pkg), `out`, runName())),
     only: args.only ? new Set(args.only.split(`,`)) : undefined,
     // A fixed-seed random sample of this many mutants per source file, for
     // surveys across many modules.
@@ -302,8 +304,8 @@ function walkPool(pkg) {
     seen.add(dir)
     // What decides the walk here: the manifest and node_modules, and, for a
     // dependency, the directories an addon would appear in. The package's
-    // own directory is left out: a check writes its state (`.oracle-gaps`)
-    // there.
+    // own directory is left out: a check writes its session directory
+    // (`.oracle-gaps-<pid>`) there.
     const prebuilds = join(dir, `prebuilds`)
     for (const path of [
       join(dir, `package.json`),

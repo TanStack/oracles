@@ -441,6 +441,10 @@ const edits = [
   // A scoped package with a prebuilt addon installed into a scope directory
   // that already exists, so only the scope directory changes.
   `addScopedAddon`,
+  // The OS cleans the temp directory that holds the daemon's state (its
+  // lock, log, and evidence) between checks: the next check is a cold
+  // start, never a failure.
+  `cleanState`,
 ]
 // The steps that act on the daemon and change no file.
 const daemonEvents = new Set([
@@ -452,6 +456,7 @@ const daemonEvents = new Set([
   `stopAtOnce`,
   `resetBeforeRead`,
   `otherInstall`,
+  `cleanState`,
 ])
 const histories = fc.record({
   functions: fc.array(fc.array(statement, { minLength: 1, maxLength: 5 }), {
