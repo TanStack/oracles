@@ -137,7 +137,7 @@ export function analyze(ts, pkg, sources, testFiles) {
       if (fn !== undefined && !owned.has(source, fn))
         throw new Refusal(
           `${relative(file)}: owns entry ${entry} names no function in ${source}`,
-          `Name a function that ${source} defines in this owns entry, such as ${source}#run or ${source}#Class.method.`,
+          `Name a function or module-level variable that ${source} defines in this owns entry, such as ${source}#run, ${source}#Class.method, or ${source}#TABLE.`,
         )
     }
   // Owned through the call trees, which may reach a selected source from an
@@ -147,9 +147,9 @@ export function analyze(ts, pkg, sources, testFiles) {
       `no file owns any selected source: no function of a --source file has an owner`,
       `Add an owns entry for a function of a --source file to the oracle that judges it.`,
     )
-  // Each mutant belongs to the innermost function whose text holds its
-  // site; its key reads that function's name, and its owners are that
-  // function's.
+  // Each mutant belongs to the innermost unit (a function or module data)
+  // whose text holds its site; its key reads that unit's name, and its
+  // owners are that unit's.
   for (const mutant of mutants)
     mutant.function = owned.at(mutant.source, mutant.position).name
   return { instrumented, mutants, declarations, owned }
