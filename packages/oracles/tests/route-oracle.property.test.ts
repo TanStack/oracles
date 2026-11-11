@@ -289,7 +289,6 @@ oracleProperty<History, Array<string | null>>({
     statement: `The route registered when a campaign runs describes that campaign in the one route vocabulary and never claims more reproducibility than it has: fixed seed only for a seed the framework declared fixed and the parameters still carry, fixed history only with a path, random seed otherwise; one classifier serves every test.`,
     authority: `the gap report's route contract (OracleRoute in packages/oracles/src/oracle-route.ts); coordinator decisions for TanStack/oracles#1, 2026-11-08 (findings F2, R1b-4, R1b-7, R1b-8, R1c-1, R1c-2, R1c-9)`,
     limits: `A named route a caller registers is taken as its claim; oracleProperty's own routes are owned by the self-oracle's route law.`,
-    owner: `oracleProperty framework`,
   },
   histories: {
     arbitrary: history,

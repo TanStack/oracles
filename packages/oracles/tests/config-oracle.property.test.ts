@@ -301,7 +301,6 @@ oracleProperty<History, Array<Result>>({
     statement: `Every oracle read uses the one configuration in force, the replay environment is read once under it, and a first configureOracles that changes the defaults after any read throws.`,
     authority: `the configureOracles contract in packages/oracles/src/oracle-config.ts (read once at configuration or first use; configure before oracles read)`,
     limits: `One registered id; valid replay selections; retired variables, multipliers, and malformed environments are left to config.test.ts.`,
-    owner: `oracleProperty framework`,
   },
   histories: {
     arbitrary: history,

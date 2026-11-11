@@ -406,6 +406,22 @@ const histories = fc.record({
     }),
     { nil: null },
   ),
+  // Which declaration the oracle files make: `declareOracle`, `oracleProperty`
+  // with its `owns` (maintainer decision, 2026-11-10: `oracleProperty` takes
+  // `owns`), both (the entries split between the two calls, so the union is
+  // read), or none, which leaves no oracle file.
+  declaration: fc.constantFrom(
+    `declareOracle`,
+    `declareOracle`,
+    `declareOracle`,
+    `oracleProperty`,
+    `oracleProperty`,
+    `both`,
+    `neither`,
+  ),
+  // No function and no whole file is owned: every function's owners and
+  // the library's are emptied (the run refuses with no owns entry).
+  ownerless: fc.boolean(),
   fault: fc.constantFrom(
     `none`,
     `none`,
@@ -2025,13 +2041,24 @@ function resolveHistory(history) {
           : []),
       ]
     : []
+  // A run that reaches its own check keeps an owner (see `reachesRun`).
+  const ownerless = history.ownerless === true && !reachesRun(history)
   return {
-    functions,
+    functions: ownerless
+      ? functions.map((fn) => ({ ...fn, owners: [] }))
+      : functions,
     tests,
     authored,
     authoredList,
     loadCalls,
     wholeFile: history.wholeFile,
+    // A fault injects an entry into an oracle file, so it needs one: only a
+    // history with no fault can have no oracle file.
+    declaration:
+      history.declaration === `neither` && (history.fault ?? `none`) !== `none`
+        ? `declareOracle`
+        : (history.declaration ?? `declareOracle`),
+    ownerless,
     template: history.template,
     fault: history.fault,
     stability: history.stability,
@@ -2922,24 +2949,55 @@ function judge(plan, tests, sites, active) {
   return live.some((r) => r.changed) ? `not-judged` : `survived`
 }
 
-/** Which declaration fault, if any, must make the run fail, and its cause. */
+/**
+ * Which fault, if any, must make the run fail, and its cause. The analysis
+ * reads files before any test runs, so its refusals come first: a broken
+ * declaration, then a run with no oracle file or no owner. A fault that only
+ * the runner can find (`runtime`) is named only when the analysis passes.
+ */
 function refusal(plan) {
   if (plan.fault === `badEntry`) return { cause: `${SOURCE}#nope` }
   if (plan.fault === `missingSource`) return { cause: `src/missing.ts` }
   if (plan.fault === `nonLiteral`) return { cause: `b.test.ts` }
   if (plan.fault === `outsideSource`) return { cause: `outside the package` }
+  // A run with no oracle file, or with no owns entry, owns no selected
+  // source, so every mutant would read as unowned. The analysis refuses it
+  // (maintainer decision, 2026-11-10).
+  if (plan.declaration === `neither`) return { cause: `no oracle file` }
+  if (
+    plan.wholeFile === `none` &&
+    plan.functions.every((fn) => fn.owners.length === 0)
+  )
+    return { cause: `owns any selected source` }
   // A config the runner cannot honor refuses the run rather than leave every
   // mutant unreached (maintainer decision, 2026-11-08).
-  if (plan.fault === `projects`) return { cause: `test.projects` }
-  if (plan.fault === `brokenVitest`) return { cause: `vitest` }
+  if (plan.fault === `projects`)
+    return { cause: `test.projects`, runtime: true }
+  if (plan.fault === `brokenVitest`) return { cause: `vitest`, runtime: true }
   // A failing owner is named with its test's error, so the author can fix it.
   if (plan.fault === `brokenOwner`)
     return {
       cause: `b.test.ts`,
       detail: `this owner fails with no mutant active`,
+      runtime: true,
     }
   return undefined
 }
+
+// The faults the analysis refuses before it reads ownership: their plans may
+// be made ownerless. Every other fault is a runtime one, or a fault of the
+// instrumented copy, and its plan is not made ownerless, so most such runs
+// reach their own check. Its generated owners can still own nothing; the
+// analysis then refuses the run for that first (see `refusal`).
+const declarationFaults = [
+  `none`,
+  `badEntry`,
+  `missingSource`,
+  `nonLiteral`,
+  `outsideSource`,
+]
+const reachesRun = (history) =>
+  !declarationFaults.includes(history.fault ?? `none`)
 
 function model(plan) {
   const refused = refusal(plan)
@@ -3152,13 +3210,29 @@ function oracleTestFile(plan, file) {
       ? [`src/missing.ts#f0`]
       : []),
   ].map((entry) => quoteEntry(plan, entry))
-  const owns =
-    file === `b` && plan.fault === `nonLiteral`
+  // The calls that declare the entries, one per declaration the file makes.
+  // With `both`, the entries split between the two calls.
+  const declares = {
+    declareOracle: [`declareOracle`],
+    oracleProperty: [`oracleProperty`],
+    both: [`declareOracle`, `oracleProperty`],
+    neither: [],
+  }[plan.declaration ?? `declareOracle`]
+  const owns = declares.flatMap((name, part) => {
+    const list =
+      plan.declaration === `both`
+        ? entries.filter((_, i) => i % 2 === part)
+        : entries
+    return file === `b` && plan.fault === `nonLiteral`
       ? [
-          `const OWNS = [${entries.join(`, `)}]`,
-          `declareOracle({ owns: OWNS })`,
+          `const OWNS_${part} = [${list.join(`, `)}]`,
+          `${name}({ owns: OWNS_${part} })`,
         ]
-      : [`declareOracle({ owns: [${entries.join(`, `)}] })`]
+      : [`${name}({ owns: [${list.join(`, `)}] })`]
+  })
+  const stubs = declares.map(
+    (name) => `function ${name}(_parts: { owns: Array<string> }): void {}`,
+  )
   const out = [
     `import { ${plan.tests.some((t) => t.file === file && t.cleanupThrows) ? `afterEach, ` : ``}describe, expect, test${plan.tests.some((t) => t.file === file && t.spies) ? `, vi` : ``} } from 'vitest'`,
     ...(plan.tests.some((t) => t.file === file && t.shrinks)
@@ -3179,7 +3253,7 @@ function oracleTestFile(plan, file) {
       : []),
     `import * as sut from '../src/sut'`,
     ...(file === `b` ? [`import { strict } from './strict'`] : []),
-    `function declareOracle(_parts: { owns: Array<string> }): void {}`,
+    ...stubs,
     // State that tests of this file share (the `w_shared` witness).
     `const shared = { value: 0 }`,
     `const stored: { value: Array<string> } = { value: [] }`,

@@ -6,7 +6,7 @@
  * report owes before any test runs: which operator mutants exist, which are
  * probe-only code, which oracle files own each function's call tree, which
  * declarations refuse the run, and each mutant's key. The CLI computes all of
- * them in `analyze` (analysis.mjs) and `assignKeys` (report.mjs), from files
+ * them in `analyze` (analysis.mjs) and `keyAndSelect` (report.mjs), from files
  * alone. This oracle writes each generated fixture to a scratch package and
  * calls those functions directly, without Vitest or a child process, so a
  * history costs tens of milliseconds and a campaign a few seconds. The
@@ -16,7 +16,8 @@
  *
  * - **Refusal.** An owns entry that names no function, an entry that names a
  *   missing file, and an owns list that is not a literal each refuse, naming
- *   the cause. An owner whose tests fail, and a Vitest config with
+ *   the cause. A declaration fault is named even when the run also owns no
+ *   selected source: the fault is the cause the author must fix first. An owner whose tests fail, and a Vitest config with
  *   `test.projects`, are runtime refusals, so here they must not refuse.
  * - **Rune placement.** Instrumenting a source does not change whether it
  *   compiles. In a Svelte module, every rune call stays where Svelte allows
@@ -84,7 +85,7 @@ import {
 } from 'node:fs'
 import { createRequire } from 'node:module'
 import { spawnSync } from 'node:child_process'
-import { dirname, join } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { declareOracle } from '../src/oracle-declaration.ts'
 import { oracleProperty, pass, violation } from '../src/oracle-property.ts'
@@ -123,7 +124,7 @@ const ts = createRequire(join(here, `../package.json`))(`typescript`)
 // less the runner copies, as the CLI's discovery does (`isRunnerCopy`; the
 // end-to-end oracle checks that discovery), reads the source files from a
 // `--source` argument in the history's spelling as the CLI does
-// (`parseArgs`), and calls `analyze` and `assignKeys`. It records a
+// (`parseArgs`), and calls `analyze` and `keyAndSelect`. It records a
 // refusal's message, or each mutant's site, probe mark, ownership, and key,
 // and the instrumented text of the Svelte module, if there is one. For a
 // stability history it rewrites the source and records the same again.
@@ -139,6 +140,7 @@ function analyzeFixture(dir, files, plan) {
       [`--package`, dir, `--source`, sourceArgument(plan, `${dir}.link`)],
       dir,
     )
+    const outputs = defaultOutputsOf(dir, sources)
     const { mutants, owned, instrumented } = analyze(ts, dir, sources, tests)
     // A run's keys come from the whole mutant list, whatever its selection
     // (--only, --sample). The full run's keys are the reference, read before
@@ -157,6 +159,7 @@ function analyzeFixture(dir, files, plan) {
     const only = new Set(mutants.filter((_, i) => i % 2 === 0).map((m) => m.id))
     const keyed = (selected) => selected.map((m) => ({ id: m.id, key: m.key }))
     return {
+      outputs,
       help,
       selection: {
         only: keyed(keyAndSelect(mutants, { only, sources })),
@@ -178,6 +181,46 @@ function analyzeFixture(dir, files, plan) {
   } catch (error) {
     return { help, refusal: String(error?.message ?? error) }
   }
+}
+
+// The default output of three runs, two of this package and one of another
+// package (a sibling, made for the run). The driver records relations, not
+// the paths: whether each output is a directory under its own package's
+// state, and which pairs of outputs are the same directory.
+function defaultOutputsOf(dir, sources) {
+  const other = realpathSync(mkdtempSync(join(here, `.scratch-`)))
+  try {
+    const run = (pkg) =>
+      parseArgs([`--package`, pkg, `--source`, sources.join(`,`)], pkg).out
+    const home = (pkg) => join(pkg, `.oracle-gaps`, `out`) + sep
+    const outs = [run(dir), run(dir), run(other)]
+    const homes = [home(dir), home(dir), home(other)]
+    return {
+      contained: outs.map((out, i) => out.startsWith(homes[i])),
+      // Pairs: the two runs of one package, then each with the other package.
+      same: [outs[0] === outs[1], outs[0] === outs[2], outs[1] === outs[2]],
+    }
+  } finally {
+    rmSync(other, { recursive: true, force: true })
+  }
+}
+
+// Each run's default output is a directory of its own under its package's
+// state, so runs of one package and of two packages never collide.
+function outputNamespace({ contained, same }) {
+  if (!contained.every(Boolean))
+    return violation(
+      `static`,
+      `a run's default output is not a directory under its package's .oracle-gaps/out`,
+      `output namespace`,
+    )
+  if (same.some(Boolean))
+    return violation(
+      `static`,
+      `two runs share one default output directory`,
+      `output namespace`,
+    )
+  return undefined
 }
 
 /** What `index.mjs --help` prints when run in a directory, and its status. */
@@ -401,8 +444,32 @@ async function driver(plan, observe) {
       : undefined
     if (derived) observe(`derived`, derived)
     const states = new Set(derived ? derivedReach(derived) : [])
-    if (before.refusal && plan.fault !== `none`)
+    if (before.refusal && faults.includes(plan.fault))
       states.add(`refused ${plan.fault}`)
+    if (before.refusal && plan.declaration === `neither`)
+      states.add(`refused without an oracle file`)
+    // A bad entry in a run that owns no selected source: two refusals apply,
+    // and the declaration's own fault is the one to name, since fixing it is
+    // what the author must do first.
+    if (
+      before.refusal &&
+      plan.fault === `badEntry` &&
+      plan.wholeFile === `none` &&
+      plan.functions.every((fn) => fn.owners.length === 0)
+    )
+      states.add(`refused badEntry with no owner`)
+    // A runtime fault does not refuse here, so a refusal in its run is the
+    // run's lack of an owner.
+    if (
+      before.refusal &&
+      !faults.includes(plan.fault) &&
+      plan.declaration !== `neither`
+    )
+      states.add(`refused without an owner`)
+    if (!before.refusal && plan.declaration === `oracleProperty`)
+      states.add(`owns read from oracleProperty`)
+    if (!before.refusal && plan.declaration === `both`)
+      states.add(`owns read from both declarations`)
     // The statement whose lines hold a mutant, by the model's layout.
     const statementAt = (m) =>
       plan.functions
@@ -597,6 +664,10 @@ function checkDerived(plan, observed) {
 function check(plan, observations, expected) {
   const got = observations.find((o) => o.checkpoint === `static`)?.value
   if (!got) return violation(`static`, `no analysis was observed`, `completion`)
+  if (got.outputs) {
+    const namespace = outputNamespace(got.outputs)
+    if (namespace) return namespace
+  }
   if (got.help?.status !== 0 || got.help?.printed !== usage.trimEnd())
     return violation(
       `static`,
@@ -604,11 +675,8 @@ function check(plan, observations, expected) {
       `help`,
     )
   // An owner that fails, and a config the runner cannot honor, are found
-  // only when the runner starts.
-  const runtime = [`brokenOwner`, `projects`, `brokenVitest`].includes(
-    plan.fault,
-  )
-  const refused = runtime ? undefined : expected.refused
+  // only when the runner starts, so the analysis must not refuse for them.
+  const refused = expected.refused?.runtime ? undefined : expected.refused
   if (refused) {
     if (!got.refusal)
       return violation(
@@ -648,7 +716,7 @@ function check(plan, observations, expected) {
     const broken = checkDerived(plan, observed)
     if (broken) return broken
   }
-  const owedMutants = runtime
+  const owedMutants = expected.refused?.runtime
     ? model({ ...plan, fault: `none` }).mutants
     : expected.mutants
   const actual = withOrdinals(got.mutants)
@@ -813,6 +881,22 @@ const calibrations = [
 ]
 
 const faults = [`badEntry`, `missingSource`, `nonLiteral`, `outsideSource`]
+// Each constructed history builds from a generated history whose declaration
+// is `declareOracle` and whose first function is owned, the form the other
+// histories use, unless it names its own: a refusing declaration or an
+// ownerless run then reaches only the states that name it, and a run that
+// owns nothing is not refused for a state it does not name.
+const withDeclaration = (constructed) =>
+  constructed.map((item) => ({
+    ...item,
+    build: (generated) =>
+      item.build({
+        ...generated,
+        declaration: `declareOracle`,
+        ownerless: false,
+        owners: [`a`, ...generated.owners.slice(1)],
+      }),
+  }))
 const required = [
   ...Object.values(ownedStates),
   ...Object.values(derivedStates),
@@ -847,22 +931,26 @@ const required = [
   `production else judged`,
   `stability rerun`,
   ...faults.map((fault) => `refused ${fault}`),
+  `owns read from oracleProperty`,
+  `owns read from both declarations`,
+  `refused without an oracle file`,
+  `refused without an owner`,
+  `refused badEntry with no owner`,
 ]
 
 oracleProperty({
   id: `oracle-gaps.report-static`,
   law: {
-    statement: `The gap report's static half keeps every Svelte rune where Svelte allows it, enumerates the promised operator mutants, marks exactly the probe-only code, refuses broken owns declarations, gives each function the owners whose call trees contain it, anchors each mutant's key, keeps keys, probe marks, and ownership stable under unrelated edits, and keeps each derived class's \`super(...)\` call unconditional. In a derived constructor, no mutant site lies before the first statement that calls super or inside that statement (an arrow inherits super, so an arrow's call counts), and statements after it keep their sites. So no mutant, when active, prevents or delays the super call. With no mutant active the instrumented class behaves as its source does, and under every mutant the constructor completes with its base class's tag unless an early return ends it first.`,
+    statement: `The gap report's static half keeps every Svelte rune where Svelte allows it, gives each run's default output a directory of its own under its package's state, so runs of one package and of two packages never collide, enumerates the promised operator mutants, marks exactly the probe-only code, refuses broken owns declarations, gives each function the owners whose call trees contain it, anchors each mutant's key, keeps keys, probe marks, and ownership stable under unrelated edits, and keeps each derived class's \`super(...)\` call unconditional. In a derived constructor, no mutant site lies before the first statement that calls super or inside that statement (an arrow inherits super, so an arrow's call counts), and statements after it keep their sites. So no mutant, when active, prevents or delays the super call. With no mutant active the instrumented class behaves as its source does, and under every mutant the constructor completes with its base class's tag unless an early return ends it first.`,
     authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the frozen design's plan for an oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); for rune placement, Svelte 5's placement rule for runes (state_invalid_placement, effect_invalid_placement) and the maintainer's report of svelte-db's useLiveQuery.svelte.ts failing to compile under instrumentation (2026-11-08); for derived classes, the gap report's contract that instrumentation with no mutant active does not change behavior and that a mutant is a legal program variant (the operator contract in schemata.mjs), ECMAScript's rule that a derived constructor calls \`super\` before it reads \`this\` and before it returns, the maintainer's report of TanStack DB's subscription.ts failing with no mutant active (G11, 2026-11-09), and the maintainer's decision of 2026-11-09 on the derived constructor's site region (every shape of super, including an early return before it, is covered by the one rule).`,
     limits: `The grammar and model of oracle-gaps.report, with its limits. Outcomes that need test runs, and the failing-owner refusal, belong to oracle-gaps.report. Same-named functions, accessors, and field arrows are judged for ownership only; runes only as $state, $state.raw, $derived, $derived.by, $effect, and $effect.pre in a .svelte.ts module, judged by a restatement of Svelte's placement rule rather than the compiler. A derived class is judged in this oracle's in-process run and in the end-to-end oracle's static half: the end-to-end oracle instruments its file and judges its sites as unowned, but no test imports or constructs the class, so no test runs it. The in-process run transpiles the file to CommonJS at ES2022; other downlevel targets and Vitest's own transform are not exercised. The mutant switch (switchFor) is a hand copy of the switch's contract in schemata.mjs, not the capture setup's runtime: the capture setup imports Vitest and installs timers and globals when it loads, so it cannot run in-process. The derived grammar has one derived class per history, with parameter properties, a field, statements before and after super, an early return before it, and the four forms of the super call (a statement, an arrow argument, and the right operand of \`&&\` or \`||\`). It has no super call in a method, a nested class, or a \`super.method()\` call, and no default parameter.`,
-    owner: `packages/oracles/oracle-gaps`,
   },
   histories: {
     arbitrary: histories,
     states: required,
     runs: 40,
     fixedSeeds: [20261105],
-    constructed: [
+    constructed: withDeclaration([
       {
         name: `every static state`,
         enters: required.filter(
@@ -878,6 +966,11 @@ oracleProperty({
               derivedStates.and,
               derivedStates.or,
               ...faults.map((f) => `refused ${f}`),
+              `owns read from oracleProperty`,
+              `owns read from both declarations`,
+              `refused without an oracle file`,
+              `refused without an owner`,
+              `refused badEntry with no owner`,
             ].includes(s),
         ),
         build: (generated) => ({
@@ -1021,7 +1114,61 @@ oracleProperty({
         enters: [`refused ${fault}`],
         build: (generated) => ({ ...generated, fault, steps: null }),
       })),
-    ],
+      {
+        name: `owns read from oracleProperty`,
+        enters: [`owns read from oracleProperty`],
+        build: (generated) => ({
+          ...generated,
+          declaration: `oracleProperty`,
+          fault: `none`,
+          steps: null,
+        }),
+      },
+      {
+        name: `owns read from both declarations`,
+        enters: [`owns read from both declarations`],
+        build: (generated) => ({
+          ...generated,
+          declaration: `both`,
+          fault: `none`,
+          steps: null,
+        }),
+      },
+      {
+        name: `no oracle file refuses the run`,
+        enters: [`refused without an oracle file`],
+        build: (generated) => ({
+          ...generated,
+          declaration: `neither`,
+          fault: `none`,
+          steps: null,
+        }),
+      },
+      {
+        name: `no owns entry refuses the run`,
+        enters: [`refused without an owner`],
+        build: (generated) => ({
+          ...generated,
+          declaration: `declareOracle`,
+          fault: `none`,
+          ownerless: true,
+          wholeFile: `none`,
+          steps: null,
+        }),
+      },
+      {
+        name: `a bad entry in a run with no owner names the bad entry`,
+        enters: [`refused badEntry with no owner`],
+        build: (generated) => ({
+          ...generated,
+          declaration: `declareOracle`,
+          fault: `badEntry`,
+          ownerless: true,
+          wholeFile: `none`,
+          steps: null,
+        }),
+      },
+    ]),
   },
   resolve: resolveHistory,
   model,

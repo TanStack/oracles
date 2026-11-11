@@ -1356,7 +1356,6 @@ oracleProperty({
     statement: `From the records of the runs that judged it, each mutant gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, dead-code, branch-never-taken, not-infected, and not-observed, and ordinary tests for information only. Every gap has one directive message from its kind's fixed set, with no exit. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once.`,
     authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the oracle rubric's outcome kinds (ORC-006); the frozen design's oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05).`,
     limits: `No authored mutants. That real runs produce these records is oracle-gaps.report's.`,
-    owner: `packages/oracles/oracle-gaps`,
   },
   histories: {
     arbitrary: records,

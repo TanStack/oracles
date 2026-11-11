@@ -2574,7 +2574,6 @@ export function familyOptions({
       statement,
       authority: PART_REACH_AUTHORITY,
       limits: `The grammar generates the features that \`features\` enables; the reach of each gated state is a constructed history under those features.`,
-      owner: `eslint-plugin-oracles lint rules`,
     },
     histories: {
       arbitrary,

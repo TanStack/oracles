@@ -10,12 +10,13 @@
  * - `registration`: a property registers its campaigns, fixed histories, calibrations, and
  *   determinism test, and an enumerated property without a `label` gives
  *   distinct histories distinct test names, or fails to load when its id is not a registered
- *   oracle property, a required state has no constructed history, or a constructed history names an
- *   undeclared state. When several of the named load errors apply, the declaration's shape reports
- *   first, in this order: an unregistered id, then `predict` on an enumerated source (only a
- *   generated source declares states), then a history that is not data (`data`). A load fails with
- *   its first error alone. This precedence is analyst-chosen (2026-11-10): no contract text or
- *   maintainer decision orders these errors. The source kind decides which checks reach the
+ *   oracle property, a required state has no constructed history, a constructed history names an
+ *   undeclared state, or `owns` is not a non-empty literal list of strings (the gap report reads it
+ *   statically). When several of the named load errors apply, the declaration's shape reports
+ *   first, in this order: an unregistered id, then `owns`, then `predict` on an enumerated source
+ *   (only a generated source declares states), then a history that is not data (`data`). A load
+ *   fails with its first error alone. This precedence is analyst-chosen (2026-11-10): no contract
+ *   text or maintainer decision orders these errors. The source kind decides which checks reach the
  *   histories, so fixing the shape can remove a data error, and fixing the data error first can be
  *   wasted work.
  * - `verdict`: a test fails with a violation of law L exactly when its first
@@ -175,6 +176,8 @@ type Draft = {
   overReport: boolean
   noisyProbe: boolean
   predictMode: `match` | `missing` | `extra`
+  /** The `owns` option: absent, a literal list, a string, or a list with a non-string entry. */
+  ownsMode: `none` | `list` | `empty` | `string` | `bad entry`
   clock: boolean
   form:
     `plain` | `bigint` | `map` | `lossy` | `error` | `errors` | `boxed` | `trap`
@@ -296,6 +299,19 @@ const draft: fc.Arbitrary<Draft> = fc.record({
     {
       weight: 1,
       arbitrary: fc.constantFrom(`missing` as const, `extra` as const),
+    },
+  ),
+  // `owns` is read statically by the gap report, so it must be a literal list of strings.
+  ownsMode: fc.oneof(
+    { weight: 6, arbitrary: fc.constant(`none` as const) },
+    { weight: 4, arbitrary: fc.constant(`list` as const) },
+    {
+      weight: 1,
+      arbitrary: fc.constantFrom(
+        `empty` as const,
+        `string` as const,
+        `bad entry` as const,
+      ),
     },
   ),
   // A property whose driver runs on the framework's controlled clock.
@@ -453,6 +469,7 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
         ...(d.overReport ? { overReport: true } : {}),
         ...(d.noisyProbe ? { noisyProbe: true } : {}),
         ...(d.predictMode !== `match` ? { predictMode: d.predictMode } : {}),
+        ...(d.ownsMode !== `none` ? { ownsMode: d.ownsMode } : {}),
         ...(d.timing === `slow` ? { slow: true, timeout: 100 } : {}),
         ...(d.clock ? { clock: true } : {}),
         // fast-check cannot print a history whose getter throws, so only an
@@ -828,8 +845,19 @@ function predictSpec(
   const generated = spec.source.kind === `generated`
   // Every source, enumerated or generated, must name a registered property.
   if (spec.unregistered) return { loads: false }
-  // Load errors report the declaration's shape first (law `registration`): a
-  // `predict` on an enumerated source, then the data of its histories.
+  // Load errors report the declaration's shape first (law `registration`), in
+  // the order oracleProperty checks it: `owns`, then a `predict` on an
+  // enumerated source. `owns` must be a literal list of strings, which the gap
+  // report reads.
+  if (
+    spec.ownsMode === `empty` ||
+    spec.ownsMode === `string` ||
+    spec.ownsMode === `bad entry`
+  )
+    return {
+      loads: false,
+      loadError: `${spec.id}: \`owns\` must be a non-empty literal list of strings`,
+    }
   if (!generated && spec.predictMode === `extra`)
     return {
       loads: false,
@@ -1855,7 +1883,7 @@ function checkSuite(
       if (seen.loaded)
         return violation(
           `run`,
-          `${spec.id} loaded, but its id is unregistered, a required state has no constructed history, a constructed history names an undeclared state, or a history is not data`,
+          `${spec.id} loaded, but its id is unregistered, a required state has no constructed history, a constructed history names an undeclared state, \`owns\` is not a non-empty literal list of strings, or a history is not data`,
           `registration`,
         )
       if (
@@ -2143,6 +2171,7 @@ const generatedDraft = (overrides: Partial<Draft>): Draft => ({
   overReport: false,
   noisyProbe: false,
   predictMode: `match`,
+  ownsMode: `none`,
   clock: false,
   form: `plain`,
   zeroNoise: false,
@@ -2182,7 +2211,6 @@ oracleProperty({
     statement: `oracleProperty registers, fails, shrinks, replays, reruns, calibrates, times out, and checks determinism, membership, and reach as its contract states.`,
     authority: `packages/oracles/src/oracle-property.ts header; maintainer decisions of 2026-11-03; oracle rubric ORC-006, ORC-007, ORC-015`,
     limits: `Synthetic properties with histories of one to three integers, one or two per run; real Vitest child processes; one rerun probe per property.`,
-    owner: `oracleProperty framework`,
   },
   histories: {
     arbitrary: suite,
@@ -2387,6 +2415,26 @@ oracleProperty({
         generatedDraft({ probe: `agree`, predictMode: `missing` }),
       ),
       fixedHistory(
+        `owns given as an empty list fails to load`,
+        [`registration-error`],
+        generatedDraft({ ownsMode: `empty` }),
+      ),
+      fixedHistory(
+        `owns given as a string fails to load`,
+        [`registration-error`],
+        generatedDraft({ ownsMode: `string` }),
+      ),
+      fixedHistory(
+        `owns with a non-string entry fails to load`,
+        [`registration-error`],
+        generatedDraft({ ownsMode: `bad entry` }),
+      ),
+      fixedHistory(
+        `a literal owns list loads`,
+        [],
+        generatedDraft({ ownsMode: `list` }),
+      ),
+      fixedHistory(
         `predict needs a probe-bound state`,
         [`registration-error`],
         generatedDraft({ predictMode: `extra` }),
@@ -2396,6 +2444,14 @@ oracleProperty({
         [`registration-error`],
         {
           ...generatedDraft({ predictMode: `extra` }),
+          source: { kind: `enumerated`, histories: [[0]] },
+        },
+      ),
+      fixedHistory(
+        `an owns error outranks a predict error on an enumerated source`,
+        [`registration-error`],
+        {
+          ...generatedDraft({ ownsMode: `bad entry`, predictMode: `extra` }),
           source: { kind: `enumerated`, histories: [[0]] },
         },
       ),
