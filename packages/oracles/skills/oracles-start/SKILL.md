@@ -379,7 +379,8 @@ and show which law catches each.
 ## 6. Present
 
 When the oracle has found a bug and the engineer has settled some design
-questions, stop and present:
+questions, stop and present. Present the same way when the oracles found no
+bug and the engineer does not want another one:
 
 - what you built, and what it found
 - an offer to walk through how it works: how the reference model was built,
