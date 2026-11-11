@@ -18,7 +18,9 @@ oracle checklist, and a glossary.
   project's owning oracles leave unexercised or unjudged. A project runs it as
   `oracle-gaps --package <dir> --source <src/x.ts,...>`, with
   `--env-prefix` set to the prefix that the project passes to
-  `configureOracles`. Each run writes its report to
+  `configureOracles`. `--config <file>`, relative to `--package`, selects the
+  Vitest config; without it, the run loads the config that Vitest discovers,
+  and the baseline output names the config it loaded. Each run writes its report to
   `<dir>/.oracle-gaps/out/<run>/` (or to `--out`), and keeps its state in
   `<dir>/.oracle-gaps/`, and keeps the last five run directories there. Add
   `.oracle-gaps/` and `.oracle-gaps-*` to the project's `.gitignore`. The
