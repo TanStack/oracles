@@ -10,7 +10,8 @@ checks production against an independent model. Make the law clear enough
 that someone could predict an observation without reading production. The
 code comes after that.
 
-Read this skill in full, then read the [glossary](../../docs/glossary.md).
+Read this skill in full, then read the [glossary](../../docs/glossary.md)
+in full. It defines the terms that the sheet and the evidence use.
 The [checklist](../../docs/oracle-checklist.md) is the complete list of
 requirements. This skill cites it by ID, such as ORC-004.
 
@@ -50,97 +51,110 @@ its promise.
   law's stated domain is strengthening. Changing the stated domain, a
   checkpoint, or `limits` is a law change.
 - **Changing a law** (its promise, domain, checkpoint, assumptions, or the
-  freedoms it allows) needs a law delta: the old and new row for each changed
-  law. Stop for the user's review.
+  freedoms it allows) needs a law delta: the old and new block for each
+  changed law. Stop for the user's review.
 - **A new law, or missing or contradictory authority,** needs the full law
   sheet below. Stop for the user's review. An analogy to another documented
   rule is not authority: mark that law `open`.
 
-**Laws people forget to write down:**
+**Write the law sheet from this template.** Docs, tests, and bug reports give
+examples. A law is a statement over the whole domain. The template makes you
+write the step from one to the other. Copy it once for each law, and fill in
+every field. The template is the sheet. Do not replace it with a table.
+
+```markdown
+### L1 <short name>
+
+- Examples: <each concrete case, with its source>
+- What varies, what stays: <the parts that can change without changing the answer; the part that decides it>
+- Law: For every <domain>, <promise>.
+- Domain edges: <where the domain stops>
+- New case: <an input in none of the sources, with its predicted result>
+- Rebuilt examples: <each example derived from the law sentence alone; any that it gets wrong, and why>
+- Dynamics: <how the result or state changes with each action or input>
+- Constraints: <what holds in every history>
+- Boundary conditions: <each edge; each one gets a constructed history>
+- Authority: <document and section, or a dated maintainer decision>
+- Status: adopted | observed | open
+- Rival: <a plausible different law>
+- Witness: <a legal history where the law and the rival predict different observations>
+- Checkpoint: <where the contract owes the observation>
+```
+
+How to fill in the fields:
+
+- **Examples** and **What varies, what stays:** for example, `ms('2 hrs')`
+  is `7200000` (README, Examples). The number, the spelling, and the spacing
+  can change. The unit's length decides the answer.
+- **Law:** one sentence over the domain. For example: "For every finite
+  number `n` and every unit name `u` in the table, in any case and with or
+  without a space, `parse(n + u)` is `n` times the length of `u`."
+- **New case:** if you cannot write one, the law is still a list of
+  examples. Write it again.
+- **Rebuilt examples:** an example that the law gets wrong shows a missing
+  condition, a second law, or a source that disagrees. Say which.
+- **Dynamics** are the model's rules, and the histories vary them. For a pure
+  function, write "none: one call", and put the variation into the domain.
+- **Constraints** hold whatever happens: a count never above its limit, an
+  equality that is symmetric, a read that returns the last write. The check
+  tests them at every checkpoint.
+- **Boundary conditions** are the edges, where real behavior and most
+  defects live: empty, zero, `-0`, the size limit, at capacity, the first and
+  the last item, keys that shadow prototype names, cleanup. A boundary that
+  the law does not decide goes under open questions. Do not leave it out of
+  the grammar.
+- **Status:** `adopted` if it has an authority, `observed` if production does
+  it but nobody adopted it, `open` if it is a question. Only `adopted` laws
+  become expected results. An `observed` or `open` law goes to the user as a
+  question.
+- **Production output is evidence, never authority.** A rule that you write
+  only because production does it is model hacking. Mark that rule
+  `observed`, and ask the user. An analogy to another documented rule is not
+  authority either: mark that law `open`.
+
+**Required blocks: the laws people forget.** The sheet has a block for each
+of these, or one line that says why it does not apply:
 
 - **No throw on valid input.** When the contract says a call returns a value,
   it promises not to throw for valid input. State that as a law, with the same
   authority, so a mutant that throws is a kill, not a crash.
 - **The laws of the kind of function.** An equality check is reflexive and
   symmetric. A parser and a serializer round-trip. A setter is idempotent when
-  set to the same value. Give these as rows, with the function's documented
-  purpose as their authority.
-- **The task already approved these laws?** Do not ask again.
+  set to the same value. Their authority is the function's documented purpose.
 
-**Write the general law down, from the examples.** Docs, tests, and bug
-reports give examples. A law is a statement over the whole domain. Before the
-table, write this block for each law, in the sheet itself:
+The task already approved these laws? Do not ask again.
 
-1. **Examples:** each concrete case, with its source. For example:
-   `ms('2 hrs')` is `7200000` (README, Examples).
-2. **What varies, what stays:** for each example, name the parts that could
-   change without changing the expected answer (the number, the spelling,
-   the spacing). Then name the part that decides it (the unit's length).
-3. **The law:** one sentence over the domain, in the form "For every ... ,
-   ...". Name the domain's edges. For example: "For every finite number `n`
-   and every unit name `u` in the table, in any case and with or without a
-   space, `parse(n + u)` is `n` times the length of `u`."
-4. **A new case the law predicts:** one input that is in none of the sources,
-   with its predicted result. If you cannot write one, the law is still a list
-   of examples. Write it again.
-5. **Rebuild the examples:** derive every example from item 1 using only the
-   law's sentence. Name any example that the law gets wrong. A wrong one
-   means a missing condition, a second law, or a source that disagrees. Say
-   which.
-6. **Dynamics, constraints, and boundary conditions:** sort what the law
-   says into three kinds.
-   - **Dynamics:** how the result or the state changes with each action or
-     input. These are the model's rules, and the histories vary them.
-   - **Constraints:** what holds in every history, whatever happens: a count
-     never above its limit, an equality that is symmetric, a read that returns
-     the last write. The check tests them at every checkpoint.
-   - **Boundary conditions:** the edges, where real behavior and most defects
-     live: empty, zero, `-0`, the size limit, at capacity, the first and the
-     last item, keys that shadow prototype names, cleanup. List them. Give
-     each one a constructed history. A boundary that the law does not decide
-     is an open question, not something to leave out of the grammar.
+After the blocks, list the **open questions**. Then add a summary table with
+one row per block: law, status, authority, and checkpoint. The table is only
+an index to the blocks.
 
-A law written only as examples, or one that cannot rebuild its examples, is
-not ready for the sheet.
+When the promise is unclear, or two readings predict different behavior, use
+the [law discovery](../../docs/instruments/law-discovery.md) card.
 
 **Use the [design grammar](../../docs/instruments/design-grammar.md) card
-when any of these is true.** Do not judge whether the law is hard:
+when any of these is true.** Do not judge whether the law is hard. Check the
+list at the sheet, and again after each gap check:
 
-- the sheet has more than five laws for one boundary
-- a law has no new case that it predicts (item 4 above)
+- the sheet has more than five rows for one boundary (adopted, observed, and
+  open rows all count)
+- a law has no new case that it predicts
 - the model has more than one branch per law
 - the work changes or simplifies an existing model
 - the gap check leaves three or more gaps in one function
 
 Say in the evidence which trigger fired, or that none did.
 
-Write one row per law and give the sheet to the user.
-
-| Field      | What to write                                                                                                         |
-| ---------- | --------------------------------------------------------------------------------------------------------------------- |
-| Law        | The promise, stated so that a reader could predict an observation.                                                    |
-| Authority  | The API or contract document and section, or a dated maintainer decision.                                             |
-| Status     | `adopted` if it has an authority, `observed` if production does it but nobody adopted it, `open` if it is a question. |
-| Rival      | A plausible different law.                                                                                            |
-| Witness    | A legal history where the law and its rival predict different observations.                                           |
-| Checkpoint | Where the contract owes the observation.                                                                              |
-
-- **Production output is evidence, never authority.** A rule that you write
-  only because production does it is model hacking. Mark that rule
-  `observed`, and ask the user.
-- Only `adopted` laws become expected results. An `observed` or `open` law
-  goes to the user as a question.
-- When the promise is unclear, or two readings predict different behavior, use
-  the [law discovery](../../docs/instruments/law-discovery.md) card.
-
-**Stop here** when the sheet or a law delta is needed. Do not write the oracle
-until the user has reviewed it.
+**Stop here** when the sheet or a law delta is needed. Do not stop with an
+empty field: each law has a filled block first. Do not write the oracle until
+the user has reviewed the sheet. With no user present, write the sheet and
+stop. A law sheet has no default.
 
 Once the user approves it, the sheet becomes the **law block**: the opening
-comment of the oracle file, beside the model that enacts it. Each row's law,
-authority, and limits also go in that property's `law` option. Keep the
-block, the `law` option, and the model in step: a change to one updates the
-others in the same change (ORC-003).
+comment of the oracle file, beside the model that enacts it. The blocks can
+be shorter there, but keep each law sentence, its authority, and its limits.
+Each law's sentence, authority, and limits also go in that property's `law`
+option. Keep the block, the `law` option, and the model in step: a change to
+one updates the others in the same change (ORC-003).
 
 ## 2. Freeze what the oracle must preserve
 
@@ -266,9 +280,21 @@ in the model.
   one a constructed history that enters it (ORC-015). Put a state that you
   only count in `measured`. A literal example or a `fixed` history is not
   reach. A constructed history must be one the arbitrary could generate,
-  within its bounds. Build its values from the generated history (for example
-  "the initial value plus one"), not from constants that the generated values
-  might equal.
+  within its bounds. Use a constant when the arbitrary can generate it and it
+  cannot collide with a generated value (a fixed boundary shape). Otherwise
+  derive it from the generated history (for example "the initial value plus
+  one").
+- **Every arbitrary must take its histories back.** fast-check replays each
+  `fixed` and constructed history through the arbitrary. A `.map` with no
+  inverse cannot do this, and every such history fails at run time with
+  `canShrinkWithoutContext`. Give each `.map` its inverse
+  (`.map(f, unmap)`, where `unmap` throws on a value it cannot map back), or build from `fc.record`, `fc.constantFrom`, and plain
+  values. Run the oracle once right after you write each constructed history.
+- **Choose the string unit on purpose.** fast-check's unicode strings include
+  lone surrogates, and slicing by code unit splits astral characters. Use
+  `fc.string({ unit: 'grapheme' })` or code points when the law is about
+  characters. When the law is about any JavaScript string, lone surrogates
+  are a boundary condition that the law must decide.
 - **Cover the law's whole domain.** A mutant can only show what the histories
   vary. If the grammar covers part of the domain the law states (for example,
   fractions in quarter steps only), say so in `limits`. Better, widen it.
@@ -312,6 +338,13 @@ Techniques: [guide § Histories](../../docs/guide.md#histories).
     observations, so the check can reject them. A mutant that crashes
     production is not a kill.
   - It observes the contract's return values.
+  - It records only data: primitives other than symbols, plain arrays and
+    objects, Maps, Sets, and Errors. A symbol, a Date, a function, or a class
+    instance throws `OracleDataError`. Convert it first, for example to its
+    description or its time value.
+  - It identifies kinds with brand checks (`node:util` `types`, or
+    `Object.prototype.toString`), not `instanceof`, when a law is about
+    prototypes. `instanceof` follows a corrupted prototype chain.
   - It awaits the work it starts.
   - It bounds its own run time and work, and throws a structured error when
     a bound is passed.
@@ -327,9 +360,14 @@ Techniques: [guide § Histories](../../docs/guide.md#histories).
   (`src/x.ts#run`, `src/x.ts#Class.method`). Own only what the laws cover. The
   gap check judges only owned code, and the gap check's `--source` selects
   files.
-  - If an owned function reads module-level data (a lookup table, a constant
-    object), own the whole file for now. Data outside a function is not yet
-    part of a function entry's tree.
+  - A method of an object that a function returns (`mitt().emit`) has no name
+    of its own. Own it through the enclosing function (`src/index.ts#mitt`).
+    That entry also brings in the sibling methods: cover them, or report their
+    gaps as outside this oracle's scope.
+  - Temporary: data outside a function (a lookup table, a constant object) is
+    not yet part of a function entry's tree. Own the whole file only when
+    that data affects an adopted law, such as a unit table that decides the
+    result. A constant that feeds no law does not need it.
   - When a whole-file entry pulls in another contract (for example a batching
     API in the same file), write that contract's own oracle, or report its
     gaps as outside this oracle's scope.
@@ -455,6 +493,14 @@ comes with one instruction. Do what it says, within the rules below.
   limit, and do not remove the guard: it is a compile-time check.
 - **Temporary:** in a package without `"type": "module"`, Vite may warn
   while loading the gap check's own config copies. Ignore that warning.
+
+- **Few mutants are weak evidence.** If the gap check generates few mutants
+  for an owned function, or none on a law's decisions (such as a return
+  expression), write authored mutants for the laws it misses. Put them in a
+  directory and pass it with `--mutants <dir>`. The form is in the
+  [mutant gap hunt](../../docs/instruments/mutant-gap-hunt.md) card.
+- **Three or more gaps in one function** fire the design grammar trigger
+  (step 1). Apply the card before you add histories.
 
 Use the [mutant gap hunt](../../docs/instruments/mutant-gap-hunt.md) card for
 a survivor whose missing history is not obvious.

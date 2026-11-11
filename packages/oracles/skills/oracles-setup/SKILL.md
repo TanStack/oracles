@@ -8,11 +8,12 @@ description: Set up @tanstack/oracles in a repository. Install the pinned packag
 You are setting up oracle testing in this repository. Do the steps in order.
 Ask the user before each step that writes outside the repository. When no
 user is available, choose the default this skill gives, record each choice in
-your report, and continue.
+your report, and continue. That default covers setup questions only. A law
+sheet has no default: write it, report it, and stop.
 
-Setup ends when one oracle passes on production and the gap check has judged
-it with no gap left open, unless the user decides otherwise. It does not end
-when the packages are installed.
+Setup ends when one oracle passes on production and the gap check leaves no
+gap open in that oracle's own contract, outside its stated limits, unless the
+user decides otherwise. It does not end when the packages are installed.
 
 ## 1. Read the repository
 
@@ -28,7 +29,8 @@ Find out, and tell the user:
   `.eslintrc`, or no ESLint (for example Biome only).
 - The Node version that CI and the `engines` field use. The package needs
   Node 20 or later. If CI runs an older Node, tell the user, and offer a
-  separate Node 20 job for the oracles. Do not change the existing jobs.
+  separate Node 20 job for the oracles. Do not change the existing jobs. With
+  no user present, do not change CI: report the mismatch.
 - The repository's TypeScript version. Do not change it (step 2).
 - The package manager and its runner for package binaries: `pnpm exec`,
   `npx`, or `yarn`. Use them wherever this skill shows `pnpm add` or
@@ -92,7 +94,9 @@ only has to match the Vitest config and the lint glob. The gap check loads only 
 
 - If the repository has no Vitest config, create `vitest.config.ts` for the
   oracle files. Jest and mocha ignore that name.
-- If it has one, add the oracle files to its `include`.
+- If it has one, add the oracle glob to its existing `include`. Keep the
+  globs that are there: replacing them drops the existing suite, since an
+  `include` replaces Vitest's default.
 
 ```ts
 // vitest.config.ts
@@ -126,23 +130,33 @@ export default [
   so a disable comment has no effect.
 - `production` checks the probe form in `src/**` and `packages/*/src/**`. If
   production source lives elsewhere (for example a root-level `index.js`), add
-  the `oracle/probe-form` rule with that glob.
+  the rule with that glob. The config object must register the plugin itself:
+
+  ```js
+  { files: ['index.js'], plugins: { oracle: oracles }, rules: { 'oracle/probe-form': 'error' } }
+  ```
+
 - If the repository lints with xo, keep the oracle files and the new config
   files out of xo (its `ignores`), and lint them with the oracle ESLint
-  config.
+  config. Do not install `eslint@^9` as a dev dependency: xo loads ESLint
+  from the hoisted copy, and a second major breaks it. Use the `npx -p
+eslint@9` fallback below instead.
 - **TypeScript 7:** typescript-eslint does not support TypeScript 7 yet. If the
   repository's ESLint config cannot parse TypeScript, the oracle lint cannot
-  run. Report it as an environment limit, with that reason. Do not change the
-  repository's TypeScript.
+  run. Installing `@typescript-eslint/parser` fails with `ERESOLVE`, since its
+  TypeScript peer range ends before 7. Do not force the install. Report it as
+  an environment limit, with that reason. Do not change the repository's
+  TypeScript.
 - The plugin parses the modules an oracle file imports with that file's
   parser. A `.js` oracle file that imports a TypeScript module gets an
   `unparsedModule` report: write the oracle file in TypeScript, with a
   TypeScript parser.
 - If ESLint does not already parse TypeScript, add `@typescript-eslint/parser`
   as a dev dependency. Set it as `languageOptions.parser` for every TypeScript
-  file that the presets cover: the oracle files and the production source.
-  Otherwise a typed production file fails to parse before the probe rule
-  runs.
+  file that the presets cover: the oracle files, and the production source if
+  it is TypeScript. Otherwise a typed production file fails to parse before
+  the probe rule runs. For JavaScript production source, set the parser for
+  the oracle files only.
 - Do not add `legacyCampaigns` or any other exemption. Adopters have none.
 
 **An older ESLint (7 or 8, `.eslintrc`).** Do not upgrade the repository's
@@ -159,9 +173,10 @@ The config's parser import resolves from the repository, so it uses the
 repository's own `@typescript-eslint/parser`.
 
 Run the linter once and confirm that it loads the rules. Then check that the
-rules are live: a deliberately wrong line in an oracle file (for example
-`fc.assert(...)`) must produce an error. Remove that line again. Before the
-first oracle file exists, do this check through the linter's `--stdin` with
+rules are live: a deliberately wrong line in an oracle file must produce an
+error. Use `import fc from 'fast-check'` and then `fc.assert(...)`. The rule
+follows the fast-check import, so an `fc` that is not imported passes.
+Remove the probe again. Before the first oracle file exists, do this check through the linter's `--stdin` with
 an oracle file name, since a glob with no files fails.
 
 ## 4. Write the AGENTS.md block
@@ -191,7 +206,8 @@ This repository tests its laws with `@tanstack/oracles`.
 <!-- END @tanstack/oracles -->
 ```
 
-Fill in the two placeholders in step 7, once their values exist. If the repository has a
+Fill in the two placeholders in step 7, once their values exist. A run that
+stops before step 7 leaves them in place, and its report says so. If the repository has a
 `CLAUDE.md` and no `AGENTS.md`, ask the user which file gets the block.
 
 In a workspace with a package-local install, put the block in the package's
@@ -229,7 +245,7 @@ Write a pointer skill as `<directory>/<name>/SKILL.md` for each of
 ```md
 ---
 name: oracles-design
-description: <copied exactly from node_modules/@tanstack/oracles/skills/oracles-design/SKILL.md>
+description: <PLACEHOLDER: the description line of the installed oracles-design SKILL.md>
 ---
 
 Read `<installed path>/skills/oracles-design/SKILL.md` in full, and follow it.
@@ -265,7 +281,8 @@ If the first oracle fails on unchanged production under an adopted law, it
 found a defect. The RED is the finding: report it with its replay line, and
 tell the user. Never weaken the oracle to make it pass. The gap check cannot
 judge a failing baseline yet, so make the smallest local fix on a scratch
-branch, run the gap check there, and say in the report that it ran on the
+copy or a local branch (never pushed or committed to the user's branch), run
+the gap check there, and say in the report that it ran on the
 patched code. With the user's approval, follow `oracles-design` step 7's
 defect path for the real fix.
 
@@ -276,7 +293,8 @@ skip that step to finish sooner.
 Put the oracle's `owns` list on its `oracleProperty` call. An entry is a file
 (`src/index.ts`) or one function in it (`src/index.ts#parse`, or
 `src/x.ts#Class.method`). A function entry owns that function and its static
-call tree. For a first oracle, own only the function it covers. If the gap check counts **0 oracle files**, the
+call tree. For a first oracle, own only the function it covers. Own the whole file only
+when module data affects an adopted law (see `oracles-design` step 6). If the gap check counts **0 oracle files**, the
 oracle is not declared. That is a setup failure, even when the report shows
 0 gaps and the command exits 0.
 
@@ -326,7 +344,10 @@ Tell the user:
   - inside a stated limit, with the limit
   - framework or CLI limitations (for example a timeout from a synchronous
     infinite loop, or an exhaustiveness-guard mutant)
+  - other contracts that a whole-file entry pulled in, listed as outside
+    this oracle's scope
   - every other gap, with its instruction
 - any defect the oracle found, with its witness
 
-Do not call setup done while a gap is open, unless the user decides otherwise.
+Do not call setup done while a gap is open in the oracle's own contract,
+outside its stated limits, unless the user decides otherwise.
