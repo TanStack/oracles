@@ -160,7 +160,10 @@ The engineer's answer to a design question is an authority too. Once they
 decide it, it becomes a potential law, and the oracle can find where the
 code breaks it, just as with a law from the docs. In a repository with few
 docs, this is the usual way to a bug: ask the question, and let the oracle
-check the answer.
+check the answer. The oracle file records the decision with the
+engineer's name and GitHub login, so that their team knows whom to ask.
+Find the login with `gh api user --jq .login`. If that fails, ask for it
+together with the first decision.
 
 **Present each finding** in this shape, a light touch, with each finding
 called a possible bug or a question, never a certainty:
@@ -252,7 +255,7 @@ a few examples to a general law:
 - Dynamics: <how the result or state changes with each action or input>
 - Constraints: <what holds in every history>
 - Boundary conditions: <each edge; each one gets a constructed history>
-- Authority: <document and section, or a dated maintainer decision>
+- Authority: <document and section, or a decision: who (name and GitHub login), when, and the rule>
 - Backing: stated | observed | open
 - Rival: <a plausible different law>
 - Witness: <a legal history where the law and the rival predict different observations>

@@ -155,8 +155,11 @@ of the session: no "the maintainer approved", "the engineer deferred", or
 "as the probe showed". A user's decision is stated as the rule it made, and
 a limit's reason is about the code ("`klona` calls the constructor with no
 arguments"), not about who has not decided yet. When a user's decision is
-the authority for a law, write it as "Maintainer decision, <date>: <the
-rule>", the same way in the `law` option's `authority`.
+the authority for a law, write it as "Decision by <name> (GitHub
+<login>), <date>: <the rule>", the same way in the `law` option's
+`authority`. On a team, a reader needs to know whom to ask. Take the login
+from `gh api user --jq .login`, or ask the user. Write the login without an
+`@`, so that a copy into a pull request does not notify anyone.
 
 **Then write the code under it.** Each boundary condition from the probes
 and the law worksheet becomes a constructed history. If there was no first

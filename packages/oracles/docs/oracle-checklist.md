@@ -58,7 +58,8 @@ No requirement here can be met by declaring something out of reach.
 - **Framework:** `law.statement`, `law.authority`, and `law.limits` are
   required fields.
 - **Acceptance evidence:** A reviewer can trace the expected result to an
-  approved API, contract document and section, or dated maintainer decision,
+  approved API, contract document and section, or a maintainer decision
+  with its maintainer and date,
   and can say what the oracle does not establish. Production output is
   evidence; it is never authority.
 - **Not required:** A complete list of every behavior outside the subsystem.
