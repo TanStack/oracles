@@ -21,15 +21,23 @@ const parsedModules = new Map()
 
 /**
  * The state of one lint: the language options of the file it lints, the
- * modules it loaded, the production package flags it read, and what it
- * resolved. `resolved` holds one answer for each question about a module's
- * export, keyed by the question, the module, and the export's name, so no
- * export is resolved twice, whatever the call graph of the modules.
+ * modules it loaded and the paths it resolved, the production package flags
+ * it read, and what it answered. `resolved` holds one answer for each
+ * question about a module's export, keyed by the question, the module, and
+ * the export's name, so no export is resolved twice, whatever the call
+ * graph of the modules.
  */
 export class LintSession {
   modules = new Map()
+  paths = new Map()
   published = new Map()
   resolved = new Map()
+  // Answers that assumed a question still in progress, each with the index
+  // of that question in `asking`. They hold only while it is in progress.
+  provisional = new Map()
+  // The questions in progress, innermost last, each with the lowest index
+  // of a question in progress that its answer assumed.
+  asking = []
   constructor(languageOptions) {
     this.languageOptions = languageOptions
   }
@@ -37,14 +45,41 @@ export class LintSession {
   /**
    * The memoized answer of `compute` for `key`. A question that is still
    * being answered when it is asked again, through a cycle of modules,
-   * answers undefined.
+   * answers undefined for now. Every answer that used that assumption is
+   * kept only until the question that closed the cycle is answered, so no
+   * answer depends on which question of a cycle the lint asked first.
    */
   once(key, compute) {
     if (this.resolved.has(key)) return this.resolved.get(key)
-    this.resolved.set(key, undefined)
+    const kept = this.provisional.get(key)
+    if (kept !== undefined && this.asking[kept.root]?.key === kept.rootKey) {
+      this.#assume(kept.root)
+      return kept.answer
+    }
+    const cycle = this.asking.findIndex((question) => question.key === key)
+    if (cycle >= 0) {
+      this.#assume(cycle)
+      return undefined
+    }
+    const index = this.asking.length
+    const question = { key, assumes: index }
+    this.asking.push(question)
     const answer = compute()
-    this.resolved.set(key, answer)
+    this.asking.pop()
+    if (question.assumes < index)
+      this.provisional.set(key, {
+        answer,
+        root: question.assumes,
+        rootKey: this.asking[question.assumes].key,
+      })
+    else this.resolved.set(key, answer)
     return answer
+  }
+
+  /** Marks every question above `root` as assuming that it has no answer yet. */
+  #assume(root) {
+    for (const question of this.asking.slice(root + 1))
+      question.assumes = Math.min(question.assumes, root)
   }
 }
 
@@ -62,9 +97,19 @@ export function lintSession(context) {
   return session
 }
 
-/** The test module that a relative import names, or undefined. */
+/**
+ * The test module that a relative import names, or undefined. Each
+ * directory and specifier is resolved once for each lint.
+ */
 export function resolveTestModule(fromFile, source, session) {
   if (!source.startsWith(`.`)) return undefined
+  const key = `${dirname(fromFile)}\0${source}`
+  if (!session.paths.has(key))
+    session.paths.set(key, findTestModule(fromFile, source, session))
+  return session.paths.get(key)
+}
+
+function findTestModule(fromFile, source, session) {
   const base = resolve(dirname(fromFile), source)
   const stem = base.replace(/\.(m?js|tsx?)$/, ``)
   // A `.js` specifier names the TypeScript source when one exists, and

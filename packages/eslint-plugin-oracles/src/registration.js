@@ -79,24 +79,22 @@ export function isFunction(node) {
 // (`skip`, `each`, `extend`), the members written since the last binding
 // (those that the expression itself spells), and the members that a binding
 // of another module carries. A namespace value, `{ member(name) }`, is a
-// namespace import of the framework or of a test module.
+// namespace import of a package or of a relative test module.
 //
-// A binding resolves when it is an import of the framework, a namespace
-// member, a variable (its initializer, a destructuring, and each plain
-// assignment), or an export of a test module. Casts, the branches of a
+// A binding resolves when it is an import of a test root from a package, a
+// namespace member, a variable (its initializer, a destructuring, and each
+// plain assignment), or an export of a relative test module. Casts, the branches of a
 // conditional or logical expression, `test.extend(fixtures)`, a selection
 // helper such as `oracleReplayTest(it)`, and a tagged template such as
-// `it.each` with a table keep the value. Any other binding, such as a local
-// function of the same name or another package's export, is no test
+// `it.each` with a table keep the value. A test root imported from any
+// package or subpath alias is a test function, and so is a fixture of one.
+// Any other binding, such as a local function of the same name, is no test
 // function. An unbound name is one of Vitest's globals.
 
-// The packages whose exports `it`, `test`, `describe`, `suite`, and `bench`
-// are test functions.
-const testPackages = new Set([
-  `vitest`,
-  `@fast-check/vitest`,
-  `@playwright/test`,
-])
+// The names of the test functions. An import of one of these names from any
+// package or subpath alias is a test function: the rules cannot read a
+// package, so they fail closed there (coordinator decision, 2026-11-11). A
+// false positive costs a rename, and a false negative switches a law off.
 const frameworkRoots = new Set([`it`, `test`, `describe`, `suite`, `bench`])
 // Unbound names, as Vitest's `globals` declares them. `fcTest` is the name
 // that `@fast-check/vitest`'s `test` takes in an oracle file.
@@ -306,10 +304,10 @@ function destructured(pattern, name, init, scope, seen) {
   return memberOf(valueOf(init, scope, seen), key)
 }
 
-/** A namespace import of the framework or of a test module, or undefined. */
+/** A namespace import of a package or of a test module, or undefined. */
 function namespaceOf(source, scope) {
   if (
-    !testPackages.has(source) &&
+    source.startsWith(`.`) &&
     resolveTestModule(scope.file, source, scope.session) === undefined
   )
     return undefined
@@ -326,9 +324,7 @@ function namespaceOf(source, scope) {
  */
 function importedValue(source, name, scope) {
   if (!source.startsWith(`.`))
-    return testPackages.has(source) && frameworkRoots.has(name)
-      ? framework(name)
-      : undefined
+    return frameworkRoots.has(name) ? framework(name) : undefined
   const file = resolveTestModule(scope.file, source, scope.session)
   if (file === undefined) return undefined
   const value = scope.session.once(`value\0${file}\0${name}`, () =>
@@ -515,7 +511,7 @@ export function registeredTest(node, functions) {
     test === undefined ||
     suiteRoots.has(test.root) ||
     test.members.includes(`describe`) ||
-    !test.own.every((member) => testFunctionMembers.has(member))
+    !test.members.every((member) => testFunctionMembers.has(member))
   ) {
     return undefined
   }

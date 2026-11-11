@@ -44,6 +44,7 @@ import {
   findVariable,
   isModuleFile,
   oracleSettings,
+  testFunctionMembers,
   testFunctions,
 } from '../registration.js'
 
@@ -95,7 +96,11 @@ function rawCampaignOf(node, sourceCode, functions) {
   if (callee.type !== `MemberExpression`) return undefined
   // `.prop` is checked on the call that the member is, so the curried
   // registration `fcTest.prop([...])(name, body)` reports once.
-  if (functions.callee(callee)?.own.at(-1) === `prop`)
+  const test = functions.callee(callee)
+  if (
+    test?.own.at(-1) === `prop` &&
+    test.members.every((member) => testFunctionMembers.has(member))
+  )
     return {
       messageId: `rawProperty`,
       data: { call: sourceCode.getText(callee) },

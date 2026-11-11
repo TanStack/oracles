@@ -60,8 +60,11 @@ caller's body is a registration too. `oracle/no-unit-test`,
 `oracle/no-disabled`, and `oracle/oracle-property-only` share one account of
 a test function, so they agree on every call. A callee's root is a test
 function when its binding resolves to `it`, `test`, `describe`, `suite`, or
-`bench` of `vitest`, `@fast-check/vitest`, or `@playwright/test`, or to a
-fixture of one (`test.extend(fixtures)`). The rules follow these bindings:
+`bench` imported from any package or subpath alias (`vitest`,
+`@playwright/test`, `node:test`, `#test/fixtures`), or to a fixture of one
+(`test.extend(fixtures)`). The rules cannot read a package, so they fail
+closed there: a false positive costs a rename, and a false negative would
+switch an oracle off. The rules follow these bindings:
 
 - a named, aliased, or namespace import (`vitest.it`), and an unbound name
   that Vitest's `globals` declares;
@@ -77,19 +80,20 @@ as`, a default export, and a relay of an imported binding, through star
   export is resolved once per lint.
 
 A binding that resolves to anything else is no test function, whatever its
-name: a local function named `bench`, a namespace of an ordinary module
-(`patterns.test(...)`), or an export of another package. A `describe` or
+name: a local function named `bench`, or a namespace of an ordinary relative
+module (`patterns.test(...)`). A member that is no registration, such as
+Playwright's `test.step`, registers nothing, bound or not. A `describe` or
 `suite` is exempt by the function that it resolves to, not by its local
-name.
+name. In a cycle of modules, the answer does not depend on which binding
+the lint reads first.
 
 The rules do not recognize these forms:
 
 - a test function passed as a parameter to a local helper
   (`function reg(t) { t('n', fn) }`). `oracle/no-disabled` reports the
   `reg(it)` call instead;
-- a fixture or test function that a package exports, because the rules read
-  only relative test modules;
-- a test function from a package other than the three above;
+- a fixture or test function that a package exports under another name,
+  because the rules read only relative test modules;
 - a computed member whose name is not a string literal, and a variable that
   a destructuring assignment (not a declaration) writes;
 - a modifier call, such as `.skipIf(flag)`, that another module binds and

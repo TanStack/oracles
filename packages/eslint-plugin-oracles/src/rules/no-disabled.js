@@ -759,6 +759,24 @@ export default {
       )
     }
 
+    // The values already reported as passed test functions. The branches of
+    // one conditional or logical expression pass one value, so it is
+    // reported once.
+    const passedValues = new Set()
+    /** Whether `node` is the first test function of the value it passes. */
+    function firstValue(node) {
+      let value = outermostCast(node)
+      while (
+        (value.parent.type === `ConditionalExpression` &&
+          value.parent.test !== value) ||
+        value.parent.type === `LogicalExpression`
+      )
+        value = outermostCast(value.parent)
+      if (passedValues.has(value)) return false
+      passedValues.add(value)
+      return true
+    }
+
     return {
       CallExpression(node) {
         // A curried call such as `fcTest.prop(arbs)(name, fn)` is reported
@@ -786,7 +804,7 @@ export default {
         const test = functions.callee(node.callee)
         if (
           test === undefined ||
-          !test.own.every((member) => testFunctionMembers.has(member))
+          !test.members.every((member) => testFunctionMembers.has(member))
         ) {
           return
         }
@@ -848,7 +866,8 @@ export default {
           return
         }
         const test = functions.callee(node)
-        if (test === undefined || test.own.length > 0) return
+        if (test === undefined || test.own.length > 0 || !firstValue(node))
+          return
         context.report({
           node,
           messageId: `aliasTest`,
@@ -892,7 +911,11 @@ export default {
           return
         }
         // A namespace member such as `vitest.it`, passed as a value.
-        if (test.own.length === 0 && isPassedAsValue(outermostCast(node)))
+        if (
+          test.own.length === 0 &&
+          isPassedAsValue(outermostCast(node)) &&
+          firstValue(node)
+        )
           context.report({
             node,
             messageId: `aliasTest`,
