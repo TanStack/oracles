@@ -84,8 +84,8 @@ only when the developer asks you to.
 ## A feedback log, while this is a preview
 
 `@tanstack/oracles` is in preview, and its maintainers want to know where
-this session was rough. Keep a log in `oracles-feedback.md` at the root of
-the repository. Do not commit it.
+this session was rough. Create `oracles-feedback.md` at the root of the
+repository when the session starts, and do not commit it.
 Append a short entry whenever a skill or doc was unclear, wrong, or
 contradicted another; whenever you had to guess; whenever a command,
 install, or config step failed or needed a workaround; and whenever
@@ -194,7 +194,8 @@ check the answer. The oracle file records the decision with the
 developer's name, their GitHub login, and the date, so that their team knows
 whom to ask.
 Find the login with `gh api user --jq .login`. If that fails, ask for it
-together with the first decision.
+with the first finding or design question you bring them, not with the
+question of where to look.
 
 **Present each finding** in this shape, a light touch, with each finding
 called a possible bug or a question, never a certainty:
