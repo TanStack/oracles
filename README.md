@@ -77,9 +77,10 @@ A selected construction uses one deterministic seed derived from the property
 id and calibration name. Inserting or reordering other calibrations leaves this
 seed unchanged. Each driver execution builds from that seed afresh and resolves
 its plan once. This preserves builder-created metadata, including WeakMap
-associations, and avoids reusing consumed plans. Fixed and enumerated values are
-copied before resolution. Each calibration remains on the `calibration` route,
-so a failed self-check is a framework error in the gap report. Fresh-seed
+associations, and avoids reusing consumed plans. Fixed and enumerated selectors
+preserve the existing history's identity and semantics. Use `resolve` to create a
+fresh mutable execution plan from those histories for each driver run. Each
+calibration remains on the `calibration` route, so a failed self-check is a framework error in the gap report. Fresh-seed
 calibrations will follow the planned `UNIT` replay support; this API adds no new
 replay variable.
 

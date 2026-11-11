@@ -168,8 +168,9 @@
  *   decision, 2026-11-11; rubric, ORC-006). Constructed calibrations use a stable
  *   seed derived from property id and calibration name. Each driver execution
  *   builds afresh from that seed and resolves once, preserving builder metadata
- *   and isolating consumed plans. Fixed/enumerated values are copied before
- *   resolution. During migration only, unbound calibrations warn at registration
+ *   and isolating consumed plans. Fixed/enumerated selectors preserve the
+ *   existing history's identity; use resolve to create a fresh mutable plan per
+ *   run. During migration only, unbound calibrations warn at registration
  *   and retain the existing candidate search. `probeHistories` opts a state into
  *   direct forced controls: its clean-entered history detects forced-not-entered
  *   (inferred from the unique construction unless selected explicitly), and its
@@ -1694,7 +1695,7 @@ function selectCalibrationHistory<THistory, TExpected, TPlan>(
     return {
       name: `enumerated history: ${selected.name}`,
       enters: [],
-      build: () => snapshotOf(selected.history) as THistory,
+      build: () => selected.history,
     }
   }
   const kind =
@@ -1729,8 +1730,104 @@ function selectCalibrationHistory<THistory, TExpected, TPlan>(
   return {
     name,
     enters: selected.enters ?? [],
-    build: () => snapshotOf(selected.history) as THistory,
+    build: () => selected.history,
   }
+}
+
+interface ForcedCalibration {
+  name: string
+  law: string
+  state: string
+  forced: ForcedProbe
+}
+
+/** Execute the selected history without falling back to candidate search. */
+async function runBoundCalibration<THistory, TExpected, TPlan>(
+  options: BoundOptions<THistory, TExpected, TPlan>,
+  calibration: Calibration<THistory, TPlan> | ForcedCalibration,
+  selected: SelectedHistory<THistory>,
+): Promise<void> {
+  const { id } = options
+  const context = `${id}: calibration "${calibration.name}" on ${selected.name}`
+  process.stdout.write(`${context}\n`)
+  const failed = (reason: string, cause?: unknown): never => {
+    throw new Error(
+      `${context}: ${reason}${cause === undefined ? `` : `: ${cause instanceof Error ? cause.message : reportText(cause)}`}`,
+      { cause },
+    )
+  }
+  const freshPlan = (phase: string) => {
+    try {
+      return planOf(options, selected.build())
+    } catch (error) {
+      return failed(
+        `selected ${phase} run failed while building or resolving`,
+        error,
+      )
+    }
+  }
+  const plan = freshPlan(`clean`)
+  const clean = await recordGuarded(options.driver, plan)
+  if (clean.driverError || clean.spin)
+    return failed(
+      `selected clean run failed`,
+      clean.driverError?.error ?? clean.spin,
+    )
+  let actual: ReturnType<typeof judge<THistory, TExpected, TPlan>>
+  try {
+    actual = judge(options, plan, clean.observations, undefined, clean.probes)
+  } catch (error) {
+    return failed(`selected clean run failed`, error)
+  }
+  if (actual.verdict.kind !== `pass`)
+    return failed(
+      `selected clean run failed: reported law "${lawOf(actual.verdict)}"`,
+    )
+  const missing = selected.enters.filter((state) => !actual.reached.has(state))
+  if (missing.length)
+    return failed(`selected history did not enter ${missing.join(`, `)}`)
+  if (
+    `forced` in calibration &&
+    actual.reached.has(calibration.state) === calibration.forced.entered
+  )
+    return failed(
+      `selected history did not enter the required opposite clean probe premise`,
+    )
+  let wrong: Verdict
+  if (`corrupt` in calibration) {
+    const corrupted = calibration.corrupt(
+      snapshotOf(clean.observations) as ReadonlyArray<Observation>,
+      plan,
+    )
+    if (corrupted === undefined)
+      return failed(`selected corruption did not apply`)
+    wrong = judge(options, plan, corrupted, undefined, clean.probes).verdict
+  } else {
+    // Rebuild, do not clone: builders can attach WeakMap metadata, and
+    // a resolved plan may already have consumed its resources.
+    const mutantPlan = freshPlan(`mutant`)
+    const mutant = await recordGuarded(
+      `forced` in calibration ? options.driver : calibration.driver,
+      mutantPlan,
+      `forced` in calibration ? calibration.forced : undefined,
+    )
+    if (mutant.driverError || mutant.spin)
+      return failed(
+        `selected mutant run failed`,
+        mutant.driverError?.error ?? mutant.spin,
+      )
+    wrong = judge(
+      options,
+      mutantPlan,
+      mutant.observations,
+      undefined,
+      mutant.probes,
+    ).verdict
+  }
+  if (wrong.kind === `violation` && lawOf(wrong) === calibration.law) return
+  return failed(
+    `but the check ${wrong.kind === `pass` ? `passed it` : `reported law "${lawOf(wrong)}"`}. It must report law "${calibration.law}".`,
+  )
 }
 
 /**
@@ -1753,7 +1850,10 @@ function calibrationTests<THistory, TExpected, TPlan>(
   // Each probe-bound state also gets two forced-entry calibrations.
   const forcedCalibrations = [...(options.probes ?? [])].flatMap(
     ([state, probe]) => {
-      const binding = options.probeHistories?.[state]
+      const binding =
+        options.probeHistories && Object.hasOwn(options.probeHistories, state)
+          ? options.probeHistories[state]
+          : undefined
       let enteredHistory = binding?.entered
       const notEntered: unknown = binding?.notEntered
       if (binding && notEntered === undefined)
@@ -1802,106 +1902,8 @@ function calibrationTests<THistory, TExpected, TPlan>(
         route: `calibration`,
         replays: [],
         run: async () => {
-          if (selected) {
-            const context = `${id}: calibration "${calibration.name}" on ${selected.name}`
-            process.stdout.write(`${context}\n`)
-            const failed = (reason: string, cause?: unknown): never => {
-              throw new Error(
-                `${context}: ${reason}${cause === undefined ? `` : `: ${cause instanceof Error ? cause.message : reportText(cause)}`}`,
-                { cause },
-              )
-            }
-            const freshPlan = (phase: string) => {
-              try {
-                return planOf(options, selected.build())
-              } catch (error) {
-                return failed(
-                  `selected ${phase} run failed while building or resolving`,
-                  error,
-                )
-              }
-            }
-            const plan = freshPlan(`clean`)
-            const clean = await recordGuarded(options.driver, plan)
-            if (clean.driverError || clean.spin)
-              return failed(
-                `selected clean run failed`,
-                clean.driverError?.error ?? clean.spin,
-              )
-            let actual: ReturnType<typeof judge<THistory, TExpected, TPlan>>
-            try {
-              actual = judge(
-                options,
-                plan,
-                clean.observations,
-                undefined,
-                clean.probes,
-              )
-            } catch (error) {
-              return failed(`selected clean run failed`, error)
-            }
-            if (actual.verdict.kind !== `pass`)
-              return failed(
-                `selected clean run failed: reported law "${lawOf(actual.verdict)}"`,
-              )
-            const missing = selected.enters.filter(
-              (state) => !actual.reached.has(state),
-            )
-            if (missing.length)
-              return failed(
-                `selected history did not enter ${missing.join(`, `)}`,
-              )
-            if (
-              `forced` in calibration &&
-              actual.reached.has(calibration.state) ===
-                calibration.forced.entered
-            )
-              return failed(
-                `selected history did not enter the required opposite clean probe premise`,
-              )
-            let wrong: Verdict
-            if (`corrupt` in calibration) {
-              const corrupted = calibration.corrupt(
-                snapshotOf(clean.observations) as ReadonlyArray<Observation>,
-                plan,
-              )
-              if (corrupted === undefined)
-                return failed(`selected corruption did not apply`)
-              wrong = judge(
-                options,
-                plan,
-                corrupted,
-                undefined,
-                clean.probes,
-              ).verdict
-            } else {
-              // Rebuild, do not clone: builders can attach WeakMap metadata, and
-              // a resolved plan may already have consumed its resources.
-              const mutantPlan = freshPlan(`mutant`)
-              const mutant = await recordGuarded(
-                `forced` in calibration ? options.driver : calibration.driver,
-                mutantPlan,
-                `forced` in calibration ? calibration.forced : undefined,
-              )
-              if (mutant.driverError || mutant.spin)
-                return failed(
-                  `selected mutant run failed`,
-                  mutant.driverError?.error ?? mutant.spin,
-                )
-              wrong = judge(
-                options,
-                mutantPlan,
-                mutant.observations,
-                undefined,
-                mutant.probes,
-              ).verdict
-            }
-            if (wrong.kind === `violation` && lawOf(wrong) === calibration.law)
-              return
-            return failed(
-              `but the check ${wrong.kind === `pass` ? `passed it` : `reported law "${lawOf(wrong)}"`}. It must report law "${calibration.law}".`,
-            )
-          }
+          if (selected)
+            return runBoundCalibration(options, calibration, selected)
           const seen: Array<string> = []
           for (const { name, history } of candidates()) {
             const plan = planOf(options, history)

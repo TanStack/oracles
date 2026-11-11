@@ -222,7 +222,10 @@ export type SyntheticSpec = {
     | { enumerated: number | string }
   /** Preserve generated variation while testing builder identity and consumed plans. */
   isolatedPlans?: boolean
-  probeBinding?: `inferred` | `explicit` | `no-absence`
+  identityHistories?: boolean
+  /** Public alpha-renaming of logical saw-0; the production probe id stays fixed. */
+  probeName?: string
+  probeBinding?: `empty` | `inferred` | `explicit` | `no-absence`
   duplicateHistoryNames?: boolean
   /** `observe`: the driver reports reach itself, the framework's default. */
   reachVia: `reached` | `observe`
@@ -337,6 +340,11 @@ class SyntheticFault extends Error {
 }
 /** A class instance that holds a history's items and an Error. */
 class SyntheticBox {
+  #valid = true
+  readItems(): SyntheticHistory {
+    if (!this.#valid) throw new Error(`invalid synthetic box`)
+    return this.items
+  }
   constructor(
     readonly items: SyntheticHistory,
     readonly failure: Error,
@@ -440,7 +448,7 @@ const itemsOf =
       return (history as ReadonlyArray<unknown>).map(itemOf)
     }
     if (spec.form === `boxed`) {
-      if (history instanceof SyntheticBox) return history.items
+      if (history instanceof SyntheticBox) return history.readItems()
       throw new Error(`not a boxed history`)
     }
     if (spec.form === `trap`) {
@@ -652,15 +660,18 @@ function lateProbe() {
  * The synthetic driver. `mutant` records a 3 in place of the first item, the
  * wrong answer a driver calibration supplies.
  */
-function syntheticDriver(spec: SyntheticSpec, mutant = false) {
-  const consumed = new WeakSet<object>()
+function syntheticDriver(
+  spec: SyntheticSpec,
+  mutant = false,
+  consumed = new WeakSet<object>(),
+) {
   return async (
     formed: Formed,
     observe: (checkpoint: string, value: unknown) => void,
   ) => {
     const history = itemsOf(spec)(formed)
     if (
-      spec.isolatedPlans &&
+      (spec.isolatedPlans || spec.identityHistories) &&
       expect.getState().currentTestName?.includes(`calibration:`)
     ) {
       if (consumed.has(formed as object))
@@ -783,6 +794,7 @@ function syntheticCheck(
 
 function syntheticCalibrations(
   spec: SyntheticSpec,
+  consumed: WeakSet<object>,
 ): Array<Calibration<Formed, Formed>> {
   return spec.calibrations.map(
     ({ name, kind }): Calibration<Formed, Formed> => {
@@ -796,10 +808,10 @@ function syntheticCalibrations(
           driver:
             kind === `throws`
               ? async (plan, observe) => {
-                  await syntheticDriver(spec, true)(plan, observe)
+                  await syntheticDriver(spec, true, consumed)(plan, observe)
                   throw new Error(`mutant setup failed`)
                 }
-              : syntheticDriver(spec, true),
+              : syntheticDriver(spec, true, consumed),
         }
       return {
         name,
@@ -868,33 +880,90 @@ function declaredEnumerated(
 
 export function syntheticProperty(spec: SyntheticSpec): void {
   const id = spec.unregistered ? `self-oracle.unregistered` : spec.id
-  const form = formOf(spec)
+  const makeForm = formOf(spec)
   const items = itemsOf(spec)
+  const identities = new WeakMap<object, Formed>()
+  const remember = (history: Formed): Formed => {
+    if (!spec.identityHistories) return history
+    identities.set(history as object, history)
+    return history
+  }
+  const form = (history: SyntheticHistory): Formed =>
+    remember(makeForm(history))
+  // Only the public state name changes: the synthetic model still reasons
+  // about item zero and the production probe id remains synthetic#saw-0.
+  const publicState = (state: string) =>
+    spec.source.kind === `generated` && state === `saw-0`
+      ? (spec.probeName ?? state)
+      : state
   // A builder may attach metadata by object identity. A plan may own consumed
   // resources. Neither cloning a built history nor resolving it twice preserves
   // that contract. These sets record those premises, not expected observations.
   const built = new WeakSet<object>()
   const resolved = new WeakSet<object>()
-  const resolve = spec.isolatedPlans
-    ? (history: Formed) => {
-        if (
-          expect.getState().currentTestName?.includes(`calibration:`) &&
-          ((spec.calibrationHistory &&
-            `constructed` in spec.calibrationHistory) ||
-            (spec.probeBinding &&
-              expect
-                .getState()
-                .currentTestName?.includes(`forced not entered`)))
-        ) {
-          if (!built.has(history as object) || resolved.has(history as object))
-            throw new Error(
-              `calibration lost builder metadata or reused a built history`,
+  const resolve =
+    spec.isolatedPlans || spec.identityHistories
+      ? (history: Formed) => {
+          // Count invocations separately from driver calls: even a discarded
+          // resolved plan can have acquired resources. This records input-side
+          // work only; the independent checker derives the allowed budget.
+          const log = process.env.SELF_ORACLE_LOG
+          if (log)
+            appendFileSync(
+              `${log}.resolutions`,
+              `${JSON.stringify({
+                id: spec.id,
+                test: expect.getState().currentTestName ?? ``,
+              })}\n`,
             )
-          resolved.add(history as object)
+          if (spec.identityHistories && !identities.has(history as object))
+            throw new Error(`selected history lost identity metadata`)
+          if (
+            spec.isolatedPlans &&
+            ((spec.calibrationHistory &&
+              `constructed` in spec.calibrationHistory &&
+              spec.calibrations.some(({ name }) =>
+                expect
+                  .getState()
+                  .currentTestName?.endsWith(` > calibration: ${name}`),
+              )) ||
+              (spec.probeBinding &&
+                spec.probeBinding !== `empty` &&
+                expect
+                  .getState()
+                  .currentTestName?.includes(`forced not entered`)))
+          ) {
+            if (
+              !built.has(history as object) ||
+              resolved.has(history as object)
+            )
+              throw new Error(
+                `calibration lost builder metadata or reused a built history`,
+              )
+            resolved.add(history as object)
+          }
+          return makeForm([
+            ...(spec.identityHistories
+              ? items(identities.get(history as object))
+              : items(history)),
+          ])
         }
-        return form([...items(history)])
-      }
-    : undefined
+      : undefined
+  // Clean and mutant driver instances share the consumption boundary. A
+  // resolved plan belongs to one execution even when different drivers use it.
+  const consumed = new WeakSet<object>()
+  const runDriver = spec.slow
+    ? trackedSlow(syntheticDriver(spec, false, consumed))
+    : syntheticDriver(spec, false, consumed)
+  const driver: typeof runDriver = (history, observe) =>
+    runDriver(history, (checkpoint, value) =>
+      observe(
+        checkpoint,
+        checkpoint === `reach` && typeof value === `string`
+          ? publicState(value)
+          : value,
+      ),
+    )
   const parts = {
     ...(resolve ? { resolve } : {}),
     model: spec.strictModel
@@ -925,35 +994,39 @@ export function syntheticProperty(spec: SyntheticSpec): void {
         : () => undefined,
     // Without `reached`, the framework counts the driver's `reach` records.
     ...(spec.reachVia === `reached`
-      ? { reached: (history: Formed) => reachedStates(spec)(items(history)) }
+      ? {
+          reached: (history: Formed) =>
+            reachedStates(spec)(items(history)).map(publicState),
+        }
       : {}),
     ...((spec.probe && spec.predictMode !== `missing`) ||
     spec.predictMode === `extra`
       ? {
           predict: (history: Formed) => ({
-            'saw-0': items(history).includes(0),
+            [publicState(`saw-0`)]: items(history).includes(0),
           }),
         }
       : {}),
     ...(spec.probeBinding
       ? {
-          probeHistories: {
-            'saw-0':
-              spec.probeBinding === `no-absence`
-                ? ({} as never)
-                : {
-                    notEntered: { fixed: `fixed-0` },
-                    ...(spec.probeBinding === `explicit`
-                      ? { entered: { constructed: `constructed-0` } }
-                      : {}),
-                  },
-          },
+          probeHistories:
+            spec.probeBinding === `empty`
+              ? {}
+              : {
+                  [publicState(`saw-0`)]:
+                    spec.probeBinding === `no-absence`
+                      ? ({} as never)
+                      : {
+                          notEntered: { fixed: `fixed-0` },
+                          ...(spec.probeBinding === `explicit`
+                            ? { entered: { constructed: `constructed-0` } }
+                            : {}),
+                        },
+                },
         }
       : {}),
-    driver: spec.slow
-      ? trackedSlow(syntheticDriver(spec))
-      : syntheticDriver(spec),
-    calibrations: syntheticCalibrations(spec),
+    driver,
+    calibrations: syntheticCalibrations(spec, consumed),
     check: (
       history: Formed,
       trace: ReadonlyArray<{ checkpoint: string; value: unknown }>,
@@ -1021,9 +1094,12 @@ export function syntheticProperty(spec: SyntheticSpec): void {
     // With a probe, `saw-0` is a probe-bound state wherever it is declared.
     const declare = (state: string) =>
       spec.probe && state === `saw-0`
-        ? { name: state, probe: syntheticProbe }
-        : state
-    const arbitrary = arbitraryOf(spec)
+        ? { name: publicState(state), probe: syntheticProbe }
+        : publicState(state)
+    const baseArbitrary = arbitraryOf(spec)
+    const arbitrary = spec.identityHistories
+      ? baseArbitrary.map(remember, (value) => value)
+      : baseArbitrary
     oracleProperty({
       id,
       law,
@@ -1037,7 +1113,7 @@ export function syntheticProperty(spec: SyntheticSpec): void {
         fixedSeeds: [spec.source.seed],
         constructed: spec.constructed.map(({ name, prefix, enters }, at) => ({
           name,
-          enters,
+          enters: enters.map(publicState),
           // A constructed history extends a generated history, so its histories
           // depend on the campaign's seed, as real constructed histories do.
           build: (generated: Formed) => {
@@ -1053,6 +1129,7 @@ export function syntheticProperty(spec: SyntheticSpec): void {
         })),
         fixed: spec.fixed.map((fixed) => ({
           ...fixed,
+          ...(fixed.enters ? { enters: fixed.enters.map(publicState) } : {}),
           history: form(fixed.history),
         })),
       },
