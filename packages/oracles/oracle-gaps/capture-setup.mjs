@@ -282,9 +282,9 @@ function spin() {
 // operand that is not a primitive might run code when compared, so it counts
 // as a change without a second comparison.
 let infected = new Set()
-// The first pair of operands each comparison saw in the running test, as
-// text (no mutant active: the unmutated runs classify with them). An operand
-// that is not a primitive is recorded as its type.
+// The first pair of operands each comparison saw in the running test (no
+// mutant active: the unmutated runs classify with them), each as `shown`
+// records it.
 let operands = new Map()
 const backgroundInfected = new Set()
 // The outcomes of the `if`s that ran outside any test, such as at module
@@ -294,8 +294,23 @@ const backgroundOutcomes = new Map()
 const infect = (id) => (inTest ? infected : backgroundInfected).add(id)
 const primitive = (value) =>
   value === null || (typeof value !== `object` && typeof value !== `function`)
-const shown = (value) =>
-  primitive(value) ? String(value).slice(0, 40) : typeof value
+// An operand as its kind and its text, which classify.mjs prints
+// (`operandText`): `-0` for negative zero, a string past 40 characters as
+// its first 37 and a digest of the whole, so two different values never
+// record alike, and a value that is not a primitive as its type alone.
+const shown = (value) => {
+  if (!primitive(value)) return [typeof value]
+  if (typeof value === `string` && value.length > 40)
+    return [
+      `string`,
+      value.slice(0, 37),
+      createHash(`sha1`).update(value).digest(`hex`).slice(0, 8),
+    ]
+  return [
+    value === null ? `null` : typeof value,
+    real.is(value, -0) ? `-0` : String(value),
+  ]
+}
 
 // Temporary profiling (ORACLE_GAPS_PROFILE): how many fast-check histories
 // each test ran, and in how many of them each site was hit, to measure what
