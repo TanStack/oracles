@@ -49,7 +49,9 @@ export function outcomeOf(
     ? { outcome: `timeout`, detail: `run time limit` }
     : undefined
   const failures = []
-  for (const unit of units) {
+  // By file path (report order, `inReportOrder`), in whatever order the
+  // runner gathered the units.
+  for (const unit of [...units].sort((a, b) => byPath(a.file, b.file))) {
     if (unit.timedOut) continue
     const rows = new Map(unit.rows)
     for (const message of unit.setupErrors)
@@ -156,6 +158,27 @@ export function outcomeOf(
 }
 
 const fileOf = (key) => key.split(` > `)[0]
+const byPath = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
+
+// Report order, the order of every list of tests that a result names: by
+// test file path, and within a file in the order of the baseline run's
+// records of that file's tests, with a test the baseline did not record
+// after them. The owner and ordinary tests that reached a mutant (and so the
+// test that infected it, its operands, and its nondeterministic tests) and
+// its changed tests are in report order. Its failing tests are by file path
+// too (`outcomeOf`), and within a file in the order the reporter lists the
+// file's tests. The runner joins the baseline's files in an order that
+// depends on its context count, and an authored mutant's owner files in the
+// order the owners were declared; this order depends on neither, so the same
+// project and code give the same report on any machine (the classify
+// oracle's law 7).
+const inReportOrder = (keys, baseline) =>
+  [...keys].sort(
+    (a, b) =>
+      byPath(fileOf(a), fileOf(b)) ||
+      (baseline.rank.get(a) ?? Infinity) - (baseline.rank.get(b) ?? Infinity) ||
+      0,
+  )
 
 /**
  * What the two unmutated runs show: which tests are nondeterministic (their
@@ -176,12 +199,19 @@ export function baselineOf(firstRows, secondRows) {
   for (const [key, row] of firstRows)
     for (const id of row.hits)
       reachedBy.set(id, [...(reachedBy.get(id) ?? []), key])
-  return { firstRows, nondeterministic, reachedBy }
+  const rank = new Map([...firstRows.keys()].map((key, i) => [key, i]))
+  return { firstRows, nondeterministic, reachedBy, rank }
 }
 
-/** The owner tests and the ordinary tests that reached a mutant's site. */
+/**
+ * The owner tests and the ordinary tests that reached a mutant's site, in
+ * report order (`inReportOrder`).
+ */
 export function targetsOf(mutant, baseline, owners, oracleFiles) {
-  const keys = baseline.reachedBy.get(mutant.number) ?? []
+  const keys = inReportOrder(
+    baseline.reachedBy.get(mutant.number) ?? [],
+    baseline,
+  )
   const oracleKeys = keys.filter((k) => owners.has(fileOf(k)))
   const testKeys = keys.filter((k) => !oracleFiles.has(fileOf(k)))
   return {
@@ -259,12 +289,16 @@ function operandsOf(mutant, targets, baseline) {
 }
 
 // A changed asserted value or a changed property observation, with no
-// failure, is a difference that the check did not judge.
+// failure, is a difference that the check did not judge. In report order,
+// not in the order the mutant's runs wrote their records.
 const changedIn = (rows, keys, baseline) =>
-  keys.filter(
-    (k) =>
-      rows.get(k)?.hash !== baseline.firstRows.get(k)?.hash ||
-      rows.get(k)?.observed !== baseline.firstRows.get(k)?.observed,
+  inReportOrder(
+    keys.filter(
+      (k) =>
+        rows.get(k)?.hash !== baseline.firstRows.get(k)?.hash ||
+        rows.get(k)?.observed !== baseline.firstRows.get(k)?.observed,
+    ),
+    baseline,
   )
 
 /**

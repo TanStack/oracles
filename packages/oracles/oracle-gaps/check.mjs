@@ -1856,10 +1856,10 @@ export default async (env) => {
               ignore: ignoredIn(file),
             },
           ])
-          // In its owner file's place, not in the order the contexts
-          // finish, so the outcome's tests and laws are listed alike in
-          // every run (law 9).
-          job.units[job.targets.indexOf(file)] = got
+          // In the order the contexts finish: the classification lists
+          // the tests and laws in report order (classify.mjs
+          // `inReportOrder`), so they are listed alike in every run (law 9).
+          job.units.push(got)
           serve[slot.index] = undefined
           invalidateChanged([job.path], slot.context)
         }
