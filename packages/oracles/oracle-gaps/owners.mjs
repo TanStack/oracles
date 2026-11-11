@@ -11,14 +11,16 @@
 // data that the test compares, so it is not read: an `expect` chain
 // (`expect(x).toEqual({ owns: [...] })`, `.not`, `.soft`, a computed
 // matcher, an aliased `expect`), `assert` and its members, `chai`,
-// `expectTypeOf`, and `assertType`. Limits: the CLI cannot see whether a
+// `expectTypeOf`, `assertType`, and every binding imported from Node's
+// `assert` (`import { deepStrictEqual } from 'node:assert'`, a default, or a
+// namespace). A local function named like an assertion, such as `function
+// assert() {}`, is also skipped, which is a limit. Limits: the CLI cannot see whether a
 // wrapper forwards the list, so one that drops it still makes the file an
 // owner, and a wrapper called inside an assertion's arguments is not read.
 // An `owns` key in an object literal passed to any other call, such as a
-// domain object passed to a factory, or to an assertion library under
-// another local name than a named import gives it (a default or namespace
-// import, such as `import ok from 'node:assert'`), also makes the file an
-// oracle file, and it refuses the run when its value is not a literal list.
+// domain object passed to a factory, or to `chai` or Vitest's assertions
+// under a default or namespace import name, also makes the file an oracle
+// file, and it refuses the run when its value is not a literal list.
 // Each
 // entry is a source path relative to the package, in any spelling that
 // names the package's file (args.mjs, packagePath), either alone (the whole
@@ -84,20 +86,37 @@ const assertionNames = new Set([
   `expectTypeOf`,
 ])
 
+// Node's assertion modules. Every binding that a file imports from one of
+// them, named, default, or namespace, is an assertion.
+const assertionModules = new Set([
+  `assert`,
+  `node:assert`,
+  `node:assert/strict`,
+])
+
 /**
  * The local names that a file gives the assertion libraries: their own
- * names, and any name that an import gives one of them, as `import { expect
- * as check }` does.
+ * names, any name that an import gives one of them, as `import { expect
+ * as check }` does, and every binding imported from Node's `assert`.
  */
 function assertionBindings(ts, file) {
   const names = new Set(assertionNames)
   for (const statement of file.statements) {
-    const bindings = ts.isImportDeclaration(statement)
-      ? statement.importClause?.namedBindings
+    const clause = ts.isImportDeclaration(statement)
+      ? statement.importClause
       : undefined
-    if (bindings && ts.isNamedImports(bindings))
+    if (clause === undefined) continue
+    const node = assertionModules.has(statement.moduleSpecifier.text)
+    if (node && clause.name) names.add(clause.name.text)
+    const bindings = clause.namedBindings
+    if (bindings && ts.isNamespaceImport(bindings)) {
+      if (node) names.add(bindings.name.text)
+    } else if (bindings)
       for (const element of bindings.elements)
-        if (assertionNames.has((element.propertyName ?? element.name).text))
+        if (
+          node ||
+          assertionNames.has((element.propertyName ?? element.name).text)
+        )
           names.add(element.name.text)
   }
   return names
