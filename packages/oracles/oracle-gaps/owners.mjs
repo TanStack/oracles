@@ -5,8 +5,13 @@
 // forwards it to `oracleProperty`, such as `registerX('id', { owns: [...] })`.
 // The CLI reads every object-literal argument of every call in the test
 // file, so it needs no knowledge of a project's wrappers (maintainer
-// decision, 2026-11-11). It cannot see whether a wrapper forwards the list;
-// one that drops it still makes the file an owner. Each
+// decision, 2026-11-11). An `owns` key inside an expectation's arguments,
+// as in `expect(x).toEqual({ owns: [...] })`, is data that the test
+// compares, so it is not read. Limits: the CLI cannot see whether a wrapper
+// forwards the list, so one that drops it still makes the file an owner. An
+// `owns` key in an object literal passed to any other call, such as a
+// domain object passed to a factory, also makes the file an oracle file,
+// and it refuses the run when its value is not a literal list. Each
 // entry is a source path relative to the package, in any spelling that
 // names the package's file (args.mjs, packagePath), either alone (the whole
 // file) or with an entry function after the first `#` (`src/x.ts#run`,
@@ -62,26 +67,42 @@ export function splitEntry(entry) {
 }
 
 /**
+ * Whether a call is an expectation: `expect(x)`, or a call through it, such
+ * as `expect(x).toEqual(y)` or `expect(x).not.toEqual(y)`.
+ */
+function isExpectation(ts, call) {
+  let callee = call.expression
+  while (ts.isPropertyAccessExpression(callee) || ts.isCallExpression(callee))
+    callee = callee.expression
+  return ts.isIdentifier(callee) && callee.text === `expect`
+}
+
+/**
  * Whether a test file is an oracle file, the `owns` entries it names, and a
  * problem when a list cannot be read statically. A test file is an oracle
  * file when it calls `oracleProperty`, or passes an `owns` property in an
- * object-literal argument of any call. Its entries are the union of those
- * lists. Each must be a literal list of strings or plain template literals,
- * because an entry the CLI cannot read would hide gaps.
+ * object-literal argument of any call that is not inside an expectation's
+ * arguments. Its entries are the union of those lists. Each must be a
+ * literal list of strings or plain template literals, because an entry the
+ * CLI cannot read would hide gaps.
  */
 export function readOwns(ts, path, text) {
   const file = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true)
   const result = { declares: false, entries: [], problem: undefined }
-  const visit = (node) => {
+  // `compared` is true inside an expectation's arguments.
+  const visit = (node, compared) => {
     if (ts.isCallExpression(node)) {
       if (
         ts.isIdentifier(node.expression) &&
         node.expression.text === `oracleProperty`
       )
         result.declares = true
-      for (const property of node.arguments.flatMap((argument) =>
-        ts.isObjectLiteralExpression(argument) ? argument.properties : [],
-      ))
+      compared ||= isExpectation(ts, node)
+      for (const property of compared
+        ? []
+        : node.arguments.flatMap((argument) =>
+            ts.isObjectLiteralExpression(argument) ? argument.properties : [],
+          ))
         if (property.name?.getText(file) === `owns`) {
           result.declares = true
           const list = ts.isPropertyAssignment(property)
@@ -98,9 +119,9 @@ export function readOwns(ts, path, text) {
               result.problem = `its owns entry ${element.getText(file)} is not a literal string`
         }
     }
-    ts.forEachChild(node, visit)
+    ts.forEachChild(node, (child) => visit(child, compared))
   }
-  visit(file)
+  visit(file, false)
   return result
 }
 
