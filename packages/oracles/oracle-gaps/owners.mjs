@@ -1,7 +1,27 @@
 // Ownership: which oracle files judge a function.
 //
-// An oracle file names what it owns in `oracleProperty({ owns: [...] })` (or
-// the older `declareOracle({ owns: [...] })`). Each
+// An oracle file names what it owns in an `owns` list: on its
+// `oracleProperty({ owns: [...] })` call, or on the call of a wrapper that
+// forwards it to `oracleProperty`, such as `registerX('id', { owns: [...] })`.
+// The CLI reads every object-literal argument of every call in the test
+// file, so it needs no knowledge of a project's wrappers (maintainer
+// decision, 2026-11-11). A file that never calls `oracleProperty` is still
+// an oracle file when it passes `owns` to a wrapper that it imports, so
+// every test file is read. An `owns` key inside an assertion's arguments is
+// data that the test compares, so it is not read: an `expect` chain
+// (`expect(x).toEqual({ owns: [...] })`, `.not`, `.soft`, a computed
+// matcher, an aliased `expect`), `assert` and its members, `chai`,
+// `expectTypeOf`, `assertType`, and every binding imported from Node's
+// `assert` (`import { deepStrictEqual } from 'node:assert'`, a default, or a
+// namespace). A local function named like an assertion, such as `function
+// assert() {}`, is also skipped, which is a limit. Limits: the CLI cannot see whether a
+// wrapper forwards the list, so one that drops it still makes the file an
+// owner, and a wrapper called inside an assertion's arguments is not read.
+// An `owns` key in an object literal passed to any other call, such as a
+// domain object passed to a factory, or to `chai` or Vitest's assertions
+// under a default or namespace import name, also makes the file an oracle
+// file, and it refuses the run when its value is not a literal list.
+// Each
 // entry is a source path relative to the package, in any spelling that
 // names the package's file (args.mjs, packagePath), either alone (the whole
 // file) or with an entry function after the first `#` (`src/x.ts#run`,
@@ -56,31 +76,97 @@ export function splitEntry(entry) {
   return at < 0 ? [entry, undefined] : [entry.slice(0, at), entry.slice(at + 1)]
 }
 
-// The calls that declare a test file an oracle file, each with its `owns`.
-const declaringCalls = new Set([`oracleProperty`, `declareOracle`])
+// The assertion libraries' names: Vitest's `expect`, `assert`, `chai`,
+// `expectTypeOf`, and `assertType`, which Node's `assert` and `chai` share.
+const assertionNames = new Set([
+  `assert`,
+  `assertType`,
+  `chai`,
+  `expect`,
+  `expectTypeOf`,
+])
+
+// Node's assertion modules. Every binding that a file imports from one of
+// them, named, default, or namespace, is an assertion.
+const assertionModules = new Set([
+  `assert`,
+  `node:assert`,
+  `node:assert/strict`,
+])
 
 /**
- * Whether a test file calls `oracleProperty` or `declareOracle` (which makes
- * it an oracle file), the `owns` entries it names, and a problem when the
- * list cannot be read statically: it must be a literal list of strings or
- * plain template literals, because an entry the CLI cannot read would hide
- * gaps.
+ * The local names that a file gives the assertion libraries: their own
+ * names, any name that an import gives one of them, as `import { expect
+ * as check }` does, and every binding imported from Node's `assert`.
+ */
+function assertionBindings(ts, file) {
+  const names = new Set(assertionNames)
+  for (const statement of file.statements) {
+    const clause = ts.isImportDeclaration(statement)
+      ? statement.importClause
+      : undefined
+    if (clause === undefined) continue
+    const node = assertionModules.has(statement.moduleSpecifier.text)
+    if (node && clause.name) names.add(clause.name.text)
+    const bindings = clause.namedBindings
+    if (bindings && ts.isNamespaceImport(bindings)) {
+      if (node) names.add(bindings.name.text)
+    } else if (bindings)
+      for (const element of bindings.elements)
+        if (
+          node ||
+          assertionNames.has((element.propertyName ?? element.name).text)
+        )
+          names.add(element.name.text)
+  }
+  return names
+}
+
+/**
+ * Whether a call is an assertion: a call of an assertion library, or a
+ * call through one, such as `expect(x).toEqual(y)`, `expect(x)['toEqual'](y)`,
+ * `assert.deepEqual(x, y)`, or `chai.expect(x).to.deep.equal(y)`.
+ */
+function isAssertion(ts, call, names) {
+  let callee = call.expression
+  while (
+    ts.isPropertyAccessExpression(callee) ||
+    ts.isElementAccessExpression(callee) ||
+    ts.isCallExpression(callee)
+  )
+    callee = callee.expression
+  return ts.isIdentifier(callee) && names.has(callee.text)
+}
+
+/**
+ * Whether a test file is an oracle file, the `owns` entries it names, and a
+ * problem when a list cannot be read statically. A test file is an oracle
+ * file when it calls `oracleProperty`, or passes an `owns` property in an
+ * object-literal argument of any call that is not inside an assertion's
+ * arguments. Its entries are the union of those lists. Each must be a
+ * literal list of strings or plain template literals, because an entry the
+ * CLI cannot read would hide gaps.
  */
 export function readOwns(ts, path, text) {
   const file = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true)
   const result = { declares: false, entries: [], problem: undefined }
-  const visit = (node) => {
-    if (
-      ts.isCallExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      declaringCalls.has(node.expression.text)
-    ) {
-      result.declares = true
-      const parts = node.arguments[0]
-      for (const property of parts && ts.isObjectLiteralExpression(parts)
-        ? parts.properties
-        : [])
+  const assertions = assertionBindings(ts, file)
+  // `compared` is true inside an assertion's arguments.
+  const visit = (node, compared) => {
+    if (ts.isCallExpression(node)) {
+      if (
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === `oracleProperty`
+      )
+        result.declares = true
+      compared ||= isAssertion(ts, node, assertions)
+      for (const property of compared
+        ? []
+        : node.arguments.flatMap((argument) =>
+            ts.isObjectLiteralExpression(argument) ? argument.properties : [],
+          ))
         if (property.name?.getText(file) === `owns`) {
+          result.declares = true
           const list = ts.isPropertyAssignment(property)
             ? property.initializer
             : undefined
@@ -95,9 +181,9 @@ export function readOwns(ts, path, text) {
               result.problem = `its owns entry ${element.getText(file)} is not a literal string`
         }
     }
-    ts.forEachChild(node, visit)
+    ts.forEachChild(node, (child) => visit(child, compared))
   }
-  visit(file)
+  visit(file, false)
   return result
 }
 
