@@ -150,7 +150,7 @@ When a probe is cheap, run it over a grid or a random sample of inputs,
 count the failures, and show the smallest one.
 
 **Find the authority for each promise, and show it.** Look in the README,
-the API docs, the JSDoc, the tests' names and bodies, the changelog, source
+the API docs, the JSDoc, the tests' names and bodies, the changelog, commit messages that state an intent, source
 comments, and any standard that the docs name. Quote it, with the file and
 line. The authority is what makes a finding credible, and it becomes the
 documentation in the oracle file. When nothing decides a behavior, it is a
