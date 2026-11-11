@@ -2800,7 +2800,10 @@ function driveSuite(
               return { ...entry, test: unnested(entry.test) }
             })
         : [],
-      stdout: report.stdout,
+      // Independent child files finish in either order. Preserve every line
+      // and its multiplicity, without treating their interleaving as a law.
+      // Per-property driver observations retain their original order above.
+      stdout: report.stdout.split(`\n`).sort().join(`\n`),
       warnings: [...report.warnings].sort(),
       unhandled: report.unhandled.map((error) => error.message ?? ``),
     }
