@@ -16,7 +16,8 @@
  *
  * - **Refusal.** An owns entry that names no function, an entry that names a
  *   missing file, and an owns list that is not a literal each refuse, naming
- *   the cause. An owner whose tests fail, and a Vitest config with
+ *   the cause. A declaration fault is named even when the run also owns no
+ *   selected source: the fault is the cause the author must fix first. An owner whose tests fail, and a Vitest config with
  *   `test.projects`, are runtime refusals, so here they must not refuse.
  * - **Rune placement.** Instrumenting a source does not change whether it
  *   compiles. In a Svelte module, every rune call stays where Svelte allows
@@ -443,13 +444,25 @@ async function driver(plan, observe) {
       : undefined
     if (derived) observe(`derived`, derived)
     const states = new Set(derived ? derivedReach(derived) : [])
-    if (before.refusal && plan.fault !== `none`)
+    if (before.refusal && faults.includes(plan.fault))
       states.add(`refused ${plan.fault}`)
     if (before.refusal && plan.declaration === `neither`)
       states.add(`refused without an oracle file`)
+    // A bad entry in a run that owns no selected source: two refusals apply,
+    // and the declaration's own fault is the one to name, since fixing it is
+    // what the author must do first.
     if (
       before.refusal &&
-      plan.fault === `none` &&
+      plan.fault === `badEntry` &&
+      plan.wholeFile === `none` &&
+      plan.functions.every((fn) => fn.owners.length === 0)
+    )
+      states.add(`refused badEntry with no owner`)
+    // A runtime fault does not refuse here, so a refusal in its run is the
+    // run's lack of an owner.
+    if (
+      before.refusal &&
+      !faults.includes(plan.fault) &&
       plan.declaration !== `neither`
     )
       states.add(`refused without an owner`)
@@ -662,11 +675,8 @@ function check(plan, observations, expected) {
       `help`,
     )
   // An owner that fails, and a config the runner cannot honor, are found
-  // only when the runner starts.
-  const runtime = [`brokenOwner`, `projects`, `brokenVitest`].includes(
-    plan.fault,
-  )
-  const refused = runtime ? undefined : expected.refused
+  // only when the runner starts, so the analysis must not refuse for them.
+  const refused = expected.refused?.runtime ? undefined : expected.refused
   if (refused) {
     if (!got.refusal)
       return violation(
@@ -706,7 +716,7 @@ function check(plan, observations, expected) {
     const broken = checkDerived(plan, observed)
     if (broken) return broken
   }
-  const owedMutants = runtime
+  const owedMutants = expected.refused?.runtime
     ? model({ ...plan, fault: `none` }).mutants
     : expected.mutants
   const actual = withOrdinals(got.mutants)
@@ -925,6 +935,7 @@ const required = [
   `owns read from both declarations`,
   `refused without an oracle file`,
   `refused without an owner`,
+  `refused badEntry with no owner`,
 ]
 
 oracleProperty({
@@ -959,6 +970,7 @@ oracleProperty({
               `owns read from both declarations`,
               `refused without an oracle file`,
               `refused without an owner`,
+              `refused badEntry with no owner`,
             ].includes(s),
         ),
         build: (generated) => ({
@@ -1139,6 +1151,18 @@ oracleProperty({
           ...generated,
           declaration: `declareOracle`,
           fault: `none`,
+          ownerless: true,
+          wholeFile: `none`,
+          steps: null,
+        }),
+      },
+      {
+        name: `a bad entry in a run with no owner names the bad entry`,
+        enters: [`refused badEntry with no owner`],
+        build: (generated) => ({
+          ...generated,
+          declaration: `declareOracle`,
+          fault: `badEntry`,
           ownerless: true,
           wholeFile: `none`,
           steps: null,

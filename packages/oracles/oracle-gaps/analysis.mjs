@@ -122,12 +122,8 @@ export function analyze(ts, pkg, sources, testFiles) {
     hostFor(ts),
   )
   const owned = ownership(ts, program, pkg, declarations)
-  // Owned through the call trees, which may reach a selected source from an
-  // entry in another file.
-  if (!sources.some((source) => owned.ownsAny(source)))
-    throw new Error(
-      `no file owns any selected source: no function of a --source file has an owner`,
-    )
+  // A bad entry is named before the run's lack of an owner, which it can
+  // cause: the entry is what the author must fix.
   for (const [file, entries] of declarations)
     for (const entry of entries) {
       const [source, fn] = splitEntry(entry)
@@ -136,6 +132,12 @@ export function analyze(ts, pkg, sources, testFiles) {
           `${relative(file)}: owns entry ${entry} names no function in ${source}`,
         )
     }
+  // Owned through the call trees, which may reach a selected source from an
+  // entry in another file.
+  if (!sources.some((source) => owned.ownsAny(source)))
+    throw new Error(
+      `no file owns any selected source: no function of a --source file has an owner`,
+    )
   // Each mutant belongs to the innermost function whose text holds its
   // site; its key reads that function's name, and its owners are that
   // function's.

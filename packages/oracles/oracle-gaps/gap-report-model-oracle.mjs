@@ -2914,38 +2914,46 @@ function judge(plan, tests, sites, active) {
   return live.some((r) => r.changed) ? `comparison-gap` : `survived`
 }
 
-/** Which declaration fault, if any, must make the run fail, and its cause. */
+/**
+ * Which fault, if any, must make the run fail, and its cause. The analysis
+ * reads files before any test runs, so its refusals come first: a broken
+ * declaration, then a run with no oracle file or no owner. A fault that only
+ * the runner can find (`runtime`) is named only when the analysis passes.
+ */
 function refusal(plan) {
   if (plan.fault === `badEntry`) return { cause: `${SOURCE}#nope` }
   if (plan.fault === `missingSource`) return { cause: `src/missing.ts` }
   if (plan.fault === `nonLiteral`) return { cause: `b.test.ts` }
   if (plan.fault === `outsideSource`) return { cause: `outside the package` }
-  // A config the runner cannot honor refuses the run rather than leave every
-  // mutant unreached (maintainer decision, 2026-11-08).
-  if (plan.fault === `projects`) return { cause: `test.projects` }
-  if (plan.fault === `brokenVitest`) return { cause: `vitest` }
-  // A failing owner is named with its test's error, so the author can fix it.
-  if (plan.fault === `brokenOwner`)
-    return {
-      cause: `b.test.ts`,
-      detail: `this owner fails with no mutant active`,
-    }
   // A run with no oracle file, or with no owns entry, owns no selected
   // source, so every mutant would read as unowned. The analysis refuses it
-  // (analysis.mjs), so the expectation does too.
+  // (maintainer decision, 2026-11-10).
   if (plan.declaration === `neither`) return { cause: `no oracle file` }
   if (
     plan.wholeFile === `none` &&
     plan.functions.every((fn) => fn.owners.length === 0)
   )
     return { cause: `owns any selected source` }
+  // A config the runner cannot honor refuses the run rather than leave every
+  // mutant unreached (maintainer decision, 2026-11-08).
+  if (plan.fault === `projects`)
+    return { cause: `test.projects`, runtime: true }
+  if (plan.fault === `brokenVitest`) return { cause: `vitest`, runtime: true }
+  // A failing owner is named with its test's error, so the author can fix it.
+  if (plan.fault === `brokenOwner`)
+    return {
+      cause: `b.test.ts`,
+      detail: `this owner fails with no mutant active`,
+      runtime: true,
+    }
   return undefined
 }
 
 // The faults the analysis refuses before it reads ownership: their plans may
-// own nothing. Every other fault is a runtime one, or a fault of the
-// instrumented copy, and its plan keeps an owner and a declaration, so the run
-// reaches its own check rather than the unowned-run refusal.
+// be made ownerless. Every other fault is a runtime one, or a fault of the
+// instrumented copy, and its plan is not made ownerless, so most such runs
+// reach their own check. Its generated owners can still own nothing; the
+// analysis then refuses the run for that first (see `refusal`).
 const declarationFaults = [
   `none`,
   `badEntry`,
