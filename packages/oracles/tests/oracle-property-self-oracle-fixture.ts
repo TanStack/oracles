@@ -146,7 +146,7 @@
 import { appendFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
 import fc from 'fast-check'
-import { afterAll, beforeEach, describe, expect, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, vi } from 'vitest'
 import {
   configureOracles,
   differs,
@@ -1054,6 +1054,19 @@ function declaredEnumerated(
 }
 
 export function syntheticProperty(spec: SyntheticSpec): void {
+  // An ordinary child still selects its seed without ORACLE_SEED. Control
+  // the host draw so observing its inputs/status does not make the outer
+  // determinism check compare two different random environments.
+  if (process.env.SELF_ORACLE_RANDOM_DRAW !== undefined) {
+    const random = Math.random
+    const draw = Number(process.env.SELF_ORACLE_RANDOM_DRAW)
+    beforeAll(() => {
+      Math.random = () => draw
+    })
+    afterAll(() => {
+      Math.random = random
+    })
+  }
   const id = spec.unregistered ? `self-oracle.unregistered` : spec.id
   const makeForm = formOf(spec)
   const items = itemsOf(spec)

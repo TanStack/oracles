@@ -54,7 +54,7 @@ with multiplicity and compare against the same model-derived registration list.
 | CHRON-1      | Earlier clean declared-enumerated receiving gate was run after production repair.                                                           | Historical process violation remains recorded. Current receiver and hostile omission check exist; retrospective evidence cannot make the earlier gate pre-edit. |
 
 The raw intake has seven canonical items. Rechecks added four sibling items.
-Ten executable gaps are repaired; CHRON-1 remains a historical process finding,
+Ten review-derived executable gaps are repaired; CHRON-1 remains a historical process finding,
 with no claim that today's tests repair the past ordering. No item was deferred,
 refuted, waived, or reclassified as a product-law decision. The temporary stdout
 announcement note is preserved as chronology, not a final net production defect.
@@ -119,6 +119,17 @@ remains in the repaired cuts: the real reporter supplies all the compared facts.
 The bounded faults are distinguished by the legal neighbors and mutants above;
 no second implementation of production selection was introduced.
 
+The full local sweep then passed 226 of 227 checks and caught REPAIR-1, an
+observation mistake introduced by this repair: the new child recorder included
+raw seedless histories and status, so legitimate host randomness broke the
+outer determinism comparison. The seedless receiver now controls Math.random's
+draw through fixture hooks while leaving ORACLE_SEED absent. It still exercises
+ordinary random-route selection and all child error/count assertions. A focused
+real-Vitest receiver runs the same model/driver/check for ordinary, late-probe,
+and two-property inputs and then the framework's own determinism check: 4/4
+pass. Entropy or seed-distribution quality is not claimed. The complete expanded
+suite remains subject to final-head CI; the failed intermediate run is not GREEN.
+
 The owner retains its explicit finite synthetic-history, name-family, callback,
 regex and scheduler limits. It does not establish all possible JavaScript labels
 or errors, browser/provider behavior, downstream DB consumer integration, a DB
@@ -143,5 +154,5 @@ four in their reviewed scopes; none establishes whole-PR correctness alone.
 
 Parent commit: `2dc95d4e838678a03eb345c08f141dbd20a8c4a7`.
 
-- `packages/oracles/tests/oracle-property-self-oracle.test.ts`: SHA256 `7d1da835c7c07bd0ad6670de47e0893e3e950c79df15e6773d038ca4e6da77d7`.
-- `packages/oracles/tests/oracle-property-self-oracle-fixture.ts`: SHA256 `46a7a47ce4e028a45ab0de99119e130aae4bcde238791f3c869970b5739d3962`.
+- `packages/oracles/tests/oracle-property-self-oracle.test.ts`: SHA256 `c8df3de2569460a80ff1eab23811d21f9ac6fffe6e4d935bdcfdc5ed5f579d0f`.
+- `packages/oracles/tests/oracle-property-self-oracle-fixture.ts`: SHA256 `27195bf184b7ae58f9eaea7bab82973aae5876ce292e2b6aa7e6fa02ac20627d`.

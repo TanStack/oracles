@@ -2553,7 +2553,9 @@ function frameworkReach(
 //   Vitest runs that file with a `-t` pattern that selects only its reach
 //   test.
 // Child runs fix the random campaign's seed (a seed without a path reseeds the
-// campaign and selects no replay), so a child run records the same facts every time.
+// campaign and selects no replay). The ordinary-route child instead controls
+// Math.random's draw while leaving ORACLE_SEED absent. This fixes the host
+// input without changing the route, so every recorded fact can repeat.
 
 type ReportedError = { name?: string; message?: string; cause?: ReportedError }
 type ReportedTest = {
@@ -3165,13 +3167,13 @@ function driveSuite(
       receive(
         directory,
         files,
-        { SELF_ORACLE_LOG: seedlessLog },
+        { SELF_ORACLE_LOG: seedlessLog, SELF_ORACLE_RANDOM_DRAW: `0.5` },
         undefined,
         false,
       )
       const logged = readLog(seedlessLog)
       // The routes each random campaign ran under: the same whatever seed it
-      // drew, so this observation repeats.
+      // draws under the controlled host RNG, so this observation repeats.
       observe(
         `seedless`,
         Object.fromEntries(
