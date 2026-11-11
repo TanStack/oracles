@@ -271,6 +271,25 @@ function discoveredConfig(pkg) {
 }
 
 /**
+ * Whether Vite loads a config file of the package as an ES module, as its
+ * `isFilePathESM` decides: `.mjs` and `.mts` are, `.cjs` and `.cts` are
+ * not, and any other extension follows the `type` of the nearest
+ * package.json.
+ */
+function isModuleConfig(pkg, config) {
+  if (/\.c[jt]s$/.test(config)) return false
+  if (/\.m[jt]s$/.test(config)) return true
+  let dir = dirname(join(pkg, config))
+  while (!existsSync(join(dir, `package.json`)) && dirname(dir) !== dir)
+    dir = dirname(dir)
+  const manifest = join(dir, `package.json`)
+  return (
+    existsSync(manifest) &&
+    JSON.parse(readFileSync(manifest, `utf8`)).type === `module`
+  )
+}
+
+/**
  * A session over one package: the Vitest that the package resolves, and warm
  * Vitest contexts that later checks reuse. A cold run opens a session for one
  * check; the daemon keeps one open.
@@ -311,14 +330,19 @@ export async function openSession(pkg) {
   // One wrapper config per context, over the package's own config (a path
   // relative to the package, or undefined for none). Each serves its own
   // context's patched sources, so authored mutants run in every context at
-  // once without one seeing another's patch. A wrapper is an `.mts` file, so
-  // Vite loads it, and the config it imports, as an ES module in a package
-  // of any module type, as Vitest loads an `.mjs` config itself.
+  // once without one seeing another's patch. Vite bundles the package's
+  // config into the wrapper, in the wrapper's format, so a wrapper has the
+  // format Vite would load that config in: an `.mts` wrapper for an ES
+  // module config (where a top-level await works), and a `.cts` one for a
+  // CommonJS config (where `require` works).
   const wrappers = new Set()
-  const wrapperFor = (index) =>
-    join(pkg, `.oracle-gaps-${process.pid}-${index}.vitest.config.mts`)
+  const wrapperFor = (index, config) =>
+    join(
+      pkg,
+      `.oracle-gaps-${process.pid}-${index}.vitest.config.${config === undefined || isModuleConfig(pkg, config) ? `mts` : `cts`}`,
+    )
   const writeWrapper = (index, config) => {
-    const wrapper = wrapperFor(index)
+    const wrapper = wrapperFor(index, config)
     writeFileSync(
       wrapper,
       `import { realpathSync } from 'node:fs'
@@ -398,7 +422,7 @@ export default async (env) => {
     loading.catch((error) => {
       const name = config ?? `the default Vitest config`
       throw new Refusal(
-        `the package's Vitest config (${name}) failed to load: ${String(error?.message ?? error).replaceAll(basename(wrapperFor(index)), name)}`,
+        `the package's Vitest config (${name}) failed to load: ${String(error?.message ?? error).replaceAll(basename(wrapperFor(index, config)), name)}`,
         `Make ${name} load under Vitest: run vitest --run in the package and fix the error it reports.`,
       )
     })
@@ -415,13 +439,15 @@ export default async (env) => {
     context.close().finally(() => allowListeners(-1))
   async function warmContext(settings, index) {
     writeWrapper(index, settings.config)
+    // A context that fails to open gives its listener allowance back: one
+    // that never opened, at once, and one that opened, when it closes.
     allowListeners(1)
     const context = await fromConfig(
       index,
       settings.config,
       createVitest(`test`, {
         root: pkg,
-        config: wrapperFor(index),
+        config: wrapperFor(index, settings.config),
         watch: false,
         maxWorkers: 1,
         // Every test in a file runs, so a kill is attributed to each route
@@ -450,6 +476,9 @@ export default async (env) => {
         pool: settings.pool,
         sequence: { sequencer: KeepOrder },
         reporters: [{}],
+      }).catch((error) => {
+        allowListeners(-1)
+        throw error
       }),
     )
     // Vitest 3 calls this step `init`; Vitest 4 renamed it `standalone`.
@@ -457,7 +486,10 @@ export default async (env) => {
       index,
       settings.config,
       context.standalone ? context.standalone() : context.init(),
-    )
+    ).catch(async (error) => {
+      await closeContext(context).catch(() => undefined)
+      throw error
+    })
     // Each project of a `test.projects` config has its own environment and
     // setup files, which the runner's copies would not run under, so every
     // mutant would read as unreached. The run refuses instead.
@@ -1003,6 +1035,13 @@ export default async (env) => {
     while (contexts.length < options.contexts)
       contexts.push(await warmContext(settings, contexts.length))
     endPhase(`warm contexts`, { contexts: contexts.length })
+    // The run names the config its contexts loaded, before any refusal that
+    // the analysis or the baseline makes.
+    log(
+      settings.config === undefined
+        ? `no config file: Vitest's default discovery`
+        : `config: ${settings.config}`,
+    )
     for (const context of contexts) await globSpecs(context)
     endPhase(`find test files`)
 
@@ -1373,12 +1412,6 @@ export default async (env) => {
         tests: first.units.find((u) => u.file === file)?.tests ?? [],
       })),
       options.config,
-    )
-    // The baseline names the config the run loaded first.
-    log(
-      settings.config === undefined
-        ? `no config file: Vitest's default discovery`
-        : `config: ${settings.config}`,
     )
     for (const line of baseline0) log(line)
     const failingOwners = [...first.failed.keys()].filter((file) =>

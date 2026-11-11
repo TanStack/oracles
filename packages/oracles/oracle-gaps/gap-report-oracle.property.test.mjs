@@ -84,10 +84,13 @@
  *    the config Vitest would load in the package, or the one `--config`
  *    names, relative to `--package`, even where Vitest would discover
  *    another (maintainer finding F12, 2026-11-10),
- *    as Vitest loads it: an `.mjs` config, or any config of a package whose
- *    module type is `module`, is an ES module, so a top-level await in it
- *    loads, even in a package with no module type (F13). It names that
- *    config in the line `config: <file>`, or prints `no config file:
+ *    as Vitest loads it, in its own format: an `.mjs` or `.mts` config, or
+ *    a `.js` or `.ts` one in a package whose module type is `module`, is an
+ *    ES module, so a top-level await in it loads, even in a package with no
+ *    module type (F13); a `.cjs` or `.cts` config, or a `.js` or `.ts` one
+ *    in a package with no module type, is CommonJS, so its `require` and
+ *    `require.resolve` work (review of 2026-11-11). It names that config in
+ *    the line `config: <file>` once the config has loaded, or prints `no config file:
  *    Vitest's default discovery` when there is none. Its process prints no
  *    MaxListenersExceededWarning, with eleven warm contexts too (F15): each
  *    context is a Vitest instance that listens on the process, and the
@@ -379,6 +382,7 @@ import {
   model,
   edited,
   AUTHORED,
+  altConfigPath,
   initialState,
   fixtureFiles,
   written,
@@ -814,6 +818,8 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       sources: sourceArgument(plan, `${dir}.link`),
       budget: plan.budget,
       ...configArgs(plan),
+      // After the `config` edit, `--config` names the second config.
+      ...(state.altConfig ? { config: altConfigPath(plan) } : {}),
     }
     // The first check may be two at once, which must reach one daemon, and
     // so are the two after a crash.
@@ -1311,6 +1317,15 @@ async function driver(plan, observe) {
         states.add(`a package with no config ran`)
       if (plan.packageType === `commonjs` && plan.configAwait)
         states.add(`an awaiting config in a package with no module type ran`)
+      // A CommonJS config that calls `require` and `require.resolve`: by
+      // its extension, or as JavaScript or TypeScript in a package with no
+      // module type.
+      if (plan.configRequire && /\.c[jt]s$/.test(plan.configPath))
+        states.add(`a .cjs or .cts config that calls require ran`)
+      if (plan.configRequire && /(?<!\.[cm])\.[jt]s$/.test(plan.configPath))
+        states.add(
+          `a .js or .ts config in a package with no module type that calls require ran`,
+        )
       if (plan.contexts > 10) states.add(`a run with eleven contexts`)
       if (plan.configEnv)
         states.add(`a config that reads Vitest's environment ran`)
@@ -1454,17 +1469,15 @@ function check(plan, observations, expected) {
       `the run warned: ${cli.warnings[0]}`,
       `process warnings`,
     )
-  // A run that loaded its config names it, or says it found none (law 3).
-  // A refusal before the config loads names none.
-  if (
-    (cli.exit === 0 || cli.configLines.length > 0) &&
-    JSON.stringify(cli.configLines) !== JSON.stringify([expected.configLine])
-  )
+  // A run whose contexts loaded its config names it once, or says it found
+  // none, whether it then completes or refuses; a run refused before its
+  // config loaded names none (law 3).
+  if (JSON.stringify(cli.configLines) !== JSON.stringify(expected.configLines))
     return violation(
       `cli`,
-      `the run named its config as ${JSON.stringify(cli.configLines)}, owed ${JSON.stringify([expected.configLine])}`,
+      `the run named its config as ${JSON.stringify(cli.configLines)}, owed ${JSON.stringify(expected.configLines)}`,
       `config`,
-      { actual: cli.configLines, expected: [expected.configLine] },
+      { actual: cli.configLines, expected: expected.configLines },
     )
   if (expected.refused) {
     if (cli.exit === 0)
@@ -1917,6 +1930,8 @@ const required = [
   `a config that --config names ran`,
   `a package with no config ran`,
   `an awaiting config in a package with no module type ran`,
+  `a .cjs or .cts config that calls require ran`,
+  `a .js or .ts config in a package with no module type that calls require ran`,
   `a run with eleven contexts`,
   `a failing owner replayed under a config that --config names`,
   `a config that reads Vitest's environment ran`,
@@ -1989,6 +2004,8 @@ const separate = [
   `a config that --config names ran`,
   `a package with no config ran`,
   `an awaiting config in a package with no module type ran`,
+  `a .cjs or .cts config that calls require ran`,
+  `a .js or .ts config in a package with no module type that calls require ran`,
   `a run with eleven contexts`,
   `a failing owner replayed under a config that --config names`,
   ...incrementalStates,
@@ -2018,7 +2035,7 @@ oracleProperty({
   law: {
     statement: `The gap report enumerates the promised operator mutants, leaves out exactly the probe-only code, discovers every oracle that owns a function's call tree and refuses broken ownership, judges each mutant only by its owners' tests on their registered routes and counts only law verdicts on reproducible routes as kills, which outrank a run that never ends, anchors each mutant by its function and normalized statement, lists every gap and unowned mutant once with consistent counts, keeps keys stable under unrelated edits, reports through one daemon per package what a cold run reports at every state of a sequence of edits, and runs the package as Vitest does from any install path and any --source spelling: one instance of each workspace dependency, no refusal over an unbuildable devDependency, child processes for a native addon anywhere in the tree, a capture that a test's builtin spies cannot see, and a refusal of test.projects; and every run that does not complete ends, cold or through the daemon, with a refusal that exits 2, prints a refused: block and one fix: directive with no stack trace, and writes the refusal to the run's output directory.`,
     authority: `The maintainer's decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), not in this package's records, including that a kill by reach agreement alone is a gap and that an incremental run through the daemon equals a cold one (v19.3); the project's oracle guide on quiet exclusions; the oracle rubric's outcome kinds (ORC-006); the CLI's documented operator list in schemata.mjs.`,
-    limits: `Law 12 judges refusals only: no legal history reaches an internal error, so its shape (exit 3, the stack in error.log) is not judged; argument refusals are the static oracle's; the check's rejection of a stack trace, a missing fix, and a wrong exit code is calibrated in the static oracle, through the same refusalBreach, and here only a refused run reported as complete is calibrated, because each calibration here runs real CLI histories. Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 6 s full limit, and a slow run only as one witness that waits 3 s before it judges; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; no --only, --sample, or --diff-base; a derived class's file is instrumented and its sites are judged as unowned, but no test imports or constructs the class, so its no-mutant and super-region behavior is the static oracle's (in-process), not this oracle's; package configs only in vite.config.ts, vitest.config.ts, or vite.config.mjs, in config/gap-vitest.ts or .mjs through --config, or none, as an object or a sync or async function, with no plugins of their own and test.projects only as a refusal; a package with no module type only with an .mjs config; contexts only four or eleven, and process warnings judged only as MaxListenersExceededWarning on the CLI's own stderr (a daemon's process warnings go to its log); no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9's edits leave out files read through fs, other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; cut-off charging judged only under one budget; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages; daemon races (two CLIs reading one error file, a CLI hearing closing from the failing daemon it started, a reset connection on macOS) fixed by inspection; a workspace dependency's one-file bundle is written in that dependency's own .oracle-gaps folder, a known stray write (date-fns report), which the stray-write check excludes; the runner's copies and Vitest configs (.oracle-gaps-PID*) sit at the package root and are removed when the run closes, so a killed run leaves them there, and the stray-write check runs after close and cannot see them; a counterexample shrinks through at most six histories, so it can be larger than the smallest that fails.`,
+    limits: `Law 12 judges refusals only: no legal history reaches an internal error, so its shape (exit 3, the stack in error.log) is not judged; argument refusals are the static oracle's; the check's rejection of a stack trace, a missing fix, and a wrong exit code is calibrated in the static oracle, through the same refusalBreach, and here only a refused run reported as complete is calibrated, because each calibration here runs real CLI histories. Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 6 s full limit, and a slow run only as one witness that waits 3 s before it judges; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; no --only, --sample, or --diff-base; a derived class's file is instrumented and its sites are judged as unowned, but no test imports or constructs the class, so its no-mutant and super-region behavior is the static oracle's (in-process), not this oracle's; package configs only as vite.config or vitest.config with one of the extensions .ts, .mts, .cts, .js, .mjs, and .cjs (not every pair), as config/gap-vitest with the same extension through --config, or none, as an object or a sync or async function, with no plugins of their own and test.projects only as a refusal, and only under the package's own package.json; a top-level await only in an ES module config and require only in a CommonJS one, as Vitest itself loads no other; a --config outside the package is refused by design, through the rule for paths outside the package (args.mjs), and no history generates one; contexts only four or eleven, and process warnings judged only as MaxListenersExceededWarning on the CLI's own stderr (a daemon's process warnings go to its log); a context that fails to open gives back its listener allowance, which no observation shows (a kept allowance only raises the limit, so no warning follows), so that accounting is fixed by inspection; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9's edits leave out files read through fs, other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; cut-off charging judged only under one budget; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages; daemon races (two CLIs reading one error file, a CLI hearing closing from the failing daemon it started, a reset connection on macOS) fixed by inspection; a workspace dependency's one-file bundle is written in that dependency's own .oracle-gaps folder, a known stray write (date-fns report), which the stray-write check excludes; the runner's copies and Vitest configs (.oracle-gaps-PID*) sit at the package root and are removed when the run closes, so a killed run leaves them there, and the stray-write check runs after close and cannot see them; a counterexample shrinks through at most six histories, so it can be larger than the smallest that fails.`,
   },
   histories: {
     // A failing history shrinks through at most six smaller ones. Each runs
@@ -2182,6 +2199,9 @@ oracleProperty({
             `helper`,
             `seed`,
             `revert`,
+            // File b's function is unowned under the second config.
+            `config`,
+            `config`,
             `test`,
             `revert`,
             `test`,
@@ -2288,7 +2308,33 @@ oracleProperty({
         [
           `an awaiting config in a package with no module type`,
           `an awaiting config in a package with no module type ran`,
-          { packageType: `commonjs`, configAwait: true },
+          {
+            configFile: `vite.config.mjs`,
+            configPlace: `discovered`,
+            packageType: `commonjs`,
+            configAwait: true,
+          },
+        ],
+        // CommonJS configs that call `require` and `require.resolve`, which
+        // Vitest loads (review of 2026-11-11).
+        [
+          `a .cjs config that calls require`,
+          `a .cjs or .cts config that calls require ran`,
+          {
+            configFile: `vitest.config.cjs`,
+            configPlace: `discovered`,
+            configRequire: true,
+          },
+        ],
+        [
+          `a .ts config in a package with no module type that calls require`,
+          `a .js or .ts config in a package with no module type that calls require ran`,
+          {
+            configFile: `vite.config.ts`,
+            configPlace: `discovered`,
+            packageType: `commonjs`,
+            configRequire: true,
+          },
         ],
         [
           `a run with eleven contexts`,
