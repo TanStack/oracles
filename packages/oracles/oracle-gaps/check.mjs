@@ -43,7 +43,7 @@ import {
   renderReport,
   renderStdout,
 } from './report.mjs'
-import { baselineLines, gapLine, progressLine } from './stream.mjs'
+import { baselineLines, gapLine, progressLine, testNamesOf } from './stream.mjs'
 import { analyze, isRunnerCopy } from './analysis.mjs'
 import { Refusal } from './ending.mjs'
 import {
@@ -637,6 +637,8 @@ export default async (env) => {
         return {
           key: `${module.moduleId} > ${testCase.fullName}`,
           fullName: testCase.fullName,
+          // The names a baseline's replay selects the test by (stream.mjs).
+          names: testNamesOf(testCase),
           state: testResult.state,
           // fast-check attaches the error its predicate threw as the cause.
           message: (testResult.errors ?? [])
@@ -1345,9 +1347,7 @@ export default async (env) => {
       [...oracleFiles].map((file) => ({
         file: relative(file),
         failure: first.failed.get(file),
-        fullName: first.units
-          .find((u) => u.file === file)
-          ?.tests.find((t) => t.state === `failed`)?.fullName,
+        tests: first.units.find((u) => u.file === file)?.tests ?? [],
       })),
     )
     for (const line of baseline0) log(line)
