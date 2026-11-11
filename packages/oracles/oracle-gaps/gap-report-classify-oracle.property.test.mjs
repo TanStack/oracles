@@ -83,7 +83,11 @@
  *    model's values are primitives by SameValue (so `-0` and `0`, `1` and
  *    `"1"`, `1n` and `1`, `undefined`, `null`, and `NaN` all differ, and two
  *    long strings that share a prefix differ), and a non-primitive operand
- *    as its type alone, because the capture records only its type.
+ *    as its type alone, because the capture records only its type. Each
+ *    printed text is the model's own rendering of its operand: a string as
+ *    JSON, past 40 code points its first 37, `...`, `#`, and eight hex digits
+ *    of its SHA-1; a bigint with `n`; `-0`; another primitive as JavaScript
+ *    prints it; a non-primitive as `(object)` or `(function)`.
  * 8. The compressed stdout summary (report.mjs `renderStdout`) lists the
  *    totals, one legend line per class present, and every gap once, one line
  *    each, grouped by function; it names the full report's path. The
@@ -91,8 +95,10 @@
  *    mutants are judged, are the same lines, each once. A gap line is one
  *    line however long its code or intent is: each of the mutant's original
  *    and replacement code, and an authored mutant's intent, is shown with its
- *    whitespace collapsed to single spaces and, past 60 characters, cut to
- *    its first 57 and `...`. The results keep the full text.
+ *    whitespace collapsed to single spaces and, past 60 characters (code
+ *    points, so an astral-plane character is never split), cut to its first
+ *    57 and `...`. An intent is the author's text, so it prints as a code
+ *    span, which the exit law does not read. The results keep the full text.
  * 9. Before any mutant, each oracle file's baseline is printed: `pass`, or
  *    `fail` with the command that replays its first failing test. That
  *    command, read as a POSIX shell reads it, is `vitest run <file>`, with
@@ -100,7 +106,8 @@
  *    of the file, whether it matches the pattern against the names of the
  *    test's suites and its own joined by a space (Vitest 4) or by ` > `
  *    (Vitest 5). A file that failed with no failing test (it did not load)
- *    replays whole, with no `-t`.
+ *    replays whole, with no `-t`. Every baseline line is one line, even when
+ *    a test's name holds a newline or a tab.
  * 6. A survivor or an unreached mutant that ordinary tests reached gets
  *    their outcome for information, where an assertion failure counts on the
  *    test's route; it never changes the class.
@@ -130,7 +137,10 @@
  * real run writes them correctly is the end-to-end oracle's. The driver
  * encodes operands as the capture does (`shown`); that the capture's
  * encoding is lossless is not judged here, and two long strings are told
- * apart by a 32-bit digest. Test names hold no backtick and no ` > `, the
+ * apart by a 32-bit digest. No symbol operand is generated: two symbols of
+ * one description print alike. Only the runner's single-file path
+ * (`unit()`) records a test's names, and only it feeds the baseline; units
+ * from the batch path carry none. Test names hold no backtick and no ` > `, the
  * names within a file are distinct, and the replay's file argument is judged
  * as text, not as Vitest's substring match over every file. An authored
  * mutant's intent holds no word the exit law forbids, because the stdout
@@ -175,7 +185,10 @@ const SLOTS = MUTANTS + AUTHORED
 // a test of it fails with no mutant active, or it does not load.
 //
 // The code and intents straddle the gap line's 60-character cut (exactly 60,
-// 61, and longer), span lines, and hold backticks.
+// 61, and longer), span lines, and hold backticks; one holds an astral-plane
+// character (two UTF-16 units) where the cut falls, so a cut by UTF-16 units
+// would split it. An intent holds words the exit law forbids, which the gap
+// line must keep inside its code span.
 const sixty = `value.total > limit.maximum && value.total !== limit.exact`
 const codes = [
   [`x > 4`, `true`],
@@ -187,6 +200,7 @@ const codes = [
     `undefined`,
   ],
   [`\`\${a}\` + b`, `\`\${a}\` - b`],
+  [`${`a`.repeat(56)}😀😀 && b.rest()`, `false`],
 ]
 const intents = [
   `pushes a different label`,
@@ -194,6 +208,8 @@ const intents = [
   `skips the write\n  on a retry`,
   `pushes a label that is sixty characters long, as lines read.`,
   `pushes a label that is sixty-one characters long, as lines do`,
+  `${`b`.repeat(56)}😀😀 pushes past the cut`,
+  `returns null or undefined, whichever comes first?`,
 ]
 // The operands a comparison sees: small numbers, so that ties (which
 // separate `>` from `>=`) happen, and typed values that a printer which
@@ -220,6 +236,8 @@ const typedOperands = [
   `true`,
   `${longText}one`,
   `${longText}two`,
+  // An astral-plane character where a 37-character cut falls.
+  `${`c`.repeat(36)}😀😀 and more text past the cut`,
   {},
   [],
 ]
@@ -227,8 +245,26 @@ const operand = fc.oneof(
   { weight: 3, arbitrary: fc.nat({ max: 2 }) },
   { weight: 2, arbitrary: fc.constantFrom(...typedOperands) },
 )
-const suiteNames = [`t0`, `s (1)`, `a.b`, `$x`, `it's`, `back\\slash`]
-const labels = [``, ``, `(a|b) `, `$HOME `, `it's `, `q"t `, `[t0]+ `, `^x$ `]
+const suiteNames = [
+  `t0`,
+  `s (1)`,
+  `a.b`,
+  `$x`,
+  `it's`,
+  `back\\slash`,
+  `two\nlines`,
+]
+const labels = [
+  ``,
+  ``,
+  `(a|b) `,
+  `$HOME `,
+  `it's `,
+  `q"t `,
+  `[t0]+ `,
+  `^x$ `,
+  `tab\there `,
+]
 const routes = [
   undefined,
   `fixed seed`,
@@ -362,6 +398,13 @@ const namesOf = (h, fi, ti) => {
 }
 const nameOf = (h, fi, ti) => namesOf(h, fi, ti).join(` > `)
 const keyOf = (h, fi, ti) => `${fileName(fi)} > ${nameOf(h, fi, ti)}`
+// A test's name as a message prints it: one line, each control character,
+// line separator, or paragraph separator as its \\uXXXX escape.
+const shownName = (h, fi, ti) =>
+  nameOf(h, fi, ti).replace(
+    /[\u0000-\u001f\u007f\u2028\u2029]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, `0`)}`,
+  )
 // The framework's route vocabulary (oracle-route.ts in PR #1): three
 // reproducible routes, the random campaign, and one route for the property's
 // own checks. Any other name, the retired `constructed history`,
@@ -494,7 +537,7 @@ function modelOutcome(h, mi) {
   if (changed)
     return sized(`not-judged`, {
       mention: [
-        `Make a law in \`${nameOf(h, changed.fi, changed.ti)}\` reject the changed value.`,
+        `Make a law in \`${shownName(h, changed.fi, changed.ti)}\` reject the changed value.`,
       ],
     })
   if (compared.length === 0) return sized(`indeterminate`)
@@ -552,7 +595,7 @@ function modelAuthored(h, ai) {
         outcome: `survived`,
         class: `not-judged`,
         mention: [
-          `Make a law in \`${nameOf(h, changed.fi, changed.ti)}\` reject the changed value.`,
+          `Make a law in \`${shownName(h, changed.fi, changed.ti)}\` reject the changed value.`,
         ],
       }
     : {
@@ -647,7 +690,7 @@ function infectedIn(h, mi, owners) {
 // The first deterministic test that infected the mutant, if any test did.
 function infectingTest(h, mi, owners) {
   const hit = reachingTests(h, mi, owners).find(({ t }) => infects(h, mi, t))
-  return hit ? nameOf(h, hit.fi, hit.ti) : undefined
+  return hit ? shownName(h, hit.fi, hit.ti) : undefined
 }
 // The operand pairs the owners' tests reached, distinct as values, in order,
 // up to three.
@@ -710,9 +753,27 @@ function ordinaryOutcome(h, mi, files) {
 
 // A text as a gap line shows it (law 8): whitespace collapsed, and past 60
 // characters its first 57 and `...`.
+// It counts characters by code point, so an astral-plane character is one
+// character and is never split.
 const shortened = (text) => {
-  const flat = String(text).replace(/\s+/g, ` `)
-  return flat.length > 60 ? `${flat.slice(0, 57)}...` : flat
+  const flat = [...String(text).replace(/\s+/g, ` `)]
+  return flat.length > 60 ? `${flat.slice(0, 57).join(``)}...` : flat.join(``)
+}
+// An operand's text as the model renders it (law 7): a string quoted as
+// JSON, past 40 characters (code points) its first 37 and `...`, then `#`
+// and the first eight hex digits of the SHA-1 of the whole; a bigint with
+// `n`; negative zero as `-0`; any other primitive as JavaScript prints it;
+// and a value that is not a primitive as its type in parentheses.
+function operandOf(value) {
+  if (!isPrimitive(value)) return `(${typeof value})`
+  if (typeof value === `string`) {
+    const chars = [...value]
+    return chars.length > 40
+      ? `${JSON.stringify(`${chars.slice(0, 37).join(``)}...`)}#${createHash(`sha1`).update(value).digest(`hex`).slice(0, 8)}`
+      : JSON.stringify(value)
+  }
+  if (typeof value === `bigint`) return `${value}n`
+  return Object.is(value, -0) ? `-0` : String(value)
 }
 
 // Law 9: the tests of a file that `vitest run <file> -t <pattern>` runs.
@@ -961,10 +1022,11 @@ const primitive = (value) =>
 // value as its type alone.
 function shownByCapture(value) {
   if (!primitive(value)) return [typeof value]
-  if (typeof value === `string` && value.length > 40)
+  const chars = typeof value === `string` ? [...value] : undefined
+  if (chars !== undefined && chars.length > 40)
     return [
       `string`,
-      value.slice(0, 37),
+      chars.slice(0, 37).join(``),
       createHash(`sha1`).update(value).digest(`hex`).slice(0, 8),
     ]
   return [
@@ -1259,6 +1321,12 @@ async function driver(h, observe) {
       states.add(`a gap line cut at 60 characters`)
     if (texts.some((text) => /\n/.test(String(text))))
       states.add(`a gap line of code on several lines`)
+    // A cut by UTF-16 units would split the character at the cut.
+    const units = (text) => String(text).replace(/\s+/g, ` `)
+    if (texts.some((text) => /[\ud800-\udbff]/.test(units(text).slice(56, 57))))
+      states.add(`a gap line cut at an astral character`)
+    if (r.authored && exits.test(r.intent))
+      states.add(`an authored intent with words the exit law forbids`)
   }
   // Operands a printer that drops types would conflate (law 7): two
   // distinct values with one String() text, or two long strings that share
@@ -1279,6 +1347,17 @@ async function driver(h, observe) {
         ),
       )
       if (conflated) states.add(`not-infected operands that String conflates`)
+      if (
+        seen.some((v) => typeof v === `bigint` || v === null || v === undefined)
+      )
+        states.add(`a not-infected message with typed operands`)
+      if (
+        seen.some(
+          (v) =>
+            typeof v === `string` && /[\ud800-\udbff]/.test(v.slice(36, 37)),
+        )
+      )
+        states.add(`a not-infected operand cut at an astral character`)
     }
   // Law 9: a failing test in a suite whose name holds regular-expression
   // syntax, a test whose full name another test's contains, and a file
@@ -1298,6 +1377,12 @@ async function driver(h, observe) {
         )
       )
         states.add(`a baseline test in a suite named with regex syntax`)
+      if (
+        f.tests.some((t, ti) =>
+          /[\u0000-\u001f]/.test(namesOf(h, fi, ti).join(``)),
+        )
+      )
+        states.add(`a baseline test whose name holds a newline or a tab`)
     }
   }
   for (const state of states) observe(`reach`, state)
@@ -1389,6 +1474,12 @@ function check(h, observations, expected) {
         for (const side of [0, 1]) {
           const text = pair[side]
           const value = owed.operands[i][side]
+          if (text !== operandOf(value))
+            return violation(
+              `classified`,
+              `gap ${owed.key} prints the operand ${shownValue(value)} as ${JSON.stringify(text)}, owed ${JSON.stringify(operandOf(value))}`,
+              `operands`,
+            )
           const earlier = printedAs.get(text)
           if (earlier !== undefined && !sameValue(earlier.value, value))
             return violation(
@@ -1498,17 +1589,19 @@ function check(h, observations, expected) {
     )
   // Law 8: each gap line is one line, and shows its change shortened: an
   // operator mutant's original and replacement as two code spans, an
-  // authored mutant's intent and author. The results keep the full text.
+  // authored mutant's intent as a code span and its author. The results keep the full text.
   for (const owed of gapsOfModel) {
     const head = `${owed.class ?? owed.outcome} L${owed.line} ${owed.id} `
     const line = streamed.find((l) => l.startsWith(head))
     const rest = line?.slice(head.length)
     let shown
-    if (owed.authored)
+    if (owed.authored) {
+      // The intent is the author's text, so it sits in a code span.
+      const intent = rest === undefined ? undefined : readSpan(rest)
       shown =
-        rest ===
-        `${shortened(owed.authored.intent)} (authored by ${owed.authored.author})`
-    else {
+        intent?.content === shortened(owed.authored.intent) &&
+        rest.slice(intent.length) === ` (authored by ${owed.authored.author})`
+    } else {
       const a = rest === undefined ? undefined : readSpan(rest)
       const arrow = a && rest.slice(a.length).startsWith(` → `)
       const b = arrow ? readSpan(rest.slice(a.length + 3)) : undefined
@@ -1558,6 +1651,10 @@ function baselineBreach(h, observations, expected) {
       actual: lines,
       expected: expected.baseline,
     })
+  // Each printed line is one line, whatever a test's name holds.
+  const broken = lines.find((line) => /[\r\n\u2028\u2029]/.test(line))
+  if (broken !== undefined)
+    return breach(`a baseline line spans lines: ${JSON.stringify(broken)}`)
   for (const owed of expected.baseline) {
     const file = `tests/f${owed.fi}.test.ts`
     const at = lines.findIndex(
@@ -1808,6 +1905,11 @@ const required = [
   `a baseline test in a suite named with regex syntax`,
   `a baseline test whose name another test's contains`,
   `a baseline file that did not load`,
+  `a gap line cut at an astral character`,
+  `an authored intent with words the exit law forbids`,
+  `a not-infected operand cut at an astral character`,
+  `a baseline test whose name holds a newline or a tab`,
+  `a not-infected message with typed operands`,
 ]
 
 // One constructed history per outcome class: one mutant judged by one
@@ -2137,6 +2239,60 @@ const constructed = [
       more: [plainTest({}, { tail: ` t0` })],
     },
   ),
+  // The review round's states: a cut at an astral-plane character in code,
+  // an intent, and an operand; an intent with exit words; and test names
+  // with a newline and a tab.
+  single(
+    `a gap whose code is cut at an astral character`,
+    [`a gap line cut at an astral character`],
+    { mutant: { code: codes[6] } },
+  ),
+  single(
+    `an authored intent cut at an astral character, beside exit words`,
+    [
+      `a gap line cut at an astral character`,
+      `an authored intent with words the exit law forbids`,
+    ],
+    {
+      authored: [{ intent: intents[5] }, { intent: intents[6] }],
+    },
+  ),
+  // Each operand kind a not-infected message can print, three to a message,
+  // each beside 2, where `>` and `>=` agree.
+  ...[
+    [1n, -0, undefined],
+    [null, NaN, true],
+  ].map((values) =>
+    single(
+      `operands of the kinds ${values.map(String).join(`, `)}`,
+      [`not-infected`, `a not-infected message with typed operands`],
+      {
+        mutant: { operator: `binary-swap`, original: `>` },
+        test: { pair: four([values[0], 2]) },
+        more: values.slice(1).map((v) => plainTest({}, { pair: four([v, 2]) })),
+      },
+    ),
+  ),
+  single(
+    `an operand cut at an astral character`,
+    [`not-infected`, `a not-infected operand cut at an astral character`],
+    {
+      mutant: { operator: `binary-swap`, original: `>` },
+      test: { pair: four([typedOperands[20], `true`]) },
+    },
+  ),
+  single(
+    `a failing baseline test whose names hold a newline and a tab`,
+    [
+      `a baseline failing test`,
+      `a baseline test whose name holds a newline or a tab`,
+    ],
+    {
+      baseline: `test`,
+      test: { suites: [`two\nlines`], label: `tab\there `, fails: true },
+      more: [plainTest({}, { suites: [`two\nlines`] })],
+    },
+  ),
   single(
     `a baseline file that does not load`,
     [`a baseline file that did not load`],
@@ -2151,7 +2307,7 @@ oracleProperty({
   law: {
     statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, dead-code, branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed.`,
     authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the oracle rubric's outcome kinds (ORC-006); the frozen design's oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); the maintainer's findings F22 and the leftovers of #12 (2026-11-10); Vitest's runner (@vitest/runner 4.1: -t is a regular expression matched against getTaskFullName, the suites' names and the test's joined by a space); POSIX.1-2017 Shell Command Language 2.2 and 2.6 for the replay's quoting.`,
-    limits: `That real runs produce these records is oracle-gaps.report's, and so is a real replay. The driver encodes operands as capture-setup.mjs \`shown\` does, by a copy of it; long strings are told apart by a 32-bit digest. Test names hold no backtick and no \` > \`, and names within a file are distinct; the replay's file argument is judged as text, not as Vitest's substring filter over every file. Authored intents hold no word that the exit law forbids, and an author is not shortened.`,
+    limits: `That real runs produce these records is oracle-gaps.report's, and so is a real replay. The driver encodes operands as capture-setup.mjs \`shown\` does, by a copy of it; long strings are told apart by a 32-bit digest; no symbol operand is generated, and two symbols of one description print alike. Only the runner's single-file path records a test's names, and only it feeds the baseline. Test names hold no backtick and no \` > \`, and names within a file are distinct; the replay's file argument is judged as text, not as Vitest's substring filter over every file. Authored intents hold no word that the exit law forbids, and an author is not shortened.`,
   },
   histories: {
     arbitrary: records,

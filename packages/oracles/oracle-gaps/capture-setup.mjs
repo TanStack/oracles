@@ -300,10 +300,12 @@ const primitive = (value) =>
 // record alike, and a value that is not a primitive as its type alone.
 const shown = (value) => {
   if (!primitive(value)) return [typeof value]
-  if (typeof value === `string` && value.length > 40)
+  // Characters are code points, so a cut never splits an astral-plane one.
+  const chars = typeof value === `string` ? real.from(value) : undefined
+  if (chars !== undefined && chars.length > 40)
     return [
       `string`,
-      value.slice(0, 37),
+      chars.slice(0, 37).join(``),
       createHash(`sha1`).update(value).digest(`hex`).slice(0, 8),
     ]
   return [

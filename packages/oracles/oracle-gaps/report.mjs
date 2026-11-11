@@ -19,7 +19,7 @@
 // innermost statement that holds the site, joined by single spaces and kept in
 // full, with `~n` for the nth repeat of one anchor in a function. An authored
 // mutant's key is its source and id (`source#authored:id`).
-import { change, codeSpan, gapLine, kindOf } from './stream.mjs'
+import { change, codeSpan, escapeControls, gapLine, kindOf } from './stream.mjs'
 
 /** Outcomes that are gaps. Only a law verdict on a reproducible route kills. */
 export const gapOutcomes = new Set([
@@ -80,9 +80,11 @@ const BOUNDARY = `boundary: -0`
 const BOUNDARY_SENTENCE = `Add a boundary history with -0 and 0.`
 
 // The name of the test a key names: its path after the file.
+// A test's name prints on one line: a control character as its escape.
 const testName = (key) =>
-  key ? key.split(` > `).slice(1).join(` > `) : `(background)`
-const first = (names) => names?.[0] ?? `(none)`
+  key ? escapeControls(key.split(` > `).slice(1).join(` > `)) : `(background)`
+const first = (names) =>
+  names?.[0] === undefined ? `(none)` : escapeControls(names[0])
 // The error a crash threw, as one short line that fits a code span.
 const errorText = (text = `(no message)`) =>
   text.replace(/`/g, `'`).split(`\n`)[0].slice(0, 120)
