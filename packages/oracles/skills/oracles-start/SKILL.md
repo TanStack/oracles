@@ -70,7 +70,8 @@ only when the engineer asks you to.
 
 ## 1. Open
 
-Say in two or three sentences what this session will do. For example: "I'll
+Your first message starts with two or three sentences on what this session
+will do, before any question. For example: "I'll
 look around your code for a behavior that's easy to break, try it with small
 scripts that call your real API, and show you what I find. Then I'll write
 an oracle for it with you and run it."
@@ -78,6 +79,8 @@ an oracle for it with you and run it."
 Then ask one question: is there a part of the code they want to try this on,
 or should you look around? Stop for the answer. If their first message
 already named a part of the code, say that you will start there, and go on.
+A request about the whole repository ("what can it find in this repo")
+names no part: ask.
 
 ## 2. Look around
 
