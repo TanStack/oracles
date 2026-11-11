@@ -399,6 +399,10 @@ Techniques: [guide § Histories](../../docs/guide.md#histories).
     of its own. Own it through the enclosing function (`src/index.ts#mitt`).
     That entry also brings in the sibling methods: cover them, or report their
     gaps as outside this oracle's scope.
+  - Temporary: an unnamed default export (`module.exports = function ...`,
+    `export default () => ...`) cannot be named yet. Own the whole file, and
+    report the gaps that this pulls in from other code in the file as caused
+    by that CLI limitation, not as gaps in this oracle.
   - Temporary: data outside a function (a lookup table, a constant object) is
     not yet part of a function entry's tree. Own the whole file only when
     that data affects an adopted law, such as a unit table that decides the
