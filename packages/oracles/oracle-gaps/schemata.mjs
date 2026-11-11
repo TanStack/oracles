@@ -818,8 +818,16 @@ export function instrument(ts, path, text, source, offset = 0) {
       : holder.condition
     if (!primitiveComparisons(condition)) return undefined
     const [left, right] = [typeOf(node.left), typeOf(node.right)]
+    // Without strict null checks a bigint admits `null`, which ties with a
+    // zero, and the CLI does not know the package's strictness: a bigint
+    // label needs a nonzero bigint literal at the tie (the eighth review).
     if (left === `bigint` && right === `bigint`)
-      return `a number in place of a bigint`
+      return [node.left, node.right].some((e) => {
+        const value = literalValue(e)
+        return typeof value === `bigint` && value !== 0n
+      })
+        ? `a number in place of a bigint`
+        : undefined
     return left === `number` &&
       right === `number` &&
       !(zeroable(node.left) && zeroable(node.right))
@@ -899,8 +907,10 @@ export function instrument(ts, path, text, source, offset = 0) {
   // x`, or the global `undefined`, which the binder resolves to no
   // declaration, in a file whose scopes are static. Its mutant then returns
   // the same `undefined` after the same evaluation. A type proves nothing
-  // here. A direct `eval` (a call of the global `eval`, through parentheses
-  // or a type's wrapper) can declare a `var` at run time, and a `with` reads
+  // here. A direct `eval` (a call of the identifier `eval`, through
+  // parentheses or a type's wrapper, whatever binding holds it: a sloppy
+  // call of a local `eval` that holds the real one is direct too) can
+  // declare a `var` at run time, and a `with` reads
   // names through an object, so either one makes the file's scopes dynamic.
   const unwrapped = (node) => {
     let n = node
@@ -921,7 +931,7 @@ export function instrument(ts, path, text, source, offset = 0) {
     if (ts.isWithStatement(node)) dynamicScope.with = true
     if (ts.isCallExpression(node)) {
       const callee = unwrapped(node.expression)
-      if (ts.isIdentifier(callee) && callee.text === `eval` && global(callee))
+      if (ts.isIdentifier(callee) && callee.text === `eval`)
         dynamicScope.eval = true
     }
     ts.forEachChild(node, scan)
