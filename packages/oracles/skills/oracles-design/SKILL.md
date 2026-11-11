@@ -64,7 +64,11 @@ and nothing else:
 
 1. **The law block**, the file's opening comment. The oracle file is a
    literate program (ORC-003), so write it as prose for a reader who has not
-   seen the review. Do not paste the template's fields or a list of law IDs.
+   seen the review. That reader is a maintainer or a serious user who knows
+   the codebase. Name internal parts without introducing them, and do not
+   explain the language, the library's basic ideas, or what a reader of the
+   code can see at once. Spend the words on what such a reader could get
+   wrong. Do not write about "a careless reader": state the case. Do not paste the template's fields or a list of law IDs.
    Write it as continuous prose in this order. Do not label the parts with
    the names below ("The hook", "The mechanism"): they are for you, not the
    reader.
