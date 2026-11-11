@@ -229,3 +229,13 @@ counterexample must have appeared in that test's invocation log. Exact finite
 driver causes and item checkpoints are compared at that concrete cut. Nested
 judgment causes and arbitrary AggregateError metadata remain outside this
 synthetic diagnostic grammar; no universal error-serialization claim is made.
+
+### Source-kind repair after the gate
+
+Oracle-only commit `d5e615a` precedes the production repair. Selection now
+uses the selector kind to look up fixed or constructed declarations, preserving
+fixed originals even when the declaration has unrelated `build` metadata. The
+same gate passes **26/26** after repair (227 skipped), in 49.59 seconds. Package
+TypeScript, scoped ESLint and the Vite package/declaration build pass. Full
+fixed/random validation and a new independent review round follow this commit;
+this focused result alone does not establish PR readiness.

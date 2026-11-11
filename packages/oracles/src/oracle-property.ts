@@ -1741,25 +1741,28 @@ function selectCalibrationHistory<THistory, TExpected, TPlan>(
     kind === `constructed`
       ? (selector as { constructed: string }).constructed
       : (selector as { fixed: string }).fixed
-  const matches = (
-    kind === `constructed` ? (source.constructed ?? []) : (source.fixed ?? [])
-  ).filter(({ name }) => name === key)
-  if (typeof key !== `string` || matches.length !== 1)
-    return invalid(
-      `${kind} ${reportText(key)} must identify exactly one history (found ${matches.length})`,
-    )
-  const selected = matches[0]!
-  const name = `${kind} history: ${selected.name}`
-  if (`build` in selected) {
+  const select = <T extends { name: string }>(
+    declarations: ReadonlyArray<T>,
+  ) => {
+    const matches = declarations.filter(({ name }) => name === key)
+    if (typeof key !== `string` || matches.length !== 1)
+      return invalid(
+        `${kind} ${reportText(key)} must identify exactly one history (found ${matches.length})`,
+      )
+    return matches[0]!
+  }
+  if (kind === `constructed`) {
+    const selected = select(source.constructed ?? [])
     const seed = calibrationSeed(id, calibration.name)
     return {
-      name: `${name} (seed ${seed})`,
+      name: `constructed history: ${selected.name} (seed ${seed})`,
       enters: selected.enters,
       build: () => buildConstruction(id, source.arbitrary, selected, seed),
     }
   }
+  const selected = select(source.fixed ?? [])
   return {
-    name,
+    name: `fixed history: ${selected.name}`,
     enters: selected.enters ?? [],
     build: () => selected.history,
   }
