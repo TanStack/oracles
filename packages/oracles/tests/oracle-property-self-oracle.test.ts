@@ -1535,6 +1535,21 @@ function predictSpec(
         }
     }
   }
+  // Calibration declaration checks precede requirement checks; resolving a
+  // selected history comes last. This diagnostic order is analyst-chosen,
+  // like the earlier shape checks, rather than a new product guarantee.
+  if (
+    spec.probeBinding &&
+    spec.probeBinding !== `empty` &&
+    (!spec.probe ||
+      [`no-absence`, `null-binding`, `false-binding`, `zero-binding`].includes(
+        spec.probeBinding,
+      ) ||
+      (spec.probeBinding === `inferred` &&
+        spec.constructed.filter(({ enters }) => enters.includes(`saw-0`))
+          .length !== 1))
+  )
+    return { loads: false, loadError: `calibration history selector` }
   const empty = spec.calibrations.find(({ difference }) =>
     emptyDifference(difference),
   )
@@ -1592,19 +1607,10 @@ function predictSpec(
   if (
     spec.probeBinding &&
     spec.probeBinding !== `empty` &&
-    (!spec.probe ||
-      [
-        `no-absence`,
-        `null-entered`,
-        `null-binding`,
-        `false-binding`,
-        `zero-binding`,
-      ].includes(spec.probeBinding) ||
+    (spec.probeBinding === `null-entered` ||
       !spec.fixed.some(({ name }) => name === `fixed-0`) ||
-      (spec.probeBinding === `inferred`
-        ? spec.constructed.filter(({ enters }) => enters.includes(`saw-0`))
-            .length !== 1
-        : !spec.constructed.some(({ name }) => name === `constructed-0`)))
+      (spec.probeBinding === `explicit` &&
+        !spec.constructed.some(({ name }) => name === `constructed-0`)))
   )
     return { loads: false, loadError: `calibration history selector` }
   const names =
@@ -4392,6 +4398,36 @@ oracleProperty({
             probe: `agree`,
             probeBinding,
           }),
+        ),
+      ),
+      ...([`empty text`, `empty pattern`] as const).flatMap((difference) =>
+        (
+          [
+            `null-binding`,
+            `false-binding`,
+            `zero-binding`,
+            `no-absence`,
+            `inferred`,
+            `null-entered`,
+            `explicit`,
+          ] as const
+        ).map((probeBinding) =>
+          fixedHistory(
+            `registration phases ${probeBinding} with ${difference}`,
+            [`registration-error`],
+            generatedDraft({
+              fixed: [at([1])],
+              // Inferred entry lacks a unique construction; explicit entry
+              // selects a missing one. These fail in different phases.
+              constructed:
+                probeBinding === `inferred` || probeBinding === `explicit`
+                  ? []
+                  : [{ prefix: [0], enters: [`saw-0`] }],
+              probe: `agree`,
+              probeBinding,
+              calibrations: [cal(`right`, difference)],
+            }),
+          ),
         ),
       ),
       fixedHistory(
