@@ -25,9 +25,12 @@
 // assigned to a variable, or a method, accessor, or function property of an
 // object literal (named by its property). Module-level data is a unit of its
 // own, as a function is: a variable declared at the top of a module whose
-// initializer is not a function, named by its variable (`src/x.ts#TABLE`). A
-// function that reads it brings it into its tree, with whatever its
-// initializer refers to, and an owns entry may name it. A mutant belongs to
+// initializer is not a function, named by its variable (`src/x.ts#TABLE`), in a
+// top-level variable statement. A function that reads it brings it into its
+// tree, with what its initializer refers to outside the functions it holds,
+// and an owns entry may name it. A function its initializer holds, such as an
+// object literal's method, is a unit of its own, owned where something
+// refers to it, not because the declaration's text holds it. A mutant belongs to
 // the innermost unit whose lines hold it. Two functions may share a name, as a getter and
 // its setter do, or two nested helpers; each is still its own function, and
 // owns entry that names them owns them all. A function's owners are the
@@ -127,6 +130,7 @@ export function functionsIn(ts, file) {
       node.initializer !== undefined &&
       !valued &&
       ts.isIdentifier(node.name) &&
+      ts.isVariableStatement(node.parent.parent) &&
       ts.isSourceFile(node.parent.parent.parent)
     if (
       (hasBody || valued || data) &&
@@ -194,9 +198,12 @@ export function ownership(ts, program, pkg, oracles) {
         for (const declaration of symbol?.declarations ?? [])
           found.push(...targetsOf(declaration, constructed))
       }
-      ts.forEachChild(child, visit)
+      // A function in module data's initializer is a unit of its own,
+      // reached only when something refers to it.
+      if (!(data && ts.isFunctionLike(child))) ts.forEachChild(child, visit)
     }
     // A function's body, or module data's initializer.
+    const data = node.body === undefined
     const text = node.body ?? node.initializer
     if (text) visit(text)
     return found
@@ -222,9 +229,10 @@ export function ownership(ts, program, pkg, oracles) {
         seen.add(fn)
         add(fn, oracle)
         // The functions in a function's text follow it in document order.
-        const functions = functionsOf(
-          relative(pkg, fn.node.getSourceFile().fileName),
-        )
+        // Module data owns only its own sites, not the functions it holds.
+        const functions = ts.isVariableDeclaration(fn.node)
+          ? []
+          : functionsOf(relative(pkg, fn.node.getSourceFile().fileName))
         for (
           let at = functions.indexOf(fn) + 1;
           at < functions.length && functions[at].start < fn.end;

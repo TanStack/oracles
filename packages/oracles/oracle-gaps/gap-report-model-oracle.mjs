@@ -53,6 +53,8 @@ const ROOT_VITE = dirname(
 // A source in a directory of the package whose name starts with `..`, which
 // is in the package all the same. No test loads it.
 const DOTGEN = `..gen/extra.ts`
+// The model's own name for the code in no function of that file.
+const TOP_LOOP = `<module>@..gen`
 // Whether this filesystem ignores letter case, so that `src/Sut.ts` names
 // `src/sut.ts`; the `cased` spelling applies only where it does.
 const caseless = existsSync(fileURLToPath(import.meta.url).toUpperCase())
@@ -167,7 +169,7 @@ const statement = fc.oneof(
   // fields, an array's first element, or a primitive constant.
   fc.record({
     kind: fc.constant(`readData`),
-    shape: fc.constantFrom(`object`, `array`, `primitive`),
+    shape: fc.constantFrom(`object`, `array`, `primitive`, `methods`),
   }),
 )
 const libStatement = fc.oneof(
@@ -540,7 +542,7 @@ const histories = fc.record({
   // in `MODULE_DATA`'s order. A declaration is written when a function reads
   // it or an entry names it.
   dataOwners: fc.array(fc.constantFrom(`a`, `b`, `none`, `none`), {
-    maxLength: 3,
+    maxLength: 4,
   }),
 })
 
@@ -1477,6 +1479,17 @@ const MODULE_DATA = [
     text: `const D_PRIM = true;`,
     read: `\`\${D_PRIM}\``,
   },
+  // An object of two methods, each a unit of its own: a read calls `used`,
+  // which its call brings into the reader's tree, and nothing calls
+  // `spare`. Neither belongs to the declaration because its text holds it.
+  {
+    shape: `methods`,
+    id: `D_FNS`,
+    text: `const D_FNS = { used() { return 1 + 2; }, spare() { return 3 + 4; } };`,
+    read: `\`\${D_FNS.used()}\``,
+    refers: [],
+    calls: [`used`],
+  },
 ]
 const dataOf = (shape) => MODULE_DATA.find((d) => d.shape === shape)
 const preambleStatements = {
@@ -2062,6 +2075,12 @@ function resolveHistory(history) {
   for (const fn of functions) if (fn.file === RUNES) emit(fn, ``)
   const runesLines = lines.splice(0)
   for (const fn of functions) if (fn.file === DOTGEN) emit(fn, ``)
+  // A top-level loop, whose variable is no unit: its code is `<module>`'s.
+  const topLoop =
+    dotGen.length > 0
+      ? { line: lines.length + 1, text: `for (let i = 1 - 1; i < 1; i += 1);` }
+      : undefined
+  if (topLoop) lines.push(topLoop.text)
   const dotGenSource =
     dotGen.length > 0 ? `${lines.splice(0).join(`\n`)}\nexport {}\n` : undefined
   lines.push(...mainLines)
@@ -2182,6 +2201,7 @@ function resolveHistory(history) {
       ...(file ? [DERIVED] : []),
     ],
     dotGenSource,
+    topLoop,
     history,
     source,
     librarySource,
@@ -2486,6 +2506,8 @@ function sitesOf(plan) {
       }
       if (stmt.kind === `primeCall`) at(`delete-call`, `call`, stmt.line, whole)
       if (stmt.kind === `readData`) at(`delete-call`, `push`, stmt.line, whole)
+      if (stmt.kind === `readData` && stmt.shape === `methods`)
+        at(`value-undefined`, `value`, stmt.line, whole)
       if (stmt.kind === `if`) {
         condition()
         at(`delete-call`, `push`, stmt.line, pushText(stmt))
@@ -2617,7 +2639,23 @@ function sitesOf(plan) {
     }
     if (d.shape === `array`) put(`arithmetic-swap`, `arith`)
     if (d.shape === `primitive`) put(`bool-flip`, `flag`)
+    // A method's `+` belongs to the method, and runs only when it is called.
+    if (d.shape === `methods`)
+      for (const [name, text] of [
+        [`used`, `return 1 + 2;`],
+        [`spare`, `return 3 + 4;`],
+      ])
+        add(name, d.line, `arithmetic-swap`, text, { role: `${name}Arith` })
   }
+  // The `..gen/` file's top-level loop: its variable's `-`, its condition,
+  // and its `<`, in no function, and owned by no entry (a whole-file entry
+  // names the main source).
+  if (plan.topLoop)
+    for (const operator of [`arithmetic-swap`, `loop-false`, `binary-swap`])
+      add(TOP_LOOP, plan.topLoop.line, operator, plan.topLoop.text, {
+        file: DOTGEN,
+        function: `<module>`,
+      })
   // A call statement to a probe helper is probe-only code (law 2), at
   // module level too.
   for (const call of plan.loadCalls)
@@ -2677,7 +2715,10 @@ function ownersOf(plan) {
                               ? [`W9.status#get`, `W9.status#set`]
                               : // A read of module data refers to its declaration.
                                 stmt.kind === `readData`
-                                ? [dataOf(stmt.shape).id]
+                                ? [
+                                    dataOf(stmt.shape).id,
+                                    ...(dataOf(stmt.shape).calls ?? []),
+                                  ]
                                 : [],
       ),
     ]),
@@ -2709,7 +2750,10 @@ function ownersOf(plan) {
   return (id) =>
     new Set([
       ...(owners.get(id) ?? []),
-      ...(plan.wholeFile === `none` || inLibrary.has(id) || id === DERIVED_FN
+      ...(plan.wholeFile === `none` ||
+      inLibrary.has(id) ||
+      id === TOP_LOOP ||
+      id === DERIVED_FN
         ? []
         : [plan.wholeFile]),
     ])
@@ -2908,12 +2952,23 @@ function interpret(plan, fnId, x, sites, active) {
             isActive(
               sites.find((s) => s.data === stmt.shape && s.role === role),
             )
+          // A method's call: undefined in its place, or its `1 + 2`.
+          const called = () => {
+            const value = siteOf(stmt, `value`)
+            reached.add(value.id)
+            if (isActive(value)) return `undefined`
+            const arith = sites.find((s) => s.role === `usedArith`)
+            reached.add(arith.id)
+            return String(isActive(arith) ? -1 : 3)
+          }
           trace.push(
-            stmt.shape === `object`
-              ? `${at(`dropN`) ? undefined : 3}${at(`dropS`) ? undefined : `o`}`
-              : stmt.shape === `array`
-                ? String(at(`arith`) ? 1 : 3)
-                : String(!at(`flag`)),
+            stmt.shape === `methods`
+              ? called()
+              : stmt.shape === `object`
+                ? `${at(`dropN`) ? undefined : 3}${at(`dropS`) ? undefined : `o`}`
+                : stmt.shape === `array`
+                  ? String(at(`arith`) ? 1 : 3)
+                  : String(!at(`flag`)),
           )
         }
       }
