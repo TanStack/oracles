@@ -316,12 +316,13 @@ in the model.
   cannot collide with a generated value (a fixed boundary shape). Otherwise
   derive it from the generated history (for example "the initial value plus
   one").
-- **Every arbitrary must take its histories back.** fast-check replays each
-  `fixed` and constructed history through the arbitrary. A `.map` with no
-  inverse cannot do this, and every such history fails at run time with
-  `canShrinkWithoutContext`. Give each `.map` its inverse
-  (`.map(f, unmap)`, where `unmap` throws on a value it cannot map back), or build from `fc.record`, `fc.constantFrom`, and plain
-  values. Run the oracle once right after you write each constructed history.
+- **Every arbitrary must take its histories back.** Each `fixed` and
+  constructed history goes back through the arbitrary, and one that cannot
+  fails when the file loads, naming the history. Give each `.map` its inverse
+  (`.map(f, unmap)`, where `unmap` throws on a value it cannot map back), and
+  avoid `.chain`. Build objects with `fc.record` or `fc.tuple` over primitive
+  leaves. `fc.constant` and `fc.constantFrom` take back only primitives, or
+  the same object reference.
 - **Choose the string unit that covers the law's domain.** fast-check's
   default strings include lone surrogates, and slicing by code unit splits
   astral characters. `fc.string({ unit: 'binary' })` gives every code point
@@ -346,7 +347,11 @@ They do not reach them.
 
 - **Cover every critical state by construction.** Each state that a law
   needs is a declared state with a constructed history, and a probe where
-  production decides to enter it. Never raise `runs` to reach a state.
+  production decides to enter it. Never raise `runs` to reach a state. With
+  an enumerated source (`histories: { enumerated, states, measured }`), every
+  history runs, so a required state needs no constructed history: the `reach`
+  test fails if no history entered it. No enumerated history's label may be
+  `reach` or `determinism`: those name the framework's own tests.
 - **Need a state at least N times?** Give it N constructed histories.
 - **Give at least one fixed seed** in `fixedSeeds`. The random campaign always
   runs beside it. A kill that only the random campaign finds is a gap until you

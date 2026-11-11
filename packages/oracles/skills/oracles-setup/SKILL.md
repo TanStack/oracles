@@ -66,10 +66,10 @@ TypeScript 5 or newer. If the repository's `tsc` is older, keep the oracle
 files and the Vitest config out of its run (its `include` or `exclude`).
 Report any typecheck errors that existed before setup as pre-existing.
 
-Temporary, a known packaging bug: `@tanstack/oracles` depends on
-`typescript`, and npm can hoist that copy to the repository root. A
-repository that declares no `typescript` then gets one, and `npx tsc`
-resolves to it. Report it as this bug. Do not treat that copy as the
+The gap check's own TypeScript installs as `typescript-for-tanstack-oracles`,
+so it does not replace the repository's. In a repository with no TypeScript,
+or after an incremental npm install, npm can still link its `tsc` into
+`node_modules/.bin` until the next `npm ci`. Do not treat that `tsc` as the
 repository's TypeScript, and do not add a typecheck that uses it.
 
 Use the repository's own package manager. With pnpm 11, an install that skips
@@ -139,6 +139,9 @@ export default [
 ]
 ```
 
+- If you spread a preset and set your own `ignores` on it, merge
+  `...preset.ignores` into them. The presets ignore tool configs
+  (`eslint.config.*`, `vite.config.*`, `vitest.config.*`, `*.oracle.config.*`).
 - `recommended` applies to oracle files and turns off inline directives there,
   so a disable comment has no effect.
 - `production` checks the probe form in `src/**` and `packages/*/src/**`. If
@@ -329,8 +332,8 @@ file only when module data affects an adopted law (see `oracles-design` step
 declared: that is a setup failure.
 
 In an oracle file, only `oracleProperty` registers tests. A plain Vitest test
-there is not a kill, and the gap check reports it. Do not leave an empty test
-there either: it checks nothing and looks like coverage. The driver records
+there is not a kill, and the gap check reports it. Lint also reports an empty test
+there: it checks nothing and looks like coverage. Remove it, or use `it.todo`. The driver records
 production errors as observations: a mutant that crashes production is not a
 kill until the check rejects the recorded error.
 
