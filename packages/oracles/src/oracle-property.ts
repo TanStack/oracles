@@ -2,9 +2,9 @@
  * Oracle properties: one constructor for an oracle's law, histories, model,
  * production driver, and check.
  *
- * An oracle file used to assemble these parts by hand: `declareOracle`, a loop
- * of `it` calls, assertions spread through the driver, and its own failure
- * text. `oracleProperty` takes the parts and does the mechanics that every
+ * An oracle file used to assemble these parts by hand: a loop of `it` calls,
+ * assertions spread through the driver, and its own failure text.
+ * `oracleProperty` takes the parts and does the mechanics that every
  * oracle shares, so an oracle file holds only the parts that state its law.
  * Cleanup stays with the driver: a driver releases what it created before it
  * returns or throws, so the framework never holds a production resource.
@@ -194,9 +194,10 @@
  * way an oracle checks production: it runs synthetic properties under real Vitest
  * and compares what Vitest reports with an independent model.
  *
- * The `oracle/no-unit-test` lint rule treats an `oracleProperty` call as an
- * oracle test whose parts are its arguments, when its options are an object
- * literal with a `check`. The property is its own declaration.
+ * The `oracle/no-unit-test` lint rule accepts an `oracleProperty` call whose
+ * options are an object literal with a `check`, and reports every other test
+ * registration in an oracle file: an oracle file registers its tests only
+ * through `oracleProperty` (maintainer decision, 2026-11-11).
  */
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { appendFileSync } from 'node:fs'

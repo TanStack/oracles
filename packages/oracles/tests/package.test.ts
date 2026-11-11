@@ -15,8 +15,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import * as oracles from '../src/index'
-import * as declaration from '../src/declaration'
-import { commonJsForDeclarationOnly } from '../vite.config'
+import * as route from '../src/route'
+import { commonJsForRouteOnly } from '../vite.config'
 
 // The public surface, as a consumer imports it. An added or removed export
 // changes this list on purpose.
@@ -33,7 +33,6 @@ describe(`@tanstack/oracles`, () => {
         `atOracleCheckpoint`,
         `configureOracles`,
         `createOracleFailureFidelity`,
-        `declareOracle`,
         `differs`,
         `forwardCut`,
         `oracleCalibrationTest`,
@@ -72,53 +71,47 @@ describe(`@tanstack/oracles`, () => {
     expect(manifest.main).toBe(manifest.module)
   })
 
-  // A module bundled into a browser or a native webview declares its parts
-  // and registers its routes through this entry.
-  it(`exports declareOracle and the route helpers from the browser-safe declaration entry`, () => {
-    expect(Object.keys(declaration).sort()).toEqual(
-      [
-        `declareOracle`,
-        `oracleFixedSeed`,
-        `oracleRoute`,
-        `oracleRouteOf`,
-      ].sort(),
+  // A module bundled into a browser or a native webview registers its routes
+  // through this entry.
+  it(`exports the route helpers from the browser-safe route entry`, () => {
+    expect(Object.keys(route).sort()).toEqual(
+      [`oracleFixedSeed`, `oracleRoute`, `oracleRouteOf`].sort(),
     )
-    expect(declaration.declareOracle).toBe(oracles.declareOracle)
-    expect(declaration.oracleRoute).toBe(oracles.oracleRoute)
-    expect(declaration.oracleRouteOf).toBe(oracles.oracleRouteOf)
-    expect(declaration.oracleFixedSeed).toBe(oracles.oracleFixedSeed)
+    expect(route.oracleRoute).toBe(oracles.oracleRoute)
+    expect(route.oracleRouteOf).toBe(oracles.oracleRouteOf)
+    expect(route.oracleFixedSeed).toBe(oracles.oracleFixedSeed)
   })
 
   // Each build of the CommonJS output, including each rebuild in watch mode,
-  // holds exactly the modules the declaration entry reaches in that build.
+  // holds exactly the modules the route entry reaches in that build.
   // Watch mode is not driven here; two builds call the plugin's hook in turn.
   it(`prunes each CommonJS build by that build's own imports`, () => {
-    const plugin = commonJsForDeclarationOnly()
+    const plugin = commonJsForRouteOnly()
     const generate = plugin.generateBundle as (
       output: { format: string },
       bundle: Record<string, { type: string; imports?: Array<string> }>,
     ) => void
     const chunk = (...imports: Array<string>) => ({ type: `chunk`, imports })
     const first = {
-      'cjs/declaration.cjs': chunk(`cjs/oracle-declaration.cjs`),
-      'cjs/oracle-declaration.cjs': chunk(),
-      'cjs/index.cjs': chunk(`cjs/oracle-declaration.cjs`),
+      'cjs/route.cjs': chunk(`cjs/oracle-route.cjs`),
+      'cjs/oracle-route.cjs': chunk(),
+      'cjs/index.cjs': chunk(`cjs/oracle-route.cjs`),
     }
     generate({ format: `cjs` }, first)
     expect(Object.keys(first).sort()).toEqual([
-      `cjs/declaration.cjs`,
-      `cjs/oracle-declaration.cjs`,
+      `cjs/oracle-route.cjs`,
+      `cjs/route.cjs`,
     ])
     const second = {
-      'cjs/declaration.cjs': chunk(`cjs/oracle-route.cjs`),
+      'cjs/route.cjs': chunk(`cjs/oracle-environment.cjs`),
+      'cjs/oracle-environment.cjs': chunk(),
       'cjs/oracle-route.cjs': chunk(),
-      'cjs/oracle-declaration.cjs': chunk(),
       'cjs/index.cjs': chunk(),
     }
     generate({ format: `cjs` }, second)
     expect(Object.keys(second).sort()).toEqual([
-      `cjs/declaration.cjs`,
-      `cjs/oracle-route.cjs`,
+      `cjs/oracle-environment.cjs`,
+      `cjs/route.cjs`,
     ])
   })
 
@@ -162,7 +155,7 @@ describe(`@tanstack/oracles`, () => {
           visit(join(dirname(file), specifier!), seen)
         else if (isBuiltin(specifier!)) builtins.push(`${file}: ${specifier}`)
     }
-    visit(`dist/esm/declaration.js`)
+    visit(`dist/esm/route.js`)
     expect(builtins).toEqual([])
     const { exports } = local(`../package.json`) as { exports: unknown }
     const targets = (

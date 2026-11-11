@@ -371,7 +371,6 @@ import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import fc from 'fast-check'
-import { declareOracle } from '../src/oracle-declaration.ts'
 import { socketOf, stateDirOf } from './daemon.mjs'
 import { oracleProperty, pass, violation } from '../src/oracle-property.ts'
 
@@ -1697,12 +1696,6 @@ function check(plan, observations, expected) {
   }
   return incrementalCheck(observations) ?? daemonCheck(observations) ?? pass
 }
-
-declareOracle({
-  check: [check, incrementalCheck, daemonCheck, refusalBreach],
-  model: [model, interpret, ownersOf, probeHelpers],
-  grammar: [histories],
-})
 
 // ## Calibrations
 //

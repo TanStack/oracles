@@ -98,7 +98,6 @@ import { spawnSync } from 'node:child_process'
 import { dirname, join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import fc from 'fast-check'
-import { declareOracle } from '../src/oracle-declaration.ts'
 import { oracleProperty, pass, violation } from '../src/oracle-property.ts'
 import { analyze, isRunnerCopy } from './analysis.mjs'
 import {
@@ -1135,12 +1134,6 @@ function check(plan, observations, expected) {
   }
   return pass
 }
-
-declareOracle({
-  check: [check, refusalBreach],
-  model: [model, interpret, ownersOf, probeHelpers, argumentFault],
-  grammar: [histories, argumentHistories],
-})
 
 // ## Calibrations
 //
