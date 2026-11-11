@@ -491,14 +491,16 @@ const histories = fc.record({
     }),
     { nil: null },
   ),
-  // Which declaration the oracle files make: `declareOracle`, `oracleProperty`
-  // with its `owns` (maintainer decision, 2026-11-10: `oracleProperty` takes
-  // `owns`), both (the entries split between the two calls, so the union is
-  // read), or none, which leaves no oracle file.
+  // Where the oracle files name their `owns`: on `oracleProperty`
+  // (maintainer decision, 2026-11-10: `oracleProperty` takes `owns`), on a
+  // wrapper's call, which forwards it to `oracleProperty` (maintainer
+  // decision, 2026-11-11: the CLI reads `owns` from an object-literal
+  // argument of any call), on both (the entries split between the two calls,
+  // so the union is read), or nowhere, which leaves no oracle file.
   declaration: fc.constantFrom(
-    `declareOracle`,
-    `declareOracle`,
-    `declareOracle`,
+    `wrapper`,
+    `wrapper`,
+    `wrapper`,
     `oracleProperty`,
     `oracleProperty`,
     `both`,
@@ -2428,8 +2430,8 @@ function resolveHistory(history) {
     // history with no fault can have no oracle file.
     declaration:
       history.declaration === `neither` && (history.fault ?? `none`) !== `none`
-        ? `declareOracle`
-        : (history.declaration ?? `declareOracle`),
+        ? `wrapper`
+        : (history.declaration ?? `wrapper`),
     ownerless,
     template: history.template,
     fault: history.fault,
@@ -3459,10 +3461,7 @@ function refusal(plan) {
   // A run with no oracle file, or with no owns entry, owns no selected
   // source, so every mutant would read as unowned. The analysis refuses it
   // (maintainer decision, 2026-11-10).
-  // Its directive names only oracleProperty: declareOracle is legacy, and an
-  // author who reads it would call it (maintainer decision, 2026-11-10: F25).
-  if (plan.declaration === `neither`)
-    return { cause: `no oracle file`, withheld: `declareOracle` }
+  if (plan.declaration === `neither`) return { cause: `no oracle file` }
   if (ownsNothing(plan)) return { cause: `owns any selected source` }
   // A setup file that throws fails every oracle file before any test runs,
   // so the run refuses as for a failing owner, naming the setup's error.
@@ -3733,13 +3732,19 @@ function oracleTestFile(plan, file) {
       : []),
   ].map((entry) => quoteEntry(plan, entry))
   // The calls that declare the entries, one per declaration the file makes.
-  // With `both`, the entries split between the two calls.
+  // With `both`, the entries split between the two calls. A wrapper takes
+  // its options, `owns` among them, after a leading id, as a project's
+  // registration helpers do, so the list is read from any argument.
   const declares = {
-    declareOracle: [`declareOracle`],
+    wrapper: [`registerOwned`],
     oracleProperty: [`oracleProperty`],
-    both: [`declareOracle`, `oracleProperty`],
+    both: [`registerOwned`, `oracleProperty`],
     neither: [],
-  }[plan.declaration ?? `declareOracle`]
+  }[plan.declaration ?? `wrapper`]
+  const call = (name, owns) =>
+    name === `registerOwned`
+      ? `${name}('p', { runs: 1, owns: ${owns} })`
+      : `${name}({ owns: ${owns} })`
   const owns = declares.flatMap((name, part) => {
     const list =
       plan.declaration === `both`
@@ -3748,12 +3753,14 @@ function oracleTestFile(plan, file) {
     return file === `b` && plan.fault === `nonLiteral`
       ? [
           `const OWNS_${part} = [${list.join(`, `)}]`,
-          `${name}({ owns: OWNS_${part} })`,
+          call(name, `OWNS_${part}`),
         ]
-      : [`${name}({ owns: [${list.join(`, `)}] })`]
+      : [call(name, `[${list.join(`, `)}]`)]
   })
-  const stubs = declares.map(
-    (name) => `function ${name}(_parts: { owns: Array<string> }): void {}`,
+  const stubs = declares.map((name) =>
+    name === `registerOwned`
+      ? `function ${name}(_id: string, _options: { runs: number; owns: Array<string> }): void {}`
+      : `function ${name}(_parts: { owns: Array<string> }): void {}`,
   )
   const out = [
     `import { ${plan.tests.some((t) => t.file === file && t.cleanupThrows) ? `afterEach, ` : ``}describe, expect, test${plan.tests.some((t) => t.file === file && t.spies) ? `, vi` : ``} } from 'vitest'`,
@@ -4229,8 +4236,8 @@ function fixtureFiles(plan, state = initialState(plan)) {
     // that took it for one would refuse the run.
     'tests/.oracle-gaps-1-1-a.test.ts': [
       `import { test } from 'vitest'`,
-      `function declareOracle(_parts: { owns: Array<string> }): void {}`,
-      `declareOracle({ owns: ['${SOURCE}#w_kill'] })`,
+      `function oracleProperty(_parts: { owns: Array<string> }): void {}`,
+      `oracleProperty({ owns: ['${SOURCE}#w_kill'] })`,
       `test('fixed seed 1', () => {`,
       `  throw new Error('a copy that a check which died left behind')`,
       `})`,

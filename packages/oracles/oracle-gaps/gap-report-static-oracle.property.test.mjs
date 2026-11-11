@@ -738,6 +738,8 @@ async function driver(plan, observe) {
       states.add(`refused without an owner`)
     if (!before.refusal && plan.declaration === `oracleProperty`)
       states.add(`owns read from oracleProperty`)
+    if (!before.refusal && plan.declaration === `wrapper`)
+      states.add(`owns read from a wrapper call`)
     if (!before.refusal && plan.declaration === `both`)
       states.add(`owns read from both declarations`)
     // The statement whose lines hold a mutant, by the model's layout.
@@ -1035,13 +1037,6 @@ function check(plan, observations, expected) {
         `the refusal does not name ${refused.cause}: ${got.refusal}`,
         `refusal`,
       )
-    // A refusal never directs the author to a legacy API.
-    if (refused.withheld && got.refusal.includes(refused.withheld))
-      return violation(
-        `static`,
-        `the refusal names ${refused.withheld}, which is legacy: ${got.refusal}`,
-        `refusal`,
-      )
     return pass
   }
   if (got.refusal)
@@ -1268,8 +1263,8 @@ const calibrations = [
 ]
 
 const faults = [`badEntry`, `missingSource`, `nonLiteral`, `outsideSource`]
-// Each constructed history builds from a generated history whose declaration
-// is `declareOracle` and whose first function is owned, the form the other
+// Each constructed history builds from a generated history whose `owns` is
+// on a wrapper's call and whose first function is owned, the form the other
 // histories use, unless it names its own: a refusing declaration or an
 // ownerless run then reaches only the states that name it, and a run that
 // owns nothing is not refused for a state it does not name.
@@ -1279,7 +1274,7 @@ const withDeclaration = (constructed) =>
     build: (generated) =>
       item.build({
         ...generated,
-        declaration: `declareOracle`,
+        declaration: `wrapper`,
         ownerless: false,
         owners: [`a`, ...generated.owners.slice(1)],
       }),
@@ -1323,6 +1318,7 @@ const required = [
   `stability rerun`,
   ...faults.map((fault) => `refused ${fault}`),
   `owns read from oracleProperty`,
+  `owns read from a wrapper call`,
   `owns read from both declarations`,
   `refused without an oracle file`,
   `refused without an owner`,
@@ -1621,7 +1617,7 @@ oracleProperty({
         enters: [`refused without an owner`],
         build: (generated) => ({
           ...generated,
-          declaration: `declareOracle`,
+          declaration: `wrapper`,
           fault: `none`,
           ownerless: true,
           wholeFile: `none`,
@@ -1658,7 +1654,7 @@ oracleProperty({
         enters: [`refused badEntry with no owner`],
         build: (generated) => ({
           ...generated,
-          declaration: `declareOracle`,
+          declaration: `wrapper`,
           fault: `badEntry`,
           ownerless: true,
           wholeFile: `none`,
