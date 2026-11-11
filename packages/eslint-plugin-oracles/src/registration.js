@@ -105,11 +105,11 @@ export function findVariable(scope, name) {
 }
 
 // The package entries that export each framework module. A project imports the
-// framework from `@tanstack/oracles`, or from its `declaration` entry, which
-// loads only the declaration helpers.
+// framework from `@tanstack/oracles`, or from its browser-safe `route` entry,
+// which loads only the route helpers.
 const frameworkEntries = {
   'oracle-config': [`@tanstack/oracles`],
-  'oracle-declaration': [`@tanstack/oracles`, `@tanstack/oracles/declaration`],
+  'oracle-route': [`@tanstack/oracles`, `@tanstack/oracles/route`],
   'oracle-property': [`@tanstack/oracles`],
 }
 
@@ -134,7 +134,7 @@ export function isFrameworkSource(source, name) {
 export function isOracleConfigSource(source) {
   return (
     isFrameworkSource(source, `oracle-config`) ||
-    isFrameworkSource(source, `oracle-declaration`)
+    isFrameworkSource(source, `oracle-route`)
   )
 }
 
