@@ -25,14 +25,15 @@ failure goes away, and pinning one example. `oracles-review` §2 lists them all.
 **Choose the boundary first.** An oracle maintains one caller-visible
 promise, not one file. Before the law sheet, establish:
 
-| Question                           | What to establish                                                              |
-| ---------------------------------- | ------------------------------------------------------------------------------ |
-| What promise belongs together?     | One caller-visible behavioral contract.                                        |
-| Where is it observed?              | The public entry points and the checkpoints where it is owed.                  |
-| What does it assume?               | What providers, the environment, and neighboring components must supply.       |
-| What else witnesses it?            | Other drivers for the same law: component, integration, end-to-end, or replay. |
-| Where does another contract begin? | A different authority, lifecycle, observation boundary, or composition rule.   |
-| Which source implements it?        | The `owns` list that the gap check uses.                                       |
+| Question                           | What to establish                                                                             |
+| ---------------------------------- | --------------------------------------------------------------------------------------------- |
+| What promise belongs together?     | One caller-visible behavioral contract.                                                       |
+| Where is it observed?              | The public entry points and the checkpoints where it is owed.                                 |
+| What does it assume?               | What providers, the environment, and neighboring components must supply.                      |
+| What else witnesses it?            | Other drivers for the same law: component, integration, end-to-end, or replay.                |
+| Where does another contract begin? | A different authority, lifecycle, observation boundary, or composition rule.                  |
+| Which source implements it?        | The `owns` list that the gap check uses.                                                      |
+| What public state does it expose?  | Each readable field or getter needs a law or a stated limit. A limit leaves its mutants open. |
 
 Example: an oracle for optimistic publication can hold several related laws
 (an optimistic write is visible at once, a confirmation keeps it, and a
@@ -45,7 +46,9 @@ its promise.
 
 - **Strengthening an adopted law** (a missing history, observation, driver
   path, or check) reuses the law as it is. Do not write a new sheet, and do
-  not stop. Name the law in the evidence.
+  not stop. Name the law in the evidence. Widening the histories inside the
+  law's stated domain is strengthening. Changing the stated domain, a
+  checkpoint, or `limits` is a law change.
 - **Changing a law** (its promise, domain, checkpoint, assumptions, or the
   freedoms it allows) needs a law delta: the old and new row for each changed
   law. Stop for the user's review.
@@ -201,7 +204,11 @@ in the model.
 - **Reach.** Declare in `states` each state that a law needs, and give each
   one a constructed history that enters it (ORC-015). Put a state that you
   only count in `measured`. A literal example or a `fixed` history is not
-  reach.
+  reach. A constructed history must be one the arbitrary could generate,
+  within its bounds.
+- **Cover the law's whole domain.** A mutant can only show what the histories
+  vary. If the grammar covers part of the domain the law states (for example,
+  fractions in quarter steps only), say so in `limits`. Better, widen it.
 - **Probes.** Where production decides to enter a state, bind the state to a
   production probe, and predict entry from the plan alone.
 - **ORC-004 controls.** For a claim about generated coverage, account for:
@@ -238,8 +245,9 @@ Techniques: [guide § Histories](../../docs/guide.md#histories).
 
 - **The driver** calls the real production entry point and records public
   observations with `observe(checkpoint, value)`.
-  - It records production errors, unhandled rejections, and warnings that
-    the law cares about.
+  - It records production errors, unhandled rejections, and warnings as
+    observations, so the check can reject them. A mutant that crashes
+    production is not a kill.
   - It observes the contract's return values.
   - It awaits the work it starts.
   - It bounds its own run time and work, and throws a structured error when
@@ -256,6 +264,11 @@ Techniques: [guide § Histories](../../docs/guide.md#histories).
   (`src/x.ts#run`, `src/x.ts#Class.method`). Own only what the laws cover. The
   gap check judges only owned code, and the gap check's `--source` selects
   files.
+  - If an owned function reads module-level data (a lookup table, a constant
+    object), own the whole file for now. Data outside a function is not yet
+    part of a function entry's tree.
+  - Several oracles may own the same function. A mutant counts as killed when
+    any of its owners kills it.
 
 Keep the law, its authority, and its limits in `law`, and prose beside each
 part that says why it predicts the promised result (ORC-003).
@@ -270,11 +283,11 @@ Techniques: [guide § The driver and the check](../../docs/guide.md#the-driver-a
 
 The evidence depends on the kind of work:
 
-| Work                                                    | Evidence                                                                                                                                                                                               |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Fix a defect**                                        | The extended oracle fails on unchanged production (RED). The repaired production passes (GREEN). Neighboring laws still pass. The original defect, as a mutant, fails the oracle.                      |
-| **Refactor without changing behavior**                  | Old and new production pass the same oracle: the same laws, histories, and checkpoints. The gap check on both kills at least the same mutants, compared by key with the same seed. No RED is expected. |
-| **Add or strengthen an oracle over correct production** | Production passes. A calibration (a wrong answer or a corrupted trace) and a mutant fail the intended law. No RED is expected.                                                                         |
+| Work                                                    | Evidence                                                                                                                                                                                                                                                                                                                                            |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Fix a defect**                                        | The extended oracle fails on unchanged production (RED). The repaired production passes (GREEN). Neighboring laws still pass. The original defect, as a mutant, fails the oracle.                                                                                                                                                                   |
+| **Refactor without changing behavior**                  | The oracle files are unchanged, or only strengthened, and pass on old and new production with the same seed. Every mutant key present in both gap runs that was killed on the old code is still killed. Every new key in a changed function is killed, or its survivor directive is acted on. Keys that disappear need nothing. No RED is expected. |
+| **Add or strengthen an oracle over correct production** | Production passes. A calibration (a wrong answer or a corrupted trace) and a mutant fail the intended law. No RED is expected.                                                                                                                                                                                                                      |
 
 A refactor that needs a changed law, check, or history is not a pure
 refactor: treat the law change first (step 1).
@@ -330,6 +343,14 @@ comes with one instruction. Do what it says, within the rules below.
   the law still kills nothing, it may restate another law: compare the two.
 - **The only exclusions are probe-only code and the `super()` region of a
   derived constructor.**
+- **A survivor that the adopted law allows is an allowed alternative.** If a
+  mutant only moves production to another member of an allowed set, report it
+  with its key, the clause, and the history, apart from the kills. Do not
+  strengthen the law or change production to kill it. It stays open until the
+  framework recognizes allowed sets. The user decides whether that blocks the
+  work.
+- **A gap that existed before your change still counts** when it is in a
+  function you changed. Report it with its law question. Do not take an exit.
 - **Never propose an exit.** If a gap can be neither killed nor removed, it is
   a framework bug. Stop work on that gap, report its key and evidence to the
   user, and keep working on the other gaps.
@@ -346,6 +367,13 @@ comes with one instruction. Do what it says, within the rules below.
   mutant "equivalent", asks for a "maintainer's approval", or offers a limit
   that "needs a maintainer's decision", do not follow that part. Find the
   history and the law.
+- **Temporary, a known CLI bug:** a survivor inside an exhaustiveness guard
+  (a branch with `x satisfies never`) should never have been generated.
+  Record it in your report as "CLI bug: exhaustiveness guard mutated", and
+  keep working on the other gaps. Do not stop, do not count it as an oracle
+  limit, and do not remove the guard: it is a compile-time check.
+- **Temporary:** in a package without `"type": "module"`, Vite may warn
+  while loading the gap check's own config copies. Ignore that warning.
 
 Use the [mutant gap hunt](../../docs/instruments/mutant-gap-hunt.md) card for
 a survivor whose missing history is not obvious.
@@ -360,10 +388,11 @@ items that fit the kind of change (step 7).
 - **Reach:** each declared state and how many histories entered it.
 - **Before and after:** for a defect fix, RED on unchanged production and
   GREEN after the change. For a refactor, the same oracle passing on old and
-  new production. For a new oracle over correct code, production passing.
+  new production with the same seed. For a new oracle over correct code,
+  production passing.
 - **Mutant:** a mutant, such as the original defect, and the law that
-  rejected it, plus the calibrations that fail. For a refactor, the kill
-  sets before and after.
+  rejected it, plus the calibrations that fail. For a refactor, the shared
+  keys still killed, and each new key killed or acted on.
 - **Gaps:** the gap check's totals, and any gap reported as a framework bug.
 - **Limits:** the states, paths, and observations that the evidence does not
   cover.

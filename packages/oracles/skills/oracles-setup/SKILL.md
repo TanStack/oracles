@@ -6,7 +6,9 @@ description: Set up @tanstack/oracles in a repository. Install the pinned packag
 # Set up @tanstack/oracles
 
 You are setting up oracle testing in this repository. Do the steps in order.
-Ask the user before each step that writes outside the repository.
+Ask the user before each step that writes outside the repository. When no
+user is available, choose the default this skill gives, record each choice in
+your report, and continue.
 
 Setup ends when one oracle passes on production and the gap check has judged
 it with no gap left open, unless the user decides otherwise. It does not end
@@ -57,8 +59,14 @@ TypeScript 5 or newer. If the repository's `tsc` is older, keep the oracle
 files and the Vitest config out of its run (its `include` or `exclude`). Report any typecheck errors
 that existed before setup as pre-existing.
 
-Use the repository's own package manager. To upgrade, change both URLs to
-the new commit at once, then do step 4 again and rerun the gap check (step 7).
+Use the repository's own package manager. With pnpm 11, an install that skips
+a dependency's build script stops every later pnpm command
+(`ERR_PNPM_IGNORED_BUILDS`), and pnpm writes an `allowBuilds` placeholder into
+`pnpm-workspace.yaml`. Answer it, usually `false`, and tell the user.
+
+To upgrade, change both URLs to the new commit at once. Then do step 4 and
+step 5 again (copy each pointer's `name` and `description` again, since they
+can change), and rerun the gap check (step 7).
 
 ## 3. Configure
 
@@ -69,10 +77,15 @@ Vitest setup file that runs before any oracle module is imported.
 **Where oracle files go.** Put oracle files in a test directory, named
 `*oracle*.test.ts`, for example `tests/parse.oracle.property.test.ts`. If the
 repository's main runner is not Vitest, check that its test glob does not
-also match the oracle files, and run them with their own Vitest config:
+also match the oracle files. The gap check loads only `vitest.config.*` or
+`vite.config.*`, so:
+
+- If the repository has no Vitest config, create `vitest.config.ts` for the
+  oracle files. Jest and mocha ignore that name.
+- If it has one, add the oracle files to its `include`.
 
 ```ts
-// vitest.oracle.config.ts
+// vitest.config.ts
 import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
@@ -82,6 +95,10 @@ export default defineConfig({
 
 Add a script for it, such as `test:oracles`. Leave the existing suite
 unchanged.
+
+If the repository's own lint or formatter covers the oracle files (for
+example, an older ESLint with Prettier over `test/`), keep the oracle files
+out of its globs, or match its style. Say which in your report.
 
 **Lint.** Add both presets to the ESLint flat config:
 
@@ -154,6 +171,10 @@ This repository tests its laws with `@tanstack/oracles`.
 Fill in the two placeholders in step 7, once their values exist. If the repository has a
 `CLAUDE.md` and no `AGENTS.md`, ask the user which file gets the block.
 
+In a workspace with a package-local install, put the block in the package's
+`AGENTS.md`, where its `node_modules` paths resolve. A root copy must use the
+full paths, such as `packages/<name>/node_modules/@tanstack/oracles/...`.
+
 ## 5. Make the skills findable
 
 The skills ship inside the package, so agents find them only through a
@@ -190,7 +211,8 @@ description: <copied exactly from node_modules/@tanstack/oracles/skills/oracles-
 
 Read `<installed path>/skills/oracles-design/SKILL.md` in full, and follow it.
 It matches the installed version of `@tanstack/oracles`. If that file does not
-exist, `@tanstack/oracles` is not installed there: say so and stop.
+exist, run the repository's install, then look again. If it is still missing,
+`@tanstack/oracles` is not installed there: say so and stop.
 ```
 
 - In a **repository pointer**, `<installed path>` is the path above, relative
@@ -227,7 +249,9 @@ oracle is not declared. That is a setup failure, even when the report shows
 0 gaps and the command exits 0.
 
 In an oracle file, only `oracleProperty` registers tests. A plain Vitest test
-there is not a kill, and the gap check reports it.
+there is not a kill, and the gap check reports it. The driver records
+production errors as observations: a mutant that crashes production is not a
+kill until the check rejects the recorded error.
 
 ## 7. Run the gap check
 
