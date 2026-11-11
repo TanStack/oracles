@@ -1,6 +1,6 @@
 ---
 name: oracles-setup
-description: Set up @tanstack/oracles in a repository. Install the pinned packages, add the lint preset, and write the AGENTS.md block. Make the oracle skills findable by coding agents, and run a first oracle through the gap check. Use when a repository adopts @tanstack/oracles or upgrades its pinned commit.
+description: Configure a repository for @tanstack/oracles. Install the pinned packages, add the lint preset and the Vitest config, write the AGENTS.md block, and make the oracle skills findable by coding agents. Then build the first oracle from an approved sketch and run it through the gap check. Use once oracles-start has an approved sketch, or when a repository upgrades its pinned commit.
 ---
 
 # Set up @tanstack/oracles
@@ -8,8 +8,11 @@ description: Set up @tanstack/oracles in a repository. Install the pinned packag
 You are setting up oracle testing in this repository. Do the steps in order.
 Ask the user before each step that writes outside the repository. When no
 user is available, choose the default this skill gives, record each choice in
-your report, and continue. That default covers setup questions only. A law
-sheet has no default: write it, report it, and stop.
+your report, and continue. That default covers setup questions only. A
+sketch has no default: write it, report it, and stop.
+
+Setup starts once the engineer has chosen a sketch in `oracles-start`. If
+there is none yet, load `oracles-start` first.
 
 Setup ends when one oracle passes on production and the gap check leaves no
 gap open in that oracle's own contract, unless the user decides otherwise. A
@@ -53,7 +56,10 @@ pnpm add -D \
   fast-check vitest
 ```
 
-Add `fast-check` and `vitest` beside them. For lint, also add `eslint@^9`
+Add `fast-check` and `vitest` beside them. The framework needs Vitest 4.1 or
+later. If the repository already runs an older Vitest, upgrading it is the
+user's decision: ask, and with no user present, do not upgrade. Report it as
+a blocker. For lint, also add `eslint@^9`
 if the repository has no ESLint, and `@typescript-eslint/parser@^8` if
 nothing parses TypeScript yet. Name those majors: a package manager can pick
 a prerelease otherwise. If the repository's ESLint is older than 9 (xo
@@ -79,6 +85,10 @@ a dependency's build script stops every later pnpm command
 (`ERR_PNPM_IGNORED_BUILDS`), and pnpm writes an `allowBuilds` placeholder into
 `pnpm-workspace.yaml`. Answer it, usually `false`, and tell the user.
 
+A run that installs from a local tarball has no commit to pin or check. Say
+which tarball you installed, and note that `package.json` now points at a
+local path that must be replaced before anything is committed.
+
 To upgrade, change both URLs to the new commit at once. Then do step 4 and
 step 5 again (copy each pointer's `name` and `description` again, since they
 can change), and rerun the gap check (step 7).
@@ -98,6 +108,9 @@ the oracle files:
   oracle files in their own directory, such as `oracles/`.
 - If its default glob matches `*.test.ts` (better-node-test, Jest), name the
   oracle files `*.oracle.ts`, and include that name in the Vitest config.
+- If the repository's own Vitest run would also pick them up (a config with
+  no `include`, or one whose setup needs a server), name the oracle files
+  `*.oracle.ts`, and give them their own `vitest.oracle.config.ts`.
 
 The gap check finds oracle files by their `oracleProperty` call, so the name
 only has to match the Vitest config and the lint glob.
@@ -119,6 +132,10 @@ export default defineConfig({
   test: { include: ['tests/**/*oracle*.test.ts'] },
 })
 ```
+
+If the production source uses syntax that Vite cannot parse (Flow types,
+for example), add a Vite plugin to the oracle config that strips it, such as
+one built on `flow-remove-types`.
 
 Add a script for it, such as `test:oracles`. Leave the existing suite
 unchanged. In a published package, keep the new files out of the published
@@ -192,8 +209,14 @@ lint. Lint the oracle files with a separate ESLint 9:
    manager's equivalent.
 2. Write a flat `eslint.oracle.config.mjs` with both presets and a TypeScript
    parser for the oracle files and the production source.
-3. Run it as `npx -y -p eslint@9 eslint -c eslint.oracle.config.mjs <oracle
-files> <production source>`, and add a `lint:oracles` script.
+3. Run it with an ESLint 9 that the plugin can find: the plugin loads
+   `eslint` at run time, from where the plugin is installed. `npx -p eslint@9`
+   is not enough, because npx runs the repository's local ESLint when one
+   exists. With pnpm, use `pnpm dlx eslint@9 -c eslint.oracle.config.mjs
+<oracle files> <production source>`. Otherwise, install `eslint@^9` in the
+   workspace package that holds the plugin, if that does not replace the
+   ESLint that the repository's own lint uses. If neither works, lint is an
+   environment limit: report it. Add a `lint:oracles` script.
 
 The config's parser import resolves from the repository, so it uses the
 repository's own `@typescript-eslint/parser`.
@@ -211,7 +234,7 @@ Add this block to `AGENTS.md` (create the file if needed). On an upgrade,
 replace everything between the markers and keep the rest of the file.
 
 ```md
-<!-- BEGIN @tanstack/oracles (template 2) -->
+<!-- BEGIN @tanstack/oracles (template 3) -->
 
 ## Oracle tests
 
@@ -225,6 +248,9 @@ is your call, and you will keep building on it. Make it the smallest, clearest
 code that satisfies the oracles: merge repeated code, remove code that no law
 needs (after the checks in `oracles-design` step 8), and restructure freely while the oracles pass.
 
+- To find where an oracle would help, or to sketch a new one, read
+  `node_modules/@tanstack/oracles/skills/oracles-start/SKILL.md` in full and
+  follow it.
 - Before you create or change an oracle, or change production code that an
   oracle owns, read `node_modules/@tanstack/oracles/skills/oracles-design/SKILL.md`
   in full and follow it.
@@ -271,8 +297,13 @@ choices. They can pick more than one.
 | **Global pointers**     | A pointer skill per skill in `~/.agents/skills/` and `~/.claude/skills/` (and any other skills directory the user's agents read) | The user wants the skills in every repository that uses `@tanstack/oracles`. |
 
 Write a pointer skill as `<directory>/<name>/SKILL.md` for each of
-`oracles-design`, `oracles-review`, `oracles-evaluate-review`, and
-`oracles-setup`.
+`oracles-start`, `oracles-design`, `oracles-review`,
+`oracles-evaluate-review`, and `oracles-setup`.
+
+Before you write repository pointers, check that git does not ignore their
+directories (`git check-ignore .claude/skills .agents/skills`). If one is
+ignored, tell the user: they can commit the pointers in the other
+directory, or add an exception to `.gitignore`.
 
 - Copy `name` and `description` exactly from the package's `SKILL.md`, so the
   agent selects it for the same requests.
@@ -307,15 +338,11 @@ Before writing a global pointer:
 - If a skill with the same name exists, show it and ask. Never overwrite it
   silently.
 
-## 6. Write the first oracle
+## 6. Build the first oracle
 
-Choose one public, documented promise with a small owned surface: an
-exported function or method that callers use, with a contract in the README
-or the API docs. Its law must say more than its code does: if a model of the
-law would repeat the implementation (an internal helper that only wraps or
-escapes a string), choose the caller-visible promise that uses it. If most
-of its laws would have no authority (no docs, only tests or code), choose
-another one. Ask the user which one if it is not obvious.
+The first oracle is the sketch that the engineer chose in `oracles-start`,
+with its questions answered. Load `oracles-design`, and follow it from its
+first step.
 
 If the first oracle fails on unchanged production under an adopted law, it
 found a defect. The RED is the finding: report it with its replay line, and
@@ -325,10 +352,6 @@ copy or a local branch (never pushed or committed to the user's branch), run
 the gap check there, and say in the report that it ran on the
 patched code. With the user's approval, follow `oracles-design` step 7's
 defect path for the real fix.
-
-Then load `oracles-design` and follow it from its first step. The oracle
-file's prose laws come first, and the user reviews them before you add code.
-Setup does not skip that step to finish sooner.
 
 Put the oracle's `owns` list on its `oracleProperty` call. An entry is a file
 (`src/index.ts`) or one function in it (`src/index.ts#parse`, or

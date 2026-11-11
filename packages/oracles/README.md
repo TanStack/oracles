@@ -16,32 +16,34 @@ Paste this prompt into your coding agent at the root of the repository you
 want to test. Any agent that can run shell commands works.
 
 ```text
-Set up oracle testing in this repository with @tanstack/oracles.
+Show me what oracle testing with @tanstack/oracles can find in this repository.
 
 1. Find the current commit of TanStack/oracles. Run
    `git ls-remote https://github.com/TanStack/oracles refs/heads/main`, and use
    the first 7 characters of the hash as <sha>.
 2. Install https://pkg.pr.new/TanStack/oracles/@tanstack/oracles@<sha> as a dev
    dependency, with this repository's package manager.
-3. Read node_modules/@tanstack/oracles/skills/oracles-setup/SKILL.md in full,
-   and follow it. Use <sha> wherever it asks for the commit to pin.
-4. When the skill asks me to review the laws for the first oracle, stop and
-   show me the oracle file.
+3. Read node_modules/@tanstack/oracles/skills/oracles-start/SKILL.md in full,
+   and follow it. Use <sha> wherever a skill asks for the commit to pin.
+4. Stop after each step of the skill, show me what you found, and wait.
 ```
 
 What happens next:
 
-1. The agent installs this package and `@tanstack/eslint-plugin-oracles` at
-   the same commit. It adds the lint preset, writes a block in `AGENTS.md`,
-   and offers to make the skills findable for your coding agents.
-2. It chooses one documented function and writes the first oracle file as
-   prose only: what the code promises, with the source of each promise. Then
-   it stops.
-3. You review the laws. This is the one step that needs you: you decide what
-   the code promises, and the agent does the rest.
-4. The agent adds the model, the histories, the driver, and the check. It runs
-   the oracle on your unchanged code and reports any defect with a replay
-   line. Then it runs the gap check and reports what is left.
+1. The agent asks whether you have something specific in mind, introduces
+   oracles in a few sentences, and offers to look at a subsystem you name or
+   around the whole repository.
+2. It reports two or three spots where an oracle would help, and you pick
+   one.
+3. It explores that spot with probes: small scripts that call your real API.
+   It reports what it found, each with a command you can rerun: bugs,
+   places where the docs and the code disagree, behavior no test checks, and
+   design questions nobody has decided.
+4. It writes sketches of candidate oracles in `oracles/SKETCHES.md`. You
+   choose one and answer its questions. This is the step that needs you: you
+   decide what the code promises.
+5. The agent configures the repository, writes the oracle, runs it on your
+   unchanged code, and runs the gap check.
 
 The package needs Node 20 or later. The setup skill installs Vitest and
 fast-check if the repository does not have them.
@@ -50,10 +52,12 @@ fast-check if the repository does not have them.
 
 | Path                              | What it is                                                                                         |
 | --------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `skills/oracles-setup/`           | Setup, upgrade, and making the skills findable.                                                    |
-| `skills/oracles-design/`          | How to design, write, or change an oracle: prose laws first, model, histories, RED, GREEN, gaps.   |
+| `skills/oracles-start/`           | A first session: an introduction, a look around, probes, and sketches of candidate oracles.        |
+| `skills/oracles-setup/`           | Configuration, upgrade, and making the skills findable.                                            |
+| `skills/oracles-design/`          | How to design, write, or change an oracle: from an approved sketch to model, histories, and gaps.  |
 | `skills/oracles-evaluate-review/` | How to act on a review: a lossless ledger, RED on unchanged production, and closing the bug class. |
 | `skills/oracles-review/`          | How to review oracle work.                                                                         |
+| `docs/intro.md`                   | What an oracle is, in a few minutes.                                                               |
 | `docs/oracle-checklist.md`        | The complete requirements, by ID (ORC-001 to ORC-016).                                             |
 | `docs/guide.md`                   | Techniques for each design and review step.                                                        |
 | `docs/model-styles.md`            | One small example of each model style.                                                             |

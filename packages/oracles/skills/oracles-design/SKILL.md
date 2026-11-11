@@ -1,6 +1,6 @@
 ---
 name: oracles-design
-description: Design, write, or change an oracle with @tanstack/oracles. Choose the boundary, write the oracle file's prose laws first, choose a model, and build histories that reach the states the law needs. Show the evidence the change needs, and close every gap. Use for a new oracle, an oracle repair, or a production change in owned code. Also use for any change to a model, history grammar, driver, or check.
+description: Design, write, or change an oracle with @tanstack/oracles. Start from an approved sketch, write the oracle file with its law block and code, choose a model, and build histories that reach the states the law needs. Show the evidence the change needs, and close every gap. Use for a new oracle, an oracle repair, or a production change in owned code. Also use for any change to a model, history grammar, driver, or check.
 ---
 
 # Design an oracle
@@ -11,7 +11,7 @@ that someone could predict an observation without reading production. The
 code comes after that.
 
 Read this skill in full, then read the [glossary](../../docs/glossary.md)
-in full. It defines the terms that the sheet and the evidence use.
+in full. It defines the terms that the sketch and the evidence use.
 The [checklist](../../docs/oracle-checklist.md) is the complete list of
 requirements. This skill cites it by ID, such as ORC-004.
 
@@ -21,205 +21,43 @@ witness, and another round. The common shortcuts are changing production
 first, editing the model to match production, narrowing histories until a
 failure goes away, and pinning one example. `oracles-review` §2 lists them all.
 
-## 1. Choose the boundary, then write the law sheet
+## 1. Start from an approved sketch, then write the oracle file once
 
-**Choose the boundary first.** An oracle maintains one caller-visible
-promise, not one file. Before the law sheet, establish:
-
-| Question                           | What to establish                                                                             |
-| ---------------------------------- | --------------------------------------------------------------------------------------------- |
-| What promise belongs together?     | One caller-visible behavioral contract.                                                       |
-| Where is it observed?              | The public entry points and the checkpoints where it is owed.                                 |
-| What does it assume?               | What providers, the environment, and neighboring components must supply.                      |
-| What else witnesses it?            | Other drivers for the same law: component, integration, end-to-end, or replay.                |
-| Where does another contract begin? | A different authority, lifecycle, observation boundary, or composition rule.                  |
-| Which source implements it?        | The `owns` list that the gap check uses.                                                      |
-| What public state does it expose?  | Each readable field or getter needs a law or a stated limit. A limit leaves its mutants open. |
-
-Example: an oracle for optimistic publication can hold several related laws
-(an optimistic write is visible at once, a confirmation keeps it, and a
-rollback removes it) and several drivers (an in-memory provider and a real one). It
-keeps its identity if the code moves between files. One source file can also
-serve several contracts. A new failure belongs to the oracle whose law covers
-its promise.
+**A new oracle starts from an approved sketch** in `oracles/SKETCHES.md`
+(`oracles-start` step 4): the user chose it, and no open question is left.
+If there is none, do `oracles-start` steps 3 and 4 for this boundary first:
+explore with probes, write the sketch, and stop for review. Exploration and
+review never go in the oracle file. The file is written once, when the
+direction is settled, with its law block and its code together.
 
 **Decide whether the user must approve.**
 
 - **Strengthening an adopted law** (a missing history, observation, driver
-  path, or check) reuses the law as it is. Do not write a new sheet, and do
+  path, or check) reuses the law as it is. Do not write a new sketch, and do
   not stop. Name the law in the evidence. Widening the histories inside the
   law's stated domain is strengthening. Changing the stated domain, a
   checkpoint, or `limits` is a law change.
 - **Changing a law** (its promise, domain, checkpoint, assumptions, or the
-  freedoms it allows) needs a law delta. Edit the law block's prose in the
-  oracle file, and add review notes with the old and the new block for each
-  changed law. Stop for the user's review.
-- **A new law, or missing or contradictory authority,** needs the full law
-  sheet below. Stop for the user's review. An analogy to another documented
-  rule is not authority: mark that law `open`.
+  freedoms it allows) needs a law delta. Add it to the sketch: the old and
+  the new block for each changed law, with the probe that shows why. Stop
+  for the user's review, then update the oracle file.
+- **A new law, or missing or contradictory authority,** needs an approved
+  sketch. An analogy to another documented rule is not authority.
+- **The task already approved these laws?** Do not ask again.
 
-**Write the oracle file's prose first.** The law sheet is the new oracle
-file before it has any code. Create it at its final path, with two comments
-and nothing else:
-
-1. **The law block**, the file's opening comment. The oracle file is a
-   literate program (ORC-003), so write it as prose for a reader who has not
-   seen the review. That reader is a maintainer or a serious user who knows
-   the codebase. Name internal parts without introducing them, and do not
-   explain the language, the library's basic ideas, or what a reader of the
-   code can see at once. Spend the words on what such a reader could get
-   wrong. Do not write about "a careless reader": state the case. Do not paste the template's fields or a list of law IDs.
-   Write it as continuous prose in this order. Do not label the parts with
-   the names below ("The hook", "The mechanism"): they are for you, not the
-   reader.
-   1. **What this oracle owns**, in one or two plain sentences, about 40 words
-      in all: the concrete promise it maintains, the public entry point and
-      checkpoints where the promise is owed, and the owned code. A reader who
-      stops here knows what the file is for. Name the promise itself. "The
-      stylesheet matches the options the README documents" names no promise. For
-      example: "This oracle owns `klona`'s deep-copy promise for the default
-      mode, checked on the value that `klona(x)` returns. It owns
-      `src/index.js#klona`."
-
-   2. **The contract at a glance:** a short code block, right after those
-      sentences, that shows the public API promises this oracle maintains. A
-      reader takes it in at one look. Give it no title, and no sentence that
-      introduces it. Write each line as `call // → result`:
-      - the call is the public API, written the way a user writes it, with
-        concrete values where they make the promise clear.
-      - the result is what the user gets back or sees: a value, or a short
-        phrase.
-      - a condition goes at the end of the line, as "when ...".
-      - an open law ends with `(open)`.
-      - when several laws share one call, write the call once, and put one
-        `// → result` line under it for each law.
-
-      Keep it to about five results. A call may span several lines. Never write
-      an assertion, a test helper, or a checkpoint expression there: those
-      belong in the code. The block never shows how production computes the
-      answer. For example:
-
-      ```ts
-      klona(x) // → a deep copy: same kind, prototype, and values as x, sharing no object with it
-      typography({ scaleRatio: 2, baseFontSize: '16px' }) // → h1 font size 32px (ratio × base)
-      typography({ scaleRatio: 2, baseFontSize: '15.5px' }) // → h1 font size 31px (open)
-      ```
-
-   3. **The hook:** the one concrete case that shows where the promise is
-      easy to get wrong. Write it as code where you can. Choose its form by
-      the oracle's shape:
-
-      | Shape                                          | Hook                                                                                                                                             |
-      | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-      | State, timing, or order with a surprising rule | A question that names the surprise: "Why does a ready transaction wait?"                                                                         |
-      | A pure function with documented examples       | The documented example, then the nearby case that a careless reading gets wrong: ratio 2 and base 16px give 32px, so what does base 15.5px give? |
-      | The obvious implementation is wrong            | The plausible implementation and the one input where it fails: why a deep copy is not a JSON round trip                                          |
-
-      When two forms fit, choose the one whose case a reader is most likely
-      to get wrong.
-
-   4. **The mechanism:** the two or three moving parts that make the
-      behavior necessary, in plain sentences. Give each a short name (the
-      window, the head, the applied receipt), and use the same name in the
-      law names. When you write the code, use it in the `states` and the
-      calibrations too.
-   5. **The laws:** each one sentence over its domain ("For every ..."), with
-      the source of its promise in the documentation's own words where you
-      can. Then the edges where it is easy to get wrong, and what a caller
-      sees when the law breaks.
-   6. **How the oracle knows:** what the model reads to predict each law,
-      which histories reach the edges, what the driver observes and does not
-      observe and why, and where the check compares.
-   7. **Limits and open questions**, last, each with its reason.
-
-   Avoid the two generic openings: a summary that says the code does what
-   its documentation promises, and a law that restates the implementation. A
-   model of that law would be the same code, so it could not catch a defect.
-
-2. **Review notes**, a second comment headed "Review notes (delete when
-   approved)". Docs, tests, and bug reports give examples. A law is a
-   statement over the whole domain. The template below makes you write the
-   step from one to the other. Copy it once for each law, and fill in every
-   field. Then list the open questions.
-
-```markdown
-### L1 <short name>
-
-- Examples: <each concrete case, with its source>
-- What varies, what stays: <the parts that can change without changing the answer; the part that decides it>
-- Law: For every <domain>, <promise>.
-- Domain edges: <where the domain stops>
-- New case: <an input in none of the sources, with its predicted result>
-- Rebuilt examples: <each example derived from the law sentence alone; any that it gets wrong, and why>
-- Dynamics: <how the result or state changes with each action or input>
-- Constraints: <what holds in every history>
-- Boundary conditions: <each edge; each one gets a constructed history>
-- Authority: <document and section, or a dated maintainer decision>
-- Status: adopted | observed | open
-- Rival: <a plausible different law>
-- Witness: <a legal history where the law and the rival predict different observations>
-- Checkpoint: <where the contract owes the observation>
-```
-
-How to fill in the fields:
-
-- **Examples** and **What varies, what stays:** for example, `ms('2 hrs')`
-  is `7200000` (README, Examples). The number, the spelling, and the spacing
-  can change. The unit's length decides the answer.
-- **Law:** one sentence over the domain. For example: "For every finite
-  number `n` and every unit name `u` in the table, in any case and with or
-  without a space, `parse(n + u)` is `n` times the length of `u`."
-- **New case:** if you cannot write one, the law is still a list of
-  examples. Write it again. A new case that only renames a value in the
-  example (`/:id` for `/:foo`) does not count.
-- **Domain edges:** wider than the examples. A block whose domain is only its
-  own examples is not a law. Keep those examples as `fixed` histories, and as
-  rebuilt examples of the general law that explains them.
-- **Rebuilt examples:** an example that the law gets wrong shows a missing
-  condition, a second law, or a source that disagrees. Say which.
-- **Dynamics** are the model's rules, and the histories vary them. For a pure
-  function, write "none: one call", and put the variation into the domain.
-- **Constraints** hold whatever happens: a count never above its limit, an
-  equality that is symmetric, a read that returns the last write. The check
-  tests them at every checkpoint.
-- **Boundary conditions** are the edges, where real behavior and most
-  defects live: empty, zero, `-0`, the size limit, at capacity, the first and
-  the last item, keys that shadow prototype names, cleanup. A boundary that
-  the law does not decide goes under open questions. Do not leave it out of
-  the grammar.
-- **Status:** `adopted` if it has an authority, `observed` if production does
-  it but nobody adopted it, `open` if it is a question. Only `adopted` laws
-  become expected results. An `observed` or `open` law goes to the user as a
-  question.
-- **Production output is evidence, never authority.** A rule that you write
-  only because production does it is model hacking. Mark that rule
-  `observed`, and ask the user. An analogy to another documented rule is not
-  authority either: mark that law `open`.
-
-**Required blocks: the laws people forget.** The review notes have a block
-for each of these, or one line that says why it does not apply:
-
-- **No throw on valid input.** When the contract says a call returns a value,
-  it promises not to throw for valid input. State that as a law, with the same
-  authority, so a mutant that throws is a kill, not a crash.
-- **The laws of the kind of function.** An equality check is reflexive and
-  symmetric. A parser and a serializer round-trip. A setter is idempotent when
-  set to the same value. Their authority is the function's documented purpose.
-
-The task already approved these laws? Do not ask again.
-
-The law block and the review notes must agree: each law in the prose has its
-block, with the same sentence.
+**Production output is evidence, never authority.** A rule that exists only
+because production does it is model hacking. When the law and the code
+disagree, the sketch's answer decides, not the code.
 
 When the promise is unclear, or two readings predict different behavior, use
 the [law discovery](../../docs/instruments/law-discovery.md) card.
 
 **Use the [design grammar](../../docs/instruments/design-grammar.md) card
 when any of these is true.** Do not judge whether the law is hard. Check the
-list at the sheet, and again after each gap check:
+list at the sketch, and again after each gap check:
 
-- the sheet has more than five laws for one boundary (adopted, observed, and
-  open ones all count)
+- the sketch has more than five laws for one boundary (adopted, observed,
+  and open ones all count)
 - a law has no new case that it predicts
 - the model has more than one branch per law
 - the work changes or simplifies an existing model
@@ -227,38 +65,101 @@ list at the sheet, and again after each gap check:
 
 Say in the evidence which trigger fired, or that none did.
 
-**Check the law block before you stop:**
+**Write the law block.** The law block is the file's opening comment. The oracle file is a literate
+program (ORC-003), so write it as prose. That reader is a maintainer or a serious user who knows
+the codebase. Name internal parts without introducing them, and do not
+explain the language, the library's basic ideas, or what a reader of the
+code can see at once. Spend the words on what such a reader could get
+wrong. Do not write about "a careless reader": state the case. Do not paste the template's fields or a list of law IDs.
+Write it as continuous prose in this order. Do not label the parts with
+the names below ("The hook", "The mechanism"): they are for you, not the
+reader.
+
+1. **What this oracle owns**, in one or two plain sentences, about 40 words
+   in all: the concrete promise it maintains, the public entry point and
+   checkpoints where the promise is owed, and the owned code. A reader who
+   stops here knows what the file is for. Name the promise itself. "The
+   stylesheet matches the options the README documents" names no promise. For
+   example: "This oracle owns `klona`'s deep-copy promise for the default
+   mode, checked on the value that `klona(x)` returns. It owns
+   `src/index.js#klona`."
+
+2. **The contract at a glance:** a short code block, right after those
+   sentences, that shows the public API promises this oracle maintains. A
+   reader takes it in at one look. Give it no title, and no sentence that
+   introduces it. Write each line as `call // → result`:
+   - the call is the public API, written the way a user writes it, with
+     concrete values where they make the promise clear.
+   - the result is what the user gets back or sees: a value, or a short
+     phrase.
+   - a condition goes at the end of the line, as "when ...".
+   - an open law ends with `(open)`.
+   - when several laws share one call, write the call once, and put one
+     `// → result` line under it for each law.
+
+   Keep it to about five results. A call may span several lines. Never write
+   an assertion, a test helper, or a checkpoint expression there: those
+   belong in the code. The block never shows how production computes the
+   answer. For example:
+
+   ```ts
+   klona(x) // → a deep copy: same kind, prototype, and values as x, sharing no object with it
+   typography({ scaleRatio: 2, baseFontSize: '16px' }) // → h1 font size 32px (ratio × base)
+   typography({ scaleRatio: 2, baseFontSize: '15.5px' }) // → h1 font size 31px (open)
+   ```
+
+3. **The hook:** the one concrete case that shows where the promise is
+   easy to get wrong. Write it as code where you can. Choose its form by
+   the oracle's shape:
+
+   | Shape                                          | Hook                                                                                                                                             |
+   | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+   | State, timing, or order with a surprising rule | A question that names the surprise: "Why does a ready transaction wait?"                                                                         |
+   | A pure function with documented examples       | The documented example, then the nearby case that a careless reading gets wrong: ratio 2 and base 16px give 32px, so what does base 15.5px give? |
+   | The obvious implementation is wrong            | The plausible implementation and the one input where it fails: why a deep copy is not a JSON round trip                                          |
+
+   When two forms fit, choose the one whose case a reader is most likely
+   to get wrong.
+
+4. **The mechanism:** the two or three moving parts that make the
+   behavior necessary, in plain sentences. Give each a short name (the
+   window, the head, the applied receipt), and use the same name in the
+   law names. When you write the code, use it in the `states` and the
+   calibrations too.
+5. **The laws:** each one sentence over its domain ("For every ..."), with
+   the source of its promise in the documentation's own words where you
+   can. Then the edges where it is easy to get wrong, and what a caller
+   sees when the law breaks.
+6. **How the oracle knows:** what the model reads to predict each law,
+   which histories reach the edges, what the driver observes and does not
+   observe and why, and where the check compares.
+7. **Limits and open questions**, last, each with its reason.
+
+Avoid the two generic openings: a summary that says the code does what
+its documentation promises, and a law that restates the implementation. A
+model of that law would be the same code, so it could not catch a defect.
+
+Keep the law block to about 40 lines of prose, plus the contract code block.
+It never mentions the sketch, a review, or an open question: a point the
+sketch left undecided appears only as a limit, with its reason.
+
+**Then write the code under it.** Each boundary condition in the sketch
+becomes a constructed history. Each law's sentence, authority, and limits go
+in that property's `law` option. Put prose beside the model, the histories,
+the driver, and the check that says why each one predicts or tests the
+promised result.
+
+**Check the law block:**
 
 - From the prose alone, a reader can predict one observation of each law.
   For a no-throw law, the observation is that the call returns.
-- The law block starts with one or two sentences on what the oracle owns,
-  then the contract code block: public API calls and their results, with no
-  assertion or helper. Each line states the same law
-  as its sentence.
-- The opening names the promise that the oracle owns.
+- It starts with one or two sentences on what the oracle owns, then the
+  contract code block: public API calls and their results, with no assertion
+  or helper. Each line states the same law as its sentence.
 - No law restates the code.
-- Each law sentence matches its block in the review notes. If they disagree,
-  the review notes decide: fix the prose, and tell the user. A new heading
-  for a law is not a law change. A changed sentence, domain, or checkpoint is.
-
-**Stop here** when the sheet or a law delta is needed. Do not stop with an
-empty field: each law has a filled block first. Do not add code to the file
-until the user has reviewed it. With no user present, write the file and
-stop. A law sheet has no default. Until it has code, the file fails Vitest
-with "No test suite found", so keep it off a branch whose CI must pass, or
-say in the review request that it will fail.
-
-**Once the user approves it:**
-
-- Apply the review's changes to the law block first. The approved review
-  notes are the anchor: a later edit to the prose that changes a law's
-  domain, checkpoint, or strength ("may" to "does") is a law change.
-- Delete the review notes. They stay in the review record.
-- Add the code under the law block. Each boundary condition becomes a
-  constructed history, and each law's sentence, authority, and limits go in
-  that property's `law` option.
-- Put prose beside the model, the histories, the driver, and the check that
-  says why each one predicts or tests the promised result.
+- Each law sentence matches its block in the sketch. If they disagree, the
+  sketch decides: fix the prose, and tell the user. A new heading for a law
+  is not a law change. A changed sentence, domain, or checkpoint is.
 
 Keep the law block, the `law` option, and the model in step: a change to one
 updates the others in the same change (ORC-003).
@@ -267,7 +168,7 @@ updates the others in the same change (ORC-003).
 
 Write these down. They stay fixed while you build the oracle.
 
-- The laws and their checkpoints, from the approved law block.
+- The laws and their checkpoints, from the approved sketch.
 - The owned production code: the files or functions the oracle answers for.
 - The freedoms the contract leaves open, such as the order of independent
   events, scheduling, or representation. The oracle must accept every
