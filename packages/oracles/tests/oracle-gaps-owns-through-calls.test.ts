@@ -8,7 +8,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
-import ts from 'typescript'
+import ts from 'typescript-for-tanstack-oracles'
 import { analyze } from '../oracle-gaps/analysis.mjs'
 
 // The gap report's refusal of a run whose selected sources no oracle owns. A
