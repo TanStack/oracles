@@ -43,11 +43,18 @@ import {
   renderReport,
   renderStdout,
 } from './report.mjs'
-import { baselineLines, gapLine, progressLine, testNamesOf } from './stream.mjs'
+import {
+  baselineLines,
+  blockedLines,
+  gapLine,
+  progressLine,
+  testNamesOf,
+} from './stream.mjs'
 import { analyze, isRunnerCopy } from './analysis.mjs'
 import { Refusal } from './ending.mjs'
 import {
   baselineOf,
+  blockedOr,
   judgeAuthored,
   judgeMutant,
   judgeOrdinary,
@@ -1474,12 +1481,39 @@ export default async (env) => {
         seconds: Math.max(0, ...units.map((u) => u.seconds)),
       }
     }
-    // Without --ordinary, only oracle files run.
-    let files = [...fileSpecs.keys()].filter(
-      (file) => options.ordinary || oracleFiles.has(file),
-    )
-    const first = await runAcross(files, 1)
-    endPhase(`unmutated pass 1`, { files: files.length })
+    const ownersOf = (mutant) => owned.at(mutant.source, mutant.position).owners
+    // Keys are numbered over every mutant before the selection (report.mjs).
+    let queue = keyAndSelect(mutants, options)
+    // With --only, the baseline runs only the owners of the selected mutants
+    // (maintainer disposition G5, 2026-11-11), operator and authored.
+    const selectedOwners =
+      options.only &&
+      new Set([
+        ...queue.flatMap((mutant) => [...ownersOf(mutant)]),
+        ...authored
+          .filter((mutant) => options.only.has(`authored:${mutant.id}`))
+          .flatMap((mutant) => {
+            const path = realpathSync(join(pkg, mutant.source))
+            const patched = applyAuthored(readFileSync(path, `utf8`), mutant)
+            return patched
+              ? [...owned.at(mutant.source, patched.position).owners]
+              : []
+          }),
+      ])
+    // The first pass runs every test file, ordinary ones too, so the report
+    // leads with each file's result (the v20 freeze's one loop: test results
+    // and gaps together); with --only, the selected mutants' owners, and the
+    // ordinary files only with --ordinary. Ordinary files run again, and
+    // against mutants, only with --ordinary.
+    const firstFiles = [...fileSpecs.keys()]
+      .filter((file) =>
+        oracleFiles.has(file)
+          ? !selectedOwners || selectedOwners.has(file)
+          : !selectedOwners || options.ordinary,
+      )
+      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+    const first = await runAcross(firstFiles, 1)
+    endPhase(`unmutated pass 1`, { files: firstFiles.length })
     if (profileFile)
       for (const [key, row] of first.rows)
         if (row.histories)
@@ -1488,40 +1522,48 @@ export default async (env) => {
             histories: row.histories,
             sites: row.siteHistories,
           })
-    // An oracle file that fails with no mutant active cannot judge the code
-    // it owns, so the run refuses rather than report that code as unowned.
-    // The baseline first: each oracle file's result, and a failing law's replay.
-    const baseline0 = baselineLines(
-      [...oracleFiles].map((file) => ({
-        file: relative(file),
-        failure: first.failed.get(file),
-        tests: first.units.find((u) => u.file === file)?.tests ?? [],
-      })),
-      options.config,
+    // The baseline first: each test file's result, a failing test's error,
+    // law, and counterexample, and its replay; then each failing oracle
+    // file, with the step that unblocks what it owns (G13).
+    const baselineFiles = firstFiles.map((file) => ({
+      file: relative(file),
+      ordinary: !oracleFiles.has(file),
+      failure: first.failed.get(file),
+      tests: first.units.find((u) => u.file === file)?.tests ?? [],
+    }))
+    for (const line of [
+      ...baselineLines(baselineFiles, options.config),
+      ...blockedLines(baselineFiles),
+    ])
+      log(line)
+    // An oracle file that fails with no mutant active judges nothing, so it
+    // blocks the mutants it owns, and the rest are judged; the report is
+    // provisional (maintainer disposition G5; the v20 freeze's decision 2,
+    // Vitest's model: a failing baseline does not stop the run). A failing
+    // ordinary file is left out. Neither runs again, and an ordinary file
+    // runs again only with --ordinary.
+    const blocking = new Set(
+      [...first.failed.keys()].filter((file) => oracleFiles.has(file)),
     )
-    for (const line of baseline0) log(line)
-    const failingOwners = [...first.failed.keys()].filter((file) =>
-      oracleFiles.has(file),
+    const excluded = [...first.failed.keys()].filter(
+      (file) => !oracleFiles.has(file),
     )
-    if (failingOwners.length > 0)
-      throw new Refusal(
-        `oracle files fail with no mutant active, so their owned code cannot be judged: ${failingOwners.map((file) => `${relative(file)} (${first.failed.get(file)})`).join(`, `)}`,
-        `Make these oracle files pass with no mutant active, then check again.`,
-      )
-    const excluded = [...first.failed.keys()]
-    if (excluded.length > 0) {
+    if (excluded.length > 0)
       log(`left out, failing with no mutant active: ${excluded.join(`, `)}`)
-      files = files.filter((file) => !first.failed.has(file))
-      for (const file of excluded) {
+    for (const file of firstFiles)
+      if (
+        first.failed.has(file) ||
+        (!options.ordinary && !oracleFiles.has(file))
+      ) {
         fileSpecs.delete(file)
-        oracleFiles.delete(file)
         for (const key of [...first.rows.keys()])
           if (fileOf(key) === file) first.rows.delete(key)
       }
-    }
-    const ownersOf = (mutant) => owned.at(mutant.source, mutant.position).owners
-    // Keys are numbered over every mutant before the selection (report.mjs).
-    let queue = keyAndSelect(mutants, options)
+    const files = firstFiles.filter((file) => fileSpecs.has(file))
+    // A mutant's owners that failed: their rows are gone, so its targets
+    // name only its passing owners.
+    const blockersOf = (owners) =>
+      [...owners].filter((file) => blocking.has(file))
     // The tests of a file that a mutant must run: every test from the first
     // one that reached its site. A later test can see the mutant through
     // state that a reaching test changed, so only the tests before the
@@ -1799,13 +1841,16 @@ export default async (env) => {
           ...st.mutant,
           oracleFiles: st.targets.oracleTargets,
           ordinaryFiles: st.targets.testTargets,
-          ...judgeMutant(st.mutant, {
-            owners: st.owners,
-            targets: st.targets,
-            units: st.units,
-            baseline,
-            mutants,
-          }),
+          ...blockedOr(
+            judgeMutant(st.mutant, {
+              owners: st.owners,
+              targets: st.targets,
+              units: st.units,
+              baseline,
+              mutants,
+            }),
+            blockersOf(st.owners),
+          ),
         }
         if (needsOrdinary(st.result, st.targets))
           ordinary.push({ ...st, units: [], done: false })
@@ -1909,6 +1954,7 @@ export default async (env) => {
         path,
         patched,
         result,
+        owners,
         targets: [...owners].filter((file) => fileSpecs.has(file)),
       })
     }
@@ -1953,9 +1999,11 @@ export default async (env) => {
         }
       }),
     )
-    for (const job of authoredJobs) {
-      Object.assign(job.result, judgeAuthored(job.units, baseline))
-    }
+    for (const job of authoredJobs)
+      Object.assign(
+        job.result,
+        blockedOr(judgeAuthored(job.units, baseline), blockersOf(job.owners)),
+      )
     endPhase(`authored mutants`, { mutants: authored.length })
     // Every authored gap is streamed once, judged or not (a stale `find` is
     // judged by nothing). Keys were numbered by keyAndSelect (operator
@@ -1973,6 +2021,16 @@ export default async (env) => {
         {
           run: runIdentity,
           options: { ...options, only: options.only && [...options.only] },
+          // A report with a failing oracle file is provisional: the mutants
+          // it owns are blocked (G5). Each test file's baseline, as the
+          // report leads with it.
+          provisional: blocking.size > 0,
+          baseline: baselineFiles.map(({ tests, ...file }) => ({
+            ...file,
+            passed: tests.filter((t) => t.state === `passed`).length,
+            failed: tests.filter((t) => t.state === `failed`).length,
+            skipped: tests.filter((t) => t.state === `skipped`).length,
+          })),
           excluded,
           nondeterministic: [...nondeterministic],
           mutantSeconds,
@@ -1993,6 +2051,8 @@ export default async (env) => {
         results,
         run: runIdentity,
         excluded: excluded.map(relative),
+        baseline: baselineFiles,
+        config: options.config,
       }),
     )
     return renderStdout({
@@ -2000,9 +2060,12 @@ export default async (env) => {
       run: runIdentity,
       excluded: excluded.map(relative),
       pkg,
+      baseline: baselineFiles,
+      config: options.config,
       paths: {
         report: join(options.out, `summary.md`),
         results: join(options.out, `results.json`),
+        out: options.out,
       },
     })
   }

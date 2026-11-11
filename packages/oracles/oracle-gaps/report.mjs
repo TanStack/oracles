@@ -19,7 +19,15 @@
 // innermost statement that holds the site, joined by single spaces and kept in
 // full, with `~n` for the nth repeat of one anchor in a function. An authored
 // mutant's key is its source and id (`source#authored:id`).
-import { change, codeSpan, escapeControls, gapLine, kindOf } from './stream.mjs'
+import {
+  baselineLines,
+  blockedLines,
+  change,
+  codeSpan,
+  escapeControls,
+  gapLine,
+  kindOf,
+} from './stream.mjs'
 
 /** Outcomes that are gaps. Only a law verdict on a reproducible route kills. */
 export const gapOutcomes = new Set([
@@ -33,6 +41,7 @@ export const gapOutcomes = new Set([
   `timeout`,
   `setup-error`,
   `does-not-apply`,
+  `blocked`,
 ])
 
 /** An authored mutant's key: its source and its id. */
@@ -126,6 +135,15 @@ const directive = {
     `Run an owner test that loads this module and asserts on its exports, so a failed load rejects the mutant.`,
   'does-not-apply': () =>
     `Update the \`find\` text of this authored mutant so that it occurs exactly once in the source.`,
+  blocked: (g) =>
+    `Make ${g.blockedBy.map((file) => `\`${file}\``).join(`, `)} pass with no mutant active, then check again: this mutant waits for ${g.blockedBy.length === 1 ? `it` : `them`}.`,
+}
+
+// What a legend line says a class is, before its directive, where the
+// class's name alone misleads (maintainer disposition G3, 2026-11-11): a
+// crash is a gap, not a kill (the v20 freeze, P3 and C1).
+const meanings = {
+  crashed: `Production threw where no law judged it: a gap, not a kill. Its error is on the gap's Detail line in summary.md, and in its \`detail\` in results.json. `,
 }
 
 // The directive for an operator whose infection is not measured: the input
@@ -168,8 +186,32 @@ const placeholders = {
   by: [`<test>`],
   detail: `<error>`,
   operator: `<operator>`,
+  blockedBy: [`<file>`],
 }
-const legendOf = (kind) => directive[kind]({ ...placeholders, outcome: kind })
+const legendOf = (kind) =>
+  `${meanings[kind] ?? ``}${directive[kind]({ ...placeholders, outcome: kind })}`
+
+// A count of things, as the report words it.
+const counted = (n, thing) => `${n} ${thing}${n === 1 ? `` : `s`}`
+
+/**
+ * The baseline's lines that lead both reports (the v20 freeze's one loop:
+ * test results and gaps together): each test file's result, a line for
+ * each failing oracle file that names what it blocks (G13), and, when one
+ * failed, the provisional status with how many mutants are blocked (the
+ * freeze's decision 2).
+ */
+function baselineSection(results, baseline, config) {
+  const blocking = blockedLines(baseline)
+  const blocked = gapsOf(results).filter((r) => r.outcome === `blocked`).length
+  return {
+    lines: [...baselineLines(baseline, config), ...blocking],
+    provisional:
+      blocking.length === 0
+        ? undefined
+        : `Provisional: ${counted(blocked, `mutant`)} ${blocked === 1 ? `is` : `are`} blocked by failing oracle files; the rest are judged.`,
+  }
+}
 
 // What the author does about a law that rejects no mutant: one next step.
 // The table credits each history's first rejecting law only: a check returns
@@ -201,7 +243,13 @@ const groupOf = (gap) =>
     ? `authored mutants (${gap.source})`
     : `fn ${gap.function} (${gap.source})`
 
-export function renderReport({ results, run, excluded }) {
+export function renderReport({
+  results,
+  run,
+  excluded,
+  baseline = [],
+  config,
+}) {
   const gaps = gapsOf(results)
   const guards = results.filter((r) => r.probeGuard)
   const unowned = results.filter(
@@ -233,6 +281,24 @@ export function renderReport({ results, run, excluded }) {
       `Ordinary test files left out because they fail with no mutant active: ${excluded.join(`, `)}.`,
       ``,
     )
+  // The baseline, before the gaps, in a fence that no backtick in it closes.
+  const section = baselineSection(results, baseline, config)
+  const longest = Math.max(
+    0,
+    ...section.lines.flatMap((line) =>
+      (line.match(/`+/g) ?? []).map((run) => run.length),
+    ),
+  )
+  const fence = `\``.repeat(Math.max(3, longest + 1))
+  lines.push(
+    `## Baseline`,
+    ``,
+    ...(section.provisional ? [section.provisional, ``] : []),
+    `${fence}text`,
+    ...section.lines,
+    fence,
+    ``,
+  )
   lines.push(
     `## How to use this report`,
     ``,
@@ -312,7 +378,15 @@ export function renderReport({ results, run, excluded }) {
  * unowned warnings counted per function, and the paths of the full report
  * and the results.
  */
-export function renderStdout({ results, run, excluded, pkg, paths }) {
+export function renderStdout({
+  results,
+  run,
+  excluded,
+  pkg,
+  paths,
+  baseline = [],
+  config,
+}) {
   const gaps = gapsOf(results)
   const unowned = results.filter(
     (r) => !r.probeGuard && r.outcome === `unowned`,
@@ -320,7 +394,11 @@ export function renderStdout({ results, run, excluded, pkg, paths }) {
   const killed = results.filter((r) => r.outcome === `killed` && !r.probeGuard)
   const relative = (file) =>
     file.startsWith(`${pkg}/`) ? file.slice(pkg.length + 1) : file
+  const section = baselineSection(results, baseline, config)
   const lines = [
+    ...section.lines,
+    ...(section.provisional ? [section.provisional] : []),
+    ``,
     `Oracle gap check ${run.id}: ${results.length} mutants, ${killed.length} killed, ${gaps.length} gaps, ${unowned.length} unowned (warnings). ${run.inputs}.`,
     ``,
     `Legend, one directive per class:`,
@@ -351,5 +429,9 @@ export function renderStdout({ results, run, excluded, pkg, paths }) {
       `Left out, failing with no mutant active: ${excluded.join(`, `)}.`,
     )
   lines.push(``, `Full report: ${paths.report}`, `Results: ${paths.results}`)
+  if (paths.out !== undefined) lines.push(`output: ${paths.out}`)
+  // The last line says the check ran to its end, and how many gaps it
+  // found (G6): exit 0 means the run completed, not that it found none.
+  lines.push(`completed: ${counted(gaps.length, `gap`)}`)
   return lines.join(`\n`)
 }

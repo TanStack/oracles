@@ -396,6 +396,19 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
   return result
 }
 
+/**
+ * A mutant's outcome once its failing owners count: an owner file that
+ * fails with no mutant active judges nothing, so a mutant that one of them
+ * owns and no passing owner kills is `blocked`, and names those files
+ * (`blockers`) in report order (maintainer disposition G5, 2026-11-11; the
+ * v20 freeze's decision 2: a RED baseline gives a provisional report that
+ * lists the blocked mutants and judges the rest). A kill stands.
+ */
+export const blockedOr = (judged, blockers) =>
+  blockers.length === 0 || judged.outcome === `killed`
+    ? judged
+    : { outcome: `blocked`, blockedBy: [...blockers].sort(byPath) }
+
 /** Whether the ordinary tests run, for information: only for a survivor. */
 export const needsOrdinary = (result, targets) =>
   (result.outcome === `survived` || result.outcome === `unreached`) &&

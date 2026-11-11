@@ -16,12 +16,17 @@
 //    function owns its static call tree (owners.mjs). A declaration that
 //    names nothing or is not a literal list refuses the run, because it would
 //    hide gaps.
-// 3. Runs every test file twice with no mutant active. Each test reports the
+// 3. Runs every test file with no mutant active, the oracle files twice
+//    (with --only, only the selected mutants' owners). Each test reports the
 //    mutation sites it reached, the outcomes each `if` took, the values it
 //    asserted on and observed, its registered route, and its law verdicts
 //    (capture-setup.mjs). A test whose values differ between the runs is
-//    nondeterministic and judges nothing. An oracle file that fails here
-//    refuses the run; an ordinary file is left out and listed.
+//    nondeterministic and judges nothing. The report leads with this
+//    baseline: each file's result and test counts, and a failing test's
+//    error, law, counterexample, and replay command. An oracle file that
+//    fails here blocks the mutants it owns: each that no passing owner kills
+//    is `blocked`, the rest are judged, and the report is provisional. A
+//    failing ordinary file is left out and listed.
 // 4. Runs each mutant against the owner files whose tests reached it, in a
 //    warm Vitest process, and classifies it (see `outcomeOf`): `killed` only
 //    by a law verdict on a reproducible route; otherwise a gap. A mutant in a
@@ -60,8 +65,7 @@
 // A run that does not complete never ends with a bare stack trace
 // (ending.mjs; maintainer decision, 2026-11-10). A problem the author can
 // fix (bad arguments, a broken owns declaration, no oracle file or owner,
-// `test.projects`, a Vitest that does not load, an owner that fails with no
-// mutant active) refuses the run: exit 2, `refused: <cause>` and `fix:
+// `test.projects`, a Vitest that does not load) refuses the run: exit 2, `refused: <cause>` and `fix:
 // <directive>` on stderr, and results.json and summary.md in the output
 // directory once the arguments name one. Any other error is a bug in the
 // CLI: exit 3, and its stack in error.log. A check through the daemon ends
@@ -100,8 +104,9 @@
 //                              the config it loaded, or says it found none)
 //   oracle-gaps --stop-daemon --package <dir>
 //   oracle-gaps --help      (prints the usage text, args.mjs)
-// Exit codes: 0 the check completed, 2 refused, 3 an internal error, and
-// 130 or 143 when SIGINT or SIGTERM stopped it.
+// Exit codes: 0 the check completed, whatever its gaps (the last stdout
+// line is `completed: <n> gaps`), 2 refused, 3 an internal error, and 130
+// or 143 when SIGINT or SIGTERM stopped it.
 //
 // No process outlives the CLI (maintainer disposition G2, 2026-11-11). The
 // CLI starts the run as a child in a process group of its own, which every
@@ -239,10 +244,11 @@ else if (main) {
     if (options.help) console.log(usage)
     else if (options.stop) await stopDaemon(options.pkg)
     else {
+      // The summary ends with the output directory and the completion
+      // line (report.mjs).
       console.log(
         await (options.daemon ? checkThroughDaemon : checkCold)(options),
       )
-      console.log(`output: ${options.out}`)
     }
     end(0)
   } catch (error) {

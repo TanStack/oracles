@@ -32,6 +32,24 @@ every commit with [pkg.pr.new](https://pkg.pr.new).
   time. A mutant whose confirmations pass it is a `timeout` gap. To give one
   copy more time with `--hang-limit`, raise `--mutant-limit` too.
 
+  The report, on stdout and in `summary.md`, leads with the baseline: each
+  test file's result with its test counts (ordinary files too), and for a
+  failing file its failing test, its error, the law and counterexample of a
+  law violation, and a `replay:` command. An oracle file that fails with no
+  mutant active blocks only the mutants it owns: each that no passing owner
+  kills is a `blocked` gap, a `blocked:` line names the file and its failing
+  test, the rest are judged, and the report says it is provisional. With
+  `--only <id,...>`, the baseline runs only the owners of the selected
+  mutants. A `crashed` gap is not a kill: production threw where no law
+  judged it, and the error is on the gap's Detail line in `summary.md` and
+  in its `detail` in `results.json`. Record the error in the driver, and
+  state the law that decides that input's outcome.
+
+  Exit codes: 0 the check completed, whatever its gaps (the last stdout line
+  is `completed: <n> gaps`); 2 the run was refused, with `refused:` and
+  `fix:` on stderr; 3 an internal error of the CLI; 130 or 143 stopped by
+  SIGINT or SIGTERM.
+
   The check runs in a process group of its own, with every Vitest worker and
   every process that a test starts. On SIGINT or SIGTERM the CLI signals the
   whole group, kills what is left 2 s later, and exits 130 or 143. A check

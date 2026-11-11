@@ -50,7 +50,8 @@ export const usage = `Usage: oracle-gaps --package <dir> --source <src/x.ts,...>
 The paths in --source and --config are relative to --package. Without
 --config, the run loads the Vitest config that Vitest discovers in the
 package. Run the CLI from any directory.
-Exit codes: 0 the check completed; 2 refused, with the fix on stderr;
+Exit codes: 0 the check completed, whatever its gaps: its last line is
+\`completed: <n> gaps\`; 2 refused, with the fix on stderr;
 3 an internal error of oracle-gaps; 130 or 143 stopped by SIGINT or
 SIGTERM, once every process the run started has ended.`
 const help = `as \`oracle-gaps --help\` shows`
