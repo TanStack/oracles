@@ -1,18 +1,21 @@
 ---
 name: oracles-setup
-description: Configure a repository for @tanstack/oracles. Install the pinned packages, add the lint preset and the Vitest config, write the AGENTS.md block, and make the oracle skills findable by coding agents. Then build the first oracle from an approved sketch and run it through the gap check. Use once oracles-start has an approved sketch, or when a repository upgrades its pinned commit.
+description: Take an oracle to production with @tanstack/oracles. Pin the packages, add the lint preset and the Vitest config, write the AGENTS.md block, make the oracle skills findable by coding agents, and run the oracle through the gap check. Use when the engineer chooses to ship an oracle from a first session, when a repository adopts @tanstack/oracles, or when it upgrades its pinned commit. Its install and file-placement sections also cover the minimal setup that a first session needs.
 ---
 
-# Set up @tanstack/oracles
+# Take an oracle to production
 
 You are setting up oracle testing in this repository. Do the steps in order.
 Ask the user before each step that writes outside the repository. When no
 user is available, choose the default this skill gives, record each choice in
-your report, and continue. That default covers setup questions only. A
-sketch has no default: write it, report it, and stop.
+your report, and continue. That default covers setup questions only.
+Potential laws have no default: propose them, report them, and stop.
 
-Setup starts once the engineer has chosen a sketch in `oracles-start`. If
-there is none yet, load `oracles-start` first.
+Setup takes an oracle to production. It usually starts after a first
+session (`oracles-start`), once the engineer has an oracle that found a bug
+and chooses to ship it. If there is no oracle yet, load `oracles-start`
+first. A first session needs only this skill's install section and its
+"where oracle files go" section.
 
 Setup ends when one oracle passes on production and the gap check leaves no
 gap open in that oracle's own contract, unless the user decides otherwise. A
@@ -248,7 +251,7 @@ is your call, and you will keep building on it. Make it the smallest, clearest
 code that satisfies the oracles: merge repeated code, remove code that no law
 needs (after the checks in `oracles-design` step 8), and restructure freely while the oracles pass.
 
-- To find where an oracle would help, or to sketch a new one, read
+- To find where an oracle would help, or to propose a new one, read
   `node_modules/@tanstack/oracles/skills/oracles-start/SKILL.md` in full and
   follow it.
 - Before you create or change an oracle, or change production code that an
@@ -268,9 +271,15 @@ needs (after the checks in `oracles-design` step 8), and restructure freely whil
 
 If lint is an environment limit (step 3), replace the lint line with "Lint:
 not available here (<the reason>)." Fill in the two placeholders in step 7,
-once their values exist. A run that
-stops before step 7 leaves them in place, and its report says so. If the repository has a
-`CLAUDE.md` and no `AGENTS.md`, ask the user which file gets the block.
+once their values exist. A run that stops before step 7 leaves them in
+place, and its report says so.
+
+Check for both `AGENTS.md` and `CLAUDE.md`. Claude Code reads `CLAUDE.md`,
+and most other agents read `AGENTS.md`. If both exist, put the block in
+`AGENTS.md` and make sure `CLAUDE.md` refers to it (a line `@AGENTS.md`
+imports it). If only `CLAUDE.md` exists, ask the user which file gets the
+block. If neither exists, create `AGENTS.md` and a `CLAUDE.md` that holds
+only `@AGENTS.md`, after asking.
 
 In a workspace with a package-local install, put the block in the package's
 `AGENTS.md`, where its `node_modules` paths resolve. A root copy must use the
@@ -340,9 +349,10 @@ Before writing a global pointer:
 
 ## 6. Build the first oracle
 
-The first oracle is the sketch that the engineer chose in `oracles-start`,
-with its questions answered. Load `oracles-design`, and follow it from its
-first step.
+Usually the oracle already exists from the first session. Keep it, and
+continue with its gap check. If there is none, build it from the potential
+laws that the engineer approved: load `oracles-design`, and follow it from
+its first step.
 
 If the first oracle fails on unchanged production under an adopted law, it
 found a defect. The RED is the finding: report it with its replay line, and

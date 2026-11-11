@@ -1,5 +1,9 @@
 # What an oracle is
 
+This page is for an engineer who asks what an oracle is. An agent running a
+first session does not recite it: it shows oracles working on the
+engineer's own code, and uses this page to answer questions.
+
 Types check that a value has the right shape. An oracle checks that the code
 does what it promises, for every input and sequence of calls the promise
 covers. It is engineering assurance for software: the way a bridge is
@@ -42,13 +46,13 @@ checks that the promise still holds.
 The gap check then shows what is left: production behavior that no law
 judges yet.
 
-## How a first session goes
+## If you know fuzzing or formal models
 
-1. Look around the code, or one subsystem you name.
-2. Probe one area: small scripts that call the real API, to find what holds,
-   what changes, where the edges are, and where the sources disagree.
-3. Sketch candidate oracles from what the probes found.
-4. Build the one you choose.
+Like a fuzzer, an oracle generates many inputs. Unlike a fuzzer, it does
+not only wait for a crash: it compares every result with what the code
+promises. Like a formal model, it states the rules the code must follow.
+Unlike a proof, it checks the real code by running it, across the histories
+it generates.
 
 For the story of how TanStack DB uses oracles, read
 [TanStack DB 1.0 RC1: Going All In on Oracles](https://tanstack.com/blog/tanstack-db-1.0-rc1-going-all-in-on-oracles).

@@ -1,6 +1,6 @@
 ---
 name: oracles-design
-description: Design, write, or change an oracle with @tanstack/oracles. Start from an approved sketch, write the oracle file with its law block and code, choose a model, and build histories that reach the states the law needs. Show the evidence the change needs, and close every gap. Use for a new oracle, an oracle repair, or a production change in owned code. Also use for any change to a model, history grammar, driver, or check.
+description: Design, write, or change an oracle with @tanstack/oracles. Start from approved potential laws, write the oracle file with its law block and code, choose a model, and build histories that reach the states the law needs. Show the evidence the change needs, and close every gap. Use for a new oracle, an oracle repair, or a production change in owned code. Also use for any change to a model, history grammar, driver, or check.
 ---
 
 # Design an oracle
@@ -11,7 +11,7 @@ that someone could predict an observation without reading production. The
 code comes after that.
 
 Read this skill in full, then read the [glossary](../../docs/glossary.md)
-in full. It defines the terms that the sketch and the evidence use.
+in full. It defines the terms that the laws and the evidence use.
 The [checklist](../../docs/oracle-checklist.md) is the complete list of
 requirements. This skill cites it by ID, such as ORC-004.
 
@@ -21,43 +21,45 @@ witness, and another round. The common shortcuts are changing production
 first, editing the model to match production, narrowing histories until a
 failure goes away, and pinning one example. `oracles-review` §2 lists them all.
 
-## 1. Start from an approved sketch, then write the oracle file once
+## 1. Start from approved potential laws, then write the oracle file
 
-**A new oracle starts from an approved sketch** in `oracles/SKETCHES.md`
-(`oracles-start` step 4): the user chose it, and no open question is left.
-If there is none, do `oracles-start` steps 3 and 4 for this boundary first:
-explore with probes, write the sketch, and stop for review. Exploration and
-review never go in the oracle file. The file is written once, when the
-direction is settled, with its law block and its code together.
+**A new oracle starts from potential laws that the user approved**, usually
+in a first session (`oracles-start`): the laws that the authority decides.
+Open design questions may still be open: they are limits until the user
+settles them. If no laws are approved yet, probe the behavior and propose
+them first, as `oracles-start` does, and stop for approval. Exploration and
+review stay in the conversation, never in the oracle file. The file is
+written with its law block and its code together.
 
 **Decide whether the user must approve.**
 
 - **Strengthening an adopted law** (a missing history, observation, driver
-  path, or check) reuses the law as it is. Do not write a new sketch, and do
+  path, or check) reuses the law as it is. Do not propose new laws, and do
   not stop. Name the law in the evidence. Widening the histories inside the
   law's stated domain is strengthening. Changing the stated domain, a
   checkpoint, or `limits` is a law change.
 - **Changing a law** (its promise, domain, checkpoint, assumptions, or the
-  freedoms it allows) needs a law delta. Add it to the sketch: the old and
-  the new block for each changed law, with the probe that shows why. Stop
-  for the user's review, then update the oracle file.
-- **A new law, or missing or contradictory authority,** needs an approved
-  sketch. An analogy to another documented rule is not authority.
+  freedoms it allows) needs a law delta. Show the user the old and the new
+  law, with the probe or result that shows why. Stop for their review, then
+  rewrite the law block in the same change.
+- **A new law, or missing or contradictory authority,** needs the user's
+  approval of that potential law. An analogy to another documented rule is
+  not authority.
 - **The task already approved these laws?** Do not ask again.
 
 **Production output is evidence, never authority.** A rule that exists only
 because production does it is model hacking. When the law and the code
-disagree, the sketch's answer decides, not the code.
+disagree, the approved law decides, not the code.
 
 When the promise is unclear, or two readings predict different behavior, use
 the [law discovery](../../docs/instruments/law-discovery.md) card.
 
 **Use the [design grammar](../../docs/instruments/design-grammar.md) card
 when any of these is true.** Do not judge whether the law is hard. Check the
-list at the sketch, and again after each gap check:
+list when you propose the laws, and again after each gap check:
 
-- the sketch has more than five laws for one boundary (adopted, observed,
-  and open ones all count)
+- there are more than five laws for one boundary (adopted, observed, and
+  open ones all count)
 - a law has no new case that it predicts
 - the model has more than one branch per law
 - the work changes or simplifies an existing model
@@ -140,11 +142,11 @@ its documentation promises, and a law that restates the implementation. A
 model of that law would be the same code, so it could not catch a defect.
 
 Keep the law block to about 40 lines of prose, plus the contract code block.
-It never mentions the sketch, a review, or an open question: a point the
-sketch left undecided appears only as a limit, with its reason.
+It never mentions a review or an open question: a point the user has not
+decided appears only as a limit, with its reason.
 
-**Then write the code under it.** Each boundary condition in the sketch
-becomes a constructed history. Each law's sentence, authority, and limits go
+**Then write the code under it.** Each boundary condition from the probes
+and the law worksheet becomes a constructed history. Each law's sentence, authority, and limits go
 in that property's `law` option. Put prose beside the model, the histories,
 the driver, and the check that says why each one predicts or tests the
 promised result.
@@ -157,18 +159,19 @@ promised result.
   contract code block: public API calls and their results, with no assertion
   or helper. Each line states the same law as its sentence.
 - No law restates the code.
-- Each law sentence matches its block in the sketch. If they disagree, the
-  sketch decides: fix the prose, and tell the user. A new heading for a law
-  is not a law change. A changed sentence, domain, or checkpoint is.
+- Each law sentence matches the law the user approved. If they disagree, the
+  approved law decides: fix the prose, and tell the user. A new heading for
+  a law is not a law change. A changed sentence, domain, or checkpoint is.
 
 Keep the law block, the `law` option, and the model in step: a change to one
-updates the others in the same change (ORC-003).
+updates the others in the same change (ORC-003). When a decision changes a
+law during the work, rewrite the law block at once, not at the end.
 
 ## 2. Freeze what the oracle must preserve
 
 Write these down. They stay fixed while you build the oracle.
 
-- The laws and their checkpoints, from the approved sketch.
+- The laws and their checkpoints, as the user approved them.
 - The owned production code: the files or functions the oracle answers for.
 - The freedoms the contract leaves open, such as the order of independent
   events, scheduling, or representation. The oracle must accept every
@@ -364,6 +367,13 @@ Techniques: [guide § Histories](../../docs/guide.md#histories).
   - It awaits the work it starts.
   - It bounds its own run time and work, and throws a structured error when
     a bound is passed.
+  - It waits on events, never on the wall clock. Control time with fake
+    timers, a virtual clock, or deferred promises, so that load on the
+    machine cannot change a result.
+  - When something else needs the model (a probe, a second oracle, a
+    reconstruction), keep the model in a test-free companion module, such
+    as `parse-model-oracle.ts`. An oracle file registers tests when it is
+    imported.
   - It releases what it created.
 - **The check** compares observations with the model at each checkpoint. It
   is the only place that reports a violation. For exact values, use

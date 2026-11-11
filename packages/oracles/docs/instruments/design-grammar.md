@@ -6,7 +6,7 @@ retries, or ownership. For an ordinary oracle, design step 2 is enough.
 
 **Inputs:**
 
-- the approved sketch and the frozen list from design step 2
+- the approved potential laws and the frozen list from design step 2
 - the owned production code
 - the known examples: docs, issues, and existing tests
 - one nearby invalid history that the oracle must reject
@@ -25,7 +25,7 @@ of range.
      allow the same observations at the same checkpoints.
 
    Name the checkpoints, the assumptions, and the freedoms the contract leaves
-   open. The user's review of the sketch fixes the intended contract. It is
+   open. The user's approval of the laws fixes the intended contract. It is
    not evidence that a model meets it.
 
 2. **Separate what you found from what you added.** Each rule cites its

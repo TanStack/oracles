@@ -1,47 +1,83 @@
 ---
 name: oracles-start
-description: Introduce @tanstack/oracles to an engineer and find a first oracle in their codebase. Give a short introduction, look around a subsystem they name or the whole repository, explore one area with probes that prove each finding, and write sketches of candidate oracles for the engineer to choose from. Use when someone is trying @tanstack/oracles, asks where an oracle would help, or wants a new oracle and has no approved sketch yet.
+description: Run a first session with @tanstack/oracles in an engineer's codebase. Say what the session will do, look around a part of the code they name or the whole repository, probe the real API to prove each finding, propose a potential oracle and its potential laws, then build it and run it until it finds a bug and the engineer has settled some design questions. Present the work, and explain the path to production. Use when someone is trying @tanstack/oracles, or asks where an oracle would help.
 ---
 
-# Start with oracles
+# A first session with oracles
 
-The engineer is trying this tool, often in the mood of "impress me". Earn it
-with evidence about their own code: a probe that shows a bug, an
-inconsistency between the docs and the code, or a behavior that no test
-checks. An agent that only says things is often wrong, and one wrong claim
-costs the tool its credibility. So never claim what a probe has not shown.
+## Your goal
 
-Probes are the small first instrument. They bootstrap the oracle: each probe
-finds a constraint (or its absence), a dynamic, or a boundary, and those
-become the oracle's laws and histories. The oracle then explores the whole
-design space and checks the production code far more thoroughly than any
-probe can.
+Be an engaging teacher. The engineer is trying this tool, often in the mood
+of "impress me". Show, don't tell. Bring up interesting findings about their
+own code, and explain what you are doing and why as you go. Tie each
+explanation to something you just showed them: a probe, a finding, a law, or
+the oracle file. Do not explain what oracles are unless they ask.
+[What an oracle is](../../docs/intro.md) is there for when they do.
 
-Work in these four steps. Stop after each one, show the result, and wait for
-the engineer. Then `oracles-design` builds the oracle that the engineer
-chooses.
+The session ends at one moment: an oracle that runs on their code, has found
+a bug, and has pushed them to settle some design questions. Then you present
+what you built, and explain how to take it to production.
 
-## 1. Ask, then introduce
+An agent that only says things is often wrong, and one wrong claim costs the
+tool its credibility. So every finding needs a probe that the engineer can
+run again.
 
-Ask one question first: is there something specific they want to try this
-on? Then introduce the tool in a few sentences and one example, from the
-[introduction](../../docs/intro.md). Keep it short: the engineer came to see
-it work.
+## How to talk
 
-Offer two ways to start:
+- Use these terms, and use them every time: a **probe**, a **finding**, a
+  **potential oracle** that owns a public behavior, its **potential laws**,
+  and the **oracle file**.
+- Talk naturally. Never name a skill, a step, or a section ("step 3", "the
+  skill's fallback"). Say what you are doing, in your own words.
+- Ask in plain words. Explain any term the engineer may not know in one
+  line (for example, a lone surrogate is half of a character that takes two
+  UTF-16 units).
+- Ask one clear question when you need a decision. For a possible bug, ask
+  "Is this a bug, or is it intended?"
 
-- **A subsystem they name:** look closely at that part of the code.
-- **No preference:** look around the repository for a good first oracle.
+## Where you stop
 
-Say what you will do: read the repository, run small scripts against its
-code from a scratch directory, and change no file in the repository until
-the engineer chooses an oracle to build.
+Stop and wait only when the engineer must decide:
+
+- which part of the code to look at
+- whether a finding is a bug, or intended
+- a design question
+- whether to approve the potential laws
+- whether to approve a more complex design (see below)
+- whether to take the oracle to production
+
+Between those points, keep working, and keep telling them what you are doing.
+
+## What you change
+
+Until the engineer chooses to take an oracle to production, change only
+these:
+
+- the minimal installs that an oracle needs to run: `@tanstack/oracles`,
+  `fast-check`, and `vitest` when they are missing
+- a minimal Vitest config that picks up the oracle file, only when the
+  repository's own config does not
+- oracle files, with their prose
+
+Findings, potential oracles, and potential laws stay in the chat. Keep
+probes in a scratch directory outside the repository. Change production code
+only when the engineer asks you to.
+
+## 1. Open
+
+Say in two or three sentences what this session will do. For example: "I'll
+look around your code for a behavior that's easy to break, try it with small
+scripts that call your real API, and show you what I find. Then I'll write
+an oracle for it with you and run it."
+
+Then ask one question: is there a part of the code they want to try this on,
+or should you look around?
 
 ## 2. Look around
 
 Make it quick. Read the public API and its docs (the README, the API docs,
-the JSDoc), the existing tests, and the git history of fixes (for example
-`git log --oneline -i --grep fix`, and the files that fixes change most).
+the JSDoc), the existing tests, and the git history of fixes. The files that
+fixes change most often tell you more than a search for "fix".
 
 Look for behavior that is easy to break, and whose right answer is simpler
 to state than the code that produces it. Good signs:
@@ -56,21 +92,18 @@ to state than the code that produces it. Good signs:
 Avoid an internal helper whose only law would restate its code. Avoid
 behavior that nothing documents, unless the engineer wants to decide it.
 
-Report two or three spots, a short paragraph each: what the code seems to
-promise and where that is stated, and why it makes a good first oracle.
-Recommend one. The engineer picks.
+Tell them about two or three spots, a short paragraph each: what the code
+seems to promise, where that is stated, and why it would make a good oracle.
+Recommend one, and let them choose.
 
-## 3. Explore with probes
+## 3. Probe
 
-Read the chosen spot's docs, code, tests, and fix history. Then probe it.
+Read the spot's docs, code, tests, and fix history. Then probe it.
 
 **A probe** is a small script that calls the real public API with chosen
-inputs and prints what happens. Run it from a scratch directory, outside the
-repository or in an ignored path, against the unchanged code. Keep each
-probe and its output, so the engineer can run it again.
-
-**Every finding needs a probe.** A claim without one is a suspicion: label
-it as a suspicion, or leave it out.
+inputs and prints what happens. Import the code the way the repository's own
+tests do, and run the probe from a scratch directory against the unchanged
+code. Keep each probe and its output.
 
 **Probe to find the design, not only bugs.** Look for:
 
@@ -82,67 +115,73 @@ it as a suspicion, or leave it out.
   capacity, time, and odd input (digits, unicode, lone surrogates, keys that
   shadow prototype names).
 - **Inconsistencies:** places where the docs, the code, the tests, and the
-  examples disagree, and behavior that nobody decided, where two readings
-  predict different results.
+  examples disagree, and behavior that nobody decided.
 
 When a probe is cheap, run it over a grid or a random sample of inputs,
 count the failures, and show the smallest one.
 
-**Report each finding with its kind:**
+**Find the authority for each promise, and show it.** Look in the README,
+the API docs, the JSDoc, the tests' names and bodies, the changelog, source
+comments, and any standard that the docs name. Quote it, with the file and
+line. The authority is what makes a finding credible, and it becomes the
+documentation in the oracle file. When nothing decides a behavior, it is a
+design question, not a bug.
+
+**Present each finding** in this shape, a light touch, with each finding
+called a possible bug or a question, never a certainty:
+
+1. A title that names the behavior: "Object Map key: replay throws".
+2. The smallest case, expected against observed, as a short snippet the
+   engineer can run.
+3. **Why I think it's wrong:** the authority, quoted, with its file and line.
+4. **Why the tests miss it:** what the existing tests check instead.
+5. **How often:** how many of the probe's inputs failed, out of how many.
+
+Give each finding its kind:
 
 | Kind            | What it means                                                           |
 | --------------- | ----------------------------------------------------------------------- |
-| Bug             | The code breaks a promise that a document states.                       |
+| Possible bug    | The code breaks a promise that a document or a test states.             |
 | Inconsistency   | Two sources disagree: say which ones, and what each says.               |
 | Test gap        | A probe shows behavior that no existing test checks.                    |
 | Design question | Nothing decides the behavior: give two readings and what each predicts. |
 
-For each finding, give the promise and its source, the input, what
-happened, the command that reproduces it, and why the existing tests miss
-it. For a bug, ask the engineer two questions: is it unintended, and did
-they already know?
+For a possible bug, ask: "Is this a bug, or is it intended?"
 
-Then say why an oracle would help here: it would generate the whole domain
-instead of a few probes, state the law that the probes point at, settle the
-open questions, and hold the answer for every later change. For example:
+If the probes find nothing, say so plainly: "No confirmed defect in what I
+tried." Show what held, and the design questions that came up.
 
-> Column mapping between snake_case and camelCase. The JSDoc promises a
-> round trip. The tests cover `user_id` and `created_at`. A probe over
-> 21,844 names found 3,518 that do not round-trip, for example
-> `address2_line → address2Line → address2line`. The JSDoc also shows
-> `userHTTPSURL → user_https_url`, but the code gives `user_httpsurl`. An
-> oracle would generate every name shape, state the round trip as a law,
-> settle the acronym rule, and hold it.
+## 4. Propose a potential oracle
 
-If the probes find nothing, say so plainly: "No confirmed defect in the
-paths examined." Then report what they did find: the constraints that held,
-and the design questions.
+Say why an oracle would help here. It tries the whole space of inputs and
+sequences, not a few probes, states the rule that the probes point at, and
+holds the answer for every later change.
 
-## 4. Sketch candidate oracles
+Then present it in the chat: "Here's a potential oracle that owns
+<the public behavior>, and its potential laws as I see them."
 
-Write one to three candidate oracles for the chosen spot in
-`oracles/SKETCHES.md`. Create the file if it does not exist, and add to it
-if it does: it is the repository's list of oracle ideas. Mark a sketch
-"built" once its oracle exists.
+- What it would own, in one or two sentences.
+- The contract, as a few lines of public calls and their results:
 
-Each sketch establishes the boundary:
+  ```ts
+  klona(x) // → a deep copy: same kind, prototype, and values as x, sharing no object with it
+  ```
 
-| Question                           | What to establish                                                                             |
-| ---------------------------------- | --------------------------------------------------------------------------------------------- |
-| What promise belongs together?     | One caller-visible behavioral contract.                                                       |
-| Where is it observed?              | The public entry points and the checkpoints where it is owed.                                 |
-| What does it assume?               | What providers, the environment, and neighboring components must supply.                      |
-| What else witnesses it?            | Other drivers for the same law: component, integration, end-to-end, or replay.                |
-| Where does another contract begin? | A different authority, lifecycle, observation boundary, or composition rule.                  |
-| Which source implements it?        | The `owns` list that the gap check uses.                                                      |
-| What public state does it expose?  | Each readable field or getter needs a law or a stated limit. A limit leaves its mutants open. |
+- Each potential law, as one "For every …" sentence, with its authority
+  quoted, and what the probes showed about it.
+- The laws people forget, or one line on why each does not apply:
+  - **No throw on valid input.** When the contract says a call returns a
+    value, it promises not to throw for valid input.
+  - **The laws of the kind of function.** An equality check is reflexive and
+    symmetric. A parser and a serializer round-trip. A setter is idempotent
+    when set to the same value.
+- The open design questions, each with its two readings, and what the probe
+  showed. Say that these can wait: the oracle's results will help decide
+  them.
 
-Then each sketch gives:
-
-- **The promise,** in one or two sentences, and what the oracle would own.
-- **The contract,** as `call // → result` lines (see `oracles-design` step 1).
-- **One block for each law,** from this template. It is where examples
-  become a general law.
+**Work out each law privately before you propose it.** Fill in this
+worksheet for each one, for yourself. Do not show it. It is how you get from
+a few examples to a general law:
 
 ```markdown
 ### L1 <short name>
@@ -163,61 +202,59 @@ Then each sketch gives:
 - Checkpoint: <where the contract owes the observation>
 ```
 
-How to fill in the fields:
+The law must say more than the code does. If a model of it would only repeat
+the implementation, look for the public promise that the code serves.
 
-- **Examples** and **What varies, what stays:** for example, `ms('2 hrs')`
-  is `7200000` (README, Examples). The number, the spelling, and the spacing
-  can change. The unit's length decides the answer.
-- **Law:** one sentence over the domain. For example: "For every finite
-  number `n` and every unit name `u` in the table, in any case and with or
-  without a space, `parse(n + u)` is `n` times the length of `u`."
-- **New case:** if you cannot write one, the law is still a list of
-  examples. Write it again. A new case that only renames a value in the
-  example (`/:id` for `/:foo`) does not count.
-- **Domain edges:** wider than the examples. A block whose domain is only its
-  own examples is not a law. Keep those examples as `fixed` histories, and as
-  rebuilt examples of the general law that explains them.
-- **Rebuilt examples:** an example that the law gets wrong shows a missing
-  condition, a second law, or a source that disagrees. Say which.
-- **Dynamics** are the model's rules, and the histories vary them. For a pure
-  function, write "none: one call", and put the variation into the domain.
-- **Constraints** hold whatever happens: a count never above its limit, an
-  equality that is symmetric, a read that returns the last write. The check
-  tests them at every checkpoint.
-- **Boundary conditions** are the edges, where real behavior and most
-  defects live: empty, zero, `-0`, the size limit, at capacity, the first and
-  the last item, keys that shadow prototype names, cleanup. A boundary that
-  the law does not decide goes under open questions. Do not leave it out of
-  the grammar.
-- **Status:** `adopted` if it has an authority, `observed` if production does
-  it but nobody adopted it, `open` if it is a question. Only `adopted` laws
-  become expected results. An `observed` or `open` law goes to the user as a
-  question.
-- **Production output is evidence, never authority.** A rule that you write
-  only because production does it is model hacking. Mark that rule
-  `observed`, and ask the user. An analogy to another documented rule is not
-  authority either: mark that law `open`.
+**A more complex design needs sign-off.** If the potential oracle has more
+than five laws, or a law has no new case that it predicts, or the model
+needs more than one branch per law, work through the
+[design grammar](../../docs/instruments/design-grammar.md) card. Then show
+the engineer the design it produced: its parts, and any choice between two
+designs. Ask them to approve it with the laws.
 
-The sketch also gives:
+Then ask the engineer to approve the potential laws that the authority
+decides.
 
-- **What the probes found,** sorted into constraints, dynamics, and
-  boundaries. Each one becomes a law, a history dimension, or a constructed
-  history. Link each probe.
-- **The laws people forget,** as blocks, or one line that says why each does
-  not apply:
-  - **No throw on valid input.** When the contract says a call returns a
-    value, it promises not to throw for valid input.
-  - **The laws of the kind of function.** An equality check is reflexive and
-    symmetric. A parser and a serializer round-trip. A setter is idempotent
-    when set to the same value.
-- **Open design questions,** each with its two readings and what the probe
-  showed.
+## 5. Build and run
 
-Check each sketch: from its contract and laws alone, a reader can predict
-one observation of each law, and no law restates the code.
+1. **Install what is missing**, and nothing more: `fast-check` and `vitest`
+   when the repository does not have them. Use the repository's own package
+   manager. Add a minimal Vitest config only if the repository's own config
+   would not pick up the oracle file. The `oracles-setup` skill's install and
+   "where oracle files go" sections have the details.
+2. **Write the oracle file.** Follow `oracles-design` from its first step:
+   the law block's prose, then the model, the histories, the driver, and the
+   check. As you build, tell the engineer briefly what each part is for: the
+   model computes the expected answer the simple way, the histories are the
+   generated inputs and sequences, the driver calls their real code, and the
+   check compares the two at each step.
+3. **Run it on the unchanged code.** A failure under an approved law is a
+   possible bug. Present it like a probe finding, with the oracle's smallest
+   failing case as the snippet.
+4. **As the engineer settles questions, change the law** and rewrite the law
+   block's prose in the same step. Before you show results, check that the
+   prose still says what the code does.
 
-**Stop here.** The engineer picks a sketch and answers its questions. Record
-the answers in the sketch. A sketch has no default: with no engineer
-present, write it and stop. When the chosen sketch has no open question
-left, its direction is settled. Then load `oracles-setup` if the repository
-is not configured yet, and then `oracles-design` to build it.
+Do not run the gap check yet, and do not change production code. Both belong
+to taking the oracle to production.
+
+If the oracle finds no bug, say so plainly, show what held, and offer to
+build the next oracle at another spot.
+
+## 6. Present
+
+When the oracle has found a bug and the engineer has settled some design
+questions, stop and present:
+
+- what you built, and what it found
+- an offer to walk through how it works: how the reference model was built,
+  how the histories are generated, and how the driver calls their code.
+  Engineers often want this, and it is the best part to teach.
+- an invitation to ask questions
+
+Then explain how to take the oracle to production: a lint preset that keeps
+oracle files honest, a block in `AGENTS.md` (or `CLAUDE.md`) so every agent
+follows the same rules, and the gap check, which makes small changes to a copy of the
+production code and shows each change that no law catches. That is how the
+oracle grows toward full coverage. If they want to go ahead, load
+`oracles-setup`.
