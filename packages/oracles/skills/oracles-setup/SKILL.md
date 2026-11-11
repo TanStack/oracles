@@ -142,7 +142,8 @@ export default [
 - `recommended` applies to oracle files and turns off inline directives there,
   so a disable comment has no effect.
 - `production` checks the probe form in `src/**` and `packages/*/src/**`. If
-  production source lives elsewhere (for example a root-level `index.js`), add
+  production source lives elsewhere (for example `source/`, or a root-level
+  `index.js`), add
   the rule with that glob. The config object must register the plugin itself:
 
   ```js
@@ -152,8 +153,11 @@ export default [
 - If the repository lints with xo, keep the oracle files and the new config
   files out of xo (its `ignores`), and lint them with the oracle ESLint
   config. Do not install `eslint@^9` as a dev dependency: xo loads ESLint
-  from the hoisted copy, and a second major breaks it. Use the `npx -p
-eslint@9` fallback below instead.
+  from the hoisted copy, and a second major breaks it. Use the
+  `npx -p eslint@9` fallback below instead, and run it with
+  `--no-inline-config`:
+  xo's own disable comments in production files name rules that this config
+  does not load, and ESLint reports each one.
 - **TypeScript 7:** typescript-eslint does not support TypeScript 7 yet. If the
   repository's ESLint config cannot parse TypeScript, the oracle lint cannot
   run. Installing `@typescript-eslint/parser` fails with `ERESOLVE`, since its

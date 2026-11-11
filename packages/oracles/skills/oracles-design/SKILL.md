@@ -399,6 +399,11 @@ Techniques: [guide § Histories](../../docs/guide.md#histories).
     of its own. Own it through the enclosing function (`src/index.ts#mitt`).
     That entry also brings in the sibling methods: cover them, or report their
     gaps as outside this oracle's scope.
+  - The tree follows what the TypeScript checker resolves. A call whose
+    target is typed only by an interface or a type parameter (`this.#queue.filter`
+    where `#queue: QueueType`) reaches no function body, so it is not followed.
+    If the law depends on that method, own the implementation too
+    (`source/priority-queue.ts#PriorityQueue.filter`).
   - Temporary: an unnamed default export (`module.exports = function ...`,
     `export default () => ...`) cannot be named yet. Own the whole file, and
     report the gaps that this pulls in from other code in the file as caused
