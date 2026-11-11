@@ -271,6 +271,10 @@ choose it later.
 
 B1, B3, B4, and B7 are review checks until lint ships them.
 
+B6 is about a check that stands in for a richer law. When the adopted law is
+itself "returns without throwing on valid input", its check may assert only
+that, and it needs its own calibration.
+
 Techniques: [guide § The model](../../docs/guide.md#the-model).
 
 ## 4. Account for every distinction
