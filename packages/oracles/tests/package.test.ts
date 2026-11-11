@@ -214,16 +214,18 @@ console.log(JSON.stringify({ failed, unreached }))`,
   }, 60_000)
 
   // The gap CLI analyzes with its own TypeScript, which the package depends
-  // on under the npm alias `typescript-for-tanstack-oracles`. npm hoists a
-  // plain `typescript` dependency to the project's root, where every tool
-  // resolves it, and dedupes the project's own range against it. Under the
-  // alias, a project without TypeScript gets no `typescript` package, and a
-  // project with its own keeps that version for `require` and for `tsc`. npm
-  // still links the alias's `tsc` into `.bin` when no other package claims
-  // it; the alias name sorts after `typescript`, so on a fresh install the
-  // project's own `typescript` claims `tsc` first. The tarball installs with
-  // npm's cache first; npm fetches only what the cache lacks, from the
-  // configured registry.
+  // on under the npm alias `typescript-for-tanstack-oracles`. With a plain
+  // `typescript` dependency, npm hoisted it to a project without TypeScript,
+  // and an incremental install into a project with `typescript@^5.4.5`
+  // deduped the project's root TypeScript up to 5.9. Under the alias, the
+  // project's `typescript` is its own. npm links the bins of every package at
+  // the root, so the alias's `tsc` remains a known residue, asserted below as
+  // documented behavior: in a project without TypeScript, and after an
+  // incremental install into one with TypeScript, until a clean install
+  // (`npm ci`). The alias name sorts after `typescript`, so on a clean
+  // install the project's own `typescript` claims `tsc` first. The tarball
+  // installs with npm's cache first; npm fetches only what the cache lacks,
+  // from the configured registry.
   it(`installs with npm without a typescript the project resolves, and its gap CLI analyzes there`, () => {
     const packageDirectory = dirname(dirname(fileURLToPath(import.meta.url)))
     const local = createRequire(import.meta.url)
@@ -259,6 +261,23 @@ console.log(JSON.stringify({ failed, unreached }))`,
         scratch,
         readdirSync(scratch).find((file) => file.endsWith(`.tgz`))!,
       )
+      const npm = (
+        directory: string,
+        command: string,
+        ...specs: Array<string>
+      ) =>
+        run(
+          `npm`,
+          [
+            command,
+            `--prefer-offline`,
+            `--no-audit`,
+            `--no-fund`,
+            `--ignore-scripts`,
+            ...specs,
+          ],
+          directory,
+        )
       const project = (name: string, ...specs: Array<string>) => {
         const directory = join(scratch, name)
         mkdirSync(directory)
@@ -266,29 +285,39 @@ console.log(JSON.stringify({ failed, unreached }))`,
           join(directory, `package.json`),
           JSON.stringify({ name, private: true, type: `module` }),
         )
-        run(
-          `npm`,
-          [
-            `install`,
-            `--prefer-offline`,
-            `--no-audit`,
-            `--no-fund`,
-            `--ignore-scripts`,
-            tarball,
-            ...specs,
-          ],
-          directory,
-        )
+        npm(directory, `install`, ...specs)
         return directory
       }
+      // Where the project's `tsc` command links.
+      const tscOf = (directory: string) =>
+        readlinkSync(join(directory, `node_modules/.bin/tsc`))
+      const aliasTsc = join(
+        `..`,
+        `typescript-for-tanstack-oracles`,
+        `bin`,
+        `tsc`,
+      )
+      const ownTsc = join(`..`, `typescript`, `bin`, `tsc`)
+      const typescriptOf = (directory: string) =>
+        (
+          JSON.parse(
+            readFileSync(
+              join(directory, `node_modules/typescript/package.json`),
+              `utf8`,
+            ),
+          ) as { version: string }
+        ).version
 
       // A project with no TypeScript of its own.
       const bare = project(
         `bare`,
+        tarball,
         `vitest@${versionOf(`vitest`)}`,
         `fast-check@${versionOf(`fast-check`)}`,
       )
       expect(existsSync(join(bare, `node_modules/typescript`))).toBe(false)
+      // The known residue: no other package claims `tsc`.
+      expect(tscOf(bare)).toBe(aliasTsc)
       mkdirSync(join(bare, `src`))
       mkdirSync(join(bare, `tests`))
       writeFileSync(
@@ -336,16 +365,16 @@ console.log(JSON.stringify({ failed, unreached }))`,
       expect(results.length).toBeGreaterThan(0)
 
       // A project with its own TypeScript, of a version the alias's range
-      // excludes, keeps it.
+      // excludes, then installs the package: npm saves `^5.4.5`, which a plain
+      // dependency deduped up to 5.9. The project keeps 5.4.5.
       const owned = project(`owned`, `typescript@5.4.5`)
-      const projectRequire = createRequire(join(owned, `package.json`))
-      expect(
-        (projectRequire(`typescript/package.json`) as { version: string })
-          .version,
-      ).toBe(`5.4.5`)
-      expect(readlinkSync(join(owned, `node_modules/.bin/tsc`))).toBe(
-        join(`..`, `typescript`, `bin`, `tsc`),
-      )
+      npm(owned, `install`, tarball)
+      expect(typescriptOf(owned)).toBe(`5.4.5`)
+      // The known residue of the incremental install, until a clean one.
+      expect(tscOf(owned)).toBe(aliasTsc)
+      npm(owned, `ci`)
+      expect(typescriptOf(owned)).toBe(`5.4.5`)
+      expect(tscOf(owned)).toBe(ownTsc)
     } finally {
       rmSync(scratch, { recursive: true, force: true })
     }
