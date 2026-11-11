@@ -23,7 +23,7 @@ import fc from 'fast-check'
 // TypeScript is the authority on what a token is (law 6), not the CLI.
 const ts = createRequire(
   join(dirname(fileURLToPath(import.meta.url)), `../package.json`),
-)(`typescript`)
+)(`typescript-for-tanstack-oracles`)
 
 // The prefix of the framework's environment variables that the fixtures read
 // and the end-to-end oracle passes to the CLI (`--env-prefix`).
@@ -3032,6 +3032,10 @@ function judge(plan, tests, sites, active) {
  * tagged `runtime`, so the static oracle, which runs only the analysis, does
  * not expect it.
  */
+// The suite of the failing owner test (`brokenOwner`): regular-expression
+// syntax, a dollar sign, and a quote.
+const BROKEN_SUITE = `broken (b.*) $x it's`
+
 function refusal(plan) {
   // A Vitest that does not load, and a config the runner cannot honor, refuse
   // the run rather than leave every mutant unreached (maintainer decision,
@@ -3058,7 +3062,10 @@ function refusal(plan) {
   // A run with no oracle file, or with no owns entry, owns no selected
   // source, so every mutant would read as unowned. The analysis refuses it
   // (maintainer decision, 2026-11-10).
-  if (plan.declaration === `neither`) return { cause: `no oracle file` }
+  // Its directive names only oracleProperty: declareOracle is legacy, and an
+  // author who reads it would call it (maintainer decision, 2026-11-10: F25).
+  if (plan.declaration === `neither`)
+    return { cause: `no oracle file`, withheld: `declareOracle` }
   if (
     plan.wholeFile === `none` &&
     plan.functions.every((fn) => fn.owners.length === 0)
@@ -3068,11 +3075,13 @@ function refusal(plan) {
   // so the run refuses as for a failing owner, naming the setup's error.
   if (plan.fault === `setupThrows`)
     return { cause: `the fixture setup broke`, runtime: true }
-  // A failing owner is named with its test's error, so the author can fix it.
+  // A failing owner is named with its test's error, so the author can fix it,
+  // and its baseline's replay runs that test alone.
   if (plan.fault === `brokenOwner`)
     return {
       cause: `b.test.ts`,
       detail: `this owner fails with no mutant active`,
+      replayed: [`${BROKEN_SUITE} fixed seed 999`],
       runtime: true,
     }
   return undefined
@@ -3485,12 +3494,20 @@ function oracleTestFile(plan, file) {
       `})`,
     )
   })
+  // The failing owner test sits in a suite whose name holds regular
+  // expression and shell syntax, beside a test whose name extends it and a
+  // top-level test of its own name, so the baseline's replay command must
+  // escape, anchor, and quote its pattern to run it alone (law 3).
   if (file === `b` && plan.fault === `brokenOwner`)
     out.push(
-      `test('fixed seed 999', () => {`,
-      `  g.__oracleRoute?.('fixed seed')`,
-      `  throw new Error('this owner fails with no mutant active')`,
+      `describe(${JSON.stringify(BROKEN_SUITE)}, () => {`,
+      `  test('fixed seed 999', () => {`,
+      `    g.__oracleRoute?.('fixed seed')`,
+      `    throw new Error('this owner fails with no mutant active')`,
+      `  })`,
+      `  test('fixed seed 999 again', () => {})`,
       `})`,
+      `test('fixed seed 999', () => {})`,
     )
   // A file with no tests still loads, so the CLI can read what it owns.
   if (!plan.tests.some((t) => t.file === file))

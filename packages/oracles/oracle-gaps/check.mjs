@@ -43,7 +43,7 @@ import {
   renderReport,
   renderStdout,
 } from './report.mjs'
-import { baselineLines, gapLine, progressLine } from './stream.mjs'
+import { baselineLines, gapLine, progressLine, testNamesOf } from './stream.mjs'
 import { analyze, isRunnerCopy } from './analysis.mjs'
 import { Refusal } from './ending.mjs'
 import {
@@ -279,8 +279,9 @@ export async function openSession(pkg) {
   // The analysis reads with this CLI's own TypeScript, never the package's: a
   // TypeScript 7 package exposes its version and no compiler API. The CLI's
   // dependency is TypeScript 5, so a copy without the API is a broken install,
-  // refused before any work.
-  const ts = createRequire(import.meta.url)(`typescript`)
+  // refused before any work. The dependency is an npm alias, so installing
+  // this package puts no `typescript` where an adopter's tools resolve it.
+  const ts = createRequire(import.meta.url)(`typescript-for-tanstack-oracles`)
   if (typeof ts.createSourceFile !== `function`)
     throw new Refusal(
       `the TypeScript this CLI depends on (${ts.version}) has no compiler API`,
@@ -656,6 +657,8 @@ export default async (env) => {
         return {
           key: `${module.moduleId} > ${testCase.fullName}`,
           fullName: testCase.fullName,
+          // The names a baseline's replay selects the test by (stream.mjs).
+          names: testNamesOf(testCase),
           state: testResult.state,
           // fast-check attaches the error its predicate threw as the cause.
           message: (testResult.errors ?? [])
@@ -1367,9 +1370,7 @@ export default async (env) => {
       [...oracleFiles].map((file) => ({
         file: relative(file),
         failure: first.failed.get(file),
-        fullName: first.units
-          .find((u) => u.file === file)
-          ?.tests.find((t) => t.state === `failed`)?.fullName,
+        tests: first.units.find((u) => u.file === file)?.tests ?? [],
       })),
     )
     // The baseline names the config the run loaded first.

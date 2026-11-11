@@ -1,13 +1,14 @@
 // The gap report's classification: what each mutant's outcome is, from the
 // plain records of the runs that judged it (check.mjs runs them). Every
-// function here is pure, so the CLI's own oracle checks the classification
-// on generated records in-process (gap-report-classify-oracle).
+// function here is pure, so the CLI's own oracle, in its repository, checks
+// the classification on generated records in-process.
 //
 // A run record (a unit) holds one test file's tests under one mutant: each
 // test's state and error text, its setup and unhandled errors, whether it
 // timed out, and its capture rows (capture-setup.mjs): the sites each test
 // reached, the outcomes each `if` took, the hashes of what it asserted on
 // and observed, its registered route, and its law verdicts.
+import { codeSpan } from './stream.mjs'
 
 // Which kind of test produced a failure: the route the framework registered
 // for it through `__oracleRoute` (capture-setup.mjs), never its name. A kill
@@ -228,14 +229,32 @@ function infectionOf(mutant, targets, baseline) {
   return { infected: infected.length > 0, infectedBy: test }
 }
 
-// The operand pairs that the owner tests' comparison recorded for a mutant:
-// distinct, in test order, up to three. A nondeterministic test's do not count.
+/**
+ * An operand as the capture recorded it (capture-setup.mjs `shown`), as a
+ * typed text: a string quoted, with a digest after a long one's cut, a bigint
+ * with `n`, a number as JavaScript prints it but `-0`, and a value that is
+ * not a primitive as its type in parentheses. Two values the capture records
+ * differently never print alike.
+ */
+export function operandText([kind, text, digest]) {
+  if (text === undefined) return `(${kind})`
+  if (kind === `string`)
+    return digest === undefined
+      ? JSON.stringify(text)
+      : `${JSON.stringify(`${text}...`)}#${digest}`
+  return kind === `bigint` ? `${text}n` : text
+}
+
+// The operand pairs that the owner tests' comparison recorded for a mutant,
+// as code spans: distinct, in test order, up to three. A nondeterministic
+// test's do not count.
 function operandsOf(mutant, targets, baseline) {
   const pairs = []
   for (const k of targets.oracleKeys)
     if (!baseline.nondeterministic.has(k))
       for (const [id, pair] of baseline.firstRows.get(k)?.operands ?? [])
-        if (id === mutant.number) pairs.push(pair.join(` and `))
+        if (id === mutant.number)
+          pairs.push(pair.map((o) => codeSpan(operandText(o))).join(` and `))
   return [...new Set(pairs)].slice(0, 3)
 }
 

@@ -66,7 +66,11 @@
  *    a gap. An owns entry that names nothing, an owns list that is not a
  *    literal, and an owner whose tests fail with no mutant active each make
  *    the run fail and name the cause, because each would otherwise hide gaps;
- *    a failing owner is named with a failing test and its error. The CLI's
+ *    a failing owner is named with a failing test and its error, and the
+ *    baseline's replay command, pasted into a POSIX shell in the package,
+ *    runs that test alone, though its suite's name holds regular-expression
+ *    and shell syntax and other tests' names extend it or repeat its own
+ *    (the classify oracle's law 9 over generated names). The CLI's
  *    capture must not change what a test observes: an owner that passes
  *    alone passes under the CLI, even when it counts the reads of a getter
  *    on a value it asserts on, or spies on the builtins a value is scanned
@@ -493,6 +497,11 @@ function runCli(dir, files, how = {}) {
     env: cleanEnv(),
   })
   const run = readRun(dir, out, child.status, child.stderr, how.cli ?? here)
+  // The command the baseline printed to replay a failing owner (law 3).
+  const replay = `${child.stderr ?? ``}`
+    .split(`\n`)
+    .find((line) => line.startsWith(`  replay: `))
+    ?.slice(`  replay: `.length)
   // What the run wrote beside its output directory and outside the package's
   // own state (`.oracle-gaps`), as a path relative to the package.
   const strayWrites = filesUnder(dir).filter(
@@ -501,7 +510,42 @@ function runCli(dir, files, how = {}) {
       !KNOWN_STRAY_WRITES.test(file) &&
       !OWN_WRITES.some((home) => file === home || file.startsWith(`${home}/`)),
   )
-  return { ...run, strayWrites }
+  return { ...run, strayWrites, replay }
+}
+
+/**
+ * Runs a baseline's replay command as an author pastes it into a POSIX
+ * shell in the package, with this repository's Vitest on the path, and
+ * names the tests it ran (passed or failed) by their full names, the suites'
+ * names and the test's joined by a space.
+ */
+function replayed(dir, command) {
+  if (command === undefined) return undefined
+  const scratch = mkdtempSync(join(realpathSync(tmpdir()), `gap-replay-`))
+  try {
+    const report = join(scratch, `report.json`)
+    spawnSync(
+      `sh`,
+      [`-c`, `${command} --reporter=json --outputFile='${report}'`],
+      {
+        cwd: dir,
+        encoding: `utf8`,
+        timeout: 120_000,
+        env: {
+          ...cleanEnv(),
+          PATH: `${join(here, `..`, `node_modules`, `.bin`)}:${process.env.PATH}`,
+        },
+      },
+    )
+    if (!existsSync(report)) return []
+    return JSON.parse(readFileSync(report, `utf8`))
+      .testResults.flatMap((file) => file.assertionResults)
+      .filter((test) => test.status === `passed` || test.status === `failed`)
+      .map((test) => test.fullName)
+      .sort()
+  } finally {
+    rmSync(scratch, { recursive: true, force: true })
+  }
 }
 
 /** Relative paths of the files under a directory, not inside node_modules. */
@@ -1019,10 +1063,13 @@ async function driver(plan, observe) {
       cli: plan.cliPath === `spaced` ? copy : here,
       ...configArgs(plan),
     }
-    const cli = runCli(dir, files, how)
+    const { replay, ...cli } = runCli(dir, files, how)
     // How many units were computed or reused says how the result was
     // produced, not what it is, so it is not observed.
     observe(`cli`, { ...cli, evidence: undefined })
+    // A failing owner's replay, run as the author would run it (law 3).
+    if (plan.fault === `brokenOwner`)
+      observe(`replay`, { command: replay, ran: replayed(dir, replay) })
     // Reach comes from what the CLI reported, mapped onto the plan.
     const states = new Set()
     // Each kind of declaration fault is its own state, so each refusal has
@@ -1430,6 +1477,20 @@ function check(plan, observations, expected) {
         `the refusal does not give the failing test's error, ${expected.refused.detail}: ${cli.stderr}`,
         `ownership`,
       )
+    // The baseline's replay of a failing owner runs exactly its failing test.
+    if (expected.refused.replayed) {
+      const replay = observations.find((o) => o.checkpoint === `replay`)?.value
+      if (
+        JSON.stringify(replay?.ran) !==
+        JSON.stringify(expected.refused.replayed)
+      )
+        return violation(
+          `replay`,
+          `the replay command ${JSON.stringify(replay?.command)} ran ${JSON.stringify(replay?.ran)}, owed only ${JSON.stringify(expected.refused.replayed)}`,
+          `ownership`,
+          { actual: replay?.ran, expected: expected.refused.replayed },
+        )
+    }
     // Law 12: the refusal is one block with its fix, and the output
     // directory the run was given holds it.
     // Every e2e run names its output directory (`--out`), so even a
