@@ -68,8 +68,9 @@ and nothing else:
    Write it as continuous prose in this order. Do not label the parts with
    the names below ("The hook", "The mechanism"): they are for you, not the
    reader.
-   1. **The contract at a glance:** a short code block, first, that shows the public API promises this oracle maintains. A reader takes
-      it in at one look. Give it no title, and no sentence that introduces
+   1. **The contract at a glance:** a short code block, first, that shows the
+      public API promises this oracle maintains. A reader takes it in at one
+      look. Give it no title, and no sentence that introduces
       it. Write each line as `call // → result`:
       - the call is the public API, written the way a user writes it, with
         concrete values where they make the promise clear.
@@ -77,6 +78,8 @@ and nothing else:
         phrase.
       - a condition goes at the end of the line, as "when ...".
       - an open law ends with `(open)`.
+      - when several laws share one call, write the call once, and put one
+        `// → result` line under it for each law.
 
       Keep it to about five lines. Never write an assertion, a test helper,
       or a checkpoint expression there: those belong in the code. The block
