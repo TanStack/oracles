@@ -391,6 +391,8 @@ const edits = [
   `config`,
   `newOracle`,
   `cli`,
+  // The module that only file b's mutated runs import (`lazyGate`).
+  `lazy`,
   `restart`,
   `revert`,
   // Events that end a daemon, not edits: a crash (killed, its socket and
@@ -553,6 +555,10 @@ const histories = fc.record({
   // Most histories have no steps, which keeps the campaign's cost down.
   // Whether the run asks for the ordinary tests' outcome (`--ordinary`).
   ordinary: fc.boolean(),
+  // File b's verdicts also wait on a module that the test imports only
+  // where the output differs, so only a mutated run loads it
+  // (`tests/lazy.ts`, which law 9's `lazy` edit changes).
+  lazyGate: fc.constantFrom(false, false, false, true),
   // A second authored mutant, on the next statement, so that two patched
   // sources are judged in the same run and neither may see the other's.
   secondAuthored: fc.boolean(),
@@ -2438,6 +2444,7 @@ function resolveHistory(history) {
     fault: history.fault,
     stability: history.stability,
     steps: history.steps ?? [],
+    lazyGate: history.lazyGate === true,
     ordinary: history.ordinary === true,
     config: history.config ?? `object`,
     ...configOf(history),
@@ -3720,6 +3727,10 @@ const callFor = (fn) =>
 const quoteEntry = (plan, entry) =>
   plan.template ? `\`${entry}\`` : `'${entry}'`
 
+// Whether a test's verdict waits on file b's lazy gate (`lazyGate`).
+const lazyGated = (plan, file, t) =>
+  plan.lazyGate && file === `b` && t.judges && t.judgeBy === `verdict`
+
 function oracleTestFile(plan, file) {
   const sites = sitesOf(plan)
   const entries = [
@@ -3886,7 +3897,10 @@ function oracleTestFile(plan, file) {
                 `    if (${when}) expect${t.judgeBy === `soft` ? `.soft` : ``}(${out}).toEqual(${expected})`,
               ]
             : [
-                `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) {`,
+                // A lazy gate is imported only where the output differs, so
+                // the unmutated run never loads it. It is open before any
+                // edit, so the model need not read it.
+                `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}${lazyGated(plan, file, t) ? ` && (await import('./lazy')).open` : ``}) {`,
                 `      g.__oracleVerdict?.({ property: 'fixture-${file}', law: '${t.law}', checkpoint: 'trace' })`,
                 `      throw new Error('violation')`,
                 `    }`,
@@ -3904,7 +3918,7 @@ function oracleTestFile(plan, file) {
         : []),
       t.asProp
         ? `  fcTest.prop([fcv.integer({ min: 0, max: 10 })], { numRuns: 20, seed: 1 })('${testName(t, index)}', async (n) => {`
-        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait ? `async ` : ``}() => {`,
+        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || lazyGated(plan, file, t) ? `async ` : ``}() => {`,
       ...partsOf(t).flatMap(campaign),
       `  })`,
       `})`,
@@ -3992,6 +4006,8 @@ const initialState = (plan) => ({
   history: plan.history,
   prepend: false,
   strict: true,
+  // What `tests/lazy.ts` exports: whether file b's lazy gate is open.
+  lazyOpen: true,
   seed: 1,
   // Whether the check's `--config` names the second config (`altConfig`).
   altConfig: false,
@@ -4147,6 +4163,9 @@ function fixtureFiles(plan, state = initialState(plan)) {
     ...(plan.dotGenSource ? { [DOTGEN]: plan.dotGenSource } : {}),
     ...plan.exportSources,
     'tests/strict.ts': `export const strict = ${state.strict}\n`,
+    ...(plan.lazyGate
+      ? { 'tests/lazy.ts': `export const open = ${state.lazyOpen}\n` }
+      : {}),
     // A workspace dependency with module state, linked through node_modules.
     'deps/state-dep/package.json': manifest({
       name: `state-dep`,
@@ -4385,6 +4404,7 @@ function applyEdit(state, edit) {
       },
     }
   if (edit === `helper`) return { ...state, strict: !state.strict }
+  if (edit === `lazy`) return { ...state, lazyOpen: !state.lazyOpen }
   if (edit === `seed`) return { ...state, seed: state.seed === 1 ? 2 : 1 }
   if (edit === `config`) return { ...state, altConfig: !state.altConfig }
   // A seed no other step uses, so the check has fresh work to be killed in.

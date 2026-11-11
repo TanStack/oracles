@@ -184,7 +184,8 @@
  *    differ: durations, the options that name the output directory and the
  *    daemon, and the counts of reused and computed evidence. The edits change
  *    a test, a source statement, the source's line numbers, an owns list,
- *    the authored mutant, a helper module that one oracle file imports, the
+ *    the authored mutant, a helper module that one oracle file imports, a
+ *    module that a test imports only where its output differs, the
  *    seed, and the set of oracle files; they also restart the daemon and
  *    revert the last edit. The law says nothing unless the daemon reuses
  *    evidence, so the reach requires a check that reused evidence, one that
@@ -193,8 +194,8 @@
  *    edit changed: an edit that changes nothing cannot expose a stale cache.
  *    Each warm context caches the modules it read, so the reach also
  *    requires an edit that changed the cold result after a hang replaced
- *    the only context: the context that read the edited file is gone, and
- *    the one that replaced it read the file again in its mutant runs.
+ *    the only context (which ran every file), and an edit of a module that
+ *    only mutated runs load, which no unmutated run records as an input.
  *    One daemon serves a package, across crashes, reboots, and concurrent
  *    starts: two checks started at once, a check after the daemon was
  *    killed (its socket and lock left behind), after a reboot (its socket
@@ -302,6 +303,11 @@
  * reach agreement kills every probe mutant is not checked. Gap answers and
  * the gate are not part of the CLI until answers become evidence-log events,
  * which waits on the maintainer's decision about how an answer maps to a law.
+ * Law 9's edits come only between checks: a file saved during a check is
+ * not generated, so the runner's handling of an input that changes while a
+ * run runs (it invalidates the input and does not store the run) is fixed
+ * by inspection; a witness needs a step that edits a file between a unit's
+ * start and its end.
  * Law 9's edits do not include a file that a test reads through `fs`, an
  * environment variable other than the seed, a new file that changes how an
  * unchanged import resolves, a change to the Vite config or the installed
@@ -945,10 +951,14 @@ async function incremental(dir, plan, cli, copy, observe, states) {
     // An edit that changes the cold result is one a stale cache could miss.
     if (step !== `start` && result(previous) !== result(coldRun)) {
       states.add(`edit ${step} changed the cold result`)
-      // The context that read the edited file is gone, and the one that
-      // replaced it read the file again: the daemon must still invalidate it.
+      // The daemon's previous check cut a run off, so the only context, which
+      // ran every file, was replaced. Whether the replacement read the edited
+      // file again is not observed; the constructed history's order makes it
+      // read it.
       if (replacedOnly)
-        states.add(`an edit after a hang replaced the only context`)
+        states.add(
+          `an edit that changed the cold result after a hang replaced the only context`,
+        )
     }
     replacedOnly = plan.contexts === 1 && (daemon.evidence?.cut ?? 0) > 0
     previous = coldRun
@@ -1880,7 +1890,10 @@ const incrementalStates = [
   `evidence reused after a daemon restart`,
   `a revert of a file edit reran nothing`,
   ...edits
-    .filter((edit) => !daemonEvents.has(edit) && edit !== `fixSession`)
+    .filter(
+      (edit) =>
+        !daemonEvents.has(edit) && edit !== `fixSession` && edit !== `lazy`,
+    )
     .map((edit) => `edit ${edit} changed the cold result`),
   `a check whose daemon died during it`,
   `a check whose daemon held it past the CLI's wait, then died`,
@@ -2016,7 +2029,8 @@ const required = [
   `a session failure larger than a socket buffer`,
   `a config fault in a run that owns nothing`,
   ...incrementalStates,
-  `an edit after a hang replaced the only context`,
+  `an edit that changed the cold result after a hang replaced the only context`,
+  `edit lazy changed the cold result`,
 ]
 // The faults the CLI analyzes anyway: a package's TypeScript is no input.
 const analyzedFaults = [`noTypescript`, `apiLessTypescript`]
@@ -2068,7 +2082,8 @@ const separate = [
   `a run with eleven contexts`,
   `a failing owner replayed under a config that --config names`,
   ...incrementalStates,
-  `an edit after a hang replaced the only context`,
+  `an edit that changed the cold result after a hang replaced the only context`,
+  `edit lazy changed the cold result`,
 ]
 const witnessed = required.filter((s) => !separate.includes(s))
 
@@ -2095,7 +2110,7 @@ oracleProperty({
   law: {
     statement: `The gap report enumerates the promised operator mutants, leaves out exactly the probe-only code, discovers every oracle that owns a function's call tree and refuses broken ownership, judges each mutant only by its owners' tests on their registered routes and counts only law verdicts on reproducible routes as kills, which outrank a run that never ends, anchors each mutant by its function and normalized statement, lists every gap and unowned mutant once with consistent counts, keeps keys stable under unrelated edits, reports through one daemon per package what a cold run reports at every state of a sequence of edits, and runs the package as Vitest does from any install path and any --source spelling: one instance of each workspace dependency, no refusal over an unbuildable devDependency, child processes for a native addon anywhere in the tree, a capture that a test's builtin spies cannot see, and a refusal of test.projects; and every run that does not complete ends, cold or through the daemon, with a refusal that exits 2, prints a refused: block and one fix: directive with no stack trace, and writes the refusal to the run's output directory.`,
     authority: `The maintainer's decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), not in this package's records, including that a kill by reach agreement alone is a gap and that an incremental run through the daemon equals a cold one (v19.3); the project's oracle guide on quiet exclusions; the oracle rubric's outcome kinds (ORC-006); the CLI's documented operator list in schemata.mjs.`,
-    limits: `Law 12 judges refusals only: no legal history reaches an internal error, so its shape (exit 3, the stack in error.log) is not judged; argument refusals are the static oracle's; the check's rejection of a stack trace, a missing fix, and a wrong exit code is calibrated in the static oracle, through the same refusalBreach, and here only a refused run reported as complete is calibrated, because each calibration here runs real CLI histories. Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 6 s full limit, and a slow run only as one witness that waits 3 s before it judges; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; no --only, --sample, or --diff-base; a derived class's file is instrumented and its sites are judged as unowned, but no test imports or constructs the class, so its no-mutant and super-region behavior is the static oracle's (in-process), not this oracle's; package configs only as vite.config or vitest.config with one of the extensions .ts, .mts, .cts, .js, .mjs, and .cjs (not every pair), as config/gap-vitest with the same extension through --config, or none, as an object or a sync or async function, with no plugins of their own and test.projects only as a refusal, and only under the package's own package.json; a top-level await only in an ES module config and require only in a CommonJS one, as Vitest itself loads no other; a --config outside the package is refused by design, through the rule for paths outside the package (args.mjs), and no history generates one; contexts only one, four, or eleven, and process warnings judged only as MaxListenersExceededWarning on the CLI's own stderr (a daemon's process warnings go to its log); a context that fails to open gives back its listener allowance, which no observation shows (a kept allowance only raises the limit, so no warning follows), so that accounting is fixed by inspection; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9's edits leave out files read through fs, other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; cut-off charging judged only under one budget; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages; daemon races (two CLIs reading one error file, a CLI hearing closing from the failing daemon it started, a reset connection on macOS) fixed by inspection; a workspace dependency's one-file bundle is written in that dependency's own .oracle-gaps folder, a known stray write (date-fns report), which the stray-write check excludes; the runner's copies and Vitest configs (.oracle-gaps-PID*) sit at the package root and are removed when the run closes, so a killed run leaves them there, and the stray-write check runs after close and cannot see them; a counterexample shrinks through at most six histories, so it can be larger than the smallest that fails; module-level data only as four \`const\` declarations of the main source (an object literal, an array that holds a function, a boolean, and an object of two methods), read in place, with no data imported from another file, destructured, reassigned, or declared as an enum or a default export.`,
+    limits: `Law 12 judges refusals only: no legal history reaches an internal error, so its shape (exit 3, the stack in error.log) is not judged; argument refusals are the static oracle's; the check's rejection of a stack trace, a missing fix, and a wrong exit code is calibrated in the static oracle, through the same refusalBreach, and here only a refused run reported as complete is calibrated, because each calibration here runs real CLI histories. Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 6 s full limit, and a slow run only as one witness that waits 3 s before it judges; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; no --only, --sample, or --diff-base; a derived class's file is instrumented and its sites are judged as unowned, but no test imports or constructs the class, so its no-mutant and super-region behavior is the static oracle's (in-process), not this oracle's; package configs only as vite.config or vitest.config with one of the extensions .ts, .mts, .cts, .js, .mjs, and .cjs (not every pair), as config/gap-vitest with the same extension through --config, or none, as an object or a sync or async function, with no plugins of their own and test.projects only as a refusal, and only under the package's own package.json; a top-level await only in an ES module config and require only in a CommonJS one, as Vitest itself loads no other; a --config outside the package is refused by design, through the rule for paths outside the package (args.mjs), and no history generates one; contexts only one, four, or eleven, and process warnings judged only as MaxListenersExceededWarning on the CLI's own stderr (a daemon's process warnings go to its log); a context that fails to open gives back its listener allowance, which no observation shows (a kept allowance only raises the limit, so no warning follows), so that accounting is fixed by inspection; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9's edits come only between checks, so a file saved during a check is not generated (the runner invalidates a known input that changed while a run ran and does not store that run, which only inspection fixes; a witness needs a step that edits a file between a unit's start and its end), and a module that a run first loads and that changes during that same run is stored under its later hash; law 9's edits leave out files read through fs, other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; cut-off charging judged only under one budget; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages; daemon races (two CLIs reading one error file, a CLI hearing closing from the failing daemon it started, a reset connection on macOS) fixed by inspection; a workspace dependency's one-file bundle is written in that dependency's own .oracle-gaps folder, a known stray write (date-fns report), which the stray-write check excludes; the runner's copies and Vitest configs (.oracle-gaps-PID*) sit at the package root and are removed when the run closes, so a killed run leaves them there, and the stray-write check runs after close and cannot see them; a counterexample shrinks through at most six histories, so it can be larger than the smallest that fails; module-level data only as four \`const\` declarations of the main source (an object literal, an array that holds a function, a boolean, and an object of two methods), read in place, with no data imported from another file, destructured, reassigned, or declared as an enum or a default export.`,
   },
   histories: {
     // A failing history shrinks through at most six smaller ones. Each runs
@@ -2507,8 +2522,10 @@ oracleProperty({
         // replaces it reads the helper again in b's mutant runs. The helper
         // edit then changes b's verdicts, and the daemon must invalidate the
         // helper in the new context.
-        name: `an edit after a hang replaced the only context`,
-        enters: [`an edit after a hang replaced the only context`],
+        name: `an edit that changed the cold result after a hang replaced the only context`,
+        enters: [
+          `an edit that changed the cold result after a hang replaced the only context`,
+        ],
         build: (generated) => ({
           ...generated,
           functions: [
@@ -2548,6 +2565,44 @@ oracleProperty({
           concurrentStart: false,
           contexts: 1,
           steps: [`helper`],
+        }),
+      },
+      {
+        // File b's verdict waits on a module that it imports only where the
+        // output differs, so only mutated runs load it. The edit closes that
+        // gate: the cold run then reports b's mutants as survivors, and the
+        // daemon must not reuse a kill that read the old module.
+        name: `an edit to a module that only mutated runs load`,
+        enters: [`edit lazy changed the cold result`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`b`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          derived: null,
+          dotGen: false,
+          dataOwners: [],
+          exportOwners: [],
+          importer: `none`,
+          wholeFile: `none`,
+          template: false,
+          tests: [{ ...judging(`b`, `fixed seed`, 1), fn: 0 }],
+          witness: false,
+          authored: null,
+          secondAuthored: false,
+          fault: `none`,
+          stability: `none`,
+          ordinary: false,
+          native: `none`,
+          boot: false,
+          cliPath: `plain`,
+          concurrentStart: false,
+          lazyGate: true,
+          steps: [`lazy`],
         }),
       },
     ]),
