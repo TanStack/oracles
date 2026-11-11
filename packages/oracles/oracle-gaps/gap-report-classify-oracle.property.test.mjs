@@ -212,7 +212,6 @@
  */
 import { createHash } from 'node:crypto'
 import fc from 'fast-check'
-import { declareOracle } from '../src/oracle-declaration.ts'
 import { oracleProperty, pass, violation } from '../src/oracle-property.ts'
 import {
   baselineOf,
@@ -2484,12 +2483,6 @@ const shownValue = (value) =>
         : isPrimitive(value)
           ? String(value)
           : `a value of type ${typeof value}`
-
-declareOracle({
-  check: [check, baselineBreach],
-  model: [model, modelOutcome, modelAuthored, ordinaryOutcome],
-  grammar: [records],
-})
 
 // ## Calibrations
 const corrupt = (change) => (trace) => {

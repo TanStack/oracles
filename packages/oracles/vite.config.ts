@@ -6,20 +6,20 @@ import packageJson from './package.json'
 import type { Plugin } from 'vite'
 
 /**
- * Only the browser-safe `./declaration` entry has a CommonJS build. The main
+ * Only the browser-safe `./route` entry has a CommonJS build. The main
  * entry imports Vitest, which refuses require(), so a CommonJS copy of it
  * could never load. The library build emits every entry in both formats, so
- * this plugin keeps only the CommonJS modules that the declaration entry
+ * this plugin keeps only the CommonJS modules that the route entry
  * reaches, and their declaration files. `tests/package.test.ts` checks the
  * packed result.
  */
-export function commonJsForDeclarationOnly(): Plugin {
+export function commonJsForRouteOnly(): Plugin {
   const reached = new Set<string>()
   const commonJsDirectory = fileURLToPath(
     new URL(`./dist/cjs`, import.meta.url),
   )
   return {
-    name: `oracles:commonjs-for-declaration-only`,
+    name: `oracles:commonjs-for-route-only`,
     // Tests serve the config, and a dev server's close calls closeBundle too.
     apply: `build`,
     generateBundle(output, bundle) {
@@ -32,7 +32,7 @@ export function commonJsForDeclarationOnly(): Plugin {
         const chunk = bundle[file]
         if (chunk?.type === `chunk`) chunk.imports.forEach(visit)
       }
-      visit(`cjs/declaration.cjs`)
+      visit(`cjs/route.cjs`)
       for (const file of Object.keys(bundle))
         if (!reached.has(file.replace(/\.map$/, ``))) delete bundle[file]
     },
@@ -51,7 +51,7 @@ export function commonJsForDeclarationOnly(): Plugin {
 
 /** The settings a test run uses; the self-oracle's config extends them. */
 export const testConfig = defineConfig({
-  plugins: [commonJsForDeclarationOnly()],
+  plugins: [commonJsForRouteOnly()],
   test: {
     name: packageJson.name,
     dir: `./tests`,
@@ -72,7 +72,7 @@ export default defineConfig(async ({ command }) =>
     ? mergeConfig(
         testConfig,
         (await import(`@tanstack/vite-config`)).tanstackViteConfig({
-          entry: [`./src/index.ts`, `./src/declaration.ts`],
+          entry: [`./src/index.ts`, `./src/route.ts`],
           srcDir: `./src`,
         }),
       )

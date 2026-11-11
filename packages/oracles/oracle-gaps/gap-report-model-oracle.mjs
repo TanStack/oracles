@@ -504,14 +504,16 @@ const histories = fc.record({
     }),
     { nil: null },
   ),
-  // Which declaration the oracle files make: `declareOracle`, `oracleProperty`
-  // with its `owns` (maintainer decision, 2026-11-10: `oracleProperty` takes
-  // `owns`), both (the entries split between the two calls, so the union is
-  // read), or none, which leaves no oracle file.
+  // Where the oracle files name their `owns`: on `oracleProperty`
+  // (maintainer decision, 2026-11-10: `oracleProperty` takes `owns`), on a
+  // wrapper's call, which forwards it to `oracleProperty` (maintainer
+  // decision, 2026-11-11: the CLI reads `owns` from an object-literal
+  // argument of any call), on both (the entries split between the two calls,
+  // so the union is read), or nowhere, which leaves no oracle file.
   declaration: fc.constantFrom(
-    `declareOracle`,
-    `declareOracle`,
-    `declareOracle`,
+    `wrapper`,
+    `wrapper`,
+    `wrapper`,
     `oracleProperty`,
     `oracleProperty`,
     `both`,
@@ -2485,14 +2487,17 @@ function resolveHistory(history) {
     // history with no fault can have no oracle file.
     declaration:
       history.declaration === `neither` && (history.fault ?? `none`) !== `none`
-        ? `declareOracle`
-        : (history.declaration ?? `declareOracle`),
+        ? `wrapper`
+        : (history.declaration ?? `wrapper`),
     ownerless,
     template: history.template,
     fault: history.fault,
     stability: history.stability,
     steps: history.steps ?? [],
     ordinary: history.ordinary === true,
+    // An `owns` key in an assertion's arguments, in the ordinary file: its
+    // assertion form and whether its list is a literal, or none.
+    matcherOwns: history.matcherOwns ?? `none`,
     config: history.config ?? `object`,
     ...configOf(history),
     configEnv: history.configEnv === true,
@@ -3593,10 +3598,7 @@ function refusal(plan) {
   // A run with no oracle file, or with no owns entry, owns no selected
   // source, so every mutant would read as unowned. The analysis refuses it
   // (maintainer decision, 2026-11-10).
-  // Its directive names only oracleProperty: declareOracle is legacy, and an
-  // author who reads it would call it (maintainer decision, 2026-11-10: F25).
-  if (plan.declaration === `neither`)
-    return { cause: `no oracle file`, withheld: `declareOracle` }
+  if (plan.declaration === `neither`) return { cause: `no oracle file` }
   if (ownsNothing(plan)) return { cause: `owns any selected source` }
   // A failing owner, and a setup file that throws (which fails every test
   // file before any test runs), refuse nothing: they block the mutants the
@@ -3943,13 +3945,19 @@ function oracleTestFile(plan, file) {
       : []),
   ].map((entry) => quoteEntry(plan, entry))
   // The calls that declare the entries, one per declaration the file makes.
-  // With `both`, the entries split between the two calls.
+  // With `both`, the entries split between the two calls. A wrapper takes
+  // its options, `owns` among them, after a leading id, as a project's
+  // registration helpers do, so the list is read from any argument.
   const declares = {
-    declareOracle: [`declareOracle`],
+    wrapper: [`registerOwned`],
     oracleProperty: [`oracleProperty`],
-    both: [`declareOracle`, `oracleProperty`],
+    both: [`registerOwned`, `oracleProperty`],
     neither: [],
-  }[plan.declaration ?? `declareOracle`]
+  }[plan.declaration ?? `wrapper`]
+  const call = (name, owns) =>
+    name === `registerOwned`
+      ? `${name}('p', { runs: 1, owns: ${owns} })`
+      : `${name}({ owns: ${owns} })`
   const owns = declares.flatMap((name, part) => {
     const list =
       plan.declaration === `both`
@@ -3958,12 +3966,14 @@ function oracleTestFile(plan, file) {
     return file === `b` && plan.fault === `nonLiteral`
       ? [
           `const OWNS_${part} = [${list.join(`, `)}]`,
-          `${name}({ owns: OWNS_${part} })`,
+          call(name, `OWNS_${part}`),
         ]
-      : [`${name}({ owns: [${list.join(`, `)}] })`]
+      : [call(name, `[${list.join(`, `)}]`)]
   })
-  const stubs = declares.map(
-    (name) => `function ${name}(_parts: { owns: Array<string> }): void {}`,
+  const stubs = declares.map((name) =>
+    name === `registerOwned`
+      ? `function ${name}(_id: string, _options: { runs: number; owns: Array<string> }): void {}`
+      : `function ${name}(_parts: { owns: Array<string> }): void {}`,
   )
   const out = [
     `import { ${plan.tests.some((t) => t.file === file && t.cleanupThrows) ? `afterEach, ` : ``}describe, expect, test${plan.tests.some((t) => t.file === file && t.spies) ? `, vi` : ``} } from 'vitest'`,
@@ -4158,6 +4168,32 @@ function oracleTestFile(plan, file) {
   return `${out.join(`\n`)}\n`
 }
 
+/**
+ * The assertions that may hold an `owns` key in their arguments, each as the
+ * statement it writes for an object: every form of `expect` that Vitest
+ * offers (a matcher, a negated or soft one, one read by a computed member,
+ * and an aliased `expect`), Vitest's `assert` and `chai`, `expectTypeOf`,
+ * and Node's `assert` by a named, a default, and a namespace import.
+ */
+export const ASSERTION_FORMS = {
+  expect: (object) => `expect(compared).toEqual(${object})`,
+  'expect-not': (object) => `expect(compared).not.toEqual(${object})`,
+  'expect-soft': (object) => `expect.soft(compared).toEqual(${object})`,
+  'expect-computed': (object) => `expect(compared)['toEqual'](${object})`,
+  'expect-aliased': (object) => `check(compared).toEqual(${object})`,
+  'expect-argument': (object) => `expect(${object}).toBeDefined()`,
+  assert: (object) => `assert.deepEqual(compared, ${object})`,
+  chai: (object) => `chai.expect(compared).to.deep.equal(${object})`,
+  'expect-type-of': (object) =>
+    `expectTypeOf(compared).toEqualTypeOf(${object})`,
+  // Node's `assert`, by a named, a default, and a namespace import.
+  'node-assert-named': (object) => `deepStrictEqual(compared, ${object})`,
+  'node-assert-default': (object) =>
+    `nodeAssert.deepStrictEqual(compared, ${object})`,
+  'node-assert-namespace': (object) =>
+    `strictAssert.deepEqual(compared, ${object})`,
+}
+
 function ordinaryTestFile(plan) {
   const sites = sitesOf(plan)
   const out = [
@@ -4177,6 +4213,31 @@ function ordinaryTestFile(plan) {
   })
   if (!plan.tests.some((t) => t.file === `c`))
     out.push(`test.skip('no tests', () => {})`)
+  // An `owns` key in an assertion's arguments is data that the test
+  // compares, so it declares no ownership: the file stays an ordinary test
+  // file, and a list that is not a literal refuses nothing (review of
+  // remove/declare-oracle, 2026-11-11). The model's ownership and refusals
+  // never read it.
+  const assertion = ASSERTION_FORMS[plan.matcherOwns?.form]
+  if (assertion !== undefined) {
+    const list =
+      plan.matcherOwns.list === `literal`
+        ? `['${SOURCE}']`
+        : `compared.owns.slice(1)`
+    out[0] = `import { assert, chai, expect, expect as check, expectTypeOf, test } from 'vitest'`
+    out.splice(
+      1,
+      0,
+      `import nodeAssert, { deepStrictEqual } from 'node:assert'`,
+      `import * as strictAssert from 'node:assert/strict'`,
+    )
+    out.push(
+      `const compared = { owns: ['${SOURCE}'] }`,
+      `test('owns in an assertion', () => {`,
+      `  ${assertion(`{ owns: ${list} }`)}`,
+      `})`,
+    )
+  }
   return `${out.join(`\n`)}\n`
 }
 
@@ -4474,8 +4535,8 @@ function fixtureFiles(plan, state = initialState(plan)) {
     // that took it for one would refuse the run.
     'tests/.oracle-gaps-1-1-a.test.ts': [
       `import { test } from 'vitest'`,
-      `function declareOracle(_parts: { owns: Array<string> }): void {}`,
-      `declareOracle({ owns: ['${SOURCE}#w_kill'] })`,
+      `function oracleProperty(_parts: { owns: Array<string> }): void {}`,
+      `oracleProperty({ owns: ['${SOURCE}#w_kill'] })`,
       `test('fixed seed 1', () => {`,
       `  throw new Error('a copy that a check which died left behind')`,
       `})`,
