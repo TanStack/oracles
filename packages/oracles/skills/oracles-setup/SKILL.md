@@ -304,9 +304,9 @@ the gap check there, and say in the report that it ran on the
 patched code. With the user's approval, follow `oracles-design` step 7's
 defect path for the real fix.
 
-Then load `oracles-design` and follow it from its first step. The law sheet
-comes first, and the user reviews it before you write code. Setup does not
-skip that step to finish sooner.
+Then load `oracles-design` and follow it from its first step. The oracle
+file's prose laws come first, and the user reviews them before you add code.
+Setup does not skip that step to finish sooner.
 
 Put the oracle's `owns` list on its `oracleProperty` call. An entry is a file
 (`src/index.ts`) or one function in it (`src/index.ts#parse`, or

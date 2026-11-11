@@ -29,7 +29,7 @@ coding agents, and walks through a first oracle and gap check.
 | Path                              | What it is                                                                                         |
 | --------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `skills/oracles-setup/`           | Setup, upgrade, and making the skills findable.                                                    |
-| `skills/oracles-design/`          | How to design, write, or change an oracle: law sheet first, model, histories, RED, GREEN, gaps.    |
+| `skills/oracles-design/`          | How to design, write, or change an oracle: prose laws first, model, histories, RED, GREEN, gaps.   |
 | `skills/oracles-evaluate-review/` | How to act on a review: a lossless ledger, RED on unchanged production, and closing the bug class. |
 | `skills/oracles-review/`          | How to review oracle work.                                                                         |
 | `docs/oracle-checklist.md`        | The complete requirements, by ID (ORC-001 to ORC-016).                                             |

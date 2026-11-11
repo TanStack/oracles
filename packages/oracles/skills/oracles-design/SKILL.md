@@ -1,6 +1,6 @@
 ---
 name: oracles-design
-description: Design, write, or change an oracle with @tanstack/oracles. Choose the boundary, write a law sheet first, choose a model, and build histories that reach the states the law needs. Show the evidence the change needs, and close every gap. Use for a new oracle, an oracle repair, or a production change in owned code. Also use for any change to a model, history grammar, driver, or check.
+description: Design, write, or change an oracle with @tanstack/oracles. Choose the boundary, write the oracle file's prose laws first, choose a model, and build histories that reach the states the law needs. Show the evidence the change needs, and close every gap. Use for a new oracle, an oracle repair, or a production change in owned code. Also use for any change to a model, history grammar, driver, or check.
 ---
 
 # Design an oracle
@@ -51,16 +51,37 @@ its promise.
   law's stated domain is strengthening. Changing the stated domain, a
   checkpoint, or `limits` is a law change.
 - **Changing a law** (its promise, domain, checkpoint, assumptions, or the
-  freedoms it allows) needs a law delta: the old and new block for each
+  freedoms it allows) needs a law delta. Edit the law block's prose in the
+  oracle file, and add review notes with the old and the new block for each
   changed law. Stop for the user's review.
 - **A new law, or missing or contradictory authority,** needs the full law
   sheet below. Stop for the user's review. An analogy to another documented
   rule is not authority: mark that law `open`.
 
-**Write the law sheet from this template.** Docs, tests, and bug reports give
-examples. A law is a statement over the whole domain. The template makes you
-write the step from one to the other. Copy it once for each law, and fill in
-every field. The template is the sheet. Do not replace it with a table.
+**Write the oracle file's prose first.** The law sheet is the new oracle
+file before it has any code. Create it at its final path, with two comments
+and nothing else:
+
+1. **The law block**, the file's opening comment. The oracle file is a
+   literate program (ORC-003), so write it as prose for a reader who has not
+   seen the review. Do not paste the template's fields or a list of law IDs.
+   In this order:
+   1. A title that asks the question the oracle answers, for example "Does a
+      copy keep every value, and share nothing with its source?"
+   2. How the code works at this boundary, and what goes wrong there, in
+      plain sentences.
+   3. What the documentation promises, in its own words where you can, with
+      the source of each promise. State each law as one sentence over its
+      domain ("For every ..."). These are the laws.
+   4. How the model will state those promises, and what it reads to predict
+      them.
+   5. What the driver will do, what it observes, and what it does not
+      observe and why. Then the limits, each with its reason.
+2. **Review notes**, a second comment headed "Review notes (delete when
+   approved)". Docs, tests, and bug reports give examples. A law is a
+   statement over the whole domain. The template below makes you write the
+   step from one to the other. Copy it once for each law, and fill in every
+   field. Then list the open questions.
 
 ```markdown
 ### L1 <short name>
@@ -116,8 +137,8 @@ How to fill in the fields:
   `observed`, and ask the user. An analogy to another documented rule is not
   authority either: mark that law `open`.
 
-**Required blocks: the laws people forget.** The sheet has a block for each
-of these, or one line that says why it does not apply:
+**Required blocks: the laws people forget.** The review notes have a block
+for each of these, or one line that says why it does not apply:
 
 - **No throw on valid input.** When the contract says a call returns a value,
   it promises not to throw for valid input. State that as a law, with the same
@@ -128,9 +149,8 @@ of these, or one line that says why it does not apply:
 
 The task already approved these laws? Do not ask again.
 
-After the blocks, list the **open questions**. Then add a summary table with
-one row per block: law, status, authority, and checkpoint. The table is only
-an index to the blocks.
+The law block and the review notes must agree: each law in the prose has its
+block, with the same sentence.
 
 When the promise is unclear, or two readings predict different behavior, use
 the [law discovery](../../docs/instruments/law-discovery.md) card.
@@ -139,8 +159,8 @@ the [law discovery](../../docs/instruments/law-discovery.md) card.
 when any of these is true.** Do not judge whether the law is hard. Check the
 list at the sheet, and again after each gap check:
 
-- the sheet has more than five rows for one boundary (adopted, observed, and
-  open rows all count)
+- the sheet has more than five laws for one boundary (adopted, observed, and
+  open ones all count)
 - a law has no new case that it predicts
 - the model has more than one branch per law
 - the work changes or simplifies an existing model
@@ -149,36 +169,30 @@ list at the sheet, and again after each gap check:
 Say in the evidence which trigger fired, or that none did.
 
 **Stop here** when the sheet or a law delta is needed. Do not stop with an
-empty field: each law has a filled block first. Do not write the oracle until
-the user has reviewed the sheet. With no user present, write the sheet and
-stop. A law sheet has no default.
+empty field: each law has a filled block first. Do not add code to the file
+until the user has reviewed it. With no user present, write the file and
+stop. A law sheet has no default. Until it has code, the file fails Vitest
+with "No test suite found", so keep it off a branch whose CI must pass, or
+say in the review request that it will fail.
 
-Once the user approves it, the sheet becomes the **law block**: the opening
-comment of the oracle file. The oracle file is a literate program (ORC-003),
-so write the block as prose for a reader who has not seen the sheet. Do not
-paste the template's fields or a list of law IDs. In this order:
+**Once the user approves it:**
 
-1. A title that asks the question the oracle answers, for example "Does a
-   copy keep every value, and share nothing with its source?"
-2. How the code works at this boundary, and what goes wrong there, in plain
-   sentences.
-3. What the documentation promises, in its own words where you can, with the
-   source of each promise. These are the laws.
-4. How the model states those promises, and what it reads to predict them.
-5. What the driver does, what it observes, and what it does not observe and
-   why. Then the limits, each with its reason.
+- Apply the review's changes to the law block first.
+- Delete the review notes. They stay in the review record.
+- Add the code under the law block. Each boundary condition becomes a
+  constructed history, and each law's sentence, authority, and limits go in
+  that property's `law` option.
+- Put prose beside the model, the histories, the driver, and the check that
+  says why each one predicts or tests the promised result.
 
-The prose beside the model, the histories, the driver, and the check says why
-each one predicts or tests the promised result. The sheet's examples, rivals,
-and witnesses stay in the review record, not the file. Each law's sentence,
-authority, and limits also go in that property's `law` option. Keep the block, the `law` option, and the model in step: a change to
-one updates the others in the same change (ORC-003).
+Keep the law block, the `law` option, and the model in step: a change to one
+updates the others in the same change (ORC-003).
 
 ## 2. Freeze what the oracle must preserve
 
 Write these down. They stay fixed while you build the oracle.
 
-- The laws and their checkpoints, from the sheet.
+- The laws and their checkpoints, from the approved law block.
 - The owned production code: the files or functions the oracle answers for.
 - The freedoms the contract leaves open, such as the order of independent
   events, scheduling, or representation. The oracle must accept every
