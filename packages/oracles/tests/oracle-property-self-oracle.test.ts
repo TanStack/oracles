@@ -92,6 +92,10 @@
  *   property/process without dropping tests, and collect-only stays silent.
  *   Every real child must finish with a complete report and no unmodeled
  *   unhandled errors, including replay and registration-only children.
+ *   Each authored calibration selects independently, including bound/unbound
+ *   mixtures. Extra own or inherited metadata on a fixed declaration cannot
+ *   change its selected source kind. A mutant may record a wrong value, then
+ *   spin and optionally throw: that earlier violation still decides.
  * - `determinism`: the determinism test runs every fixed and constructed history
  *   and three generated ones, and fails for a driver whose trace changes,
  *   compared by their data encoding: `-0` is not `0`, and key order and
@@ -248,6 +252,8 @@ const calibrationKinds = [
   `no-op`,
   `driver`,
   `driver-last`,
+  `driver-spin`,
+  `driver-spin-throws`,
   `clock`,
   `corrupt-throws`,
   `judge-throws`,
@@ -266,6 +272,8 @@ const calibrationDifferences = [
 type CalibrationDraft = {
   kind: (typeof calibrationKinds)[number]
   difference: CalibrationDifference | `none`
+  /** Absent inherits the property default; null explicitly retains search. */
+  history?: SyntheticSpec[`calibrationHistory`] | null
 }
 type Draft = {
   source:
@@ -274,7 +282,12 @@ type Draft = {
   /** `exact` declares the constructed histories' states; the others break registration. */
   statesMode: `exact` | `extra` | `missing`
   constructed: Array<{ prefix: SyntheticHistory; enters: Array<string> }>
-  fixed: Array<{ history: SyntheticHistory; enters: Array<string> | null }>
+  fixed: Array<{
+    history: SyntheticHistory
+    enters: Array<string> | null
+    /** Unrelated declaration metadata, never a history construction. */
+    buildMetadata?: `own` | `inherited`
+  }>
   /**
    * How a generated source's arbitrary maps its histories: not at all (only
    * a form maps, with an unmapper), through a `.map` with an unmapper, or
@@ -382,6 +395,28 @@ const probeSelector = fc.oneof(
     constructed: fc.constantFrom(`constructed-0`, `constructed-1`, `missing`),
   }),
 )
+// Selection belongs to each calibration. The property default remains useful
+// for migrations; an explicit null chooses search beside selected neighbors.
+const calibrationSelector = fc.oneof(
+  fc.record({
+    fixed: fc.constantFrom(`fixed-0`, `fixed-1`, `unknown`, `missing`),
+  }),
+  fc.record({
+    constructed: fc.constantFrom(
+      `constructed-0`,
+      `constructed-1`,
+      `unknown`,
+      `missing`,
+    ),
+  }),
+  fc.record({
+    enumerated: fc.oneof(
+      fc.integer({ min: -1, max: 4 }),
+      fc.constant(1.5),
+      fc.constantFrom(`items 0 | 1`, `items 0 | 1 ${shellText}`, `[0,1]`),
+    ),
+  }),
+)
 const draft: fc.Arbitrary<Draft> = fc.record({
   probeEntered: probeSelector,
   probeNotEntered: probeSelector,
@@ -450,10 +485,17 @@ const draft: fc.Arbitrary<Draft> = fc.record({
     { maxLength: 2 },
   ),
   fixed: fc.array(
-    fc.record({
-      history: insideOrOutside(4),
-      enters: fc.option(fc.subarray(allStates), { freq: 2 }),
-    }),
+    fc.record(
+      {
+        history: insideOrOutside(4),
+        enters: fc.option(fc.subarray(allStates), { freq: 2 }),
+        buildMetadata: fc.option(
+          fc.constantFrom(`own` as const, `inherited` as const),
+          { nil: undefined, freq: 8 },
+        ),
+      },
+      { requiredKeys: [`history`, `enters`] },
+    ),
     { maxLength: 2 },
   ),
   // Rare: a `.map` with or without an unmapper, which decides whether the
@@ -517,21 +559,31 @@ const draft: fc.Arbitrary<Draft> = fc.record({
   calibrations: fc.array(
     fc.oneof(
       fc.constantFrom(...calibrationKinds),
-      fc.record({
-        kind: fc.constantFrom(...calibrationKinds),
-        difference: fc.oneof(
-          // Rare: an empty difference fails the whole property's load.
-          { weight: 9, arbitrary: fc.constant(`none` as const) },
-          { weight: 9, arbitrary: fc.constantFrom(...calibrationDifferences) },
-          {
-            weight: 1,
-            arbitrary: fc.constantFrom(
-              `empty text` as const,
-              `empty pattern` as const,
-            ),
-          },
-        ),
-      }),
+      fc.record(
+        {
+          kind: fc.constantFrom(...calibrationKinds),
+          history: fc.option(fc.option(calibrationSelector, { nil: null }), {
+            nil: undefined,
+            freq: 4,
+          }),
+          difference: fc.oneof(
+            // Rare: an empty difference fails the whole property's load.
+            { weight: 9, arbitrary: fc.constant(`none` as const) },
+            {
+              weight: 9,
+              arbitrary: fc.constantFrom(...calibrationDifferences),
+            },
+            {
+              weight: 1,
+              arbitrary: fc.constantFrom(
+                `empty text` as const,
+                `empty pattern` as const,
+              ),
+            },
+          ),
+        },
+        { requiredKeys: [`kind`, `difference`] },
+      ),
     ),
     { maxLength: 3 },
   ),
@@ -729,9 +781,16 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
     seedless,
     specs: drafts.map((d, index) => {
       const generated = d.source.kind === `generated`
+      const hasBinding = d.calibrations.some((calibration) =>
+        typeof calibration === `string`
+          ? d.calibrationHistory !== null
+          : calibration.history === undefined
+            ? d.calibrationHistory !== null
+            : calibration.history !== null,
+      )
       const constructed = generated
         ? d.constructed.map((construction, at) => ({
-            name: `constructed-${d.duplicateHistoryNames && d.calibrationHistory ? 0 : at}`,
+            name: `constructed-${d.duplicateHistoryNames && hasBinding ? 0 : at}`,
             ...construction,
           }))
         : []
@@ -752,9 +811,12 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
         constructed,
         fixed: generated
           ? d.fixed.map((fixedHistory, at) => ({
-              name: `fixed-${d.duplicateHistoryNames && d.calibrationHistory ? 0 : at}`,
+              name: `fixed-${d.duplicateHistoryNames && hasBinding ? 0 : at}`,
               history: fixedHistory.history,
               ...(fixedHistory.enters ? { enters: fixedHistory.enters } : {}),
+              ...(fixedHistory.buildMetadata
+                ? { buildMetadata: fixedHistory.buildMetadata }
+                : {}),
             }))
           : [],
         ...(generated && d.arbitraryMap !== `none`
@@ -879,9 +941,9 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
               (item) => item !== undefined,
             )
         ).map((entry, at) => {
-          const { kind, difference } =
+          const { kind, difference, history } =
             typeof entry === `string`
-              ? { kind: entry, difference: `none` as const }
+              ? { kind: entry, difference: `none` as const, history: undefined }
               : entry
           return {
             name:
@@ -892,6 +954,7 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
                   : `cal-${at}`,
             kind,
             ...(difference === `none` ? {} : { difference }),
+            ...(history === undefined ? {} : { history }),
           }
         }),
       }
@@ -937,6 +1000,8 @@ type Outcome = {
   law?: `three` | `four` | `reach agreement` | `bounded clock`
   /** A violation whose driver threw afterwards carries that error. */
   cause?: `driver`
+  /** The exact finite driver error a violation carries. */
+  causeMessage?: string
   /** The checkpoint a framework-made violation names. */
   checkpoint?: string
   /** For a predicted entry that did not happen: whether the probe was called. */
@@ -1002,7 +1067,21 @@ function verdictOf(history: SyntheticHistory, spec: SyntheticSpec): Outcome {
     (history[stopAt] === 6 ||
       spec.throwOnSpin === true ||
       history.slice(stopAt + 1).includes(6))
-  const carried = driverThrows ? { cause: `driver` as const } : {}
+  const driverThrowAt = history.findIndex(
+    (item) => item === 6 || (clock && spec.throwOnSpin === true && item === 7),
+  )
+  const carried = driverThrows
+    ? {
+        cause: `driver` as const,
+        causeMessage:
+          history[driverThrowAt] === 7
+            ? `synthetic driver failed after the spin at item ${driverThrowAt}`
+            : `synthetic driver failed at item ${driverThrowAt}`,
+      }
+    : {}
+  // A model-not-total error wraps the judgment error, while retaining the
+  // driver error separately. Its inner cause does not use violation shape.
+  const modelCarried = driverThrows ? { cause: `driver` as const } : {}
   const judgedItems = stopAt >= 0 ? history.slice(0, stopAt + 1) : history
   const modelThrows = spec.strictModel
     ? stopAt >= 0 && stopAt < history.length - 1
@@ -1021,7 +1100,7 @@ function verdictOf(history: SyntheticHistory, spec: SyntheticSpec): Outcome {
       stopAt >= 0 &&
       (stopAt < history.length - 1 || trailing || driverThrows)
     )
-      return { kind: `model-not-total`, ...carried }
+      return { kind: `model-not-total`, ...modelCarried }
     return { kind: `setup` }
   }
   // A check that compares data past the encoding limit fails as that limit,
@@ -1033,6 +1112,7 @@ function verdictOf(history: SyntheticHistory, spec: SyntheticSpec): Outcome {
       return {
         kind: `violation`,
         law: item === 3 ? `three` : `four`,
+        checkpoint: `item ${at}`,
         ...(history.slice(at + 1).some(stops) ? carried : {}),
       }
     if (item === 6) return { kind: `setup` }
@@ -1247,9 +1327,50 @@ const emptyDifference = (difference: CalibrationDifference | undefined) =>
 const driverCalibration = (
   kind: SyntheticSpec[`calibrations`][number][`kind`],
 ) =>
-  [`driver`, `driver-last`, `throws`, `clock`, `judge-driver-throws`].includes(
-    kind,
+  [
+    `driver`,
+    `driver-last`,
+    `driver-spin`,
+    `driver-spin-throws`,
+    `throws`,
+    `clock`,
+    `judge-driver-throws`,
+  ].includes(kind)
+// Binding is authored input, not an observation of the framework's selection.
+// Explicit unbound entries remain distinct from inheritance of the default.
+const bindingOf = (
+  spec: SyntheticSpec,
+  calibration: SyntheticSpec[`calibrations`][number],
+) =>
+  calibration.history === undefined
+    ? spec.calibrationHistory
+    : (calibration.history ?? undefined)
+const bindingsOf = (spec: SyntheticSpec) =>
+  spec.calibrations
+    .map((calibration) => bindingOf(spec, calibration))
+    .filter((binding) => binding !== undefined)
+const unboundCalibrationNames = (spec: SyntheticSpec) => [
+  ...spec.calibrations
+    .filter((calibration) => !bindingOf(spec, calibration))
+    .map(({ name }) => name),
+  ...(!spec.probeBinding || spec.probeBinding === `empty`
+    ? forcedCalibrationNames(spec).map((name) =>
+        name.slice(`calibration: `.length),
+      )
+    : []),
+]
+const boundTest = (spec: SyntheticSpec, name: string) => {
+  const calibration = spec.calibrations.find(
+    (entry) => name === `calibration: ${entry.name}`,
   )
+  return calibration
+    ? bindingOf(spec, calibration) !== undefined
+    : Boolean(
+        spec.probeBinding &&
+        spec.probeBinding !== `empty` &&
+        forcedCalibrationNames(spec).includes(name),
+      )
+}
 type BuildEntry = {
   id: string
   test: string
@@ -1269,9 +1390,10 @@ const authoredEnumerationLabel = (
     return spec.form === undefined ? JSON.stringify(history) : undefined
   if (
     spec.duplicateHistoryNames &&
-    spec.calibrationHistory &&
-    `enumerated` in spec.calibrationHistory &&
-    typeof spec.calibrationHistory.enumerated === `string` &&
+    bindingsOf(spec).some(
+      (binding) =>
+        `enumerated` in binding && typeof binding.enumerated === `string`,
+    ) &&
     spec.source.kind === `enumerated`
   )
     return `items ${spec.source.histories[0]!.join(` | `)}`
@@ -1389,15 +1511,13 @@ const enumeratedReach = (
   judgedHistory: (history: SyntheticHistory) => boolean,
 ): { outcome: Outcome; counts: Record<string, number> } => {
   const counts = Object.fromEntries(
-    [...declaredOf(spec)!]
-      .sort()
-      .map((state) => [
-        state,
-        histories.filter(
-          (history) =>
-            judgedHistory(history) && reachedOf(spec, history).includes(state),
-        ).length,
-      ]),
+    [...declaredOf(spec)!].map((state) => [
+      state,
+      histories.filter(
+        (history) =>
+          judgedHistory(history) && reachedOf(spec, history).includes(state),
+      ).length,
+    ]),
   )
   const missed = spec.enumeratedStates!.states.some(
     (state) => counts[state] === 0,
@@ -1628,10 +1748,10 @@ function predictSpec(
   // The synthetic namespace is deliberately small: names identify the fixed
   // or constructed index; enumerated names state their items. This model judges
   // selection independently of the framework's resolver.
-  const binding = spec.calibrationHistory
-  const selected =
-    binding &&
-    (`fixed` in binding
+  const selectedDeclaration = (
+    binding: NonNullable<SyntheticSpec[`calibrationHistory`]>,
+  ) =>
+    `fixed` in binding
       ? spec.fixed.find(({ name }) => name === binding.fixed)
       : `constructed` in binding
         ? spec.constructed.find(({ name }) => name === binding.constructed)
@@ -1642,10 +1762,11 @@ function predictSpec(
                 : authoredEnumerationLabel(spec, history) ===
                   binding.enumerated,
             )
-          : undefined)
-  const duplicates =
-    binding &&
-    (`fixed` in binding
+          : undefined
+  const duplicateSelection = (
+    binding: NonNullable<SyntheticSpec[`calibrationHistory`]>,
+  ) =>
+    `fixed` in binding
       ? spec.fixed.filter(({ name }) => name === binding.fixed).length > 1
       : `constructed` in binding
         ? spec.constructed.filter(({ name }) => name === binding.constructed)
@@ -1656,15 +1777,16 @@ function predictSpec(
               (history) =>
                 authoredEnumerationLabel(spec, history) === binding.enumerated,
             ).length > 1
-          : false)
+          : false
   if (
-    binding &&
-    spec.calibrations.length &&
-    (!selected ||
-      duplicates ||
-      (spec.source.kind === `enumerated`
-        ? !(`enumerated` in binding)
-        : `enumerated` in binding))
+    bindingsOf(spec).some(
+      (binding) =>
+        !selectedDeclaration(binding) ||
+        duplicateSelection(binding) ||
+        (spec.source.kind === `enumerated`
+          ? !(`enumerated` in binding)
+          : `enumerated` in binding),
+    )
   )
     return { loads: false, loadError: `calibration history selector` }
   if (
@@ -1705,9 +1827,7 @@ function predictSpec(
     for (const name of all)
       tests.set(
         name,
-        binding && name.startsWith(`calibration:`)
-          ? { kind: `calibration-clean` }
-          : data,
+        boundTest(spec, name) ? { kind: `calibration-clean` } : data,
       )
     const { outcome, counts } = enumeratedReach(
       spec,
@@ -1726,9 +1846,7 @@ function predictSpec(
     for (const name of all)
       tests.set(
         name,
-        binding && name.startsWith(`calibration:`)
-          ? { kind: `calibration-clean` }
-          : data,
+        boundTest(spec, name) ? { kind: `calibration-clean` } : data,
       )
     return {
       loads: true,
@@ -1750,10 +1868,11 @@ function predictSpec(
   }
   // The source changes how the premise is chosen, never how a mutant verdict ranks.
   const calibrate = (
-    name: string,
-    kind: SyntheticSpec[`calibrations`][number][`kind`],
-    difference?: CalibrationDifference,
+    calibration: SyntheticSpec[`calibrations`][number],
   ): Outcome => {
+    const { name, kind, difference } = calibration
+    const binding = bindingOf(spec, calibration)
+    const selected = binding && selectedDeclaration(binding)
     const chosen = binding
       ? authoredInput(spec, `calibration: ${name}`, binding, builds)
       : undefined
@@ -1828,7 +1947,12 @@ function predictSpec(
   // 2026-11-03). A campaign runs its constructed histories first, in order.
   const campaign = (test: string): Outcome => {
     for (const [at, history] of ran(test).entries()) {
-      const { cause: _shrinkable, ...verdict } = judged(spec, history)
+      const {
+        cause: _shrinkableCause,
+        causeMessage: _shrinkableCauseMessage,
+        checkpoint: _shrinkableCheckpoint,
+        ...verdict
+      } = judged(spec, history)
       const construction = spec.constructed[at]
       // Without a budget, a constructed history's failure shrinks to the
       // end. No smaller history is a constructed one, so a missed state
@@ -1882,8 +2006,8 @@ function predictSpec(
       )
     }
   }
-  for (const { name, kind, difference } of spec.calibrations)
-    tests.set(`calibration: ${name}`, calibrate(name, kind, difference))
+  for (const calibration of spec.calibrations)
+    tests.set(`calibration: ${calibration.name}`, calibrate(calibration))
   // A forced-probe calibration needs a candidate whose clean trace passes and
   // whose prediction differs from the forced probe; the check must then report
   // reach agreement.
@@ -2032,7 +2156,30 @@ function owedRoute(name: string, replay = false): string {
 // The self-oracle's own reach: states of the framework that its laws are
 // about. Each fixed history names the state it witnesses, so every one is reached on
 // every run; campaigns count them.
+const round3FrameworkStates = [
+  `bound-fixed-own-metadata-authored`,
+  `bound-fixed-own-metadata-forced-entered`,
+  `bound-fixed-own-metadata-forced-not-entered`,
+  `bound-fixed-inherited-metadata-authored`,
+  `bound-fixed-inherited-metadata-forced-entered`,
+  `bound-fixed-inherited-metadata-forced-not-entered`,
+  `bound-authored-distinct-selectors`,
+  `bound-authored-search-neighbor`,
+  `bound-mutant-violation-before-spin`,
+  `legacy-mutant-violation-before-spin`,
+  `bound-enumerated-label-rejected`,
+  `enumerated-reach-key-order-neighbor`,
+  `bound-registration-warning-silence`,
+  `receiving-run`,
+  `receiving-seedless`,
+  `receiving-replay`,
+  `receiving-rerun`,
+  `receiving-reach-alone`,
+  `receiving-binding-reordered`,
+  `receiving-registration-warnings`,
+] as const
 const frameworkStates = [
+  ...round3FrameworkStates,
   `auxiliary-late-error`,
   `bound-enumerated-label-selector`,
   `bound-control-fixed-entered`,
@@ -2138,6 +2285,20 @@ function frameworkReach(
   expected: ReturnType<typeof suiteModel>,
 ): Iterable<string> {
   const reached = new Set<string>()
+  // Count the real host receiving cut, not a plan flag or a derived summary.
+  // Registration-only children owe a loaded test inventory; every other cut
+  // additionally owes a test that actually ran in that child.
+  for (const { checkpoint, value } of trace) {
+    if (checkpoint !== `child`) continue
+    const child = value as ChildRun
+    if (
+      child.loads.some(({ errors }) => errors.length === 0) &&
+      child.tests.length > 0 &&
+      (child.context.kind === `registration-warnings` ||
+        child.tests.some(({ state }) => state !== `skipped`))
+    )
+      reached.add(`receiving-${child.context.kind}`)
+  }
   if (
     trace
       .filter(({ checkpoint }) => checkpoint === `child`)
@@ -2166,15 +2327,45 @@ function frameworkReach(
     SuiteRun | undefined
   for (const spec of plan.specs) {
     const owed = expected.get(spec.id)!
+    const reachOnly = trace.find(
+      ({ checkpoint, value }) =>
+        checkpoint === `reach-alone` && (value as ReachAlone).id === spec.id,
+    )?.value as ReachAlone | undefined
     if (
-      run?.files[spec.id] &&
-      spec.source.kind === `enumerated` &&
-      spec.calibrationHistory &&
-      `enumerated` in spec.calibrationHistory &&
-      typeof spec.calibrationHistory.enumerated === `string` &&
-      [`shell`, `default`].includes(spec.labelStyle ?? ``)
+      spec.enumeratedStates &&
+      declaredOf(spec)!.join(`,`) !== [...declaredOf(spec)!].sort().join(`,`) &&
+      reachOnly?.state === `passed`
     )
-      reached.add(`bound-enumerated-label-selector`)
+      reached.add(`enumerated-reach-key-order-neighbor`)
+    const file = run?.files[spec.id]
+    const ranCalibration = (name: string) =>
+      file?.loaded &&
+      file.tests.some(
+        (test) => test.name === name && test.state !== `skipped`,
+      ) &&
+      run?.log.some(
+        (entry) =>
+          entry.id === spec.id && entry.test === `${spec.id} > ${name}`,
+      )
+    if (
+      file &&
+      spec.source.kind === `enumerated` &&
+      bindingsOf(spec).some(
+        (binding) =>
+          `enumerated` in binding && typeof binding.enumerated === `string`,
+      ) &&
+      [`shell`, `default`].includes(spec.labelStyle ?? ``)
+    ) {
+      if (
+        owed.loads &&
+        spec.calibrations.some(({ name }) =>
+          ranCalibration(`calibration: ${name}`),
+        )
+      )
+        reached.add(`bound-enumerated-label-selector`)
+      else if (!owed.loads && file.loaded === false)
+        reached.add(`bound-enumerated-label-rejected`)
+    }
     if (!owed.loads) {
       if (
         run?.files[spec.id]?.loaded === false &&
@@ -2193,7 +2384,7 @@ function frameworkReach(
       )
         reached.add(`bound-null-selector`)
       reached.add(`registration-error`)
-      if (spec.calibrationHistory)
+      if (bindingsOf(spec).length)
         reached.add(`bound-calibration-registration-error`)
       if (owed.shapeError) reached.add(`enumerated-shape-error`)
       if (owed.reservedLabel) reached.add(`reserved-label-error`)
@@ -2213,6 +2404,58 @@ function frameworkReach(
       }
       continue
     }
+    for (const declaration of spec.fixed) {
+      if (!declaration.buildMetadata) continue
+      const prefix = `bound-fixed-${declaration.buildMetadata}-metadata`
+      if (
+        spec.calibrations.some((calibration) => {
+          const binding = bindingOf(spec, calibration)
+          return (
+            binding &&
+            `fixed` in binding &&
+            binding.fixed === declaration.name &&
+            ranCalibration(`calibration: ${calibration.name}`)
+          )
+        })
+      )
+        reached.add(`${prefix}-authored`)
+      if (spec.probeBinding === `explicit`)
+        for (const [at, name] of forcedCalibrationNames(spec).entries()) {
+          const binding = selectedControlBinding(spec, at === 0)
+          if (
+            `fixed` in binding &&
+            binding.fixed === declaration.name &&
+            ranCalibration(name)
+          )
+            reached.add(
+              `${prefix}-${at === 0 ? `forced-entered` : `forced-not-entered`}`,
+            )
+        }
+    }
+    const authored = spec.calibrations.filter(({ name }) =>
+      ranCalibration(`calibration: ${name}`),
+    )
+    if (
+      new Set(
+        authored
+          .map((calibration) => bindingOf(spec, calibration))
+          .filter(Boolean)
+          .map((binding) => JSON.stringify(binding)),
+      ).size > 1
+    )
+      reached.add(`bound-authored-distinct-selectors`)
+    if (
+      authored.some((calibration) => bindingOf(spec, calibration)) &&
+      authored.some((calibration) => !bindingOf(spec, calibration))
+    )
+      reached.add(`bound-authored-search-neighbor`)
+    for (const calibration of authored)
+      if ([`driver-spin`, `driver-spin-throws`].includes(calibration.kind))
+        reached.add(
+          bindingOf(spec, calibration)
+            ? `bound-mutant-violation-before-spin`
+            : `legacy-mutant-violation-before-spin`,
+        )
     if (
       run?.files[spec.id]?.loaded &&
       spec.probeBinding === `explicit` &&
@@ -2228,18 +2471,20 @@ function frameworkReach(
       reached.add(`bound-control-constructed-absent`)
     if (
       run?.files[spec.id]?.loaded &&
-      spec.calibrationHistory &&
-      `fixed` in spec.calibrationHistory &&
       spec.identityHistories &&
-      spec.fixed.filter(
-        ({ history }) =>
-          JSON.stringify(history) ===
-          JSON.stringify(authoredInput(spec, ``, spec.calibrationHistory!, [])),
-      ).length > 1
+      bindingsOf(spec).some(
+        (binding) =>
+          `fixed` in binding &&
+          spec.fixed.filter(
+            ({ history }) =>
+              JSON.stringify(history) ===
+              JSON.stringify(authoredInput(spec, ``, binding, [])),
+          ).length > 1,
+      )
     )
       reached.add(`bound-equal-fixed-origin`)
     if (
-      spec.calibrationHistory &&
+      bindingsOf(spec).length > 0 &&
       spec.calibrations.some(
         ({ kind }) => kind === `throws` || kind === `clock`,
       )
@@ -2253,10 +2498,10 @@ function frameworkReach(
       reached.add(`bound-independent-premise`)
     if (spec.calibrationNames !== `indexed` && spec.calibrations.length > 1)
       reached.add(`bound-name-seed`)
-    if (spec.calibrationHistory && spec.extraReach)
+    if (bindingsOf(spec).length && spec.extraReach)
       reached.add(`bound-extra-state`)
     if (
-      spec.calibrationHistory &&
+      bindingsOf(spec).length > 0 &&
       spec.calibrations.some(({ kind }) =>
         [`corrupt-throws`, `judge-throws`, `judge-driver-throws`].includes(
           kind,
@@ -2264,20 +2509,35 @@ function frameworkReach(
       )
     )
       reached.add(`bound-error-context`)
-    if (spec.warningProbe) reached.add(`registration-warning-policy`)
+    if (spec.warningProbe) {
+      reached.add(`registration-warning-policy`)
+      if (
+        unboundCalibrationNames(spec).length === 0 &&
+        trace.some(
+          ({ checkpoint, value }) =>
+            checkpoint === `registration-warnings` &&
+            (value as { id: string; loaded: Record<string, boolean> }).id ===
+              spec.id &&
+            Object.values(
+              (value as { loaded: Record<string, boolean> }).loaded,
+            ).every(Boolean),
+        )
+      )
+        reached.add(`bound-registration-warning-silence`)
+    }
     if (
-      spec.calibrationHistory &&
+      bindingsOf(spec).length > 0 &&
       spec.calibrations.some(({ difference }) => difference !== undefined)
     )
       reached.add(`bound-difference`)
-    if (spec.identityHistories && spec.calibrationHistory) {
-      if (`fixed` in spec.calibrationHistory)
+    if (spec.identityHistories) {
+      if (bindingsOf(spec).some((binding) => `fixed` in binding))
         reached.add(`bound-fixed-identity`)
-      if (`enumerated` in spec.calibrationHistory)
+      if (bindingsOf(spec).some((binding) => `enumerated` in binding))
         reached.add(`bound-enumerated-identity`)
     }
     if (
-      spec.calibrationHistory &&
+      bindingsOf(spec).length > 0 &&
       spec.probeBinding &&
       spec.probeBinding !== `empty`
     )
@@ -2296,15 +2556,18 @@ function frameworkReach(
       reached.add(`bound-control-full-reach`)
     const named = spec.fixed.length + spec.constructed.length > 0
     if (
-      spec.calibrationHistory ||
+      bindingsOf(spec).length > 0 ||
       (spec.probeBinding && spec.probeBinding !== `empty`)
     )
       reached.add(`bound-calibration`)
     if (
       spec.isolatedPlans &&
-      spec.calibrationHistory &&
-      `constructed` in spec.calibrationHistory &&
-      spec.calibrations.some(({ kind }) => kind === `driver`)
+      spec.calibrations.some((calibration) => {
+        const binding = bindingOf(spec, calibration)
+        return (
+          binding && `constructed` in binding && calibration.kind === `driver`
+        )
+      })
     )
       reached.add(`bound-constructed-driver`)
     if (spec.arbitraryMap?.unmapper === true && named)
@@ -2588,6 +2851,8 @@ type Failure = {
   diagnosis?: `never-reached` | `false-condition`
   cause?: `driver`
   counterexample?: string
+  /** The concrete reported candidate, when its finite data form shows its items. */
+  counterexampleHistory?: SyntheticHistory
   seed?: number
   path?: string
   rerun?: string
@@ -2622,6 +2887,35 @@ type SuiteRun = {
   warnings: Array<string>
   /** The run's unhandled errors, by message. */
   unhandled: Array<string>
+}
+// Every real child has a named receiving cut. The context is supplied by the
+// driver, independently of the test states Vitest reports, so absent tests or
+// an unexpected first error cannot authorize their own outcome.
+type ChildContext =
+  | { kind: `run` | `seedless` }
+  | { kind: `binding-reordered`; id: string }
+  | { kind: `registration-warnings`; id: string; phases: Array<string> }
+  | { kind: `replay`; id: string; target: string }
+  | { kind: `rerun`; id: string; target: string }
+  | { kind: `reach-alone`; id: string }
+type ChildRun = {
+  context: ChildContext
+  exit: number | null
+  signal: string | null
+  files: Array<string>
+  expectedFiles: Array<string>
+  loads: Array<{ id: string; errors: Array<string> }>
+  tests: Array<{
+    id: string
+    name: string
+    state: string
+    errors: Array<Failure>
+  }>
+  log: Array<LogEntry>
+  builds: Array<BuildEntry>
+  secondaryErrors: Array<{ test: string; message: string }>
+  unhandled: Array<string>
+  failed: boolean
 }
 type ProbeRun = {
   id: string
@@ -2908,6 +3202,48 @@ const statesIn = (report: Report, plan: Plan, files: Array<string>) =>
     ),
   )
 
+const readBuilds = (log: string): Array<BuildEntry> =>
+  existsSync(`${log}.builds`)
+    ? readFileSync(`${log}.builds`, `utf8`)
+        .trim()
+        .split(`\n`)
+        .filter(Boolean)
+        .map((line) => {
+          const entry = JSON.parse(line) as BuildEntry
+          return { ...entry, test: unnested(entry.test) }
+        })
+        // Independent files may finish in either order. Keep every build and
+        // each property's local order, as the invocation log does.
+        .sort((a, b) => a.id.localeCompare(b.id))
+    : []
+
+// Only semantic diagnostic facts enter the outer observation. Host stacks,
+// temporary paths, elapsed times and a campaign wrapper's random seed are not
+// promised failure differences. Error multiplicity remains observable.
+const diagnosticFacts = ({
+  kind,
+  law,
+  checkpoint,
+  diagnosis,
+  cause,
+  causeMessage,
+  counterexample,
+  dataPath,
+  dataKind,
+}: Failure): Failure => ({
+  kind,
+  ...(law === undefined ? {} : { law }),
+  ...(checkpoint === undefined ? {} : { checkpoint }),
+  ...(diagnosis === undefined ? {} : { diagnosis }),
+  ...(cause === undefined ? {} : { cause }),
+  ...(causeMessage === undefined ? {} : { causeMessage }),
+  ...(counterexample !== undefined && counterexampleItems(counterexample)
+    ? { counterexampleHistory: counterexampleItems(counterexample)! }
+    : {}),
+  ...(dataPath === undefined ? {} : { dataPath }),
+  ...(dataKind === undefined ? {} : { dataKind }),
+})
+
 function driveSuite(
   plan: Plan,
   observe: (checkpoint: string, value: unknown) => void,
@@ -2918,7 +3254,10 @@ function driveSuite(
   )
   mkdirSync(directory, { recursive: true })
   try {
-    const receive: typeof runVitest = (...args) => {
+    const receive = (
+      context: ChildContext,
+      ...args: Parameters<typeof runVitest>
+    ): Report => {
       const childLog =
         args[2].SELF_ORACLE_LOG ?? join(directory, `child-${runCount}.jsonl`)
       const report = runVitest(
@@ -2929,7 +3268,20 @@ function driveSuite(
         args[4],
       )
       observe(`child`, {
-        log: readLog(childLog).map(({ id, history }) => ({ id, history })),
+        context,
+        log: readLog(childLog),
+        builds: readBuilds(childLog),
+        tests: report.files
+          .flatMap(({ file, tests }) => {
+            const id = plan.specs[files.indexOf(file)]?.id ?? `unknown`
+            return tests.map(({ name, state, errors }) => ({
+              id,
+              name: short(id, name),
+              state,
+              errors: errors.map((error) => diagnosticFacts(classify(error))),
+            }))
+          })
+          .sort((a, b) => a.id.localeCompare(b.id)),
         loads: report.files.map(({ file, errors }) => ({
           id: plan.specs[files.indexOf(file)]?.id ?? `unknown`,
           errors: errors.map(({ message }) => message ?? ``),
@@ -2955,7 +3307,7 @@ function driveSuite(
             file.errors.length > 0 ||
             file.tests.some(({ state }) => state === `failed`),
         ),
-      })
+      } satisfies ChildRun)
       return report
     }
     const log = join(directory, `log.jsonl`)
@@ -2967,21 +3319,14 @@ function driveSuite(
       )
       return file
     })
-    const report = receive(directory, files, { SELF_ORACLE_LOG: log })
+    const report = receive({ kind: `run` }, directory, files, {
+      SELF_ORACLE_LOG: log,
+    })
     const run: SuiteRun = {
       files: {},
       log: readLog(log),
       resolutions: readResolutions(`${log}.resolutions`),
-      builds: existsSync(`${log}.builds`)
-        ? readFileSync(`${log}.builds`, `utf8`)
-            .trim()
-            .split(`\n`)
-            .filter(Boolean)
-            .map((line) => {
-              const entry = JSON.parse(line) as BuildEntry
-              return { ...entry, test: unnested(entry.test) }
-            })
-        : [],
+      builds: readBuilds(log),
       // Independent child files finish in either order. Preserve every line
       // and its multiplicity, without treating their interleaving as a law.
       // Per-property driver observations retain their original order above.
@@ -3040,8 +3385,10 @@ function driveSuite(
     // independent of the framework's particular seed hash.
     for (const [index, spec] of plan.specs.entries()) {
       if (
-        !spec.calibrationHistory ||
-        !(`constructed` in spec.calibrationHistory) ||
+        !spec.calibrations.some((calibration) => {
+          const binding = bindingOf(spec, calibration)
+          return binding && `constructed` in binding
+        }) ||
         !run.files[spec.id]!.loaded
       )
         continue
@@ -3061,6 +3408,7 @@ function driveSuite(
           `import { syntheticProperty } from ${JSON.stringify(join(here, `oracle-property-self-oracle-fixture.ts`))}\nsyntheticProperty(${JSON.stringify(reordered)})\n`,
         )
         receive(
+          { kind: `binding-reordered`, id: spec.id },
           directory,
           [file],
           { SELF_ORACLE_LOG: reorderedLog },
@@ -3090,6 +3438,11 @@ function driveSuite(
           `import { describe } from 'vitest'\nimport { syntheticProperty } from ${JSON.stringify(join(here, `oracle-property-self-oracle-fixture.ts`))}\ndescribe('first',()=>{${call}})\ndescribe('second',()=>{${call}})\n`,
         )
         const repeated = receive(
+          {
+            kind: `registration-warnings`,
+            id: spec.id,
+            phases: [`first`, `second`],
+          },
           directory,
           [file],
           {},
@@ -3101,6 +3454,11 @@ function driveSuite(
           `import { describe } from 'vitest'\nimport { syntheticProperty } from ${JSON.stringify(join(here, `oracle-property-self-oracle-fixture.ts`))}\ndescribe('collect',()=>{process.env.ORACLE_MANIFEST=${JSON.stringify(manifest)};try{${call}}finally{delete process.env.ORACLE_MANIFEST}})\ndescribe('ordinary',()=>{${call}})\n`,
         )
         const collectThenRun = receive(
+          {
+            kind: `registration-warnings`,
+            id: spec.id,
+            phases: [`collect`, `ordinary`],
+          },
           directory,
           [file],
           {},
@@ -3115,6 +3473,7 @@ function driveSuite(
           `import { syntheticProperty } from ${JSON.stringify(join(here, `oracle-property-self-oracle-fixture.ts`))}\n${call}\n`,
         )
         const collected = receive(
+          { kind: `registration-warnings`, id: spec.id, phases: [] },
           directory,
           [file],
           { ORACLE_MANIFEST: collectedManifest },
@@ -3165,6 +3524,7 @@ function driveSuite(
     if (plan.seedless) {
       const seedlessLog = join(directory, `seedless-${runCount}.jsonl`)
       receive(
+        { kind: `seedless` },
         directory,
         files,
         { SELF_ORACLE_LOG: seedlessLog, SELF_ORACLE_RANDOM_DRAW: `0.5` },
@@ -3195,12 +3555,17 @@ function driveSuite(
         if (!isCampaign(campaign.name) || campaign.failure?.path === undefined)
           continue
         const replayLog = join(directory, `replay-${runCount}.jsonl`)
-        const replay = receive(directory, files, {
-          ORACLE_SEED: String(campaign.failure.seed),
-          ORACLE_PATH: campaign.failure.path,
-          ORACLE_PROPERTY: spec.id,
-          SELF_ORACLE_LOG: replayLog,
-        })
+        const replay = receive(
+          { kind: `replay`, id: spec.id, target: campaign.name },
+          directory,
+          files,
+          {
+            ORACLE_SEED: String(campaign.failure.seed),
+            ORACLE_PATH: campaign.failure.path,
+            ORACLE_PROPERTY: spec.id,
+            SELF_ORACLE_LOG: replayLog,
+          },
+        )
         const index = plan.specs.indexOf(spec)
         const random = replay.files
           .find((file) => file.file === files[index])
@@ -3226,6 +3591,7 @@ function driveSuite(
       if (!target) continue
       const index = plan.specs.indexOf(spec)
       const rerun = receive(
+        { kind: `rerun`, id: spec.id, target: target.name },
         directory,
         [files[index]!],
         {},
@@ -3251,6 +3617,7 @@ function driveSuite(
         text.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
       const pattern = `^${[...(spec.nested ? [outerSuite] : []), spec.id, `reach`].map(escape).join(`(?: | > )`)}$`
       const alone = receive(
+        { kind: `reach-alone`, id: spec.id },
         directory,
         [files[index]!],
         {},
@@ -3315,6 +3682,210 @@ const lawOfKind = (kind: string, name: string) =>
           ? `reach`
           : lawOfTest(name)
 
+const matchesOutcome = (
+  outcome: Outcome,
+  failure: Failure | undefined,
+  kind: string,
+  campaign: boolean,
+) =>
+  kind === outcome.kind &&
+  (outcome.law === undefined || failure?.law === outcome.law) &&
+  (outcome.checkpoint === undefined ||
+    failure?.checkpoint === outcome.checkpoint) &&
+  failure?.diagnosis === outcome.diagnosis &&
+  failure?.dataPath === outcome.dataPath &&
+  failure?.dataKind === outcome.dataKind &&
+  (campaign || failure?.cause === outcome.cause) &&
+  (campaign ||
+    (outcome.kind === `violation`
+      ? failure?.causeMessage === outcome.causeMessage
+      : outcome.causeMessage === undefined ||
+        failure?.causeMessage === outcome.causeMessage))
+
+// A concrete campaign candidate owes its own diagnostics, not those of the
+// first failing history before shrinking. Missing a construction's state is
+// separate from the candidate's row-value law and can have a passing trace.
+const campaignCandidateOutcome = (
+  spec: SyntheticSpec,
+  concrete: SyntheticHistory,
+  campaign: Outcome,
+): Outcome => {
+  const precise = dataOutcome(spec) ?? judged(spec, concrete)
+  return campaign.kind === `constructed-reach` && precise.kind === `pass`
+    ? campaign
+    : precise
+}
+
+// The same independent synthetic model judges every receiving child. The
+// context determines selection, never the reported state. Full registration
+// remains owed when a filter or path replay makes most tests stand aside.
+function childExpectation(
+  plan: Plan,
+  child: ChildRun,
+  expected: ReturnType<typeof suiteModel>,
+) {
+  const context = child.context
+  const selectedSpecs =
+    `id` in context
+      ? plan.specs.filter(
+          ({ id }) => id === context.id || context.kind === `replay`,
+        )
+      : plan.specs
+  let failed = false
+  for (const original of selectedSpecs) {
+    const spec: SyntheticSpec =
+      context.kind === `binding-reordered`
+        ? {
+            ...original,
+            calibrations: [
+              { name: `unrelated calibration`, kind: `right` },
+              ...[...original.calibrations].reverse(),
+            ],
+          }
+        : original
+    const prediction = predictSpec(spec, child.log, child.builds)
+    if (!prediction.loads) failed = true
+    const names = prediction.loads ? [...prediction.tests.keys()] : []
+    const owedNames =
+      context.kind === `registration-warnings` && context.phases.length
+        ? context.phases.flatMap((phase) =>
+            names.map((name) => `${phase} > ${name}`),
+          )
+        : names
+    const seen = child.tests.filter(({ id }) => id === spec.id)
+    const actualNames = seen.map(({ name }) => name).sort()
+    if (JSON.stringify(actualNames) !== JSON.stringify([...owedNames].sort()))
+      return {
+        failure: violation(
+          `child`,
+          `${spec.id} ${context.kind} omitted or duplicated registrations`,
+          `registration`,
+          { actual: actualNames, expected: [...owedNames].sort() },
+        ),
+      }
+    if (!prediction.loads) continue
+    for (const test of seen) {
+      const selected =
+        context.kind === `registration-warnings`
+          ? false
+          : context.kind === `binding-reordered`
+            ? test.name.startsWith(`calibration:`)
+            : context.kind === `replay`
+              ? spec.id === context.id && test.name === `random seed`
+              : context.kind === `rerun`
+                ? test.name === context.target
+                : context.kind === `reach-alone`
+                  ? test.name === `reach`
+                  : true
+      if (!selected) {
+        if (test.state !== `skipped` || test.errors.length !== 0)
+          return {
+            failure: violation(
+              `child`,
+              `${spec.id} ${context.kind} unselected test ${JSON.stringify(test.name)} did not stand aside`,
+              `registration`,
+            ),
+          }
+        continue
+      }
+      const originalPrediction = expected.get(spec.id)!
+      if (!originalPrediction.loads)
+        return {
+          failure: violation(
+            `child`,
+            `${spec.id} ran despite its rejected declaration`,
+            `registration`,
+          ),
+        }
+      const ordinary =
+        context.kind === `replay`
+          ? originalPrediction.tests.get(context.target)!
+          : prediction.tests.get(test.name)!
+      const outcome =
+        context.kind === `reach-alone`
+          ? reachAloneOutcome(spec, ordinary)
+          : ordinary
+      if (outcome.kind !== `pass`) failed = true
+      const failure = test.errors[0]
+      const kind = test.state === `passed` ? `pass` : (failure?.kind ?? `other`)
+      const owesFailure = outcome.kind !== `pass`
+      if (
+        test.state !== (owesFailure ? `failed` : `passed`) ||
+        test.errors.length !== (owesFailure ? 1 : 0) ||
+        !matchesOutcome(outcome, failure, kind, isCampaign(test.name))
+      )
+        return {
+          failure: violation(
+            `child`,
+            `${spec.id} ${context.kind} ${JSON.stringify(test.name)} ${test.state} as ${JSON.stringify(test.errors)}, owed ${JSON.stringify(outcome)}`,
+            lawOfKind(outcome.kind === `pass` ? kind : outcome.kind, test.name),
+            { actual: test.errors, expected: outcome },
+          ),
+        }
+      if (isCampaign(test.name) && failure) {
+        const calls = child.log.filter(
+          ({ id, test: name }) =>
+            id === spec.id && name === `${spec.id} > ${test.name}`,
+        )
+        // A path replay runs its one requested concrete history directly.
+        // The input-side log also supplies its items when an Error history's
+        // inspection cannot be read back as an array of integers.
+        if (context.kind === `replay` && calls.length !== 1)
+          return {
+            failure: violation(
+              `child`,
+              `${spec.id} replay ran ${calls.length} histories, owed exactly one`,
+              `replay`,
+            ),
+          }
+        const concrete =
+          context.kind === `replay`
+            ? calls[0]!.history
+            : failure.counterexampleHistory
+        if (
+          context.kind === `replay` &&
+          failure.counterexampleHistory &&
+          JSON.stringify(failure.counterexampleHistory) !==
+            JSON.stringify(concrete)
+        )
+          return {
+            failure: violation(
+              `child`,
+              `${spec.id} replay reported a different concrete candidate than it ran`,
+              `replay`,
+            ),
+          }
+        if (concrete) {
+          if (
+            !calls.some(
+              ({ history }) =>
+                JSON.stringify(history) === JSON.stringify(concrete),
+            )
+          )
+            return {
+              failure: violation(
+                `child`,
+                `${spec.id} ${context.kind} reported a candidate the driver never ran`,
+                `shrink`,
+              ),
+            }
+          const diagnostic = campaignCandidateOutcome(spec, concrete, outcome)
+          if (!matchesOutcome(diagnostic, failure, kind, false))
+            return {
+              failure: violation(
+                `child`,
+                `${spec.id} ${context.kind} campaign lost its concrete candidate's diagnostic facts: ${JSON.stringify(failure)}, owed ${JSON.stringify(diagnostic)} for ${JSON.stringify(concrete)}`,
+                context.kind === `replay` ? `replay` : `shrink`,
+                { actual: failure, expected: diagnostic },
+              ),
+            }
+        }
+      }
+    }
+  }
+  return { failed }
+}
+
 function checkSuite(
   plan: Plan,
   trace: ReadonlyArray<{ checkpoint: string; value: unknown }>,
@@ -3352,17 +3923,7 @@ function checkSuite(
   // disappear merely because a reporter managed to write a partial result.
   const lateMessage = `probe synthetic#saw-0 was called after its history ended. The driver must await the work it starts, so every probe call belongs to one history.`
   for (const { value } of children) {
-    const child = value as {
-      exit: number | null
-      signal: string | null
-      files: Array<string>
-      expectedFiles: Array<string>
-      unhandled: Array<string>
-      failed: boolean
-      secondaryErrors: Array<{ test: string; message: string }>
-      log: Array<Pick<LogEntry, `id` | `history`>>
-      loads: Array<{ id: string; errors: Array<string> }>
-    }
+    const child = value as ChildRun
     if (child.secondaryErrors.length)
       return violation(
         `child`,
@@ -3385,6 +3946,8 @@ function checkSuite(
           `registration`,
         )
     }
+    const modeled = childExpectation(plan, child, expected)
+    if (modeled.failure) return modeled.failure
     const owedLate = lateCalls(plan, child.log)
     const actualLate = child.unhandled.filter(
       (message) => message === lateMessage,
@@ -3408,7 +3971,7 @@ function checkSuite(
       )
     if (
       child.signal !== null ||
-      child.exit !== (child.failed || child.unhandled.length ? 1 : 0) ||
+      child.exit !== (modeled.failed || child.unhandled.length ? 1 : 0) ||
       JSON.stringify([...child.files].sort()) !==
         JSON.stringify([...child.expectedFiles].sort())
     )
@@ -3431,7 +3994,7 @@ function checkSuite(
     const seen = run.files[spec.id]!
     if (!owed.loads) {
       if (
-        (spec.calibrationHistory ||
+        (bindingsOf(spec).length ||
           (spec.probeBinding && spec.probeBinding !== `empty`)) &&
         run.log.some((entry) => entry.id === spec.id)
       )
@@ -3504,9 +4067,11 @@ function checkSuite(
     }
     if (
       spec.calibrationNames !== `indexed` &&
-      spec.calibrationHistory &&
-      `constructed` in spec.calibrationHistory &&
-      spec.calibrations.length > 1
+      spec.calibrations.length > 1 &&
+      spec.calibrations.every((calibration) => {
+        const binding = bindingOf(spec, calibration)
+        return binding && `constructed` in binding
+      })
     ) {
       const inputs = spec.calibrations.map(
         ({ name }) =>
@@ -3595,12 +4160,13 @@ function checkSuite(
             warning.startsWith(`${spec.id}:`) &&
             warning.includes(`history binding`),
         )
+      const expectedWarnings = unboundCalibrationNames(spec).length ? 1 : 0
       if (
         !warningProbe.loaded.repeated ||
         !warningProbe.loaded.collectThenRun ||
         !warningProbe.loaded.collected ||
-        forId(warningProbe.repeated).length !== 1 ||
-        forId(warningProbe.collectThenRun).length !== 1 ||
+        forId(warningProbe.repeated).length !== expectedWarnings ||
+        forId(warningProbe.collectThenRun).length !== expectedWarnings ||
         forId(warningProbe.collected).length !== 0
       )
         return violation(
@@ -3611,16 +4177,7 @@ function checkSuite(
     }
     // The compatibility route must be visible before any selected test runs,
     // including automatic controls; bound calibrations must never warn search.
-    const unbound = [
-      ...(!spec.calibrationHistory
-        ? spec.calibrations.map(({ name }) => name)
-        : []),
-      ...(!spec.probeBinding || spec.probeBinding === `empty`
-        ? forcedCalibrationNames(spec).map((name) =>
-            name.slice(`calibration: `.length),
-          )
-        : []),
-    ]
+    const unbound = unboundCalibrationNames(spec)
     const warnings = run.warnings.filter(
       (warning) =>
         warning.startsWith(`${spec.id}:`) &&
@@ -3738,7 +4295,8 @@ function checkSuite(
       const calibration = spec.calibrations.find(
         ({ name }) => test.name === `calibration: ${name}`,
       )
-      if (spec.calibrationHistory && calibration) {
+      const calibrationBinding = calibration && bindingOf(spec, calibration)
+      if (calibrationBinding) {
         const calls = run.log.filter(
           (entry) =>
             entry.id === spec.id && entry.test === `${spec.id} > ${test.name}`,
@@ -3750,8 +4308,8 @@ function checkSuite(
             ? 2
             : 1
         const expectedConstruction =
-          `constructed` in spec.calibrationHistory
-            ? spec.calibrationHistory.constructed
+          `constructed` in calibrationBinding
+            ? calibrationBinding.constructed
             : undefined
         const expectedBuilds =
           expectedConstruction === undefined ? 0 : expectedCalls
@@ -3788,7 +4346,7 @@ function checkSuite(
             `${spec.id} "${test.name}" used ${calls.length} driver calls; binding owes ${expectedCalls}`,
             `calibration`,
           )
-        const binding = spec.calibrationHistory
+        const binding = calibrationBinding
         const first = calls[0]!.history
         const fullInput = authoredInput(spec, test.name, binding, run.builds)
         if (
@@ -3836,8 +4394,7 @@ function checkSuite(
           )
       }
       if (
-        spec.calibrationHistory &&
-        calibration &&
+        calibrationBinding &&
         test.state === `failed` &&
         ([`corrupt-throws`, `judge-throws`, `judge-driver-throws`].includes(
           calibration.kind,
@@ -3845,9 +4402,9 @@ function checkSuite(
           (spec.odd && dataOutcome(spec)))
       ) {
         const selectedKind =
-          `constructed` in spec.calibrationHistory
+          `constructed` in calibrationBinding
             ? `constructed`
-            : `fixed` in spec.calibrationHistory
+            : `fixed` in calibrationBinding
               ? `fixed`
               : `enumerated`
         const invalidData = dataOutcome(spec)
@@ -3985,7 +4542,7 @@ function checkSuite(
       }
     }
     if (
-      (spec.calibrationHistory ||
+      (bindingsOf(spec).length ||
         (spec.probeBinding && spec.probeBinding !== `empty`)) &&
       run.stdout
         .split(`\n`)
@@ -4095,7 +4652,12 @@ function checkSuite(
         { actual: alone ?? null, expected: outcome },
       )
     const counts = outcome.kind === `pass` && owed.reach.get(`enumerated`)
-    if (counts && JSON.stringify(alone.reach) !== JSON.stringify(counts))
+    if (
+      counts &&
+      JSON.stringify(
+        Object.entries((alone.reach ?? {}) as Record<string, number>).sort(),
+      ) !== JSON.stringify(Object.entries(counts).sort())
+    )
       return violation(
         `reach-alone`,
         `${spec.id}: its reach test run alone printed ${JSON.stringify(alone.reach ?? null)}, owed ${JSON.stringify(counts)}`,
@@ -4155,7 +4717,66 @@ function checkSuite(
         `${probe.id}: reproduced ${JSON.stringify(probe.failure)}, first failure ${JSON.stringify(probe.original)}`,
         checkpoint,
       )
-    if (checkpoint !== `replay`) continue
+    if (checkpoint === `rerun`) {
+      const prediction = expected.get(probe.id as SyntheticSpec[`id`])!
+      if (!prediction.loads)
+        return violation(
+          checkpoint,
+          `${probe.id}: rerun of a rejected declaration`,
+          `registration`,
+        )
+      const outcome = prediction.tests.get(probe.target)!
+      if (!matchesOutcome(outcome, probe.failure, probe.failure.kind, false))
+        return violation(
+          checkpoint,
+          `${probe.id}: rerun lost its modeled diagnostic facts: ${JSON.stringify(probe.failure)}, owed ${JSON.stringify(outcome)}`,
+          `rerun`,
+          { actual: diagnosticFacts(probe.failure), expected: outcome },
+        )
+      continue
+    }
+    const spec = plan.specs.find(({ id }) => id === probe.id)!
+    const prediction = expected.get(spec.id)!
+    if (!prediction.loads)
+      return violation(
+        checkpoint,
+        `${probe.id}: replay of a rejected declaration`,
+        `registration`,
+      )
+    const receiving = children
+      .map(({ value }) => value as ChildRun)
+      .find(
+        ({ context }) =>
+          context.kind === `replay` &&
+          context.id === probe.id &&
+          context.target === probe.target,
+      )
+    const concreteInputs = receiving?.log
+      .filter(
+        ({ id, test }) => id === spec.id && test === `${spec.id} > random seed`,
+      )
+      .map(({ history }) => history)
+    if (
+      concreteInputs?.length !== 1 ||
+      JSON.stringify(probe.ran) !== JSON.stringify(concreteInputs)
+    )
+      return violation(
+        checkpoint,
+        `${probe.id}: replay summary omitted or changed its one received concrete history`,
+        `replay`,
+      )
+    const diagnostic = campaignCandidateOutcome(
+      spec,
+      concreteInputs[0]!,
+      prediction.tests.get(probe.target)!,
+    )
+    if (!matchesOutcome(diagnostic, probe.failure, probe.failure.kind, false))
+      return violation(
+        checkpoint,
+        `${probe.id}: replay summary lost its concrete candidate's diagnostic facts: ${JSON.stringify(probe.failure)}, owed ${JSON.stringify(diagnostic)}`,
+        `replay`,
+        { actual: diagnosticFacts(probe.failure), expected: diagnostic },
+      )
     const replayRoute = owedRoute(`random seed`, true)
     if (probe.routes?.some((route) => route !== replayRoute))
       return violation(
@@ -4258,10 +4879,109 @@ const seedlessHistory = (
   ...drafts: Array<Draft>
 ) => ({ name, enters, history: { drafts, seedless: true } })
 const at = (history: SyntheticHistory) => ({ history, enters: null })
+const receivingCutStates = [
+  `receiving-run`,
+  `receiving-seedless`,
+  `receiving-replay`,
+  `receiving-rerun`,
+  `receiving-reach-alone`,
+  `receiving-binding-reordered`,
+  `receiving-registration-warnings`,
+] as const
+const receivingCutDrafts = (tail: 1 | 2 = 1): Array<Draft> => [
+  generatedDraft({
+    fixed: [at([3, 6])],
+    constructed: [
+      { prefix: [0, tail], enters: [`saw-0`] },
+      { prefix: [3, 6], enters: [] },
+    ],
+    calibrationHistory: { constructed: `constructed-0` },
+    calibrations: [`right`, `driver`],
+    isolatedPlans: true,
+    warningProbe: true,
+  }),
+  generatedDraft({
+    source: { kind: `enumerated`, histories: [[0], [tail]] },
+    enumeratedStates: [`measured`, `measured`, `measured`],
+  }),
+]
 const cal = (
   kind: CalibrationDraft[`kind`],
   difference: CalibrationDraft[`difference`] = `none`,
-): CalibrationDraft => ({ kind, difference })
+  history?: CalibrationDraft[`history`],
+): CalibrationDraft => ({
+  kind,
+  difference,
+  ...(history === undefined ? {} : { history }),
+})
+
+// One wrapper dimension crosses all three public selection receivers. Its
+// metadata must never execute, regardless of the selected clean polarity.
+const metadataDraft = (
+  buildMetadata: `own` | `inherited` | undefined,
+  tail = 1,
+  receiver:
+    `all` | `authored` | `forced-entered` | `forced-not-entered` = `all`,
+) =>
+  generatedDraft({
+    fixed: [
+      {
+        history: [0, tail],
+        enters: null,
+        ...(buildMetadata && receiver !== `forced-entered`
+          ? { buildMetadata }
+          : {}),
+      },
+      {
+        history: [tail],
+        enters: null,
+        ...(buildMetadata &&
+        (receiver === `all` || receiver === `forced-entered`)
+          ? { buildMetadata }
+          : {}),
+      },
+    ],
+    calibrationHistory: { fixed: `fixed-0` },
+    calibrations:
+      receiver === `all` || receiver === `authored` ? [`driver`] : [],
+    constructed: [{ prefix: [0], enters: [`saw-0`] }],
+    probe: receiver === `authored` ? `none` : `agree`,
+    probeBinding: receiver === `authored` ? `unbound` : `explicit`,
+    probeEntered: { fixed: `fixed-0` },
+    probeNotEntered: { fixed: `fixed-1` },
+    identityHistories: true,
+  })
+const mixedBindingsDraft = (second: `fixed` | `constructed`) =>
+  generatedDraft({
+    fixed: [at([0]), at([1])],
+    constructed: [{ prefix: [0], enters: [`saw-0`] }],
+    // The last calibration explicitly opts out of this property default.
+    calibrationHistory: { fixed: `fixed-1` },
+    calibrations: [
+      cal(`driver`, `none`, { fixed: `fixed-0` }),
+      cal(
+        `driver`,
+        `none`,
+        second === `fixed`
+          ? { fixed: `fixed-1` }
+          : { constructed: `constructed-0` },
+      ),
+      cal(`driver`, `none`, null),
+    ],
+    isolatedPlans: true,
+  })
+const spinDraft = (
+  kind: `driver-spin` | `driver-spin-throws`,
+  bound: boolean,
+  tail = 1,
+) =>
+  generatedDraft({
+    fixed: [at([0, tail])],
+    calibrations: [
+      cal(kind, `text match`, bound ? { fixed: `fixed-0` } : null),
+    ],
+    identityHistories: true,
+  })
 
 oracleProperty({
   id: `self-oracle.framework`,
@@ -4273,6 +4993,7 @@ oracleProperty({
   histories: {
     arbitrary: suite,
     states: [
+      ...round3FrameworkStates,
       `auxiliary-late-error`,
       `bound-enumerated-label-selector`,
       `bound-control-fixed-entered`,
@@ -4300,6 +5021,7 @@ oracleProperty({
     measured: frameworkStates.filter(
       (state) =>
         state !== `auxiliary-late-error` &&
+        !round3FrameworkStates.some((required) => required === state) &&
         !state.startsWith(`bound-`) &&
         state !== `unbound-prototype-probe` &&
         state !== `registration-warning-policy`,
@@ -4307,6 +5029,93 @@ oracleProperty({
     runs: 3,
     fixedSeeds: [1],
     constructed: [
+      {
+        name: `round3 every actual receiving cut`,
+        enters: [...receivingCutStates],
+        build: (generated: Suite) => ({
+          ...generated,
+          seedless: true,
+          drafts: receivingCutDrafts(generated.drafts[0]!.clock ? 1 : 2),
+        }),
+      },
+      {
+        name: `round3 replayed clock failure retains driver cause`,
+        enters: [`receiving-replay`],
+        build: (generated: Suite) => ({
+          ...generated,
+          drafts: [
+            generatedDraft({
+              clock: true,
+              throwOnSpin: true,
+              constructed: [{ prefix: [7], enters: [] }],
+            }),
+          ],
+        }),
+      },
+      {
+        name: `round3 named reach counts permit key reorder`,
+        enters: [`enumerated-reach-key-order-neighbor`],
+        build: (generated: Suite) => ({
+          ...generated,
+          drafts: [
+            generatedDraft({
+              source: { kind: `enumerated`, histories: [[0], [0, 1], [2]] },
+              enumeratedStates: generated.drafts[0]!.clock
+                ? [`measured`, `measured`, `required`]
+                : [`measured`, `required`, `measured`],
+            }),
+          ],
+        }),
+      },
+      ...([`own`, `inherited`] as const).flatMap((buildMetadata) =>
+        ([`authored`, `forced-entered`, `forced-not-entered`] as const).map(
+          (receiver) => ({
+            name: `round3 ${buildMetadata} fixed metadata ${receiver}`,
+            enters: [`bound-fixed-${buildMetadata}-metadata-${receiver}`],
+            build: (generated: Suite) => ({
+              ...generated,
+              drafts: [
+                metadataDraft(
+                  buildMetadata,
+                  generated.drafts[0]!.clock ? 1 : 2,
+                  receiver,
+                ),
+              ],
+            }),
+          }),
+        ),
+      ),
+      {
+        name: `round3 independently selected authored calibrations`,
+        enters: [
+          `bound-authored-distinct-selectors`,
+          `bound-authored-search-neighbor`,
+        ],
+        build: (generated: Suite) => ({
+          ...generated,
+          drafts: [
+            mixedBindingsDraft(
+              generated.drafts[0]!.clock ? `fixed` : `constructed`,
+            ),
+          ],
+        }),
+      },
+      {
+        name: `round3 recorded violation before mutant clock spin`,
+        enters: [
+          `bound-mutant-violation-before-spin`,
+          `legacy-mutant-violation-before-spin`,
+        ],
+        build: (generated: Suite) => {
+          const kind = generated.drafts[0]!.clock
+            ? `driver-spin`
+            : `driver-spin-throws`
+          return {
+            ...generated,
+            drafts: [spinDraft(kind, true), spinDraft(kind, false)],
+          }
+        },
+      },
       {
         name: `review auxiliary late errors`,
         enters: [`auxiliary-late-error`],
@@ -4325,6 +5134,25 @@ oracleProperty({
       {
         name: `review enumerated selector labels`,
         enters: [`bound-enumerated-label-selector`],
+        build: (generated: Suite) => ({
+          ...generated,
+          drafts: [
+            generatedDraft({
+              source: { kind: `enumerated`, histories: [[0, 1]] },
+              labelStyle: generated.drafts[0]!.clock ? `shell` : `default`,
+              calibrationHistory: {
+                enumerated: generated.drafts[0]!.clock
+                  ? `items 0 | 1 ${shellText}`
+                  : `[0,1]`,
+              },
+              calibrations: [`right`],
+            }),
+          ],
+        }),
+      },
+      {
+        name: `round3 rejected named enumeration selector`,
+        enters: [`bound-enumerated-label-rejected`],
         build: (generated: Suite) => ({
           ...generated,
           drafts: [
@@ -4520,7 +5348,10 @@ oracleProperty({
       },
       {
         name: `round2 registration warning phases`,
-        enters: [`registration-warning-policy`],
+        enters: [
+          `registration-warning-policy`,
+          `bound-registration-warning-silence`,
+        ],
         build: (generated: Suite) => ({
           ...generated,
           drafts: [
@@ -4528,6 +5359,12 @@ oracleProperty({
               fixed: [at([1])],
               constructed: [{ prefix: [0], enters: [`saw-0`] }],
               probe: `agree`,
+              warningProbe: true,
+              calibrations: [`right`, `driver`],
+            }),
+            generatedDraft({
+              fixed: [at([0, generated.drafts[0]!.clock ? 1 : 2])],
+              calibrationHistory: { fixed: `fixed-0` },
               warningProbe: true,
               calibrations: [`right`, `driver`],
             }),
@@ -4725,6 +5562,76 @@ oracleProperty({
       },
     ],
     fixed: [
+      seedlessHistory(
+        `round3 every actual receiving cut`,
+        [...receivingCutStates],
+        ...receivingCutDrafts(),
+      ),
+      fixedHistory(
+        `round3 replayed clock failure retains driver cause`,
+        [`receiving-replay`],
+        generatedDraft({
+          clock: true,
+          throwOnSpin: true,
+          constructed: [{ prefix: [7], enters: [] }],
+        }),
+      ),
+      fixedHistory(
+        `round3 named reach count key order neighbor`,
+        [`enumerated-reach-key-order-neighbor`],
+        generatedDraft({
+          source: { kind: `enumerated`, histories: [[0], [0, 1], [2]] },
+          enumeratedStates: [`measured`, `measured`, `required`],
+        }),
+      ),
+      fixedHistory(
+        `round3 fully bound warning phases stay silent`,
+        [`bound-registration-warning-silence`],
+        generatedDraft({
+          fixed: [at([0])],
+          calibrationHistory: { fixed: `fixed-0` },
+          warningProbe: true,
+          calibrations: [`right`, `driver`],
+        }),
+      ),
+      fixedHistory(
+        `round3 plain fixed declaration metadata neighbor`,
+        [],
+        metadataDraft(undefined),
+      ),
+      ...([`own`, `inherited`] as const).flatMap((buildMetadata) =>
+        ([`authored`, `forced-entered`, `forced-not-entered`] as const).map(
+          (receiver) =>
+            fixedHistory(
+              `round3 ${buildMetadata} fixed metadata ${receiver} receiver`,
+              [`bound-fixed-${buildMetadata}-metadata-${receiver}`],
+              metadataDraft(buildMetadata, 1, receiver),
+            ),
+        ),
+      ),
+      ...([`fixed`, `constructed`] as const).map((second) =>
+        fixedHistory(
+          `round3 distinct ${second} and unbound authored selectors`,
+          [
+            `bound-authored-distinct-selectors`,
+            `bound-authored-search-neighbor`,
+          ],
+          mixedBindingsDraft(second),
+        ),
+      ),
+      ...([`driver-spin`, `driver-spin-throws`] as const).flatMap((kind) =>
+        [true, false].map((bound) =>
+          fixedHistory(
+            `round3 ${kind} after recorded violation ${bound ? `bound` : `legacy`} receiver`,
+            [
+              bound
+                ? `bound-mutant-violation-before-spin`
+                : `legacy-mutant-violation-before-spin`,
+            ],
+            spinDraft(kind, bound),
+          ),
+        ),
+      ),
       fixedHistory(
         `review auxiliary late errors preserve counts`,
         [`auxiliary-late-error`],
@@ -4739,7 +5646,11 @@ oracleProperty({
         [true, false].map((valid) =>
           fixedHistory(
             `review ${labelStyle} enumerated selector ${valid ? `exact` : `missing`}`,
-            [`bound-enumerated-label-selector`],
+            [
+              valid
+                ? `bound-enumerated-label-selector`
+                : `bound-enumerated-label-rejected`,
+            ],
             generatedDraft({
               source: { kind: `enumerated`, histories: [[0, 1]] },
               labelStyle,
@@ -6093,6 +7004,143 @@ oracleProperty({
   driver: driveSuite,
   check: checkSuite,
   calibrations: [
+    {
+      name: `reject replay summary cause loss`,
+      history: { fixed: `round3 replayed clock failure retains driver cause` },
+      law: `replay`,
+      corrupt: (trace) => {
+        const altered = structuredClone([...trace])
+        const probe = altered.find(({ checkpoint }) => checkpoint === `replay`)!
+          .value as ProbeRun
+        if (probe.failure?.cause !== `driver`) return undefined
+        delete probe.failure.cause
+        delete probe.failure.causeMessage
+        return altered
+      },
+    },
+    {
+      name: `reject rerun wrong cause ordinal`,
+      history: {
+        fixed: `a driver error after a violation is the violation's cause`,
+      },
+      law: `verdict`,
+      corrupt: (trace) => {
+        const altered = structuredClone([...trace])
+        const child = altered
+          .filter(({ checkpoint }) => checkpoint === `child`)
+          .map(({ value }) => value as ChildRun)
+          .find(({ context }) => context.kind === `rerun`)!
+        const test = child.tests.find(({ state }) => state === `failed`)!
+        test.errors[0]!.causeMessage = `synthetic driver failed at item 2`
+        return altered
+      },
+    },
+    {
+      name: `reject replay concrete cause loss`,
+      history: { fixed: `round3 replayed clock failure retains driver cause` },
+      law: `replay`,
+      corrupt: (trace) => {
+        const altered = structuredClone([...trace])
+        const child = altered
+          .filter(({ checkpoint }) => checkpoint === `child`)
+          .map(({ value }) => value as ChildRun)
+          .find(({ context }) => context.kind === `replay`)!
+        const test = child.tests.find(({ state }) => state === `failed`)!
+        if (test.errors[0]?.cause !== `driver`) return undefined
+        delete test.errors[0].cause
+        delete test.errors[0].causeMessage
+        return altered
+      },
+    },
+    ...[`omit`, `duplicate`].map((mutation) => ({
+      name: `reject ${mutation} auxiliary registration`,
+      history: { fixed: `a replayed campaign failure reproduces its path` },
+      law: `registration`,
+      corrupt: (
+        trace: ReadonlyArray<{ checkpoint: string; value: unknown }>,
+      ) => {
+        const altered = structuredClone([...trace])
+        const child = altered
+          .filter(({ checkpoint }) => checkpoint === `child`)
+          .map(({ value }) => value as ChildRun)
+          .find(({ context }) => context.kind === `replay`)!
+        const omittedAt = child.tests.findIndex(
+          ({ state }) => state === `skipped`,
+        )
+        if (mutation === `omit`) child.tests.splice(omittedAt, 1)
+        else child.tests.push(structuredClone(child.tests[omittedAt]!))
+        return altered
+      },
+    })),
+    {
+      name: `reject seedless first primary error`,
+      history: {
+        fixed: `an ordinary run's random campaign runs under random seed`,
+      },
+      law: `determinism`,
+      corrupt: (trace) => {
+        const altered = structuredClone([...trace])
+        const child = altered
+          .filter(({ checkpoint }) => checkpoint === `child`)
+          .map(({ value }) => value as ChildRun)
+          .find(({ context }) => context.kind === `seedless`)!
+        const test = child.tests.find(({ name }) => name === `determinism`)!
+        test.state = `failed`
+        test.errors = [{ kind: `other` }]
+        child.failed = true
+        child.exit = 1
+        return altered
+      },
+    },
+    {
+      name: `reject rerun recorder cause loss`,
+      history: {
+        fixed: `a driver error after a violation is the violation's cause`,
+      },
+      law: `verdict`,
+      corrupt: (trace) => {
+        const altered = structuredClone([...trace])
+        const child = altered
+          .filter(({ checkpoint }) => checkpoint === `child`)
+          .map(({ value }) => value as ChildRun)
+          .find(({ context }) => context.kind === `rerun`)!
+        const test = child.tests.find(({ state }) => state === `failed`)!
+        delete test.errors[0]!.cause
+        delete test.errors[0]!.causeMessage
+        return altered
+      },
+    },
+    {
+      name: `reject rerun probe cause loss`,
+      history: {
+        fixed: `a driver error after a violation is the violation's cause`,
+      },
+      law: `rerun`,
+      corrupt: (trace) => {
+        const altered = structuredClone([...trace])
+        const probe = altered.find(({ checkpoint }) => checkpoint === `rerun`)!
+          .value as ProbeRun
+        delete probe.failure!.cause
+        delete probe.failure!.causeMessage
+        return altered
+      },
+    },
+    {
+      name: `reject changed reach-only count`,
+      history: {
+        fixed: `an enumerated source counts the histories that entered each declared state`,
+      },
+      law: `reach`,
+      corrupt: (trace) => {
+        const altered = structuredClone([...trace])
+        const alone = altered.find(
+          ({ checkpoint }) => checkpoint === `reach-alone`,
+        )!.value as ReachAlone
+        const counts = alone.reach as Record<string, number>
+        counts[`saw-0`] = (counts[`saw-0`] ?? 0) + 1
+        return altered
+      },
+    },
     {
       name: `reject missing child observation`,
       history: { constructed: `round2 ranked mutant verdicts` },

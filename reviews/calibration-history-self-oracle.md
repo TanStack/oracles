@@ -156,3 +156,76 @@ Parent commit: `2dc95d4e838678a03eb345c08f141dbd20a8c4a7`.
 
 - `packages/oracles/tests/oracle-property-self-oracle.test.ts`: SHA256 `c8df3de2569460a80ff1eab23811d21f9ac6fffe6e4d935bdcfdc5ed5f579d0f`.
 - `packages/oracles/tests/oracle-property-self-oracle-fixture.ts`: SHA256 `27195bf184b7ae58f9eaea7bab82973aae5876ce292e2b6aa7e6fa02ac20627d`.
+
+## Fresh review and oracle-first repair from fc4bad8
+
+Starting reviewed head: `fc4bad8dc2c3da3a80b5002bcc36281b75f12846`.
+The previous full-head CI passed both Vitest versions. A fresh independent
+round nevertheless demonstrated one production defect and six oracle defects.
+The repair begins with all seven findings together, before changing production.
+
+The public binding law preserves an explicitly selected original and gives each
+authored calibration its own selector. Incidental declaration metadata does not
+change a fixed history into a construction. The verdict law gives an earlier
+recorded violation precedence over a later controlled-clock spin, including a
+supplied mutant driver. The receiving law requires full registration, expected
+test outcomes, faithful diagnostic causes, and named reach counts independent
+of their print order. README and the production header state these promises.
+No product-law change is proposed.
+
+The primary oracle repair adds declaration-wrapper metadata, independent
+per-calibration binding, and ordered mutant-driver events. Required real Vitest
+receivers include authored selection and both automatic clean-premise paths,
+mixed authored bindings, and bound/legacy wrong-observation-before-spin. Full
+child records must carry every registered name and independently judged primary
+outcome through normal, seedless, replay, rerun and other auxiliary cuts. A
+rerun owes diagnostic facts from its concrete reproduced history; shrinking may
+legitimately remove an unrelated throw. Count dictionaries permit key reordering
+while retaining exact names and values.
+
+Pre-edit production identity is SHA256
+`4d4c9ac25a83ebc49e1604519176418f1618c5f70bf9b9231e555bd2b5e8ee39`
+for `packages/oracles/src/oracle-property.ts`. Required receiving RED and
+neighbor results must be recorded before its source-kind dispatch is repaired.
+Hostile variants then challenge each new distinction. This section is the
+pre-edit inventory, not a claim of completed validation. The historical CHRON-1
+entry above remains unchanged.
+
+### Pre-edit gate at fc4bad8
+
+All oracle changes preceded the production repair. The final combined command
+used installed Node Vitest from `packages/oracles`, framework config,
+`--maxWorkers=2`, and selector
+`fixed history: round3|calibration: reject (omit|duplicate|seedless first|rerun|replay|changed reach)`.
+On unchanged production it reports **six intended RED and twenty GREEN** out of
+253 registered checks (227 skipped), in 45.08 seconds. RED separately compares
+own/inherited metadata on authored, forced-entered and forced-not-entered
+receiving paths. Every failure is a calibration comparison observing lost
+original identity; no setup failure supplies this gate. The plain neighbor,
+mixed selectors, bound/legacy spin and throw, dictionary order, warning phases,
+seven actual receiving cuts, concrete replay causes and nine corruption controls
+are GREEN. Package TypeScript checking passes.
+
+The primary grammar separately declares each metadata receiving path, bound and
+legacy wrong-observation-before-spin, mixed authored selectors/search, successful
+and rejected named enumeration selectors, legal count dictionary order, silent
+fully-bound warning phases, and all seven actual child receiving contexts. Full
+fixed/random reach counts remain to be measured after production repair.
+
+Isolated source/fixture/reporter variants already reject first-selector sharing,
+supplied-driver spin ranking, seedless primary errors, missing replay and
+reach-only registrations, duplicate reach-only registrations, reordered-child
+primary errors, lost rerun/replay causes, wrong cause ordinals and unexpected
+causes. Reversing only count-key printing is accepted. These are bounded
+assertion results, not full-suite mutation claims. The warning-phase extension
+also caught an oracle mistake: fully-bound properties emit no migration warning,
+but the old phase model demanded one. Its false RED preceded the independent
+per-entry warning model repair and both bound/unbound GREEN neighbors.
+
+Concrete diagnostics are judged from the history actually reproduced. A
+campaign's initial checkpoint or cause may change while shrinking. Replay's
+input-side log supplies its one concrete history; an ordinary parseable reported
+counterexample must have appeared in that test's invocation log. Exact finite
+driver causes and item checkpoints are compared at that concrete cut. Nested
+judgment causes and arbitrary AggregateError metadata remain outside this
+synthetic diagnostic grammar; no universal error-serialization claim is made.
