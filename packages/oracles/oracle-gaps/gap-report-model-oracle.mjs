@@ -3076,7 +3076,8 @@ function refusal(plan) {
   if (plan.fault === `setupThrows`)
     return { cause: `the fixture setup broke`, runtime: true }
   // A failing owner is named with its test's error, so the author can fix it,
-  // and its baseline's replay runs that test alone.
+  // and its baseline's replay runs that test alone, under the config the run
+  // loaded: a config that only `--config` names, too (F12 with law 3).
   if (plan.fault === `brokenOwner`)
     return {
       cause: `b.test.ts`,
@@ -3651,6 +3652,15 @@ function fixtureFiles(plan, state = initialState(plan)) {
             `throw new Error(\`vitest failed to load: its build is incomplete\\n\${log.join('\\n')}\`)`,
             ``,
           ].join(`\n`),
+        }
+      : {}),
+    // Beside a config that only `--config` names, a config that Vitest
+    // discovers and that includes no test file, as a package's app build
+    // config does. A run that loads it instead of the named one, or a
+    // replay command that leaves out `--config`, runs no test (F12).
+    ...(plan.configPlace === `named`
+      ? {
+          'vite.config.mjs': `export default { test: { include: ['decoy/**/*.test.ts'] } }\n`,
         }
       : {}),
     ...(plan.configPath === undefined

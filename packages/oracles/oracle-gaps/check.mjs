@@ -1372,6 +1372,7 @@ export default async (env) => {
         failure: first.failed.get(file),
         tests: first.units.find((u) => u.file === file)?.tests ?? [],
       })),
+      options.config,
     )
     // The baseline names the config the run loaded first.
     log(
