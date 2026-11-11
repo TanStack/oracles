@@ -12,9 +12,9 @@
  * true. The repository's own `eslint` run found this, with
  * @typescript-eslint/no-unnecessary-condition.
  *
- * This is a focused test of one configuration, not an oracle: the part-reach
- * oracles lint without type information, so they cannot see a type-aware
- * rule's input. The witness rule here reports the compiler options that a
+ * This is a focused test of one configuration, not an oracle: the
+ * registration-only oracle lints without type information, so it cannot see
+ * a type-aware rule's input. The witness rule here reports the compiler options that a
  * type-aware rule reads for each file. It runs in a child process, because
  * typescript-eslint keeps its programs in the process, across test files.
  */
@@ -42,20 +42,10 @@ writeFileSync(
 )
 writeFileSync(
   join(root, `a-oracle.test.js`),
-  [
-    `import { it } from 'vitest'`,
-    `import { declareOracle } from '@tanstack/oracles'`,
-    `import { drive } from './b-oracle.js'`,
-    `function check() {}`,
-    `declareOracle({ check: [check] })`,
-    `it('drives', () => {`,
-    `  drive()`,
-    `})`,
-    ``,
-  ].join(`\n`),
+  [`import { drive } from './b-driver.js'`, `drive()`, ``].join(`\n`),
 )
-// The test's reach runs through the module, so the rule parses it.
-writeFileSync(join(root, `b-oracle.js`), `export function drive() {}\n`)
+// The rule reads the module to learn whether its helper registers tests.
+writeFileSync(join(root, `b-driver.js`), `export function drive() {}\n`)
 
 const plugin = pathToFileURL(join(import.meta.dirname, `..`, `src`, `index.js`))
 const eslint = import.meta.resolve(`eslint`)
@@ -90,7 +80,7 @@ const script = `
       oracles.configs.recommended,
     ],
   })
-  const results = await linter.lintFiles(['a-oracle.test.js', 'b-oracle.js'])
+  const results = await linter.lintFiles(['a-oracle.test.js', 'b-driver.js'])
   console.log(JSON.stringify(results.map((result) => result.messages.filter((message) => message.ruleId === 'witness/options').map((message) => message.message))))
 `
 

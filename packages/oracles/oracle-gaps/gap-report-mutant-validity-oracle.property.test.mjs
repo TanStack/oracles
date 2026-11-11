@@ -112,7 +112,6 @@ import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import fc from 'fast-check'
-import { declareOracle } from '../src/oracle-declaration.ts'
 import { oracleProperty, pass, violation } from '../src/oracle-property.ts'
 import { instrument } from './schemata.mjs'
 
@@ -3293,12 +3292,6 @@ function check(program, observations, expected) {
     )
   return pass
 }
-
-declareOracle({
-  check: [check],
-  model: [model],
-  grammar: [fc.constantFrom(...histories)],
-})
 
 // Five calibrations, each a wrong answer the check must reject.
 const observed = (trace) => {

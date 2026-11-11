@@ -2,9 +2,9 @@
  * Oracle properties: one constructor for an oracle's law, histories, model,
  * production driver, and check.
  *
- * An oracle file used to assemble these parts by hand: `declareOracle`, a loop
- * of `it` calls, assertions spread through the driver, and its own failure
- * text. `oracleProperty` takes the parts and does the mechanics that every
+ * An oracle file used to assemble these parts by hand: a loop of `it` calls,
+ * assertions spread through the driver, and its own failure text.
+ * `oracleProperty` takes the parts and does the mechanics that every
  * oracle shares, so an oracle file holds only the parts that state its law.
  * Cleanup stays with the driver: a driver releases what it created before it
  * returns or throws, so the framework never holds a production resource.
@@ -164,7 +164,16 @@
  *   wrongly. The calibration test finds a history where the corruption
  *   applies and the clean trace passes (it skips a candidate whose clean trace
  *   fails), and requires the check to report that law for the corrupted one
- *   (rubric, ORC-006).
+ *   (rubric, ORC-006). A calibration can also name a `difference`, text that
+ *   the violation's difference must contain or a pattern it must match, so
+ *   the check must reject the wrong answer for the reason the calibration
+ *   names, not only under its law (maintainer decision, 2026-11-11). The law
+ *   is judged first. A mutant driver's candidate that reports another law or
+ *   another difference is passed over for the next candidate. A pattern
+ *   matches anywhere in the difference, and a sticky (`y`) one only at its
+ *   start. A required difference that the empty difference holds, the empty
+ *   text or a pattern that matches the empty string, fails registration, and
+ *   a difference that is not text fails the calibration.
  * - **Determinism.** A `determinism` test runs some histories twice and
  *   requires the same trace: every fixed and constructed history of a generated
  *   source and three generated histories, or up to eight evenly spaced
@@ -209,9 +218,10 @@
  * way an oracle checks production: it runs synthetic properties under real Vitest
  * and compares what Vitest reports with an independent model.
  *
- * The `oracle/no-unit-test` lint rule treats an `oracleProperty` call as an
- * oracle test whose parts are its arguments, when its options are an object
- * literal with a `check`. The property is its own declaration.
+ * The `oracle/no-unit-test` lint rule accepts an `oracleProperty` call whose
+ * options are an object literal with a `check`, and reports every other test
+ * registration in an oracle file: an oracle file registers its tests only
+ * through `oracleProperty` (maintainer decision, 2026-11-11).
  */
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { appendFileSync } from 'node:fs'
@@ -554,6 +564,13 @@ export type Calibration<THistory, TPlan> = {
   name: string
   /** The law the check must report. */
   law: string
+  /**
+   * Text that the violation's difference must contain, or a pattern that it
+   * must match anywhere in it; a sticky (`y`) pattern matches only at its
+   * start. Without it, any difference under `law` rejects the wrong answer.
+   * Text or a pattern that the empty difference holds fails registration.
+   */
+  difference?: string | RegExp
 } & (
   | {
       /** A corrupted copy of the trace, or undefined when nothing applies. */
@@ -1624,12 +1641,47 @@ function calibrationTests<THistory, TExpected, TPlan>(
         forced: { probe, entered },
       })),
   )
+  // A required difference that the empty difference holds rejects any
+  // difference under its law, so it would pass silently.
+  for (const { name, difference } of options.calibrations ?? [])
+    if (
+      difference !== undefined &&
+      (typeof difference === `string`
+        ? difference === ``
+        : ``.search(difference) !== -1)
+    )
+      throw new Error(
+        `${id}: calibration "${name}" requires difference ${typeof difference === `string` ? `""` : String(difference)}, which the empty difference holds, so it rejects any difference. Require text or a pattern that only the owed difference holds.`,
+      )
   return [...(options.calibrations ?? []), ...forcedCalibrations].map(
     (calibration) => ({
       name: `calibration: ${calibration.name}`,
       route: `calibration`,
       replays: [],
       run: async () => {
+        const required =
+          `difference` in calibration ? calibration.difference : undefined
+        const owed = `law "${calibration.law}"${required === undefined ? `` : ` with a difference that ${typeof required === `string` ? `contains ${JSON.stringify(required)}` : `matches ${String(required)}`}`}`
+        // Whether a violation is the one owed: the law, then the difference.
+        // `search` ignores a pattern's `lastIndex`.
+        const rejects = (wrong: Extract<Verdict, { kind: `violation` }>) => {
+          if (lawOf(wrong) !== calibration.law || required === undefined)
+            return lawOf(wrong) === calibration.law
+          // A check in JavaScript can give any value.
+          const difference: unknown = wrong.difference
+          if (typeof difference !== `string`)
+            throw new Error(
+              `${id}: calibration "${calibration.name}" requires a difference under law "${calibration.law}", and the check gave a difference that is not text: ${reportText(difference)}. A violation's difference is text.`,
+            )
+          return typeof required === `string`
+            ? difference.includes(required)
+            : difference.search(required) !== -1
+        }
+        // What a violation reported, where it differs from what is owed.
+        const reported = (wrong: Extract<Verdict, { kind: `violation` }>) =>
+          lawOf(wrong) === calibration.law
+            ? `difference ${JSON.stringify(wrong.difference)} under law "${calibration.law}"`
+            : `law "${lawOf(wrong)}"`
         const seen: Array<string> = []
         for (const { name, history } of candidates()) {
           const plan = planOf(options, history)
@@ -1656,10 +1708,9 @@ function calibrationTests<THistory, TExpected, TPlan>(
               undefined,
               probes,
             ).verdict
-            if (wrong.kind === `violation` && lawOf(wrong) === calibration.law)
-              return
+            if (wrong.kind === `violation` && rejects(wrong)) return
             throw new Error(
-              `${id}: calibration "${calibration.name}" corrupted the trace of "${name}", but the check ${wrong.kind === `pass` ? `passed it` : `reported law "${lawOf(wrong)}"`}. It must report law "${calibration.law}".`,
+              `${id}: calibration "${calibration.name}" corrupted the trace of "${name}", but the check ${wrong.kind === `pass` ? `passed it` : `reported ${reported(wrong)}`}. It must report ${owed}.`,
             )
           }
           // The real driver's trace of the candidate must pass first.
@@ -1681,11 +1732,11 @@ function calibrationTests<THistory, TExpected, TPlan>(
                 )
               : await runOne(options, history, calibration.driver)
           if (verdict.kind === `pass`) continue
-          if (lawOf(verdict) === calibration.law) return
-          seen.push(`"${name}" reported law "${lawOf(verdict)}"`)
+          if (rejects(verdict)) return
+          seen.push(`"${name}" reported ${reported(verdict)}`)
         }
         throw new Error(
-          `${id}: calibration "${calibration.name}" found no history whose clean trace passes and where the check reports law "${calibration.law}"${seen.length ? `; ${seen.slice(0, 3).join(`, `)}` : ``}. Add a passing fixed or constructed history that reaches the state its wrong answer changes.`,
+          `${id}: calibration "${calibration.name}" found no history whose clean trace passes and where the check reports ${owed}${seen.length ? `; ${seen.slice(0, 3).join(`, `)}` : ``}. Add a passing fixed or constructed history that reaches the state its wrong answer changes.`,
         )
       },
     }),
