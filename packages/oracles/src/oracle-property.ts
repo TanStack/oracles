@@ -190,7 +190,12 @@
  *   shrinking would take; that counterexample can be larger than the smallest
  *   that fails (maintainer decision, 2026-11-11). A path replay runs its
  *   counterexample and shrinks no further, so it reports the counterexample it
- *   replays.
+ *   replays. A `timeout` of 0 or less is no timeout, as Vitest reads it, and
+ *   sets no budget. The budget is real time, so a seed-only rerun on a slower
+ *   or faster machine can report another counterexample, under the same law;
+ *   a path replay reports the same one. The clock is `performance.now()`: a
+ *   driver that leaves fake timers installed that fake it freezes the
+ *   deadline, and shrinking then has no budget.
  * - **Bounded clock.** A driver that runs on `useOracleClock` has virtual
  *   timers and `Date`; macrotask turns stay real. The clock fires at most
  *   `maxTimers` timers (1,000 by default) in one history. Past that it stops
@@ -599,8 +604,8 @@ export interface OraclePropertyOptions<THistory, TExpected, TPlan = THistory> {
    */
   predict?: (plan: TPlan) => Readonly<Record<string, boolean>>
   /**
-   * Each registered test's limit in milliseconds; 120 seconds by default. A
-   * campaign stops shrinking at half of it.
+   * Each registered test's limit in milliseconds; 120 seconds by default, and
+   * none at 0 or less. A campaign stops shrinking at half of it.
    */
   timeout?: number
   /**
@@ -1897,16 +1902,22 @@ function generatedTests<THistory, TExpected, TPlan>(
       examples: Array<[THistory]>,
     ) => NonNullable<Parameters<typeof fc.assert>[1]>,
   ) => {
+    // Vitest's clock for the test is already running.
+    const started = performance.now()
     const { examples, constructionOf } = examplesFor(seed)
     const counts = new Map<string, number>(
       [...(declared ?? [])].map((state) => [state, 0]),
     )
     const run = parameters(examples)
     // A path replay shrinks no further than the counterexample it replays.
+    // Vitest reads a timeout of 0 or less as none, which sets no budget.
+    const timeout = timeoutOf(options)
     const shrinkUntil =
-      run.path === undefined
-        ? performance.now() + timeoutOf(options) / 2
-        : -Infinity
+      run.path !== undefined
+        ? -Infinity
+        : timeout > 0
+          ? started + timeout / 2
+          : Infinity
     await fc.assert(
       fc.asyncProperty(
         arbitrary,
