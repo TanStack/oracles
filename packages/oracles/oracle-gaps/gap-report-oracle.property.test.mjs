@@ -138,7 +138,15 @@
  *    does not end within the full limit cuts its file's run off, and the
  *    clock-cut run records nothing, not even its earlier verdicts; a kill in
  *    another owner still decides (a kill outranks a timeout, v19), and failing
- *    one, the mutant is a `timeout`, whatever any other owner reported. A copy
+ *    one, the mutant is a `timeout`, whatever any other owner reported. The
+ *    confirming runs of one mutant share its budget: the larger of
+ *    `--mutant-limit` (30 s by default) and ten times its owner files'
+ *    unmutated time (maintainer disposition G1, 2026-11-11). A confirmation
+ *    gets at most what the budget has left after the mutant's confirmations
+ *    before it and those still running, and one that the budget cuts, or
+ *    that gets nothing, is a timeout; so a mutant that is slow in two owners,
+ *    whose confirmations together pass the budget, is a `timeout`, and a
+ *    kill in any owner still decides. A copy
  *    cut off for spinning (its call budget ran out, not its clock) is a
  *    timeout as it stands: its rows are not judged, so a verdict it recorded
  *    before the cut does not kill. (The framework's `bounded work` law, which
@@ -223,7 +231,11 @@
  *    is checked against the file). A worker's code that Vite loads this way
  *    is not instrumented: a stated limit, with no witness for `?worker&url`.
  *    Any other query on an owned module (`?t=`, `?import`) is served the
- *    instrumented copy. A source that imports
+ *    instrumented copy. While a run runs, it writes nothing beside the tests,
+ *    or anywhere outside its output directory and the package's
+ *    `.oracle-gaps`, so a Vitest run started meanwhile finds none of the
+ *    runner's files (maintainer disposition G4, 2026-11-11, and the freeze's
+ *    namespacing decision of 2026-11-10). A source that imports
  *    a subpath of a workspace dependency sees one instance of that
  *    dependency, as Vitest gives it; a devDependency that no test loads and
  *    that cannot be built does not refuse the run; and a package with a
@@ -232,7 +244,12 @@
  *    processes, and the run's inputs name the pool.
  * 11. **Streaming.** The CLI prints each gap as its mutant is judged, one line
  *    each (stream.mjs), and the summary repeats those gap lines: the streamed
- *    gap lines are the report's gaps, each printed once, none missing.
+ *    gap lines are the report's gaps, each printed once, none missing. While a
+ *    copy runs past the heartbeat interval (30 s; the driver shortens it), the
+ *    CLI prints `busy: <id> in <file> for <n>s` at each interval: the
+ *    mutant's id, or `baseline`, and a test file that runs it; a mutant whose
+ *    run reaches a slow owner test is named in one (maintainer disposition
+ *    G1, 2026-11-11).
  * 12. **A report-shaped ending.** A run never ends with a bare stack trace
  *    (gap-report-model-oracle.mjs states the law beside its check). Every
  *    refusal of laws 3 and 10 (a broken owns declaration, no oracle file, no
@@ -246,6 +263,11 @@
  *    `refused`, the same cause and directive, and a summary.md. A refusal
  *    through the daemon ends the same way, in the output directory of the
  *    CLI that asked.
+ * 13. **Stopping.** A run stopped by SIGTERM or SIGINT ends within 30 s, and
+ *    once it has ended no process it started is left: its Vitest workers,
+ *    as child processes or as threads, and the processes their tests start
+ *    (maintainer disposition G2, 2026-11-11: "the CLI must never leave
+ *    workers running").
  *
  * Authority: the maintainer's decisions in the gap-check design runs v11, v14,
  * and v19 (2026-11-04 and 2026-11-05; the design notes are kept by the project
@@ -281,16 +303,17 @@
  * Limits. Sources are one file of exported functions and classes over one
  * number. A hang is generated only as an owner test that waits on a promise
  * that never settles, under a 1 s first budget and a 6 s full limit
- * (`--first-limit`, `--hang-limit`); a slow run that ends is only a
- * witness, a test that waits 3 s before it judges. Not generated: a busy
+ * (`--first-limit`, `--hang-limit`, and a 6 s `--mutant-limit`); a slow run
+ * that ends is only a witness, a test that waits 3 s where its output
+ * changed, which judges after it or, in two owners, does not. Not generated: a busy
  * loop, a slow run past the full limit that would still end, a hang in an
  * ordinary or nondeterministic test, a setup error other than a throw at
  * module load from a function the module calls with 0, multi-line
  * conditions, nested functions, object-literal methods, accessors, and
  * class-field arrows in code that a test calls (the static oracle judges
  * their ownership), two functions on one line,
- * `await`, `new`, and `void` statements, `--only`, `--sample`, and
- * `--diff-base`, re-exports, namespace imports, and calls into another
+ * `await`, `new`, and `void` statements, `--only` outside a stopped run,
+ * `--sample`, and `--diff-base`, re-exports, namespace imports, and calls into another
  * package (a package's tree stops at its boundary, by the maintainer's
  * decision of 2026-11-05). A module-level probe guard, a guard declared
  * in a block of the function beside its probe, and a parameter or function
@@ -405,6 +428,8 @@ import {
   removePath,
   sourceArgument,
   ENV_PREFIX,
+  MUTANT_LIMIT_MS,
+  HEARTBEAT_MS,
 } from './gap-report-model-oracle.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -421,8 +446,10 @@ const repo = resolve(here, `..`)
 // result, and the summary's counts, gap keys, and unowned keys. A stability
 // history runs the CLI again on the edited source.
 // The child gets a clean environment: no state from this Vitest worker.
-const cleanEnv = () =>
-  Object.fromEntries(
+// The heartbeat comes every HEARTBEAT_MS, not every 30 s, so that a slow
+// test's wait spans it (law 11).
+const cleanEnv = () => ({
+  ...Object.fromEntries(
     Object.entries(process.env).filter(
       ([name]) =>
         !name.startsWith(`VITEST`) &&
@@ -432,7 +459,9 @@ const cleanEnv = () =>
         name !== `TEST` &&
         name !== `NODE_ENV`,
     ),
-  )
+  ),
+  ORACLE_GAPS_HEARTBEAT_MS: String(HEARTBEAT_MS),
+})
 
 /**
  * The CLI's arguments for one run of a fixture: cold, or through the daemon
@@ -451,6 +480,8 @@ function cliArgs(
     outName = daemon ? `out-daemon` : `out`,
     config,
     contexts = 4,
+    only,
+    pool,
   } = {},
 ) {
   const out = join(dir, outName)
@@ -482,9 +513,15 @@ function cliArgs(
     budget === `one` ? `6000` : `1000`,
     `--hang-limit`,
     `6000`,
+    // The budget that a mutant's confirming runs share, the full limit of
+    // one copy: one slow owner's confirmation fits it, two do not (law 4).
+    `--mutant-limit`,
+    String(MUTANT_LIMIT_MS),
     `--out`,
     path(out),
   ]
+  if (only !== undefined) args.push(`--only`, only.join(`,`))
+  if (pool !== undefined) args.push(`--pool`, pool)
   if (ordinary) args.push(`--ordinary`)
   // A config under a name Vitest does not discover, relative to --package.
   if (config !== undefined) args.push(`--config`, config)
@@ -520,15 +557,95 @@ function runCli(dir, files, how = {}) {
     .split(`\n`)
     .find((line) => line.startsWith(`  replay: `))
     ?.slice(`  replay: `.length)
-  // What the run wrote beside its output directory and outside the package's
-  // own state (`.oracle-gaps`), as a path relative to the package.
-  const strayWrites = filesUnder(dir).filter(
+  return { ...run, strayWrites: strays(dir, before), replay }
+}
+
+/**
+ * What a run has written beside its output directory and outside the
+ * package's own state (`.oracle-gaps`), as paths relative to the package:
+ * the files under `dir` that were not in `before`.
+ */
+const strays = (dir, before) =>
+  filesUnder(dir).filter(
     (file) =>
       !before.has(file) &&
       !KNOWN_STRAY_WRITES.test(file) &&
       !OWN_WRITES.some((home) => file === home || file.startsWith(`${home}/`)),
   )
-  return { ...run, strayWrites, replay }
+
+/**
+ * A run that the driver stops by `signal` while the stop witness's test
+ * spins (law 13). The CLI runs only the witness's mutants (`ids`), with
+ * Vitest's workers in `pool`, in one context. Once the spinning test has
+ * recorded its own process and the child process it started, the driver
+ * lists what the run has written so far beside its output directory and
+ * the package's `.oracle-gaps` (law 10's namespace, while the run runs, not
+ * only after it closes), sends the signal to the CLI, and waits for the CLI
+ * to end. A second later, each recorded process must have ended.
+ */
+async function stoppedRun(dir, files, how, ids, { signal, pool }) {
+  writeFixture(dir, files)
+  const before = new Set(filesUnder(dir))
+  const pids = mkdtempSync(join(realpathSync(tmpdir()), `gap-stop-`))
+  const { args } = cliArgs(dir, files, {
+    ...how,
+    outName: `out-stop`,
+    contexts: 1,
+    only: ids,
+    pool,
+  })
+  const child = spawn(process.execPath, args, {
+    cwd: repo,
+    env: { ...cleanEnv(), GAP_STOP_DIR: pids },
+    stdio: `ignore`,
+  })
+  let exited = false
+  const exit = new Promise((resolvePromise) =>
+    child.on(`exit`, () => {
+      exited = true
+      resolvePromise(true)
+    }),
+  )
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+  for (
+    let waited = 0;
+    !exited && readdirSync(pids).length < 2 && waited < 120_000;
+    waited += 50
+  )
+    await sleep(50)
+  const spun = readdirSync(pids).length >= 2
+  const strayWhileRunning = strays(dir, before)
+  child.kill(signal)
+  const ended = await Promise.race([exit, sleep(30_000).then(() => false)])
+  await sleep(1000)
+  const alive = readdirSync(pids)
+    .map(Number)
+    .filter((pid) => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    })
+  // What the run left running is stopped here, so that it cannot slow the
+  // next history.
+  for (const pid of alive)
+    try {
+      process.kill(pid, `SIGKILL`)
+    } catch {
+      // It ended meanwhile.
+    }
+  if (!ended) child.kill(`SIGKILL`)
+  rmSync(pids, { recursive: true, force: true })
+  return {
+    signal,
+    pool,
+    spun,
+    ended,
+    survivors: alive.length,
+    strayWhileRunning,
+  }
 }
 
 /**
@@ -578,8 +695,9 @@ function filesUnder(root, within = ``) {
 }
 
 // Where a run may write in the package: its output directories and its own
-// state (the CLI's `out` and `out-daemon` in the fixture, and `.oracle-gaps`).
-const OWN_WRITES = [`out`, `out-daemon`, `.oracle-gaps`]
+// state (the CLI's `out`, `out-daemon`, and `out-stop` in the fixture, and
+// `.oracle-gaps`).
+const OWN_WRITES = [`out`, `out-daemon`, `out-stop`, `.oracle-gaps`]
 // A workspace dependency's one-file bundle, written in that dependency's own
 // `.oracle-gaps` folder (check.mjs, workspaceBundles). This is a known stray
 // write, reported from date-fns (maintainer decision, 2026-11-10: a limit,
@@ -619,9 +737,10 @@ async function runClisAtOnce(dir, files, hows) {
 // the CLI's directory (`.scratch-*` beside the CLI), so the longest path is
 // named first, whatever the order of `names`: naming the CLI first would
 // leave `<cli>/.scratch-XXXX`, a random name, in the trace. The runner's own
-// files in the package carry the CLI's process id
-// (`.oracle-gaps-<pid>-<n>.vitest.config.mts`, check.mjs), and Vitest names
-// such a config when it fails to load, so the id is named too.
+// files carry the CLI's process id (its session directory,
+// `.oracle-gaps/session-<pid>`, and its copies of test files,
+// `.oracle-gaps-<pid>-<n>-<file>`, check.mjs), and Vitest names such a file
+// when it fails to load, so the id is named too.
 function namedScratch(text, names) {
   let named = text
   const longestFirst = names
@@ -631,7 +750,9 @@ function namedScratch(text, names) {
     named = named
       .replaceAll(pathToFileURL(path).href, name)
       .replaceAll(path, name)
-  return named.replaceAll(/\.oracle-gaps-\d+/g, `.oracle-gaps-<pid>`)
+  return named
+    .replaceAll(/\.oracle-gaps-\d+/g, `.oracle-gaps-<pid>`)
+    .replaceAll(/session-\d+/g, `session-<pid>`)
 }
 
 /** What one run of the CLI reported, from its exit status and its files. */
@@ -671,7 +792,16 @@ function readRun(dir, out, status, stderr, cli) {
   // A refused run's results.json holds the refusal, not results (law 12).
   if (results === undefined) report = undefined
   const lines = `${stderr ?? ``}`.split(`\n`)
+  // Each heartbeat (law 11): what the busy copy runs (a mutant's id, or
+  // `baseline`), its test file, relative to the package, and for how long.
+  const heartbeats = lines.flatMap((line) => {
+    const beat = line.match(/^busy: (\S+) in (\S+) for (\d+)s$/)
+    return beat
+      ? [{ label: beat[1], file: beat[2], seconds: Number(beat[3]) }]
+      : []
+  })
   return {
+    heartbeats,
     // The config the run says it used (law 3), and the warnings Node printed
     // for the process.
     configLines: lines.filter((line) =>
@@ -709,6 +839,10 @@ function readRun(dir, out, status, stderr, cli) {
     // A refused run is compared by the cause it names.
     refusal: named?.match(/^refused: (.*)$/m)?.[1],
     mutants: (results ?? []).map((r) => ({
+      id: r.id,
+      // The owner files whose tests reached it, relative to the package.
+      oracleFiles: (r.oracleFiles ?? []).map((file) => relative(dir, file)),
+      ordinaryFiles: (r.ordinaryFiles ?? []).map((file) => relative(dir, file)),
       key: r.key,
       source: r.source,
       function: r.function,
@@ -1100,6 +1234,20 @@ async function driver(plan, observe) {
       observe(`replay`, { command: replay, ran: replayed(dir, replay) })
     // Reach comes from what the CLI reported, mapped onto the plan.
     const states = new Set()
+    // Law 13: each stop run, once the CLI has judged the stop witness.
+    const stopIds = cli.mutants
+      .filter((m) => m.function === `w_stop`)
+      .map((m) => m.id)
+    if (cli.exit === 0 && stopIds.length > 0)
+      for (const stop of plan.stopRuns) {
+        const stopped = await stoppedRun(dir, files, how, stopIds, stop)
+        observe(`stopped`, stopped)
+        if (!stopped.spun) continue
+        states.add(`a run stopped by ${stop.signal} while a worker spun`)
+        states.add(
+          `a stopped run whose workers are ${stop.pool === `forks` ? `child processes` : `threads`}`,
+        )
+      }
     // Each kind of declaration fault is its own state, so each refusal has
     // a history that depends on it.
     if (plan.fault !== `none` && cli.exit !== 0)
@@ -1303,6 +1451,10 @@ async function driver(plan, observe) {
         states.add(`a hang in one owner and a kill in another killed`)
       if (m.function === `w_hangsurvive` && m.outcome === `timeout`)
         states.add(`a hang in one owner and a survivor in another timed out`)
+      if (m.function === `w_slowpair` && m.outcome === `timeout`)
+        states.add(`confirmations past a mutant's budget timed out`)
+      if (cli.heartbeats.some((beat) => beat.label === m.id))
+        states.add(`a heartbeat named a busy mutant`)
       const named = {
         killed: `killed`,
         'random-only-kill': `random-only kill`,
@@ -1618,6 +1770,38 @@ function check(plan, observations, expected) {
       `streaming`,
       { actual: cli.streamed, expected: cli.gaps },
     )
+  // A heartbeat names what its busy copy runs: a mutant, and a test file
+  // that runs it (an owner file whose tests reached it, an ordinary file for
+  // the ordinary tier, an oracle file for an authored mutant), or the
+  // baseline and a test file. Each mutant whose run reaches a slow owner
+  // test keeps a copy busy past the interval, so a heartbeat names it.
+  const byId = new Map(cli.mutants.map((m) => [m.id, m]))
+  for (const beat of cli.heartbeats) {
+    const m = byId.get(beat.label)
+    const runsIt =
+      beat.label === `baseline`
+        ? /^tests\/[abc]\.test\.ts$/.test(beat.file)
+        : m?.authored
+          ? /^tests\/[ab]\.test\.ts$/.test(beat.file)
+          : [...(m?.oracleFiles ?? []), ...(m?.ordinaryFiles ?? [])].includes(
+              beat.file,
+            )
+    if (!runsIt)
+      return violation(
+        `cli`,
+        `a heartbeat names ${beat.label} in ${beat.file}, which does not run it`,
+        `streaming`,
+        { actual: beat },
+      )
+  }
+  for (const [owed, got] of pairs)
+    if (owed.heartbeat && !cli.heartbeats.some((beat) => beat.label === got.id))
+      return violation(
+        `cli`,
+        `${site(got)}: no heartbeat named it while its slow owner test ran`,
+        `streaming`,
+        { actual: cli.heartbeats, expected: got.id },
+      )
   for (const [owed, got] of pairs)
     if (!owed.probe && got.ordinaryOutcome !== owed.ordinaryOutcome)
       return violation(
@@ -1682,6 +1866,35 @@ function check(plan, observations, expected) {
         },
       },
     )
+  // Law 13, and law 10's namespace while a run runs: a stopped run had
+  // written nothing beside its output directory and the package's
+  // `.oracle-gaps` (where Vitest's include could find it), and once the CLI
+  // ends, no process the run started is left.
+  for (const { value } of observations.filter(
+    (o) => o.checkpoint === `stopped`,
+  )) {
+    const how = `${value.signal}, workers as ${value.pool}`
+    if (value.strayWhileRunning.length > 0)
+      return violation(
+        `stopped`,
+        `while it ran, the run had written ${value.strayWhileRunning.join(`, `)} outside its output directory and the package's .oracle-gaps`,
+        `output namespace`,
+        { actual: value.strayWhileRunning, expected: [] },
+      )
+    if (!value.ended)
+      return violation(
+        `stopped`,
+        `the CLI did not end within 30 s of ${how}`,
+        `stopping`,
+      )
+    if (value.survivors > 0)
+      return violation(
+        `stopped`,
+        `${value.survivors} of the processes the run started outlived the CLI (${how})`,
+        `stopping`,
+        { actual: value.survivors, expected: 0 },
+      )
+  }
   const moved = observations.find((o) => o.checkpoint === `stability`)?.value
   if (moved) {
     if (moved.exit !== 0 || !moved.reported)
@@ -1857,6 +2070,54 @@ calibrations.push({
   },
 })
 
+// Laws 10, 11, and 13 on what a run does while it runs. Each changes a
+// trace that holds the observation, so a check that cannot see the
+// difference passes it.
+const corruptStopped = (change) => (trace) => {
+  const index = trace.findIndex(
+    (o) => o.checkpoint === `stopped` && o.value.spun,
+  )
+  if (index < 0) return undefined
+  const value = change(structuredClone(trace[index].value))
+  return trace.map((o, i) => (i === index ? { ...o, value } : o))
+}
+calibrations.push(
+  {
+    name: `a stopped run leaves a process it started running`,
+    law: `stopping`,
+    corrupt: corruptStopped((value) => ({ ...value, survivors: 1 })),
+  },
+  {
+    name: `a stopped run had written a copy beside the tests`,
+    law: `output namespace`,
+    corrupt: corruptStopped((value) => ({
+      ...value,
+      strayWhileRunning: [`tests/.oracle-gaps-1-1-a.test.ts`],
+    })),
+  },
+  {
+    name: `a busy mutant is named in no heartbeat`,
+    law: `streaming`,
+    corrupt: corruptCli((cli) =>
+      cli.exit !== 0 || cli.heartbeats.length === 0
+        ? undefined
+        : { ...cli, heartbeats: [] },
+    ),
+  },
+  {
+    name: `a heartbeat names a file that does not run its mutant`,
+    law: `streaming`,
+    corrupt: corruptCli((cli) => {
+      const beat = cli.heartbeats.find((b) => b.label !== `baseline`)
+      if (cli.exit !== 0 || !beat) return undefined
+      return {
+        ...cli,
+        heartbeats: [{ ...beat, file: `tests/elsewhere.test.ts` }],
+      }
+    }),
+  },
+)
+
 // Law 9's states: reuse, a mix of reuse and recomputation, reuse from disk
 // after a restart, and each content edit changing the cold result, without
 // which a stale cache would match the cold run by chance.
@@ -1966,6 +2227,12 @@ const required = [
   `a hang alone timed out`,
   `a hang in one owner and a kill in another killed`,
   `a hang in one owner and a survivor in another timed out`,
+  `confirmations past a mutant's budget timed out`,
+  `a heartbeat named a busy mutant`,
+  `a run stopped by SIGTERM while a worker spun`,
+  `a run stopped by SIGINT while a worker spun`,
+  `a stopped run whose workers are child processes`,
+  `a stopped run whose workers are threads`,
   `a batch cut off by a hang reran the rest`,
   `a config exported as an async function ran`,
   `a config in vitest.config.ts ran`,
@@ -2077,9 +2344,9 @@ const withDeclaration = (constructed) =>
 oracleProperty({
   id: `oracle-gaps.report`,
   law: {
-    statement: `The gap report enumerates the promised operator mutants, leaves out exactly the probe-only code, discovers every oracle that owns a function's call tree and refuses broken ownership, judges each mutant only by its owners' tests on their registered routes and counts only law verdicts on reproducible routes as kills, which outrank a run that never ends, anchors each mutant by its function and normalized statement, lists every gap and unowned mutant once with consistent counts, keeps keys stable under unrelated edits, reports through one daemon per package what a cold run reports at every state of a sequence of edits, and runs the package as Vitest does from any install path and any --source spelling: one instance of each workspace dependency, no refusal over an unbuildable devDependency, child processes for a native addon anywhere in the tree, a capture that a test's builtin spies cannot see, and a refusal of test.projects; and every run that does not complete ends, cold or through the daemon, with a refusal that exits 2, prints a refused: block and one fix: directive with no stack trace, and writes the refusal to the run's output directory.`,
-    authority: `The maintainer's decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), not in this package's records, including that a kill by reach agreement alone is a gap and that an incremental run through the daemon equals a cold one (v19.3); the project's oracle guide on quiet exclusions; the oracle rubric's outcome kinds (ORC-006); the CLI's documented operator list in schemata.mjs.`,
-    limits: `Law 12 judges refusals only: no legal history reaches an internal error, so its shape (exit 3, the stack in error.log) is not judged; argument refusals are the static oracle's; the check's rejection of a stack trace, a missing fix, and a wrong exit code is calibrated in the static oracle, through the same refusalBreach, and here only a refused run reported as complete is calibrated, because each calibration here runs real CLI histories. Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 6 s full limit, and a slow run only as one witness that waits 3 s before it judges; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; no --only, --sample, or --diff-base; a derived class's file is instrumented and its sites are judged as unowned, but no test imports or constructs the class, so its no-mutant and super-region behavior is the static oracle's (in-process), not this oracle's; package configs only as vite.config or vitest.config with one of the extensions .ts, .mts, .cts, .js, .mjs, and .cjs (not every pair), as config/gap-vitest with the same extension through --config, or none, as an object or a sync or async function, with no plugins of their own and test.projects only as a refusal, and only under the package's own package.json; a top-level await only in an ES module config and require only in a CommonJS one, as Vitest itself loads no other; a --config outside the package is refused by design, through the rule for paths outside the package (args.mjs), and no history generates one; contexts only four or eleven, and process warnings judged only as MaxListenersExceededWarning on the CLI's own stderr (a daemon's process warnings go to its log); a context that fails to open gives back its listener allowance, which no observation shows (a kept allowance only raises the limit, so no warning follows), so that accounting is fixed by inspection; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9's edits leave out files read through fs, other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; cut-off charging judged only under one budget; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages; daemon races (two CLIs reading one error file, a CLI hearing closing from the failing daemon it started, a reset connection on macOS) fixed by inspection; a workspace dependency's one-file bundle is written in that dependency's own .oracle-gaps folder, a known stray write (date-fns report), which the stray-write check excludes; the runner's copies and Vitest configs (.oracle-gaps-PID*) sit at the package root and are removed when the run closes, so a killed run leaves them there, and the stray-write check runs after close and cannot see them; a counterexample shrinks through at most six histories, so it can be larger than the smallest that fails; module-level data only as four \`const\` declarations of the main source (an object literal, an array that holds a function, a boolean, and an object of two methods), read in place, with no data imported from another file, destructured, reassigned, or declared as an enum or a default export.`,
+    statement: `The gap report enumerates the promised operator mutants, leaves out exactly the probe-only code, discovers every oracle that owns a function's call tree and refuses broken ownership, judges each mutant only by its owners' tests on their registered routes and counts only law verdicts on reproducible routes as kills, which outrank a run that never ends, anchors each mutant by its function and normalized statement, lists every gap and unowned mutant once with consistent counts, keeps keys stable under unrelated edits, reports through one daemon per package what a cold run reports at every state of a sequence of edits, and bounds the runs that confirm a mutant's cut-off copies by one budget per mutant and names each busy mutant in a heartbeat while it runs, writes nothing where Vitest's include could find it while it runs, leaves no process running once it is stopped, runs the package as Vitest does from any install path and any --source spelling: one instance of each workspace dependency, no refusal over an unbuildable devDependency, child processes for a native addon anywhere in the tree, a capture that a test's builtin spies cannot see, and a refusal of test.projects; and every run that does not complete ends, cold or through the daemon, with a refusal that exits 2, prints a refused: block and one fix: directive with no stack trace, and writes the refusal to the run's output directory.`,
+    authority: `The maintainer's decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), not in this package's records, including that a kill by reach agreement alone is a gap and that an incremental run through the daemon equals a cold one (v19.3); the project's oracle guide on quiet exclusions; the oracle rubric's outcome kinds (ORC-006); the CLI's documented operator list in schemata.mjs; the maintainer's dispositions G1, G2, and G4 of the framework papercut ledger (2026-11-11) and the v20 freeze's namespacing decision (2026-11-10).`,
+    limits: `Law 12 judges refusals only: no legal history reaches an internal error, so its shape (exit 3, the stack in error.log) is not judged; argument refusals are the static oracle's; the check's rejection of a stack trace, a missing fix, and a wrong exit code is calibrated in the static oracle, through the same refusalBreach, and here only a refused run reported as complete is calibrated, because each calibration here runs real CLI histories. Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 6 s full limit, and a slow run only as two witnesses whose tests wait 3 s where the output changed, one that then judges and one, in two owners, that does not; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; --only only in a stopped run, and no --sample or --diff-base; a derived class's file is instrumented and its sites are judged as unowned, but no test imports or constructs the class, so its no-mutant and super-region behavior is the static oracle's (in-process), not this oracle's; package configs only as vite.config or vitest.config with one of the extensions .ts, .mts, .cts, .js, .mjs, and .cjs (not every pair), as config/gap-vitest with the same extension through --config, or none, as an object or a sync or async function, with no plugins of their own and test.projects only as a refusal, and only under the package's own package.json; a top-level await only in an ES module config and require only in a CommonJS one, as Vitest itself loads no other; a --config outside the package is refused by design, through the rule for paths outside the package (args.mjs), and no history generates one; contexts only four or eleven, and process warnings judged only as MaxListenersExceededWarning on the CLI's own stderr (a daemon's process warnings go to its log); a context that fails to open gives back its listener allowance, which no observation shows (a kept allowance only raises the limit, so no warning follows), so that accounting is fixed by inspection; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9's edits leave out files read through fs, other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; cut-off charging judged only under one budget; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages; daemon races (two CLIs reading one error file, a CLI hearing closing from the failing daemon it started, a reset connection on macOS) fixed by inspection; a workspace dependency's one-file bundle is written in that dependency's own .oracle-gaps folder, a known stray write (date-fns report), which the stray-write check excludes; the runner's copies of the test files exist only in memory, and its harness and Vitest configs sit in the package's .oracle-gaps, where a killed run leaves them; the namespace is checked after each run and, in a stopped run, while the run runs; the stop law covers SIGTERM and SIGINT sent to the CLI, not a SIGKILL of the CLI (its group then ends at the next check of its parent, by inspection) or a signal sent to the daemon, and its witness is one test that spins synchronously and starts one child process; the mutant budget is witnessed as two slow owners whose confirmations pass the --mutant-limit floor, not through its multiple of the owners' unmutated time, and authored mutants have no confirmations to budget; a heartbeat is owed only where a slow test waits 3 s against a 1 s interval; a counterexample shrinks through at most six histories, so it can be larger than the smallest that fails; module-level data only as four \`const\` declarations of the main source (an object literal, an array that holds a function, a boolean, and an object of two methods), read in place, with no data imported from another file, destructured, reassigned, or declared as an enum or a default export.`,
   },
   histories: {
     // A failing history shrinks through at most six smaller ones. Each runs
@@ -2124,6 +2391,12 @@ oracleProperty({
           cliPath: `spaced`,
           boot: false,
           budget: `two`,
+          // Stopped while the stop witness spins, once by each signal and
+          // in each pool (law 13).
+          stopRuns: [
+            { signal: `SIGTERM`, pool: `forks` },
+            { signal: `SIGINT`, pool: `threads` },
+          ],
         }),
       },
       {

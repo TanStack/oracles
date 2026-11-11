@@ -81,6 +81,10 @@
 //     [--diff-base <rev>]
 //     [--first-limit <ms>]    (a copy's first budget; default 2000)
 //     [--hang-limit <ms>]     (the full limit a cut copy gets again; default 10000)
+//     [--mutant-limit <ms>]   (the floor of each mutant's budget, which the
+//                              runs that confirm its cut copies share; the
+//                              budget is the larger of this and ten times
+//                              its owner files' unmutated time; default 30000)
 //     [--test-timeout <ms>]   (default 15000; also bounds hooks and teardown.
 //                              Each mutant run also has a wall-clock limit of
 //                              10 s plus three times its file's unmutated time.)
@@ -96,14 +100,84 @@
 //                              the config it loaded, or says it found none)
 //   oracle-gaps --stop-daemon --package <dir>
 //   oracle-gaps --help      (prints the usage text, args.mjs)
-// Exit codes: 0 the check completed, 2 refused, 3 an internal error.
+// Exit codes: 0 the check completed, 2 refused, 3 an internal error, and
+// 130 or 143 when SIGINT or SIGTERM stopped it.
+//
+// No process outlives the CLI (maintainer disposition G2, 2026-11-11). The
+// CLI starts the run as a child in a process group of its own, which every
+// Vitest worker and every process a test starts joins, and waits for it.
+// SIGINT or SIGTERM is sent on to the whole group; a process that has not
+// ended 2 s later is killed, and so is any process left in the group when
+// the run ends. The run kills its group itself if the CLI dies first.
+import { spawn } from 'node:child_process'
 import { realpathSync } from 'node:fs'
+import { constants } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { parseArgs, usage } from './args.mjs'
 import { codeIdentity, openSession } from './check.mjs'
 import { received, requestDaemon, stopDaemon } from './daemon.mjs'
 import { endRun } from './ending.mjs'
 import { memoryStore } from './evidence.mjs'
+
+// How long the group has to end after a stop signal before it is killed.
+const STOP_GRACE_MS = 2000
+
+/** Signals every process of group `group`; false when none is left. */
+function signalGroup(group, signal) {
+  try {
+    process.kill(-group, signal)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Runs this CLI again as a child in a process group of its own, and ends
+ * with it: with its exit code, or, once a stop signal has ended its group,
+ * with 128 plus the signal's number.
+ */
+function superviseRun() {
+  const child = spawn(
+    process.execPath,
+    [...process.execArgv, ...process.argv.slice(1)],
+    {
+      detached: true,
+      stdio: `inherit`,
+      env: { ...process.env, ORACLE_GAPS_GROUP: String(process.pid) },
+    },
+  )
+  let stopped
+  const stop = (signal) => {
+    if (stopped) return
+    stopped = signal
+    signalGroup(child.pid, signal)
+    const deadline = Date.now() + STOP_GRACE_MS
+    const poll = setInterval(() => {
+      if (signalGroup(child.pid, 0) && Date.now() < deadline) return
+      clearInterval(poll)
+      signalGroup(child.pid, `SIGKILL`)
+      process.exit(128 + constants.signals[signal])
+    }, 50)
+  }
+  process.on(`SIGINT`, stop)
+  process.on(`SIGTERM`, stop)
+  child.on(`exit`, (code, signal) => {
+    if (stopped) return
+    signalGroup(child.pid, `SIGKILL`)
+    process.exit(code ?? 128 + constants.signals[signal])
+  })
+}
+
+/**
+ * The run's side of the group: once the CLI that started it is gone, the
+ * run kills its group, itself included.
+ */
+function watchSupervisor(supervisor) {
+  setInterval(() => {
+    if (process.ppid !== supervisor) process.kill(-process.pid, `SIGKILL`)
+  }, 1000).unref()
+}
 
 /** The summary of a check run in this process. */
 async function checkCold(options) {
@@ -129,7 +203,13 @@ async function checkThroughDaemon(options) {
 
 // A file URL escapes a space, `#`, and the like, so the script's own URL is
 // compared with the URL of the path it was started as.
-if (import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
+const main =
+  import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
+if (main && process.env.ORACLE_GAPS_GROUP === undefined) superviseRun()
+else if (main) {
+  watchSupervisor(Number(process.env.ORACLE_GAPS_GROUP))
+  // A test that runs this CLI starts a run of its own, in a group of its own.
+  delete process.env.ORACLE_GAPS_GROUP
   // The run's options, once its arguments parse; a refusal or an error is
   // written to their output directory.
   let options

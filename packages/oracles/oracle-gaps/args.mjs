@@ -21,6 +21,7 @@ const counts = [
   `test-timeout`,
   `hang-limit`,
   `first-limit`,
+  `mutant-limit`,
 ]
 // Every option that takes a value. Any other option refuses the run, so a
 // misspelled option is not silently ignored.
@@ -42,7 +43,7 @@ export const usage = `Usage: oracle-gaps --package <dir> --source <src/x.ts,...>
   [--env-prefix <name>] [--daemon] [--ordinary] [--seed <n>] [--mutants <dir>]
   [--out <dir>] [--only <id,id>] [--diff-base <rev>] [--test-timeout <ms>]
   [--sample <n>] [--contexts <n>] [--pool threads|forks] [--config <file>]
-  [--first-limit <ms>] [--hang-limit <ms>]
+  [--first-limit <ms>] [--hang-limit <ms>] [--mutant-limit <ms>]
   oracle-gaps --stop-daemon --package <dir>
   oracle-gaps --help
 
@@ -50,7 +51,8 @@ The paths in --source and --config are relative to --package. Without
 --config, the run loads the Vitest config that Vitest discovers in the
 package. Run the CLI from any directory.
 Exit codes: 0 the check completed; 2 refused, with the fix on stderr;
-3 an internal error of oracle-gaps.`
+3 an internal error of oracle-gaps; 130 or 143 stopped by SIGINT or
+SIGTERM, once every process the run started has ended.`
 const help = `as \`oracle-gaps --help\` shows`
 /**
  * The options in `argv`. Paths are resolved against `cwd`, the caller's
@@ -201,6 +203,10 @@ function optionsOf(args, cwd) {
     // The base of a mutant run's first, short budget; a copy past it runs
     // again alone with the full limit before it can be a timeout.
     firstLimit: Number(args[`first-limit`] ?? 2000),
+    // The floor of a mutant's budget, which the runs that confirm its
+    // cut-off copies share (check.mjs, `budgetOf`): 30 s by default, room
+    // for three confirmations at the default hang limit.
+    mutantLimit: Number(args[`mutant-limit`] ?? 30000),
     // Vitest's worker pool. Threads start much faster than child processes;
     // a package with a native addon in its tree runs with `forks`.
     pool: args.pool ?? defaultPool(pkg),
@@ -294,7 +300,7 @@ function walkPool(pkg) {
     seen.add(dir)
     // What decides the walk here: the manifest and node_modules, and, for a
     // dependency, the directories an addon would appear in. The package's
-    // own directory is left out: a check writes its harness and test copies
+    // own directory is left out: a check writes its state (`.oracle-gaps`)
     // there.
     const prebuilds = join(dir, `prebuilds`)
     for (const path of [

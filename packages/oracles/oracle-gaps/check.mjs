@@ -316,7 +316,14 @@ export async function openSession(pkg) {
   process.env.TEST = `true`
   process.env.VITEST = `true`
   process.env.NODE_ENV ??= `test`
-  const harness = join(pkg, `.oracle-gaps-${process.pid}.capture-setup.mjs`)
+  // This process's own files, in the package's state directory and never
+  // beside the tests, where a Vitest run started meanwhile would find them
+  // (maintainer disposition G4, 2026-11-11; the freeze's namespacing
+  // decision): the capture setup and one wrapper config per context. A
+  // killed run leaves its directory there, where no include finds it.
+  const home = join(pkg, `.oracle-gaps`, `session-${process.pid}`)
+  mkdirSync(home, { recursive: true })
+  const harness = join(home, `capture-setup.mjs`)
   copyFileSync(join(here, `capture-setup.mjs`), harness)
   // One wrapper config per context, over the package's own config (a path
   // relative to the package, or undefined for none). Each serves its own
@@ -326,11 +333,10 @@ export async function openSession(pkg) {
   // format Vite would load that config in: an `.mts` wrapper for an ES
   // module config (where a top-level await works), and a `.cts` one for a
   // CommonJS config (where `require` works).
-  const wrappers = new Set()
   const wrapperFor = (index, config) =>
     join(
-      pkg,
-      `.oracle-gaps-${process.pid}-${index}.vitest.config.${config === undefined || isModuleConfig(pkg, config) ? `mts` : `cts`}`,
+      home,
+      `vitest-${index}.config.${config === undefined || isModuleConfig(pkg, config) ? `mts` : `cts`}`,
     )
   const writeWrapper = (index, config) => {
     const wrapper = wrapperFor(index, config)
@@ -338,15 +344,21 @@ export async function openSession(pkg) {
       wrapper,
       `import { realpathSync } from 'node:fs'
 import { mergeConfig } from 'vitest/config'
-${config ? `import base from ${JSON.stringify(`./${config}`)}` : `const base = {}`}
+${config ? `import base from ${JSON.stringify(relativePath(home, join(pkg, config)))}` : `const base = {}`}
 // Vitest accepts a config object or a function that returns one.
 export default async (env) => {
   const merged = mergeConfig(typeof base === 'function' ? await base(env) : base, {
   plugins: [{
     name: 'oracle-gaps-schemata',
     enforce: 'pre',
-    // A workspace dependency loads from its one-file bundle (workspaceBundles).
+    // A copy of a test file (runBatch) exists only here, so no other Vitest
+    // run finds it; Vite names a file in the package by its path from the
+    // package. A workspace dependency loads from its one-file bundle
+    // (workspaceBundles).
     resolveId(source) {
+      const copies = globalThis.__oracleGapsCopies
+      for (const path of [source, ${JSON.stringify(pkg)} + source])
+        if (copies?.has(path)) return path
       return globalThis.__oracleGapsBundles?.get(source)
     },
     load(id) {
@@ -357,6 +369,8 @@ export default async (env) => {
       const at = id.indexOf('?')
       if (at >= 0 && [...new URLSearchParams(id.slice(at + 1)).keys()].every((key) => ['raw', 'url', 'worker', 'sharedworker', 'inline'].includes(key))) return undefined
       const path = at < 0 ? id : id.slice(0, at)
+      const copy = globalThis.__oracleGapsCopies?.get(path)
+      if (copy !== undefined) return copy
       // This context's authored patch, or else the instrumented source of the
       // current check, both set by the runner in this process.
       try {
@@ -368,14 +382,15 @@ export default async (env) => {
   })
   // The harness runs before the package's own setup files, so that it sees
   // the worker's globals before a setup file adds to them.
-  merged.test = { ...merged.test, setupFiles: ['./${harness.split(`/`).at(-1)}', ...[merged.test?.setupFiles ?? []].flat()] }
+  merged.test = { ...merged.test, setupFiles: [${JSON.stringify(harness)}, ...[merged.test?.setupFiles ?? []].flat()] }
   return merged
 }
 `,
     )
-    wrappers.add(wrapper)
   }
   globalThis.__oracleGapsServe = []
+  // The text of each copy of a test file that a batch runs, by its path.
+  globalThis.__oracleGapsCopies = new Map()
   // Vitest resolves test-file filters and parts of its project setup against
   // the working directory, so the runner works from the package directory.
   process.chdir(pkg)
@@ -412,8 +427,13 @@ export default async (env) => {
   const fromConfig = (index, config, loading) =>
     loading.catch((error) => {
       const name = config ?? `the default Vitest config`
+      const wrapper = wrapperFor(index, config)
       throw new Refusal(
-        `the package's Vitest config (${name}) failed to load: ${String(error?.message ?? error).replaceAll(basename(wrapperFor(index, config)), name)}`,
+        `the package's Vitest config (${name}) failed to load: ${String(
+          error?.message ?? error,
+        )
+          .replaceAll(wrapper, config === undefined ? name : join(pkg, config))
+          .replaceAll(basename(wrapper), name)}`,
         `Make ${name} load under Vitest: run vitest --run in the package and fix the error it reports.`,
       )
     })
@@ -522,10 +542,9 @@ export default async (env) => {
     lastServed.clear()
   }
   // This process's harness files are generated from this CLI's own files,
-  // which every key covers, and their names carry the process id, so they
+  // which every key covers, and their directory names the process, so they
   // are left out of every key and input.
-  const ownHarness = (path) =>
-    path.startsWith(`${pkg}/.oracle-gaps-${process.pid}`)
+  const ownHarness = (path) => path.startsWith(`${home}/`)
   // The files the Vite config loaded, for the global key.
   const configFiles = () =>
     (contexts[0]?.vite?.config?.configFileDependencies ?? []).filter(
@@ -543,6 +562,30 @@ export default async (env) => {
         context.invalidateFile(path)
         served.set(path, hash)
       }
+    }
+  }
+
+  // The heartbeat (maintainer disposition G1, 2026-11-11): while one copy
+  // runs, each interval it passes prints what it runs, in which test file,
+  // and for how long, so that a long run never looks frozen. Its label is
+  // its mutant's id, an authored mutant's `authored:<id>`, or `baseline`
+  // for a run with no mutant. The interval is 30 s; the CLI's oracle
+  // shortens it (ORACLE_GAPS_HEARTBEAT_MS). Each check sets where it logs.
+  let pulse = { log: () => {}, every: 30_000 }
+  function heartbeat() {
+    let since
+    let sent = 0
+    return (label, file, started) => {
+      if (started !== since) {
+        since = started
+        sent = 0
+      }
+      const elapsed = Date.now() - started
+      if (Math.floor(elapsed / pulse.every) <= sent) return
+      sent = Math.floor(elapsed / pulse.every)
+      pulse.log(
+        `busy: ${label} in ${relativePath(pkg, file)} for ${Math.floor(elapsed / 1000)}s`,
+      )
     }
   }
 
@@ -569,6 +612,7 @@ export default async (env) => {
       stopOnKill = false,
       ignore = [],
       callBudget = null,
+      label = `baseline`,
     } = {},
   ) {
     const capture = join(out, `run-${process.pid}-${++runCounter}.jsonl`)
@@ -602,22 +646,23 @@ export default async (env) => {
       existsSync(capture) &&
       readFileSync(capture, `utf8`).includes(`"spin":true`)
     let spunAt
-    const result =
-      limitMs === undefined
-        ? await running
-        : await Promise.race([
-            running,
-            new Promise((resolve) => {
-              timer = setTimeout(() => resolve(undefined), limitMs)
-              const poll = () => {
-                if (spinRow()) spunAt ??= Date.now()
-                if (spunAt !== undefined && Date.now() - spunAt > IDLE_MS)
-                  return resolve(undefined)
-                poller = setTimeout(poll, 50)
-              }
-              poller = setTimeout(poll, 50)
-            }),
-          ])
+    const beat = heartbeat()
+    // A run with no time limit (an unmutated one) only beats.
+    const result = await Promise.race([
+      running,
+      new Promise((resolve) => {
+        if (limitMs !== undefined)
+          timer = setTimeout(() => resolve(undefined), limitMs)
+        const poll = () => {
+          beat(label, file, started)
+          if (limitMs !== undefined && spinRow()) spunAt ??= Date.now()
+          if (spunAt !== undefined && Date.now() - spunAt > IDLE_MS)
+            return resolve(undefined)
+          poller = setTimeout(poll, 50)
+        }
+        poller = setTimeout(poll, 50)
+      }),
+    ])
     clearTimeout(timer)
     clearTimeout(poller)
     const seconds = (Date.now() - started) / 1000
@@ -738,12 +783,15 @@ export default async (env) => {
   let copyCounter = 0
   async function runBatch(context, out, items, seed) {
     const capture = join(out, `run-${process.pid}-${++runCounter}.jsonl`)
+    // Each copy is named beside its file, so that its imports resolve as the
+    // file's do, and the wrapper's plugin serves its text: nothing is
+    // written there.
     const copies = items.map((item) => {
       const copy = join(
         dirname(item.file),
         `.oracle-gaps-${process.pid}-${++copyCounter}-${basename(item.file)}`,
       )
-      writeFileSync(copy, readFileSync(item.file))
+      globalThis.__oracleGapsCopies.set(copy, readFileSync(item.file, `utf8`))
       return copy
     })
     const keyFor = (copy, file) => (key) =>
@@ -820,6 +868,7 @@ export default async (env) => {
     let current = 0
     let copyStarted = Date.now()
     let timer
+    const beat = heartbeat()
     const watchdog = new Promise((resolve) => {
       const poll = () => {
         const at = finished()
@@ -828,6 +877,11 @@ export default async (env) => {
           current = at
           copyStarted = Date.now()
         }
+        beat(
+          items[current].label ?? `baseline`,
+          items[current].file,
+          copyStarted,
+        )
         if (
           idle.has(copies[current]) ||
           Date.now() - (spunAt.get(copies[current]) ?? Infinity) > IDLE_MS ||
@@ -971,7 +1025,7 @@ export default async (env) => {
         }),
       }
     } finally {
-      for (const copy of copies) rmSync(copy, { force: true })
+      for (const copy of copies) globalThis.__oracleGapsCopies.delete(copy)
       rmSync(capture, { force: true })
     }
   }
@@ -979,6 +1033,10 @@ export default async (env) => {
   async function check(options, store, log = console.error) {
     const authored = options.mutants ? loadAuthored(options.mutants) : []
     seedVariable = `${options.envPrefix}_SEED`
+    pulse = {
+      log,
+      every: Number(process.env.ORACLE_GAPS_HEARTBEAT_MS ?? 30_000),
+    }
     mkdirSync(options.out, { recursive: true })
     // An earlier run's internal error; a completed check writes the other
     // files of an ending over the earlier ones (ending.mjs).
@@ -1089,6 +1147,8 @@ export default async (env) => {
       spin: 0,
       rerun: 0,
       unchanged: 0,
+      // Confirmations that a mutant's budget cut short or left no time.
+      budget: 0,
     }
     // Each file's imports in its unmutated run. A run that timed out reports
     // none, so it is stored under these: a mutant changes no import.
@@ -1248,6 +1308,7 @@ export default async (env) => {
     // judge, or one whose errors outside any test cannot be attributed.
     async function runAlone(slot, r) {
       const u = await unit(slot.context, r.file, r.spec, {
+        label: r.label,
         mutant: r.mutant,
         select: r.select,
         stopOnKill: r.stopOnKill,
@@ -1263,27 +1324,44 @@ export default async (env) => {
     // limit. Only a run cut off there too is a timeout. An idle copy in a
     // file with no I/O is final at once (see unitsBatch): it waits on
     // nothing that can come.
+    //
+    // A mutant's confirmations share its budget (`budgetOf`): one gets at
+    // most what the budget has left after the confirmations before it and
+    // those still running, and gives back what it did not use. One that gets
+    // nothing does not run, and one that the budget cuts short times out;
+    // neither is remembered, since it depends on the mutant's other runs.
     async function confirmAlone(slot, hung, full) {
-      const alone = await runBatch(
-        slot.context,
-        options.out,
-        [{ ...hung, limitMs: full }],
-        options.seed ?? null,
-      )
-      if (alone.unattributed)
-        return { unit: await runAlone(slot, { ...hung, limitMs: full }) }
-      // The index of the context that ran it, before any replacement.
-      const at = indexOf.get(slot.context)
-      if (alone.timedOutAt === 0) {
-        evidence.cut += 1
-        if (alone.idle) evidence.idle += 1
-        await replace(slot)
-        return {
-          unit: { file: hung.file, timedOut: true, seconds: full / 1000 },
-          at,
+      const budget = hung.st && budgetOf(hung.st)
+      const limit = budget ? Math.min(full, budget.left) : full
+      if (budget) budget.left -= limit
+      const began = Date.now()
+      try {
+        if (limit < full) evidence.budget += 1
+        if (limit <= 0)
+          return { unit: { file: hung.file, timedOut: true, seconds: 0 } }
+        const alone = await runBatch(
+          slot.context,
+          options.out,
+          [{ ...hung, limitMs: limit }],
+          options.seed ?? null,
+        )
+        if (alone.unattributed)
+          return { unit: await runAlone(slot, { ...hung, limitMs: limit }) }
+        // The index of the context that ran it, before any replacement.
+        const at = indexOf.get(slot.context)
+        if (alone.timedOutAt === 0) {
+          evidence.cut += 1
+          if (alone.idle) evidence.idle += 1
+          await replace(slot)
+          return {
+            unit: { file: hung.file, timedOut: true, seconds: limit / 1000 },
+            at: limit < full ? undefined : at,
+          }
         }
+        return { unit: alone.units[0], at }
+      } finally {
+        if (budget) budget.left += Math.max(0, limit - (Date.now() - began))
       }
-      return { unit: alone.units[0], at }
     }
 
     const vitest = contexts[0]
@@ -1316,6 +1394,30 @@ export default async (env) => {
         limitFor(file),
         options.firstLimit + 3000 * (fileSeconds.get(file) ?? 10),
       )
+    // Each mutant's budget (maintainer disposition G1, 2026-11-11), for the
+    // runs that confirm its cut-off copies (confirmAlone): the larger of
+    // `--mutant-limit` (30 s by default) and ten times its owner files'
+    // unmutated time. With the default limits the floor holds three
+    // confirmations at the full limit of a fast file, and ten times the
+    // owners' time covers a confirmation at the full limit, which allows a
+    // copy three times its file's time, in every owner. Each first run of a
+    // copy is bounded by its first budget, so a mutant's whole time is
+    // bounded: one that makes every test wait for its own timeout is a
+    // timeout within its budget, whatever `--hang-limit` allows one copy.
+    const budgets = new Map()
+    const budgetOf = (st) => {
+      if (!budgets.has(st.mutant)) {
+        const owners = [...st.targets.oracleTargets, ...st.targets.testTargets]
+        const seconds = owners.reduce(
+          (sum, file) => sum + (fileSeconds.get(file) ?? 0),
+          0,
+        )
+        budgets.set(st.mutant, {
+          left: Math.max(options.mutantLimit, 10_000 * seconds),
+        })
+      }
+      return budgets.get(st.mutant)
+    }
     // A run cut off is still running, so its context is replaced; closing
     // it stops the worker.
     const replace = async (slot) => {
@@ -1608,6 +1710,7 @@ export default async (env) => {
           if (file === undefined) continue
           requests.push({
             st,
+            label: st.mutant.id,
             position,
             file,
             spec: `mutant:${st.mutant.number}`,
@@ -1832,6 +1935,7 @@ export default async (env) => {
           const [got] = await unitsBatch(slot, [
             {
               file,
+              label: job.id,
               spec: job.id,
               mutant: -1,
               select: null,
@@ -1905,8 +2009,7 @@ export default async (env) => {
 
   async function close() {
     await closeContexts()
-    for (const wrapper of wrappers.values()) rmSync(wrapper, { force: true })
-    rmSync(harness, { force: true })
+    rmSync(home, { recursive: true, force: true })
   }
 
   return { check, close }
