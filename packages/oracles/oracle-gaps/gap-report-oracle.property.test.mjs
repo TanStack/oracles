@@ -2209,9 +2209,10 @@ oracleProperty({
           ...generated,
           fault: `projects`,
           // Nothing owns anything: no function owners, no library owners,
-          // no module data owners, no whole-file entry.
+          // no module data or unnamed export owners, no whole-file entry.
           owners: [],
           dataOwners: [],
+          exportOwners: [],
           library: [],
           libraryOwners: [],
           containers: [],
