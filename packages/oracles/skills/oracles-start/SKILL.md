@@ -72,6 +72,7 @@ these:
 - a minimal Vitest config that picks up the oracle file, only when the
   repository's own config does not
 - oracle files, with their prose
+- the feedback log, `oracles-feedback.md`, while this is a preview
 - the gap check's working directory (`.oracle-gaps/`), when you run it.
   Tell the developer it is safe to delete, and that production adds it to
   `.gitignore`.
@@ -83,8 +84,8 @@ only when the developer asks you to.
 ## A feedback log, while this is a preview
 
 `@tanstack/oracles` is in preview, and its maintainers want to know where
-this session was rough. Keep a log at
-`~/oracles-feedback/<repository name>-<date>.md`, outside the repository.
+this session was rough. Keep a log in `oracles-feedback.md` at the root of
+the repository. Do not commit it.
 Append a short entry whenever a skill or doc was unclear, wrong, or
 contradicted another; whenever you had to guess; whenever a command,
 install, or config step failed or needed a workaround; and whenever

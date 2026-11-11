@@ -54,9 +54,9 @@ Until you choose to ship it, the agent changes nothing in your repository
 except the minimal installs, the oracle file, and the gap check's working
 directory, if it runs.
 
-While the package is in preview, the agent also keeps a feedback log at
-`~/oracles-feedback/<repository>-<date>.md`, outside your repository. When
-you're done, please send it to Kyle Mathews (GitHub KyleAMathews).
+While the package is in preview, the agent also keeps a feedback log,
+`oracles-feedback.md`, at the root of your repository. Don't commit it.
+When you're done, please send it to Kyle Mathews (GitHub KyleAMathews).
 
 The package needs Node 20 or later. The first session installs Vitest 4.1
 and fast-check 4 if the repository does not have them.
