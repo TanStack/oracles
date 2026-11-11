@@ -613,15 +613,18 @@ oracleProperty({
 // the three rules share one account of a test function, so a registration
 // that one rule sees, every rule sees. The account: the root of a callee is a
 // test function when its binding resolves to `it`, `test`, `describe`,
-// `suite`, or `bench` of the test framework (`vitest`, `@fast-check/vitest`,
-// `@playwright/test`), or to a fixture (`.extend(...)`) of one. A binding
+// `suite`, or `bench` imported from any package or subpath alias, or to a
+// fixture (`.extend(...)`) of one. A rule cannot read a package, so it fails
+// closed there (coordinator decision, 2026-11-11). A binding
 // resolves through an alias, a namespace member, a variable of any kind
 // (its initializer and every assignment), a destructuring, a cast, either
 // branch of a conditional or logical expression, and the exports of a test
 // module: a constant, a re-export, `export * as`, and a default export. A
 // binding that resolves to anything else, such as a local function of the
-// same name, a namespace of another package, an ordinary module's function,
-// or a cycle of variables, is no test function, whatever its name.
+// same name, an ordinary module's function, a cycle of variables, or a
+// member that is no registration (`test.step`), is no test function,
+// whatever its name. The answer for a binding in a cycle of modules does not
+// depend on which binding the lint asks about first.
 //
 // What each rule owes for a statement `<callee><modifier>('n', body)`:
 //
@@ -832,17 +835,65 @@ const BINDINGS = {
     test: false,
     render: (r) => ({ callee: `patterns.${r}` }),
   },
+  // Packages other than Vitest's: an import from any package or subpath
+  // alias whose name is a test root is a test function, so a rule fails
+  // closed where it cannot read the package (coordinator decision,
+  // 2026-11-11: a false positive costs a rename, and a false negative
+  // switches a law off).
   'other-package': {
-    test: false,
+    test: true,
     render: (r) => ({ callee: `other.${r}` }),
   },
   'other-package-named': {
-    test: false,
+    test: true,
     render: (r) => ({ callee: `o${capital(r)}` }),
   },
   'other-package-relayed': {
-    test: false,
+    test: true,
     render: (r) => ({ callee: `p${capital(r)}` }),
+  },
+  'other-package-fixture': {
+    test: true,
+    roots: [`it`, `test`, `describe`],
+    render: (r) => ({
+      callee:
+        r === `describe`
+          ? `oTest.extend({}).describe`
+          : `o${capital(r)}.extend({})`,
+    }),
+  },
+  'subpath-alias': {
+    test: true,
+    render: (r) => ({ callee: `h${capital(r)}` }),
+  },
+  // Two modules whose bindings refer to each other: `cx` is a test root or
+  // `cy`, and `cy` is `cx`. Both are test functions, whichever the lint asks
+  // about first (the review of 2026-11-11, third round).
+  'cycle-first': {
+    test: true,
+    render: (r) => ({ callee: `cx${capital(r)}` }),
+  },
+  'cycle-second': {
+    test: true,
+    render: (r) => ({ callee: `cy${capital(r)}` }),
+  },
+  // A conditional whose two branches are test functions is reported once.
+  'conditional-both': {
+    test: true,
+    declares: `aliasTest`,
+    render: (r, k) => ({
+      setup: [`const qb${k} = globalThis.flag ? vitest.${r} : ${r}`],
+      callee: `qb${k}`,
+    }),
+  },
+  // A member that is no registration, such as Playwright's `test.step`,
+  // registers nothing, bound or not.
+  'step-alias': {
+    test: false,
+    render: (r, k) => ({
+      setup: [`const st${k} = ${r}.step`],
+      callee: `st${k}`,
+    }),
   },
 }
 const BINDING_NAMES = Object.keys(BINDINGS)
@@ -887,6 +938,8 @@ const AGREE_HELPERS = {
   'agree-reexports.js': `export { ${ROOTS.map((r) => `${r} as x${capital(r)}`).join(`, `)} } from 'vitest'\n`,
   'agree-star-as.js': `export * as vt from 'vitest'\n`,
   'agree-other.js': `export { ${ROOTS.map((r) => `${r} as p${capital(r)}`).join(`, `)} } from 'regex-lib'\n`,
+  'agree-cycle-a.js': `import { bench, describe, it, suite, test } from 'vitest'\nimport { ${ROOTS.map((r) => `cy${capital(r)}`).join(`, `)} } from './agree-cycle-b.js'\n${ROOTS.map((r) => `export const cx${capital(r)} = globalThis.flag ? ${r} : cy${capital(r)}`).join(`\n`)}\n`,
+  'agree-cycle-b.js': `import { ${ROOTS.map((r) => `cx${capital(r)}`).join(`, `)} } from './agree-cycle-a.js'\n${ROOTS.map((r) => `export const cy${capital(r)} = cx${capital(r)}`).join(`\n`)}\n`,
   'agree-skipped.js': `import { bench, describe, it, suite, test } from 'vitest'\n${ROOTS.map((r) => `export const s${capital(r)} = ${r}.skip`).join(`\n`)}\n`,
   ...Object.fromEntries(
     ROOTS.map((r) => [
@@ -906,6 +959,9 @@ const AGREE_HEADER = [
   `import * as other from 'regex-lib'`,
   `import { ${ROOTS.map((r) => `${r} as o${capital(r)}`).join(`, `)} } from 'regex-lib'`,
   `import { ${ROOTS.map((r) => `p${capital(r)}`).join(`, `)} } from './agree-other.js'`,
+  `import { ${ROOTS.map((r) => `${r} as h${capital(r)}`).join(`, `)} } from '#test/fixtures'`,
+  `import { ${ROOTS.map((r) => `cx${capital(r)}`).join(`, `)} } from './agree-cycle-a.js'`,
+  `import { ${ROOTS.map((r) => `cy${capital(r)}`).join(`, `)} } from './agree-cycle-b.js'`,
   `import { oracleProperty } from '@tanstack/oracles'`,
   `import { checkHistory, compute } from './plain.js'`,
   `import { fxIt, fxTest } from './agree-fixtures.js'`,
@@ -1054,6 +1110,10 @@ const pairState = (binding, modifier) => `${binding} with ${modifier}`
 const rootState = (binding, root) => `${binding} for ${root}`
 const firstRoot = (binding, modifier) =>
   ROOTS.find((root) => allowed(binding, root, modifier))
+// The order in which a file first calls the two bindings of the module
+// cycle: a cached answer must not depend on it.
+const CYCLE_ORDERS = [`cycle-first called first`, `cycle-second called first`]
+
 const AGREE_STATES = [
   ...BINDING_NAMES.flatMap((binding) =>
     MODIFIERS.map((modifier) => pairState(binding, modifier)),
@@ -1064,6 +1124,7 @@ const AGREE_STATES = [
     ),
   ),
   `javascript under espree`,
+  ...CYCLE_ORDERS,
 ]
 
 function agreeReached(history) {
@@ -1073,6 +1134,11 @@ function agreeReached(history) {
     states.add(rootState(binding, root))
   }
   if (history.language === `js`) states.add(`javascript under espree`)
+  const bindings = history.statements.map(({ binding }) => binding)
+  const first = bindings.indexOf(`cycle-first`)
+  const second = bindings.indexOf(`cycle-second`)
+  if (first >= 0 && second >= 0)
+    states.add(CYCLE_ORDERS[first < second ? 0 : 1])
   return states
 }
 
@@ -1107,12 +1173,27 @@ const agreeConstructed = [
     enters: [`javascript under espree`],
     build: (generated) => ({ ...generated, language: `js` }),
   },
+  ...[
+    [`cycle-first`, `cycle-second`],
+    [`cycle-second`, `cycle-first`],
+  ].map((order, at) => ({
+    name: CYCLE_ORDERS[at],
+    enters: [CYCLE_ORDERS[at]],
+    build: (generated) => ({
+      ...generated,
+      statements: order.map((binding) => ({
+        binding,
+        root: `it`,
+        modifier: `none`,
+      })),
+    }),
+  })),
 ]
 
 oracleProperty({
   id: `lint.test-function-agreement`,
   law: {
-    statement: `oracle/no-unit-test, oracle/no-disabled, and oracle/oracle-property-only resolve a callee's root to the same test function: it, test, describe, suite, or bench of vitest, @fast-check/vitest, or @playwright/test, or a fixture of one, through an alias, a namespace member, a variable's initializer or assignment, a destructuring, a cast, a branch of a conditional or logical expression, and a test module's constant, re-export, export * as, or default export. Any other binding is no test function, whatever its name. For a test root no-unit-test reports unitTest; no-disabled reports only, skip for .skip and a .todo with a body, and conditional for .skipIf(true), and aliasTest where a bare test function is passed as a value; oracle-property-only reports rawProperty for .prop. A modifier that a module's binding carries counts at the call, and no-disabled reports alias where a modifier or a modifier call is passed as a value. Every lint ends within ${BUDGET_MS} ms.`,
+    statement: `oracle/no-unit-test, oracle/no-disabled, and oracle/oracle-property-only resolve a callee's root to the same test function: it, test, describe, suite, or bench imported from any package or subpath alias, or a fixture of one, through an alias, a namespace member, a variable's initializer or assignment, a destructuring, a cast, a branch of a conditional or logical expression, and a test module's constant, re-export, export * as, or default export. Any other binding, and a member that is no registration such as test.step, is no test function, whatever its name. An answer does not depend on the order of queries in a cycle of modules, and a conditional whose branches are both test functions is reported once. For a test root no-unit-test reports unitTest; no-disabled reports only, skip for .skip and a .todo with a body, and conditional for .skipIf(true), and aliasTest where a bare test function is passed as a value; oracle-property-only reports rawProperty for .prop. A modifier that a module's binding carries counts at the call, and no-disabled reports alias where a modifier or a modifier call is passed as a value. Every lint ends within ${BUDGET_MS} ms.`,
     authority: `The D2 law of lint.registration-only; the no-disabled and oracle-property-only rules' contracts in their source headers; the review of remove/declare-oracle of 2026-11-11 (P1), which asks that the three rules share one root recognizer and that an unknown callee that may resolve to a test root is reported.`,
     limits: `One oracle file per history with fixed helper modules. A test function passed as a parameter, a global test function, a modifier call relayed from another module (a relayed .skip is generated), a fixture exported by a package, and an unparsable module are not generated.`,
   },
