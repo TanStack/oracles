@@ -84,7 +84,16 @@ of range.
    Do not change the law, a history filter, and an observation in one step.
    Each needs its own comparison.
 
-8. **Optionally check a formal model.** For a consequential claim about state,
+8. **Offer adjacent forms.** Keep design diversity. From the parts and rules,
+   sketch two to four forms that keep every adopted law but differ in a real
+   way: another representation, another allowed-set choice, another split of
+   laws across oracles, or another production structure that the same oracle
+   accepts. Give each form's route, what it keeps, what it changes, and its
+   cost. Merge forms that differ only in naming or detail. Do not rank them
+   unless asked. When the choice is the user's, present the forms and let the
+   user pick.
+
+9. **Optionally check a formal model.** For a consequential claim about state,
    concurrency, retries, or ownership, translate the reduced model into TLA+
    or a similar model checker.
    - Add state only where it changes allowed future behavior. Write derived
@@ -109,6 +118,7 @@ of range.
 - the parts, each with its job and a witness
 - the rules with their sources, and the open conflicts
 - the reduced model, and the comparison for each simplification
+- the adjacent forms, each with what it keeps, changes, and costs
 - formal-check results with their mode, when run
 - the limits: what the work does not establish
 

@@ -87,6 +87,18 @@ table, write this block for each law, in the sheet itself:
    law's sentence. Name any example that the law gets wrong. A wrong one
    means a missing condition, a second law, or a source that disagrees. Say
    which.
+6. **Dynamics, constraints, and boundary conditions:** sort what the law
+   says into three kinds.
+   - **Dynamics:** how the result or the state changes with each action or
+     input. These are the model's rules, and the histories vary them.
+   - **Constraints:** what holds in every history, whatever happens: a count
+     never above its limit, an equality that is symmetric, a read that returns
+     the last write. The check tests them at every checkpoint.
+   - **Boundary conditions:** the edges, where real behavior and most defects
+     live: empty, zero, `-0`, the size limit, at capacity, the first and the
+     last item, keys that shadow prototype names, cleanup. List them. Give
+     each one a constructed history. A boundary that the law does not decide
+     is an open question, not something to leave out of the grammar.
 
 A law written only as examples, or one that cannot rebuild its examples, is
 not ready for the sheet.
@@ -182,6 +194,10 @@ can state it:
 
 Mixing styles is fine. [Model styles](../../docs/model-styles.md) shows a
 small example of each style.
+
+When two styles fit the law, sketch both briefly, keep the one that states
+the law most directly, and name the other in the law block, so a reader can
+choose it later.
 
 **Structure rules:**
 
@@ -377,6 +393,11 @@ it to simplify:
   reason.
 - Prefer a change that shrinks the code, or leaves its size the same. If the
   repository sets a size rule, such as a net-negative diff, follow it.
+- For a larger cleanup, sketch two or three designs that pass the same oracle
+  (a table instead of branches, one state field instead of three, a
+  recompute instead of a cache). Give each one's trade-off, and let the user
+  choose when the choice is theirs. Do not keep only the first design you
+  find.
 - Rerun the oracle and the gap check after each cleanup.
 
 Techniques: [guide § Evidence](../../docs/guide.md#evidence).
