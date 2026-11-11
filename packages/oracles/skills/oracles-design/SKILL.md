@@ -68,7 +68,8 @@ and nothing else:
    Write it as continuous prose in this order. Do not label the parts with
    the names below ("The hook", "The mechanism"): they are for you, not the
    reader.
-   1. **What this oracle owns**, in one or two plain sentences: the
+   1. **What this oracle owns**, in one or two plain sentences, about 40
+      words in all: the
       concrete promise it maintains, the public entry point and checkpoints
       where the promise is owed, and the owned code. A reader who stops here
       knows what the file is for. Name the promise itself. "The stylesheet
