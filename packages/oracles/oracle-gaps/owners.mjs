@@ -23,8 +23,12 @@
 // function of a class (named `Class.member`), a constructor (named
 // `Class.constructor`), or any other function with a name: a function
 // assigned to a variable, or a method, accessor, or function property of an
-// object literal (named by its property). A mutant belongs to the innermost
-// one whose lines hold it. Two functions may share a name, as a getter and
+// object literal (named by its property). Module-level data is a unit of its
+// own, as a function is: a variable declared at the top of a module whose
+// initializer is not a function, named by its variable (`src/x.ts#TABLE`). A
+// function that reads it brings it into its tree, with whatever its
+// initializer refers to, and an owns entry may name it. A mutant belongs to
+// the innermost unit whose lines hold it. Two functions may share a name, as a getter and
 // its setter do, or two nested helpers; each is still its own function, and
 // owns entry that names them owns them all. A function's owners are the
 // oracle files whose trees contain it. A gap is judged across all of them: a
@@ -116,7 +120,18 @@ export function functionsIn(ts, file) {
         ts.isPropertyAssignment(node)) &&
       isFunction(node.initializer) &&
       (ts.isIdentifier(node.name) || ts.isPrivateIdentifier(node.name))
-    if ((hasBody || valued) && (node.name || ts.isConstructorDeclaration(node)))
+    // Module-level data: a top-level variable whose value is not a function.
+    // Its node is the declaration, whose initializer is its text.
+    const data =
+      ts.isVariableDeclaration(node) &&
+      node.initializer !== undefined &&
+      !valued &&
+      ts.isIdentifier(node.name) &&
+      ts.isSourceFile(node.parent.parent.parent)
+    if (
+      (hasBody || valued || data) &&
+      (node.name || ts.isConstructorDeclaration(node))
+    )
       functions.push({
         name: named(node.name ? node.name.getText(file) : `constructor`),
         node: valued ? node.initializer : node,
@@ -181,7 +196,9 @@ export function ownership(ts, program, pkg, oracles) {
       }
       ts.forEachChild(child, visit)
     }
-    if (node.body) visit(node.body)
+    // A function's body, or module data's initializer.
+    const text = node.body ?? node.initializer
+    if (text) visit(text)
     return found
   }
   // Owners by function, and a whole file's owners by its source.
@@ -225,9 +242,9 @@ export function ownership(ts, program, pkg, oracles) {
     ownsAny: (source) =>
       owners.has(source) || functionsOf(source).some((fn) => owners.has(fn)),
     /**
-     * The innermost function whose text holds a position (an offset in the
-     * source), by its name (`<module>` for none), and its owners. A
-     * whole-file entry owns every function in the file.
+     * The innermost unit (a function or module data) whose text holds a
+     * position (an offset in the source), by its name (`<module>` for none),
+     * and its owners. A whole-file entry owns every unit in the file.
      */
     at: (source, position) => {
       let best

@@ -163,6 +163,12 @@ const statement = fc.oneof(
     target: fc.nat({ max: 3 }),
     alias: fc.boolean(),
   }),
+  // A read of module-level data (see `MODULE_DATA`): an object literal's
+  // fields, an array's first element, or a primitive constant.
+  fc.record({
+    kind: fc.constant(`readData`),
+    shape: fc.constantFrom(`object`, `array`, `primitive`),
+  }),
 )
 const libStatement = fc.oneof(
   fc.record({ kind: fc.constant(`push`), quote }),
@@ -530,6 +536,12 @@ const histories = fc.record({
       }),
     },
   ),
+  // Who owns each module-level data declaration directly (`src/sut.ts#D_OBJ`),
+  // in `MODULE_DATA`'s order. A declaration is written when a function reads
+  // it or an entry names it.
+  dataOwners: fc.array(fc.constantFrom(`a`, `b`, `none`, `none`), {
+    maxLength: 3,
+  }),
 })
 
 // The witness module: functions whose outcome classes generated histories
@@ -1267,6 +1279,18 @@ const witness = [
     body: [{ kind: `record` }],
     tests: [judging(`a`, `fixed seed`, 1)],
   },
+  // A function that reads each shape of module-level data, so each
+  // declaration's mutants are owned through it and killed by its test.
+  {
+    id: `w_data`,
+    owners: [`a`],
+    body: [
+      { kind: `readData`, shape: `object` },
+      { kind: `readData`, shape: `array` },
+      { kind: `readData`, shape: `primitive` },
+    ],
+    tests: [judging(`a`, `fixed seed`, 1)],
+  },
   // A test that waits on a child process where the output differs: an I/O
   // handle is open, so its copy is busy, never cut for idleness, and the
   // confirming run kills it.
@@ -1349,6 +1373,7 @@ const captureWitness = new Set([
   `w_cleanup`,
   `w_fcprop`,
   `w_record`,
+  `w_data`,
   `w_spin`,
 ])
 
@@ -1419,6 +1444,41 @@ const preamble = [
   `const memo = new Map<number, string>()`,
   `export const loaded: Array<string> = []`,
 ]
+// Module-level data: a declaration at the top of a module whose initializer
+// is not a function is a unit of its own, named by its variable, as a
+// function is by its name. It is in the static reference tree of every
+// function that reads it, so its sites take the readers' owners; an owns
+// entry may name it directly, and a whole-file entry owns it (F10, the
+// ownership law of owners.mjs applied to data). Its initializer runs when the
+// module loads, so its sites are reached at load. Each shape is written after
+// the preamble, once, with its sites: the object literal's two field drops,
+// the array element's `+`, and the primitive's boolean literal. A `readData`
+// statement pushes what it reads as one template string, so its only own
+// site is the push. What an initializer refers to is in the declaration's
+// tree, as what a function's body refers to is in the function's.
+const MODULE_DATA = [
+  {
+    shape: `object`,
+    id: `D_OBJ`,
+    text: `const D_OBJ = { n: 3, s: 'o' };`,
+    read: `\`\${D_OBJ.n}\${D_OBJ.s}\``,
+  },
+  {
+    shape: `array`,
+    id: `D_ARR`,
+    text: `const D_ARR = [2 + 1, devBuild];`,
+    read: `\`\${D_ARR[0]}\``,
+    // The array holds `devBuild` as a value, so its tree holds `devBuild`.
+    refers: [`devBuild`],
+  },
+  {
+    shape: `primitive`,
+    id: `D_PRIM`,
+    text: `const D_PRIM = true;`,
+    read: `\`\${D_PRIM}\``,
+  },
+]
+const dataOf = (shape) => MODULE_DATA.find((d) => d.shape === shape)
 const preambleStatements = {
   devBuild: `return process.env.NODE_ENV !== 'production'`,
   reportTwice: `report();`,
@@ -1554,6 +1614,8 @@ function renderStatement(stmt, callText) {
       return [`out.push(String(memo.get(x)));`]
     case `pushLoaded`:
       return [`out.push(...loaded);`]
+    case `readData`:
+      return [`out.push(${dataOf(stmt.shape).read});`]
     case `call`:
     case `libCall`:
     case `valueCall`:
@@ -1859,6 +1921,21 @@ function resolveHistory(history) {
     `import { ${imported.join(`, `)} } from './lib'; import { note, seen } from 'state-dep'${history.depSubpath ? `; import 'state-dep/extra'` : ``}`,
     ...preamble,
   ]
+  // Module-level data, after the preamble: each shape that a function reads
+  // or an owns entry names, with its direct owners.
+  const data = MODULE_DATA.flatMap((d, index) => {
+    const owners = { a: [`a`], b: [`b`], none: [] }[
+      history.dataOwners?.[index] ?? `none`
+    ]
+    const read = functions.some((fn) =>
+      fn.body.some(
+        (stmt) => stmt.kind === `readData` && stmt.shape === d.shape,
+      ),
+    )
+    if (!read && owners.length === 0) return []
+    lines.push(d.text)
+    return [{ ...d, owners, line: lines.length }]
+  })
   // A body's statements, each on its own lines. A nested function (an
   // `inner` statement) is defined where it is called: an arrow assigned to
   // its name, or a method of an object literal.
@@ -2057,6 +2134,7 @@ function resolveHistory(history) {
     functions: ownerless
       ? functions.map((fn) => ({ ...fn, owners: [] }))
       : functions,
+    data: ownerless ? data.map((d) => ({ ...d, owners: [] })) : data,
     tests,
     authored,
     authoredList,
@@ -2402,6 +2480,7 @@ function sitesOf(plan) {
         at(`value-undefined`, `get`, stmt.line, whole)
       }
       if (stmt.kind === `primeCall`) at(`delete-call`, `call`, stmt.line, whole)
+      if (stmt.kind === `readData`) at(`delete-call`, `push`, stmt.line, whole)
       if (stmt.kind === `if`) {
         condition()
         at(`delete-call`, `push`, stmt.line, pushText(stmt))
@@ -2513,6 +2592,17 @@ function sitesOf(plan) {
     }
     at(`delete-call`, s.call)
   }
+  // Module-level data: each declaration's sites belong to it, by its name.
+  for (const d of plan.data ?? []) {
+    const put = (operator, role) =>
+      add(d.id, d.line, operator, d.text, { data: d.shape, role })
+    if (d.shape === `object`) {
+      put(`field-drop`, `dropN`)
+      put(`field-drop`, `dropS`)
+    }
+    if (d.shape === `array`) put(`arithmetic-swap`, `arith`)
+    if (d.shape === `primitive`) put(`bool-flip`, `flag`)
+  }
   // A call statement to a probe helper is probe-only code (law 2), at
   // module level too.
   for (const call of plan.loadCalls)
@@ -2570,7 +2660,10 @@ function ownersOf(plan) {
                             : // A property read refers to both its accessors.
                               stmt.kind === `pushStatus`
                               ? [`W9.status#get`, `W9.status#set`]
-                              : [],
+                              : // A read of module data refers to its declaration.
+                                stmt.kind === `readData`
+                                ? [dataOf(stmt.shape).id]
+                                : [],
       ),
     ]),
   )
@@ -2584,6 +2677,7 @@ function ownersOf(plan) {
   }
   // A nested function (`parent>name`) is contained in its parent's text, so
   // its parent's tree holds it, called or not.
+  for (const d of plan.data ?? []) calls.set(d.id, d.refers ?? [])
   for (const fn of plan.functions)
     if (fn.id.includes(`>`)) {
       const parent = fn.id.slice(0, fn.id.lastIndexOf(`>`))
@@ -2591,6 +2685,8 @@ function ownersOf(plan) {
     }
   for (const fn of plan.functions)
     for (const file of fn.owners) visit(fn.id, file)
+  for (const d of plan.data ?? [])
+    for (const file of d.owners) visit(d.id, file)
   // A whole-file entry names the main source, so it owns only its functions.
   const inLibrary = new Set(
     plan.functions.filter((fn) => fn.file !== SOURCE).map((fn) => fn.id),
@@ -2786,6 +2882,26 @@ function interpret(plan, fnId, x, sites, active) {
           }
         }
       }
+      // A read of module data, as the module evaluated it at load under the
+      // same mutant: a dropped field reads undefined, the swapped `+` gives
+      // 1, and the flipped literal false.
+      if (stmt.kind === `readData`) {
+        const site = siteOf(stmt, `push`)
+        reached.add(site.id)
+        if (!isActive(site)) {
+          const at = (role) =>
+            isActive(
+              sites.find((s) => s.data === stmt.shape && s.role === role),
+            )
+          trace.push(
+            stmt.shape === `object`
+              ? `${at(`dropN`) ? undefined : 3}${at(`dropS`) ? undefined : `o`}`
+              : stmt.shape === `array`
+                ? String(at(`arith`) ? 1 : 3)
+                : String(!at(`flag`)),
+          )
+        }
+      }
       if (stmt.kind === `pushTag`) {
         const site = siteOf(stmt, `push`)
         reached.add(site.id)
@@ -2970,6 +3086,12 @@ function judge(plan, tests, sites, active) {
  * tagged `runtime`, so the static oracle, which runs only the analysis, does
  * not expect it.
  */
+/** Whether no owns entry names anything: no whole file, function, or data. */
+const ownsNothing = (plan) =>
+  plan.wholeFile === `none` &&
+  plan.functions.every((fn) => fn.owners.length === 0) &&
+  (plan.data ?? []).every((d) => d.owners.length === 0)
+
 function refusal(plan) {
   // A Vitest that does not load, and a config the runner cannot honor, refuse
   // the run rather than leave every mutant unreached (maintainer decision,
@@ -2997,11 +3119,7 @@ function refusal(plan) {
   // source, so every mutant would read as unowned. The analysis refuses it
   // (maintainer decision, 2026-11-10).
   if (plan.declaration === `neither`) return { cause: `no oracle file` }
-  if (
-    plan.wholeFile === `none` &&
-    plan.functions.every((fn) => fn.owners.length === 0)
-  )
-    return { cause: `owns any selected source` }
+  if (ownsNothing(plan)) return { cause: `owns any selected source` }
   // A setup file that throws fails every oracle file before any test runs,
   // so the run refuses as for a failing owner, naming the setup's error.
   if (plan.fault === `setupThrows`)
@@ -3046,7 +3164,9 @@ function model(plan) {
     interpret(plan, call.fn, 0, sites),
   )
   const ranAtLoad = (site) =>
-    site.fnId === `<module>` || loadRuns.some((run) => run.reached.has(site.id))
+    site.fnId === `<module>` ||
+    site.data !== undefined ||
+    loadRuns.some((run) => run.reached.has(site.id))
   const kindOf = (site) => {
     if (owners(site.fnId).size === 0) return `unowned`
     const tests = ownerTests(site.fnId)
@@ -3237,6 +3357,9 @@ function oracleTestFile(plan, file) {
     ...plan.functions
       .filter((fn) => fn.owners.includes(file))
       .map((fn) => `${spell(fn.file, plan.ownsSpelling)}#${fn.name ?? fn.id}`),
+    ...(plan.data ?? [])
+      .filter((d) => d.owners.includes(file))
+      .map((d) => `${spell(SOURCE, plan.ownsSpelling)}#${d.id}`),
     ...(file === `b` && plan.fault === `badEntry` ? [`${SOURCE}#nope`] : []),
     ...(file === `b` && plan.fault === `missingSource`
       ? [`src/missing.ts#f0`]
@@ -4050,6 +4173,8 @@ export {
   interpret,
   judge,
   refusal,
+  ownsNothing,
+  MODULE_DATA,
   model,
   testName,
   callFor,
