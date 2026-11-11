@@ -1,37 +1,48 @@
 /**
- * # The gap report's mutants are judged over the framework's data domain
+ * # Types never hide a mutant
+ *
+ * The law (maintainer decision, 2026-11-11): the gap CLI never skips a
+ * mutant, and never marks it dead code, on the basis of types. A mutant that
+ * no input of its declared types distinguishes, and that an input JavaScript
+ * allows does, is emitted with the `outside` label, which names that input's
+ * class, and its survivor is reported as `outside-annotation`. An argument
+ * typed `any` is an input the types allow, so the label claims no more than
+ * that the annotations exclude the input. An unsound type analysis now only
+ * mislabels a survivor; it never hides one.
  *
  * Law 1: every emitted mutant that is not marked dead code differs from the
- * original function on some input. Law 2: every site that the instrumenter
- * skips equals the original on every input. Dead code: a site is marked dead
- * code exactly when no input distinguishes it, and no site is skipped as
- * undetectable: an undetectable site is dead code, not a skip. Boundary: a
- * site marked `boundary: -0` is distinguished by a history of 0 and -0 alone,
- * so the hint's claim holds. A distinguishable site need not carry the hint.
- * Refinement: every emitted mutant's run, dead-marked or not, agrees with the
- * model.
+ * original function on some input that JavaScript allows. Law 2: no site of
+ * the operator contract is skipped (the contract's own syntactic exclusions,
+ * such as `return undefined`, are no sites). Dead code: a site is marked dead
+ * code exactly when no input distinguishes it, by its syntax alone. The label
+ * law: a mutant that no input of its declared types distinguishes, and some
+ * other input does, carries the label (in the first family and for an
+ * annotated optional-chain receiver; over-labelling is allowed). Boundary: a
+ * site marked `boundary: -0` is distinguished by a history of 0 and -0 alone.
+ * Refinement: every emitted mutant's run agrees with the model. Types change
+ * nothing (the hostile programs): erasing a program's types changes none of
+ * its sites and no dead-code mark, and every dead-code mark there holds.
  *
- * Authority: the frozen design v20's decision of 2026-11-10, "anything an
- * oracle can't possibly detect is an invalid mutant" (freeze.md, "Undetectable
- * mutants are invalid"), and its decision 5, that a reported equivalent is a
- * framework bug and not an answer. The domain is the framework's data domain
- * (maintainer, 2026-11-10, relayed by the coordinator): signed zero counts
- * apart from zero, NaN is a value, and a string compares with coercion beside
- * a number of the same digits. A skip that the integers alone would justify is
- * unsound on that domain, so no site is skipped. The dead-code and boundary
- * evidence follow the coordinator's revision and the review of PR #8.
+ * Authority: the maintainer's decision of 2026-11-11 above, relayed by the
+ * coordinator after the fifth soundness review, and the frozen design v20's
+ * decision of 2026-11-10, "anything an oracle can't possibly detect is an
+ * invalid mutant" (freeze.md, "Undetectable mutants are invalid"). The
+ * domain counts -0 apart from 0, NaN as a value, a string beside a number of
+ * the same digits, `null` beside a zero, a number beside a bigint, and an
+ * object whose `valueOf` has an effect. The dead-code and boundary evidence
+ * follow the coordinator's revision and the review of PR #8.
  *
  * Domain. Each program is one function `f(a: T, b: T, c: T)`, where T is one
- * of three declared types: `number`, `bigint`, or `string | number`. The
- * admitted domain of a type is the values it admits, in every combination of
- * three parameters: number admits -1, 0, -0, 1, 2, and NaN; bigint admits -1n,
- * 0n, 1n, and 2n (no signed zero); `string | number` admits those numbers and
- * the strings '1' and '2'. A program may also read the free name `g`, a global
- * whose getter counts its reads. Two functions are equal when they return
- * `Object.is`-equal values on every admitted input and make the same reads. A
- * site is distinguishable when some admitted input separates the mutant from
- * the original. The grammar is enumerated at every type: each shape is one
- * history per type.
+ * of three declared types: `number`, `bigint`, or `string | number`. Its
+ * declared inputs are the values T admits, in every combination of three
+ * parameters: number admits -1, 0, -0, 1, 2, and NaN; bigint admits -1n, 0n,
+ * 1n, and 2n; `string | number` admits those numbers and the strings '1' and
+ * '2'. What JavaScript allows adds foreign inputs (`FOREIGN`): two values
+ * that tie at different identities in two of the parameters, the third 0 or
+ * 1. A program may read the free name `g`, a global whose getter counts its
+ * reads, and the coerced object counts its `valueOf` calls. Two functions
+ * are equal when they return `Object.is`-equal values on every input and
+ * make the same reads.
  *
  * Grammar. A program is one of: a comparison (of two operands, a variable or
  * the literal 0 or 1, in either written order, with each of `>`, `>=`, `<`,
@@ -40,59 +51,61 @@
  * variable twice, or on the global `g` twice; a clamp, a ternary whose false
  * branch is another ternary; or a ternary or a guard (`if (C) return T; return
  * F;`, or the same with an `else`). A test is a comparison, a negated
- * comparison, or a logical operator with a comparison and a variable. A
- * ternary's or guard's branches are the two compared operands in either order,
- * the variable that is not an operand with one of them, the same variable
- * twice, or an empty return. The grammar is enumerated: every program is one
- * history of the oracle.
+ * comparison, a logical operator with a comparison and a variable, or an
+ * ordering comparison beside the impure `g > c`. A ternary's or guard's
+ * branches are the two compared operands in either order, the variable that
+ * is not an operand with one of them, the same variable twice, or an empty
+ * return. Every program is one history of the oracle.
  *
  * Model. The model interprets the grammar on each input, with JavaScript's
- * short-circuit order and reads of `g`. A mutant is a change to the program: a
- * comparison's operator swapped to its partner (`>` with `>=`, `<` with `<=`,
- * `===` with `!==`), a logical operator swapped to its partner (`&&` with `||`,
- * `??` with `&&`), a negation dropped, or an `if`'s condition forced to true or
- * to false. The model reads the grammar's own rendered text and its sites,
- * never the instrumenter's text.
+ * short-circuit order, coercions, and reads of `g`. A mutant is a change to
+ * the program: a comparison's operator swapped to its partner (`>` with
+ * `>=`, `<` with `<=`, `===` with `!==`), a logical operator swapped to its
+ * partner (`&&` with `||`, `??` with `&&`), a negation dropped, an `if`'s
+ * condition forced to true or to false, or a returned value made
+ * `undefined` after it is evaluated. The model reads the grammar's own
+ * rendered text and its sites, never the instrumenter's text.
  *
  * Production path. The CLI's `instrument` (schemata.mjs) instruments the
  * rendered text. The driver runs the instrumented function with no mutant
  * active, which must equal the original, and then with each emitted mutant
  * active, recording whether its outputs and reads differ from the original's,
- * and the evidence the instrumenter tags on it.
+ * and the evidence and label the instrumenter tags on it.
  *
  * Observations. `instrumented` reports the clean run's result and, for each
- * emitted mutant, its operator, position, whether its run differs, and its
- * evidence.
+ * emitted mutant, its operator, position, whether its run differs, its
+ * evidence, and its label. A hostile program reports its mutants, and those
+ * of its text with the types erased.
  *
- * Comparison, for each site the model names. An emitted site that is not dead
- * code must be distinguishable in the model (law 1). A site marked dead code
- * must be indistinguishable in the model (dead-code law). A site that is not
- * emitted must equal the original on every input (law 2), and an
- * indistinguishable one must be marked dead code, not skipped. Every emitted
- * mutant's run must agree with the model (refinement). A boundary hint must sit
- * on a site that a history of 0 and -0 distinguishes (boundary law). Each
- * emitted mutant must be a site of the grammar.
+ * Comparison, for each site the model names: it is emitted (law 2); if it is
+ * not dead code it is distinguishable (law 1); a dead-code mark sits exactly
+ * on the undistinguishable sites; a label sits on every site the label law
+ * names; its run agrees with the model; a boundary hint sits on a site that
+ * a history of 0 and -0 distinguishes; and each emitted mutant is a site of
+ * the grammar.
  *
- * Limits. The domain is finite: the admitted values of each type, three
- * parameters, and one free name. A clamp at type bigint is left out: its outer swap is undetectable over bigint, because at a tie the inner ternary returns the same value (witness: `function f(a: bigint, b: bigint, c: bigint) { return a > c ? c : a === b ? b : a; }`, the swap at offset 57). No syntactic rule decides that, so it is an open family for the maintainer. The grammar has no property reads, calls,
- * getters beyond `g`, or equal branches with a non-operand expression (`a +
- * 0`). Dead code is judged for grammar programs only, and the production rule
- * requires a pure condition (local names, literals, comparisons, logical
- * operators, `!`), so a site whose condition calls a function is left untagged.
- * Logical operators on literals (`1 && 1`) are not tagged. The boundary hint
- * is one-directional: it claims that a signed zero distinguishes the mutant. It
- * is given only to a number-typed ordering swap at a top-level test whose tie
- * can be zero (both operands variables, or the literal 0). A string-admitting or
- * untyped operand gets no hint: the mutant is valid, and strings distinguish it.
- * An ordering swap with a nonzero literal tie over `number` operands, or over
- * `bigint` operands, is skipped: no admitted input distinguishes it. The
- * parameter type is read from its annotation in schemata.mjs, because
- * `instrument` takes the text alone; the checker's program belongs to the
- * caller. A skipped site is judged by the model, not by a run of the emitter.
- * The switch below restates the operator contract in schemata.mjs. No shared
- * helper exists for it: gap-report-static-oracle.property.test.mjs keeps its
- * own copy for derived classes, so this copy stays here, and both restate the
- * same contract.
+ * Every returned expression is a `return-undefined` site (F17), except a
+ * call, `return undefined` where nothing binds the name, and `return void
+ * x`. Its mutant evaluates the returned expression and returns `undefined`
+ * in its place, so the two left out are exact equivalents, and the returned
+ * values family judges them. The optional chains family judges
+ * `optional-chain`.
+ *
+ * Limits. The domain is finite: each type's values, a fixed set of foreign
+ * ties, and one free name. A clamp at type bigint is left out. The grammar
+ * has no property reads, calls, getters beyond `g`, or equal branches with
+ * a non-operand expression (`a + 0`). Dead code is tagged only under a pure
+ * condition (local names, literals, comparisons, logical operators, `!`)
+ * where no ordering comparison runs or not because of the site. Logical
+ * operators on literals (`1 && 1`) are not tagged. The boundary hint is
+ * one-directional. The label law covers the first family and an annotated
+ * optional-chain receiver only: the narrowed family's narrowings are not
+ * labelled, and their survivors take their other classes. The type analysis
+ * reads annotations by syntax and makes no claim beyond the label; its known
+ * mislabels (overload merging, module augmentation, a project's other
+ * tsconfig options) only name a survivor's class. The switch below restates
+ * the operator contract in schemata.mjs; the static oracle keeps its own
+ * copy for derived classes.
  */
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
@@ -108,8 +121,10 @@ const ts = createRequire(join(here, `../package.json`))(
 )
 
 const LAW_1 = `every emitted mutant that is not dead code differs from the original on some input`
-const LAW_2 = `every skipped site equals the original on every input`
+const LAW_2 = `no site is skipped on the basis of types, and a skipped site equals the original on every input`
 const LAW_DEAD = `a site is marked dead code exactly when no input distinguishes it`
+const LAW_LABEL = `a mutant that only an input outside its declared types distinguishes carries the outside-annotation label`
+const LAW_TYPELESS = `erasing the types changes no emitted site and no dead-code mark`
 const LAW_BOUNDARY = `a boundary hint sits only on a site that a 0 and -0 history distinguishes`
 const LAW_REFINE = `the mutant run agrees with the model`
 const LAW_KNOWN = `every emitted mutant is a site of the grammar`
@@ -138,6 +153,51 @@ const VALUES = {
 const cube = (values) =>
   values.flatMap((a) => values.flatMap((b) => values.map((c) => [a, b, c])))
 const DOMAIN = Object.fromEntries(TYPES.map((t) => [t, cube(VALUES[t])]))
+// What JavaScript allows (maintainer decision, 2026-11-11: types never skip
+// a mutant or mark it dead). Beside each type's own inputs, a fixed set of
+// foreign inputs puts two values that tie at different identities in two
+// parameters: a string beside the number of its digits, `null` beside a
+// zero, a number beside a bigint, -0 beside 0, and an object whose `valueOf`
+// has an effect beside the number it yields. The third parameter is 0 or 1.
+// An object's `valueOf` counts in `effects`, which a run reads as it reads
+// `g`, so a mutant that changes how often an operand is coerced shows.
+const effects = { count: 0 }
+const VALUED = {
+  valueOf() {
+    effects.count += 1
+    return 1
+  },
+}
+const TIES = [
+  [`1`, 1],
+  [null, 0],
+  [null, 0n],
+  [1n, 1],
+  [0, -0],
+  [VALUED, 1],
+  [VALUED, VALUED],
+  [undefined, 0],
+].flatMap(([x, y]) => [
+  [x, y],
+  [y, x],
+])
+const FOREIGN = [
+  [0, 1],
+  [0, 2],
+  [1, 2],
+].flatMap(([i, j]) =>
+  TIES.flatMap(([x, y]) =>
+    [0, 1].map((third) => {
+      const input = [third, third, third]
+      input[i] = x
+      input[j] = y
+      return input
+    }),
+  ),
+)
+const JS_DOMAIN = Object.fromEntries(
+  TYPES.map((t) => [t, [...DOMAIN[t], ...FOREIGN]]),
+)
 // The inputs that hold only zeros, with their signs; a bigint has none.
 const ZERO_DOMAIN = Object.fromEntries(
   TYPES.map((t) => [t, t === `bigint` ? [] : cube([0, -0])]),
@@ -278,6 +338,27 @@ for (const test of tests) {
   branched(test, [...branchesOf(test), ...EMPTY_BRANCHES])
 }
 for (const test of compounds) branched(test, compoundBranches(test))
+// A comparison beside an impure operand, `g > c`, which reads the global
+// `g` (its value is the read count, 1 here). Under `&&` and `||` the
+// comparison decides whether `g` is read. At a tie an ordering swap changes
+// that read, which the reads show, so a skip there is unsound (the third
+// review, 2026-11-11). The comparison orders its operands, as the swap's
+// skip needs, and does not read `c`, so `g > c` can take either value. Its
+// branches are its operands.
+const READ = { kind: `cmp`, left: ref(FREE), op: `>`, right: ref(`c`) }
+const impure = tests
+  .filter(
+    (cmp) =>
+      ORDERING.includes(cmp.op) &&
+      cmp.left.name !== `c` &&
+      cmp.right.name !== `c`,
+  )
+  .flatMap((cmp) => [logic(`&&`, cmp, READ), logic(`||`, cmp, READ)])
+for (const test of impure)
+  branched(test, [
+    [test.left.left, test.left.right],
+    [test.left.right, test.left.left],
+  ])
 // Same-variable comparisons, returned as values.
 for (const v of VARIABLES)
   for (const op of OPS)
@@ -309,7 +390,7 @@ const isClamp = (shape) =>
   shape.kind === `return` &&
   shape.expr.kind === `cond` &&
   shape.expr.else.kind === `cond`
-const programs = shapes.flatMap((shape) =>
+const typedPrograms = shapes.flatMap((shape) =>
   TYPES.filter((type) => !(type === `bigint` && isClamp(shape))).map(
     (type) => ({
       ...shape,
@@ -318,8 +399,1581 @@ const programs = shapes.flatMap((shape) =>
   ),
 )
 
+const programs = typedPrograms
+
+// ## Narrowed unions
+//
+// A second family, for the types TypeScript narrows. Its programs are
+// `function f(t: T, a: number)`, where the subject `t` is a union of two
+// members, `'x' | 'y'` (plain, read as `t`) or `{ type: 'x' } | { type: 'y' }`
+// (tagged, read as `t.type`), or its wide counterpart, `string` or
+// `{ type: string }`. The typed inputs of a union are its two members; of a
+// wide type, those and a third, `'z'`; `a` takes the number values. Each
+// program tests the subject against `'x'` and then `'y'`. At a union the
+// second test meets the last member: the subject is narrowed to `'y'` there,
+// the test is constant, and the code after both members is narrowed to
+// `never`. The same text at the wide type narrows nothing. No narrowing is
+// trusted, so the model judges every program over the cast domain.
+//
+// Each program is checked under strict null checks and, as a package with
+// them off is, without them (loose). Without them a declared type admits
+// `undefined` too: a plain subject may be `undefined`, and a tagged one's
+// `type` may be, so narrowing proves nothing and no site is skipped.
+//
+// A program's form says how it tests and what follows:
+//
+// - `chain`, `reversed`, `negated`: `if (D === 'x') return a > 0;`, then the
+//   second test (`D === 'y'`, `'y' === D`, or `!(D !== 'y')`) returning
+//   `a > 1`, then `return a > 2;`;
+// - `guard`: the second test as `D !== 'y'` (constant false) returning
+//   `a > 1`, then `return a > 2;`;
+// - `else`: the second test with `else return a > 2;`;
+// - `loop`: in `for (const u of [t])`, `if (U === 'x') continue;`, then
+//   `if (U === 'y') return a > 1;` and `return a > 0;`, and `return a > 2;`
+//   after the loop, which the first member reaches;
+// - `loopWork`: the same loop, whose first branch does work before it
+//   continues (`{ a = a + 1; continue; }`), as path-to-regexp's token loop
+//   does, and `return a < 2;` after the loop: on the path to the second test
+//   only conditions run, so its narrowing holds;
+// - `switch`: `switch (D)` with the cases `'x'` and `'y'` and a `default`
+//   returning `a > 2`;
+// - `satisfies`: the same switch with no `default`, then `t satisfies never;`
+//   and `return a > 2;`;
+// - `labelled`: a plain `'x' | number` subject (wide: `string | number`, with
+//   the numbers 0 and 1 its members too), switched on `case 'x'` and on
+//   `case other`, a `let other = 0`, with a `default`: a label with no single
+//   value, and a member with none, leave the switch open;
+// - `hoisted`: the second test returns `check(a)`, a function declared after
+//   it, which the call reaches though it follows the narrowed test;
+// - `assigned`: a flag that a callback sets: the checker narrows `done` to
+//   `false` at its test, though the callback has set it when the subject is
+//   `'y'`;
+// - `retag`: after the first test, a callback that, when `a > 1`, changes the
+//   subject (a destructuring `[t] = ['x']`, or the tagged object's `type`),
+//   then the second test returning `a > 1` and `return a < 2;`: a narrowing
+//   that a call, or an assignment the checker does not follow, has undone;
+// - `retagLoop`: the same with a plain subject assigned by `for (t of …)`.
+//
+// The sites are the if-operators, the comparison swaps, the dropped
+// negation, a boolean literal's flip, a skipped call statement, the `+`'s
+// swap, and a call's value; a switch, a case label, a loop over an array,
+// and `satisfies` have none.
+const NARROWED_TYPE = {
+  plain: { union: `'x' | 'y'`, wide: `string` },
+  tagged: { union: `{ type: 'x' } | { type: 'y' }`, wide: `{ type: string }` },
+}
+const WIDTHS = [`union`, `wide`]
+const MEMBERS = { union: [`x`, `y`], wide: [`x`, `y`, `z`] }
+const STRICTNESS = [`strict`, `loose`]
+// The `labelled` form's own subject types and members.
+const LABELLED = {
+  type: { union: `'x' | number`, wide: `string | number` },
+  members: { union: [`x`, 0, 1], wide: [`x`, `z`, 0, 1] },
+}
+// A narrowed program is judged over the cast domain, which JavaScript
+// allows (maintainer decision, 2026-11-11: types never skip a mutant or mark
+// it dead): the members, the wide type's third string, which a cast passes,
+// and without strict null checks `undefined`. No narrowing is trusted, so
+// the code a narrowing excludes stays emitted. The switch forms below each
+// reach the default, or the code after the switch, in their own way.
+function narrowedDomain(program) {
+  const flow =
+    program.form === `labelled`
+      ? LABELLED.members[program.width]
+      : MEMBERS[program.width]
+  const members = flow.includes(`z`) ? flow : [...flow, `z`]
+  const loose = program.strictness === `loose` ? [undefined] : []
+  return [...members, ...loose].flatMap((name) =>
+    VALUES.number.map((a) => [
+      program.subject === `tagged` ? { type: name } : name,
+      a,
+    ]),
+  )
+}
+const subjectRef = (name) => ({ kind: `subject`, name })
+const member = (value) => ({ kind: `member`, value })
+const number = (value) => ({ kind: `number`, value })
+const compared = (op, k) => ({
+  kind: `return`,
+  expr: { kind: `cmp`, left: ref(`a`), op, right: number(k) },
+})
+const above = (k) => compared(`>`, k)
+const when = (test, then, otherwise) => ({
+  kind: `if`,
+  test,
+  then,
+  else: otherwise,
+})
+const is = (left, op, right) => ({ kind: `cmp`, left, op, right })
+const bool = (value) => ({ kind: `bool`, value })
+const SUBJECT = subjectRef(`t`)
+const firstMember = () => when(is(SUBJECT, `===`, member(`x`)), above(0))
+const secondMember = (then) => when(is(SUBJECT, `===`, member(`y`)), then)
+const twoCases = (fallback) => ({
+  kind: `switch`,
+  cases: [
+    [member(`x`), above(0)],
+    [member(`y`), above(1)],
+  ],
+  fallback,
+})
+const loopOf = (first, after) => [
+  {
+    kind: `loop`,
+    body: [
+      when(is(subjectRef(`u`), `===`, member(`x`)), first),
+      when(is(subjectRef(`u`), `===`, member(`y`)), above(1)),
+      above(0),
+    ],
+  },
+  after,
+]
+// A callback that changes the subject when `a > 1`, then the second test.
+const retagged = (change) => [
+  firstMember(),
+  {
+    kind: `each`,
+    body: when(is(ref(`a`), `>`, number(1)), change),
+  },
+  secondMember(above(1)),
+  compared(`<`, 2),
+]
+// Each form's statements, and the subjects it takes.
+const NARROWED_FORMS = {
+  chain: () => [firstMember(), secondMember(above(1)), above(2)],
+  reversed: () => [
+    firstMember(),
+    when(is(member(`y`), `===`, SUBJECT), above(1)),
+    above(2),
+  ],
+  negated: () => [
+    firstMember(),
+    when(negation(is(SUBJECT, `!==`, member(`y`))), above(1)),
+    above(2),
+  ],
+  guard: () => [
+    firstMember(),
+    when(is(SUBJECT, `!==`, member(`y`)), above(1)),
+    above(2),
+  ],
+  else: () => [
+    firstMember(),
+    when(is(SUBJECT, `===`, member(`y`)), above(1), above(2)),
+  ],
+  loop: () => loopOf({ kind: `continue` }, above(2)),
+  // After the loop, `a < 2`, so that the `+ 1` and the work's skip both show.
+  loopWork: () =>
+    loopOf(
+      { kind: `block`, body: [{ kind: `bump` }, { kind: `continue` }] },
+      compared(`<`, 2),
+    ),
+  switch: () => [twoCases(above(2))],
+  satisfies: () => [twoCases(undefined), { kind: `satisfies` }, above(2)],
+  // Switch forms that reach the default, or the code after the switch, with
+  // a member: each broke one condition of an earlier exhaustive-switch skip.
+  // `fallthrough`: the case `'y'` has no statement and falls into the
+  // default.
+  fallthrough: () => [
+    {
+      kind: `switch`,
+      cases: [
+        [member(`x`), above(0)],
+        [member(`y`), undefined],
+      ],
+      fallback: above(2),
+    },
+  ],
+  // `broken`: the case `'x'` breaks, so the code after the switch runs.
+  broken: () => [
+    {
+      kind: `switch`,
+      cases: [
+        [member(`x`), { kind: `break` }],
+        [member(`y`), above(1)],
+      ],
+    },
+    above(2),
+  ],
+  // `recast`: when `a > 1` the program assigns the subject a value that a
+  // cast passes, so the default runs.
+  recast: () => [
+    when(is(ref(`a`), `>`, number(1)), { kind: `recast` }),
+    twoCases(above(2)),
+  ],
+  // `hoistedSwitch`: the case `'x'` calls a function declared after the
+  // switch, which is hoisted: its body runs, and the return after the
+  // switch does not.
+  hoistedSwitch: () => [
+    {
+      kind: `switch`,
+      cases: [
+        [
+          member(`x`),
+          {
+            kind: `return`,
+            expr: { kind: `call`, name: `check`, argument: ref(`a`) },
+          },
+        ],
+        [member(`y`), above(1)],
+      ],
+    },
+    { kind: `satisfies` },
+    above(2),
+    { kind: `function`, name: `check`, body: compared(`>`, 1) },
+  ],
+  labelled: () => [
+    { kind: `let`, name: `other`, init: number(0) },
+    {
+      kind: `switch`,
+      cases: [
+        [member(`x`), above(0)],
+        [{ kind: `name`, name: `other` }, above(1)],
+      ],
+      fallback: above(2),
+    },
+  ],
+  hoisted: () => [
+    firstMember(),
+    secondMember({
+      kind: `return`,
+      expr: { kind: `call`, name: `check`, argument: ref(`a`) },
+    }),
+    { kind: `function`, name: `check`, body: compared(`>`, 1) },
+  ],
+  assigned: () => [
+    { kind: `let`, name: `done`, init: bool(false) },
+    {
+      kind: `each`,
+      body: when(is(subjectRef(`u`), `===`, member(`y`)), {
+        kind: `set`,
+        name: `done`,
+        value: bool(true),
+      }),
+    },
+    when({ kind: `name`, name: `done` }, above(1)),
+    above(2),
+  ],
+  // A returned `void a`, whose value is `undefined` whatever `a` is.
+  voided: () => [
+    firstMember(),
+    { kind: `return`, expr: { kind: `voidOf`, name: `a` } },
+  ],
+  retag: () => retagged({ kind: `retag` }),
+  retagLoop: () => retagged({ kind: `retagLoop` }),
+}
+const PLAIN_ONLY = new Set([`labelled`, `retagLoop`])
+const narrowedPrograms = Object.keys(NARROWED_FORMS).flatMap((form) =>
+  [`plain`, `tagged`]
+    .filter((subject) => subject === `plain` || !PLAIN_ONLY.has(form))
+    .flatMap((subject) =>
+      WIDTHS.flatMap((width) =>
+        STRICTNESS.map((strictness) => ({
+          kind: `narrowed`,
+          form,
+          subject,
+          width,
+          strictness,
+          body: NARROWED_FORMS[form](),
+        })),
+      ),
+    ),
+)
+
+// The source of a narrowed program and its sites, as `render` gives them for
+// the first family.
+function renderNarrowed(program) {
+  const type =
+    program.form === `labelled`
+      ? LABELLED.type[program.width]
+      : NARROWED_TYPE[program.subject][program.width]
+  let text = `function f(t: ${type}, a: number) {\n`
+  const sites = []
+  const put = (piece) => {
+    text += piece
+  }
+  const site = (operator, change) =>
+    sites.push({ operator, position: text.length, change })
+  const read = (name) => (program.subject === `tagged` ? `${name}.type` : name)
+  const expression = (expr) => {
+    if (expr.kind === `subject`) return put(read(expr.name))
+    if (expr.kind === `voidOf`) return put(`void ${expr.name}`)
+    if (expr.kind === `member`)
+      return put(
+        typeof expr.value === `string` ? `'${expr.value}'` : `${expr.value}`,
+      )
+    if (expr.kind === `number`) return put(String(expr.value))
+    if (expr.kind === `ref` || expr.kind === `name`) return put(expr.name)
+    if (expr.kind === `call`) {
+      site(`value-undefined`, { kind: `undefine`, node: expr })
+      put(`${expr.name}(`)
+      expression(expr.argument)
+      return put(`)`)
+    }
+    if (expr.kind === `bool`) {
+      site(`bool-flip`, { kind: `flip`, node: expr })
+      return put(String(expr.value))
+    }
+    if (expr.kind === `not`) {
+      site(`drop-not`, { kind: `drop`, node: expr })
+      put(`!(`)
+      expression(expr.operand)
+      return put(`)`)
+    }
+    expression(expr.left)
+    put(` `)
+    site(`binary-swap`, { kind: `flip`, node: expr })
+    put(`${expr.op} `)
+    return expression(expr.right)
+  }
+  const statement = (s, indent) => {
+    if (s.kind === `return`) {
+      put(`${indent}return `)
+      // `void a` is `undefined` already, and a call is `value-undefined`'s,
+      // so neither is a site.
+      if (s.expr.kind !== `voidOf` && s.expr.kind !== `call`)
+        sites.push({
+          operator: `return-undefined`,
+          position: text.length,
+          change: { kind: `undefine`, node: s },
+        })
+      expression(s.expr)
+      return put(`;\n`)
+    }
+    if (s.kind === `continue`) return put(`continue;`)
+    if (s.kind === `bump`) {
+      put(`a = a `)
+      site(`arithmetic-swap`, { kind: `swap`, node: s })
+      return put(`+ 1;`)
+    }
+    if (s.kind === `block`) {
+      put(`{ `)
+      for (const [i, inner] of s.body.entries()) {
+        if (i > 0) put(` `)
+        statement(inner, ``)
+      }
+      return put(` }\n`)
+    }
+    if (s.kind === `retag`)
+      return put(
+        program.subject === `tagged`
+          ? `(u as { type: string }).type = 'x';`
+          : `[t] = ['x'];`,
+      )
+    if (s.kind === `retagLoop`) return put(`for (t of ['x' as const]);`)
+    if (s.kind === `recast`)
+      return put(
+        program.subject === `tagged`
+          ? `(t as { type: string }).type = 'z';`
+          : `t = 'z' as 'x';`,
+      )
+    if (s.kind === `break`) return put(`break;\n`)
+    if (s.kind === `set`) {
+      put(`${s.name} = `)
+      expression(s.value)
+      return put(`;`)
+    }
+    if (s.kind === `let`) {
+      put(`${indent}let ${s.name} = `)
+      expression(s.init)
+      return put(`;\n`)
+    }
+    if (s.kind === `each`) {
+      put(indent)
+      site(`delete-call`, { kind: `delete`, node: s })
+      put(`[t].forEach((u) => { `)
+      statement(s.body, ``)
+      return put(` });\n`)
+    }
+    if (s.kind === `function`) {
+      put(`${indent}function ${s.name}(a: number) {\n`)
+      statement(s.body, `${indent}  `)
+      return put(`${indent}}\n`)
+    }
+    if (s.kind === `satisfies`) return put(`${indent}t satisfies never;\n`)
+    if (s.kind === `if`) {
+      put(`${indent}if (`)
+      for (const taken of [true, false])
+        site(taken ? `if-true` : `if-false`, { kind: `force`, node: s, taken })
+      expression(s.test)
+      put(`) `)
+      statement(s.then, ``)
+      if (s.then.kind !== `return` && s.then.kind !== `block`) put(`\n`)
+      if (s.else) {
+        put(`${indent}else `)
+        statement(s.else, ``)
+      }
+      return undefined
+    }
+    if (s.kind === `loop`) {
+      put(`${indent}for (const u of [t]) {\n`)
+      for (const inner of s.body) statement(inner, `${indent}  `)
+      return put(`${indent}}\n`)
+    }
+    put(`${indent}switch (${read(`t`)}) {\n`)
+    for (const [label, body] of s.cases) {
+      put(`${indent}  case `)
+      expression(label)
+      put(`: `)
+      // A case with no statement falls through into the next.
+      if (body) statement(body, ``)
+      else put(`\n`)
+    }
+    if (s.fallback) {
+      put(`${indent}  default: `)
+      statement(s.fallback, ``)
+    }
+    return put(`${indent}}\n`)
+  }
+  for (const s of program.body) statement(s, `  `)
+  put(`}`)
+  return { text, sites }
+}
+
+// A narrowed program on one input, under at most one change. A statement ends
+// the function with its value, or continues the loop. The subject is copied,
+// so a run that changes it leaves the input as it was.
+function evaluateNarrowed(program, input, change) {
+  const [t, a] = input
+  const env = { t: typeof t === `object` ? { ...t } : t, a }
+  const functions = new Map(
+    program.body.filter((s) => s.kind === `function`).map((s) => [s.name, s]),
+  )
+  const subject = (name) =>
+    program.subject === `tagged` ? env[name].type : env[name]
+  const value = (expr) => {
+    if (expr.kind === `subject`) return subject(expr.name)
+    if (expr.kind === `voidOf`) return undefined
+    if (expr.kind === `member` || expr.kind === `number`) return expr.value
+    if (expr.kind === `ref` || expr.kind === `name`) return env[expr.name]
+    if (expr.kind === `call`) {
+      if (change?.kind === `undefine` && change.node === expr) return undefined
+      // A function's parameter shadows `a` while it runs.
+      const outer = env.a
+      env.a = value(expr.argument)
+      const result = execute(functions.get(expr.name).body)?.value
+      env.a = outer
+      return result
+    }
+    if (expr.kind === `bool`)
+      return change?.kind === `flip` && change.node === expr
+        ? !expr.value
+        : expr.value
+    if (expr.kind === `not`)
+      return change?.kind === `drop` && change.node === expr
+        ? value(expr.operand)
+        : !value(expr.operand)
+    const op =
+      change?.kind === `flip` && change.node === expr
+        ? BOUNDARY[expr.op]
+        : expr.op
+    return COMPARE[op](value(expr.left), value(expr.right))
+  }
+  const run = (statements) => {
+    for (const s of statements) {
+      const ended = execute(s)
+      if (ended) return ended
+    }
+    return undefined
+  }
+  const execute = (s) => {
+    if (s === undefined || s.kind === `satisfies` || s.kind === `function`)
+      return undefined
+    if (s.kind === `return`) {
+      // The returned expression runs even when its value is dropped.
+      const result = value(s.expr)
+      return {
+        value:
+          change?.kind === `undefine` && change.node === s ? undefined : result,
+      }
+    }
+    if (s.kind === `continue`) return { next: true }
+    if (s.kind === `block`) return run(s.body)
+    if (s.kind === `bump`) {
+      env.a =
+        change?.kind === `swap` && change.node === s ? env.a - 1 : env.a + 1
+      return undefined
+    }
+    if (s.kind === `break`) return { broke: true }
+    if (s.kind === `recast`) {
+      if (program.subject === `tagged`) env.t.type = `z`
+      else env.t = `z`
+      return undefined
+    }
+    if (s.kind === `retag` || s.kind === `retagLoop`) {
+      if (program.subject === `tagged`) env.t.type = `x`
+      else env.t = `x`
+      return undefined
+    }
+    if (s.kind === `let` || s.kind === `set`) {
+      env[s.name] = value(s.kind === `let` ? s.init : s.value)
+      return undefined
+    }
+    if (s.kind === `each`) {
+      if (change?.kind !== `delete` || change.node !== s)
+        for (const u of [env.t]) {
+          env.u = u
+          execute(s.body)
+        }
+      return undefined
+    }
+    if (s.kind === `if`) {
+      // The condition is evaluated even when a change forces the branch.
+      const truth = Boolean(value(s.test))
+      const forced = change?.kind === `force` && change.node === s
+      return execute((forced ? change.taken : truth) ? s.then : s.else)
+    }
+    if (s.kind === `loop`) {
+      for (const u of [env.t]) {
+        env.u = u
+        const ended = run(s.body)
+        if (ended && !ended.next) return ended
+      }
+      return undefined
+    }
+    // A switch runs from the matching case, or else from the default, through
+    // the clauses after it until one ends the function or breaks.
+    const bodies = [...s.cases.map(([, body]) => body), s.fallback]
+    const found = s.cases.findIndex(([label]) => value(label) === subject(`t`))
+    for (const body of bodies.slice(found < 0 ? s.cases.length : found)) {
+      const ended = execute(body)
+      if (ended?.broke) return undefined
+      if (ended) return ended
+    }
+    return undefined
+  }
+  return run(program.body)?.value
+}
+
+// ## Optional chains
+//
+// A fourth family: `function f(o: T, a: number) { return R === a; }`, where
+// R reads `v` of a receiver through an optional chain, as `?.v` (property)
+// or `?.['v']` (element), and T is `{ v: number } | undefined` (nullable)
+// or `{ v: number }` (present). The `optional-chain` mutant reads through a
+// plain access, which throws on a nullish receiver.
+//
+// Every receiver is judged over the inputs JavaScript allows: the typed
+// objects, `undefined`, and `null`. Where the receiver is the parameter its
+// own annotation declares (`param`), in TypeScript under strict null checks,
+// the declared types' inputs are the typed objects alone: there no declared
+// input makes the present type's receiver nullish, so the plain read carries
+// the label, `null`. The other receivers: a local that holds the parameter
+// (`local`, `const p = o`), a property of a wrapper (`property`, `w.o`), the
+// same text in JavaScript with a JSDoc type, and a literal constant
+// (`constant`, `const K = 'v'`, read as `K?.length`), which is never
+// nullish, so its plain read is dead code: emitted, and marked.
+const CHAIN_TYPE = {
+  nullable: `{ v: number } | undefined`,
+  present: `{ v: number }`,
+}
+const CHAIN_WIDTHS = [`nullable`, `present`]
+const CHAIN_OBJECTS = {
+  nullable: [{ v: 1 }, undefined],
+  present: [{ v: 1 }, { v: 2 }],
+}
+const RECEIVERS = [`param`, `local`, `property`, `constant`]
+const LANGS = [`ts`, `js`]
+// A run that throws, in the model and the driver alike.
+const THREW = `threw TypeError`
+const chainPrograms = [`property`, `element`].flatMap((access) =>
+  RECEIVERS.flatMap((receiver) =>
+    LANGS.flatMap((lang) =>
+      CHAIN_WIDTHS.flatMap((width) =>
+        STRICTNESS.map((strictness) => ({
+          kind: `optional`,
+          access,
+          receiver,
+          lang,
+          width,
+          strictness,
+        })),
+      ),
+    ),
+  ),
+)
+// Whether the receiver is the parameter whose own annotation declares it, in
+// TypeScript under strict null checks: then its declared types are the
+// typed objects, and the label law applies.
+const annotatedChain = (program) =>
+  program.receiver === `param` &&
+  program.lang === `ts` &&
+  program.strictness === `strict`
+function renderChain(program) {
+  const type =
+    program.receiver === `property`
+      ? `{ o: ${CHAIN_TYPE[program.width]} }`
+      : CHAIN_TYPE[program.width]
+  const name = program.receiver === `property` ? `w` : `o`
+  const declared =
+    program.lang === `ts`
+      ? `function f(${name}: ${type}, a: number) {\n`
+      : `/** @param {${type}} ${name} @param {number} a */\nfunction f(${name}, a) {\n`
+  const constant = program.receiver === `constant` ? `const K = 'v';\n` : ``
+  const local = program.receiver === `local` ? `  const p = o;\n` : ``
+  const head = `${constant}${declared}${local}  return `
+  const at = head.length
+  const object = { param: `o`, local: `p`, property: `w.o`, constant: `K` }[
+    program.receiver
+  ]
+  const key = program.receiver === `constant` ? `length` : `v`
+  const read =
+    program.access === `property`
+      ? `${object}?.${key}`
+      : `${object}?.['${key}']`
+  return {
+    text: `${head}${read} === a;\n}`,
+    sites: [
+      {
+        operator: `return-undefined`,
+        position: at,
+        change: { kind: `undefine` },
+      },
+      { operator: `optional-chain`, position: at, change: { kind: `chain` } },
+      {
+        operator: `binary-swap`,
+        position: at + read.length + 1,
+        change: { kind: `flip`, node: { kind: `cmp`, op: `===` } },
+      },
+    ],
+  }
+}
+function evaluateChain(program, [o, a], change) {
+  const object =
+    program.receiver === `constant`
+      ? `v`
+      : program.receiver === `property`
+        ? o.o
+        : o
+  if (change?.kind === `chain` && (object === undefined || object === null))
+    return THREW
+  const read = program.receiver === `constant` ? object.length : object?.v
+  const value = COMPARE[change?.kind === `flip` ? `!==` : `===`](read, a)
+  return change?.kind === `undefine` ? undefined : value
+}
+// What JavaScript allows: the typed objects, `undefined`, and `null`. The
+// declared types' inputs are the typed objects alone.
+function chainDomain(program, typed = false) {
+  const objects = [
+    ...new Set([
+      ...CHAIN_OBJECTS[program.width],
+      ...(typed ? [] : [undefined, null]),
+    ]),
+  ]
+  return objects
+    .map((o) => (program.receiver === `property` ? { o } : o))
+    .flatMap((o) => VALUES.number.map((a) => [o, a]))
+}
+
+// ## Returned values
+//
+// A fifth family: `function f(a: number) { R }`, where R returns `a`
+// (`plain`), `void a` (`voided`), `void g` (`voidRead`, which reads the
+// global), or `undefined` (`undefinedName`), and the same `return undefined`
+// where a parameter named `undefined` shadows the global (`shadowed`), or a
+// `var` in a nested block does (`varShadowed`, function-scoped). The
+// `return-undefined` mutant evaluates the returned expression and returns
+// `undefined` in its place, so its effects stay (the reads of `g`). Its
+// contract leaves out a returned call, which `value-undefined` covers, and a
+// returned `undefined` or `void x`, which already return `undefined` after
+// the same effects: those are no site. A shadowed `undefined` is a name
+// like any other, and its return is a site. Each is judged in TypeScript and
+// in JavaScript, under strict null checks and without them, over the number
+// values of `a`, `undefined`, and `null`.
+const RETURN_FORMS = [
+  `plain`,
+  `voided`,
+  `voidRead`,
+  `undefinedName`,
+  `shadowed`,
+  `varShadowed`,
+]
+const returnPrograms = RETURN_FORMS.flatMap((form) =>
+  LANGS.flatMap((lang) =>
+    STRICTNESS.map((strictness) => ({
+      kind: `returned`,
+      form,
+      lang,
+      strictness,
+    })),
+  ),
+)
+function renderReturned(program) {
+  const name = program.form === `shadowed` ? `undefined` : `a`
+  const block =
+    program.form === `varShadowed` ? `  { var undefined = a; }\n` : ``
+  const head =
+    program.lang === `ts`
+      ? `function f(${name}: number) {\n${block}  return `
+      : `function f(${name}) {\n${block}  return `
+  const value = {
+    plain: `a`,
+    voided: `void a`,
+    voidRead: `void g`,
+    undefinedName: `undefined`,
+    shadowed: `undefined`,
+    varShadowed: `undefined`,
+  }[program.form]
+  const site = [`plain`, `shadowed`, `varShadowed`].includes(program.form)
+  return {
+    text: `${head}${value};\n}`,
+    sites: site
+      ? [
+          {
+            operator: `return-undefined`,
+            position: head.length,
+            change: { kind: `undefine` },
+          },
+        ]
+      : [],
+  }
+}
+// The program on one input, with the reads of `g` it made.
+function evaluateReturned(program, [a], change, counter = { reads: 0 }) {
+  if (program.form === `voidRead`) counter.reads += 1
+  const value = [`plain`, `shadowed`, `varShadowed`].includes(program.form)
+    ? a
+    : undefined
+  return change?.kind === `undefine` ? undefined : value
+}
+const returnDomain = () => [...VALUES.number, undefined, null].map((a) => [a])
+
+// ## Hostile programs
+//
+// A family of fixed programs from five reviews (2026-11-10 to 2026-11-11).
+// Each held a static judgment that some input defeats: a narrowing, a type,
+// a literal, a binding, or a coercion. The shapes: (a) a `case` that falls
+// through into `default`; (b) a numeric enum, where a number is admitted,
+// and a string enum; (c) a property read with effects between its guard and
+// its read, through a getter, a generator, a `toString`, a Proxy's `has`
+// trap, `Symbol.hasInstance`, a nested or an optional read, and
+// path-to-regexp's last union member; (d) a default parameter that runs
+// before the body; (e) a `never` default fed by an `as` cast, and ms's
+// `satisfies never` fed by a regex through `as`; (f) an extra label that a
+// template computes; (g) operand types from `bigint | null` and `bigint`
+// without strict null checks, a local fed by `any`, a cast, or
+// `JSON.parse`, JavaScript with or without JSDoc, and generics instantiated
+// with `any`; the conditions of an exhaustive-switch skip, each broken
+// once; a comparison beside a call; overloads; ambient constants; and the
+// fifth review's nested `var`s, imports, zero literals, changed constants,
+// coercions, and type-only merges. Each program's inputs include one that
+// distinguishes a mutant there, which its reach state records.
+//
+// Laws (see `checkEscape`): erasing the types changes no emitted site and no
+// dead-code mark; each dead-code mark holds on the inputs; and a returned
+// `undefined` that a declaration binds is a site. A mutant is applied as
+// text (its operator's `original` replaced at its position by its
+// `replacement`), and the program and the mutant run on each input, by
+// their results and their `log()` calls.
+const ESCAPE_PROGRAMS = [
+  {
+    name: `a case that falls through into default`,
+    text: `export function f(x: 'a' | 'b') {\n  switch (x) {\n    case 'a':\n    case 'b':\n    default:\n      log()\n      return 1\n  }\n}`,
+    inputs: () => [[`a`], [`b`]],
+  },
+  {
+    name: `a numeric enum switched`,
+    text: `export enum E { A, B }\nexport function f(e: E) {\n  switch (e) {\n    case 0: return 'a'\n    case 1: return 'b'\n    default: log(); return 'z'\n  }\n}`,
+    inputs: () => [[0], [1], [2]],
+  },
+  {
+    name: `a numeric enum tested`,
+    text: `export enum E { A, B }\nexport function f(e: E) {\n  if (e === 0) return 'a'\n  if (e === 1) return 'b'\n  log()\n  return 'z'\n}`,
+    inputs: () => [[0], [1], [2]],
+  },
+  {
+    name: `a class getter`,
+    text: `export class C { n = 0; get k(): 'a' | 'b' { return this.n++ % 2 ? 'b' : 'a' } }\nexport function f(c: C) {\n  if (c.k !== 'a') return 0\n  if (c.k === 'a') return 1\n  log()\n  return 2\n}`,
+    inputs: (m) => [[new m.C()]],
+  },
+  {
+    name: `a generator iterated between the guard and the read`,
+    text: `export function f(o: { k: 'a' | 'b' }, it: Iterable<number>) {\n  if (o.k !== 'a') return 0\n  for (const _ of it) {}\n  if (o.k === 'a') return 1\n  log()\n  return 2\n}`,
+    inputs: () => [[{ k: `a` }, []], [{ k: `b` }, []], changing(`k`, `b`)],
+  },
+  {
+    name: `a generator spread between the guard and the read`,
+    text: `export function f(o: { k: 'a' | 'b' }, it: Iterable<number>) {\n  if (o.k !== 'a') return 0\n  const xs = [...it]\n  if (o.k === 'a') return xs.length\n  log()\n  return 2\n}`,
+    inputs: () => [[{ k: `a` }, []], changing(`k`, `b`)],
+  },
+  {
+    name: `a template that calls toString`,
+    text: "export function f(o: { k: 'a' | 'b' }, t: { toString(): string }) {\n  if (o.k !== 'a') return 0\n  const s = `${t}`\n  if (o.k === 'a') return s\n  log()\n  return 2\n}",
+    inputs: () => {
+      const o = { k: `a` }
+      return [
+        [{ k: `a` }, `t`],
+        [
+          o,
+          {
+            toString() {
+              o.k = `b`
+              return `u`
+            },
+          },
+        ],
+      ]
+    },
+  },
+  {
+    name: `an in test through a Proxy`,
+    text: `export function f(o: { k: 'a' | 'b' }, p: object) {\n  if (o.k !== 'a') return 0\n  const has = 'x' in p\n  if (o.k === 'a') return has\n  log()\n  return 2\n}`,
+    inputs: () => {
+      const o = { k: `a` }
+      const trap = new Proxy(
+        {},
+        {
+          has() {
+            o.k = `b`
+            return true
+          },
+        },
+      )
+      return [
+        [{ k: `a` }, {}],
+        [o, trap],
+      ]
+    },
+  },
+  {
+    name: `an instanceof through Symbol.hasInstance`,
+    text: `export function f(o: { k: 'a' | 'b' }, v: unknown, K: { [Symbol.hasInstance](v: unknown): boolean }) {\n  if (o.k !== 'a') return 0\n  const is = v instanceof K\n  if (o.k === 'a') return is\n  log()\n  return 2\n}`,
+    inputs: () => {
+      const o = { k: `a` }
+      const K = {
+        [Symbol.hasInstance]() {
+          o.k = `b`
+          return false
+        },
+      }
+      return [
+        [{ k: `a` }, 1, { [Symbol.hasInstance]: () => true }],
+        [o, 1, K],
+      ]
+    },
+  },
+  {
+    name: `a getter read into a const`,
+    text: `export function f(o: { k: 'a' | 'b'; readonly j: number }) {\n  if (o.k !== 'a') return 0\n  const j = o.j\n  if (o.k === 'a') return j\n  log()\n  return 2\n}`,
+    inputs: () => {
+      const o = {
+        k: `a`,
+        get j() {
+          o.k = `b`
+          return 1
+        },
+      }
+      return [[{ k: `a`, j: 1 }], [o]]
+    },
+  },
+  {
+    name: `a nested discriminant`,
+    text: `export function f(o: { v: { t: 'a' } | { t: 'b' } }, it: Iterable<number>) {\n  if (o.v.t !== 'a') return 0\n  for (const _ of it) {}\n  if (o.v.t === 'a') return 1\n  log(); return 2\n}`,
+    inputs: () => {
+      const o = { v: { t: `a` } }
+      function* change() {
+        o.v = { t: `b` }
+        yield 1
+      }
+      return [
+        [{ v: { t: `a` } }, []],
+        [o, change()],
+      ]
+    },
+  },
+  {
+    name: `an optional read through a getter`,
+    text: `export function f(o: { k: 'a' | 'b' } | undefined) {\n  if (o?.k !== 'a') return 0\n  if (o?.k === 'a') return 1\n  log()\n  return 2\n}`,
+    inputs: () => {
+      let reads = 0
+      return [
+        [{ k: `a` }],
+        [undefined],
+        [
+          {
+            get k() {
+              reads += 1
+              return reads > 1 ? `b` : `a`
+            },
+          },
+        ],
+      ]
+    },
+  },
+  {
+    name: `a default parameter that runs first`,
+    text: `export function f(o: { k: 'a' }, m: () => void, _u: void = m()) {\n  if (o.k === 'a') return 1\n  log(); return 2\n}`,
+    inputs: () => {
+      const o = { k: `a` }
+      return [
+        [{ k: `a` }, () => {}],
+        [
+          o,
+          () => {
+            o.k = `b`
+          },
+        ],
+      ]
+    },
+  },
+  {
+    name: `a never default fed by a cast`,
+    text: `type K = 'a' | 'b'\nexport function f(raw: string) {\n  const k = raw as K\n  switch (k) {\n    case 'a': return 1\n    case 'b': return 2\n    default: { const n: never = k; log(); return n }\n  }\n}`,
+    inputs: () => [[`a`], [`b`], [`z`]],
+  },
+  {
+    name: `an extra label that a template computes`,
+    text: "export function f(x: 'a', o: { k: 'a' | 'b' }, t: { toString(): string }) {\n  if (o.k !== 'a') return 0\n  switch (x) {\n    case `${t}`: return 1\n    case o.k: return 2\n    default: log(); return 3\n  }\n}",
+    inputs: () => {
+      const o = { k: `a` }
+      return [
+        [`a`, { k: `a` }, `a`],
+        [
+          `a`,
+          o,
+          {
+            toString() {
+              o.k = `b`
+              return `z`
+            },
+          },
+        ],
+      ]
+    },
+  },
+  // The switch rule's own conditions, each broken once with a typed input
+  // that reaches the default.
+  {
+    name: `a string enum switched`,
+    text: `export enum E { A = 'a', B = 'b' }\nexport function f(e: E) {\n  switch (e) {\n    case E.A: return 1\n    case E.B: return 2\n    default: log(); return 3\n  }\n}`,
+    inputs: () => [[`a`], [`b`], [`z`]],
+  },
+  {
+    name: `a subject with a default value`,
+    text: `export function f(t: 'a' | 'b' = 'z' as 'a') {\n  switch (t) {\n    case 'a': return 1\n    case 'b': return 2\n    default: log(); return 3\n  }\n}`,
+    inputs: () => [[`a`], [`b`], []],
+  },
+  {
+    name: `an optional subject`,
+    text: `export function f(t?: 'a' | 'b') {\n  switch (t) {\n    case 'a': return 1\n    case 'b': return 2\n    default: log(); return 3\n  }\n}`,
+    inputs: () => [[`a`], [`b`], []],
+  },
+  {
+    name: `a subject assigned from a cast`,
+    text: `export function f(t: 'a' | 'b', m: boolean) {\n  if (m) t = 'z' as 'a'\n  switch (t) {\n    case 'a': return 1\n    case 'b': return 2\n    default: log(); return 3\n  }\n}`,
+    inputs: () => [
+      [`a`, false],
+      [`a`, true],
+    ],
+  },
+  {
+    name: `a subject that a callback assigns`,
+    text: `export function f(t: 'a' | 'b', run: (set: () => void) => void) {\n  run(() => { t = 'z' as 'a' })\n  switch (t) {\n    case 'a': return 1\n    case 'b': return 2\n    default: log(); return 3\n  }\n}`,
+    inputs: () => [
+      [`a`, () => {}],
+      [`a`, (set) => set()],
+    ],
+  },
+  {
+    name: `a subject that eval assigns`,
+    text: `export function f(t: 'a' | 'b', code: string) {\n  eval(code)\n  switch (t) {\n    case 'a': return 1\n    case 'b': return 2\n    default: log(); return 3\n  }\n}`,
+    inputs: () => [
+      [`a`, ``],
+      [`a`, `t = 'z'`],
+    ],
+  },
+  {
+    name: `a switch that misses a member`,
+    text: `export function f(t: 'a' | 'b') {\n  switch (t) {\n    case 'a': return 1\n    default: log(); return 3\n  }\n}`,
+    inputs: () => [[`a`], [`b`]],
+  },
+  {
+    name: `a function the default declares`,
+    text: `export function f(t: 'a' | 'b') {\n  switch (t) {\n    case 'a': return g()\n    case 'b': return 2\n    default:\n      function g() { log(); return 1 }\n  }\n}`,
+    inputs: () => [[`a`], [`b`]],
+  },
+  {
+    name: `a property's last member, as path-to-regexp tests it`,
+    text: `type Token = { type: 'text'; value: string } | { type: 'param'; name: string } | { type: 'wildcard'; name: string }\nexport function f(tokens: Token[]) {\n  let out = ''\n  for (const token of tokens) {\n    if (token.type === 'text') { out += token.value; continue }\n    if (token.type === 'param') { out += ':' + token.name; continue }\n    if (token.type === 'wildcard') { out += '*' + token.name; continue }\n    log()\n  }\n  return out\n}`,
+    inputs: () => [
+      [[{ type: `text`, value: `a` }]],
+      [[{ type: `wildcard`, name: `w` }]],
+      [[{ type: `other`, name: `o` }]],
+    ],
+  },
+  {
+    name: `a satisfies never whose subject a regex feeds through as, as in ms`,
+    text: `type Unit = 'ms' | 's'\nexport function f(str: string) {\n  const match = /^(\\d+)(ms|s|h)?$/.exec(str)\n  if (!match) return NaN\n  const type = (match[2] || 'ms').toLowerCase() as Unit\n  const n = Number(match[1])\n  switch (type) {\n    case 'ms': return n\n    case 's': return n * 1000\n    default:\n      type satisfies never\n      log()\n      return NaN\n  }\n}`,
+    inputs: () => [[`1ms`], [`1s`], [`1h`]],
+  },
+  // The ordering swap's operand types: each from a source the rule does not
+  // trust, with an input that ties its operands at different values.
+  {
+    name: `a bigint | null parameter without strict null checks`,
+    strict: false,
+    text: `export function f(a: bigint | null, b: bigint) { return a < b ? a : b }`,
+    inputs: () => [
+      [1n, 0n],
+      [null, 0n],
+    ],
+  },
+  {
+    name: `bigint parameters without strict null checks`,
+    strict: false,
+    text: `export function f(a: bigint, b: bigint) { return a < b ? a : b }`,
+    inputs: () => [
+      [1n, 0n],
+      [null, 0n],
+    ],
+  },
+  {
+    name: `a bigint parameter and a zero without strict null checks`,
+    strict: false,
+    text: `export function f(a: bigint) { return a < 0n ? a : 0n }`,
+    inputs: () => [[1n], [null]],
+  },
+  {
+    name: `a local number fed by any`,
+    text: `export function f(o: any) { const x: number = o; return x < 5 ? x : 5 }`,
+    inputs: () => [[1], [`5`]],
+  },
+  {
+    name: `a local number fed by a cast`,
+    text: `export function f(s: string) { const x = s as unknown as number; return x < 5 ? x : 5 }`,
+    inputs: () => [[`1`], [`5`]],
+  },
+  {
+    name: `a local number fed by JSON.parse`,
+    text: `export function f(s: string) { const x: number = JSON.parse(s); return x < 5 ? x : 5 }`,
+    inputs: () => [[`1`], [`"5"`]],
+  },
+  {
+    name: `a number parameter assigned from a cast`,
+    text: `export function f(a: number, s: string) { a = s as unknown as number; return a < 5 ? a : 5 }`,
+    inputs: () => [[0, `5`]],
+  },
+  {
+    name: `a number parameter assigned by destructuring`,
+    text: `export function f(a: number, o: any) { [a] = o; return a < 5 ? a : 5 }`,
+    inputs: () => [[0, [`5`]]],
+  },
+  {
+    name: `a number parameter that eval assigns`,
+    text: `export function f(a: number, code: string) { eval(code); return a < 5 ? a : 5 }`,
+    inputs: () => [[0, `a = '5'`]],
+  },
+  {
+    name: `a number parameter that a var redeclares`,
+    text: `export function f(a: number, s: any) { { var a: number = s } return a < 5 ? a : 5 }`,
+    inputs: () => [[0, `5`]],
+  },
+  {
+    name: `JavaScript with a JSDoc number`,
+    ext: `js`,
+    text: `/** @param {number} x */\nexport function f(x) { return x < 5 ? x : 5 }`,
+    inputs: () => [[1], [`5`]],
+  },
+  {
+    name: `JavaScript with JSDoc bigints`,
+    ext: `js`,
+    text: `/** @param {bigint} a @param {bigint} b */\nexport function f(a, b) { return a < b ? a : b }`,
+    inputs: () => [
+      [1n, 0n],
+      [0n, 0],
+    ],
+  },
+  {
+    name: `JavaScript with a JSDoc cast`,
+    ext: `js`,
+    text: `export function f(s) { const x = /** @type {number} */ (s); return x < 5 ? x : 5 }`,
+    inputs: () => [[1], [`5`]],
+  },
+  {
+    name: `untyped JavaScript that reassigns a number`,
+    ext: `js`,
+    text: `export function f(s) { let x = 0; x = s; return x < 5 ? x : 5 }`,
+    inputs: () => [[1], [`5`]],
+  },
+  {
+    name: `a generic instantiated with any`,
+    text: `export function f<T extends bigint>(a: T, b: T) { return a < b ? a : b }`,
+    inputs: () => [
+      [1n, 0n],
+      [0n, 0],
+    ],
+  },
+  {
+    name: `a generic call fed by any`,
+    text: `function g<T>(v: T): T { return v }\nexport function f(a: bigint, s: any) { const b = g<bigint>(s); return a < b ? a : b }`,
+    inputs: () => [
+      [1n, 0n],
+      [0n, 0],
+    ],
+  },
+  // The third review (2026-11-11): a comparison beside a call, whose
+  // evaluation an ordering swap changes at a tie, and overloads, whose
+  // callers see only the overload signatures. TypeScript erases an
+  // overload's type parameters when it checks the implementation, so a
+  // caller can pass what the implementation's annotation excludes. And an
+  // ambient constant, whose value the environment gives.
+  {
+    name: `a comparison beside a call under &&`,
+    text: `export function f(a: number, check: () => boolean): number {\n  return a < 1 && check() ? a : 1\n}`,
+    inputs: () => [
+      [0, () => true],
+      [
+        1,
+        () => {
+          throw new Error(`called`)
+        },
+      ],
+    ],
+  },
+  {
+    name: `a bigint comparison beside a call under ||`,
+    text: `export function f(a: bigint, b: bigint, check: () => boolean): bigint {\n  if (a < b || check()) return a\n  return b\n}`,
+    inputs: () => [
+      [0n, 1n, () => true],
+      [
+        1n,
+        1n,
+        () => {
+          throw new Error(`called`)
+        },
+      ],
+    ],
+  },
+  {
+    name: `a switch under a generic overload`,
+    text: `export function f<T extends string>(x: T): number\nexport function f(x: 'a' | 'b'): number {\n  switch (x) {\n    case 'a': return 1\n    case 'b': return 2\n    default: log(); return 3\n  }\n}`,
+    inputs: () => [[`a`], [`zzz`]],
+  },
+  {
+    name: `a bigint swap under a generic overload`,
+    text: `export function f<T>(a: T, b: T): T\nexport function f(a: bigint, b: bigint): bigint {\n  return a < b ? a : b\n}`,
+    inputs: () => [
+      [1n, 0n],
+      [0, -0],
+    ],
+  },
+  {
+    name: `a switch in an overloaded method`,
+    text: `export class C {\n  m<T extends string>(x: T): number\n  m(x: 'a' | 'b'): number {\n    switch (x) {\n      case 'a': return 1\n      case 'b': return 2\n      default: log(); return 3\n    }\n  }\n}\nexport const f = (x: string) => new C().m(x)`,
+    inputs: () => [[`a`], [`zzz`]],
+  },
+  {
+    name: `a switch on an ambient constant`,
+    text: `declare const K = 'a'\nexport function f(): number {\n  switch (K) {\n    case 'a': return 1\n    default: log(); return 3\n  }\n}`,
+    inputs: () => {
+      globalThis.K = `z`
+      return [[]]
+    },
+  },
+  {
+    name: `a swap with an ambient constant`,
+    text: `declare const K = 5\nexport function f(x: number): number { return x < K ? x : K }`,
+    inputs: () => {
+      globalThis.K = `5`
+      return [[1], [5]]
+    },
+  },
+  {
+    name: `an equality tie of locals fed by any`,
+    text: `export function f(s: any, t: any) {\n  const a: bigint = s\n  const c: bigint = t\n  if (a !== c) return a\n  return c\n}`,
+    inputs: () => [
+      [1n, 0n],
+      [0, -0],
+    ],
+  },
+  // F17's operators: an optional read whose receiver's type the rule does
+  // not trust, and a returned value typed `undefined` or `void`, each with
+  // an input that JavaScript allows.
+  {
+    name: `an optional read of a local fed by any`,
+    text: `export function f(s: any) { const p: { v: number } = s; return p?.v }`,
+    inputs: () => [[{ v: 1 }], [undefined]],
+  },
+  {
+    name: `an optional read of a local fed by a cast`,
+    text: `export function f(s: unknown) { const p = s as { v: number }; return p?.v }`,
+    inputs: () => [[{ v: 1 }], [undefined]],
+  },
+  {
+    name: `an optional read of a property`,
+    text: `export function f(w: { o: { v: number } }) { return w.o?.v }`,
+    inputs: () => [[{ o: { v: 1 } }], [{ o: undefined }]],
+  },
+  {
+    name: `an optional read of a generic parameter`,
+    text: `export function f<T extends { v: number }>(o: T) { return o?.v }`,
+    inputs: () => [[{ v: 1 }], [undefined]],
+  },
+  {
+    name: `an optional read of an optional parameter`,
+    text: `export function f(o?: { v: number }) { return o?.v }`,
+    inputs: () => [[{ v: 1 }], []],
+  },
+  {
+    name: `an optional read of a defaulted parameter`,
+    text: `export function f(o: { v: number } = undefined as any) { return o?.v }`,
+    inputs: () => [[{ v: 1 }], []],
+  },
+  {
+    name: `an optional read of an assigned parameter`,
+    text: `export function f(o: { v: number }, s: any) { o = s; return o?.v }`,
+    inputs: () => [
+      [{ v: 1 }, { v: 2 }],
+      [{ v: 1 }, undefined],
+    ],
+  },
+  {
+    name: `an optional read of a parameter that eval assigns`,
+    text: `export function f(o: { v: number }, code: string) { eval(code); return o?.v }`,
+    inputs: () => [
+      [{ v: 1 }, ``],
+      [{ v: 1 }, `o = undefined`],
+    ],
+  },
+  {
+    name: `an optional read in JavaScript with a JSDoc type`,
+    ext: `js`,
+    text: `/** @param {{ v: number }} o */\nexport function f(o) { return o?.v }`,
+    inputs: () => [[{ v: 1 }], [undefined]],
+  },
+  {
+    name: `an optional read of a parameter without strict null checks`,
+    strict: false,
+    text: `export function f(o: { v: number }) { return o?.v }`,
+    inputs: () => [[{ v: 1 }], [undefined]],
+  },
+  {
+    name: `an optional read under a generic overload`,
+    text: `export function f<T>(x: T): number | undefined\nexport function f(x: { n: number }): number | undefined {\n  return x?.n\n}`,
+    inputs: () => [[{ n: 1 }], [null]],
+  },
+  {
+    name: `a returned parameter typed undefined`,
+    text: `export function f(x: undefined) { return x }`,
+    inputs: () => [[undefined], [5]],
+  },
+  {
+    name: `a returned parameter typed void`,
+    text: `export function f(x: void) { return x }`,
+    inputs: () => [[undefined], [5]],
+  },
+  // The fifth review (2026-11-11): each program defeats a static judgment
+  // that the CLI made without types or with them. A `var` in a nested block
+  // is the function's, and an import binds a name. `0x0`, `0.0`, `0b0`,
+  // and `0x0n` are zeros. A namespace's or a CommonJS module's exported
+  // `const` is a property that code can change. An object's `valueOf` runs
+  // when a comparison coerces it. The rest change nothing but types: an
+  // overload named by a default export or a quoted method, an interface
+  // merged with a class, and a function type without strict function types.
+  {
+    name: `a nested var that shadows a constant beside a swap`,
+    text: `const k = 5\nexport function f(a: number): number {\n  { var k = 0 }\n  return a < k ? a : k\n}`,
+    inputs: () => [[-0], [1]],
+  },
+  {
+    name: `a nested var that shadows a constant beside a guard`,
+    text: `const k = 5\nexport function f(a: number): number {\n  { var k = 0 }\n  if (a !== k) return a\n  return k\n}`,
+    inputs: () => [[-0], [1]],
+  },
+  {
+    name: `a nested var that shadows a constant receiver`,
+    text: `const s = 'x'\nexport function f(): number | undefined {\n  { var s: string | undefined = undefined }\n  return s?.length\n}`,
+    inputs: () => [[]],
+  },
+  {
+    name: `a nested var named undefined`,
+    text: `export function f(): number | undefined {\n  { var undefined = 5 }\n  return undefined\n}`,
+    inputs: () => [[]],
+  },
+  {
+    name: `an import named undefined`,
+    text: `import { five as undefined } from './five'\nexport function f(): number { return undefined }`,
+    inputs: () => [[]],
+  },
+  {
+    name: `a destructured parameter named undefined`,
+    text: `export function f({ undefined }: { undefined: number }): number { return undefined }`,
+    inputs: () => [[{ undefined: 5 }]],
+  },
+  {
+    name: `a hexadecimal zero beside a guard`,
+    text: `export function f(a: number): number {\n  if (a !== 0x0) return a\n  return 0x0\n}`,
+    inputs: () => [[-0], [1]],
+  },
+  {
+    name: `a decimal zero with a fraction beside a guard`,
+    text: `export function f(a: number): number {\n  if (a !== 0.0) return a\n  return 0.0\n}`,
+    inputs: () => [[-0], [1]],
+  },
+  {
+    name: `a binary zero beside a guard in JavaScript`,
+    ext: `js`,
+    text: `export function f(a) {\n  if (a !== 0b0) return a\n  return 0b0\n}`,
+    inputs: () => [[-0], [1]],
+  },
+  {
+    name: `a hexadecimal bigint zero beside a swap`,
+    text: `export function f(a: bigint): bigint {\n  return a < 0x0n ? a : 0x0n\n}`,
+    inputs: () => [[1n], [null], [0]],
+  },
+  {
+    name: `a namespace constant that code changes`,
+    text: `export namespace N {\n  export const s: string | undefined = 'x'\n  export function f(): number | undefined { return s?.length }\n}\nexport const f = N.f`,
+    inputs: (m) => {
+      m.N.s = undefined
+      return [[]]
+    },
+  },
+  {
+    name: `an exported constant that a CommonJS caller changes`,
+    text: `export const s: string | undefined = 'x'\nexport function f(): number | undefined { return s?.length }`,
+    inputs: (m) => {
+      m.s = undefined
+      return [[]]
+    },
+  },
+  {
+    name: `a comparison that coerces an object beside identical branches`,
+    text: `export function f(c: boolean, p: object, q: object): number {\n  if (c || p < q) return 1\n  return 1\n}`,
+    inputs: () => {
+      const loud = {
+        valueOf() {
+          throw new Error(`coerced`)
+        },
+      }
+      return [
+        [true, loud, loud],
+        [false, {}, {}],
+      ]
+    },
+  },
+  {
+    name: `a comparison that coerces an object under && beside identical branches`,
+    text: `export function f(c: boolean, p: object, q: object): number {\n  return c && p < q ? 1 : 1\n}`,
+    inputs: () => {
+      const loud = {
+        valueOf() {
+          throw new Error(`coerced`)
+        },
+      }
+      return [
+        [false, loud, loud],
+        [true, {}, {}],
+      ]
+    },
+  },
+  {
+    name: `a swap beside a comparison of objects`,
+    text: `export function f(a: number, p: object, q: object): number {\n  return a < 1 && p < q ? a : 1\n}`,
+    inputs: () => {
+      const loud = {
+        valueOf() {
+          throw new Error(`coerced`)
+        },
+      }
+      return [
+        [1, loud, loud],
+        [0, 1, 2],
+      ]
+    },
+  },
+  {
+    name: `an overloaded default export`,
+    text: `export default function g<T extends string>(x: T): number\nexport default function g(x: 'a' | 'b'): number {\n  switch (x) {\n    case 'a': return 1\n    case 'b': return 2\n    default: log(); return 3\n  }\n}\nexport const f = g`,
+    inputs: () => [[`a`], [`zzz`]],
+  },
+  {
+    name: `an overload named by a quoted method`,
+    text: `export class K {\n  'm'<T extends string>(x: T): number\n  m(x: 'a' | 'b'): number {\n    switch (x) {\n      case 'a': return 1\n      case 'b': return 2\n      default: log(); return 3\n    }\n  }\n}\nexport const f = (x: string) => new K().m(x)`,
+    inputs: () => [[`a`], [`zzz`]],
+  },
+  {
+    name: `an interface merged with a class`,
+    text: `export interface K { m(x: string): number }\nexport class K {\n  m(x: 'a' | 'b'): number {\n    switch (x) {\n      case 'a': return 1\n      case 'b': return 2\n      default: log(); return 3\n    }\n  }\n}\nexport const f = (x: string) => new K().m(x)`,
+    inputs: () => [[`a`], [`zzz`]],
+  },
+  {
+    name: `an optional read under a wider function type`,
+    text: `type H = (x: { n: number } | undefined) => number | undefined\nexport const f: H = (x: { n: number }): number | undefined => x?.n`,
+    inputs: () => [[{ n: 1 }], [undefined]],
+  },
+]
+// A history is data, so each program's inputs are found by its name.
+const ESCAPE_INPUTS = new Map(
+  ESCAPE_PROGRAMS.map(({ name, inputs }) => [name, inputs]),
+)
+const ESCAPES = ESCAPE_PROGRAMS.map(({ name, text, strict, ext }) => ({
+  kind: `escape`,
+  name,
+  strict: strict ?? true,
+  ext: ext ?? `ts`,
+  // JavaScript has no `declare`: there `log` is a free name.
+  text: ext === `js` ? text : `${text}\ndeclare function log(): void\n`,
+}))
+// An object whose `key` a generator changes to `value` when iterated.
+function changing(key, value) {
+  const o = { [key]: `a` }
+  function* change() {
+    o[key] = value
+    yield 1
+  }
+  return [o, change()]
+}
+
+// A program's runs on its inputs: each result, or the error it threw, and
+// its `log()` calls. Each run builds its inputs afresh, so state that one run
+// changes does not reach the next.
+function runEscape(program, text) {
+  const js = ts.transpileModule(text, {
+    compilerOptions: {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.CommonJS,
+    },
+  }).outputText
+  const load = () => {
+    const exported = {}
+    let calls = 0
+    // An import reads `./five`, a module whose `five` is 5.
+    const required = (name) =>
+      name === `./five` ? { five: 5 } : { __proto__: null }
+    new Function(`exports`, `log`, `require`, js)(
+      exported,
+      () => {
+        calls += 1
+      },
+      required,
+    )
+    return { exported, calls: () => calls }
+  }
+  const inputs = ESCAPE_INPUTS.get(program.name)
+  return inputs(load().exported).map((_, index) => {
+    const { exported, calls } = load()
+    const input = inputs(exported)[index]
+    let result
+    try {
+      result = shown(exported.f(...input))
+    } catch (error) {
+      result = `threw ${error.name}`
+    }
+    return `${result}:${calls()}`
+  })
+}
+// A result as text that tells apart what `Object.is` does: a bigint from a
+// number, -0 from 0, NaN, `null`, and `undefined`.
+function shown(value) {
+  if (typeof value === `bigint`) return `${value}n`
+  if (typeof value === `number`)
+    return Object.is(value, -0) ? `-0` : String(value)
+  if (value === undefined) return `undefined`
+  return JSON.stringify(value, (_, inner) =>
+    typeof inner === `bigint` ? `${inner}n` : inner,
+  )
+}
+// A mutant applied as text: its original at its position, replaced. An
+// optional chain's `?.` is the first after the access's start.
+function mutateText(text, mutant) {
+  const at =
+    mutant.operator === `optional-chain`
+      ? text.indexOf(`?.`, mutant.position)
+      : mutant.position
+  // A returned value made undefined reads the global's own value, which a
+  // name that shadows `undefined` would not.
+  const replacement =
+    mutant.operator === `return-undefined` ? `void 0` : mutant.replacement
+  return `${text.slice(0, at)}${replacement}${text.slice(at + mutant.original.length)}`
+}
+
+// The families, each program one history.
+const histories = [
+  ...programs,
+  ...narrowedPrograms,
+  ...chainPrograms,
+  ...returnPrograms,
+  ...ESCAPES,
+]
+
+// ## Reach
+//
+// The states where the laws matter, each derived from the grammar and the
+// model: a mutant that only an input outside its annotation distinguishes,
+// which must carry the label; an ordering swap beside an impure operand; an
+// optional read of an annotated parameter, and of a literal constant; the
+// returns that are no site, and a shadowed `undefined`; and each hostile
+// program whose inputs distinguish a mutant that the CLI emits.
+const REACH = {
+  label: `a mutant that only an input outside its annotation distinguishes`,
+  impure: `an ordering swap beside an impure operand that its reads distinguish`,
+  hostile: (name) => `a hostile shape stays emitted: ${name}`,
+  chainLabel: `an optional read of an annotated parameter that only null reaches`,
+  chainDead: (lang) => `an optional read of a literal constant in ${lang}`,
+  returnExcluded: (form) => `a returned ${form} that is no site`,
+  shadowed: (form) => `a returned undefined that a ${form} shadows`,
+}
+const REQUIRED_STATES = [
+  REACH.label,
+  REACH.impure,
+  ...ESCAPE_PROGRAMS.map(({ name }) => REACH.hostile(name)),
+  REACH.chainLabel,
+  ...LANGS.map(REACH.chainDead),
+  ...[`voided`, `voidRead`, `undefinedName`].map(REACH.returnExcluded),
+  ...[`shadowed`, `varShadowed`].map(REACH.shadowed),
+]
+// The ordering swaps of a first-family program, each with the model's site.
+const orderingSites = (program, expected) =>
+  sourceOf(program)
+    .sites.map((site, index) => [site, expected.sites[index], index])
+    .filter(
+      ([site]) =>
+        site.change.kind === `flip` &&
+        site.change.node.kind === `cmp` &&
+        ORDERING.includes(site.change.node.op),
+    )
+function reached(program, trace, expected) {
+  if (program.kind === `optional`) {
+    const chain = expected.sites.find((s) => s.operator === `optional-chain`)
+    if (program.receiver === `constant`)
+      return chain.dead ? [REACH.chainDead(program.lang)] : []
+    return chain.label ? [REACH.chainLabel] : []
+  }
+  if (program.kind === `returned`) {
+    if ([`shadowed`, `varShadowed`].includes(program.form))
+      return [REACH.shadowed(program.form)]
+    return program.form === `plain` ? [] : [REACH.returnExcluded(program.form)]
+  }
+  if (program.kind === `escape`) {
+    const found = trace.find((o) => o.checkpoint === `instrumented`)?.value
+    const runs = runEscape(program, program.text)
+    const detected = (found?.mutants ?? []).some(
+      (mutant) =>
+        runEscape(program, mutateText(program.text, mutant)).join() !==
+        runs.join(),
+    )
+    return detected ? [REACH.hostile(program.name)] : []
+  }
+  if (program.kind === `narrowed`) return []
+  const states = expected.sites.some((site) => site.label) ? [REACH.label] : []
+  const test = program.kind === `guard` ? program.test : program.expr.test
+  if (
+    test?.kind === `logic` &&
+    test.right.left?.name === FREE &&
+    orderingSites(program, expected).some(([, site]) => site.distinct)
+  )
+    states.push(REACH.impure)
+  return states
+}
+
 // The structural state a program enters, derived from the grammar.
 function stateOf(program) {
+  if (program.kind === `optional`)
+    return `an optional ${program.access} read of a ${program.width} ${program.receiver} receiver in ${program.lang}, ${program.strictness}`
+  if (program.kind === `returned`)
+    return `a ${program.form} return in ${program.lang}, ${program.strictness}`
+  if (program.kind === `escape`) return `a hostile program: ${program.name}`
+  if (program.kind === `narrowed`)
+    return `a narrowed ${program.subject} subject's ${program.form} at its ${program.width} type, ${program.strictness}`
   if (program.kind === `return`) {
     const expr = program.expr
     if (expr.kind === `cmp`)
@@ -370,12 +2024,13 @@ function stateOf(program) {
 function render(program) {
   const annotation = ANNOTATION[program.type]
   let text = `function f(a: ${annotation}, b: ${annotation}, c: ${annotation}) {\n  `
+  const operandText = (name) => literal(name, program.type)
   const sites = []
   const put = (piece) => {
     text += piece
   }
   const expression = (expr) => {
-    if (expr.kind === `ref`) return put(literal(expr.name, program.type))
+    if (expr.kind === `ref`) return put(operandText(expr.name))
     if (expr.kind === `void`) return undefined
     if (expr.kind === `cond`) {
       expression(expr.test)
@@ -408,14 +2063,25 @@ function render(program) {
   }
   // An operand of a negation or a binary: parenthesised unless it is a name.
   const operand = (expr) => {
-    if (expr.kind === `ref`) return put(literal(expr.name, program.type))
+    if (expr.kind === `ref`) return put(operandText(expr.name))
     put(`(`)
     expression(expr)
     put(`)`)
   }
+  // A returned expression's site: replaced with `undefined`, unevaluated.
+  // An empty return has none.
+  const returned = (expr, branch) => {
+    if (expr.kind !== `void`)
+      sites.push({
+        operator: `return-undefined`,
+        position: text.length,
+        change: { kind: `undefine`, branch },
+      })
+    expression(expr)
+  }
   if (program.kind === `return`) {
     put(`return `)
-    expression(program.expr)
+    returned(program.expr, `expr`)
     put(`;\n}`)
   } else {
     put(`if (`)
@@ -434,9 +2100,9 @@ function render(program) {
     )
     expression(program.test)
     put(`) return `)
-    expression(program.then)
+    returned(program.then, `then`)
     put(program.form === `else` ? `;\n  else return ` : `;\n  return `)
-    expression(program.rest)
+    returned(program.rest, `rest`)
     put(`;\n}`)
   }
   return { text, sites }
@@ -456,13 +2122,16 @@ const COMPARE = {
   '!==': (x, y) => x !== y,
 }
 
-function evaluate(program, input, change) {
+function evaluate(program, input, change, counter = { reads: 0 }) {
   const env = { a: input[0], b: input[1], c: input[2] }
   let reads = 0
   const flipped = (node) => change?.kind === `flip` && change.node === node
   const value = (expr) => {
     if (expr.kind === `ref`) {
-      if (expr.name === FREE) return ++reads
+      if (expr.name === FREE) {
+        counter.reads += 1
+        return ++reads
+      }
       if (/^[01]$/.test(expr.name))
         return program.type === `bigint` ? BigInt(expr.name) : Number(expr.name)
       return env[expr.name]
@@ -484,11 +2153,20 @@ function evaluate(program, input, change) {
     const op = flipped(expr) ? BOUNDARY[expr.op] : expr.op
     return COMPARE[op](value(expr.left), value(expr.right))
   }
-  if (program.kind === `return`) return value(program.expr)
+  // A returned expression replaced with `undefined` is still evaluated.
+  const returned = (expr, branch) => {
+    const result = value(expr)
+    return change?.kind === `undefine` && change.branch === branch
+      ? undefined
+      : result
+  }
+  if (program.kind === `return`) return returned(program.expr, `expr`)
   // The condition is evaluated even when a change forces the branch.
   const truth = Boolean(value(program.test))
   const forced = change?.kind === `force` && change.node === program
-  return value((forced ? change.taken : truth) ? program.then : program.rest)
+  return (forced ? change.taken : truth)
+    ? returned(program.then, `then`)
+    : returned(program.rest, `rest`)
 }
 
 // The model's expectation for a program: its source, and for each site whether
@@ -496,38 +2174,119 @@ function evaluate(program, input, change) {
 // (`distinct`), whether no admitted input of any declared type does (`dead`:
 // the program is redundant, whatever its parameters' types), and whether a
 // history of 0 and -0 alone does (for an ordering comparison at its own type).
+// A program's source and sites, its run on one input, its typed inputs, and
+// the declared types its text may take, for either family.
+const families = {
+  // An escape program is judged by its runs as text (`checkEscape`), and has
+  // no sites of its own.
+  escape: {
+    render: (program) => ({ text: program.text, sites: [] }),
+    domain: () => [],
+  },
+  narrowed: {
+    render: renderNarrowed,
+    evaluate: evaluateNarrowed,
+    domain: (program) => narrowedDomain(program),
+  },
+  optional: {
+    render: renderChain,
+    evaluate: evaluateChain,
+    domain: chainDomain,
+    typedDomain: (program) =>
+      annotatedChain(program) ? chainDomain(program, true) : undefined,
+  },
+  returned: {
+    render: renderReturned,
+    evaluate: evaluateReturned,
+    domain: returnDomain,
+  },
+}
+const familyOf = (program) => families[program.kind]
+const sourceOf = (program) => (familyOf(program)?.render ?? render)(program)
+const run = (program, input, change, counter) =>
+  (familyOf(program)?.evaluate ?? evaluate)(program, input, change, counter)
+// Whether a change shows on one input: in the value, or in the reads of `g`
+// and the coercions of an object (two functions are equal only when they
+// make the same reads).
+const shows = (program, input, change) => {
+  const [mutant, original] = [change, null].map((c) => {
+    const counter = { reads: 0 }
+    const before = effects.count
+    const result = run(program, input, c, counter)
+    return [result, counter.reads + effects.count - before]
+  })
+  return !Object.is(mutant[0], original[0]) || mutant[1] !== original[1]
+}
+// What JavaScript allows, and what the declared types allow where the label
+// law applies (the first family's annotations, and an annotated receiver).
+const domainOf = (program) =>
+  familyOf(program)?.domain(program) ?? JS_DOMAIN[program.type]
+const typedDomainOf = (program) =>
+  familyOf(program)
+    ? familyOf(program).typedDomain?.(program)
+    : DOMAIN[program.type]
+const zeroDomainOf = (program) =>
+  familyOf(program)
+    ? domainOf(program).filter(([, a]) => a === 0)
+    : ZERO_DOMAIN[program.type]
+
+// A digest of a mutant's runs over the domain, each its result and its reads
+// of `g`, for the refinement of a `return-undefined` site: its mutant must
+// keep the returned expression's effects, as the model's does.
+function digest(runs) {
+  let hash = 2166136261
+  for (const char of runs.map((r) => `${shown(r.result)}:${r.reads}`).join(` `))
+    hash = Math.imul(hash ^ char.charCodeAt(0), 16777619) >>> 0
+  return hash.toString(16)
+}
+function modelRuns(program, change) {
+  return digest(
+    domainOf(program).map((input) => {
+      const counter = { reads: 0 }
+      const before = effects.count
+      const result = (familyOf(program)?.evaluate ?? evaluate)(
+        program,
+        input,
+        change,
+        counter,
+      )
+      return { result, reads: counter.reads + effects.count - before }
+    }),
+  )
+}
+
 function model(program) {
-  const { text, sites } = render(program)
-  const distinctAt = (type, index) => {
-    const copy = { ...program, type }
-    const change = render(copy).sites[index].change
-    return DOMAIN[type].some(
-      (input) =>
-        !Object.is(evaluate(copy, input, change), evaluate(copy, input, null)),
-    )
+  if (program.kind === `escape`) return { source: program.text, sites: [] }
+  const { text, sites } = sourceOf(program)
+  const distinctIn = (copy, index) => {
+    const change = sourceOf(copy).sites[index].change
+    return domainOf(copy).some((input) => shows(copy, input, change))
   }
   return {
     source: text,
     sites: sites.map((site, index) => {
-      const distinct = distinctAt(program.type, index)
+      const distinct = distinctIn(program, index)
       const differs = (domain, change) =>
-        domain.some(
-          (input) =>
-            !Object.is(
-              evaluate(program, input, change),
-              evaluate(program, input, null),
-            ),
-        )
+        domain.some((input) => shows(program, input, change))
+      // The label law: no input of the declared types distinguishes the
+      // mutant, and an input that JavaScript allows does.
+      const typed = typedDomainOf(program)
       return {
         operator: site.operator,
         position: site.position,
         distinct,
-        dead: TYPES.every((type) => !distinctAt(type, index)),
+        label: typed !== undefined && distinct && !differs(typed, site.change),
+        // Dead code: no input that JavaScript allows distinguishes it, in
+        // this program's own text.
+        dead: !distinct,
         zeroDistinct:
           site.change.kind === `flip` &&
           site.change.node.kind === `cmp` &&
           ORDERING.includes(site.change.node.op) &&
-          differs(ZERO_DOMAIN[program.type], site.change),
+          differs(zeroDomainOf(program), site.change),
+        ...(site.operator === `return-undefined`
+          ? { runs: modelRuns(program, site.change) }
+          : {}),
       }
     }),
   }
@@ -557,6 +2316,12 @@ function switchFor(active) {
     b: (id, value) => (id === active ? !value : value),
     cond: (ifTrue, ifFalse, value) =>
       active === ifTrue ? true : active === ifFalse ? false : value,
+    // A plain access in place of `?.`: it throws on a nullish object.
+    chain: (id, value) => {
+      if (id === active && (value === undefined || value === null))
+        throw new TypeError(`Cannot read properties of ${value}`)
+      return value
+    },
   }
 }
 
@@ -571,8 +2336,23 @@ function runAll(f, domain) {
   try {
     return domain.map((input) => {
       globalReads = 0
-      const result = f(...input)
-      return { result, reads: globalReads }
+      const before = effects.count
+      // A run may change an object it is given, so each gets a copy (but
+      // the coerced object, which no run changes, and whose identity a
+      // result keeps); one that throws records the error's name.
+      let result
+      try {
+        result = f(
+          ...input.map((value) =>
+            typeof value === `object` && value !== null && value !== VALUED
+              ? { ...value }
+              : value,
+          ),
+        )
+      } catch (error) {
+        result = `threw ${error.name}`
+      }
+      return { result, reads: globalReads + effects.count - before }
     })
   } finally {
     delete globalThis[FREE]
@@ -592,23 +2372,112 @@ function runsUnder(code, active, domain) {
   }
 }
 
+// An escape program's checker has the real standard library (it uses
+// iterables, `Symbol.hasInstance`, and a Proxy), under strict null checks.
+const escapeOptions = {
+  noEmit: true,
+  strict: true,
+  types: [],
+  target: ts.ScriptTarget.ESNext,
+  lib: [`lib.esnext.d.ts`],
+}
+const escapeHost = ts.createCompilerHost(escapeOptions)
+const escapeLibs = new Map()
+function escapeTyped(path, text, strict) {
+  const options = { ...escapeOptions, strictNullChecks: strict, allowJs: true }
+  const file = ts.createSourceFile(path, text, ts.ScriptTarget.ESNext, true)
+  const base = ts.createCompilerHost(options)
+  const host = {
+    ...escapeHost,
+    getSourceFile: (name, language) => {
+      if (name === path) return file
+      if (!escapeLibs.has(name))
+        escapeLibs.set(name, base.getSourceFile(name, language))
+      return escapeLibs.get(name)
+    },
+    fileExists: (name) => name === path || base.fileExists(name),
+  }
+  const program = ts.createProgram([path], options, host)
+  return { file, checker: program.getTypeChecker(), strict }
+}
+// The types of an escape program erased: every type in a runtime position
+// becomes `any`, and type arguments go. Types alone, without the runtime
+// code (an enum, a class, a heritage clause), change.
+function eraseTypes(text) {
+  const file = ts.createSourceFile(
+    `/erase.ts`,
+    text,
+    ts.ScriptTarget.ESNext,
+    true,
+  )
+  const any = () => ts.factory.createKeywordTypeNode(ts.SyntaxKind.AnyKeyword)
+  const visit = (context) => (node) => {
+    if (ts.isTypeAliasDeclaration(node) || ts.isInterfaceDeclaration(node))
+      return node
+    if (ts.isHeritageClause(node)) return node
+    if (ts.isTypeNode(node) && !ts.isExpressionWithTypeArguments(node))
+      return any()
+    if (ts.isCallExpression(node) && node.typeArguments)
+      return ts.visitEachChild(
+        ts.factory.updateCallExpression(
+          node,
+          node.expression,
+          undefined,
+          node.arguments,
+        ),
+        visit(context),
+        context,
+      )
+    return ts.visitEachChild(node, visit(context), context)
+  }
+  const [erased] = ts.transform(file, [visit]).transformed
+  return ts.createPrinter().printFile(erased)
+}
+// The escape driver instruments the text, and the text with its types
+// erased, and records both mutant lists.
+function escapeDriver(program, observe) {
+  const path = `/mutant-validity-escape.${program.ext}`
+  const of = (text) =>
+    instrument(ts, path, text, `src/escape.${program.ext}`).mutants.map(
+      ({ operator, position, original, replacement, evidence }) => ({
+        operator,
+        position,
+        original,
+        replacement,
+        ...(evidence ? { evidence } : {}),
+      }),
+    )
+  observe(`instrumented`, {
+    mutants: of(program.text),
+    erased: of(program.ext === `js` ? program.text : eraseTypes(program.text)),
+  })
+}
+
 function driver(program, observe) {
-  const { text } = render(program)
-  const domain = DOMAIN[program.type]
+  if (program.kind === `escape`) return escapeDriver(program, observe)
+  const { text } = sourceOf(program)
+  const domain = domainOf(program)
   const original = runAll(load(text), domain)
+  const ext = program.lang === `js` ? `js` : `ts`
+  const path = `/mutant-validity.${ext}`
   const { code, mutants } = instrument(
     ts,
-    `mutant-validity.ts`,
+    path,
     text,
-    `src/mutant-validity.ts`,
+    `src/mutant-validity.${ext}`,
   )
   const clean = sameRuns(runsUnder(code, null, domain), original)
-  const emitted = mutants.map((mutant) => ({
-    operator: mutant.operator,
-    position: mutant.position,
-    differs: !sameRuns(runsUnder(code, mutant.number, domain), original),
-    evidence: mutant.evidence,
-  }))
+  const emitted = mutants.map((mutant) => {
+    const runs = runsUnder(code, mutant.number, domain)
+    return {
+      operator: mutant.operator,
+      position: mutant.position,
+      differs: !sameRuns(runs, original),
+      evidence: mutant.evidence,
+      ...(mutant.outside ? { outside: mutant.outside } : {}),
+      ...(mutant.operator === `return-undefined` ? { runs: digest(runs) } : {}),
+    }
+  })
   observe(`instrumented`, { clean, emitted })
 }
 
@@ -617,10 +2486,69 @@ const keyOf = (site) => `${site.operator}@${site.position}`
 const DEAD = `dead code`
 const BOUNDARY_EVIDENCE = `boundary: -0`
 
+// A hostile program's laws. Types change nothing the CLI emits: its sites
+// and dead-code marks are the same with the types erased (compared as
+// operators and marks, since erasing moves positions). A dead-code mark
+// holds: the mutant, applied as text, equals the program on every input.
+// And a returned `undefined` that a declaration binds, by the oracle's own
+// checker, is a site.
+const markOf = (m) => `${m.operator}${m.evidence === DEAD ? ` (dead)` : ``}`
+const tally = (mutants) => mutants.map(markOf).sort().join(`, `)
+function checkEscape(program, found) {
+  if (tally(found.mutants) !== tally(found.erased))
+    return violation(
+      `instrumented`,
+      `erasing the types of ${program.name} changes its sites: ${tally(found.mutants)} against ${tally(found.erased)}`,
+      LAW_TYPELESS,
+    )
+  const runs = runEscape(program, program.text)
+  for (const mutant of found.mutants) {
+    if (mutant.evidence !== DEAD) continue
+    const mutated = runEscape(program, mutateText(program.text, mutant))
+    if (mutated.join() !== runs.join())
+      return violation(
+        `instrumented`,
+        `marks ${keyOf(mutant)} of ${program.name} dead code, but an input distinguishes it: ${runs.join(` `)} against ${mutated.join(` `)}`,
+        LAW_DEAD,
+      )
+  }
+  const { file, checker } = escapeTyped(
+    `/mutant-validity-escape.${program.ext}`,
+    program.text,
+    true,
+  )
+  const sites = new Set(found.mutants.map(keyOf))
+  const bound = []
+  const visit = (node) => {
+    if (
+      ts.isReturnStatement(node) &&
+      node.expression &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === `undefined` &&
+      (checker.getSymbolAtLocation(node.expression)?.declarations?.length ??
+        0) > 0
+    )
+      bound.push(node.expression.getStart(file))
+    ts.forEachChild(node, visit)
+  }
+  visit(file)
+  const missed = bound.find(
+    (position) => !sites.has(`return-undefined@${position}`),
+  )
+  if (missed !== undefined)
+    return violation(
+      `instrumented`,
+      `leaves out the returned undefined at offset ${missed} of ${program.name}, which a declaration binds`,
+      LAW_2,
+    )
+  return pass
+}
+
 function check(program, observations, expected) {
   const found = observations.find((o) => o.checkpoint === `instrumented`)?.value
   if (!found)
     return violation(`instrumented`, `nothing was instrumented`, LAW_INERT)
+  if (program.kind === `escape`) return checkEscape(program, found)
   if (!found.clean)
     return violation(
       `instrumented`,
@@ -631,32 +2559,25 @@ function check(program, observations, expected) {
   for (const site of expected.sites) {
     const where = `${site.operator} at offset ${site.position} of ${JSON.stringify(expected.source)}`
     const mutant = emitted.get(keyOf(site))
-    if (!mutant) {
-      if (site.distinct)
-        return violation(
-          `instrumented`,
-          `skipped ${where}, but the model finds an input that distinguishes it`,
-          LAW_2,
-        )
-      if (site.dead)
-        return violation(
-          `instrumented`,
-          `skipped ${where}, which no declared type can distinguish: it is dead code, not a skip`,
-          LAW_DEAD,
-        )
-      continue
-    }
+    if (!mutant)
+      return violation(
+        `instrumented`,
+        site.distinct
+          ? `skipped ${where}, but the model finds an input that distinguishes it`
+          : `skipped ${where}: no site of the contract is skipped, and an undistinguished one is dead code`,
+        LAW_2,
+      )
     const marked = mutant.evidence === DEAD
     if (!marked && !site.distinct)
       return violation(
         `instrumented`,
-        `emitted ${where}, which equals the original on every input of its type, and is not marked dead code`,
+        `emitted ${where}, which equals the original on every input, and is not marked dead code`,
         LAW_1,
       )
     if (marked !== site.dead)
       return violation(
         `instrumented`,
-        `${marked ? `marked dead code` : `left unmarked`} ${where}, but ${site.dead ? `no declared type can distinguish it` : `some declared type can distinguish it`}`,
+        `${marked ? `marked dead code` : `left unmarked`} ${where}, but ${site.dead ? `no input distinguishes it` : `an input distinguishes it`}`,
         LAW_DEAD,
       )
     if (mutant.differs !== site.distinct)
@@ -664,6 +2585,18 @@ function check(program, observations, expected) {
         `instrumented`,
         `${marked ? `marked dead code` : `emitted`} ${where}: its run ${mutant.differs ? `differs` : `matches`} the original, but the model says ${site.distinct ? `it is distinguishable` : `it is not`}`,
         LAW_REFINE,
+      )
+    if (site.runs !== undefined && mutant.runs !== site.runs)
+      return violation(
+        `instrumented`,
+        `emitted ${where}: its runs and reads differ from the model's, which evaluates the returned expression and then returns undefined`,
+        LAW_REFINE,
+      )
+    if (site.label && !mutant.outside)
+      return violation(
+        `instrumented`,
+        `emitted ${where} without the outside-annotation label, though no input of its declared types distinguishes it`,
+        LAW_LABEL,
       )
     if (mutant.evidence === BOUNDARY_EVIDENCE && !site.zeroDistinct)
       return violation(
@@ -686,13 +2619,16 @@ function check(program, observations, expected) {
 declareOracle({
   check: [check],
   model: [model],
-  grammar: [fc.constantFrom(...programs)],
+  grammar: [fc.constantFrom(...histories)],
 })
 
 // Five calibrations, each a wrong answer the check must reject.
 const observed = (trace) => {
   const index = trace.findIndex((o) => o.checkpoint === `instrumented`)
-  return index < 0 ? undefined : { index, value: trace[index].value }
+  // An escape program's observation has no emitted list to corrupt.
+  return index < 0 || !trace[index].value.emitted
+    ? undefined
+    : { index, value: trace[index].value }
 }
 const withEmitted = (trace, index, value, emitted) =>
   trace.map((o, i) =>
@@ -776,14 +2712,15 @@ const calibrations = [
 oracleProperty({
   id: `oracle-gaps.report-mutant-validity`,
   law: {
-    statement: `Over the admitted domain of each declared parameter type (number: -1, 0, -0, 1, 2, NaN; bigint: -1n, 0n, 1n, 2n; string | number: the numbers and the strings '1' and '2'; in three parameters, with the free global g counting its reads), every emitted mutant of a grammar program that is not marked dead code differs from the program on some input (law 1). Every site the instrumenter skips equals the program on every input (law 2). A site is marked dead code exactly when no input distinguishes it, and no site is skipped as undetectable. Every emitted mutant's run agrees with the model. A boundary hint sits only on a site that a history of 0 and -0 distinguishes.`,
-    authority: `The frozen design v20's maintainer decision of 2026-11-10 that anything an oracle can't possibly detect is an invalid mutant (freeze.md, "Undetectable mutants are invalid"), and its decision 5, that an equivalent is a framework bug and not an answer. The domain is the framework's data domain, which counts -0 apart from 0 and compares strings with coercion (maintainer, 2026-11-10, relayed by the coordinator). The dead-code and boundary evidence follow the coordinator's revision and the review of PR #8.`,
-    limits: `A finite domain of eight values per variable and one free name. A small grammar, without property reads, calls, getters beyond g, or equal branches with a non-operand expression (\`a + 0\`). Dead code is judged on grammar programs, and tagged only under a pure condition. Logical operators on literals are not tagged. The boundary hint is one-directional, and is given only where both operands are variables or the literal 0; a nonzero tie, such as \`n > 10 ? 10 : n\`, carries none, because within numbers that mutant is undetectable and only a coerced string detects it. Whether the domain should come from the TypeScript types is a design question, not settled here. A skipped site is judged by the model, not by a run of the emitter.`,
+    statement: `No mutant is skipped or marked dead code on the basis of types (maintainer decision, 2026-11-11). Over the inputs JavaScript allows (each declared type's values, and foreign ties: a string beside the number of its digits, null beside a zero, a number beside a bigint, -0 beside 0, and an object whose valueOf has an effect; with the free global g counting its reads), every emitted mutant that is not marked dead code differs from the program on some input (law 1), no site of the operator contract is skipped (law 2), and a site is marked dead code exactly when no input distinguishes it. A mutant that no input of its declared types distinguishes, and some other input does, carries the outside-annotation label, in the first family and for an annotated optional-chain receiver. A return-undefined mutant's runs and reads equal the model's, which evaluates the returned expression and then returns undefined. Erasing a hostile program's types changes none of its sites and no dead-code mark, every dead-code mark there holds on its inputs, and a returned undefined that a declaration binds is a site. Every emitted mutant's run agrees with the model, and a boundary hint sits only on a site that a history of 0 and -0 distinguishes.`,
+    authority: `The maintainer's decision of 2026-11-11, relayed by the coordinator after the fifth soundness review: the gap CLI never skips a mutant, and never marks it dead code, on the basis of types; a mutant the type analysis judges undetectable by inputs of the declared types is a survivor in its own class, whose directive names the distinguishing input; an argument typed any counts as an input the types allow. The frozen design v20's decision of 2026-11-10 that anything an oracle can't possibly detect is an invalid mutant (freeze.md, "Undetectable mutants are invalid"). The dead-code and boundary evidence follow the coordinator's revision and the review of PR #8. The F17 operators follow the coordinator's F17 brief (2026-11-10).`,
+    limits: `A finite domain: each type's values, a fixed set of foreign ties, and one free name. A small grammar, without property reads, calls, getters beyond g, or equal branches with a non-operand expression. A clamp at type bigint is left out. Dead code is tagged only under a pure condition where no ordering comparison runs or not because of the site. The label law covers the first family and an annotated optional-chain receiver; the narrowed family's narrowings are not labelled. The optional chains read one property of a parameter, a local, a wrapper's property, or a literal constant. The returned values are one return of a name, \`void a\`, \`void g\`, or \`undefined\`. Only a return-undefined site's runs are compared in full with the model's. The hostile programs are fixed texts with chosen inputs, compared with their own text with the types erased, as operators and marks; their dead-code marks are judged on their inputs only. Its mutants are applied as text, and an optional chain's \`?.\` is found as the first after the access's start, which a nested chain would misplace.`,
   },
   // Enumerated: every program of the grammar is one history, in order.
-  histories: programs,
-  label: (program) => `${stateOf(program)}: ${render(program).text}`,
+  histories: { enumerated: histories, states: REQUIRED_STATES },
+  label: (program) => `${stateOf(program)}: ${sourceOf(program).text}`,
   model,
+  reached,
   driver,
   check,
   calibrations,

@@ -17,8 +17,11 @@
  *    `!`, `bool-flip` for a boolean literal outside a type,
  *    `value-undefined` for a call whose value is used (not a callee or the
  *    object of a property or element access), `loop-false` for the
- *    condition of a `for`, `while`, or `do` loop, and `delete-call` for a
- *    call statement. Each names its function and its line: a class's
+ *    condition of a `for`, `while`, or `do` loop, `delete-call` for a
+ *    call statement, `return-undefined` for a returned expression that is
+ *    not a call (value-undefined covers one) and not already `undefined`,
+ *    and `optional-chain` for a property or element read through `?.`
+ *    whose object may be nullish (F17). Each names its function and its line: a class's
  *    method, accessor, or field function by `Class.member`, any other
  *    function by its own name (an object literal's method by its property),
  *    a function exported with no name of its own by the name an import
@@ -152,7 +155,8 @@
  *    operators agreed on every operand an owner test reached, a
  *    `not-distinguished` when its operator changes a value only on some
  *    inputs and no capture shows which (a loop's condition, an undefined call
- *    value, a dropped field, a skipped call, a logical operator), and
+ *    value, a dropped field, a skipped call, a logical operator, a returned
+ *    value made undefined, a plain read in place of `?.`), and
  *    `not-observed` otherwise: the mutant changed a value that no recorded
  *    observation showed. A test in a file that is not an
  *    oracle file never changes any of this, and runs only when the run asks
@@ -630,7 +634,7 @@ function namedScratch(text, names) {
 // A gap line the CLI streams to stderr as its mutant is judged (stream.mjs):
 // its class, its line, and its id.
 const streamedGap =
-  /^(?:not-judged|indeterminate|dead-code|branch-never-taken|not-infected|not-observed|not-distinguished|unreached|random-only-kill|agreement-only-kill|unregistered-kill|framework-error|timeout|setup-error|crashed|does-not-apply) L(?:\d+|\?) (\S+) /
+  /^(?:not-judged|indeterminate|dead-code|outside-annotation|branch-never-taken|not-infected|not-observed|not-distinguished|unreached|random-only-kill|agreement-only-kill|unregistered-kill|framework-error|timeout|setup-error|crashed|does-not-apply) L(?:\d+|\?) (\S+) /
 
 function readRun(dir, out, status, stderr, cli) {
   // The output names the CLI directory that ran and the package, as scratch
@@ -1238,6 +1242,10 @@ async function driver(plan, observe) {
         states.add(`a loop that never runs killed`)
       if (m.operator === `field-drop` && m.outcome === `killed`)
         states.add(`a dropped field killed`)
+      if (m.operator === `return-undefined` && m.class === `not-distinguished`)
+        states.add(`a returned value made undefined not distinguished`)
+      if (m.operator === `optional-chain` && m.class === `not-distinguished`)
+        states.add(`a plain read in place of ?. not distinguished`)
       if (m.operator === `arithmetic-swap` && m.outcome === `killed`)
         states.add(`an arithmetic swap killed`)
       if (m.function === `w_leaf` && m.outcome !== `unowned`)
@@ -1914,6 +1922,8 @@ const required = [
   `a kill through state an earlier test stored`,
   `a mutant of code run at module load killed`,
   `a mutant of module data killed through its reader`,
+  `a returned value made undefined not distinguished`,
+  `a plain read in place of ?. not distinguished`,
   `a module-level cache judged afresh`,
   `ordinary tests run when asked`,
   `ordinary tests left out by default`,
