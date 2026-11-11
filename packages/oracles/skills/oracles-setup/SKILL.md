@@ -27,10 +27,12 @@ Find out, and tell the user:
 - The lint setup: ESLint 9 or later with a flat config, an older ESLint with
   `.eslintrc`, or no ESLint (for example Biome only).
 - The Node version that CI and the `engines` field use. The package needs
-  Node 20 or later. If CI runs an older Node, tell the user. Do not change CI.
+  Node 20 or later. If CI runs an older Node, tell the user, and offer a
+  separate Node 20 job for the oracles. Do not change the existing jobs.
 - The repository's TypeScript version. Do not change it (step 2).
-- The command runner for package binaries: `pnpm exec`, `npx`, or
-  `yarn`. Use it wherever this skill shows `pnpm exec`.
+- The package manager and its runner for package binaries: `pnpm exec`,
+  `npx`, or `yarn`. Use them wherever this skill shows `pnpm add` or
+  `pnpm exec`.
 - Which coding agents the user works with. Look for `.claude/`, `.agents/`,
   `.codex/`, `AGENTS.md`, and `CLAUDE.md`, and ask.
 
@@ -76,8 +78,16 @@ Vitest setup file that runs before any oracle module is imported.
 
 **Where oracle files go.** Put oracle files in a test directory, named
 `*oracle*.test.ts`, for example `tests/parse.oracle.property.test.ts`. If the
-repository's main runner is not Vitest, check that its test glob does not
-also match the oracle files. The gap check loads only `vitest.config.*` or
+repository's main runner is not Vitest, check that it does not also pick up
+the oracle files:
+
+- If the runner loads every file in its test directory (uvu, mocha), put the
+  oracle files in their own directory, such as `oracles/`.
+- If its default glob matches `*.test.ts` (better-node-test, Jest), name the
+  oracle files `*.oracle.ts`, and include that name in the Vitest config.
+
+The gap check finds oracle files by their `oracleProperty` call, so the name
+only has to match the Vitest config and the lint glob. The gap check loads only `vitest.config.*` or
 `vite.config.*`, so:
 
 - If the repository has no Vitest config, create `vitest.config.ts` for the
@@ -115,8 +125,15 @@ export default [
 - `recommended` applies to oracle files and turns off inline directives there,
   so a disable comment has no effect.
 - `production` checks the probe form in `src/**` and `packages/*/src/**`. If
-  production source lives elsewhere, add the `oracle/probe-form` rule with that
-  glob.
+  production source lives elsewhere (for example a root-level `index.js`), add
+  the `oracle/probe-form` rule with that glob.
+- If the repository lints with xo, keep the oracle files and the new config
+  files out of xo (its `ignores`), and lint them with the oracle ESLint
+  config.
+- **Temporary, a known plugin bug:** under TypeScript 7 the plugin cannot load.
+  Skip the oracle lint, and report "known plugin bug: plugin cannot load under
+  TypeScript 7 (fix in progress)". This is not an oracle limit, and not a
+  reason to stop.
 - If ESLint does not already parse TypeScript, add `@typescript-eslint/parser`
   as a dev dependency. Set it as `languageOptions.parser` for every TypeScript
   file that the presets cover: the oracle files and the production source.
@@ -139,7 +156,9 @@ repository's own `@typescript-eslint/parser`.
 
 Run the linter once and confirm that it loads the rules. Then check that the
 rules are live: a deliberately wrong line in an oracle file (for example
-`fc.assert(...)`) must produce an error. Remove that line again.
+`fc.assert(...)`) must produce an error. Remove that line again. Before the
+first oracle file exists, do this check through the linter's `--stdin` with
+an oracle file name, since a glob with no files fails.
 
 ## 4. Write the AGENTS.md block
 
@@ -234,8 +253,17 @@ Before writing a global pointer:
 
 ## 6. Write the first oracle
 
-Choose one small, owned production function with a clear promise. Ask the
-user which one if it is not obvious.
+Choose one small, owned production function with a clear, documented
+promise. If most of its laws would have no authority (no docs, only tests or
+code), choose another one. Ask the user which one if it is not obvious.
+
+If the first oracle fails on unchanged production under an adopted law, it
+found a defect. The RED is the finding: report it with its replay line, and
+tell the user. Never weaken the oracle to make it pass. The gap check cannot
+judge a failing baseline yet, so make the smallest local fix on a scratch
+branch, run the gap check there, and say in the report that it ran on the
+patched code. With the user's approval, follow `oracles-design` step 7's
+defect path for the real fix.
 
 Then load `oracles-design` and follow it from its first step. The law sheet
 comes first, and the user reviews it before you write code. Setup does not
@@ -290,6 +318,11 @@ Tell the user:
 - what was installed (both pinned URLs) and where configuration changed
 - which pointers were written, and where
 - the first oracle's law and its result
-- the gap check's totals, and every gap left with its instruction
+- the gap check's totals, and every gap left, grouped as:
+  - inside a stated limit, with the limit
+  - framework or CLI limitations (for example a timeout from a synchronous
+    infinite loop, or an exhaustiveness-guard mutant)
+  - every other gap, with its instruction
+- any defect the oracle found, with its witness
 
 Do not call setup done while a gap is open, unless the user decides otherwise.

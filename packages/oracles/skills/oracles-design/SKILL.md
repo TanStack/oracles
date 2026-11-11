@@ -53,7 +53,18 @@ its promise.
   freedoms it allows) needs a law delta: the old and new row for each changed
   law. Stop for the user's review.
 - **A new law, or missing or contradictory authority,** needs the full law
-  sheet below. Stop for the user's review.
+  sheet below. Stop for the user's review. An analogy to another documented
+  rule is not authority: mark that law `open`.
+
+**Laws people forget to write down:**
+
+- **No throw on valid input.** When the contract says a call returns a value,
+  it promises not to throw for valid input. State that as a law, with the same
+  authority, so a mutant that throws is a kill, not a crash.
+- **The laws of the kind of function.** An equality check is reflexive and
+  symmetric. A parser and a serializer round-trip. A setter is idempotent when
+  set to the same value. Give these as rows, with the function's documented
+  purpose as their authority.
 - **The task already approved these laws?** Do not ask again.
 
 Write one row per law and give the sheet to the user.
@@ -205,7 +216,9 @@ in the model.
   one a constructed history that enters it (ORC-015). Put a state that you
   only count in `measured`. A literal example or a `fixed` history is not
   reach. A constructed history must be one the arbitrary could generate,
-  within its bounds.
+  within its bounds. Build its values from the generated history (for example
+  "the initial value plus one"), not from constants that the generated values
+  might equal.
 - **Cover the law's whole domain.** A mutant can only show what the histories
   vary. If the grammar covers part of the domain the law states (for example,
   fractions in quarter steps only), say so in `limits`. Better, widen it.
@@ -267,11 +280,21 @@ Techniques: [guide § Histories](../../docs/guide.md#histories).
   - If an owned function reads module-level data (a lookup table, a constant
     object), own the whole file for now. Data outside a function is not yet
     part of a function entry's tree.
+  - When a whole-file entry pulls in another contract (for example a batching
+    API in the same file), write that contract's own oracle, or report its
+    gaps as outside this oracle's scope.
+  - Owned code that serves another module's contract belongs to that module's
+    oracle. Owned code with no behavior anyone observes is possible dead code:
+    investigate it as step 8 says.
   - Several oracles may own the same function. A mutant counts as killed when
     any of its owners kills it.
 
 Keep the law, its authority, and its limits in `law`, and prose beside each
 part that says why it predicts the promised result (ORC-003).
+
+The options of `oracleProperty` are typed in
+`node_modules/@tanstack/oracles/src/oracle-property.ts`
+(`OraclePropertyOptions`). Read them there.
 
 **Lint as you go.** Run the repository's lint on each oracle file and each
 changed production file after you edit it, and again before you finish. Fix
@@ -366,7 +389,13 @@ comes with one instruction. Do what it says, within the rules below.
 - **Temporary, until the report's messages change:** if a message calls a
   mutant "equivalent", asks for a "maintainer's approval", or offers a limit
   that "needs a maintainer's decision", do not follow that part. Find the
-  history and the law.
+  history and the law. Do not copy those words into your own report either:
+  for a survivor you cannot kill, give the histories you tried and what they
+  showed.
+- **Temporary, a CLI limitation:** a mutant that makes production loop forever
+  synchronously shows as a timeout. The framework's breakage laws will judge
+  it, and they are not built yet. Report it as a known CLI limitation, not an
+  oracle gap. Do not add driver timeouts for it, and keep working.
 - **Temporary, a known CLI bug:** a survivor inside an exhaustiveness guard
   (a branch with `x satisfies never`) should never have been generated.
   Record it in your report as "CLI bug: exhaustiveness guard mutated", and
