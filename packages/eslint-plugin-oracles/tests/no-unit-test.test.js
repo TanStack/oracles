@@ -243,11 +243,6 @@ it.each(cases)('runs %s', (c) => { covered.add(modelHistory(c)); checkHistory(c)
 it('covers every outcome', () => expect([...covered]).toEqual(['a', 'b']))`,
       filename,
     },
-    // A placeholder registered during a replay runs nothing.
-    {
-      code: `it.skip('runs only when its replay property is selected', () => {})`,
-      filename,
-    },
     // A suite and a Playwright step are not tests.
     {
       code: `${header}describe('suite', () => {
@@ -259,6 +254,13 @@ it('covers every outcome', () => expect([...covered]).toEqual(['a', 'b']))`,
     { code: `export function fixture() { return [] }`, filename },
   ],
   invalid: [
+    // An empty body checks nothing, a skipped placeholder included: remove
+    // it, or register it with it.todo (maintainer decision, 2026-11-10).
+    {
+      code: `it.skip('runs only when its replay property is selected', () => {})`,
+      filename,
+      errors: [{ messageId: `emptyTest`, line: 1 }],
+    },
     // The reported failure: production compared with a hand-written value.
     {
       code: `${header}import { compileExpression } from '../src/compiler.js'

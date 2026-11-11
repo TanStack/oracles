@@ -11,8 +11,11 @@
  *
  * This file owns the registration forms: the plain and identifier forms of
  * the base grammar, call and member bodies, `.for` tables, options before or
- * after a body, `let` and `for...of` drivers, declaration spreads, and
- * generated properties. Each feature family is one oracle property with its
+ * after a body, `let` and `for...of` drivers, declaration spreads, generated
+ * properties, and empty bodies. A registration with an empty body checks
+ * nothing: it is reported as an empty test, with "remove it, or use
+ * it.todo", whatever else the file declares (maintainer decision F21,
+ * 2026-11-10; the rule no longer exempts it as a placeholder). Each feature family is one oracle property with its
  * own features, budget, and fixed and random campaigns. Each property gates
  * the states its features enter, and each gated state has a constructed
  * history: a builder that splices the parts entering the state into the generated
@@ -104,6 +107,15 @@ oracleProperty({
     statement: `A declaration that spreads its first part list reaches the parts it spreads, as the model predicts.`,
     features: { ...BASE, spreads: true },
     gated: [`declaration-spread`],
+  }),
+  check: checkPaths,
+})
+oracleProperty({
+  ...familyOptions({
+    id: `lint.part-reach.empty-bodies`,
+    statement: `A registration whose body is empty checks nothing, so it is reported as an empty test whatever the file declares and whichever function form or registration (it, test, or a skipped placeholder) it uses; it reaches no part, and the other registrations are judged as the model predicts (maintainer decision, 2026-11-10).`,
+    features: { ...BASE, emptyBodies: true },
+    gated: [`empty-test-body`, `empty-test-body-through-test`],
   }),
   check: checkPaths,
 })

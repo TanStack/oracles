@@ -161,6 +161,12 @@ export const registrationSkeleton = fc.record({
   // An oracle property's options: a literal with a check and a model, with a
   // check only, with no check, or a const name that the rule cannot read.
   frameworkOptions: fc.constantFrom(`check-model`, `check`, `model`, `name`),
+  // A plain registration whose body is empty: through `it`, `test`, or
+  // `it.skip` (a replay's placeholder), as an arrow, an async arrow, or a
+  // function expression.
+  empty: fc.constantFrom(false, false, false, true),
+  emptyCallee: fc.constantFrom(`it`, `test`, `it.skip`),
+  emptyFunction: fc.constantFrom(`arrow`, `async`, `function`),
 })
 
 export const programSkeleton = fc.record({
@@ -217,6 +223,8 @@ export const BASE = {
   frameworkNames: false,
   // Off: the oracle file is TypeScript, linted with typescript-eslint.
   parsers: false,
+  // Off: every plain registration's body checks something.
+  emptyBodies: false,
 }
 export const ALL = {
   companions: true,
@@ -233,6 +241,7 @@ export const ALL = {
   jsCompanions: true,
   frameworkNames: true,
   parsers: true,
+  emptyBodies: true,
 }
 
 /** The base grammar with `forms` added, and `more` overriding any feature. */
@@ -771,6 +780,13 @@ export function buildRegistration(skeleton, index, context) {
       ),
     }
     test.body = { kind: `arrow`, refs: [] }
+  } else if (form === `plain` && features.emptyBodies && skeleton.empty) {
+    // A body with nothing in it, which checks nothing.
+    test.empty = {
+      callee: skeleton.emptyCallee ?? `it`,
+      fn: skeleton.emptyFunction ?? `arrow`,
+    }
+    test.body = { kind: `arrow`, refs: [] }
   } else {
     test.body = { kind: `arrow`, refs }
   }
@@ -956,9 +972,13 @@ export function predictReports(program) {
       )
     return bodyReaches || tableReaches
   }
-  // Oracle-property calls are judged by their own rule, below.
+  // Oracle-property calls are judged by their own rule, below. A test whose
+  // body is empty checks nothing, so it is reported on its own, whatever the
+  // file declares (maintainer decision, 2026-11-10), and reaches nothing.
+  const empty = program.tests.filter((test) => test.empty !== undefined)
   const judged = program.tests.filter(
     (test) =>
+      test.empty === undefined &&
       test.framework === undefined &&
       (test.helper === undefined || !lintedOnItsOwn(program.helperFile)),
   )
@@ -982,6 +1002,7 @@ export function predictReports(program) {
   } else {
     for (const title of unreached) keys.push(`unit:${title}`)
   }
+  for (const test of empty) keys.push(`empty:${test.title}`)
   for (const name of oracle.typeNames) {
     if (!oracle.types.has(name)) keys.push(`typeModel:${name}`)
   }
@@ -1351,6 +1372,14 @@ export function registrationText(test, use) {
       body.callee.kind === `local` ? body.callee.name : use(body.callee.alias)
     return [`it('${title}', ${callee}(${arrowText(body.refs, use)}))`]
   }
+  if (test.empty !== undefined) {
+    const fn = {
+      arrow: `() => {}`,
+      async: `async () => {}`,
+      function: `function () {}`,
+    }[test.empty.fn]
+    return [`${test.empty.callee}('${title}', ${fn})`]
+  }
   if (test.options !== undefined) {
     const options = test.options.literal ? `{ timeout: 5000 }` : `oopt`
     return test.options.at === `first`
@@ -1381,6 +1410,7 @@ export function keyOf(message, subjects) {
   const id = message.messageId
   if (subject === undefined) return `unmatched:${id}@${message.line}`
   if (id === `unitTest`) return `unit:${subject.id}`
+  if (id === `emptyTest`) return `empty:${subject.id}`
   if (id === `undeclared`) return `undeclared:${subject.id}`
   if (id === `unknownTypeModel`) return `typeModel:${subject.id}`
   if (id === `importedRegistration`)
@@ -1561,7 +1591,13 @@ export function statesOf(program) {
     if (test.body.kind === `call`) states.add(`form-call-body`)
     if (test.body.kind === `member`) states.add(`form-member-body`)
     if (test.options !== undefined) states.add(`form-options`)
+    if (test.empty !== undefined) {
+      states.add(`empty-test-body`)
+      if (test.empty.callee === `test`)
+        states.add(`empty-test-body-through-test`)
+    }
   }
+
   if (program.calls.some((call) => !lintedOnItsOwn(call.file))) {
     states.add(`imported-registration`)
   }
@@ -2193,6 +2229,9 @@ const FILL = {
     predicate: `inline`,
     readsInput: true,
     elements: [0],
+    empty: false,
+    emptyCallee: `it`,
+    emptyFunction: `arrow`,
   }),
   slots: () => slot(false),
 }
@@ -2271,6 +2310,7 @@ const neutralSlots = (prefix, keep = []) =>
  * moves the reach that the state needs.
  */
 const plainTest = (test) => ({
+  [`${test}.empty`]: false,
   [`${test}.callee`]: 0,
   [`${test}.wrapped`]: false,
   [`${test}.wrap`]: 0,
@@ -2426,6 +2466,20 @@ export const WRITES = {
   'form-for': {
     'oracle.tests.0.formIndex': formAt(`for`),
     'oracle.tests.0.rows': [{ value: 1 }],
+  },
+  // Empty bodies: one through `it`, beside the generated tests, and one
+  // through `test` as an async arrow.
+  'empty-test-body': {
+    'oracle.tests.0.formIndex': formAt(`plain`),
+    'oracle.tests.0.empty': true,
+    'oracle.tests.0.emptyCallee': `it`,
+    'oracle.tests.0.emptyFunction': `arrow`,
+  },
+  'empty-test-body-through-test': {
+    'oracle.tests.0.formIndex': formAt(`plain`),
+    'oracle.tests.0.empty': true,
+    'oracle.tests.0.emptyCallee': `test`,
+    'oracle.tests.0.emptyFunction': `async`,
   },
   'form-options': {
     'oracle.tests.0.formIndex': formAt(`options-first`),
@@ -2781,4 +2835,6 @@ export const STATE_NAMES = [
   `espree-oracle`,
   `espree-oracle-test-uses-part`,
   `oracle-imports-type-syntax-under-espree`,
+  `empty-test-body`,
+  `empty-test-body-through-test`,
 ]

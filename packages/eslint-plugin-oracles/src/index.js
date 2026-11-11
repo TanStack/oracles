@@ -32,6 +32,11 @@ const oracleFiles = [
   `**/*oracle*.jsx`,
 ]
 
+// A tool's config file (`eslint.oracle.config.mjs`, `vite.config.ts`) is
+// never an oracle file or production source, so both configs leave it out.
+// A companion oracle module (`foo-oracle.ts`) stays in scope.
+const configFiles = [`**/*.config.{js,mjs,cjs,ts,mts,cts}`]
+
 const plugin = {
   meta: { name: `eslint-plugin-oracle` },
   rules: {
@@ -49,6 +54,7 @@ plugin.configs = {
   recommended: {
     name: `oracle/recommended`,
     files: oracleFiles,
+    ignores: configFiles,
     plugins: { oracle: plugin },
     linterOptions: { noInlineConfig: true },
     rules: {
@@ -69,6 +75,7 @@ plugin.configs = {
     files: [`packages/*/src`, `src`].flatMap((dir) =>
       [`ts`, `tsx`, `js`, `jsx`, `mjs`].map((ext) => `${dir}/**/*.${ext}`),
     ),
+    ignores: configFiles,
     plugins: { oracle: plugin },
     rules: {
       'oracle/no-oracle-disable': `error`,

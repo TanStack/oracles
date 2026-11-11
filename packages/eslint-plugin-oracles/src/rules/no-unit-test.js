@@ -85,6 +85,12 @@ import {
  * whose tests reach no part, and that declares none itself, gets one report
  * that asks for the declaration.
  *
+ * A test whose body is an empty function, such as `it('x', () => {})` or
+ * `test('x', async function () {})`, checks nothing, so the rule reports it
+ * as an empty test, whatever the file declares: remove it, or register it
+ * with `it.todo` (maintainer decision, 2026-11-10). An empty test reaches no
+ * part, and no other report counts it.
+ *
  * Files whose names start with `oracle-`, such as `oracle-replay.test.ts`,
  * test the shared oracle machinery, and the rule skips them.
  *
@@ -1299,7 +1305,7 @@ function tableFunctionReaches(module, table) {
   return reaches
 }
 
-function isPlaceholder(body) {
+function isEmpty(body) {
   return (
     isFunction(body) &&
     body.body.type === `BlockStatement` &&
@@ -1310,8 +1316,8 @@ function isPlaceholder(body) {
 /**
  * The test module that a relative specifier names in `fromFile`, as this rule
  * resolves it: undefined for production source, a package, or a missing file.
- * The lint selection in scripts/agent-lint-feedback.mjs follows these edges, so
- * an edit reaches the oracle files that this rule reads.
+ * A project's lint selection can follow these edges, so that an edit reaches
+ * the oracle files that this rule reads.
  */
 const selectionSession = new LintSession()
 export function resolveImportedTestModule(fromFile, specifier) {
@@ -1326,6 +1332,7 @@ export default {
     },
     schema: [],
     messages: {
+      emptyTest: `This test's body is empty, so it checks nothing. Remove it, or use it.todo.`,
       unitTest: `This test reaches no part that this file declares with declareOracle, so its expected result has no independent source. A unit test belongs in an ordinary test file: move it there. A fixed history runs through the declared check, a model-rule expectation uses the declared model, and a grammar calibration uses the declared grammar.`,
       unknownTypeModel: `This typeModel name is not a type alias or interface in this file. A type model is the expected type that type-level tests compare with, so it must be declared here.`,
       incompleteProperty: `This oracleProperty call does not pass an object literal with a check, so the rule cannot see that the property has one. Pass its options inline as \`oracleProperty({ id, law, histories, driver, model, check })\`.`,
@@ -1386,7 +1393,11 @@ export default {
           return
         }
         const test = registeredTest(node, sourceCode)
-        if (test === undefined || isPlaceholder(test.body)) return
+        if (test === undefined) return
+        if (isEmpty(test.body)) {
+          context.report({ node, messageId: `emptyTest` })
+          return
+        }
         // An `.each(table)` row can carry a function that the test body calls,
         // such as a mutant observation each check must reject. A function in
         // the table that uses a declared part makes the test use it. Plain
