@@ -33,8 +33,9 @@ jobs:
       - run: pnpm run format:check
       - run: pnpm run typecheck
       - run: pnpm --filter @tanstack/oracles run test
-      # Every test of the end-to-end gap oracle is in exactly one CI shard
-      # (packages/oracles/scripts/e2e-shards.mjs).
+      # Checks the partition of the end-to-end gap oracle into CI shards
+      # (packages/oracles/scripts/e2e-shards.mjs) ahead of the shard jobs,
+      # which CI does not run yet: every test is in exactly one shard.
       - run: pnpm --filter @tanstack/oracles run test:oracle-gaps:shards
       - run: pnpm run test:publint
       - run: pnpm run test:sherif
