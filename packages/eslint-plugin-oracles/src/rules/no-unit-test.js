@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
-import { parseForESLint } from '@typescript-eslint/parser'
+import { Linter } from 'eslint'
 import {
   findVariable,
   isFunction,
@@ -70,6 +70,16 @@ import {
  * part. A private package, such as an end-to-end suite, keeps its tests in
  * `src/`, and the rule follows those.
  *
+ * The rule reads an imported module with the parser and parser options that
+ * ESLint uses for the file it lints, so it agrees with the consumer's config
+ * and needs no TypeScript of its own. A module that this parser cannot read
+ * reaches nothing and never makes the rule throw. When the file has a test
+ * that reaches no part, each import, re-export, or star export that names
+ * such a module is reported too (unparsedModule), with the parser's error, since
+ * the reach may have run through it. A file whose tests all reach is not
+ * judged by such a module, so a JavaScript config that imports a TypeScript
+ * one is not reported.
+ *
  * The rule reports each test that reaches no declared part. Move such a test
  * to an ordinary test file, where it stays as supplemental coverage. A file
  * whose tests reach no part, and that declares none itself, gets one report
@@ -102,20 +112,28 @@ const declarationHelper = `declareOracle`
 
 /**
  * Every module that an earlier lint parsed, by path, with the mtime and size
- * it was read at. Parsing is the costly part, so a module is parsed again only
- * when it changes. The reach that a lint computes is never kept between lints,
- * so an edit to any module reaches the next lint: see LintSession.
+ * it was read at and the language options it was parsed with. Parsing is the
+ * costly part, so a module is parsed again only when it changes, or when a
+ * file with other language options imports it. The reach that a lint computes
+ * is never kept between lints, so an edit to any module reaches the next lint:
+ * see LintSession.
  */
 const parsedModules = new Map()
 
 /**
- * The reach state of one lint run: the modules it loaded, the production
- * package flags it read, and the reach search that resolves bindings.
+ * The reach state of one lint run: the language options of the file it lints,
+ * the modules it loaded, the parse error of each module that did not parse,
+ * the production package flags it read, and the reach search that resolves
+ * bindings.
  */
 class LintSession {
   modules = new Map()
+  parseErrors = new Map()
   published = new Map()
   search = new ReachSearch()
+  constructor(languageOptions) {
+    this.languageOptions = languageOptions
+  }
 }
 
 /**
@@ -398,52 +416,83 @@ function inTypeQuery(identifier) {
   return false
 }
 
-/** ESLint sets `parent` on the file it lints; a module parsed here needs it too. */
-function setParents(node, parent) {
-  node.parent = parent
-  for (const [key, child] of Object.entries(node)) {
-    if (key === `parent`) continue
-    for (const item of Array.isArray(child) ? child : [child]) {
-      if (typeof item?.type === `string`) setParents(item, node)
-    }
-  }
-}
-
 /**
  * The module that a file names, for this lint. A module that cannot be read or
- * does not parse reaches nothing. Its own lint reports the error.
+ * does not parse reaches nothing, and its error is kept for the import that
+ * names it (see the `unparsedModule` report).
  */
 function loadModule(file, session) {
   if (!session.modules.has(file)) {
+    // Only reading and parsing the module may fail here; an error in the
+    // rule's own analysis of a parsed module is a rule bug, not a parse
+    // failure, so it is not reported as one.
     let parsed
     try {
-      parsed = parseModule(file)
-    } catch {
-      parsed = undefined
+      parsed = parseModule(file, session.languageOptions)
+    } catch (error) {
+      session.parseErrors.set(file, error.message)
     }
-    const module =
-      parsed === undefined
-        ? undefined
-        : new OracleModule(file, parsed.ast, parsed.scopeManager, session)
-    session.modules.set(file, module)
+    session.modules.set(
+      file,
+      parsed &&
+        new OracleModule(file, parsed.ast, parsed.scopeManager, session),
+    )
   }
   return session.modules.get(file)
 }
 
-/** The parsed AST of a module, reused while its mtime and size are unchanged. */
-function parseModule(file) {
+/**
+ * The parsed source of a module, reused while its mtime, size, and language
+ * options are unchanged. ESLint's own Linter parses it with the language
+ * options of the file being linted, so an imported module is read with the
+ * parser and parser options that the consumer configured, whichever parser
+ * that is, and it gets the scope analysis and `parent` links that ESLint
+ * gives the linted file.
+ *
+ * The rule reads syntax and scope, not types. typescript-eslint's `project`,
+ * `projectService`, and `programs` options build a type-checked program, which
+ * costs far more than the parse and changes the program that the consumer's
+ * type-aware rules then read for that module, so they are left out.
+ */
+function parseModule(file, languageOptions) {
   const { mtimeMs, size } = statSync(file)
   const cached = parsedModules.get(file)
-  if (cached?.mtimeMs === mtimeMs && cached.size === size) return cached
-  const { ast, scopeManager } = parseForESLint(readFileSync(file, `utf8`), {
-    filePath: file,
-    jsx: file.endsWith(`.tsx`),
-    loc: true,
-    range: true,
-    sourceType: `module`,
-  })
-  setParents(ast, null)
-  const parsed = { mtimeMs, size, ast, scopeManager }
+  if (
+    cached?.mtimeMs === mtimeMs &&
+    cached.size === size &&
+    cached.languageOptions === languageOptions
+  )
+    return cached
+  const linter = new Linter({ cwd: dirname(file) })
+  const [fatal] = linter
+    .verify(
+      readFileSync(file, `utf8`),
+      [
+        {
+          files: [`**/*.*`],
+          // The imported module's own eslint comments configure rules and
+          // environments this parse does not run.
+          linterOptions: {
+            noInlineConfig: true,
+            reportUnusedDisableDirectives: `off`,
+          },
+          languageOptions: {
+            ...languageOptions,
+            parserOptions: {
+              ...languageOptions.parserOptions,
+              project: undefined,
+              projectService: undefined,
+              programs: undefined,
+            },
+          },
+        },
+      ],
+      file,
+    )
+    .filter((message) => message.fatal)
+  if (fatal !== undefined) throw new Error(fatal.message)
+  const { ast, scopeManager } = linter.getSourceCode()
+  const parsed = { mtimeMs, size, languageOptions, ast, scopeManager }
   parsedModules.set(file, parsed)
   return parsed
 }
@@ -464,10 +513,12 @@ class OracleModule {
       .flatMap((scope) => scope.references)
       // A type annotation runs nothing, so only value references reach.
       // `typeof check` in a type names a value, and still runs nothing.
+      // espree's scope analysis has no type references, so it does not mark
+      // its references as values.
       .filter(
         (reference) =>
           reference.resolved !== null &&
-          reference.isValueReference &&
+          reference.isValueReference !== false &&
           !inTypeQuery(reference.identifier),
       )
       .sort((a, b) => a.identifier.range[0] - b.identifier.range[0])
@@ -1279,6 +1330,7 @@ export default {
       unknownTypeModel: `This typeModel name is not a type alias or interface in this file. A type model is the expected type that type-level tests compare with, so it must be declared here.`,
       incompleteProperty: `This oracleProperty call does not pass an object literal with a check, so the rule cannot see that the property has one. Pass its options inline as \`oracleProperty({ id, law, histories, driver, model, check })\`.`,
       importedRegistration: `This oracle file calls a helper that registers tests. An oracle file registers only oracle tests, so register those tests from an ordinary test file and keep this file to its checks and model.`,
+      unparsedModule: `This file's parser cannot parse {{module}} ({{error}}), so no test reaches a part through it. Lint this file with a parser that reads the module, or fix the module's syntax.`,
       undeclared: `This oracle file registers tests and declares no oracle part. Name its check, model, and grammar with \`declareOracle({ check: [...], model: [...], grammar: [...] })\` from \`@tanstack/oracles\`. Then move each test that reaches none of them to an ordinary test file.`,
     },
   },
@@ -1287,7 +1339,7 @@ export default {
     // shared oracle machinery. Their tests check that machinery, not a law.
     if (basename(context.filename).startsWith(`oracle-`)) return {}
     const { sourceCode } = context
-    const session = new LintSession()
+    const session = new LintSession(context.languageOptions)
     const module = new OracleModule(
       context.filename,
       sourceCode.ast,
@@ -1296,7 +1348,14 @@ export default {
     )
     const unreached = []
     let anyReached = false
+    // The declarations that name another module, whose parse an unreached
+    // test's report may depend on.
+    const sources = []
+    const addSource = (node) => sources.push(node.source)
     return {
+      ImportDeclaration: addSource,
+      ExportAllDeclaration: addSource,
+      'ExportNamedDeclaration[source]': addSource,
       CallExpression(node) {
         // A curried callee is not a call of its own: the outermost call is the
         // registration.
@@ -1348,6 +1407,26 @@ export default {
       'Program:exit'() {
         for (const node of module.unknownTypeModels) {
           context.report({ node, messageId: `unknownTypeModel` })
+        }
+        // A test that reaches no part may reach none because a module that
+        // this file names does not parse with its parser, so each declaration
+        // that names such a module is reported beside the test's report.
+        for (const source of unreached.length > 0 ? sources : []) {
+          const file = resolveTestModule(
+            context.filename,
+            source.value,
+            session,
+          )
+          if (file === undefined || loadModule(file, session) !== undefined)
+            continue
+          context.report({
+            node: source,
+            messageId: `unparsedModule`,
+            data: {
+              module: `'${source.value}'`,
+              error: session.parseErrors.get(file),
+            },
+          })
         }
         // A file that relies on a companion module's declaration declares
         // nothing itself. It is undeclared only when no test reaches a part.

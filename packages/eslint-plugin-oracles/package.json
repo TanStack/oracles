@@ -35,12 +35,10 @@
   "peerDependencies": {
     "eslint": "^9.0.0 || ^10.0.0"
   },
-  "dependencies": {
-    "@typescript-eslint/parser": "^8.72.1"
-  },
   "devDependencies": {
     "@fast-check/vitest": "^0.5.0",
     "@tanstack/oracles": "workspace:*",
+    "@typescript-eslint/parser": "^8.72.1",
     "eslint": "^9.39.2",
     "fast-check": "^4.10.2",
     "vitest": "^4.1.12"

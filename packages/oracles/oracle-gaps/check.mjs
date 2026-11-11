@@ -36,7 +36,14 @@ import { createRequire } from 'node:module'
 import { basename, dirname, join, relative as relativePath } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { applyAuthored, loadAuthored } from './authored.mjs'
-import { authoredKey, keyAndSelect, renderReport } from './report.mjs'
+import {
+  authoredKey,
+  gapsOf,
+  keyAndSelect,
+  renderReport,
+  renderStdout,
+} from './report.mjs'
+import { baselineLines, gapLine, progressLine } from './stream.mjs'
 import { analyze, isRunnerCopy } from './analysis.mjs'
 import {
   baselineOf,
@@ -72,6 +79,7 @@ const ownFiles = [
   `schemata.mjs`,
   `owners.mjs`,
   `report.mjs`,
+  `stream.mjs`,
   `authored.mjs`,
   `capture-setup.mjs`,
   `evidence.mjs`,
@@ -1299,6 +1307,17 @@ export default async (env) => {
           })
     // An oracle file that fails with no mutant active cannot judge the code
     // it owns, so the run refuses rather than report that code as unowned.
+    // The baseline first: each oracle file's result, and a failing law's replay.
+    const baseline0 = baselineLines(
+      [...oracleFiles].map((file) => ({
+        file: relative(file),
+        failure: first.failed.get(file),
+        fullName: first.units
+          .find((u) => u.file === file)
+          ?.tests.find((t) => t.state === `failed`)?.fullName,
+      })),
+    )
+    for (const line of baseline0) log(line)
     const failingOwners = [...first.failed.keys()].filter((file) =>
       oracleFiles.has(file),
     )
@@ -1353,7 +1372,7 @@ export default async (env) => {
     }
     const selectionChecks = new Map()
     const planned = new Map()
-    const reach = baselineOf(first.rows, first.rows, oracleFiles)
+    const reach = baselineOf(first.rows, first.rows)
     for (const mutant of queue) {
       const owners = ownersOf(mutant)
       if (owners.size === 0) continue
@@ -1405,7 +1424,7 @@ export default async (env) => {
       files: files.length,
       selections: planned.size,
     })
-    const baseline = baselineOf(first.rows, second.rows, oracleFiles)
+    const baseline = baselineOf(first.rows, second.rows)
     const { nondeterministic } = baseline
     // A nondeterministic test judges nothing, so its verdict must not stop
     // a run at its first kill: a later test of the file may decide.
@@ -1626,11 +1645,19 @@ export default async (env) => {
           targets: st.targets.oracleTargets.length,
         })
         appendFileSync(partial, `${JSON.stringify(st.result)}\n`)
-        log(
-          `${st.mutant.id} L${st.mutant.line} ${st.mutant.operator} ${st.result.outcome}${st.result.class ? ` (${st.result.class})` : ``}${st.result.testOutcome ? ` [ordinary: ${st.result.testOutcome}]` : ``}`,
-        )
+        judged += 1
+        if (gapsOf([st.result]).length > 0) {
+          gaps += 1
+          log(gapLine(st.result))
+        }
+        if (judged % 25 === 0) log(progressLine({ judged, total, gaps }))
       }
     }
+    // The streamed progress: each gap as its mutant is judged, and a count
+    // every 25 mutants.
+    const total = queue.length
+    let judged = 0
+    let gaps = 0
     let evaluating = contexts.length
     await Promise.all(
       contexts.map(async (context, index) => {
@@ -1743,11 +1770,13 @@ export default async (env) => {
     )
     for (const job of authoredJobs) {
       Object.assign(job.result, judgeAuthored(job.units, baseline))
-      log(
-        `${job.id} ${job.result.outcome}${job.result.class ? ` (${job.result.class})` : ``}`,
-      )
     }
     endPhase(`authored mutants`, { mutants: authored.length })
+    // Every authored gap is streamed once, judged or not (a stale `find` is
+    // judged by nothing). Keys were numbered by keyAndSelect (operator
+    // mutants) and authoredKey (authored ones), before any selection.
+    for (const result of results)
+      if (result.authored && gapsOf([result]).length > 0) log(gapLine(result))
     const mutantSeconds = (Date.now() - started) / 1000
     log(
       `mutant phase: ${results.length} mutants in ${mutantSeconds.toFixed(1)}s`,
@@ -1773,13 +1802,24 @@ export default async (env) => {
       ),
     )
     span(`check`, checkStarted, { evidence })
-    const summary = renderReport({
+    writeFileSync(
+      join(options.out, `summary.md`),
+      renderReport({
+        results,
+        run: runIdentity,
+        excluded: excluded.map(relative),
+      }),
+    )
+    return renderStdout({
       results,
       run: runIdentity,
       excluded: excluded.map(relative),
+      pkg,
+      paths: {
+        report: join(options.out, `summary.md`),
+        results: join(options.out, `results.json`),
+      },
     })
-    writeFileSync(join(options.out, `summary.md`), summary)
-    return summary
   }
 
   async function close() {

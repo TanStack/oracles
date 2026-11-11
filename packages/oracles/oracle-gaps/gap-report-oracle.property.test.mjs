@@ -116,11 +116,16 @@
  *    would judge such a verdict, is not built.) A copy that a batch skipped
  *    because an earlier copy killed the mutant runs again, through the batch,
  *    only while no kill is in hand, so every mutant gets an outcome and no
- *    other missing unit is rerun. A mutant
- *    that no owner test fails is a survivor: a `comparison-gap` when an owner
- *    test's observation or asserted value changed, a `generator-gap` when an
- *    `if` on its line never took one of its outcomes in an owner test, and
- *    `no-observed-difference` otherwise. A test in a file that is not an
+ *    other missing unit is rerun. A mutant that no owner test fails is a
+ *    survivor: a `not-judged` when an owner test's observation or asserted
+ *    value changed, a `branch-never-taken` when an `if` on its line never took
+ *    one of its outcomes in an owner test, a `not-infected` when a comparison's
+ *    operators agreed on every operand an owner test reached, a
+ *    `not-distinguished` when its operator changes a value only on some
+ *    inputs and no capture shows which (a loop's condition, an undefined call
+ *    value, a dropped field, a skipped call, a logical operator), and
+ *    `not-observed` otherwise: the mutant changed a value that no recorded
+ *    observation showed. A test in a file that is not an
  *    oracle file never changes any of this, and runs only when the run asks
  *    for it (`--ordinary`, maintainer decision of 2026-11-06): then a
  *    survivor or an unreached mutant that an ordinary test reached reports
@@ -128,7 +133,7 @@
  *    mutant; every other class is a gap.
  * 5. **Authored mutants.** An authored mutant whose text occurs exactly once
  *    is judged by law 4 against the owners of the function it edits, without
- *    the generator-gap class, and is reported at the line of its edit; one
+ *    the branch-never-taken class, and is reported at the line of its edit; one
  *    whose text occurs zero or several times is `does-not-apply`. Its key is
  *    its id, whatever its file is called.
  * 6. **Keys.** Each mutant's key is its anchor:
@@ -194,6 +199,9 @@
  *    native addon anywhere in its dependency tree (a `binding.gyp`, or a
  *    prebuilt `.node` file in a dependency of a dependency) runs in child
  *    processes, and the run's inputs name the pool.
+ * 11. **Streaming.** The CLI prints each gap as its mutant is judged, one line
+ *    each (stream.mjs), and the summary repeats those gap lines: the streamed
+ *    gap lines are the report's gaps, each printed once, none missing.
  *
  * Authority: the maintainer's decisions in the gap-check design runs v11, v14,
  * and v19 (2026-11-04 and 2026-11-05; the design notes are kept by the project
@@ -517,6 +525,11 @@ function namedScratch(text, names) {
 }
 
 /** What one run of the CLI reported, from its exit status and its files. */
+// A gap line the CLI streams to stderr as its mutant is judged (stream.mjs):
+// its class, its line, and its id.
+const streamedGap =
+  /^(?:not-judged|indeterminate|dead-code|branch-never-taken|not-infected|not-observed|not-distinguished|unreached|random-only-kill|agreement-only-kill|unregistered-kill|framework-error|timeout|setup-error|crashed|does-not-apply) L(?:\d+|\?) (\S+) /
+
 function readRun(dir, out, status, stderr, cli) {
   // The output names the CLI directory that ran and the package, as scratch
   // directories do, before it is cut to its last characters.
@@ -537,10 +550,21 @@ function readRun(dir, out, status, stderr, cli) {
   } catch {
     // A run that wrote no report is recorded by its exit status and output.
   }
+  // Each streamed gap, by its key: a line whose id names no reported mutant
+  // is kept as it is, so it cannot match.
+  const keyById = new Map((results ?? []).map((r) => [r.id, r.key]))
+  const streamed = `${stderr ?? ``}`
+    .split(`\n`)
+    .flatMap((line) => {
+      const id = line.match(streamedGap)?.[1]
+      return id === undefined ? [] : [keyById.get(id) ?? `unknown id ${id}`]
+    })
+    .sort()
   return {
     exit: status,
     stderr: named === undefined ? undefined : named.slice(-1500),
     reported: results !== undefined,
+    streamed,
     // Law 9 compares everything the run reports except how it was
     // produced: durations, the options it was given (the output directory
     // and the daemon flag differ by construction), and the counts of reused
@@ -1002,7 +1026,7 @@ async function driver(plan, observe) {
         states.add(`an uncalled function in an owned function is a gap`)
       if (m.function === `w_spy` && m.outcome === `killed`)
         states.add(`a builtin spy the capture left uncalled`)
-      if (m.function === `w_shared` && m.class === `generator-gap`)
+      if (m.function === `w_shared` && m.class === `branch-never-taken`)
         states.add(`a test that depends on an earlier test`)
       if (m.function === `w_late` && m.outcome === `killed`)
         states.add(`a kill after a caught verdict`)
@@ -1082,7 +1106,7 @@ async function driver(plan, observe) {
       if (
         m.function === `w_shrink` &&
         m.operator === `if-true` &&
-        m.class === `comparison-gap`
+        m.class === `not-judged`
       )
         states.add(`a shrinking calibration passes under a mutant`)
       if (m.function === `w_fcprop` && m.outcome === `killed`)
@@ -1111,10 +1135,11 @@ async function driver(plan, observe) {
         timeout: `timeout`,
       }[m.outcome]
       if (named) states.add(named)
-      if (m.class === `comparison-gap`) states.add(`comparison gap`)
-      if (m.class === `generator-gap`) states.add(`generator gap`)
-      if (m.class === `no-observed-difference`)
-        states.add(`no observed difference`)
+      if (m.class === `not-judged`) states.add(`not judged`)
+      if (m.class === `branch-never-taken`) states.add(`branch never taken`)
+      if (m.class === `not-infected`) states.add(`not infected`)
+      if (m.class === `not-observed`) states.add(`not observed`)
+      if (m.class === `not-distinguished`) states.add(`not distinguished`)
       if (m.class === `indeterminate`) states.add(`indeterminate`)
     }
     // A batch that a hang cut off reran its other items in a new context.
@@ -1335,6 +1360,15 @@ function check(plan, observations, expected) {
         { actual: got, expected: owed },
       )
   }
+  // Each gap is streamed once as its mutant is judged (stream.mjs), and the
+  // streamed gaps are the report's gaps, each once.
+  if (JSON.stringify(cli.streamed) !== JSON.stringify(cli.gaps))
+    return violation(
+      `cli`,
+      `the streamed gap lines are not the report's gaps: ${cli.streamed.length} streamed, ${cli.gaps.length} reported`,
+      `streaming`,
+      { actual: cli.streamed, expected: cli.gaps },
+    )
   for (const [owed, got] of pairs)
     if (!owed.probe && got.ordinaryOutcome !== owed.ordinaryOutcome)
       return violation(
@@ -1618,9 +1652,11 @@ const required = [
   `crash gap`,
   `framework-only failure`,
   `indeterminate`,
-  `comparison gap`,
-  `generator gap`,
-  `no observed difference`,
+  `not judged`,
+  `branch never taken`,
+  `not infected`,
+  `not observed`,
+  `not distinguished`,
   `unreached`,
   `unowned`,
   `authored mutant`,
@@ -1936,7 +1972,7 @@ oracleProperty({
       },
       {
         // Two authored mutants in one source file, one killed and one a
-        // comparison gap: a run that let one see the other's patch would
+        // not-judged gap: a run that let one see the other's patch would
         // judge them alike.
         name: `two authored mutants`,
         enters: [

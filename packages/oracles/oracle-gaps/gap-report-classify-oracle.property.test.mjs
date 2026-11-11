@@ -40,13 +40,40 @@
  *    calibrations, probe calibrations, and the determinism test) makes it a
  *    `framework-error`; and errors outside any
  *    test make it a `setup-error`.
- * 5. With no failure it survived: a `comparison-gap` when a reaching,
- *    deterministic owner test's asserted or observed value changed (code
- *    that ran when a file loaded the module reaches every test of that file,
- *    maintainer decision of 2026-11-06);
- *    `indeterminate` when no such test judged it; a `generator-gap` when an
- *    `if` on its line, reached by an owner test, never took one of its
- *    outcomes in the owners' tests; and `no-observed-difference` otherwise.
+ * 5. With no failure it survived, and gets exactly one survivor class, from
+ *    what the run measured (decision 11 of the v20 design grammar):
+ *    `not-judged` when a reaching, deterministic owner test's asserted or
+ *    observed value changed (code that ran when a file loaded the module
+ *    reaches every test of that file, maintainer decision of 2026-11-06);
+ *    `indeterminate` when no such test judged it; `dead-code` when the
+ *    mutant carries the `dead code` evidence (no input distinguishes it);
+ *    `branch-never-taken` when it is an `if`-operator mutant and an owner
+ *    test reached its `if` with one outcome only; `not-infected` when it is
+ *    a comparison whose two operators agree on every operand pair the
+ *    owners reached; `not-observed` when an `if` or comparison mutant was
+ *    infected and no recorded observation showed the change; and
+ *    `not-distinguished` for any other operator, whose infection the
+ *    capture does not measure, so its directive names the input that
+ *    distinguishes it. This oracle's grammar has no operator that always
+ *    changes a value when reached (`!`, booleans, arithmetic); production
+ *    measures those and classes them `not-observed`, which the end-to-end
+ *    oracle checks.
+ *    A mutant is infected in a test when its mutated expression's value
+ *    differs from the original's there. A comparison is infected when the
+ *    operators disagree on its operands; an `if` when its condition took the
+ *    outcome the mutant forces the other way; any other mutant when reached
+ *    (its helper infects on reach).
+ * 7. Every survivor's message is one directive from its class's fixed set,
+ *    built from the run's data (the test that infected it, the operands
+ *    seen, the outcome an `if` took). A message never offers an exit:
+ *    no equivalence, approval, limit, or question. A mutant with the
+ *    `boundary: -0` hint adds "Add a boundary history with -0 and 0." to its
+ *    message. The summary's message is read as an author reads it.
+ * 8. The compressed stdout summary (report.mjs `renderStdout`) lists the
+ *    totals, one legend line per class present, and every gap once, one line
+ *    each, grouped by function; it names the full report's path. The
+ *    streamed gap lines (stream.mjs `gapLine`), printed in the order the
+ *    mutants are judged, are the same lines, each once.
  * 6. A survivor or an unreached mutant that ordinary tests reached gets
  *    their outcome for information, where an assertion failure counts on the
  *    test's route; it never changes the class.
@@ -76,7 +103,7 @@ import {
   targetsOf,
 } from './classify.mjs'
 import { readSummary } from './gap-report-model-oracle.mjs'
-import { assignKeys, renderReport } from './report.mjs'
+import * as report from './report.mjs'
 
 const MUTANTS = 4
 
@@ -132,6 +159,12 @@ const testRecord = fc.record({
     maxLength: MUTANTS,
   }),
   under: fc.array(effect, { minLength: MUTANTS, maxLength: MUTANTS }),
+  // The two operands of each comparison the test reached. Small, so that
+  // ties (which separate `>` from `>=`) happen.
+  pair: fc.array(fc.tuple(fc.nat({ max: 2 }), fc.nat({ max: 2 })), {
+    minLength: MUTANTS,
+    maxLength: MUTANTS,
+  }),
 })
 const records = fc.record({
   files: fc.array(
@@ -143,6 +176,12 @@ const records = fc.record({
         minLength: MUTANTS,
         maxLength: MUTANTS,
       }),
+      // Whether that loaded code changed a measured value of the mutant
+      // (an `if`'s outcome or a comparison's operators).
+      backgroundInfects: fc.array(fc.boolean(), {
+        minLength: MUTANTS,
+        maxLength: MUTANTS,
+      }),
     }),
     { minLength: 1, maxLength: 3 },
   ),
@@ -150,7 +189,24 @@ const records = fc.record({
     fc.record({
       owners: fc.array(fc.nat({ max: 2 }), { maxLength: 2 }),
       line: fc.nat({ max: 1 }),
-      operator: fc.constantFrom(`if-true`, `if-false`, `delete-call`),
+      // A `binary-swap` is a comparison (`>`, `>=`, `===`) or a logical
+      // operator (`&&`); its evidence is a hint the framework may attach.
+      operator: fc.constantFrom(
+        `if-true`,
+        `if-false`,
+        `delete-call`,
+        `binary-swap`,
+        `loop-false`,
+        `value-undefined`,
+        `field-drop`,
+      ),
+      original: fc.constantFrom(`>`, `>=`, `===`, `&&`, `||`, `??`),
+      evidence: fc.constantFrom(
+        undefined,
+        undefined,
+        `dead code`,
+        `boundary: -0`,
+      ),
       anchor: fc.constantFrom(
         `out . push ( 'a' ) ;`,
         `if ( x > 4 ) out . push ( \`b\` ) ;`,
@@ -205,7 +261,11 @@ function modelOutcome(h, mi) {
       : result
   if (owners.size === 0) return { outcome: `unowned` }
   const targets = [...owners].filter(reachingIn)
-  if (targets.length === 0) return withOrdinary({ outcome: `unreached` })
+  if (targets.length === 0)
+    return withOrdinary({
+      outcome: `unreached`,
+      mention: [`line ${m.line + 1}`],
+    })
   const tests = targets.flatMap((fi) =>
     h.files[fi].tests.map((t, ti) => ({ t, fi, ti })),
   )
@@ -262,37 +322,136 @@ function modelOutcome(h, mi) {
   const compared = ran.filter(
     (x) => (x.t.reaches[mi] || h.files[x.fi].background[mi]) && !x.t.flaky,
   )
-  if (compared.some((x) => [`changed`, `observedChanged`].includes(under(x))))
-    return withOrdinary({ outcome: `survived`, class: `comparison-gap` })
-  if (compared.length === 0)
-    return withOrdinary({ outcome: `survived`, class: `indeterminate` })
-  const missing = h.mutants.some((other, oi) => {
-    if (other.operator !== `if-true` || other.line !== m.line) return false
-    const seen = targetsSeen(h, oi, owners)
-    return seen.reached && !(seen.truthy && seen.falsy)
-  })
-  return withOrdinary({
-    outcome: `survived`,
-    class: missing ? `generator-gap` : `no-observed-difference`,
+  const changed = compared.find((x) =>
+    [`changed`, `observedChanged`].includes(under(x)),
+  )
+  const sized = (cls, extra = {}) =>
+    withOrdinary({
+      outcome: `survived`,
+      class: cls,
+      mention: [],
+      boundary: m.evidence === `boundary: -0`,
+      ...extra,
+    })
+  if (changed)
+    return sized(`not-judged`, {
+      mention: [`Make a law in \`t${changed.ti}\` reject the changed value.`],
+    })
+  if (compared.length === 0) return sized(`indeterminate`)
+  if (m.evidence === `dead code`)
+    return sized(`dead-code`, { mention: [`line ${m.line + 1}.`] })
+  // An `if` mutant forces its condition: an if-true mutant changes a value
+  // only where the condition was false, an if-false mutant only where it was
+  // true. Its branch is never taken when no deterministic owner test (or the
+  // owner file's loaded code) saw that outcome, whatever the sibling did.
+  if (isIf(m)) {
+    const need = m.operator === `if-true` ? `false` : `true`
+    if (!infectedIn(h, mi, owners))
+      return sized(`branch-never-taken`, {
+        mention: [`the condition on line ${m.line + 1} is ${need},`],
+      })
+    return sized(`not-observed`, { mention: [observedMention(h, mi, owners)] })
+  }
+  if (isCompare(m)) {
+    if (!infectedIn(h, mi, owners))
+      return sized(`not-infected`, {
+        mention: [`Operands seen: ${operandsSeen(h, mi, owners)}.`],
+      })
+    return sized(`not-observed`, { mention: [observedMention(h, mi, owners)] })
+  }
+  // The other operators' infection is not measured, so the directive says
+  // what input distinguishes the mutant, built from its operator.
+  return sized(`not-distinguished`, {
+    mention: [distinguishingDirective(m)],
   })
 }
 
-// Whether an owner test reached an `if-true` mutant, and which outcomes the
-// owners' deterministic and nondeterministic tests saw there.
-function targetsSeen(h, oi, owners) {
-  let reached = false
-  let truthy = false
-  let falsy = false
-  for (const fi of owners) {
-    if (h.files[fi].background[oi]) reached = true
-    for (const t of h.files[fi].tests) {
-      if (!t.reaches[oi]) continue
-      reached = true
-      truthy ||= t.seen[oi] !== `false`
-      falsy ||= t.seen[oi] !== `true`
-    }
+// The directive for an operator whose infection is not measured: the input
+// that makes the mutant's value differ, built from the operator's semantics.
+function distinguishingDirective(m) {
+  const line = m.line + 1
+  if (m.operator === `loop-false`)
+    return `Add an owner history that enters the loop on line ${line}, so that forcing its condition to false changes an asserted result, and assert on the result.`
+  if (m.operator === `value-undefined`)
+    return `Add an owner history where the call on line ${line} returns a value that changes an asserted result when it is \`undefined\`, and assert on the result.`
+  if (m.operator === `field-drop`)
+    return `Add an owner history that reads the property dropped on line ${line}, so that its absence changes an asserted result, and assert on the result.`
+  if (m.operator === `delete-call`)
+    return `Add an owner history where the call on line ${line} changes an asserted result when it does not run, and assert on the result.`
+  if (m.original === `??`)
+    return `Add an owner history where the left operand of \`??\` on line ${line} is truthy, so \`??\` and \`&&\` give different results, and assert on the result.`
+  return `Add an owner history where one operand of \`${m.original}\` on line ${line} is falsy and the other is truthy, so \`&&\` and \`||\` give different results, and assert on the result.`
+}
+// The observation a survivor with an infection names: its infecting test, or
+// the owner tests when only loaded code infected it.
+const observedMention = (h, mi, owners) => {
+  const infecting = infectingTest(h, mi, owners)
+  return infecting === undefined
+    ? `Observe the value this code changes in the owner tests, and assert on it.`
+    : `Observe the value this code changes in \`${infecting}\`, and assert on it.`
+}
+
+// Comparisons and their swaps, as the mutant states them. A comparison is
+// infected when its operators disagree on the operands a test reached.
+const comparisons = new Set([`>`, `>=`, `===`])
+const swapOf = { '>': `>=`, '>=': `>`, '===': `!==` }
+const holds = {
+  '>': (a, b) => a > b,
+  '>=': (a, b) => a >= b,
+  '===': (a, b) => a === b,
+  '!==': (a, b) => a !== b,
+}
+const isIf = (m) => m.operator === `if-true` || m.operator === `if-false`
+const isCompare = (m) =>
+  m.operator === `binary-swap` && comparisons.has(m.original)
+// Whether test t's mutated expression takes another value than the original.
+// Only `if` and comparison mutants are measured (the capture records them);
+// any other mutant infects on reach (its helper does).
+function infects(h, mi, t) {
+  const m = h.mutants[mi]
+  if (!t.reaches[mi]) return false
+  if (m.operator === `if-true`) return t.seen[mi] !== `true`
+  if (m.operator === `if-false`) return t.seen[mi] !== `false`
+  if (isCompare(m)) {
+    const [a, b] = t.pair[mi]
+    return holds[m.original](a, b) !== holds[swapOf[m.original]](a, b)
   }
-  return { reached, truthy, falsy }
+  return true
+}
+// The deterministic owner tests, in file order, that reached the mutant.
+function reachingTests(h, mi, owners) {
+  return [...owners]
+    .sort((a, b) => a - b)
+    .flatMap((fi) =>
+      h.files[fi].tests.flatMap((t, ti) =>
+        t.reaches[mi] && !t.flaky ? [{ t, ti }] : [],
+      ),
+    )
+}
+// Whether a deterministic owner test, or the loaded code of an owner file,
+// infected the mutant. A nondeterministic test's infection judges nothing.
+function infectedIn(h, mi, owners) {
+  return [...owners].some(
+    (fi) =>
+      (h.files[fi].background[mi] && h.files[fi].backgroundInfects[mi]) ||
+      reachingTests(h, mi, new Set([fi])).some(({ t }) => infects(h, mi, t)),
+  )
+}
+// The first deterministic test that infected the mutant, if any test did.
+function infectingTest(h, mi, owners) {
+  const hit = reachingTests(h, mi, owners).find(({ t }) => infects(h, mi, t))
+  return hit ? `t${hit.ti}` : undefined
+}
+// The operand pairs the owners' tests reached, distinct, in order, up to three.
+function operandsSeen(h, mi, owners) {
+  const pairs = [
+    ...new Set(
+      reachingTests(h, mi, owners)
+        .filter(({ t }) => isCompare(h.mutants[mi]))
+        .map(({ t }) => t.pair[mi].join(` and `)),
+    ),
+  ].slice(0, 3)
+  return pairs.length > 0 ? pairs.join(`; `) : `none recorded`
 }
 
 // The ordinary tests' outcome: their assertion failures count on their
@@ -365,6 +524,15 @@ function model(h) {
   const gapsOf = listed.filter(
     (x) => !x.m.probe && ![`killed`, `unowned`].includes(x.kind),
   )
+  // Each mutant's key, line, id, and function, for the messages and the
+  // stdout summary (the driver names mutant mi `m${mi}` in `f${line}`).
+  outcomes.forEach((o, mi) => {
+    o.key = listed[mi].key
+    o.line = h.mutants[mi].line + 1
+    o.id = `m${mi}`
+    o.function = `f${h.mutants[mi].line}`
+    o.probe = h.mutants[mi].probe
+  })
   return {
     outcomes,
     summary: {
@@ -387,6 +555,63 @@ function model(h) {
   }
 }
 
+// ## Messages
+//
+// Each gap's message is one directive from its kind's fixed set (decision 10:
+// messages leave no outs). Names in backticks are run data. A message never
+// offers an exit: no equivalence, approval, allowance, limit, choice, or
+// question. A survivor with the `boundary: -0` hint carries the boundary
+// sentence after its directive.
+const boundaryLine = `Add a boundary history with -0 and 0.`
+// The kills-by-law section's one next step for a law that rejects no mutant.
+const killsDirective = `To find a law that rejects no mutant, add a history that varies the input the law judges, and run the check again.`
+const exits =
+  /equivalen|maintainer|approv|allowance|either|whether|\bor\b|\bif no\b|limit|accept|\?|\bsay\b/i
+const directives = {
+  unreached:
+    /^Add an owner test that runs line \d+ and asserts on its result\.$/,
+  'branch-never-taken':
+    /^Add an owner history where the condition on line \d+ is (true|false), so the branch it guards runs\.$/,
+  'not-infected':
+    /^Add a history whose operands are equal, where `[^`]+` and `[^`]+` disagree\. Operands seen: .+\.$/,
+  'not-observed':
+    /^Observe the value this code changes in (`[^`]+`|the owner tests), and assert on it\.$/,
+  'not-judged': /^Make a law in `[^`]+` reject the changed value\.$/,
+  indeterminate:
+    /^(Make `[^`]+` deterministic: control its clock and its random seed, so its failures judge this code|Add an owner test that runs line \d+ and asserts on its result)\.$/,
+  'dead-code': /^Remove the redundant code on line \d+\.$/,
+  'random-only-kill':
+    /^Keep the counterexample that `[^`]+` found in the random campaign as a fixed history\.$/,
+  'agreement-only-kill':
+    /^Assert on the value this path produces in `[^`]+`\.$/,
+  'unregistered-kill':
+    /^Register the route of `[^`]+` through the framework, so its failure counts as a kill\.$/,
+  'framework-error':
+    /^The framework check `[^`]+` failed with `[^`]*`, and a calibration judges no behavior: state the oracle law that decides this input's outcome, and let it reject the change\.$/,
+  crashed:
+    /^Production threw `[^`]*` in `[^`]+`; record the error as an observation in the driver, and state the law that decides this input's outcome\.$/,
+  'not-distinguished':
+    /^Add an owner history (where one operand of `[&|]{2}` on line \d+ is falsy and the other is truthy, so `&&` and `\|\|` give different results|where the left operand of `\?\?` on line \d+ is truthy, so `\?\?` and `&&` give different results|that enters the loop on line \d+, so that forcing its condition to false changes an asserted result|where the call on line \d+ returns a value that changes an asserted result when it is `undefined`|that reads the property dropped on line \d+, so that its absence changes an asserted result|where the call on line \d+ changes an asserted result when it does not run), and assert on the result\.$/,
+  timeout:
+    /^Bound the run of the owner tests so that they end, and let a law reject a run that does not\.$/,
+  'setup-error':
+    /^Run an owner test that loads this module and asserts on its exports, so a failed load rejects the mutant\.$/,
+  'does-not-apply':
+    /^Update the `find` text of this authored mutant so that it occurs exactly once in the source\.$/,
+}
+// Each gap's message as the report's author reads it: the line after its key.
+function messagesOf(summary) {
+  const lines = summary.split(`\n`)
+  const messages = {}
+  lines.forEach((line, i) => {
+    const key = line.startsWith(`  - Key: `)
+      ? line.slice(`  - Key: `.length).match(/^(`+) (.*) \1; rerun/)?.[2]
+      : undefined
+    if (key !== undefined) messages[key] = lines[i + 1].replace(/^  - /, ``)
+  })
+  return messages
+}
+
 // ## Production driver
 //
 // The driver turns the records into the capture rows and units the CLI's
@@ -398,6 +623,39 @@ const messages = {
   assertion: `AssertionError: expected [ 'a' ] to deeply equal [ 'b' ]`,
   crash: `TypeError: x.y is not a function`,
   timeoutMessage: `Error: Test timed out in 15000ms.`,
+}
+// The capture's comparison and the swap a comparison mutant states, as the
+// instrumented code evaluates them (capture-setup.mjs `cmp`).
+const captured = {
+  '===': (a, b) => a === b,
+  '!==': (a, b) => a !== b,
+  '<': (a, b) => a < b,
+  '<=': (a, b) => a <= b,
+  '>': (a, b) => a > b,
+  '>=': (a, b) => a >= b,
+}
+const capturedSwap = { '>': `>=`, '>=': `>`, '===': `!==` }
+// What the capture records for a reached test: the mutants whose value it
+// changed (`infected`), and the operands of each reached comparison.
+function capturedRows(h, t) {
+  const infected = []
+  const operands = []
+  t.reaches.forEach((r, mi) => {
+    if (!r || mi >= h.mutants.length) return
+    const m = h.mutants[mi]
+    if (m.operator === `if-true`) {
+      if (t.seen[mi] !== `true`) infected.push(mi)
+    } else if (m.operator === `if-false`) {
+      if (t.seen[mi] !== `false`) infected.push(mi)
+    } else if (m.operator === `binary-swap` && capturedSwap[m.original]) {
+      const [a, b] = t.pair[mi]
+      operands.push([mi, [a, b]])
+      const swapped = capturedSwap[m.original]
+      if (captured[m.original](a, b) !== captured[swapped](a, b))
+        infected.push(mi)
+    } else infected.push(mi)
+  })
+  return { infected, operands }
 }
 function rowsOf(h, pass) {
   const rows = new Map()
@@ -415,6 +673,7 @@ function rowsOf(h, pass) {
             ? [[mi, [t.seen[mi] !== `false`, t.seen[mi] !== `true`]]]
             : [],
         ),
+        ...capturedRows(h, t),
         route: t.route,
         verdicts: [],
       })
@@ -424,6 +683,9 @@ function rowsOf(h, pass) {
       background: true,
       hits: f.background.flatMap((r, mi) =>
         r && mi < h.mutants.length ? [mi] : [],
+      ),
+      infected: f.background.flatMap((r, mi) =>
+        r && f.backgroundInfects[mi] && mi < h.mutants.length ? [mi] : [],
       ),
     })
   })
@@ -485,7 +747,9 @@ async function driver(h, observe) {
   const oracleFiles = new Set(
     h.files.flatMap((f, fi) => (f.oracle ? [fileName(fi)] : [])),
   )
-  const baseline = baselineOf(rowsOf(h, 1), rowsOf(h, 2), oracleFiles)
+  const baseline = baselineOf(rowsOf(h, 1), rowsOf(h, 2))
+  // The swap a comparison or logical mutant states (its replacement).
+  const swapFor = { '>': `>=`, '>=': `>`, '===': `!==`, '&&': `||` }
   const mutants = h.mutants.map((m, mi) => ({
     id: `m${mi}`,
     number: mi,
@@ -494,6 +758,10 @@ async function driver(h, observe) {
     line: m.line + 1,
     operator: m.operator,
     anchor: m.anchor,
+    ...(m.operator === `binary-swap`
+      ? { original: m.original, replacement: swapFor[m.original] }
+      : {}),
+    ...(m.evidence ? { evidence: m.evidence } : {}),
     ...(m.probe ? { probeGuard: true } : {}),
   }))
   const fileIndex = (file) => Number(file.match(/f(\d+)\.test/)[1])
@@ -521,7 +789,15 @@ async function driver(h, observe) {
       )
     return result
   })
-  assignKeys(results)
+  report.assignKeys(results)
+  const summary = report.renderReport({
+    results,
+    run: { id: `r`, inputs: `records` },
+    excluded: [],
+  })
+  // The streaming printer (stream.mjs) prints each gap as the mutant is
+  // judged; the completion order is the reverse here.
+  const printer = await import(`./stream.mjs`).catch(() => undefined)
   observe(`classified`, {
     outcomes: results.map((r) => ({
       outcome: r.outcome,
@@ -529,17 +805,25 @@ async function driver(h, observe) {
       laws: r.laws && [...r.laws].sort(),
       testOutcome: r.testOutcome,
     })),
-    summary: readSummary(
-      renderReport({
-        results,
-        run: { id: `r`, inputs: `records` },
-        excluded: [],
-      }),
-    ),
+    summary: readSummary(summary),
+    messages: messagesOf(summary),
+    stdout: report.renderStdout?.({
+      results,
+      run: { id: `r`, inputs: `records` },
+      excluded: [],
+      pkg: `/pkg`,
+      paths: { report: `out/summary.md`, results: `out/results.json` },
+    }),
+    streamed: printer
+      ? [...report.gapsOf(results)].reverse().map((r) => printer.gapLine(r))
+      : undefined,
+    killsSection: summary.slice(summary.indexOf(`## Kills by law`)),
   })
   for (const r of results) {
     states.add(r.class ?? r.outcome)
     if (r.testOutcome === `killed`) states.add(`ordinary killed`)
+    if (r.class === `not-infected` && r.evidence)
+      states.add(`not-infected with a boundary hint`)
   }
   if (h.mutants.some((m) => m.anchor.includes(`\``) && !m.probe))
     states.add(`a key with backticks`)
@@ -571,6 +855,139 @@ function check(h, observations, expected) {
         { actual, expected: owed },
       )
   }
+  // Messages. Each gap's message is one directive from its kind's fixed set,
+  // with no exit, carries the boundary sentence exactly when the mutant has
+  // the hint, and names the run's data its kind is built from.
+  const gapsOfModel = expected.outcomes.filter(
+    (o) => !o.probe && !['killed', 'unowned'].includes(o.class ?? o.outcome),
+  )
+  for (const owed of gapsOfModel) {
+    const kind = owed.class ?? owed.outcome
+    const message = got.messages?.[owed.key]
+    if (message === undefined)
+      return violation(
+        `classified`,
+        `gap ${owed.key} has no message in the report`,
+        `messages`,
+      )
+    const core =
+      owed.boundary && owed.outcome === `survived`
+        ? message.endsWith(` ${boundaryLine}`)
+          ? message.slice(0, -boundaryLine.length - 1)
+          : undefined
+        : message.includes(boundaryLine)
+          ? undefined
+          : message
+    if (core === undefined || !directives[kind]?.test(core))
+      return violation(
+        `classified`,
+        `gap ${owed.key} (${kind}) has message ${JSON.stringify(message)}, which is not its directive${owed.boundary ? ` with the boundary sentence` : ``}`,
+        `messages`,
+        { actual: message, expected: directives[kind] },
+      )
+    if (exits.test(message.replace(/`[^`]*`/g, ``)))
+      return violation(
+        `classified`,
+        `gap ${owed.key} (${kind}) has an exit in its message: ${JSON.stringify(message)}`,
+        `messages`,
+      )
+    for (const text of owed.mention ?? [])
+      if (!message.includes(text))
+        return violation(
+          `classified`,
+          `gap ${owed.key} (${kind}) message ${JSON.stringify(message)} does not name ${JSON.stringify(text)}`,
+          `messages`,
+        )
+  }
+  // The compressed stdout summary: the totals, one legend line per class
+  // present, and every gap once, under its function.
+  const stdout = got.stdout
+  if (typeof stdout !== `string`)
+    return violation(`classified`, `no compressed stdout summary`, `stdout`)
+  const stdoutGaps = stdout
+    .split(`\n`)
+    .filter((line) => /^  \S+ L\d+ m\d+ /.test(line))
+  const kinds = new Set(gapsOfModel.map((o) => o.class ?? o.outcome))
+  const functions = new Set(gapsOfModel.map((o) => o.function))
+  const legend = stdout.split(`\n`).filter((line) => /^  [a-z-]+: /.test(line))
+  const headings = stdout.split(`\n`).filter((line) => line.startsWith(`fn `))
+  const stdoutProblem = !stdout.includes(`, ${gapsOfModel.length} gaps,`)
+    ? `the totals do not state ${gapsOfModel.length} gaps`
+    : !stdout.includes(`out/summary.md`)
+      ? `the stdout does not print the path of the full report`
+      : stdoutGaps.length !== gapsOfModel.length
+        ? `${stdoutGaps.length} gap lines for ${gapsOfModel.length} gaps`
+        : legend.length !== kinds.size
+          ? `${legend.length} legend lines for ${kinds.size} classes`
+          : headings.length !== functions.size
+            ? `${headings.length} function groups for ${functions.size} functions`
+            : gapsOfModel.find(
+                  (o) =>
+                    stdoutGaps.filter((line) =>
+                      line.startsWith(
+                        `  ${o.class ?? o.outcome} L${o.line} ${o.id} `,
+                      ),
+                    ).length !== 1,
+                )
+              ? `a gap is not printed once under its class, line, and id`
+              : exits.test(stdout.replace(/`[^`]*`/g, ``))
+                ? `the stdout summary has an exit`
+                : undefined
+  if (stdoutProblem)
+    return violation(`classified`, stdoutProblem, `stdout`, {
+      actual: stdout,
+    })
+  // Unowned warnings: one line per function, with its count, so that they
+  // do not bury the gaps.
+  const unownedFns = new Map()
+  for (const o of expected.outcomes)
+    if (!o.probe && o.outcome === `unowned`)
+      unownedFns.set(o.function, (unownedFns.get(o.function) ?? 0) + 1)
+  const unownedLines = stdout
+    .split(`\n`)
+    .filter((line) => line.startsWith(`  unowned fn `))
+  const unownedText = (fn, n) =>
+    `  unowned fn ${fn} (src/x.ts): ${n} ${n === 1 ? `mutant` : `mutants`}`
+  if (
+    unownedLines.length !== unownedFns.size ||
+    [...unownedFns].some(
+      ([fn, n]) => !unownedLines.includes(unownedText(fn, n)),
+    )
+  )
+    return violation(
+      `classified`,
+      `${unownedLines.length} unowned lines for ${unownedFns.size} functions with unowned mutants, or a wrong count`,
+      `stdout`,
+      { actual: unownedLines, expected: [...unownedFns] },
+    )
+  // The kills-by-law section names one next step for a law that rejects no
+  // mutant, and offers no exit.
+  if (!got.killsSection?.includes(killsDirective))
+    return violation(
+      `classified`,
+      `the kills-by-law section does not direct the author to a next step`,
+      `messages`,
+      { actual: got.killsSection },
+    )
+  if (exits.test(got.killsSection.replace(/`[^`]*`/g, ``)))
+    return violation(
+      `classified`,
+      `the kills-by-law section offers an exit`,
+      `messages`,
+      { actual: got.killsSection },
+    )
+  // The streamed lines are the stdout's gap lines, each once.
+  const printed = stdoutGaps.map((line) => line.slice(2)).sort()
+  const streamed = got.streamed
+  if (!Array.isArray(streamed))
+    return violation(`classified`, `no streaming printer`, `stream`)
+  if (JSON.stringify([...streamed].sort()) !== JSON.stringify(printed))
+    return violation(
+      `classified`,
+      `the streamed gap lines differ from the stdout's: ${streamed.length} streamed, ${printed.length} printed`,
+      `stream`,
+      { actual: streamed, expected: printed },
+    )
   if (JSON.stringify(got.summary) !== JSON.stringify(expected.summary))
     return violation(
       `classified`,
@@ -596,6 +1013,69 @@ const corrupt = (change) => (trace) => {
   return trace.map((o, i) => (i === index ? { ...o, value } : o))
 }
 const calibrations = [
+  {
+    name: `a message offers an equivalence exit`,
+    law: `messages`,
+    corrupt: (trace) => {
+      const index = trace.findIndex((o) => o.checkpoint === `classified`)
+      if (index < 0) return undefined
+      const value = structuredClone(trace[index].value)
+      const key = Object.keys(value.messages ?? {})[0]
+      if (key === undefined) return undefined
+      value.messages[key] =
+        `Either the mutant is equivalent, or ${value.messages[key]}`
+      return trace.map((o, i) => (i === index ? { ...o, value } : o))
+    },
+  },
+  {
+    name: `a survivor's message asks a question`,
+    law: `messages`,
+    corrupt: (trace) => {
+      const index = trace.findIndex((o) => o.checkpoint === `classified`)
+      if (index < 0) return undefined
+      const value = structuredClone(trace[index].value)
+      const key = Object.keys(value.messages ?? {})[0]
+      if (key === undefined) return undefined
+      value.messages[key] = `Which law forbids this value?`
+      return trace.map((o, i) => (i === index ? { ...o, value } : o))
+    },
+  },
+  {
+    name: `a not-infected comparison is reported as not observed`,
+    law: `classification`,
+    corrupt: corrupt((v) => {
+      const o = v.outcomes.find((x) => x.class === `not-infected`)
+      if (!o) return false
+      o.class = `not-observed`
+    }),
+  },
+  {
+    name: `the stdout summary omits a gap`,
+    law: `stdout`,
+    corrupt: (trace) => {
+      const index = trace.findIndex((o) => o.checkpoint === `classified`)
+      if (index < 0) return undefined
+      const value = structuredClone(trace[index].value)
+      const line = value.stdout
+        ?.split(`\n`)
+        .find((l) => /^  \S+ L\d+ m\d+ /.test(l))
+      if (line === undefined) return undefined
+      value.stdout = value.stdout.replace(`${line}\n`, ``)
+      return trace.map((o, i) => (i === index ? { ...o, value } : o))
+    },
+  },
+  {
+    name: `the stream prints a gap twice`,
+    law: `stream`,
+    corrupt: (trace) => {
+      const index = trace.findIndex((o) => o.checkpoint === `classified`)
+      if (index < 0) return undefined
+      const value = structuredClone(trace[index].value)
+      if (!value.streamed?.length) return undefined
+      value.streamed.push(value.streamed[0])
+      return trace.map((o, i) => (i === index ? { ...o, value } : o))
+    },
+  },
   {
     name: `a crash is reported as a kill`,
     law: `classification`,
@@ -636,10 +1116,14 @@ const required = [
   `crashed`,
   `framework-error`,
   `setup-error`,
-  `comparison-gap`,
+  `not-judged`,
   `indeterminate`,
-  `generator-gap`,
-  `no-observed-difference`,
+  `branch-never-taken`,
+  `not-infected`,
+  `not-infected with a boundary hint`,
+  `not-observed`,
+  `not-distinguished`,
+  `dead-code`,
   `ordinary killed`,
   `a key with backticks`,
 ]
@@ -651,7 +1135,14 @@ const four = (value) => Array.from({ length: MUTANTS }, () => value)
 const single = (
   name,
   enters,
-  { mutant = {}, test = {}, effect = {}, ordinary = false } = {},
+  {
+    mutant = {},
+    test = {},
+    effect = {},
+    ordinary = false,
+    background = four(false),
+    backgroundInfects = four(false),
+  } = {},
 ) => ({
   name,
   enters,
@@ -665,6 +1156,7 @@ const single = (
             flaky: false,
             reaches: four(true),
             seen: four(`both`),
+            pair: four([0, 1]),
             under: four({
               kind: `same`,
               law: `L`,
@@ -674,7 +1166,8 @@ const single = (
             ...test,
           },
         ],
-        background: four(false),
+        background,
+        backgroundInfects,
       },
       ...(ordinary
         ? [
@@ -686,6 +1179,7 @@ const single = (
                   flaky: false,
                   reaches: four(true),
                   seen: four(`both`),
+                  pair: four([0, 1]),
                   under: four({
                     kind: `assertion`,
                     law: `L`,
@@ -694,6 +1188,7 @@ const single = (
                 },
               ],
               background: four(false),
+              backgroundInfects: four(false),
             },
           ]
         : []),
@@ -703,6 +1198,8 @@ const single = (
         owners: [0],
         line: 0,
         operator: `delete-call`,
+        original: `>`,
+        evidence: undefined,
         anchor: `out . push ( 'a' ) ;`,
         probe: false,
         ...mutant,
@@ -767,24 +1264,86 @@ const constructed = [
   single(`a file that fails to load`, [`setup-error`], {
     effect: { kind: `setupError` },
   }),
-  single(`a changed value`, [`comparison-gap`], {
+  single(`a changed value`, [`not-judged`], {
     effect: { kind: `changed` },
   }),
-  single(`a changed observation`, [`comparison-gap`], {
+  single(`a changed observation`, [`not-judged`], {
     effect: { kind: `observedChanged` },
   }),
   single(`only a nondeterministic test`, [`indeterminate`], {
     test: { flaky: true },
   }),
-  single(`an if that took one outcome`, [`generator-gap`], {
+  single(`an if that took one outcome`, [`branch-never-taken`], {
     mutant: { operator: `if-true` },
     test: { seen: four(`true`) },
   }),
+  // A comparison whose operators agree on the operands the test reached: the
+  // mutant changes no value, and the message names those operands.
+  single(`a comparison whose operands never tie`, [`not-infected`], {
+    mutant: { operator: `binary-swap`, original: `>` },
+    test: { pair: four([1, 2]) },
+  }),
+  single(
+    `a comparison that never ties, with the boundary hint`,
+    [`not-infected`, `not-infected with a boundary hint`],
+    {
+      mutant: {
+        operator: `binary-swap`,
+        original: `>`,
+        evidence: `boundary: -0`,
+      },
+      test: { pair: four([1, 2]) },
+    },
+  ),
+  // The same comparison on a tie: infected, and no observation shows it.
+  single(`a comparison that ties and shows nothing`, [`not-observed`], {
+    mutant: { operator: `binary-swap`, original: `>` },
+    test: { pair: four([2, 2]) },
+  }),
+  single(`a logical swap that is dead code`, [`dead-code`], {
+    mutant: {
+      operator: `binary-swap`,
+      original: `&&`,
+      evidence: `dead code`,
+    },
+  }),
+  // The field witness (issue 2254): an infected survivor that no recorded
+  // observation shows. Its message named the exits the report offered.
+  single(`an infected survivor that no observation shows`, [`not-observed`], {
+    mutant: { operator: `binary-swap`, original: `>` },
+    test: { pair: four([2, 2]) },
+  }),
   single(
     `a survivor an ordinary test fails`,
-    [`no-observed-difference`, `ordinary killed`],
-    { ordinary: true },
+    [`not-observed`, `ordinary killed`],
+    {
+      mutant: { operator: `binary-swap`, original: `>` },
+      test: { pair: four([2, 2]) },
+      ordinary: true,
+    },
   ),
+  // An if-false whose condition was always true is infected (its forced
+  // outcome changes the value), so it is not a branch never taken.
+  single(`an if-false that always saw true`, [`not-observed`], {
+    mutant: { operator: `if-false` },
+    test: { seen: four(`true`) },
+  }),
+  // Operators whose infection is not measured name the input that
+  // distinguishes them.
+  single(`a logical swap is not distinguished`, [`not-distinguished`], {
+    mutant: { operator: `binary-swap`, original: `&&` },
+  }),
+  single(`a loop-false is not distinguished`, [`not-distinguished`], {
+    mutant: { operator: `loop-false` },
+  }),
+  // Infected at module load only: loaded code reaches every test of the file,
+  // so the comparison is not not-infected.
+  single(`a comparison infected only at module load`, [`not-observed`], {
+    mutant: { operator: `binary-swap`, original: `>` },
+    test: { pair: four([1, 2]) },
+    background: four(true),
+    backgroundInfects: four(true),
+  }),
   single(`a key with backticks`, [`a key with backticks`], {
     mutant: { anchor: `x \`\` y` },
     effect: { kind: `changed` },
@@ -794,7 +1353,7 @@ const constructed = [
 oracleProperty({
   id: `oracle-gaps.report-classify`,
   law: {
-    statement: `From the records of the runs that judged it, each mutant gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into comparison gaps, indeterminate, generator gaps, and no observed difference, and ordinary tests for information only; the summary lists every gap and unowned mutant once with consistent counts.`,
+    statement: `From the records of the runs that judged it, each mutant gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, dead-code, branch-never-taken, not-infected, and not-observed, and ordinary tests for information only. Every gap has one directive message from its kind's fixed set, with no exit. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once.`,
     authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the oracle rubric's outcome kinds (ORC-006); the frozen design's oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05).`,
     limits: `No authored mutants. That real runs produce these records is oracle-gaps.report's.`,
   },
