@@ -97,6 +97,11 @@
  * An enumerated spec with `enumeratedStates` passes its histories as
  * `{ enumerated, states, measured }`; without it, as a plain list.
  *
+ * A `throwingBuild` spec's first constructed history throws
+ * `synthetic build failed` from its build. An `arbitraryMap` spec maps its
+ * arbitrary through an identity `.map`, with or without an unmapper, at the
+ * whole history or at each item.
+ *
  * The synthetic ids come from a fixed pool, which this fixture registers with
  * `configureOracles`. The framework's own id, `self-oracle.framework`, is
  * registered beside them, so the self-oracle's registration law can reject an
@@ -198,6 +203,8 @@ export type SyntheticSpec = {
     states: ReadonlyArray<string>
     measured: ReadonlyArray<string>
   }
+  /** The first constructed history's build throws `synthetic build failed`. */
+  throwingBuild?: boolean
   nondeterministic: boolean
   calibrations: ReadonlyArray<{
     name: string
@@ -891,13 +898,16 @@ export function syntheticProperty(spec: SyntheticSpec): void {
           .map(declare),
         runs: spec.source.runs,
         fixedSeeds: [spec.source.seed],
-        constructed: spec.constructed.map(({ name, prefix, enters }) => ({
+        constructed: spec.constructed.map(({ name, prefix, enters }, at) => ({
           name,
           enters,
           // A constructed history extends a generated history, so its histories
           // depend on the campaign's seed, as real constructed histories do.
-          build: (generated: Formed) =>
-            form([...prefix, ...items(generated)].slice(0, 3)),
+          build: (generated: Formed) => {
+            if (at === 0 && spec.throwingBuild)
+              throw new Error(`synthetic build failed`)
+            return form([...prefix, ...items(generated)].slice(0, 3))
+          },
         })),
         fixed: spec.fixed.map((fixed) => ({
           ...fixed,

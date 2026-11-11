@@ -139,7 +139,10 @@
  *   cover a dimension that the grammar lacks; such a dimension belongs in the
  *   grammar, or in the property's stated limits. The property checks this when
  *   it registers, for every fixed history and for the constructed histories
- *   the first fixed seed builds, and fails to load naming the history
+ *   built from the first fixed seed (or seed 0 when there is none), so a
+ *   constructed history's `build` runs when the test file loads. It fails to
+ *   load naming the history, and a `build` that throws there fails to load
+ *   naming its constructed history
  *   (maintainer decision, 2026-11-10); a campaign checks the constructed
  *   histories its own seed builds. In fast-check 4, a `.map` without an
  *   unmapper, at the whole history or anywhere inside it, takes no value
@@ -1688,7 +1691,7 @@ function rerunOf(task: NamedTask): string {
  */
 const untakeable = (id: string, history: string) =>
   new Error(
-    `${id}: ${history} a history the arbitrary cannot take back (its \`canShrinkWithoutContext\` is false), so its failures could not shrink. Either the arbitrary cannot generate it, or the history passes a combinator that cannot map it back: \`.map\` needs an unmapper (its second argument), or build the history from fc.record / fc.tuple / fc.constantFrom. A \`.chain\` cannot map a history back.`,
+    `${id}: ${history} a history the arbitrary cannot take back (its \`canShrinkWithoutContext\` is false), so its failures could not shrink. Either the arbitrary cannot generate it, or the history passes through a combinator that cannot map it back. \`.map\` needs an unmapper (its second argument). \`fc.constant\`/\`fc.constantFrom\` take back only primitives or the same object reference, so build objects with \`fc.record\`/\`fc.tuple\` over primitive leaves. \`.chain\`, \`fc.func\`, and \`fc.commands\` cannot take a value back.`,
   )
 
 function generatedTests<THistory, TExpected, TPlan>(
@@ -1795,14 +1798,25 @@ function generatedTests<THistory, TExpected, TPlan>(
   // Each campaign runs every constructed history, built from histories its own
   // seed draws.
   // fast-check passes example inputs by reference, which identifies them.
-  const examplesFor = (seed: number) => {
+  // At registration, an error from sampling or building names its
+  // constructed history: it would otherwise fail the file's load unnamed.
+  const examplesFor = (seed: number, registering = false) => {
     const constructionOf = new Map<THistory, ConstructedHistory<THistory>>()
     const examples = constructions.map((construction, index) => {
-      const [generated] = fc.sample(source.arbitrary, {
-        seed: seed + index,
-        numRuns: 1,
-      })
-      const history = construction.build(generated!)
+      let history: THistory
+      try {
+        const [generated] = fc.sample(source.arbitrary, {
+          seed: seed + index,
+          numRuns: 1,
+        })
+        history = construction.build(generated!)
+      } catch (error) {
+        if (!registering) throw error
+        throw new Error(
+          `oracleProperty ${id}: constructed history "${construction.name}" threw while it was built for registration: ${error instanceof Error ? error.message : reportText(error)}`,
+          { cause: error },
+        )
+      }
       if (!source.arbitrary.canShrinkWithoutContext(history))
         throw untakeable(id, `constructed history "${construction.name}" built`)
       constructionOf.set(history, construction)
@@ -1811,12 +1825,12 @@ function generatedTests<THistory, TExpected, TPlan>(
     return { examples, constructionOf }
   }
   // Registration checks every fixed history, then the constructed histories
-  // the first fixed seed builds, so a history that cannot shrink fails the
-  // load rather than a full run.
+  // built from the first fixed seed (or seed 0 when there is none), so a
+  // history that cannot shrink fails the load rather than a full run.
   for (const [index, fixed] of (source.fixed ?? []).entries())
     if (!source.arbitrary.canShrinkWithoutContext(fixed.history))
       throw untakeable(id, `fixed history ${index} ("${fixed.name}") is`)
-  examplesFor(source.fixedSeeds[0] ?? 0)
+  examplesFor(source.fixedSeeds[0] ?? 0, true)
 
   // A campaign reports its reach counts after it passes; a failing campaign
   // reports its counterexample instead.
@@ -1886,8 +1900,9 @@ function generatedTests<THistory, TExpected, TPlan>(
         )
     },
   }))
-  // Fixed histories and the constructed histories of the first fixed seed, so
-  // these checks are reproducible; they are built when a test runs, like a
+  // Fixed histories and the constructed histories of the first fixed seed (or
+  // seed 0), so these checks are reproducible. Registration built them once to
+  // check them; they are built again when a test runs, like a
   // campaign's.
   const namedHistories = () => {
     const { examples, constructionOf } = examplesFor(source.fixedSeeds[0] ?? 0)
