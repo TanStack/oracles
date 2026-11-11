@@ -26,7 +26,11 @@ run again.
 
 - Use these terms, and use them every time: a **probe**, a **finding**, a
   **potential oracle** that owns a public behavior, its **potential laws**,
-  and the **oracle file**.
+  and the **oracle file**. Once the engineer approves a potential law, it is
+  a **law**; once the oracle runs, it is the **oracle**.
+- Explain a framework term in a line the first time you use it (a
+  calibration is a wrong answer planted in a run to show that the check
+  rejects it), or leave the term out.
 - Talk naturally. Never name a skill, a step, or a section ("step 3", "the
   skill's fallback"). Say what you are doing, in your own words.
 - Ask in plain words. Explain any term the engineer may not know in one
