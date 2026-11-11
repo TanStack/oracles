@@ -309,9 +309,13 @@ Before writing a global pointer:
 
 ## 6. Write the first oracle
 
-Choose one small, owned production function with a clear, documented
-promise. If most of its laws would have no authority (no docs, only tests or
-code), choose another one. Ask the user which one if it is not obvious.
+Choose one public, documented promise with a small owned surface: an
+exported function or method that callers use, with a contract in the README
+or the API docs. Its law must say more than its code does: if a model of the
+law would repeat the implementation (an internal helper that only wraps or
+escapes a string), choose the caller-visible promise that uses it. If most
+of its laws would have no authority (no docs, only tests or code), choose
+another one. Ask the user which one if it is not obvious.
 
 If the first oracle fails on unchanged production under an adopted law, it
 found a defect. The RED is the finding: report it with its replay line, and

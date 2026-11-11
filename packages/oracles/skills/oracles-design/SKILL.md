@@ -66,17 +66,40 @@ and nothing else:
    literate program (ORC-003), so write it as prose for a reader who has not
    seen the review. Do not paste the template's fields or a list of law IDs.
    In this order:
-   1. A title that asks the question the oracle answers, for example "Does a
-      copy keep every value, and share nothing with its source?"
-   2. How the code works at this boundary, and what goes wrong there, in
-      plain sentences.
-   3. What the documentation promises, in its own words where you can, with
-      the source of each promise. State each law as one sentence over its
-      domain ("For every ..."). These are the laws.
-   4. How the model will state those promises, and what it reads to predict
-      them.
-   5. What the driver will do, what it observes, and what it does not
-      observe and why. Then the limits, each with its reason.
+   1. **What this oracle owns**, in two or three plain sentences: the
+      promise it maintains, the public entry point and checkpoints where the
+      promise is owed, and the owned code. A reader who stops here knows what
+      the file is for. For example: "This oracle owns `klona`'s deep-copy
+      promise for the default mode: the copy has the source's kind,
+      prototype, and values at every depth, and shares no object with it. It
+      checks the value that `klona(x)` returns. It owns `src/index.js#klona`."
+   2. **The hook:** one concrete case where the obvious reading of the
+      promise is wrong. Choose it by the oracle's shape:
+
+      | Shape                                          | Hook                                                                                                    |
+      | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+      | State, timing, or order with a surprising rule | A question that names the surprise: "Why does a ready transaction wait?"                                |
+      | A pure function with documented examples       | The documented example as code, then what in it can vary and what decides the answer                    |
+      | The obvious implementation is wrong            | The plausible implementation and the one input where it fails: why a deep copy is not a JSON round trip |
+
+   3. **The mechanism:** the two or three moving parts that make the
+      behavior necessary, in plain sentences. Give each a short name (the
+      window, the head, the applied receipt), and use the same name in the
+      law names, the `states`, and the calibrations.
+   4. **The laws:** each one sentence over its domain ("For every ..."), with
+      the source of its promise in the documentation's own words where you
+      can. Then the edges where it is easy to get wrong, and what a caller
+      sees when the law breaks.
+   5. **How the oracle knows:** what the model reads to predict each law,
+      which histories reach the edges, what the driver observes and does not
+      observe and why, and where the check compares.
+   6. **Limits and open questions**, last, each with its reason.
+
+   Avoid the two generic openings: a title or summary that asks whether the
+   code does what its documentation promises, and a law that restates the
+   implementation. A model of that law would be the same code, so it could
+   not catch a defect.
+
 2. **Review notes**, a second comment headed "Review notes (delete when
    approved)". Docs, tests, and bug reports give examples. A law is a
    statement over the whole domain. The template below makes you write the
@@ -169,15 +192,23 @@ list at the sheet, and again after each gap check:
 Say in the evidence which trigger fired, or that none did.
 
 **Stop here** when the sheet or a law delta is needed. Do not stop with an
-empty field: each law has a filled block first. Do not add code to the file
-until the user has reviewed it. With no user present, write the file and
-stop. A law sheet has no default. Until it has code, the file fails Vitest
-with "No test suite found", so keep it off a branch whose CI must pass, or
-say in the review request that it will fail.
+empty field: each law has a filled block first. Before you stop, check the
+law block:
+
+- From the prose alone, a reader can predict one observation of each law.
+- Each name from the mechanism appears in the law names, the states, and the
+  calibrations.
+- The opening says what the oracle owns, and no law restates the code. Do not add code to the file
+  until the user has reviewed it. With no user present, write the file and
+  stop. A law sheet has no default. Until it has code, the file fails Vitest
+  with "No test suite found", so keep it off a branch whose CI must pass, or
+  say in the review request that it will fail.
 
 **Once the user approves it:**
 
-- Apply the review's changes to the law block first.
+- Apply the review's changes to the law block first. The approved review
+  notes are the anchor: a later edit to the prose that changes a law's
+  domain, checkpoint, or strength ("may" to "does") is a law change.
 - Delete the review notes. They stay in the review record.
 - Add the code under the law block. Each boundary condition becomes a
   constructed history, and each law's sentence, authority, and limits go in
