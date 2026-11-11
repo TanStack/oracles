@@ -369,7 +369,10 @@ Do not run the gap check yet, and do not change production code. Both belong
 to taking the oracle to production.
 
 If the oracle finds no bug, say so plainly, show what held, and offer to
-build the next oracle at another spot.
+build the next oracle at another spot. To show that it would have caught
+one, make one or two small, plausible bugs in a scratch copy of the
+production code (never in the repository), run the oracle against the copy,
+and show which law catches each.
 
 ## 6. Present
 
