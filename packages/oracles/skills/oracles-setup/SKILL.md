@@ -130,10 +130,14 @@ export default [
 - If the repository lints with xo, keep the oracle files and the new config
   files out of xo (its `ignores`), and lint them with the oracle ESLint
   config.
-- **Temporary, a known plugin bug:** under TypeScript 7 the plugin cannot load.
-  Skip the oracle lint, and report "known plugin bug: plugin cannot load under
-  TypeScript 7 (fix in progress)". This is not an oracle limit, and not a
-  reason to stop.
+- **TypeScript 7:** typescript-eslint does not support TypeScript 7 yet. If the
+  repository's ESLint config cannot parse TypeScript, the oracle lint cannot
+  run. Report it as an environment limit, with that reason. Do not change the
+  repository's TypeScript.
+- The plugin parses the modules an oracle file imports with that file's
+  parser. A `.js` oracle file that imports a TypeScript module gets an
+  `unparsedModule` report: write the oracle file in TypeScript, with a
+  TypeScript parser.
 - If ESLint does not already parse TypeScript, add `@typescript-eslint/parser`
   as a dev dependency. Set it as `languageOptions.parser` for every TypeScript
   file that the presets cover: the oracle files and the production source.

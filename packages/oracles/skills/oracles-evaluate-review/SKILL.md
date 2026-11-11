@@ -87,8 +87,11 @@ driver path, or observation.
 A reviewer's bug shows one history. The oracle must cover the family it
 belongs to.
 
-- **State the causal condition:** the relationship that makes the history
-  fail, such as "a completion outlives the operation that started it".
+- **State the causal condition, in writing:** the relationship that makes
+  the history fail, as one sentence over histories: "For every history where
+  a completion outlives the operation that started it, ...". Then write one
+  history, different from the reported one, that the sentence says also
+  fails, and run it.
 - **Add it to the grammar:** a generator dimension or a constructed history
   that varies the incidental details (counts, order, values, timing) and
   keeps the condition. A pinned example alone is not the fix. Keep the

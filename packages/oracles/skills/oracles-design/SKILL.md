@@ -67,6 +67,41 @@ its promise.
   purpose as their authority.
 - **The task already approved these laws?** Do not ask again.
 
+**Write the general law down, from the examples.** Docs, tests, and bug
+reports give examples. A law is a statement over the whole domain. Before the
+table, write this block for each law, in the sheet itself:
+
+1. **Examples:** each concrete case, with its source. For example:
+   `ms('2 hrs')` is `7200000` (README, Examples).
+2. **What varies, what stays:** for each example, name the parts that could
+   change without changing the expected answer (the number, the spelling,
+   the spacing). Then name the part that decides it (the unit's length).
+3. **The law:** one sentence over the domain, in the form "For every ... ,
+   ...". Name the domain's edges. For example: "For every finite number `n`
+   and every unit name `u` in the table, in any case and with or without a
+   space, `parse(n + u)` is `n` times the length of `u`."
+4. **A new case the law predicts:** one input that is in none of the sources,
+   with its predicted result. If you cannot write one, the law is still a list
+   of examples. Write it again.
+5. **Rebuild the examples:** derive every example from item 1 using only the
+   law's sentence. Name any example that the law gets wrong. A wrong one
+   means a missing condition, a second law, or a source that disagrees. Say
+   which.
+
+A law written only as examples, or one that cannot rebuild its examples, is
+not ready for the sheet.
+
+**Use the [design grammar](../../docs/instruments/design-grammar.md) card
+when any of these is true.** Do not judge whether the law is hard:
+
+- the sheet has more than five laws for one boundary
+- a law has no new case that it predicts (item 4 above)
+- the model has more than one branch per law
+- the work changes or simplifies an existing model
+- the gap check leaves three or more gaps in one function
+
+Say in the evidence which trigger fired, or that none did.
+
 Write one row per law and give the sheet to the user.
 
 | Field      | What to write                                                                                                         |
@@ -120,8 +155,7 @@ failure. Make each weakening its own decision, with its own reason.
 - When two rules conflict, record the conflict as an open question for the
   user. Do not pick a winner.
 
-For a hard law or a model that keeps growing, use the
-[design grammar](../../docs/instruments/design-grammar.md) card.
+For the design grammar card, see the triggers in step 1.
 
 ## 3. Choose the model
 
@@ -386,12 +420,9 @@ comes with one instruction. Do what it says, within the rules below.
   A narrower domain stated only in the law's prose, such as "positive
   integers", does not make a mutant invalid. Cover the type's whole domain,
   or narrow the type.
-- **Temporary, until the report's messages change:** if a message calls a
-  mutant "equivalent", asks for a "maintainer's approval", or offers a limit
-  that "needs a maintainer's decision", do not follow that part. Find the
-  history and the law. Do not copy those words into your own report either:
-  for a survivor you cannot kill, give the histories you tried and what they
-  showed.
+- **Never write "equivalent" or "needs a maintainer's decision" in your
+  report.** For a survivor you cannot kill, give the histories you tried and
+  what they showed, and follow its directive.
 - **Temporary, a CLI limitation:** a mutant that makes production loop forever
   synchronously shows as a timeout. The framework's breakage laws will judge
   it, and they are not built yet. Report it as a known CLI limitation, not an
