@@ -112,6 +112,32 @@
  * arbitrary through an identity `.map`, with or without an unmapper, at the
  * whole history or at each item.
  *
+ * The check's difference names the item, as `item 2 is 3`; a
+ * `numberDifference` spec's check reports the item's value, a number, as its
+ * difference instead. A `driver` calibration's mutant records a 3 in place of
+ * the first item, so its difference is `item 0 is 3`, the same as a
+ * corruption's; a `driver-last` mutant records it in place of the last item,
+ * so its difference names the candidate's last item. A calibration may
+ * require a difference: `is 3` or `is 4` as text, `/^item \d is 3$/` or
+ * `/^item \d is 4$/` as a pattern, `item 2 is 3` as text or `/^item 2 /` as a
+ * pattern (which only a three-item candidate's `driver-last` difference
+ * holds), or the empty text or the empty pattern. Only containment matches
+ * the text `is 3`. A `throws` driver records that wrong observation before
+ * throwing, so ordinary verdict ranking still decides its calibration. A
+ * `clock` driver leaves its item observations unchanged and spins a controlled
+ * clock; only the mutant execution spins. `corrupt-throws`, `judge-throws`,
+ * and `judge-driver-throws` exercise exceptions from corruption and from the
+ * two mutant judgment routes without supplying any expected result.
+ *
+ * Histories and execution plans carry an input-side origin association (fixed
+ * name, construction name, or enumerated index), reported with each driver
+ * input. A separate build log records the builder's generated input and output,
+ * so the model can judge selection and the whole construction without sharing
+ * production's selector or seed hash. `extraReach` reports synthetic-extra
+ * outside every declaration, either globally or only in authored calibrations.
+ * The phase driver registers the same property under distinct suites to
+ * exercise repeated registration and collect-only reporting in one process.
+ *
  * The synthetic ids come from a fixed pool, which this fixture registers with
  * `configureOracles`. The framework's own id, `self-oracle.framework`, is
  * registered beside them, so the self-oracle's registration law can reject an
@@ -220,7 +246,20 @@ export type SyntheticSpec = {
   nondeterministic: boolean
   calibrations: ReadonlyArray<{
     name: string
-    kind: `right` | `wrong-law` | `no-op` | `driver` | `inapplicable` | `throws`
+    kind:
+      | `right`
+      | `wrong-law`
+      | `no-op`
+      | `driver`
+      | `driver-last`
+      | `inapplicable`
+      | `throws`
+      | `clock`
+      | `corrupt-throws`
+      | `judge-throws`
+      | `judge-driver-throws`
+    /** The difference the calibration requires, as text or a pattern, matching or not; absent, none. */
+    difference?: CalibrationDifference
   }>
   /** The proposed binding, passed structurally so the unchanged framework can be judged. */
   calibrationHistory?:
@@ -232,13 +271,23 @@ export type SyntheticSpec = {
   identityHistories?: boolean
   /** Public alpha-renaming of logical saw-0; the production probe id stays fixed. */
   probeName?: string
-  probeBinding?: `empty` | `inferred` | `explicit` | `no-absence`
+  probeBinding?:
+    | `empty`
+    | `inferred`
+    | `explicit`
+    | `no-absence`
+    | `null-entered`
+    | `null-binding`
+    | `false-binding`
+    | `zero-binding`
   duplicateHistoryNames?: boolean
   /** `observe`: the driver reports reach itself, the framework's default. */
   reachVia: `reached` | `observe`
   /** Each history takes about 300 ms; with `timeout`, tests outlive it. */
   slow?: boolean
   timeout?: number
+  /** The check reports the item's value, a number, as its difference. */
+  numberDifference?: boolean
   /** In a campaign, a history that holds a 4 takes about 2 s; elsewhere, no time. */
   slowShrink?: boolean
   /** Registers under an id no oracle configuration knows. */
@@ -247,6 +296,11 @@ export type SyntheticSpec = {
   probe?: `agree` | `always` | `never` | `unreached` | `late`
   /** Reports `saw-0` as reached in every history. */
   overReport?: boolean
+  /** Reports a state outside the declaration, without changing the item language. */
+  extraReach?: boolean | `calibration`
+  /** Registers the same property repeatedly in named enclosing suites. */
+  warningProbe?: boolean
+  calibrationNames?: `indexed` | `varied` | `astral`
   /** Calls an unbound probe on every run, entering it on every other one, so only determinism sees it. */
   noisyProbe?: boolean
   /** `missing` omits `predict` for a bound probe; `extra` passes it unbound. */
@@ -478,10 +532,18 @@ const itemsOf =
 
 const enteredStates = (history: SyntheticHistory) =>
   allStates.filter((state) => history.includes(Number(state.slice(4))))
-const reachedStates = (spec: SyntheticSpec) => (history: SyntheticHistory) =>
-  spec.overReport
+const reachedStates = (spec: SyntheticSpec) => (history: SyntheticHistory) => [
+  ...(spec.overReport
     ? [...new Set([...enteredStates(history), `saw-0`])]
-    : enteredStates(history)
+    : enteredStates(history)),
+  ...(spec.extraReach === true ||
+  (spec.extraReach === `calibration` &&
+    spec.calibrations.some(({ name }) =>
+      expect.getState().currentTestName?.endsWith(` > calibration: ${name}`),
+    ))
+    ? [`synthetic-extra`]
+    : []),
+]
 
 /**
  * The condition the synthetic driver passes to the probe for this history, or
@@ -671,8 +733,9 @@ function lateProbe() {
  */
 function syntheticDriver(
   spec: SyntheticSpec,
-  mutant = false,
+  mutant?: `first` | `last` | `clock`,
   consumed = new WeakSet<object>(),
+  origins = new WeakMap<object, string>(),
 ) {
   return async (
     formed: Formed,
@@ -691,7 +754,7 @@ function syntheticDriver(
     if (log)
       appendFileSync(
         log,
-        `${JSON.stringify({ id: spec.id, test: expect.getState().currentTestName ?? ``, history, route: route ?? null })}\n`,
+        `${JSON.stringify({ id: spec.id, test: expect.getState().currentTestName ?? ``, history, origin: origins.get(formed as object), route: route ?? null })}\n`,
       )
     if (spec.odd) observe(`odd`, { reason: oddValue(spec.odd) })
     if (spec.slow) await new Promise((resolve) => setTimeout(resolve, 300))
@@ -719,10 +782,15 @@ function syntheticDriver(
     // A real timer first: a clock that an earlier history released must have
     // given the real timers back, or this history never goes on.
     if (spec.clock) await new Promise((resolve) => setTimeout(resolve, 1))
-    const clock = spec.clock ? controlledClock() : undefined
+    const clock =
+      spec.clock || mutant === `clock` ? controlledClock() : undefined
     try {
       for (const [index, item] of history.entries()) {
-        observe(`item ${index}`, mutant && index === 0 ? 3 : item)
+        const mutated =
+          mutant === `first`
+            ? index === 0
+            : mutant === `last` && index === history.length - 1
+        observe(`item ${index}`, mutated ? 3 : item)
         if (item === 6)
           throw spec.oddThrow
             ? // A thrown value that is no Error and cannot become a string.
@@ -744,6 +812,13 @@ function syntheticDriver(
               `synthetic driver failed after the spin at item ${index}`,
             )
         }
+      }
+      if (mutant === `clock`) {
+        const spin = () => {
+          setTimeout(spin, 0)
+        }
+        spin()
+        await vi.advanceTimersByTimeAsync(1000)
       }
     } finally {
       clock?.release()
@@ -789,15 +864,24 @@ function syntheticDriver(
 }
 
 function syntheticCheck(
+  spec: SyntheticSpec,
   history: SyntheticHistory,
   trace: ReadonlyArray<{ checkpoint: string; value: unknown }>,
 ) {
+  // The marker is a mutant input to the check, never an expected verdict.
+  if (trace.some(({ checkpoint }) => checkpoint === `synthetic-judgment-fault`))
+    throw new Error(`synthetic judgment failed`)
   // `history` is the items of a history in any form.
   for (const { checkpoint, value } of trace) {
     // Only items carry the law; a nonce is not an item.
     if (!checkpoint.startsWith(`item`)) continue
-    if (value === 3) return violation(checkpoint, `item is 3`, `three`)
-    if (value === 4) return violation(checkpoint, `item is 4`, `four`)
+    // A difference that is not text, as a check written in JavaScript can give.
+    const difference = (item: number) =>
+      spec.numberDifference
+        ? (item as unknown as string)
+        : `${checkpoint} is ${item}`
+    if (value === 3) return violation(checkpoint, difference(3), `three`)
+    if (value === 4) return violation(checkpoint, difference(4), `four`)
   }
   const items = trace.filter(({ checkpoint }) => checkpoint.startsWith(`item`))
   if (items.length !== history.length)
@@ -809,32 +893,103 @@ function syntheticCheck(
   return pass
 }
 
+/**
+ * A required difference: text that a violation's difference must contain, or
+ * a pattern that it must match.
+ */
+export type CalibrationDifference =
+  | `text match`
+  | `text mismatch`
+  | `pattern match`
+  | `pattern mismatch`
+  | `later text`
+  | `later pattern`
+  | `empty text`
+  | `empty pattern`
+const differences: Record<CalibrationDifference, string | RegExp> = {
+  // Part of `item 0 is 3`, so only containment matches it.
+  'text match': `is 3`,
+  'text mismatch': `is 4`,
+  'pattern match': /^item \d is 3$/,
+  'pattern mismatch': /^item \d is 4$/,
+  'later text': `item 2 is 3`,
+  'later pattern': /^item 2 /,
+  'empty text': ``,
+  'empty pattern': /(?:)/,
+}
+
 function syntheticCalibrations(
   spec: SyntheticSpec,
   consumed: WeakSet<object>,
+  origins: WeakMap<object, string>,
 ): Array<Calibration<Formed, Formed>> {
   return spec.calibrations.map(
-    ({ name, kind }): Calibration<Formed, Formed> => {
-      // A mutant driver records a 3 in place of the first item.
+    ({ name, kind, difference }): Calibration<Formed, Formed> => {
       const history = spec.calibrationHistory
-      if (kind === `driver` || kind === `throws`)
+      const required =
+        difference === undefined ? {} : { difference: differences[difference] }
+      if (kind === `clock`)
+        return {
+          name,
+          history,
+          law: `bounded clock`,
+          ...required,
+          driver: syntheticDriver(spec, `clock`, consumed, origins),
+        }
+      if (kind === `judge-driver-throws`)
         return {
           name,
           history,
           law: `three`,
+          ...required,
+          driver: async (plan, observe) => {
+            await syntheticDriver(
+              spec,
+              `first`,
+              consumed,
+              origins,
+            )(plan, observe)
+            observe(`synthetic-judgment-fault`, true)
+          },
+        }
+      // A mutant driver records a 3 in place of the first or the last item.
+      if (kind === `driver` || kind === `driver-last` || kind === `throws`)
+        return {
+          name,
+          history,
+          law: `three`,
+          ...required,
           driver:
             kind === `throws`
               ? async (plan, observe) => {
-                  await syntheticDriver(spec, true, consumed)(plan, observe)
+                  await syntheticDriver(
+                    spec,
+                    `first`,
+                    consumed,
+                    origins,
+                  )(plan, observe)
                   throw new Error(`mutant setup failed`)
                 }
-              : syntheticDriver(spec, true, consumed),
+              : syntheticDriver(
+                  spec,
+                  kind === `driver-last` ? `last` : `first`,
+                  consumed,
+                  origins,
+                ),
         }
       return {
         name,
         history,
         law: kind === `wrong-law` ? `four` : `three`,
+        ...required,
         corrupt: (trace) => {
+          if (kind === `corrupt-throws`)
+            throw new Error(`synthetic corruption failed`)
+          if (kind === `judge-throws`)
+            return [
+              ...trace,
+              { checkpoint: `synthetic-judgment-fault`, value: true },
+            ]
           if (kind === `inapplicable`) return undefined
           const at = trace.findIndex(({ checkpoint }) =>
             checkpoint.startsWith(`item`),
@@ -900,6 +1055,11 @@ export function syntheticProperty(spec: SyntheticSpec): void {
   const makeForm = formOf(spec)
   const items = itemsOf(spec)
   const identities = new WeakMap<object, Formed>()
+  const origins = new WeakMap<object, string>()
+  const markOrigin = (history: Formed, origin: string): Formed => {
+    origins.set(history as object, origin)
+    return history
+  }
   const remember = (history: Formed): Formed => {
     if (!spec.identityHistories) return history
     identities.set(history as object, history)
@@ -959,19 +1119,21 @@ export function syntheticProperty(spec: SyntheticSpec): void {
               )
             resolved.add(history as object)
           }
-          return makeForm([
+          const plan = makeForm([
             ...(spec.identityHistories
               ? items(identities.get(history as object))
               : items(history)),
           ])
+          const origin = origins.get(history as object)
+          return origin === undefined ? plan : markOrigin(plan, origin)
         }
       : undefined
   // Clean and mutant driver instances share the consumption boundary. A
   // resolved plan belongs to one execution even when different drivers use it.
   const consumed = new WeakSet<object>()
   const runDriver = spec.slow
-    ? trackedSlow(syntheticDriver(spec, false, consumed))
-    : syntheticDriver(spec, false, consumed)
+    ? trackedSlow(syntheticDriver(spec, undefined, consumed, origins))
+    : syntheticDriver(spec, undefined, consumed, origins)
   const driver: typeof runDriver = (history, observe) =>
     runDriver(history, (checkpoint, value) =>
       observe(
@@ -1031,19 +1193,29 @@ export function syntheticProperty(spec: SyntheticSpec): void {
               ? {}
               : {
                   [publicState(`saw-0`)]:
-                    spec.probeBinding === `no-absence`
-                      ? ({} as never)
-                      : {
-                          notEntered: { fixed: `fixed-0` },
-                          ...(spec.probeBinding === `explicit`
-                            ? { entered: { constructed: `constructed-0` } }
-                            : {}),
-                        },
+                    spec.probeBinding === `null-binding`
+                      ? (null as never)
+                      : spec.probeBinding === `false-binding`
+                        ? (false as never)
+                        : spec.probeBinding === `zero-binding`
+                          ? (0 as never)
+                          : spec.probeBinding === `no-absence`
+                            ? ({} as never)
+                            : {
+                                notEntered: { fixed: `fixed-0` },
+                                ...(spec.probeBinding === `explicit`
+                                  ? {
+                                      entered: { constructed: `constructed-0` },
+                                    }
+                                  : spec.probeBinding === `null-entered`
+                                    ? { entered: null as never }
+                                    : {}),
+                              },
                 },
         }
       : {}),
     driver,
-    calibrations: syntheticCalibrations(spec, consumed),
+    calibrations: syntheticCalibrations(spec, consumed, origins),
     check: (
       history: Formed,
       trace: ReadonlyArray<{ checkpoint: string; value: unknown }>,
@@ -1064,7 +1236,7 @@ export function syntheticProperty(spec: SyntheticSpec): void {
             { a: 2 },
             new Map([[1, 2]]),
           ])) ??
-        syntheticCheck(items(history), trace)
+        syntheticCheck(spec, items(history), trace)
       )
     },
     ...(spec.timeout !== undefined ? { timeout: spec.timeout } : {}),
@@ -1081,7 +1253,9 @@ export function syntheticProperty(spec: SyntheticSpec): void {
     afterAll(() => new Promise((settle) => setTimeout(settle, 50)))
   const register = () => {
     if (spec.source.kind === `enumerated`) {
-      const enumerated = spec.source.histories.map(form)
+      const enumerated = spec.source.histories.map((history, index) =>
+        markOrigin(form(history), `enumerated:${index}`),
+      )
       const first = JSON.stringify(spec.source.histories[0])
       oracleProperty({
         id,
@@ -1139,7 +1313,22 @@ export function syntheticProperty(spec: SyntheticSpec): void {
             const tail = spec.isolatedPlans
               ? items(generated).map((item) => item % 3)
               : items(generated)
-            const history = form([...prefix, ...tail].slice(0, 3))
+            const history = markOrigin(
+              form([...prefix, ...tail].slice(0, 3)),
+              `constructed:${name}`,
+            )
+            const log = process.env.SELF_ORACLE_LOG
+            if (log)
+              appendFileSync(
+                `${log}.builds`,
+                `${JSON.stringify({
+                  id: spec.id,
+                  test: expect.getState().currentTestName ?? ``,
+                  name,
+                  generated: items(generated),
+                  history: items(history),
+                })}\n`,
+              )
             built.add(history as object)
             return history
           },
@@ -1147,7 +1336,7 @@ export function syntheticProperty(spec: SyntheticSpec): void {
         fixed: spec.fixed.map((fixed) => ({
           ...fixed,
           ...(fixed.enters ? { enters: fixed.enters.map(publicState) } : {}),
-          history: form(fixed.history),
+          history: markOrigin(form(fixed.history), `fixed:${fixed.name}`),
         })),
       },
       ...parts,

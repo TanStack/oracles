@@ -77,7 +77,16 @@
  *   call; a driver mutant uses two fresh builds and plans from the same seed.
  *   Invalid selectors fail registration before any driver runs. These are the
  *   maintainer-approved history-binding contract (2026-11-11). During migration,
- *   unbound calibrations retain the first-passing-candidate search.
+ *   unbound calibrations retain candidate search. Rejection ranks recorded law
+ *   violations and bounded-clock violations identically on bound/unbound paths.
+ *   Required difference text is contained; a pattern matches the difference,
+ *   after the designated law. Empty requirements fail registration.
+ *   Named construction inputs are stable under reorder and vary across the
+ *   finite ordinary/astral name families declared here; no universal collision
+ *   freedom is claimed. Forced premises are judged from declared input origins
+ *   and author-built callback inputs, never the framework's selected driver log.
+ *   Callback errors retain calibration/history context and cause. Registration
+ *   warns once per property/process, and collect-only registration stays silent.
  * - `determinism`: the determinism test runs every fixed and constructed history
  *   and three generated ones, and fails for a driver whose trace changes,
  *   compared by their data encoding: `-0` is not `0`, and key order and
@@ -143,9 +152,10 @@
  * that work which never goes quiet on a controlled clock fails its history; the maintainer
  * decision of 2026-11-10 (F20) that a fixed or constructed history the arbitrary cannot take back
  * fails at registration, naming the history and the fix; and the oracle rubric's replay
- * (ORC-007), calibration (ORC-006), and declared-reach (ORC-015) rules; and the
- * maintainer decision of 2026-11-11 (F31) that a law violation is reported
- * before the timeout, however slow shrinking would be.
+ * (ORC-007), calibration (ORC-006), and declared-reach (ORC-015) rules; the
+ * maintainer decision of 2026-11-11 (F27) that a calibration can require its
+ * violation's difference; and the maintainer decision of 2026-11-11 (F31) that
+ * a law violation is reported before the timeout, however slow shrinking would be.
  *
  * Limits: synthetic properties with histories of one to three integers, held
  * as an array, a bigint-tagged object, or a Map, one or two per run. An
@@ -182,6 +192,11 @@
  * machine's speed, so a seed-only rerun can report another one; a path replay reports the same.
  * A driver that leaves fake timers installed that fake `performance` freezes the deadline; no
  * history leaves them.
+ * A calibration's required difference is drawn only as four texts and
+ * four patterns, including the empty ones, judged against the difference a wrong answer
+ * reports, `item k is 3`, where k is the first item or a `driver-last` candidate's last item. A
+ * pattern with the global or sticky flag is not drawn. A difference that is not text is drawn
+ * only as a number. A calibration's failure message is judged by its kind, not by its text.
  */
 import { spawnSync } from 'node:child_process'
 import {
@@ -204,6 +219,7 @@ import {
   syntheticIds,
 } from './oracle-property-self-oracle-fixture.js'
 import type {
+  CalibrationDifference,
   OddKind,
   SyntheticHistory,
   SyntheticSpec,
@@ -226,9 +242,26 @@ const calibrationKinds = [
   `wrong-law`,
   `no-op`,
   `driver`,
+  `driver-last`,
+  `clock`,
+  `corrupt-throws`,
+  `judge-throws`,
+  `judge-driver-throws`,
   `inapplicable`,
   `throws`,
 ] as const
+const calibrationDifferences = [
+  `text match`,
+  `text mismatch`,
+  `pattern match`,
+  `pattern mismatch`,
+  `later text`,
+  `later pattern`,
+] as const
+type CalibrationDraft = {
+  kind: (typeof calibrationKinds)[number]
+  difference: CalibrationDifference | `none`
+}
 type Draft = {
   source:
     | { kind: `generated`; runs: number; seed: number }
@@ -261,14 +294,27 @@ type Draft = {
   timing: `normal` | `slow` | `slow shrink`
   /** A normal-timing spec's `timeout`: the default, 0, or -1 (both no timeout). */
   timeoutMode: `default` | `zero` | `negative`
-  calibrations: Array<SyntheticSpec[`calibrations`][number][`kind`]>
+  calibrations: Array<CalibrationDraft | (typeof calibrationKinds)[number]>
+  numberDifference: boolean
+  extraReach: boolean | `calibration`
+  calibrationNames: `indexed` | `varied` | `astral`
+  warningProbe: boolean
   calibrationHistory: NonNullable<SyntheticSpec[`calibrationHistory`]> | null
   isolatedPlans: boolean
   /** Resolution requires the original history identity and returns a fresh plan. */
   identityHistories: boolean
   /** Alpha-renames logical saw-0 at the fixture's public boundary. */
   probeName: `saw-0` | `toString` | `constructor` | `__proto__`
-  probeBinding: `unbound` | `empty` | `inferred` | `explicit` | `no-absence`
+  probeBinding:
+    | `unbound`
+    | `empty`
+    | `inferred`
+    | `explicit`
+    | `no-absence`
+    | `null-entered`
+    | `null-binding`
+    | `false-binding`
+    | `zero-binding`
   duplicateHistoryNames: boolean
   /** An id no oracle configuration registers. */
   unregistered: boolean
@@ -354,6 +400,10 @@ const draft: fc.Arbitrary<Draft> = fc.record({
         `inferred` as const,
         `explicit` as const,
         `no-absence` as const,
+        `null-entered` as const,
+        `null-binding` as const,
+        `false-binding` as const,
+        `zero-binding` as const,
       ),
     },
   ),
@@ -448,9 +498,42 @@ const draft: fc.Arbitrary<Draft> = fc.record({
       weight: 1,
     },
   ),
-  calibrations: fc.array(fc.constantFrom(...calibrationKinds), {
-    maxLength: 3,
-  }),
+  // A calibration may require its violation's difference, matching or not.
+  calibrations: fc.array(
+    fc.oneof(
+      fc.constantFrom(...calibrationKinds),
+      fc.record({
+        kind: fc.constantFrom(...calibrationKinds),
+        difference: fc.oneof(
+          // Rare: an empty difference fails the whole property's load.
+          { weight: 9, arbitrary: fc.constant(`none` as const) },
+          { weight: 9, arbitrary: fc.constantFrom(...calibrationDifferences) },
+          {
+            weight: 1,
+            arbitrary: fc.constantFrom(
+              `empty text` as const,
+              `empty pattern` as const,
+            ),
+          },
+        ),
+      }),
+    ),
+    { maxLength: 3 },
+  ),
+  extraReach: fc.oneof(
+    { weight: 30, arbitrary: fc.constant(false) },
+    { weight: 1, arbitrary: fc.constant(true) },
+    { weight: 1, arbitrary: fc.constant(`calibration` as const) },
+  ),
+  calibrationNames: fc.constantFrom(`indexed`, `varied`, `astral`),
+  warningProbe: fc.oneof(
+    { weight: 30, arbitrary: fc.constant(false) },
+    { weight: 1, arbitrary: fc.constant(true) },
+  ),
+  numberDifference: fc.oneof(
+    { weight: 5, arbitrary: fc.constant(false) },
+    { weight: 1, arbitrary: fc.constant(true) },
+  ),
   // Rare: a property under an id no oracle configuration registers.
   unregistered: fc.oneof(
     { weight: 9, arbitrary: fc.constant(false) },
@@ -691,6 +774,7 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
         nondeterministic: d.nondeterministic,
         reachVia: d.reachVia,
         ...(d.unregistered ? { unregistered: true } : {}),
+        ...(d.numberDifference ? { numberDifference: true } : {}),
         ...(generated && d.probe !== `none` ? { probe: d.probe } : {}),
         ...(d.overReport ? { overReport: true } : {}),
         ...(d.noisyProbe ? { noisyProbe: true } : {}),
@@ -755,6 +839,13 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
           : {}),
         ...(d.nested ? { nested: true } : {}),
         ...(d.strictModel ? { strictModel: true } : {}),
+        ...(d.extraReach &&
+        (generated ||
+          (d.enumeratedStates !== null && d.extraReach === `calibration`))
+          ? { extraReach: d.extraReach }
+          : {}),
+        ...(d.warningProbe ? { warningProbe: true } : {}),
+        calibrationNames: d.calibrationNames,
         ...(d.calibrationHistory
           ? { calibrationHistory: d.calibrationHistory }
           : {}),
@@ -765,10 +856,27 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
           ? { probeBinding: d.probeBinding }
           : {}),
         ...(d.duplicateHistoryNames ? { duplicateHistoryNames: true } : {}),
-        calibrations: d.calibrations.map((kind, at) => ({
-          name: `cal-${at}`,
-          kind,
-        })),
+        calibrations: (d.calibrationNames === `indexed`
+          ? d.calibrations
+          : Array.from({ length: 16 }, () => d.calibrations[0]).filter(
+              (item) => item !== undefined,
+            )
+        ).map((entry, at) => {
+          const { kind, difference } =
+            typeof entry === `string`
+              ? { kind: entry, difference: `none` as const }
+              : entry
+          return {
+            name:
+              d.calibrationNames === `astral`
+                ? `drops ${String.fromCodePoint(0x1f600 + at)}`
+                : d.calibrationNames === `varied`
+                  ? `named calibration ${at}`
+                  : `cal-${at}`,
+            kind,
+            ...(difference === `none` ? {} : { difference }),
+          }
+        }),
       }
     }),
   }
@@ -797,11 +905,12 @@ type Kind =
   | `determinism`
   | `calibration-passed`
   | `calibration-wrong-law`
+  | `calibration-wrong-difference`
+  | `calibration-odd-difference`
   | `calibration-none`
   | `calibration-clean`
   | `calibration-reach`
   | `calibration-inapplicable`
-  | `calibration-mutant-error`
   | `timeout`
   | `model-not-total`
   | `data`
@@ -827,6 +936,7 @@ type LogEntry = {
   history: SyntheticHistory
   /** The route registered for the test when the history ran. */
   route: string | null
+  origin?: string
 }
 
 const allowed = (item: number) => [0, 1, 2, 3, 4, 6, 7].includes(item)
@@ -1006,6 +1116,12 @@ function judged(
   forced?: boolean,
 ): Outcome {
   const verdict = verdictOf(history, spec)
+  if (
+    spec.extraReach === true &&
+    (verdict.kind === `pass` || verdict.kind === `violation`) &&
+    (spec.source.kind === `generated` || spec.enumeratedStates)
+  )
+    return { kind: `undeclared-state` }
   if (verdict.kind !== `pass` || !spec.probe) return verdict
   const predicts = predictsZero(history)
   if (enteredFor(spec, history, forced) === predicts) return verdict
@@ -1064,6 +1180,111 @@ function enumeratedName(
     ? ran.test.slice(spec.id.length + 3)
     : `(never ran) ${JSON.stringify(history)}`
 }
+// The candidates a calibration tries, in order (the contract's rule): an
+// enumerated source's histories; or a generated source's fixed histories,
+// its constructed histories built from the first fixed seed (constructed
+// history k from seed + k), and 100 histories sampled with that seed. A `.map`
+// draws no randomness, so a spec's form samples the same items.
+const calibrationCandidates = (
+  spec: SyntheticSpec,
+): ReadonlyArray<SyntheticHistory> => {
+  if (spec.source.kind === `enumerated`) return spec.source.histories
+  const { seed } = spec.source
+  return [
+    ...spec.fixed.map(({ history }) => history),
+    ...spec.constructed.map(({ prefix }, at) =>
+      [
+        ...prefix,
+        ...fc
+          .sample(syntheticArbitrary, { seed: seed + at, numRuns: 1 })[0]!
+          .map((item) => (spec.isolatedPlans ? item % 3 : item)),
+      ].slice(0, 3),
+    ),
+    ...fc.sample(syntheticArbitrary, { seed, numRuns: 100 }),
+  ]
+}
+// What a required difference holds, stated apart from the fixture's values:
+// text by containment, a pattern by a match anywhere. The empty ones never
+// register.
+const differenceHolds: Record<
+  CalibrationDifference,
+  (difference: string) => boolean
+> = {
+  'text match': (difference) => difference.includes(`is 3`),
+  'text mismatch': (difference) => difference.includes(`is 4`),
+  'pattern match': (difference) => /^item \d is 3$/.test(difference),
+  'pattern mismatch': (difference) => /^item \d is 4$/.test(difference),
+  'later text': (difference) => difference.includes(`item 2 is 3`),
+  'later pattern': (difference) => difference.startsWith(`item 2 `),
+  'empty text': () => true,
+  'empty pattern': () => true,
+}
+// The difference a wrong answer reports for a clean candidate.
+const mutatedDifference = (
+  kind: (typeof calibrationKinds)[number],
+  history: SyntheticHistory,
+) => `item ${kind === `driver-last` ? history.length - 1 : 0} is 3`
+const emptyDifference = (difference: CalibrationDifference | undefined) =>
+  difference === `empty text` || difference === `empty pattern`
+
+const driverCalibration = (
+  kind: SyntheticSpec[`calibrations`][number][`kind`],
+) =>
+  [`driver`, `driver-last`, `throws`, `clock`, `judge-driver-throws`].includes(
+    kind,
+  )
+type BuildEntry = {
+  id: string
+  test: string
+  name: string
+  generated: SyntheticHistory
+  history: SyntheticHistory
+}
+const authoredInput = (
+  spec: SyntheticSpec,
+  test: string,
+  binding: NonNullable<SyntheticSpec[`calibrationHistory`]>,
+  builds: ReadonlyArray<BuildEntry>,
+): SyntheticHistory | undefined => {
+  if (`fixed` in binding)
+    return spec.fixed.find(({ name }) => name === binding.fixed)?.history
+  if (`enumerated` in binding && spec.source.kind === `enumerated`)
+    return spec.source.histories.find((history, index) =>
+      typeof binding.enumerated === `number`
+        ? index === binding.enumerated
+        : `items ${history.join(` | `)}` === binding.enumerated,
+    )
+  if (`constructed` in binding) {
+    const construction = spec.constructed.find(
+      ({ name }) => name === binding.constructed,
+    )
+    const input = builds.find(
+      (entry) =>
+        entry.id === spec.id &&
+        entry.test === `${spec.id} > ${test}` &&
+        entry.name === binding.constructed,
+    )
+    if (construction && input)
+      return [
+        ...construction.prefix,
+        ...input.generated.map((item) =>
+          spec.isolatedPlans ? item % 3 : item,
+        ),
+      ].slice(0, 3)
+  }
+  return undefined
+}
+const selectedControlBinding = (spec: SyntheticSpec, forced: boolean) =>
+  forced
+    ? { fixed: `fixed-0` }
+    : {
+        constructed:
+          spec.probeBinding === `explicit`
+            ? `constructed-0`
+            : (spec.constructed.find(({ enters }) => enters.includes(`saw-0`))
+                ?.name ?? `missing`),
+      }
+
 const isCampaign = (name: string) =>
   name.startsWith(`fixed seed`) || name === `random seed`
 
@@ -1179,6 +1400,8 @@ type SpecExpectation =
       loadCause?: string
       /** A constructed history's build threw at registration. */
       buildError?: boolean
+      /** A calibration requires a difference that the empty difference holds. */
+      emptyDifference?: boolean
       /** An enumerated declaration with a foreign key or a probe-bound state. */
       shapeError?: boolean
       /** A label that names a framework test. */
@@ -1204,6 +1427,7 @@ type SpecExpectation =
 function predictSpec(
   spec: SyntheticSpec,
   logged: ReadonlyArray<LogEntry>,
+  builds: ReadonlyArray<BuildEntry> = [],
 ): SpecExpectation {
   const ran = (test: string) =>
     logged
@@ -1311,6 +1535,15 @@ function predictSpec(
         }
     }
   }
+  const empty = spec.calibrations.find(({ difference }) =>
+    emptyDifference(difference),
+  )
+  if (empty)
+    return {
+      loads: false,
+      loadError: `${spec.id}: calibration "${empty.name}" requires difference`,
+      emptyDifference: true,
+    }
   // The synthetic namespace is deliberately small: names identify the fixed
   // or constructed index; enumerated names state their items. This model judges
   // selection independently of the framework's resolver.
@@ -1360,7 +1593,13 @@ function predictSpec(
     spec.probeBinding &&
     spec.probeBinding !== `empty` &&
     (!spec.probe ||
-      spec.probeBinding === `no-absence` ||
+      [
+        `no-absence`,
+        `null-entered`,
+        `null-binding`,
+        `false-binding`,
+        `zero-binding`,
+      ].includes(spec.probeBinding) ||
       !spec.fixed.some(({ name }) => name === `fixed-0`) ||
       (spec.probeBinding === `inferred`
         ? spec.constructed.filter(({ enters }) => enters.includes(`saw-0`))
@@ -1395,7 +1634,13 @@ function predictSpec(
   // Every history fails before a verdict, so an enumerated source's reach
   // test counts none.
   if (data && spec.source.kind === `enumerated` && declaredOf(spec)) {
-    for (const name of all) tests.set(name, data)
+    for (const name of all)
+      tests.set(
+        name,
+        binding && name.startsWith(`calibration:`)
+          ? { kind: `calibration-clean` }
+          : data,
+      )
     const { outcome, counts } = enumeratedReach(
       spec,
       spec.source.histories,
@@ -1410,7 +1655,13 @@ function predictSpec(
     }
   }
   if (data) {
-    for (const name of all) tests.set(name, data)
+    for (const name of all)
+      tests.set(
+        name,
+        binding && name.startsWith(`calibration:`)
+          ? { kind: `calibration-clean` }
+          : data,
+      )
     return {
       loads: true,
       tests,
@@ -1429,43 +1680,54 @@ function predictSpec(
       )
     return { loads: true, tests, reach: new Map(), replays: [] }
   }
-  // A calibration needs a candidate whose clean trace passes; it skips the
-  // others (maintainer decision, 2026-11-03). Every history has an item, so
-  // the corruption applies to every candidate.
+  // The source changes how the premise is chosen, never how a mutant verdict ranks.
   const calibrate = (
     name: string,
     kind: SyntheticSpec[`calibrations`][number][`kind`],
-  ) => {
+    difference?: CalibrationDifference,
+  ): Outcome => {
+    const chosen = binding
+      ? authoredInput(spec, `calibration: ${name}`, binding, builds)
+      : undefined
+    const clean = binding
+      ? chosen
+        ? [chosen]
+        : []
+      : calibrationCandidates(spec).filter(
+          (history) =>
+            judged({ ...spec, extraReach: false }, history).kind === `pass`,
+        )
     if (binding) {
-      const clean = ran(`calibration: ${name}`)[0]
-      if (!clean || judged(spec, clean).kind !== `pass`)
-        return { kind: `calibration-clean` } as Outcome
+      if (!chosen || judged(spec, chosen).kind !== `pass` || spec.extraReach)
+        return { kind: `calibration-clean` }
       const enters =
         selected && !Array.isArray(selected) && `enters` in selected
           ? (selected.enters ?? [])
           : []
-      if (!reaches(spec, clean, enters))
-        return { kind: `calibration-reach` } as Outcome
-      if (kind === `inapplicable`)
-        return { kind: `calibration-inapplicable` } as Outcome
-      if (kind === `throws`)
-        return { kind: `calibration-mutant-error` } as Outcome
-      if (kind === `driver` || kind === `right`)
-        return { kind: `pass` } as Outcome
-      return {
-        kind: kind === `no-op` ? `calibration-passed` : `calibration-wrong-law`,
-      } as Outcome
+      if (!reaches(spec, chosen, enters)) return { kind: `calibration-reach` }
     }
-    const used = ran(`calibration: ${name}`).find(
-      (history) => judged(spec, history).kind === `pass`,
+    if (!clean.length || kind === `inapplicable`)
+      return { kind: binding ? `calibration-inapplicable` : `calibration-none` }
+    if (
+      [`corrupt-throws`, `judge-throws`, `judge-driver-throws`].includes(kind)
     )
-    if (!used || kind === `inapplicable`)
-      return { kind: `calibration-none` } as Outcome
-    if (kind === `right` || kind === `driver` || kind === `throws`)
-      return { kind: `pass` } as Outcome
-    return {
-      kind: kind === `no-op` ? `calibration-passed` : `calibration-wrong-law`,
-    } as Outcome
+      return { kind: `setup` }
+    if (kind === `no-op`) return { kind: `calibration-passed` }
+    if (kind === `wrong-law`) return { kind: `calibration-wrong-law` }
+    if (difference === undefined) return { kind: `pass` }
+    if (spec.numberDifference && kind !== `clock`)
+      return { kind: `calibration-odd-difference` }
+    const holds = (history: SyntheticHistory) =>
+      differenceHolds[difference](
+        kind === `clock`
+          ? `clock passed its timer bound`
+          : mutatedDifference(kind, history),
+      )
+    if (binding || !driverCalibration(kind))
+      return holds(clean[0]!)
+        ? { kind: `pass` }
+        : { kind: `calibration-wrong-difference` }
+    return clean.some(holds) ? { kind: `pass` } : { kind: `calibration-none` }
   }
   // A generated property's determinism test also runs three generated
   // histories (maintainer decision, 2026-11-03), so a nondeterministic driver
@@ -1552,15 +1814,20 @@ function predictSpec(
       )
     }
   }
-  for (const { name, kind } of spec.calibrations)
-    tests.set(`calibration: ${name}`, calibrate(name, kind))
+  for (const { name, kind, difference } of spec.calibrations)
+    tests.set(`calibration: ${name}`, calibrate(name, kind, difference))
   // A forced-probe calibration needs a candidate whose clean trace passes and
   // whose prediction differs from the forced probe; the check must then report
   // reach agreement.
   for (const [at, name] of forcedCalibrationNames(spec).entries()) {
     const forced = at === 0
     if (spec.probeBinding && spec.probeBinding !== `empty`) {
-      const clean = ran(name)[0]
+      const clean = authoredInput(
+        spec,
+        name,
+        selectedControlBinding(spec, forced),
+        builds,
+      )
       // The clean opposite-polarity premise also owes every state declared by
       // its selected fixed case or construction, not just the probe's state.
       const selectedControl = forced
@@ -1587,7 +1854,7 @@ function predictSpec(
       name,
       ran(name).some(
         (history) =>
-          judged(spec, history).kind === `pass` &&
+          judged({ ...spec, extraReach: false }, history).kind === `pass` &&
           predictsZero(history) !== forced,
       )
         ? { kind: `pass` }
@@ -1656,7 +1923,12 @@ function suiteModel(
   const run = trace.find(({ checkpoint }) => checkpoint === `run`)?.value as
     SuiteRun | undefined
   const logged = run?.log ?? []
-  return new Map(plan.specs.map((spec) => [spec.id, predictSpec(spec, logged)]))
+  return new Map(
+    plan.specs.map((spec) => [
+      spec.id,
+      predictSpec(spec, logged, run?.builds ?? []),
+    ]),
+  )
 }
 
 // A late spec calls its probe again, unawaited, after every run of a history
@@ -1698,6 +1970,14 @@ function owedRoute(name: string, replay = false): string {
 // about. Each fixed history names the state it witnesses, so every one is reached on
 // every run; campaigns count them.
 const frameworkStates = [
+  `bound-ranked-mutants`,
+  `bound-independent-premise`,
+  `bound-name-seed`,
+  `bound-extra-state`,
+  `bound-error-context`,
+  `bound-null-selector`,
+  `registration-warning-policy`,
+  `bound-difference`,
   `registration-error`,
   `campaign-violation`,
   `campaign-setup-failure`,
@@ -1717,6 +1997,11 @@ const frameworkStates = [
   `constructed-build-load-error`,
   `calibration-applied`,
   `calibration-rejected`,
+  `calibration-difference-applied`,
+  `calibration-difference-rejected`,
+  `calibration-difference-later`,
+  `calibration-empty-difference-error`,
+  `calibration-odd-difference`,
   `calibration-skipped-candidate`,
   `bound-fixed-identity`,
   `bound-enumerated-identity`,
@@ -1787,6 +2072,15 @@ function frameworkReach(
   for (const spec of plan.specs) {
     const owed = expected.get(spec.id)!
     if (!owed.loads) {
+      if (
+        [
+          `null-entered`,
+          `null-binding`,
+          `false-binding`,
+          `zero-binding`,
+        ].includes(spec.probeBinding ?? ``)
+      )
+        reached.add(`bound-null-selector`)
       reached.add(`registration-error`)
       if (spec.calibrationHistory)
         reached.add(`bound-calibration-registration-error`)
@@ -1794,6 +2088,8 @@ function frameworkReach(
       if (owed.reservedLabel) reached.add(`reserved-label-error`)
       if (owed.dataError) reached.add(`history-out-of-domain`)
       if (owed.buildError) reached.add(`constructed-build-load-error`)
+      if (owed.emptyDifference)
+        reached.add(`calibration-empty-difference-error`)
       if (owed.membership === `fixed`) reached.add(`fixed-membership-failure`)
       if (owed.membership === `constructed`)
         reached.add(`constructed-membership-failure`)
@@ -1806,6 +2102,38 @@ function frameworkReach(
       }
       continue
     }
+    if (
+      spec.calibrationHistory &&
+      spec.calibrations.some(
+        ({ kind }) => kind === `throws` || kind === `clock`,
+      )
+    )
+      reached.add(`bound-ranked-mutants`)
+    if (
+      spec.probeBinding === `explicit` &&
+      spec.constructed.length > 1 &&
+      spec.fixed.length > 1
+    )
+      reached.add(`bound-independent-premise`)
+    if (spec.calibrationNames !== `indexed` && spec.calibrations.length > 1)
+      reached.add(`bound-name-seed`)
+    if (spec.calibrationHistory && spec.extraReach)
+      reached.add(`bound-extra-state`)
+    if (
+      spec.calibrationHistory &&
+      spec.calibrations.some(({ kind }) =>
+        [`corrupt-throws`, `judge-throws`, `judge-driver-throws`].includes(
+          kind,
+        ),
+      )
+    )
+      reached.add(`bound-error-context`)
+    if (spec.warningProbe) reached.add(`registration-warning-policy`)
+    if (
+      spec.calibrationHistory &&
+      spec.calibrations.some(({ difference }) => difference !== undefined)
+    )
+      reached.add(`bound-difference`)
     if (spec.identityHistories && spec.calibrationHistory) {
       if (`fixed` in spec.calibrationHistory)
         reached.add(`bound-fixed-identity`)
@@ -1910,10 +2238,48 @@ function frameworkReach(
         'undeclared-state': `enumerated-undeclared-state`,
         'calibration-passed': `calibration-rejected`,
         'calibration-wrong-law': `calibration-rejected`,
+        'calibration-wrong-difference': `calibration-difference-rejected`,
       }[outcome.kind as string]
       if (failure) reached.add(failure)
       if (name.startsWith(`calibration:`) && outcome.kind === `pass`)
         reached.add(`calibration-applied`)
+      // A calibration that requires a difference: one that matches applies,
+      // and a mutant driver's that does not finds no history.
+      const calibration = spec.calibrations.find(
+        (candidate) => name === `calibration: ${candidate.name}`,
+      )
+      if (calibration?.difference && outcome.kind === `pass`)
+        reached.add(`calibration-difference-applied`)
+      if (outcome.kind === `calibration-odd-difference`)
+        reached.add(`calibration-odd-difference`)
+      // A mutant driver passed over a clean candidate whose difference did not
+      // hold, then passed at a later one.
+      if (calibration?.difference && outcome.kind === `pass`) {
+        const first = (run?.log ?? []).find(
+          (entry) =>
+            entry.test === `${spec.id} > ${name}` &&
+            judged(spec, entry.history).kind === `pass`,
+        )
+        if (
+          first &&
+          calibration.kind !== `right` &&
+          !differenceHolds[calibration.difference](
+            mutatedDifference(calibration.kind, first.history),
+          )
+        )
+          reached.add(`calibration-difference-later`)
+      }
+      if (
+        calibration?.kind === `driver` &&
+        calibration.difference?.endsWith(`mismatch`) &&
+        outcome.kind === `calibration-none` &&
+        (run?.log ?? []).some(
+          (entry) =>
+            entry.test === `${spec.id} > ${name}` &&
+            judged(spec, entry.history).kind === `pass`,
+        )
+      )
+        reached.add(`calibration-difference-rejected`)
       if (
         name === `reach` &&
         outcome.kind === `pass` &&
@@ -2072,6 +2438,8 @@ type Report = {
   unhandled: Array<ReportedError>
 }
 type Failure = {
+  message?: string
+  causeMessage?: string
   kind: Kind | `other`
   dataPath?: string
   dataKind?: string
@@ -2109,6 +2477,8 @@ type SuiteRun = {
   >
   log: Array<LogEntry>
   resolutions: Array<Pick<LogEntry, `id` | `test`>>
+  builds: Array<BuildEntry>
+  stdout: string
   warnings: Array<string>
   /** The run's unhandled errors, by message. */
   unhandled: Array<string>
@@ -2157,8 +2527,9 @@ function classifyKind(
     return `calibration-reach`
   if (text.includes(`selected corruption did not apply`))
     return `calibration-inapplicable`
-  if (text.includes(`selected mutant run failed`))
-    return `calibration-mutant-error`
+  // A wrapped runtime exception is still setup failure. Context and cause are
+  // checked separately, so binding does not change the semantic verdict kind.
+  if (text.includes(`selected mutant run failed`)) return `setup`
   if (inner.name === `OracleDataError`) return `data`
   if (text.includes(`the framework's encoding limit`)) return `limit`
   if (inner.name === `OracleModelError`) return `model-not-total`
@@ -2176,6 +2547,10 @@ function classifyKind(
   if (text.includes(`which the property does not declare`))
     return `undeclared-state`
   if (text.includes(`two runs of`)) return `determinism`
+  if (text.includes(`a difference that is not text`))
+    return `calibration-odd-difference`
+  if (text.includes(`but the check reported difference`))
+    return `calibration-wrong-difference`
   if (text.includes(`but the check passed it`)) return `calibration-passed`
   if (text.includes(`but the check reported law`))
     return `calibration-wrong-law`
@@ -2183,7 +2558,9 @@ function classifyKind(
   if (
     text.includes(`synthetic driver failed`) ||
     text.includes(`cannot read a 7`) ||
-    text.includes(`mutant setup failed`)
+    text.includes(`mutant setup failed`) ||
+    text.includes(`synthetic corruption failed`) ||
+    text.includes(`synthetic judgment failed`)
   )
     return `setup`
   return `other`
@@ -2224,6 +2601,8 @@ function classify(error: ReportedError | undefined): Failure {
   const kind = classifyKind(inner, text, outer)
   return {
     kind,
+    message: text,
+    ...(inner.cause?.message ? { causeMessage: inner.cause.message } : {}),
     // A model error that quotes a machine path, such as an inspected stack.
     ...(inner.name === `OracleModelError` && text.includes(packageDirectory)
       ? { machinePath: true }
@@ -2275,6 +2654,7 @@ function runVitest(
     `run`,
     `--coverage.enabled=false`,
     `--typecheck.enabled=false`,
+    `--maxWorkers=2`,
     `--reporter=${join(here, `oracle-property-self-oracle-reporter.mjs`)}`,
     // Each child scans only its own generated directory. The generated
     // directory sits outside `tests/`, so the package's default run never
@@ -2410,6 +2790,17 @@ function driveSuite(
       files: {},
       log: readLog(log),
       resolutions: readResolutions(`${log}.resolutions`),
+      builds: existsSync(`${log}.builds`)
+        ? readFileSync(`${log}.builds`, `utf8`)
+            .trim()
+            .split(`\n`)
+            .filter(Boolean)
+            .map((line) => {
+              const entry = JSON.parse(line) as BuildEntry
+              return { ...entry, test: unnested(entry.test) }
+            })
+        : [],
+      stdout: report.stdout,
       warnings: [...report.warnings].sort(),
       unhandled: report.unhandled.map((error) => error.message ?? ``),
     }
@@ -2493,6 +2884,83 @@ function driveSuite(
         observe(`binding-reordered`, {
           id: spec.id,
           log: readLog(reorderedLog),
+        })
+      } finally {
+        writeFileSync(file, original)
+      }
+    }
+    for (const [index, spec] of plan.specs.entries()) {
+      if (!spec.warningProbe || !run.files[spec.id]!.loaded) continue
+      const file = files[index]!,
+        original = readFileSync(file, `utf8`)
+      // These probes supply the enclosing suites themselves. Register the
+      // property synchronously inside each phase's callback so its environment
+      // cannot change before a deferred nested describe runs.
+      const call = `syntheticProperty(${JSON.stringify({ ...spec, nested: false })})`
+      try {
+        // Repeated ordinary registrations share one process/id, as do a collector
+        // followed by ordinary registration. Tests are collected but not run.
+        writeFileSync(
+          file,
+          `import { describe } from 'vitest'\nimport { syntheticProperty } from ${JSON.stringify(join(here, `oracle-property-self-oracle-fixture.ts`))}\ndescribe('first',()=>{${call}})\ndescribe('second',()=>{${call}})\n`,
+        )
+        const repeated = runVitest(
+          directory,
+          [file],
+          {},
+          `-t '__registration_only__'`,
+        )
+        const manifest = join(directory, `manifest-${index}.jsonl`)
+        writeFileSync(
+          file,
+          `import { describe } from 'vitest'\nimport { syntheticProperty } from ${JSON.stringify(join(here, `oracle-property-self-oracle-fixture.ts`))}\ndescribe('collect',()=>{process.env.ORACLE_MANIFEST=${JSON.stringify(manifest)};try{${call}}finally{delete process.env.ORACLE_MANIFEST}})\ndescribe('ordinary',()=>{${call}})\n`,
+        )
+        const collectThenRun = runVitest(
+          directory,
+          [file],
+          {},
+          `-t '__registration_only__'`,
+        )
+        const collectedManifest = join(
+          directory,
+          `collected-manifest-${index}.jsonl`,
+        )
+        writeFileSync(
+          file,
+          `import { syntheticProperty } from ${JSON.stringify(join(here, `oracle-property-self-oracle-fixture.ts`))}\n${call}\n`,
+        )
+        const collected = runVitest(
+          directory,
+          [file],
+          { ORACLE_MANIFEST: collectedManifest },
+          `-t '__registration_only__'`,
+        )
+        const loaded = (phase: Report) =>
+          phase.files.length === 1 &&
+          phase.files[0]!.file === file &&
+          phase.files[0]!.errors.length === 0 &&
+          phase.unhandled.length === 0
+        const registered = (path: string) =>
+          existsSync(path) &&
+          readFileSync(path, `utf8`)
+            .trim()
+            .split(`\n`)
+            .filter(Boolean)
+            .map((line) => (JSON.parse(line) as { id: string }).id)
+        observe(`registration-warnings`, {
+          manifests: {
+            collectThenRun: registered(manifest),
+            collected: registered(collectedManifest),
+          },
+          loaded: {
+            repeated: loaded(repeated),
+            collectThenRun: loaded(collectThenRun),
+            collected: loaded(collected),
+          },
+          id: spec.id,
+          repeated: repeated.warnings,
+          collectThenRun: collectThenRun.warnings,
+          collected: collected.warnings,
         })
       } finally {
         writeFileSync(file, original)
@@ -2736,6 +3204,82 @@ function checkSuite(
           `calibration`,
         )
     }
+    if (
+      spec.calibrationNames !== `indexed` &&
+      spec.calibrationHistory &&
+      `constructed` in spec.calibrationHistory &&
+      spec.calibrations.length > 1
+    ) {
+      const inputs = spec.calibrations.map(
+        ({ name }) =>
+          run.builds.find(
+            (entry) =>
+              entry.id === spec.id &&
+              entry.test === `${spec.id} > calibration: ${name}`,
+          )?.generated,
+      )
+      if (
+        inputs.some((input) => !input) ||
+        new Set(inputs.map((input) => JSON.stringify(input))).size < 2
+      )
+        return violation(
+          `run`,
+          `${spec.id} distinct named calibrations did not vary their full construction inputs`,
+          `calibration`,
+        )
+    }
+    const warningProbe = trace.find(
+      ({ checkpoint, value }) =>
+        checkpoint === `registration-warnings` &&
+        (value as { id: string }).id === spec.id,
+    )?.value as
+      | {
+          repeated: Array<string>
+          collectThenRun: Array<string>
+          collected: Array<string>
+          manifests: {
+            collectThenRun: Array<string> | false
+            collected: Array<string> | false
+          }
+          loaded: {
+            repeated: boolean
+            collectThenRun: boolean
+            collected: boolean
+          }
+        }
+      | undefined
+    if (warningProbe) {
+      if (
+        [
+          warningProbe.manifests.collectThenRun,
+          warningProbe.manifests.collected,
+        ].some((ids) => JSON.stringify(ids) !== JSON.stringify([spec.id]))
+      )
+        return violation(
+          `run`,
+          `${spec.id} did not complete its collect-only registration in each phase`,
+          `calibration`,
+        )
+      const forId = (warnings: Array<string>) =>
+        warnings.filter(
+          (warning) =>
+            warning.startsWith(`${spec.id}:`) &&
+            warning.includes(`history binding`),
+        )
+      if (
+        !warningProbe.loaded.repeated ||
+        !warningProbe.loaded.collectThenRun ||
+        !warningProbe.loaded.collected ||
+        forId(warningProbe.repeated).length !== 1 ||
+        forId(warningProbe.collectThenRun).length !== 1 ||
+        forId(warningProbe.collected).length !== 0
+      )
+        return violation(
+          `run`,
+          `${spec.id} repeated or collect-only registration violated the one-warning boundary`,
+          `calibration`,
+        )
+    }
     // The compatibility route must be visible before any selected test runs,
     // including automatic controls; bound calibrations must never warn search.
     const unbound = [
@@ -2748,31 +3292,18 @@ function checkSuite(
           )
         : []),
     ]
-    for (const name of unbound)
-      if (
-        run.warnings.filter((warning) =>
-          warning.includes(
-            `${spec.id}: calibration "${name}" has no history binding`,
-          ),
-        ).length !== 1
-      )
-        return violation(
-          `run`,
-          `${spec.id} did not warn once at registration for unbound calibration "${name}"`,
-          `calibration`,
-        )
+    const warnings = run.warnings.filter(
+      (warning) =>
+        warning.startsWith(`${spec.id}:`) &&
+        warning.includes(`history binding`),
+    )
     if (
-      (spec.calibrationHistory ||
-        (spec.probeBinding && spec.probeBinding !== `empty`)) &&
-      run.warnings.some(
-        (warning) =>
-          warning.startsWith(`${spec.id}:`) &&
-          !unbound.some((name) => warning.includes(`calibration "${name}"`)),
-      )
+      warnings.length !== (unbound.length ? 1 : 0) ||
+      unbound.some((name) => !warnings[0]?.includes(name))
     )
       return violation(
         `run`,
-        `${spec.id} warned about search for a bound calibration`,
+        `${spec.id} did not report unbound calibrations once per property: ${JSON.stringify(warnings)}`,
         `calibration`,
       )
     const placed = seen.tests.find((test) =>
@@ -2805,11 +3336,50 @@ function checkSuite(
           (entry) =>
             entry.id === spec.id && entry.test === `${spec.id} > ${test.name}`,
         )
+        const expectedBinding = selectedControlBinding(
+          spec,
+          test.name === forcedCalibrationNames(spec)[0],
+        )
+        const expectedHistory = authoredInput(
+          spec,
+          test.name,
+          expectedBinding,
+          run.builds,
+        )
+        const expectedOrigin = `${`fixed` in expectedBinding ? `fixed` : `constructed`}:${`fixed` in expectedBinding ? expectedBinding.fixed : expectedBinding.constructed}`
+        if (
+          calls.some(
+            (entry) =>
+              entry.origin !== expectedOrigin ||
+              JSON.stringify(entry.history) !== JSON.stringify(expectedHistory),
+          )
+        )
+          return violation(
+            `run`,
+            `${spec.id} forced control ran a different declared premise`,
+            `calibration`,
+          )
         const expectedCalls =
           outcome.kind === `calibration-clean` ||
           outcome.kind === `calibration-reach`
             ? 1
             : 2
+        const expectedBuilds =
+          `constructed` in expectedBinding ? expectedCalls : 0
+        const builds = run.builds.filter(
+          (entry) =>
+            entry.id === spec.id && entry.test === `${spec.id} > ${test.name}`,
+        )
+        if (
+          builds.length !== expectedBuilds ||
+          (`constructed` in expectedBinding &&
+            builds.some((entry) => entry.name !== expectedBinding.constructed))
+        )
+          return violation(
+            `run`,
+            `${spec.id} "${test.name}" used ${builds.length} construction builds; selected control owes ${expectedBuilds}`,
+            `calibration`,
+          )
         if (
           (spec.isolatedPlans || spec.identityHistories) &&
           run.resolutions.filter(
@@ -2845,11 +3415,31 @@ function checkSuite(
             entry.id === spec.id && entry.test === `${spec.id} > ${test.name}`,
         )
         const expectedCalls =
-          (calibration.kind === `driver` || calibration.kind === `throws`) &&
+          driverCalibration(calibration.kind) &&
           outcome.kind !== `calibration-clean` &&
           outcome.kind !== `calibration-reach`
             ? 2
             : 1
+        const expectedConstruction =
+          `constructed` in spec.calibrationHistory
+            ? spec.calibrationHistory.constructed
+            : undefined
+        const expectedBuilds =
+          expectedConstruction === undefined ? 0 : expectedCalls
+        const builds = run.builds.filter(
+          (entry) =>
+            entry.id === spec.id && entry.test === `${spec.id} > ${test.name}`,
+        )
+        if (
+          builds.length !== expectedBuilds ||
+          (expectedConstruction !== undefined &&
+            builds.some((entry) => entry.name !== expectedConstruction))
+        )
+          return violation(
+            `run`,
+            `${spec.id} "${test.name}" used ${builds.length} construction builds; binding owes ${expectedBuilds}`,
+            `calibration`,
+          )
         if (
           (spec.isolatedPlans || spec.identityHistories) &&
           run.resolutions.filter(
@@ -2871,6 +3461,19 @@ function checkSuite(
           )
         const binding = spec.calibrationHistory
         const first = calls[0]!.history
+        const fullInput = authoredInput(spec, test.name, binding, run.builds)
+        if (
+          fullInput &&
+          calls.some(
+            ({ history }) =>
+              JSON.stringify(history) !== JSON.stringify(fullInput),
+          )
+        )
+          return violation(
+            `run`,
+            `${spec.id} selected calibration did not run its full authored input`,
+            `calibration`,
+          )
         const selected =
           `fixed` in binding
             ? spec.fixed.find(({ name }) => name === binding.fixed)?.history
@@ -2898,6 +3501,49 @@ function checkSuite(
           return violation(
             `run`,
             `${spec.id} "${test.name}" did not run equivalent selected histories`,
+            `calibration`,
+          )
+      }
+      if (
+        spec.calibrationHistory &&
+        calibration &&
+        test.state === `failed` &&
+        ([`corrupt-throws`, `judge-throws`, `judge-driver-throws`].includes(
+          calibration.kind,
+        ) ||
+          (spec.odd && dataOutcome(spec)))
+      ) {
+        const selectedKind =
+          `constructed` in spec.calibrationHistory
+            ? `constructed`
+            : `fixed` in spec.calibrationHistory
+              ? `fixed`
+              : `enumerated`
+        const invalidData = dataOutcome(spec)
+        const expectedCause =
+          calibration.kind === `corrupt-throws`
+            ? `synthetic corruption failed`
+            : [`judge-throws`, `judge-driver-throws`].includes(calibration.kind)
+              ? `synthetic judgment failed`
+              : undefined
+        const causeMatches =
+          expectedCause !== undefined
+            ? failure?.causeMessage === expectedCause
+            : invalidData?.kind === `data`
+              ? failure?.causeMessage?.includes(invalidData.dataPath!) &&
+                failure.causeMessage.includes(invalidData.dataKind!)
+              : invalidData?.kind === `limit` &&
+                failure?.causeMessage?.includes(
+                  `the framework's encoding limit`,
+                )
+        if (
+          !failure?.message?.includes(`calibration "${calibration.name}"`) ||
+          !failure.message.includes(`${selectedKind} history:`) ||
+          !causeMatches
+        )
+          return violation(
+            `run`,
+            `${spec.id} callback failure lost its calibration/history context or cause`,
             `calibration`,
           )
       }
@@ -3007,6 +3653,22 @@ function checkSuite(
           )
       }
     }
+    if (
+      (spec.calibrationHistory ||
+        (spec.probeBinding && spec.probeBinding !== `empty`)) &&
+      run.stdout
+        .split(`\n`)
+        .some(
+          (line) =>
+            line.startsWith(`${spec.id}: calibration "`) &&
+            line.includes(` on `),
+        )
+    )
+      return violation(
+        `run`,
+        `${spec.id} printed a per-calibration selected-history announcement`,
+        `calibration`,
+      )
     for (const [campaign, counts] of owed.reach)
       // Reach is a dictionary of counts, not an ordered observation. Renaming
       // a state may reorder its printed keys without changing any count.
@@ -3222,6 +3884,10 @@ const generatedDraft = (overrides: Partial<Draft>): Draft => ({
   probeBinding: `unbound`,
   duplicateHistoryNames: false,
   unregistered: false,
+  numberDifference: false,
+  extraReach: false,
+  calibrationNames: `indexed`,
+  warningProbe: false,
   probe: `none`,
   overReport: false,
   noisyProbe: false,
@@ -3259,6 +3925,10 @@ const seedlessHistory = (
   ...drafts: Array<Draft>
 ) => ({ name, enters, history: { drafts, seedless: true } })
 const at = (history: SyntheticHistory) => ({ history, enters: null })
+const cal = (
+  kind: CalibrationDraft[`kind`],
+  difference: CalibrationDraft[`difference`] = `none`,
+): CalibrationDraft => ({ kind, difference })
 
 oracleProperty({
   id: `self-oracle.framework`,
@@ -3270,6 +3940,14 @@ oracleProperty({
   histories: {
     arbitrary: suite,
     states: [
+      `bound-ranked-mutants`,
+      `bound-independent-premise`,
+      `bound-name-seed`,
+      `bound-extra-state`,
+      `bound-error-context`,
+      `bound-null-selector`,
+      `registration-warning-policy`,
+      `bound-difference`,
       `bound-fixed-identity`,
       `bound-enumerated-identity`,
       `bound-combined-controls`,
@@ -3281,11 +3959,149 @@ oracleProperty({
     ],
     measured: frameworkStates.filter(
       (state) =>
-        !state.startsWith(`bound-`) && state !== `unbound-prototype-probe`,
+        !state.startsWith(`bound-`) &&
+        state !== `unbound-prototype-probe` &&
+        state !== `registration-warning-policy`,
     ),
     runs: 3,
     fixedSeeds: [1],
     constructed: [
+      {
+        name: `round2 ranked mutant verdicts`,
+        enters: [`bound-ranked-mutants`],
+        build: (generated: Suite) => ({
+          ...generated,
+          drafts: [
+            generatedDraft({
+              fixed: [at([0])],
+              calibrationHistory: { fixed: `fixed-0` },
+              calibrations: [generated.drafts[0]!.clock ? `clock` : `throws`],
+            }),
+          ],
+        }),
+      },
+      {
+        name: `round2 independent forced premises`,
+        enters: [`bound-independent-premise`],
+        build: (generated: Suite) => ({
+          ...generated,
+          drafts: [
+            generatedDraft({
+              fixed: [at([1]), at([0])],
+              constructed: [
+                { prefix: [0], enters: [`saw-0`] },
+                { prefix: [0, 2], enters: [`saw-0`] },
+              ],
+              probe: `agree`,
+              probeBinding: `explicit`,
+              isolatedPlans: true,
+            }),
+          ],
+        }),
+      },
+      {
+        name: `round2 named seed variation`,
+        enters: [`bound-name-seed`],
+        build: (generated: Suite) => ({
+          ...generated,
+          drafts: [
+            generatedDraft({
+              constructed: [{ prefix: [0], enters: [`saw-0`] }],
+              calibrationHistory: { constructed: `constructed-0` },
+              calibrations: [`right`],
+              calibrationNames: generated.drafts[0]!.clock
+                ? `astral`
+                : `varied`,
+              isolatedPlans: true,
+            }),
+          ],
+        }),
+      },
+      {
+        name: `round2 declared clean reach`,
+        enters: [`bound-extra-state`],
+        build: (generated: Suite) => ({
+          ...generated,
+          drafts: [
+            generatedDraft({
+              fixed: [at([0])],
+              calibrationHistory: { fixed: `fixed-0` },
+              calibrations: [`right`],
+              extraReach: `calibration`,
+            }),
+          ],
+        }),
+      },
+      {
+        name: `round2 contextual callback errors`,
+        enters: [`bound-error-context`],
+        build: (generated: Suite) => ({
+          ...generated,
+          drafts: [
+            generatedDraft({
+              fixed: [at([0])],
+              calibrationHistory: { fixed: `fixed-0` },
+              calibrations: [
+                generated.drafts[0]!.clock
+                  ? `judge-driver-throws`
+                  : `corrupt-throws`,
+              ],
+            }),
+          ],
+        }),
+      },
+      {
+        name: `round2 invalid explicit probe selectors`,
+        enters: [`bound-null-selector`],
+        build: (generated: Suite) => ({
+          ...generated,
+          drafts: [
+            generatedDraft({
+              fixed: [at([1])],
+              constructed: [{ prefix: [0], enters: [`saw-0`] }],
+              probe: `agree`,
+              probeBinding: generated.drafts[0]!.clock
+                ? `null-entered`
+                : `null-binding`,
+            }),
+          ],
+        }),
+      },
+      {
+        name: `round2 registration warning phases`,
+        enters: [`registration-warning-policy`],
+        build: (generated: Suite) => ({
+          ...generated,
+          drafts: [
+            generatedDraft({
+              fixed: [at([1])],
+              constructed: [{ prefix: [0], enters: [`saw-0`] }],
+              probe: `agree`,
+              warningProbe: true,
+              calibrations: [`right`, `driver`],
+            }),
+          ],
+        }),
+      },
+      {
+        name: `round2 selected difference criterion`,
+        enters: [`bound-difference`],
+        build: (generated: Suite) => ({
+          ...generated,
+          drafts: [
+            generatedDraft({
+              fixed: [at([0]), at([1, 1, 0])],
+              calibrationHistory: { fixed: `fixed-0` },
+              calibrations: [
+                cal(
+                  `driver-last`,
+                  generated.drafts[0]!.clock ? `later pattern` : `later text`,
+                ),
+              ],
+            }),
+          ],
+        }),
+      },
       ...([`fixed`, `enumerated`] as const).map((source) => ({
         name: `selected ${source} preserves identity`,
         enters: [
@@ -3458,6 +4274,167 @@ oracleProperty({
       },
     ],
     fixed: [
+      ...([`throws`, `clock`] as const).map((kind) =>
+        fixedHistory(
+          `round2 ranked ${kind} bound and legacy`,
+          [`bound-ranked-mutants`],
+          generatedDraft({
+            fixed: [at([0])],
+            calibrationHistory: { fixed: `fixed-0` },
+            calibrations: [kind],
+            identityHistories: true,
+          }),
+          generatedDraft({ fixed: [at([0])], calibrations: [kind] }),
+        ),
+      ),
+      fixedHistory(
+        `round2 forced premise origins`,
+        [`bound-independent-premise`],
+        generatedDraft({
+          fixed: [at([1]), at([0])],
+          constructed: [
+            { prefix: [0], enters: [`saw-0`] },
+            { prefix: [0, 2], enters: [`saw-0`] },
+          ],
+          probe: `agree`,
+          probeBinding: `explicit`,
+          isolatedPlans: true,
+        }),
+      ),
+      ...([`varied`, `astral`] as const).map((calibrationNames) =>
+        fixedHistory(
+          `round2 ${calibrationNames} calibration seeds`,
+          [`bound-name-seed`],
+          generatedDraft({
+            constructed: [{ prefix: [0], enters: [`saw-0`] }],
+            calibrationHistory: { constructed: `constructed-0` },
+            calibrations: [`right`],
+            calibrationNames,
+            isolatedPlans: true,
+          }),
+        ),
+      ),
+      fixedHistory(
+        `round2 bound calibrations keep stdout quiet`,
+        [],
+        generatedDraft({
+          fixed: [at([0])],
+          calibrationHistory: { fixed: `fixed-0` },
+          calibrations: [`right`],
+        }),
+      ),
+      fixedHistory(
+        `round2 undeclared clean source reach`,
+        [`bound-extra-state`],
+        generatedDraft({
+          fixed: [at([0])],
+          calibrationHistory: { fixed: `fixed-0` },
+          calibrations: [`right`],
+          extraReach: `calibration`,
+        }),
+      ),
+      fixedHistory(
+        `round2 declared enumerated clean source reach`,
+        [`bound-extra-state`],
+        generatedDraft({
+          source: { kind: `enumerated`, histories: [[0], [1]] },
+          enumeratedStates: [`required`, `measured`, `measured`],
+          calibrationHistory: { enumerated: 0 },
+          calibrations: [`right`],
+          extraReach: `calibration`,
+        }),
+      ),
+      fixedHistory(
+        `round2 generated fixed history rejects undeclared reach`,
+        [],
+        generatedDraft({ fixed: [at([0])], extraReach: true }),
+      ),
+      ...(
+        [`corrupt-throws`, `judge-throws`, `judge-driver-throws`] as const
+      ).map((kind) =>
+        fixedHistory(
+          `round2 context ${kind}`,
+          [`bound-error-context`],
+          generatedDraft({
+            fixed: [at([0])],
+            calibrationHistory: { fixed: `fixed-0` },
+            calibrations: [kind],
+          }),
+        ),
+      ),
+      fixedHistory(
+        `round2 context clean invalid observation`,
+        [],
+        generatedDraft({
+          fixed: [at([0])],
+          calibrationHistory: { fixed: `fixed-0` },
+          calibrations: [`right`],
+          odd: `class`,
+        }),
+      ),
+      ...(
+        [
+          `null-entered`,
+          `null-binding`,
+          `false-binding`,
+          `zero-binding`,
+        ] as const
+      ).map((probeBinding) =>
+        fixedHistory(
+          `round2 invalid ${probeBinding}`,
+          [`bound-null-selector`],
+          generatedDraft({
+            fixed: [at([1])],
+            constructed: [{ prefix: [0], enters: [`saw-0`] }],
+            probe: `agree`,
+            probeBinding,
+          }),
+        ),
+      ),
+      fixedHistory(
+        `round2 warning repeat and manifest phases`,
+        [`registration-warning-policy`],
+        generatedDraft({
+          fixed: [at([1])],
+          constructed: [{ prefix: [0], enters: [`saw-0`] }],
+          probe: `agree`,
+          warningProbe: true,
+          calibrations: [`right`, `driver`],
+        }),
+      ),
+      ...([`fixed`, `enumerated`, `constructed`] as const).map((selectedKind) =>
+        fixedHistory(
+          `round2 selected ${selectedKind} difference never searches`,
+          [`bound-difference`],
+          generatedDraft({
+            ...(selectedKind === `enumerated`
+              ? {
+                  source: {
+                    kind: `enumerated`,
+                    histories: [[0], [1, 1, 0]],
+                  },
+                  calibrationHistory: { enumerated: 0 },
+                }
+              : selectedKind === `fixed`
+                ? {
+                    fixed: [at([0]), at([1, 1, 0])],
+                    calibrationHistory: { fixed: `fixed-0` },
+                  }
+                : {
+                    fixed: [at([1, 1, 0])],
+                    constructed: [{ prefix: [0], enters: [`saw-0`] }],
+                    calibrationHistory: {
+                      constructed: `constructed-0`,
+                    },
+                    isolatedPlans: true,
+                  }),
+            calibrations: [
+              cal(`driver-last`, `later text`),
+              cal(`right`, `pattern match`),
+            ],
+          }),
+        ),
+      ),
       ...([false, true] as const).map((isolatedPlans) =>
         fixedHistory(
           `review combined controls isolated=${isolatedPlans}`,
@@ -3851,7 +4828,10 @@ oracleProperty({
       fixedHistory(
         `a calibration skips a candidate whose clean trace fails`,
         [`calibration-skipped-candidate`, `calibration-applied`],
-        generatedDraft({ fixed: [at([3]), at([0])], calibrations: [`right`] }),
+        generatedDraft({
+          fixed: [at([3]), at([0])],
+          calibrations: [cal(`right`)],
+        }),
       ),
       // A spin fails its history, so its trace is no clean candidate, though
       // every observation in it passes the check.
@@ -3861,7 +4841,7 @@ oracleProperty({
         generatedDraft({
           clock: true,
           fixed: [at([7]), at([0])],
-          calibrations: [`right`, `driver`],
+          calibrations: [cal(`right`), cal(`driver`)],
         }),
       ),
       fixedHistory(
@@ -3869,13 +4849,104 @@ oracleProperty({
         [`calibration-applied`, `calibration-rejected`],
         generatedDraft({
           fixed: [at([0])],
-          calibrations: [`right`, `wrong-law`, `no-op`],
+          calibrations: [cal(`right`), cal(`wrong-law`), cal(`no-op`)],
         }),
       ),
       fixedHistory(
         `a mutant driver calibration`,
         [`calibration-applied`],
-        generatedDraft({ fixed: [at([0])], calibrations: [`driver`] }),
+        generatedDraft({ fixed: [at([0])], calibrations: [cal(`driver`)] }),
+      ),
+      // Text and a pattern, on a corruption and on a mutant driver.
+      ...[
+        [`text match`, `pattern match`],
+        [`pattern match`, `text match`],
+      ].map(([corrupted, mutated]) =>
+        fixedHistory(
+          `a calibration that requires a difference its violation has applies (${corrupted}, ${mutated})`,
+          [`calibration-applied`, `calibration-difference-applied`],
+          generatedDraft({
+            fixed: [at([0])],
+            calibrations: [
+              cal(`right`, corrupted as CalibrationDifference),
+              cal(`driver`, mutated as CalibrationDifference),
+            ],
+          }),
+        ),
+      ),
+      ...[
+        [`text mismatch`, `pattern mismatch`],
+        [`pattern mismatch`, `text mismatch`],
+      ].map(([corrupted, mutated]) =>
+        fixedHistory(
+          `a calibration that requires a difference its violation lacks fails (${corrupted}, ${mutated})`,
+          [`calibration-difference-rejected`],
+          generatedDraft({
+            fixed: [at([0])],
+            calibrations: [
+              cal(`right`, corrupted as CalibrationDifference),
+              cal(`driver`, mutated as CalibrationDifference),
+            ],
+          }),
+        ),
+      ),
+      // The driver passes over the first candidate, whose last item is item
+      // 0, and passes at the second, whose last item is item 2.
+      fixedHistory(
+        `a mutant driver passes at a later candidate whose difference holds`,
+        [`calibration-difference-applied`, `calibration-difference-later`],
+        generatedDraft({
+          fixed: [at([0]), at([1, 1, 0])],
+          calibrations: [
+            cal(`driver-last`, `later text`),
+            cal(`driver-last`, `later pattern`),
+            cal(`driver-last`, `text match`),
+          ],
+        }),
+      ),
+      fixedHistory(
+        `a calibration that requires the empty text fails to load`,
+        [`registration-error`, `calibration-empty-difference-error`],
+        generatedDraft({
+          fixed: [at([0])],
+          calibrations: [
+            cal(`right`, `text match`),
+            cal(`driver`, `empty text`),
+          ],
+        }),
+      ),
+      fixedHistory(
+        `a calibration that requires a pattern matching the empty string fails to load`,
+        [`registration-error`, `calibration-empty-difference-error`],
+        {
+          ...generatedDraft({ calibrations: [cal(`right`, `empty pattern`)] }),
+          source: { kind: `enumerated`, histories: [[0], [1]] },
+        },
+      ),
+      fixedHistory(
+        `a difference that is not text fails a calibration that requires one`,
+        [`calibration-odd-difference`, `calibration-applied`],
+        generatedDraft({
+          numberDifference: true,
+          fixed: [at([0])],
+          calibrations: [
+            cal(`right`, `text match`),
+            cal(`driver-last`, `pattern match`),
+            cal(`driver`),
+          ],
+        }),
+      ),
+      fixedHistory(
+        `a calibration's wrong law decides before its difference`,
+        [`calibration-rejected`],
+        generatedDraft({
+          fixed: [at([0])],
+          calibrations: [
+            cal(`wrong-law`, `text mismatch`),
+            cal(`wrong-law`, `pattern match`),
+            cal(`no-op`, `text match`),
+          ],
+        }),
       ),
       fixedHistory(
         `a law violation outranks a constructed history that misses its state`,

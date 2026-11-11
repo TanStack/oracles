@@ -68,10 +68,21 @@ Unknown or duplicate names, invalid indices, and incompatible source kinds fail
 registration before a driver runs.
 
 The selected clean run must pass and actually enter every state the history
-declares. The mutation must apply, and the check must reject it under exactly
-the named law. A failed clean run, missing reach, inapplicable corruption,
+declares. When the property declares states, every state the clean run enters
+must also be declared. The mutation must apply, and the check must reject it
+under exactly the named law. A failed clean run, missing reach, inapplicable corruption,
 passing mutant, wrong-law rejection, or driver setup error fails the calibration
 directly. It never searches another history.
+
+Mutant drivers use the same verdict rules as ordinary histories. A violation at
+a recorded checkpoint decides before a later driver error. A controlled clock
+that exceeds its timer bound reports `bounded clock`, unless an earlier recorded
+violation already decides.
+
+An optional `difference: string | RegExp` also requires the violation's
+difference to contain the text or match the pattern. The law is checked first.
+A bound mismatch fails directly. An unbound mutant driver can still try a later
+candidate, as it can for a wrong law.
 
 A selected construction uses one deterministic seed derived from the property
 id and calibration name. Inserting or reordering other calibrations leaves this
@@ -101,8 +112,9 @@ The clean-not-entered history detects the probe forced entered and always needs
 an explicit selection. Neither control may silently disappear.
 
 During consumer migration, an unbound authored calibration or entirely unbound
-probe state retains candidate search and prints a registration-time warning
-naming each affected calibration. Bind both probe controls together with
+probe state retains candidate search. Registration warns once per property per
+process, naming its unbound calibrations. Collect-only runs (`ORACLE_MANIFEST`)
+stay silent and do not consume that warning. Bind both probe controls together with
 `probeHistories`. Search will be removed after consumers migrate, before the
 first npm release.
 

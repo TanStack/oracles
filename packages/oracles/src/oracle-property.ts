@@ -170,11 +170,21 @@
  *   builds afresh from that seed and resolves once, preserving builder metadata
  *   and isolating consumed plans. Fixed/enumerated selectors preserve the
  *   existing history's identity; use resolve to create a fresh mutable plan per
- *   run. During migration only, unbound calibrations warn at registration
- *   and retain the existing candidate search. `probeHistories` opts a state into
- *   direct forced controls: its clean-entered history detects forced-not-entered
+ *   run. During migration only, unbound calibrations warn once per property
+ *   per process outside collect-only registration and retain candidate search.
+ *   `probeHistories` opts a state into direct forced controls: its clean-entered history detects forced-not-entered
  *   (inferred from the unique construction unless selected explicitly), and its
  *   explicitly selected clean-not-entered history detects forced-entered.
+ *   A calibration can also name a `difference`, text that
+ *   the violation's difference must contain or a pattern it must match, so
+ *   the check must reject the wrong answer for the reason the calibration
+ *   names, not only under its law (maintainer decision, 2026-11-11). The law
+ *   is judged first. An unbound mutant driver's candidate that reports another
+ *   law or difference is passed over for the next candidate. A pattern
+ *   matches anywhere in the difference, and a sticky (`y`) one only at its
+ *   start. A required difference that the empty difference holds, the empty
+ *   text or a pattern that matches the empty string, fails registration, and
+ *   a difference that is not text fails the calibration.
  * - **Determinism.** A `determinism` test runs some histories twice and
  *   requires the same trace: every fixed and constructed history of a generated
  *   source and three generated histories, or up to eight evenly spaced
@@ -576,6 +586,13 @@ export type Calibration<THistory, TPlan> = {
   name: string
   /** The law the check must report. */
   law: string
+  /**
+   * Text that the violation's difference must contain, or a pattern it must
+   * match anywhere; a sticky (`y`) pattern matches only at its start.
+   * Without it, any difference under `law` rejects the wrong answer.
+   * A requirement that the empty difference holds fails registration.
+   */
+  difference?: string | RegExp
   /** Run this history directly, with a stable name-derived construction seed. */
   history?: CalibrationHistory
 } & (
@@ -1663,7 +1680,7 @@ function buildConstruction<THistory>(
 function calibrationSeed(id: string, name: string): number {
   let seed = 2166136261
   for (const char of `${id}\0${name}`)
-    seed = Math.imul(seed ^ char.charCodeAt(0), 16777619)
+    seed = Math.imul(seed ^ char.codePointAt(0)!, 16777619)
   return seed | 0
 }
 
@@ -1718,13 +1735,7 @@ function selectCalibrationHistory<THistory, TExpected, TPlan>(
       build: () => selected.history,
     }
   }
-  const kind =
-    `constructed` in selector
-      ? `constructed`
-      : `fixed` in selector
-        ? `fixed`
-        : undefined
-  if (!kind) return invalid(`expected constructed, fixed, or enumerated`)
+  const kind = `constructed` in selector ? `constructed` : `fixed`
   if (enumerated) return invalid(`${kind} requires a generated source`)
   const key =
     kind === `constructed`
@@ -1761,6 +1772,37 @@ interface ForcedCalibration {
   forced: ForcedProbe
 }
 
+/** The same designated rejection applies to bound and legacy calibrations. */
+function calibrationRejection(
+  id: string,
+  calibration: { name: string; law: string; difference?: string | RegExp },
+) {
+  const required =
+    `difference` in calibration ? calibration.difference : undefined
+  const owed = `law "${calibration.law}"${required === undefined ? `` : ` with a difference that ${typeof required === `string` ? `contains ${JSON.stringify(required)}` : `matches ${String(required)}`}`}`
+  // Whether a violation is the one owed: the law, then the difference.
+  // `search` ignores a pattern's `lastIndex`.
+  const rejects = (wrong: Extract<Verdict, { kind: `violation` }>) => {
+    if (lawOf(wrong) !== calibration.law || required === undefined)
+      return lawOf(wrong) === calibration.law
+    // A check in JavaScript can give any value.
+    const difference: unknown = wrong.difference
+    if (typeof difference !== `string`)
+      throw new Error(
+        `${id}: calibration "${calibration.name}" requires a difference under law "${calibration.law}", and the check gave a difference that is not text: ${reportText(difference)}. A violation's difference is text.`,
+      )
+    return typeof required === `string`
+      ? difference.includes(required)
+      : difference.search(required) !== -1
+  }
+  // What a violation reported, where it differs from what is owed.
+  const reported = (wrong: Extract<Verdict, { kind: `violation` }>) =>
+    lawOf(wrong) === calibration.law
+      ? `difference ${JSON.stringify(wrong.difference)} under law "${calibration.law}"`
+      : `law "${lawOf(wrong)}"`
+  return { owed, rejects, reported }
+}
+
 /** Execute the selected history without falling back to candidate search. */
 async function runBoundCalibration<THistory, TExpected, TPlan>(
   options: BoundOptions<THistory, TExpected, TPlan>,
@@ -1769,7 +1811,6 @@ async function runBoundCalibration<THistory, TExpected, TPlan>(
 ): Promise<void> {
   const { id } = options
   const context = `${id}: calibration "${calibration.name}" on ${selected.name}`
-  process.stdout.write(`${context}\n`)
   const failed = (reason: string, cause?: unknown): never => {
     throw new Error(
       `${context}: ${reason}${cause === undefined ? `` : `: ${cause instanceof Error ? cause.message : reportText(cause)}`}`,
@@ -1787,15 +1828,30 @@ async function runBoundCalibration<THistory, TExpected, TPlan>(
     }
   }
   const plan = freshPlan(`clean`)
-  const clean = await recordGuarded(options.driver, plan)
+  let clean: Awaited<ReturnType<typeof recordGuarded<TPlan>>>
+  let actual: ReturnType<typeof judge<THistory, TExpected, TPlan>>
+  try {
+    clean = await recordGuarded(options.driver, plan)
+  } catch (error) {
+    return failed(`selected clean run failed`, error)
+  }
   if (clean.driverError || clean.spin)
     return failed(
       `selected clean run failed`,
       clean.driverError?.error ?? clean.spin,
     )
-  let actual: ReturnType<typeof judge<THistory, TExpected, TPlan>>
   try {
     actual = judge(options, plan, clean.observations, undefined, clean.probes)
+    assertDeclared(
+      id,
+      Array.isArray(options.histories)
+        ? undefined
+        : declaredOf(
+            options.histories as
+              GeneratedHistories<THistory> | EnumeratedHistories<THistory>,
+          ),
+      actual.reached,
+    )
   } catch (error) {
     return failed(`selected clean run failed`, error)
   }
@@ -1815,46 +1871,56 @@ async function runBoundCalibration<THistory, TExpected, TPlan>(
     )
   let wrong: Verdict
   if (`corrupt` in calibration) {
-    const corrupted = calibration.corrupt(
-      snapshotOf(clean.observations) as ReadonlyArray<Observation>,
-      plan,
-    )
+    let corrupted: ReadonlyArray<Observation> | undefined
+    try {
+      corrupted = calibration.corrupt(
+        snapshotOf(clean.observations) as ReadonlyArray<Observation>,
+        plan,
+      )
+    } catch (error) {
+      return failed(`selected corruption failed`, error)
+    }
     if (corrupted === undefined)
       return failed(`selected corruption did not apply`)
-    wrong = judge(options, plan, corrupted, undefined, clean.probes).verdict
+    try {
+      wrong = judge(options, plan, corrupted, undefined, clean.probes).verdict
+    } catch (error) {
+      return failed(`selected mutant judgment failed`, error)
+    }
   } else {
-    // Rebuild, do not clone: builders can attach WeakMap metadata, and
-    // a resolved plan may already have consumed its resources.
-    const mutantPlan = freshPlan(`mutant`)
-    const mutant = await recordGuarded(
-      `forced` in calibration ? options.driver : calibration.driver,
-      mutantPlan,
-      `forced` in calibration ? calibration.forced : undefined,
-    )
-    if (mutant.driverError || mutant.spin)
-      return failed(
-        `selected mutant run failed`,
-        mutant.driverError?.error ?? mutant.spin,
-      )
-    wrong = judge(
-      options,
-      mutantPlan,
-      mutant.observations,
-      undefined,
-      mutant.probes,
-    ).verdict
+    // Rebuild once and let runOne resolve once and rank the recorded verdict.
+    // A later driver error or clock spin must not hide an earlier violation.
+    try {
+      wrong = (
+        await runOne(
+          options,
+          selected.build(),
+          `forced` in calibration ? options.driver : calibration.driver,
+          `forced` in calibration ? calibration.forced : undefined,
+        )
+      ).verdict
+    } catch (error) {
+      return failed(`selected mutant run failed`, error)
+    }
   }
-  if (wrong.kind === `violation` && lawOf(wrong) === calibration.law) return
+  const { owed, rejects, reported } = calibrationRejection(id, calibration)
+  try {
+    if (wrong.kind === `violation` && rejects(wrong)) return
+  } catch (error) {
+    return failed(`selected mutant judgment failed`, error)
+  }
   return failed(
-    `but the check ${wrong.kind === `pass` ? `passed it` : `reported law "${lawOf(wrong)}"`}. It must report law "${calibration.law}".`,
+    `but the check ${wrong.kind === `pass` ? `passed it` : `reported ${reported(wrong)}`}. It must report ${owed}.`,
   )
 }
+
+const warnedCalibrationProperties = new Set<string>()
 
 /**
  * A binding is a premise, never a search hint: require the selected clean run
  * and actual reach, then exactly the designated law's rejection. No failed
  * premise can be hidden by another history. Legacy search remains during the
- * pinned consumers' migration and warns once per unbound calibration at load.
+ * pinned consumers' migration and warns once per property outside collection.
  */
 function calibrationTests<THistory, TExpected, TPlan>(
   options: BoundOptions<THistory, TExpected, TPlan>,
@@ -1870,17 +1936,29 @@ function calibrationTests<THistory, TExpected, TPlan>(
   // Each probe-bound state also gets two forced-entry calibrations.
   const forcedCalibrations = [...(options.probes ?? [])].flatMap(
     ([state, probe]) => {
-      const binding =
-        options.probeHistories && Object.hasOwn(options.probeHistories, state)
-          ? options.probeHistories[state]
-          : undefined
+      const hasBinding =
+        options.probeHistories !== undefined &&
+        Object.hasOwn(options.probeHistories, state)
+      const suppliedBinding: unknown = hasBinding
+        ? options.probeHistories?.[state]
+        : undefined
+      if (
+        hasBinding &&
+        (suppliedBinding === null ||
+          typeof suppliedBinding !== `object` ||
+          Array.isArray(suppliedBinding))
+      )
+        throw new Error(
+          `${id}: calibration history selector for probe state "${state}": expected a probe history binding object.`,
+        )
+      const binding = suppliedBinding as ProbeHistories | undefined
       let enteredHistory = binding?.entered
       const notEntered: unknown = binding?.notEntered
       if (binding && notEntered === undefined)
         throw new Error(
           `${id}: calibration history selector for probe state "${state}": supply notEntered explicitly.`,
         )
-      if (binding && !enteredHistory) {
+      if (binding && enteredHistory === undefined) {
         const constructions =
           (options.histories as GeneratedHistories<THistory>).constructed ?? []
         const matching = constructions.filter(({ enters }) =>
@@ -1902,92 +1980,109 @@ function calibrationTests<THistory, TExpected, TPlan>(
       }))
     },
   )
-  return [...(options.calibrations ?? []), ...forcedCalibrations].map(
-    (calibration) => {
-      const selected =
-        calibration.history === undefined
-          ? undefined
-          : selectCalibrationHistory(
-              options,
-              calibration,
-              calibration.history,
-              enumerated,
-            )
-      if (!selected)
-        console.warn(
-          `${id}: calibration "${calibration.name}" has no history binding; using transitional candidate search. Bind its history before search is removed.`,
+  // A required difference that the empty difference holds rejects any
+  // difference under its law, so it would pass silently.
+  for (const { name, difference } of options.calibrations ?? [])
+    if (
+      difference !== undefined &&
+      (typeof difference === `string`
+        ? difference === ``
+        : ``.search(difference) !== -1)
+    )
+      throw new Error(
+        `${id}: calibration "${name}" requires difference ${typeof difference === `string` ? `""` : String(difference)}, which the empty difference holds, so it rejects any difference. Require text or a pattern that only the owed difference holds.`,
+      )
+  const calibrations = [...(options.calibrations ?? []), ...forcedCalibrations]
+  const unbound = calibrations.filter(({ history }) => history === undefined)
+  if (
+    process.env.ORACLE_MANIFEST === undefined &&
+    unbound.length &&
+    !warnedCalibrationProperties.has(id)
+  ) {
+    warnedCalibrationProperties.add(id)
+    console.warn(
+      `${id}: calibrations ${unbound.map(({ name }) => `"${name}"`).join(`, `)} have no history binding; using transitional candidate search. Bind their histories before search is removed.`,
+    )
+  }
+  return calibrations.map((calibration) => {
+    const selected =
+      calibration.history === undefined
+        ? undefined
+        : selectCalibrationHistory(
+            options,
+            calibration,
+            calibration.history,
+            enumerated,
+          )
+    return {
+      name: `calibration: ${calibration.name}`,
+      route: `calibration`,
+      replays: [],
+      run: async () => {
+        if (selected) return runBoundCalibration(options, calibration, selected)
+        const { owed, rejects, reported } = calibrationRejection(
+          id,
+          calibration,
         )
-      return {
-        name: `calibration: ${calibration.name}`,
-        route: `calibration`,
-        replays: [],
-        run: async () => {
-          if (selected)
-            return runBoundCalibration(options, calibration, selected)
-          const seen: Array<string> = []
-          for (const { name, history } of candidates()) {
-            const plan = planOf(options, history)
-            if (`corrupt` in calibration) {
-              const { observations, driverError, probes, spin } =
-                await recordGuarded(options.driver, plan)
-              const corrupted = calibration.corrupt(observations, plan)
-              if (corrupted === undefined) continue
-              // A calibration is meaningful only where the true trace passes, so
-              // a candidate whose clean trace fails, whose driver throws, or
-              // whose clock spins is skipped; that history fails in its own
-              // test.
-              if (
-                driverError ||
-                spin ||
-                judge(options, plan, observations, undefined, probes).verdict
-                  .kind !== `pass`
-              )
-                continue
-              const wrong = judge(
-                options,
-                plan,
-                corrupted,
-                undefined,
-                probes,
-              ).verdict
-              if (
-                wrong.kind === `violation` &&
-                lawOf(wrong) === calibration.law
-              )
-                return
-              throw new Error(
-                `${id}: calibration "${calibration.name}" corrupted the trace of "${name}", but the check ${wrong.kind === `pass` ? `passed it` : `reported law "${lawOf(wrong)}"`}. It must report law "${calibration.law}".`,
-              )
-            }
-            // The real driver's trace of the candidate must pass first.
-            const clean = await recordGuarded(options.driver, plan)
+        const seen: Array<string> = []
+        for (const { name, history } of candidates()) {
+          const plan = planOf(options, history)
+          if (`corrupt` in calibration) {
+            const { observations, driverError, probes, spin } =
+              await recordGuarded(options.driver, plan)
+            const corrupted = calibration.corrupt(observations, plan)
+            if (corrupted === undefined) continue
+            // A calibration is meaningful only where the true trace passes, so
+            // a candidate whose clean trace fails, whose driver throws, or
+            // whose clock spins is skipped; that history fails in its own
+            // test.
             if (
-              clean.driverError ||
-              clean.spin ||
-              judge(options, plan, clean.observations, undefined, clean.probes)
-                .verdict.kind !== `pass`
+              driverError ||
+              spin ||
+              judge(options, plan, observations, undefined, probes).verdict
+                .kind !== `pass`
             )
               continue
-            const { verdict } =
-              `forced` in calibration
-                ? await runOne(
-                    options,
-                    history,
-                    options.driver,
-                    calibration.forced,
-                  )
-                : await runOne(options, history, calibration.driver)
-            if (verdict.kind === `pass`) continue
-            if (lawOf(verdict) === calibration.law) return
-            seen.push(`"${name}" reported law "${lawOf(verdict)}"`)
+            const wrong = judge(
+              options,
+              plan,
+              corrupted,
+              undefined,
+              probes,
+            ).verdict
+            if (wrong.kind === `violation` && rejects(wrong)) return
+            throw new Error(
+              `${id}: calibration "${calibration.name}" corrupted the trace of "${name}", but the check ${wrong.kind === `pass` ? `passed it` : `reported ${reported(wrong)}`}. It must report ${owed}.`,
+            )
           }
-          throw new Error(
-            `${id}: calibration "${calibration.name}" found no history whose clean trace passes and where the check reports law "${calibration.law}"${seen.length ? `; ${seen.slice(0, 3).join(`, `)}` : ``}. Add a passing fixed or constructed history that reaches the state its wrong answer changes.`,
+          // The real driver's trace of the candidate must pass first.
+          const clean = await recordGuarded(options.driver, plan)
+          if (
+            clean.driverError ||
+            clean.spin ||
+            judge(options, plan, clean.observations, undefined, clean.probes)
+              .verdict.kind !== `pass`
           )
-        },
-      }
-    },
-  )
+            continue
+          const { verdict } =
+            `forced` in calibration
+              ? await runOne(
+                  options,
+                  history,
+                  options.driver,
+                  calibration.forced,
+                )
+              : await runOne(options, history, calibration.driver)
+          if (verdict.kind === `pass`) continue
+          if (rejects(verdict)) return
+          seen.push(`"${name}" reported ${reported(verdict)}`)
+        }
+        throw new Error(
+          `${id}: calibration "${calibration.name}" found no history whose clean trace passes and where the check reports ${owed}${seen.length ? `; ${seen.slice(0, 3).join(`, `)}` : ``}. Add a passing fixed or constructed history that reaches the state its wrong answer changes.`,
+        )
+      },
+    }
+  })
 }
 
 function failure<THistory>(
@@ -2254,6 +2349,7 @@ function generatedTests<THistory, TExpected, TPlan>(
     replays: [],
     run: async (task) => {
       const { verdict, reached } = await runOne(options, fixed.history)
+      assertDeclared(id, declared, reached)
       if (verdict.kind === `violation`)
         throw failure(options, verdict, fixed.history, rerunOf(task))
       const missing = (fixed.enters ?? []).filter(
