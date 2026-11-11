@@ -15,7 +15,7 @@ Use the [glossary](../../docs/glossary.md) terms in the ledger and the report.
 ## 1. Write the ledger first
 
 Before you test or edit anything, write an append-only ledger of the raw
-review in a task-local scratch file. Do not commit it unless the user asks.
+review in a task-local scratch file. Do not commit it unless the developer asks.
 
 - Give every item a stable ID in source order: each finding, footnote, capped
   item, non-blocking comment, and testing idea.
@@ -38,7 +38,7 @@ for behavior an adopted law or decision covers, cited), `design-decision`
 kept). There is no `skip`.
 
 Deferral is rare. A confirmed, in-scope defect stays `confirmed-open` until it
-is fixed, unless the user agrees to postpone it. A deferral records the open
+is fixed, unless the developer agrees to postpone it. A deferral records the open
 work, why it cannot be done now, the remaining risk, an owner, and the
 condition for resuming.
 
@@ -54,8 +54,8 @@ For each confirmed behavioral finding, decide which kind it is.
 - **A law change: present it and wait.** The finding questions what is
   promised: a new law, a narrower or revised law, a new checkpoint, an
   obligation on a collaborator, two laws in conflict, or a rule with no
-  authority. Give the user the candidate law and its rival, the evidence,
-  what each choice changes for users, and your recommendation.
+  authority. Give the developer the candidate law and its rival, the evidence,
+  what each choice changes for callers, and your recommendation.
 
 A finding can contain both. Fix the enforcement part, and present the law
 question.
@@ -177,7 +177,7 @@ Lead with the law changes that need a decision. Then:
 - **Losses:** the totals by disposition, and every open evidence or coverage
   gap.
 
-If the user asks whether the pull request is ready, give a separate verdict:
+If the developer asks whether the pull request is ready, give a separate verdict:
 `ready`, `not ready` (a confirmed in-scope defect or an open decision blocks
 it), `readiness unproven` (a decisive witness is missing), or `not assessed`.
 A complete ledger and a green run do not make a pull request ready.

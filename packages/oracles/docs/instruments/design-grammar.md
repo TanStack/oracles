@@ -25,7 +25,7 @@ of range.
      allow the same observations at the same checkpoints.
 
    Name the checkpoints, the assumptions, and the freedoms the contract leaves
-   open. The user's approval of the laws fixes the intended contract. It is
+   open. The developer's approval of the laws fixes the intended contract. It is
    not evidence that a model meets it.
 
 2. **Separate what you found from what you added.** Each rule cites its
@@ -40,7 +40,7 @@ of range.
 
 4. **Record rules and conflicts.** Write each rule as one sentence of the law.
    When two rules conflict, keep both and mark the conflict as an open question
-   for the user. Record a priority only when the authority gives one.
+   for the developer. Record a priority only when the authority gives one.
 
 5. **Check overlaps.** Where two parts share state or timing, ask whether the
    interaction itself carries a law, such as a cleanup that races a late
@@ -79,7 +79,7 @@ of range.
    - **Refactor:** the allowed behavior stays the same.
    - **Refine:** the model adds a guarantee or narrows what it allows.
    - **Revise:** the contract itself changes. That is a law question for the
-     user.
+     developer.
 
    Do not change the law, a history filter, and an observation in one step.
    Each needs its own comparison.
@@ -90,8 +90,8 @@ of range.
    laws across oracles, or another production structure that the same oracle
    accepts. Give each form's route, what it keeps, what it changes, and its
    cost. Merge forms that differ only in naming or detail. Do not rank them
-   unless asked. When the choice is the user's, present the forms and let the
-   user pick.
+   unless asked. When the choice is the developer's, present the forms and let the
+   developer pick.
 
 9. **Optionally check a formal model.** For a consequential claim about state,
    concurrency, retries, or ownership, translate the reduced model into TLA+
@@ -134,6 +134,6 @@ simplify. A simplification that rejects an allowed outcome narrows the contract.
 - a mapping that hides an observation
 
 **Stop when:** every part has a job and a witness, every simplification has
-its comparison, and each open conflict is with the user.
+its comparison, and each open conflict is with the developer.
 
 Adapted from Field Lab's design grammar instrument.

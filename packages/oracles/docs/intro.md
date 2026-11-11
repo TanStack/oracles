@@ -1,8 +1,8 @@
 # What an oracle is
 
-This page is for an engineer who asks what an oracle is. An agent running a
+This page is for a developer who asks what an oracle is. An agent running a
 first session does not recite it: it shows oracles working on the
-engineer's own code, and uses this page to answer questions.
+developer's own code, and uses this page to answer questions.
 
 Types check that a value has the right shape. An oracle checks that the code
 does what it promises, for every input and sequence of calls the promise

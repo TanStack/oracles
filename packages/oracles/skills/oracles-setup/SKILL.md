@@ -1,13 +1,13 @@
 ---
 name: oracles-setup
-description: Take an oracle to production with @tanstack/oracles. Pin the packages, add the lint preset and the Vitest config, write the AGENTS.md block, make the oracle skills findable by coding agents, and run the oracle through the gap check. Use when the engineer chooses to ship an oracle from a first session, when a repository adopts @tanstack/oracles, or when it upgrades its pinned commit. Its install and file-placement sections also cover the minimal setup that a first session needs.
+description: Take an oracle to production with @tanstack/oracles. Pin the packages, add the lint preset and the Vitest config, write the AGENTS.md block, make the oracle skills findable by coding agents, and run the oracle through the gap check. Use when the developer chooses to ship an oracle from a first session, when a repository adopts @tanstack/oracles, or when it upgrades its pinned commit. Its install and file-placement sections also cover the minimal setup that a first session needs.
 ---
 
 # Take an oracle to production
 
 You are setting up oracle testing in this repository. Do the steps in order.
-Ask the user before each step that writes outside the repository. When no
-user is available, choose the default this skill gives, record each choice in
+Ask the developer before each step that writes outside the repository. When no
+developer is available, choose the default this skill gives, record each choice in
 your report, and continue. That default covers setup questions only.
 Potential laws have no default: propose them, report them, and stop.
 
@@ -16,16 +16,16 @@ install section and its "where oracle files go" section, for the minimal
 setup that an oracle needs to run, and step 7's command, when its oracle
 passes and it runs the gap check. Taking an oracle to production
 uses all of it. That usually starts after a first session, once the
-engineer has an oracle that found a bug and chooses to ship it. If there is
+developer has an oracle that found a bug and chooses to ship it. If there is
 no oracle yet, load `oracles-start` first.
 
 Setup ends when one oracle passes on production and the gap check leaves no
-gap open in that oracle's own contract, unless the user decides otherwise. A
+gap open in that oracle's own contract, unless the developer decides otherwise. A
 stated limit does not close a gap. It does not end when the packages are installed.
 
 ## 1. Read the repository
 
-Find out, and tell the user:
+Find out, and tell the developer:
 
 - The package manager, and whether the repository is one package or a
   workspace. For a workspace, ask which package to start in.
@@ -36,14 +36,14 @@ Find out, and tell the user:
 - The lint setup: ESLint 9 or later with a flat config, an older ESLint with
   `.eslintrc`, or no ESLint (for example Biome only).
 - The Node version that CI and the `engines` field use. The package needs
-  Node 20 or later. If CI runs an older Node, tell the user, and offer a
+  Node 20 or later. If CI runs an older Node, tell the developer, and offer a
   separate Node 20 job for the oracles. Do not change the existing jobs. With
-  no user present, do not change CI: report the mismatch.
+  no developer present, do not change CI: report the mismatch.
 - The repository's TypeScript version. Do not change it (step 2).
 - The package manager and its runner for package binaries: `pnpm exec`,
   `npx`, or `yarn`. Use them wherever this skill shows `pnpm add` or
   `pnpm exec`.
-- Which coding agents the user works with. Look for `.claude/`, `.agents/`,
+- Which coding agents the developer works with. Look for `.claude/`, `.agents/`,
   `.codex/`, `AGENTS.md`, and `CLAUDE.md`, and ask.
 
 ## 2. Install two pinned packages
@@ -52,7 +52,7 @@ The packages are not on npm yet. Install both from pkg.pr.new, pinned to the
 same commit of TanStack/oracles. If you were not given one, use the current
 commit on main: the first 7 characters of the hash that
 `git ls-remote https://github.com/TanStack/oracles refs/heads/main` prints.
-Tell the user which commit you pinned.
+Tell the developer which commit you pinned.
 
 ```sh
 pnpm add -D \
@@ -63,7 +63,7 @@ pnpm add -D \
 
 Add `fast-check` and `vitest` beside them. The framework needs Vitest 4.1 or
 later. If the repository already runs an older Vitest, upgrading it is the
-user's decision: ask, and with no user present, do not upgrade. Report it as
+developer's decision: ask, and with no developer present, do not upgrade. Report it as
 a blocker. For lint, also add `eslint@^9`
 if the repository has no ESLint, and `@typescript-eslint/parser@^8` if
 nothing parses TypeScript yet. Name those majors: a package manager can pick
@@ -88,7 +88,7 @@ repository's TypeScript, and do not add a typecheck that uses it.
 Use the repository's own package manager. With pnpm 11, an install that skips
 a dependency's build script stops every later pnpm command
 (`ERR_PNPM_IGNORED_BUILDS`), and pnpm writes an `allowBuilds` placeholder into
-`pnpm-workspace.yaml`. Answer it, usually `false`, and tell the user.
+`pnpm-workspace.yaml`. Answer it, usually `false`, and tell the developer.
 
 A run that installs from a local tarball has no commit to pin or check. Say
 which tarball you installed, and note that `package.json` now points at a
@@ -280,7 +280,7 @@ place, and its report says so.
 Check for both `AGENTS.md` and `CLAUDE.md`. Claude Code reads `CLAUDE.md`,
 and most other agents read `AGENTS.md`. If both exist, put the block in
 `AGENTS.md` and make sure `CLAUDE.md` refers to it (a line `@AGENTS.md`
-imports it). If only `CLAUDE.md` exists, ask the user which file gets the
+imports it). If only `CLAUDE.md` exists, ask the developer which file gets the
 block. If neither exists, create `AGENTS.md` and a `CLAUDE.md` that holds
 only `@AGENTS.md`, after asking.
 
@@ -299,14 +299,14 @@ pointer. A pointer must read the copy that the chosen package installed:
   `<package dir>/node_modules/@tanstack/oracles/skills/<name>/SKILL.md`,
   for the package chosen in step 1. Check that the file exists there.
 
-Use that path in the `AGENTS.md` block (step 4) too. Offer the user these
+Use that path in the `AGENTS.md` block (step 4) too. Offer the developer these
 choices. They can pick more than one.
 
-| Choice                  | Writes                                                                                                                           | Use when                                                                     |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| **AGENTS.md only**      | Step 4's block                                                                                                                   | The user's agents read `AGENTS.md`. This is always done.                     |
-| **Repository pointers** | A pointer skill per skill in `.agents/skills/` and `.claude/skills/`                                                             | Everyone who clones the repository gets the skills. Commit them.             |
-| **Global pointers**     | A pointer skill per skill in `~/.agents/skills/` and `~/.claude/skills/` (and any other skills directory the user's agents read) | The user wants the skills in every repository that uses `@tanstack/oracles`. |
+| Choice                  | Writes                                                                                                                                | Use when                                                                          |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| **AGENTS.md only**      | Step 4's block                                                                                                                        | The developer's agents read `AGENTS.md`. This is always done.                     |
+| **Repository pointers** | A pointer skill per skill in `.agents/skills/` and `.claude/skills/`                                                                  | Everyone who clones the repository gets the skills. Commit them.                  |
+| **Global pointers**     | A pointer skill per skill in `~/.agents/skills/` and `~/.claude/skills/` (and any other skills directory the developer's agents read) | The developer wants the skills in every repository that uses `@tanstack/oracles`. |
 
 Write a pointer skill as `<directory>/<name>/SKILL.md` for each of
 `oracles-start`, `oracles-design`, `oracles-review`,
@@ -314,7 +314,7 @@ Write a pointer skill as `<directory>/<name>/SKILL.md` for each of
 
 Before you write repository pointers, check that git does not ignore their
 directories (`git check-ignore .claude/skills .agents/skills`). If one is
-ignored, tell the user: they can commit the pointers in the other
+ignored, tell the developer: they can commit the pointers in the other
 directory, or add an exception to `.gitignore`.
 
 - Copy `name` and `description` exactly from the package's `SKILL.md`, so the
@@ -346,7 +346,7 @@ installed version, and never breaks before install.
 
 Before writing a global pointer:
 
-- Show the user the exact paths.
+- Show the developer the exact paths.
 - If a skill with the same name exists, show it and ask. Never overwrite it
   silently.
 
@@ -354,7 +354,7 @@ Before writing a global pointer:
 
 Usually the oracle already exists from the first session. Keep it, and
 continue with its gap check. If there is none, build it from the potential
-laws that the engineer approved: load `oracles-design`, and follow it from
+laws that the developer approved: load `oracles-design`, and follow it from
 its first step.
 
 In a first session, stop at the RED: present the bug, and leave the fix for
@@ -363,11 +363,11 @@ production. A first session runs the gap check only when its oracle passes
 
 If the first oracle fails on unchanged production under an adopted law, it
 found a defect. The RED is the finding: report it with its replay line, and
-tell the user. Never weaken the oracle to make it pass. The gap check cannot
+tell the developer. Never weaken the oracle to make it pass. The gap check cannot
 judge a failing baseline yet, so make the smallest local fix on a scratch
-copy or a local branch (never pushed or committed to the user's branch), run
+copy or a local branch (never pushed or committed to the developer's branch), run
 the gap check there, and say in the report that it ran on the
-patched code. With the user's approval, follow `oracles-design` step 7's
+patched code. With the developer's approval, follow `oracles-design` step 7's
 defect path for the real fix.
 
 Put the oracle's `owns` list on its `oracleProperty` call. An entry is a file
@@ -415,17 +415,17 @@ that instruction, and follow `oracles-design` for what a gap means. There
 are no equivalent mutants and no exits. A surviving mutant shows only that
 the current histories did not expose that code. If you believe the code is
 dead, first follow `oracles-design` step 8 to rule out a missing history,
-observation, or law. Removing it is a production change, so tell the user,
+observation, or law. Removing it is a production change, so tell the developer,
 and rerun the oracle and the gap check. If a gap can be neither killed
 nor removed, stop work on that gap and report its key and evidence to the
-user.
+developer.
 
 Now fill in the two placeholders in the `AGENTS.md` block: the oracle file
 glob and the gap check command you ran.
 
 ## 8. Report
 
-Tell the user:
+Tell the developer:
 
 - what was installed (both pinned URLs) and where configuration changed
 - which pointers were written, and where
@@ -433,7 +433,7 @@ Tell the user:
 - the gap check's totals, and every gap left, grouped as:
   - open because the inputs that expose it lie outside the law's stated
     limits: name those inputs, and recommend widening the grammar and the
-    law. The user decides. Do not count these as closed.
+    law. The developer decides. Do not count these as closed.
   - allowed alternatives (`oracles-design` step 8), apart from the kills
   - framework or CLI limitations (for example a timeout from a synchronous
     infinite loop, or a guard that TypeScript narrowing makes constant)
@@ -443,4 +443,4 @@ Tell the user:
 - any defect the oracle found, with its witness
 
 Do not call setup done while a gap is open in the oracle's own contract,
-unless the user decides otherwise.
+unless the developer decides otherwise.

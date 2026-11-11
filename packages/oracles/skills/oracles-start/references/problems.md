@@ -1,16 +1,16 @@
 # Problems you may hit in a first session
 
 Open this file when one of these happens. Each entry says what to do, and
-what to tell the engineer.
+what to tell the developer.
 
 ## Installs
 
 **The repository uses another test runner** (mocha, uvu, Jest, ava,
 `node:test`). Add Vitest for the oracles only, with a config whose `include`
 is only the oracle files. Their own suite and runner stay as they are. Tell
-the engineer this in one line as you install.
+the developer this in one line as you install.
 
-**The repository runs a Vitest older than 4.1.** This is the engineer's
+**The repository runs a Vitest older than 4.1.** This is the developer's
 decision. Tell them that the oracle needs Vitest 4.1 or later, and that
 upgrading changes the runner for their own suite too. Offer to upgrade and
 then run their suite, to show whether it still passes. Do not upgrade until
@@ -42,6 +42,6 @@ the build comes from.
 
 **Node cannot load the source as it is** (for example, an extensionless ES
 module). Copy it unchanged into the scratch directory, under a name that
-Node can load, such as `index.mjs`, and tell the engineer that you did.
+Node can load, such as `index.mjs`, and tell the developer that you did.
 
 **The code is TypeScript.** Run the probe with `npx tsx`.

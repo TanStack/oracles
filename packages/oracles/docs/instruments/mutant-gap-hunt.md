@@ -58,7 +58,7 @@ Keep test bodies and assertions out of the design brief.
      separately from the kills. Until the gap check recognizes allowed sets,
      it stays open in the report. Only the framework closes it.
    - **A law question:** the observations differ, and the contract only seems
-     to allow both. Do not record that as acceptable. Give the user the two
+     to allow both. Do not record that as acceptable. Give the developer the two
      observations and the history that shows them, and ask whether the law
      should decide the choice.
    - **A framework bug:** none of the above fits, such as a mutant that no
@@ -107,5 +107,5 @@ branch was never reached. Recheck types after a tool rewrites code.
 - a decision checked in one build mode while another mode can observe it
 
 **Stop when:** each selected mutant has an executed distinction, a removed
-piece of dead code, a law question with the user, or a framework bug
+piece of dead code, a law question with the developer, or a framework bug
 reported. Do not infer broad coverage from a kill count.

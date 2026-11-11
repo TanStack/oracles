@@ -2,7 +2,7 @@
 
 Use an instrument when a specific uncertainty makes ordinary implementation or
 review insufficient. Read only the relevant card. Choose and use it within the
-user's authorized task; these cards do not require a separate approval for each
+developer's authorized task; these cards do not require a separate approval for each
 reasoning step or a fixed workflow.
 
 | Uncertainty                                                                               | Instrument                                | Result                                                                                                                                |

@@ -1,13 +1,13 @@
 ---
 name: oracles-start
-description: Run a first session with @tanstack/oracles in an engineer's codebase. Say what the session will do, look around a part of the code they name or the whole repository, probe the real API to prove each finding, propose a potential oracle and its potential laws, then build it and run it until it finds a bug and the engineer has settled some design questions. Present the work, and explain the path to production. Use when someone is trying @tanstack/oracles, or asks where an oracle would help.
+description: Run a first session with @tanstack/oracles in a developer's codebase. Say what the session will do, look around a part of the code they name or the whole repository, probe the real API to prove each finding, propose a potential oracle and its potential laws, then build it and run it until it finds a bug and the developer has settled some design questions. Present the work, and explain the path to production. Use when someone is trying @tanstack/oracles, or asks where an oracle would help.
 ---
 
 # A first session with oracles
 
 ## Your goal
 
-Be an engaging teacher. The engineer is trying this tool, often in the mood
+Be an engaging teacher. The developer is trying this tool, often in the mood
 of "impress me". Show, don't tell. Bring up interesting findings about their
 own code, and explain what you are doing and why as you go. Tie each
 explanation to something you just showed them: a probe, a finding, a law, or
@@ -17,7 +17,7 @@ the oracle file. Do not explain what oracles are unless they ask.
 Work toward these milestones, in order: findings from probes of their real
 code; a potential oracle whose laws they approve; an oracle that runs on
 their code; and that oracle finding a bug, or the gap check finding what no
-law catches, while they settle some design questions. The engineer decides
+law catches, while they settle some design questions. The developer decides
 when the session ends.
 
 Probes are how you learn what reading the code does not tell you: its
@@ -25,33 +25,33 @@ dynamics, boundary conditions, and constraints. You need that understanding
 to build the oracle. Bugs and inconsistencies that the probes find along the
 way are a welcome side effect. They also keep you honest: an agent that only
 says things is often wrong, and one wrong claim costs the tool its
-credibility. So every finding needs a probe that the engineer can run again.
+credibility. So every finding needs a probe that the developer can run again.
 
 ## How to talk
 
 - Use these terms, and use them every time: a **probe**, a **finding**, a
   **potential oracle** that owns a public behavior, its **potential laws**,
-  and the **oracle file**. Once the engineer approves a potential law, it is
+  and the **oracle file**. Once the developer approves a potential law, it is
   a **law**; once the oracle runs, it is the **oracle**.
 - Explain a framework term in a line the first time you use it (a
   calibration is a wrong answer planted in a run to show that the check
   rejects it), or leave the term out.
 - Talk naturally. Never name a skill, a step, or a section ("step 3", "the
   skill's fallback"). Say what you are doing, in your own words.
-- Ask in plain words. Explain any term the engineer may not know in one
+- Ask in plain words. Explain any term the developer may not know in one
   line (for example, a lone surrogate is half of a character that takes two
   UTF-16 units).
 - Ask one clear question when you need a decision. For a possible bug, ask
   "Is this a bug, or is it intended?" When several decisions are waiting,
   end with a short numbered list of them, most important first, so the
-  engineer can answer by number.
-- Show the engineer only what they decide on. Your private notes, their
+  developer can answer by number.
+- Show the developer only what they decide on. Your private notes, their
   labels, and their statuses ("adopted", "open") stay private. Until the
-  engineer approves it, a potential law is only a potential law.
+  developer approves it, a potential law is only a potential law.
 
 ## Where you stop
 
-Stop and wait only when the engineer must decide:
+Stop and wait only when the developer must decide:
 
 - which part of the code to look at
 - whether a finding is a bug, or intended
@@ -64,7 +64,7 @@ Between those points, keep working, and keep telling them what you are doing.
 
 ## What you change
 
-Until the engineer chooses to take an oracle to production, change only
+Until the developer chooses to take an oracle to production, change only
 these:
 
 - the minimal installs that an oracle needs to run: `@tanstack/oracles`,
@@ -73,12 +73,25 @@ these:
   repository's own config does not
 - oracle files, with their prose
 - the gap check's working directory (`.oracle-gaps/`), when you run it.
-  Tell the engineer it is safe to delete, and that production adds it to
+  Tell the developer it is safe to delete, and that production adds it to
   `.gitignore`.
 
 Findings, potential oracles, and potential laws stay in the chat. Keep
 probes in a scratch directory outside the repository. Change production code
-only when the engineer asks you to.
+only when the developer asks you to.
+
+## A feedback log, while this is a preview
+
+`@tanstack/oracles` is in preview, and its maintainers want to know where
+this session was rough. Keep a log at
+`~/oracles-feedback/<repository name>-<date>.md`, outside the repository.
+Append a short entry whenever a skill or doc was unclear, wrong, or
+contradicted another; whenever you had to guess; whenever a command,
+install, or config step failed or needed a workaround; and whenever
+something took much longer than it should have. Each entry gives the time,
+what you were doing, what happened, the skill file and section, and what
+would have made it smooth. Keep entries short, and keep working: the log
+is for later, not a reason to stop.
 
 ## 1. Open
 
@@ -102,7 +115,7 @@ names no part: ask.
 
 ## 2. Look around
 
-If the engineer named a part of the code, look closely there. Otherwise,
+If the developer named a part of the code, look closely there. Otherwise,
 look around the repository, and make it quick. Read the public API and its
 docs (the README, the API docs, the JSDoc), the existing tests, and the git
 history of fixes. The files that fixes change most often tell you more than
@@ -122,7 +135,7 @@ to state than the code that produces it. Good signs:
 - code that git history shows was fixed more than once
 
 Avoid an internal helper whose only law would restate its code. Avoid
-behavior that nothing documents, unless the engineer wants to decide it.
+behavior that nothing documents, unless the developer wants to decide it.
 
 Tell them about two or three spots, a short paragraph each: what the code
 seems to promise, where that is stated, and why it would make a good oracle.
@@ -135,7 +148,7 @@ They can redirect you.
 Read the spot's docs, code, tests, and fix history. Then ask yourself: what
 do I not know about this code that I need to know to build its oracle? How
 does the state change with each call? Where are the boundaries? What holds
-whatever happens? Show the engineer those questions in the chat, a short
+whatever happens? Show the developer those questions in the chat, a short
 list, before you probe: it shows them how an oracle gets built. Then build a
 probe for each one, and answer each question with what its probe showed.
 
@@ -171,12 +184,12 @@ line. The authority is what makes a finding credible, and it becomes the
 documentation in the oracle file. When nothing decides a behavior, it is a
 design question, not a bug.
 
-The engineer's answer to a design question is an authority too. Once they
+The developer's answer to a design question is an authority too. Once they
 decide it, it becomes a potential law, and the oracle can find where the
 code breaks it, just as with a law from the docs. In a repository with few
 docs, this is the usual way to a bug: ask the question, and let the oracle
 check the answer. The oracle file records the decision with the
-engineer's name, their GitHub login, and the date, so that their team knows
+developer's name, their GitHub login, and the date, so that their team knows
 whom to ask.
 Find the login with `gh api user --jq .login`. If that fails, ask for it
 together with the first decision.
@@ -186,19 +199,19 @@ called a possible bug or a question, never a certainty:
 
 1. A title that names the behavior: "Object Map key: replay throws".
 2. The smallest case, expected against observed, as a short snippet the
-   engineer can run.
+   developer can run.
 3. **Why I think it's wrong:** the authority, quoted, with its file and line.
 4. **Why the tests miss it:** what the existing tests check instead.
 5. **How often:** how many of the probe's inputs failed, out of how many.
 
 Give each finding its kind:
 
-| Kind            | What it means                                                           |
-| --------------- | ----------------------------------------------------------------------- |
-| Possible bug    | The code breaks a promise that a document or a test states.             |
-| Inconsistency   | Two sources disagree: say which ones, and what each says.               |
-| Test gap        | A probe shows behavior that no existing test checks.                    |
-| Design question | Nothing decides the behavior: give two readings and what each predicts. |
+| Kind              | What it means                                                           |
+| ----------------- | ----------------------------------------------------------------------- |
+| Possible bug      | The code breaks a promise that a document or a test states.             |
+| Inconsistency     | Two sources disagree: say which ones, and what each says.               |
+| Untested behavior | A probe shows behavior that no existing test checks.                    |
+| Design question   | Nothing decides the behavior: give two readings and what each predicts. |
 
 For example:
 
@@ -233,7 +246,7 @@ own instead, and recommend one.
 
 - What it would own, in one or two sentences.
 - The contract, as a few lines of public calls and their results. Always
-  include it: it is the quickest way for the engineer to see what you mean.
+  include it: it is the quickest way for the developer to see what you mean.
 
   ```ts
   klona(x) // → a deep copy: same kind, prototype, and values as x, sharing no object with it
@@ -252,7 +265,7 @@ own instead, and recommend one.
 - The open design questions, each with its two readings, and what the probe
   showed. Say that these can wait: the oracle's results will help decide
   them. List them apart from the potential laws, and do not number them as
-  laws. Until the engineer decides one, the oracle file states it as a
+  laws. Until the developer decides one, the oracle file states it as a
   limit.
 
 **Work out each law privately before you propose it.** Fill in this
@@ -306,12 +319,12 @@ How to fill in the fields:
   the grammar.
 - **Backing:** `stated` if an authority states it, `observed` if production
   does it but nothing states it, `open` if it is a question. A `stated` law
-  is what you ask the engineer to approve. It becomes adopted only when they
+  is what you ask the developer to approve. It becomes adopted only when they
   do, and only adopted laws become expected results. An `observed` or `open`
-  law goes to the engineer as a question.
+  law goes to the developer as a question.
 - **Production output is evidence, never authority.** A rule that you write
   only because production does it is model hacking. Mark that rule
-  `observed`, and ask the user. An analogy to another documented rule is not
+  `observed`, and ask the developer. An analogy to another documented rule is not
   authority either: mark that law `open`.
 
 Settle these privately too:
@@ -334,14 +347,17 @@ trigger list in `oracles-design` step 1. When a trigger for the
 [design grammar](../../docs/instruments/design-grammar.md) card fires (for
 example, more than five laws, or a
 law with no new case that it predicts), work through the card. Then show
-the engineer the design it produced, in a few plain lines: what the model
+the developer the design it produced, in a few plain lines: what the model
 keeps, how the laws share it, and any choice between two designs, with your
 recommendation. Leave out the card's own terms (preservation relation,
 primitives, ablation). Ask them to approve it with the laws.
 
-Then ask the engineer to approve the potential laws that the authority
-decides. An approved potential law is an adopted law. Potential laws have no
-default: with no engineer present, propose them and stop.
+Then ask the developer to approve the potential laws that the authority
+decides. When the developer approves a potential law, it becomes an adopted
+law, and the oracle file records their decision. If they do not maintain the
+repository, its maintainers confirm the laws when they review the pull
+request. Potential laws have no default: with no developer present, propose
+them and stop.
 
 ## 5. Build and run
 
@@ -358,14 +374,14 @@ default: with no engineer present, propose them and stop.
 
 2. **Write the oracle file.** Follow `oracles-design` from its first step:
    the law block's prose, then the model, the histories, the driver, and the
-   check. As you build, tell the engineer briefly what each part is for: the
+   check. As you build, tell the developer briefly what each part is for: the
    model computes the expected answer the simple way, the histories are the
    generated inputs and sequences, the driver calls their real code, and the
    check compares the two at each step.
-3. **Run it on the unchanged code.** A failure under an approved law is a
+3. **Run it on the unchanged code.** A failure under an adopted law is a
    possible bug. Present it like a probe finding, with the oracle's smallest
    failing case as the snippet.
-4. **As the engineer settles questions, change the law** and rewrite the law
+4. **As the developer settles questions, change the law** and rewrite the law
    block's prose in the same step. Before you show results, check that the
    prose still says what the code does.
 
@@ -380,23 +396,25 @@ design question, or a law nobody has stated yet. Take the command and its
 flags from `oracles-setup` step 7, with its `--out` in the package's
 `.oracle-gaps/` directory, as that step says. Read each surviving change, probe
 it when it is unclear, and present what it shows as a finding: a possible
-bug, or a design question for the engineer. Do not try to close every gap:
+bug, or a design question for the developer. Do not try to close every gap:
 that is production work.
 
-If the gap check finds nothing worth the engineer's time either, offer to
+If the gap check finds nothing worth the developer's time either, offer to
 build the next oracle at another spot.
 
 ## 6. Present
 
-When the oracle or the gap check has found something and the engineer has
+When the oracle or the gap check has found something and the developer has
 settled some design questions, stop and present. Present the same way
-whenever the engineer wants to stop:
+whenever the developer wants to stop:
 
 - what you built, and what it found
 - an offer to walk through how it works: how the reference model was built,
   how the histories are generated, and how the driver calls their code.
-  Engineers often want this, and it is the best part to teach.
+  Developers often want this, and it is the best part to teach.
 - an invitation to ask questions
+- the path to the feedback log, and a request to send it to Kyle Mathews
+  (GitHub KyleAMathews) when they are done
 
 When they take the walk-through, follow one bug the oracle found through
 the file (with no bug, one change the gap check showed, or one history that

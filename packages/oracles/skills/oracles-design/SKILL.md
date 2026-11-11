@@ -23,15 +23,15 @@ failure goes away, and pinning one example. `oracles-review` §2 lists them all.
 
 ## 1. Start from approved potential laws, then write the oracle file
 
-**A new oracle starts from potential laws that the user approved**, usually
+**A new oracle starts from potential laws that the developer approved**, usually
 in a first session (`oracles-start`): the laws that the authority decides.
-Open design questions may still be open: they are limits until the user
+Open design questions may still be open: they are limits until the developer
 settles them. If no laws are approved yet, probe the behavior and propose
 them first, as `oracles-start` does, and stop for approval. Exploration and
 review stay in the conversation, never in the oracle file. The file is
 written with its law block and its code together.
 
-**Decide whether the user must approve.**
+**Decide whether the developer must approve.**
 
 - **Strengthening an adopted law** (a missing history, observation, driver
   path, or check) reuses the law as it is. Do not propose new laws, and do
@@ -39,21 +39,21 @@ written with its law block and its code together.
   law's stated domain is strengthening. Changing the stated domain, a
   checkpoint, or `limits` is a law change.
 - **Changing a law** (its promise, domain, checkpoint, assumptions, or the
-  freedoms it allows) needs a law delta. Show the user the old and the new
+  freedoms it allows) needs a law delta. Show the developer the old and the new
   law, with the probe or result that shows why. Stop for their review, then
   rewrite the law block in the same change.
-- **A new law, or missing or contradictory authority,** needs the user's
+- **A new law, or missing or contradictory authority,** needs the developer's
   approval of that potential law. An analogy to another documented rule is
   not authority.
-- **The user's answer to an open question is its review.** Rewrite the law
-  block in the same step, and continue. A change the user did not ask for
+- **The developer's answer to an open question is its review.** Rewrite the law
+  block in the same step, and continue. A change the developer did not ask for
   (you found that a law is wrong) needs the delta and a stop.
 - **The task already approved these laws?** Do not ask again. An approved
   potential law is an adopted law.
 
 **Production output is evidence, never authority.** A rule that exists only
 because production does it is model hacking. When the law and the code
-disagree, the approved law decides, not the code.
+disagree, the adopted law decides, not the code.
 
 When the promise is unclear, or two readings predict different behavior, use
 the [law discovery](../../docs/instruments/law-discovery.md) card.
@@ -71,11 +71,11 @@ list when you propose the laws, and again after each gap check:
 - the gap check leaves three or more gaps in one function
 
 Say in the evidence which trigger fired, or that none did. When a trigger
-fires before the oracle is written, show the user the design the card
+fires before the oracle is written, show the developer the design the card
 produced, and get their approval with the laws.
 
 **Write the law block.** The law block is the file's opening comment. The oracle file is a literate
-program (ORC-003), so write it as prose. That reader is a maintainer or a serious user who knows
+program (ORC-003), so write it as prose. That reader is a maintainer, or a developer who uses the library seriously and knows
 the codebase. Name internal parts without introducing them, and do not
 explain the language, the library's basic ideas, or what a reader of the
 code can see at once. Spend the words on what such a reader could get
@@ -97,9 +97,9 @@ reader.
    sentences, that shows the public API promises this oracle maintains. A
    reader takes it in at one look. Give it no title, and no sentence that
    introduces it. Write each line as `call // → result`:
-   - the call is the public API, written the way a user writes it, with
+   - the call is the public API, written the way a caller writes it, with
      concrete values where they make the promise clear.
-   - the result is what the user gets back or sees: a value, or a short
+   - the result is what the caller gets back or sees: a value, or a short
      phrase.
    - a condition goes at the end of the line, as "when ...".
    - an open law ends with `(open)`.
@@ -149,16 +149,16 @@ its documentation promises, and a law that restates the implementation. A
 model of that law would be the same code, so it could not catch a defect.
 
 Keep the law block to about 40 lines of prose, plus the contract code block.
-It never mentions a review or an open question: a point the user has not
+It never mentions a review or an open question: a point the developer has not
 decided appears only as a limit, with its reason. Nor does it tell the story
-of the session: no "the maintainer approved", "the engineer deferred", or
-"as the probe showed". A user's decision is stated as the rule it made, and
+of the session: no "the maintainer approved", "the developer deferred", or
+"as the probe showed". A developer's decision is stated as the rule it made, and
 a limit's reason is about the code ("`klona` calls the constructor with no
-arguments"), not about who has not decided yet. When a user's decision is
+arguments"), not about who has not decided yet. When a developer's decision is
 the authority for a law, write it as "Decision by <name> (GitHub
 <login>), <date>: <the rule>", the same way in the `law` option's
 `authority`. On a team, a reader needs to know whom to ask. Take the login
-from `gh api user --jq .login`, or ask the user. Write the login without an
+from `gh api user --jq .login`, or ask the developer. Write the login without an
 `@`, so that a copy into a pull request does not notify anyone.
 
 **Then write the code under it.** Each boundary condition from the probes
@@ -178,8 +178,8 @@ promised result.
   contract code block: public API calls and their results, with no assertion
   or helper. Each line states the same law as its sentence.
 - No law restates the code.
-- Each law sentence matches the law the user approved. If they disagree, the
-  approved law decides: fix the prose, and tell the user. A new heading for
+- Each law sentence matches the law the developer approved. If they disagree, the
+  adopted law decides: fix the prose, and tell the developer. A new heading for
   a law is not a law change. A changed sentence, domain, or checkpoint is.
 
 Keep the law block, the `law` option, and the model in step: a change to one
@@ -190,7 +190,7 @@ law during the work, rewrite the law block at once, not at the end.
 
 Write these down. They stay fixed while you build the oracle.
 
-- The laws and their checkpoints, as the user approved them.
+- The laws and their checkpoints, as the developer approved them.
 - The owned production code: the files or functions the oracle answers for.
 - The freedoms the contract leaves open, such as the order of independent
   events, scheduling, or representation. The oracle must accept every
@@ -209,7 +209,7 @@ failure. Make each weakening its own decision, with its own reason.
   histories and the model. A known example that the model cannot reproduce
   shows a missing part or a wrong rule.
 - When two rules conflict, record the conflict as an open question for the
-  user. Do not pick a winner.
+  developer. Do not pick a winner.
 
 For the design grammar card, see the triggers in step 1.
 
@@ -239,7 +239,7 @@ can state it:
 Mixing styles is fine. [Model styles](../../docs/model-styles.md) shows a
 small example of each style.
 
-When two styles fit the law, sketch both briefly, keep the one that states
+When two styles fit the law, draft both briefly, keep the one that states
 the law most directly, and name the other in the law block, so a reader can
 choose it later.
 
@@ -491,9 +491,9 @@ it to simplify:
   reason.
 - Prefer a change that shrinks the code, or leaves its size the same. If the
   repository sets a size rule, such as a net-negative diff, follow it.
-- For a larger cleanup, sketch two or three designs that pass the same oracle
+- For a larger cleanup, draft two or three designs that pass the same oracle
   (a table instead of branches, one state field instead of three, a
-  recompute instead of a cache). Give each one's trade-off, and let the user
+  recompute instead of a cache). Give each one's trade-off, and let the developer
   choose when the choice is theirs. Do not keep only the first design you
   find.
 - Rerun the oracle and the gap check after each cleanup.
@@ -534,20 +534,20 @@ comes with one instruction. Do what it says, within the rules below.
   mutant only moves production to another member of an allowed set, report it
   with its key, the clause, and the history, apart from the kills. Do not
   strengthen the law or change production to kill it. It stays open until the
-  framework recognizes allowed sets. The user decides whether that blocks the
+  framework recognizes allowed sets. The developer decides whether that blocks the
   work.
 - **A stated limit does not close a gap.** If a survivor differs from the
   original only on inputs that the law's limits leave out (a null-prototype
   object, say), the gap is open. Report it with that reason, and recommend
   widening the grammar and the law to say what the code promises there. If
   that behavior is truly not part of the contract, the code that the mutant
-  changes is a production question for the owner. Either way, the user
+  changes is a production question for the owner. Either way, the developer
   decides.
 - **A gap that existed before your change still counts** when it is in a
   function you changed. Report it with its law question. Do not take an exit.
 - **Never propose an exit.** If a gap can be neither killed nor removed, it is
   a framework bug. Stop work on that gap, report its key and evidence to the
-  user, and keep working on the other gaps.
+  developer, and keep working on the other gaps.
 - **A mutant that no oracle could possibly detect is an invalid mutant.** The
   framework must not generate it, so it is a framework bug: report it the same
   way. You do not decide that a mutant is invalid, and the label does not close

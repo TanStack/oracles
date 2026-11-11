@@ -54,7 +54,7 @@ contains one is not ready.
 | **Lowered budget**                | Fewer `runs`, a removed fixed seed, or a removed constructed history, without a stated reason.                                                                                                                                                                                   |
 | **Inserted, not refactored**      | A production change that adds a branch, flag, or path beside a similar old one. Or a change that leaves code that no law needs.                                                                                                                                                  |
 | **Unit test in an oracle file**   | An ordinary test or a fixed expected answer in an oracle file.                                                                                                                                                                                                                   |
-| **"Pre-existing" as a dismissal** | A reachable counterexample labeled as older than the change, and then left without a fix or a decision from the user.                                                                                                                                                            |
+| **"Pre-existing" as a dismissal** | A reachable counterexample labeled as older than the change, and then left without a fix or a decision from the developer.                                                                                                                                                       |
 | **No mutant**                     | A claim that a defect is closed, without a mutant, such as the original defect, that fails the oracle.                                                                                                                                                                           |
 | **An exit**                       | Any reasoning that calls a mutant "equivalent", an effect "unobservable", or a gap acceptable, or that counts a gap as closed because a stated limit covers it. A gap is closed only by a kill or by removing dead code. A gap that can be neither is a framework bug to report. |
 
@@ -89,7 +89,7 @@ hunt is your main job.
   Check each definition against the state that the law needs.
 - **A late or coarse checkpoint.** The check runs only at the end of a
   history, or observes only a summary, so a wrong intermediate observation
-  disappears. Ask whether a user could see the wrong value before the
+  disappears. Ask whether a caller could see the wrong value before the
   checkpoint.
 - **A limit that hides in-scope work.** A stated limit excludes a legal case
   that the law promises. Check that each limit excludes exactly what its

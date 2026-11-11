@@ -98,7 +98,7 @@ Which state determines the observation?
 
 Before you change production to satisfy a red oracle, check the contract, the
 model's representation, and the comparison. An unresolved product choice goes
-to the user as an `open` law. Judge a reviewer's accusation and their proposed
+to the developer as an `open` law. Judge a reviewer's accusation and their proposed
 fix separately: a correct concern does not make its repair correct.
 
 Projection needs the same care. Dropping internal metadata from a comparison
@@ -444,7 +444,7 @@ add an empty case.
 - **Minimal ambiguity:** include the smallest valid input for every branch of a
   classifier. Rich values that carry several redundant signals do not cover a
   one-field collision.
-- **Name invariance:** renaming a user-controlled name must not change a result
+- **Name invariance:** renaming a developer-controlled name must not change a result
   unless the contract gives the name meaning.
 - **Representation symmetry:** two forms of one input that the contract treats
   as the same must give the same
