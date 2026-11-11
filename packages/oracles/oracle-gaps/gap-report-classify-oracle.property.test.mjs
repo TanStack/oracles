@@ -50,8 +50,14 @@
  *    `branch-never-taken` when it is an `if`-operator mutant and an owner
  *    test reached its `if` with one outcome only; `not-infected` when it is
  *    a comparison whose two operators agree on every operand pair the
- *    owners reached; and `not-observed` otherwise, when the mutant changed a
- *    value that no recorded observation showed.
+ *    owners reached; `not-observed` when an `if` or comparison mutant was
+ *    infected and no recorded observation showed the change; and
+ *    `not-distinguished` for any other operator, whose infection the
+ *    capture does not measure, so its directive names the input that
+ *    distinguishes it. This oracle's grammar has no operator that always
+ *    changes a value when reached (`!`, booleans, arithmetic); production
+ *    measures those and classes them `not-observed`, which the end-to-end
+ *    oracle checks.
  *    A mutant is infected in a test when its mutated expression's value
  *    differs from the original's there. A comparison is infected when the
  *    operators disagree on its operands; an `if` when its condition took the
@@ -170,6 +176,12 @@ const records = fc.record({
         minLength: MUTANTS,
         maxLength: MUTANTS,
       }),
+      // Whether that loaded code changed a measured value of the mutant
+      // (an `if`'s outcome or a comparison's operators).
+      backgroundInfects: fc.array(fc.boolean(), {
+        minLength: MUTANTS,
+        maxLength: MUTANTS,
+      }),
     }),
     { minLength: 1, maxLength: 3 },
   ),
@@ -184,8 +196,11 @@ const records = fc.record({
         `if-false`,
         `delete-call`,
         `binary-swap`,
+        `loop-false`,
+        `value-undefined`,
+        `field-drop`,
       ),
-      original: fc.constantFrom(`>`, `>=`, `===`, `&&`),
+      original: fc.constantFrom(`>`, `>=`, `===`, `&&`, `||`, `??`),
       evidence: fc.constantFrom(
         undefined,
         undefined,
@@ -325,35 +340,55 @@ function modelOutcome(h, mi) {
   if (compared.length === 0) return sized(`indeterminate`)
   if (m.evidence === `dead code`)
     return sized(`dead-code`, { mention: [`line ${m.line + 1}.`] })
-  // An `if`'s site, reached with one outcome only (the first such sibling).
-  const siblings = h.mutants
-    .map((other, oi) => ({ other, oi }))
-    .filter(
-      ({ other }) => other.operator === `if-true` && other.line === m.line,
-    )
+  // An `if` mutant forces its condition: an if-true mutant changes a value
+  // only where the condition was false, an if-false mutant only where it was
+  // true. Its branch is never taken when no deterministic owner test (or the
+  // owner file's loaded code) saw that outcome, whatever the sibling did.
   if (isIf(m)) {
-    for (const { oi } of siblings) {
-      const seen = targetsSeen(h, oi, owners)
-      if (seen.reached && !(seen.truthy && seen.falsy))
-        return sized(`branch-never-taken`, {
-          mention: [
-            `the condition on line ${m.line + 1} is ${seen.truthy ? `false` : `true`},`,
-          ],
-        })
-    }
+    const need = m.operator === `if-true` ? `false` : `true`
+    if (!infectedIn(h, mi, owners))
+      return sized(`branch-never-taken`, {
+        mention: [`the condition on line ${m.line + 1} is ${need},`],
+      })
+    return sized(`not-observed`, { mention: [observedMention(h, mi, owners)] })
   }
-  if (isCompare(m) && !infectedIn(h, mi, owners, targets))
-    return sized(`not-infected`, {
-      mention: [`Operands seen: ${operandsSeen(h, mi, owners)}.`],
-    })
-  const infecting = infectingTest(h, mi, owners)
-  return sized(`not-observed`, {
-    mention: [
-      infecting === undefined
-        ? `Observe the value this code changes in the owner tests, and assert on it.`
-        : `Observe the value this code changes in \`${infecting}\`, and assert on it.`,
-    ],
+  if (isCompare(m)) {
+    if (!infectedIn(h, mi, owners))
+      return sized(`not-infected`, {
+        mention: [`Operands seen: ${operandsSeen(h, mi, owners)}.`],
+      })
+    return sized(`not-observed`, { mention: [observedMention(h, mi, owners)] })
+  }
+  // The other operators' infection is not measured, so the directive says
+  // what input distinguishes the mutant, built from its operator.
+  return sized(`not-distinguished`, {
+    mention: [distinguishingDirective(m)],
   })
+}
+
+// The directive for an operator whose infection is not measured: the input
+// that makes the mutant's value differ, built from the operator's semantics.
+function distinguishingDirective(m) {
+  const line = m.line + 1
+  if (m.operator === `loop-false`)
+    return `Add an owner history that enters the loop on line ${line}, so that forcing its condition to false changes an asserted result, and assert on the result.`
+  if (m.operator === `value-undefined`)
+    return `Add an owner history where the call on line ${line} returns a value that changes an asserted result when it is \`undefined\`, and assert on the result.`
+  if (m.operator === `field-drop`)
+    return `Add an owner history that reads the property dropped on line ${line}, so that its absence changes an asserted result, and assert on the result.`
+  if (m.operator === `delete-call`)
+    return `Add an owner history where the call on line ${line} changes an asserted result when it does not run, and assert on the result.`
+  if (m.original === `??`)
+    return `Add an owner history where the left operand of \`??\` on line ${line} is truthy, so \`??\` and \`&&\` give different results, and assert on the result.`
+  return `Add an owner history where one operand of \`${m.original}\` on line ${line} is falsy and the other is truthy, so \`&&\` and \`||\` give different results, and assert on the result.`
+}
+// The observation a survivor with an infection names: its infecting test, or
+// the owner tests when only loaded code infected it.
+const observedMention = (h, mi, owners) => {
+  const infecting = infectingTest(h, mi, owners)
+  return infecting === undefined
+    ? `Observe the value this code changes in the owner tests, and assert on it.`
+    : `Observe the value this code changes in \`${infecting}\`, and assert on it.`
 }
 
 // Comparisons and their swaps, as the mutant states them. A comparison is
@@ -383,25 +418,28 @@ function infects(h, mi, t) {
   }
   return true
 }
-// The owner tests, in file order, that reached the mutant.
+// The deterministic owner tests, in file order, that reached the mutant.
 function reachingTests(h, mi, owners) {
   return [...owners]
     .sort((a, b) => a - b)
     .flatMap((fi) =>
-      h.files[fi].tests.flatMap((t, ti) => (t.reaches[mi] ? [{ t, ti }] : [])),
+      h.files[fi].tests.flatMap((t, ti) =>
+        t.reaches[mi] && !t.flaky ? [{ t, ti }] : [],
+      ),
     )
 }
-function infectedIn(h, mi, owners, targets) {
-  if (!isIf(h.mutants[mi]) && !isCompare(h.mutants[mi]))
-    return targets.length > 0
-  return reachingTests(h, mi, owners).some(({ t }) => infects(h, mi, t))
+// Whether a deterministic owner test, or the loaded code of an owner file,
+// infected the mutant. A nondeterministic test's infection judges nothing.
+function infectedIn(h, mi, owners) {
+  return [...owners].some(
+    (fi) =>
+      (h.files[fi].background[mi] && h.files[fi].backgroundInfects[mi]) ||
+      reachingTests(h, mi, new Set([fi])).some(({ t }) => infects(h, mi, t)),
+  )
 }
-// The first test that infected the mutant, or the first that reached it when
-// no infection is measured. None when only a file's background reached it.
+// The first deterministic test that infected the mutant, if any test did.
 function infectingTest(h, mi, owners) {
-  const tests = reachingTests(h, mi, owners)
-  const measured = isIf(h.mutants[mi]) || isCompare(h.mutants[mi])
-  const hit = measured ? tests.find(({ t }) => infects(h, mi, t)) : tests[0]
+  const hit = reachingTests(h, mi, owners).find(({ t }) => infects(h, mi, t))
   return hit ? `t${hit.ti}` : undefined
 }
 // The operand pairs the owners' tests reached, distinct, in order, up to three.
@@ -414,24 +452,6 @@ function operandsSeen(h, mi, owners) {
     ),
   ].slice(0, 3)
   return pairs.length > 0 ? pairs.join(`; `) : `none recorded`
-}
-
-// Whether an owner test reached an `if-true` mutant, and which outcomes the
-// owners' deterministic and nondeterministic tests saw there.
-function targetsSeen(h, oi, owners) {
-  let reached = false
-  let truthy = false
-  let falsy = false
-  for (const fi of owners) {
-    if (h.files[fi].background[oi]) reached = true
-    for (const t of h.files[fi].tests) {
-      if (!t.reaches[oi]) continue
-      reached = true
-      truthy ||= t.seen[oi] !== `false`
-      falsy ||= t.seen[oi] !== `true`
-    }
-  }
-  return { reached, truthy, falsy }
 }
 
 // The ordinary tests' outcome: their assertion failures count on their
@@ -567,9 +587,11 @@ const directives = {
   'unregistered-kill':
     /^Register the route of `[^`]+` through the framework, so its failure counts as a kill\.$/,
   'framework-error':
-    /^Make a law in `[^`]+` reject the change: only a framework calibration failed, and it judges no behavior\.$/,
+    /^The framework check `[^`]+` failed with `[^`]*`, and a calibration judges no behavior: state the oracle law that decides this input's outcome, and let it reject the change\.$/,
   crashed:
-    /^Production threw `[^`]*` in `[^`]+`; record the error as an observation in the driver, and state the law that decides if this input may throw\.$/,
+    /^Production threw `[^`]*` in `[^`]+`; record the error as an observation in the driver, and state the law that decides this input's outcome\.$/,
+  'not-distinguished':
+    /^Add an owner history (where one operand of `[&|]{2}` on line \d+ is falsy and the other is truthy, so `&&` and `\|\|` give different results|where the left operand of `\?\?` on line \d+ is truthy, so `\?\?` and `&&` give different results|that enters the loop on line \d+, so that forcing its condition to false changes an asserted result|where the call on line \d+ returns a value that changes an asserted result when it is `undefined`|that reads the property dropped on line \d+, so that its absence changes an asserted result|where the call on line \d+ changes an asserted result when it does not run), and assert on the result\.$/,
   timeout:
     /^Bound the run of the owner tests so that they end, and let a law reject a run that does not\.$/,
   'setup-error':
@@ -662,6 +684,9 @@ function rowsOf(h, pass) {
       hits: f.background.flatMap((r, mi) =>
         r && mi < h.mutants.length ? [mi] : [],
       ),
+      infected: f.background.flatMap((r, mi) =>
+        r && f.backgroundInfects[mi] && mi < h.mutants.length ? [mi] : [],
+      ),
     })
   })
   return rows
@@ -722,7 +747,7 @@ async function driver(h, observe) {
   const oracleFiles = new Set(
     h.files.flatMap((f, fi) => (f.oracle ? [fileName(fi)] : [])),
   )
-  const baseline = baselineOf(rowsOf(h, 1), rowsOf(h, 2), oracleFiles)
+  const baseline = baselineOf(rowsOf(h, 1), rowsOf(h, 2))
   // The swap a comparison or logical mutant states (its replacement).
   const swapFor = { '>': `>=`, '>=': `>`, '===': `!==`, '&&': `||` }
   const mutants = h.mutants.map((m, mi) => ({
@@ -922,7 +947,7 @@ function check(h, observations, expected) {
     .split(`\n`)
     .filter((line) => line.startsWith(`  unowned fn `))
   const unownedText = (fn, n) =>
-    `  unowned fn ${fn}: ${n} ${n === 1 ? `mutant` : `mutants`}`
+    `  unowned fn ${fn} (src/x.ts): ${n} ${n === 1 ? `mutant` : `mutants`}`
   if (
     unownedLines.length !== unownedFns.size ||
     [...unownedFns].some(
@@ -1097,6 +1122,7 @@ const required = [
   `not-infected`,
   `not-infected with a boundary hint`,
   `not-observed`,
+  `not-distinguished`,
   `dead-code`,
   `ordinary killed`,
   `a key with backticks`,
@@ -1109,7 +1135,14 @@ const four = (value) => Array.from({ length: MUTANTS }, () => value)
 const single = (
   name,
   enters,
-  { mutant = {}, test = {}, effect = {}, ordinary = false } = {},
+  {
+    mutant = {},
+    test = {},
+    effect = {},
+    ordinary = false,
+    background = four(false),
+    backgroundInfects = four(false),
+  } = {},
 ) => ({
   name,
   enters,
@@ -1133,7 +1166,8 @@ const single = (
             ...test,
           },
         ],
-        background: four(false),
+        background,
+        backgroundInfects,
       },
       ...(ordinary
         ? [
@@ -1154,6 +1188,7 @@ const single = (
                 },
               ],
               background: four(false),
+              backgroundInfects: four(false),
             },
           ]
         : []),
@@ -1274,16 +1309,41 @@ const constructed = [
   }),
   // The field witness (issue 2254): an infected survivor that no recorded
   // observation shows. Its message named the exits the report offered.
-  single(
-    `an infected survivor that no observation shows`,
-    [`not-observed`],
-    {},
-  ),
+  single(`an infected survivor that no observation shows`, [`not-observed`], {
+    mutant: { operator: `binary-swap`, original: `>` },
+    test: { pair: four([2, 2]) },
+  }),
   single(
     `a survivor an ordinary test fails`,
     [`not-observed`, `ordinary killed`],
-    { ordinary: true },
+    {
+      mutant: { operator: `binary-swap`, original: `>` },
+      test: { pair: four([2, 2]) },
+      ordinary: true,
+    },
   ),
+  // An if-false whose condition was always true is infected (its forced
+  // outcome changes the value), so it is not a branch never taken.
+  single(`an if-false that always saw true`, [`not-observed`], {
+    mutant: { operator: `if-false` },
+    test: { seen: four(`true`) },
+  }),
+  // Operators whose infection is not measured name the input that
+  // distinguishes them.
+  single(`a logical swap is not distinguished`, [`not-distinguished`], {
+    mutant: { operator: `binary-swap`, original: `&&` },
+  }),
+  single(`a loop-false is not distinguished`, [`not-distinguished`], {
+    mutant: { operator: `loop-false` },
+  }),
+  // Infected at module load only: loaded code reaches every test of the file,
+  // so the comparison is not not-infected.
+  single(`a comparison infected only at module load`, [`not-observed`], {
+    mutant: { operator: `binary-swap`, original: `>` },
+    test: { pair: four([1, 2]) },
+    background: four(true),
+    backgroundInfects: four(true),
+  }),
   single(`a key with backticks`, [`a key with backticks`], {
     mutant: { anchor: `x \`\` y` },
     effect: { kind: `changed` },

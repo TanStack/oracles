@@ -610,6 +610,17 @@ const witness = [
       judging(`a`, `fixed history`, 1, { judges: false, channel: `expect` }),
     ],
   },
+  // A cache write that no observation reads: its `if-false` and `drop-not`
+  // mutants change what the module caches for 4 and leave `out` as it was,
+  // so they survive infected and unobserved (`not-observed`); its call
+  // mutants are `not-distinguished`. It caches under 4, and `w_memo` under 1,
+  // so the two never read each other's entries.
+  {
+    id: `w_unseen`,
+    owners: [`a`],
+    body: [{ kind: `memoSet`, label: 21 }],
+    tests: [judging(`a`, `fixed seed`, 4)],
+  },
   {
     id: `w_noobs`,
     owners: [`a`],
@@ -1277,6 +1288,7 @@ const captureWitness = new Set([
   `w_flaky`,
   `w_observe`,
   `w_expect`,
+  `w_unseen`,
   `w_noobs`,
   `w_unreached`,
   `w_ordinary`,
@@ -2579,6 +2591,11 @@ function interpret(plan, fnId, x, sites, active) {
     let value = holds(x, isActive(swap) ? swapped[op] : op, k)
     if (stmt.not && !isActive(siteOf(stmt, `not`))) value = !value
     outcomes.push([stmt.line, value])
+    // A forced `if` changes its condition only where the condition took the
+    // other outcome: the if-false site where it was true, the if-true where
+    // it was false (the capture's `cond`, classify.mjs).
+    const forced = siteOf(stmt, value ? `false` : `true`)
+    if (forced) infected.add(forced.id)
     if (isActive(siteOf(stmt, `true`))) return true
     if (isActive(siteOf(stmt, `false`))) return false
     return value
@@ -2703,6 +2720,11 @@ function interpret(plan, fnId, x, sites, active) {
         let value = !(isActive(siteOf(stmt, `has`)) ? undefined : memo.has(x))
         if (isActive(siteOf(stmt, `not`))) value = !value
         outcomes.push([stmt.line, value])
+        // A forced `if` changes its condition only where the condition took the
+        // other outcome: the if-false site where it was true, the if-true where
+        // it was false (the capture's `cond`, classify.mjs).
+        const forced = siteOf(stmt, value ? `false` : `true`)
+        if (forced) infected.add(forced.id)
         if (isActive(siteOf(stmt, `true`))) value = true
         if (isActive(siteOf(stmt, `false`))) value = false
         if (value) {
@@ -2778,6 +2800,11 @@ function interpret(plan, fnId, x, sites, active) {
           reached.add(siteOf(stmt, role).id)
         reached.add(sites.find((s) => s.role === `devBuild`).id)
         outcomes.push([stmt.line, true])
+        // The guard is true, so its if-false site changes it; and its `!==`
+        // compares 'test' with 'production', on which `!==` and `===`
+        // disagree.
+        infected.add(siteOf(stmt, `oldFalse`).id)
+        infected.add(siteOf(stmt, `oldNe`).id)
       }
       if (referenceKinds.has(stmt.kind) || stmt.kind === `mixedHelperCall`) {
         const site = siteOf(stmt, `call`)
@@ -2934,20 +2961,11 @@ function model(plan) {
     if (owners(site.fnId).size === 0) return `unowned`
     const tests = ownerTests(site.fnId)
     const reached = new Set()
-    const taken = new Map()
     for (const t of tests)
       for (const part of partsOf(t)) {
         const run = interpret(plan, t.fn, part.input, sites)
         for (const id of run.reached) reached.add(id)
-        for (const [line, value] of run.outcomes)
-          taken.set(line, new Set([...(taken.get(line) ?? []), value]))
       }
-    // What runs at load reaches every test of the file (maintainer decision,
-    // 2026-11-06), so the outcomes its `if`s take count as taken there.
-    if (tests.length > 0)
-      for (const run of loadRuns)
-        for (const [line, value] of run.outcomes)
-          taken.set(line, new Set([...(taken.get(line) ?? []), value]))
     // Code that ran when the module loaded runs in every owner file that has
     // a test, and reaches every test of that file (maintainer decision,
     // 2026-11-06); a site that the load did not run is reached only by tests.
@@ -2979,14 +2997,30 @@ function model(plan) {
     // never took, a comparison no owner test infected, and otherwise an
     // infected site that no observation shows.
     const isIf = site.operator === `if-true` || site.operator === `if-false`
-    if (isIf && (taken.get(site.line)?.size ?? 2) < 2)
-      return `branch-never-taken`
     const comparison = site.operator === `binary-swap` && site.role === `swap`
-    const infectedIn = tests.some((t) =>
-      partsOf(t).some((part) =>
-        interpret(plan, t.fn, part.input, sites).infected.has(site.id),
-      ),
+    // A mutant that changes a value only on some inputs, with no capture to
+    // show which: a loop's condition, an undefined call value, a dropped
+    // field, a skipped call, and a logical operator (the old probe form's
+    // `&&`). Its directive names the input that distinguishes it.
+    if (
+      [`loop-false`, `value-undefined`, `field-drop`, `delete-call`].includes(
+        site.operator,
+      ) ||
+      (site.operator === `binary-swap` && site.role === `oldAnd`)
     )
+      return `not-distinguished`
+    // Code that runs at load infects every test of its file, and a
+    // nondeterministic test's infection judges nothing.
+    const infectedIn =
+      tests.some(
+        (t) =>
+          !t.flaky &&
+          partsOf(t).some((part) =>
+            interpret(plan, t.fn, part.input, sites).infected.has(site.id),
+          ),
+      ) ||
+      (tests.length > 0 && loadRuns.some((run) => run.infected.has(site.id)))
+    if (isIf) return infectedIn ? `not-observed` : `branch-never-taken`
     if (comparison && !infectedIn) return `not-infected`
     return `not-observed`
   }
@@ -3007,6 +3041,7 @@ function model(plan) {
     `branch-never-taken`,
     `not-infected`,
     `not-observed`,
+    `not-distinguished`,
     `indeterminate`,
     `unreached`,
   ])

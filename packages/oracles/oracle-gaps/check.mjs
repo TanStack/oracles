@@ -1372,7 +1372,7 @@ export default async (env) => {
     }
     const selectionChecks = new Map()
     const planned = new Map()
-    const reach = baselineOf(first.rows, first.rows, oracleFiles)
+    const reach = baselineOf(first.rows, first.rows)
     for (const mutant of queue) {
       const owners = ownersOf(mutant)
       if (owners.size === 0) continue
@@ -1424,7 +1424,7 @@ export default async (env) => {
       files: files.length,
       selections: planned.size,
     })
-    const baseline = baselineOf(first.rows, second.rows, oracleFiles)
+    const baseline = baselineOf(first.rows, second.rows)
     const { nondeterministic } = baseline
     // A nondeterministic test judges nothing, so its verdict must not stop
     // a run at its first kill: a later test of the file may decide.

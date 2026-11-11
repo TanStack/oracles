@@ -19,7 +19,7 @@
 // innermost statement that holds the site, joined by single spaces and kept in
 // full, with `~n` for the nth repeat of one anchor in a function. An authored
 // mutant's key is its source and id (`source#authored:id`).
-import { codeSpan, gapLine, kindOf } from './stream.mjs'
+import { change, codeSpan, gapLine, kindOf } from './stream.mjs'
 
 /** Outcomes that are gaps. Only a law verdict on a reproducible route kills. */
 export const gapOutcomes = new Set([
@@ -100,6 +100,7 @@ const directive = {
     g.infectedBy === undefined
       ? `Observe the value this code changes in the owner tests, and assert on it.`
       : `Observe the value this code changes in \`${testName(g.infectedBy)}\`, and assert on it.`,
+  'not-distinguished': (g) => distinguishingDirective(g),
   'not-judged': (g) =>
     `Make a law in \`${testName(g.changedTests?.[0])}\` reject the changed value.`,
   indeterminate: (g) =>
@@ -114,15 +115,34 @@ const directive = {
   'unregistered-kill': (g) =>
     `Register the route of \`${first(g.by)}\` through the framework, so its failure counts as a kill.`,
   'framework-error': (g) =>
-    `Make a law in \`${first(g.by)}\` reject the change: only a framework calibration failed, and it judges no behavior.`,
+    `The framework check \`${first(g.by)}\` failed with \`${errorText(g.detail)}\`, and a calibration judges no behavior: state the oracle law that decides this input's outcome, and let it reject the change.`,
   crashed: (g) =>
-    `Production threw \`${errorText(g.detail)}\` in \`${first(g.by)}\`; record the error as an observation in the driver, and state the law that decides if this input may throw.`,
+    `Production threw \`${errorText(g.detail)}\` in \`${first(g.by)}\`; record the error as an observation in the driver, and state the law that decides this input's outcome.`,
   timeout: () =>
     `Bound the run of the owner tests so that they end, and let a law reject a run that does not.`,
   'setup-error': () =>
     `Run an owner test that loads this module and asserts on its exports, so a failed load rejects the mutant.`,
   'does-not-apply': () =>
     `Update the \`find\` text of this authored mutant so that it occurs exactly once in the source.`,
+}
+
+// The directive for an operator whose infection is not measured: the input
+// that makes its value differ, built from the operator (classify.mjs).
+function distinguishingDirective(g) {
+  const line = g.line
+  if (g.operator === `loop-false`)
+    return `Add an owner history that enters the loop on line ${line}, so that forcing its condition to false changes an asserted result, and assert on the result.`
+  if (g.operator === `value-undefined`)
+    return `Add an owner history where the call on line ${line} returns a value that changes an asserted result when it is \`undefined\`, and assert on the result.`
+  if (g.operator === `field-drop`)
+    return `Add an owner history that reads the property dropped on line ${line}, so that its absence changes an asserted result, and assert on the result.`
+  if (g.operator === `delete-call`)
+    return `Add an owner history where the call on line ${line} changes an asserted result when it does not run, and assert on the result.`
+  if (g.original === `??`)
+    return `Add an owner history where the left operand of \`??\` on line ${line} is truthy, so \`??\` and \`&&\` give different results, and assert on the result.`
+  if (g.original === `&&` || g.original === `||`)
+    return `Add an owner history where one operand of \`${g.original}\` on line ${line} is falsy and the other is truthy, so \`&&\` and \`||\` give different results, and assert on the result.`
+  return `Add an owner history where the input that changes the value on line ${line} gives a different result, and assert on the result.`
 }
 
 /** The gap's message: its kind's directive, with the boundary sentence if any. */
@@ -145,6 +165,7 @@ const placeholders = {
   nondeterministicBy: [`<file> > <test>`],
   by: [`<test>`],
   detail: `<error>`,
+  operator: `<operator>`,
 }
 const legendOf = (kind) => directive[kind]({ ...placeholders, outcome: kind })
 
@@ -157,22 +178,23 @@ export function gapsOf(results) {
   )
 }
 
-function change(result) {
-  if (result.authored) return `${result.intent} (authored by ${result.author})`
-  return `${codeSpan(String(result.original).replace(/\s+/g, ` `))} → ${codeSpan(String(result.replacement))}`
-}
-
 // Entries of a list, grouped by a key, in first-seen order.
 function groupBy(list, keyOf) {
   const groups = new Map()
-  for (const item of list)
-    groups.set(keyOf(item), [...(groups.get(keyOf(item)) ?? []), item])
+  for (const item of list) {
+    const key = keyOf(item)
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(item)
+  }
   return groups
 }
 
-// A group of gaps: the authored mutants, or one function.
+// A group of gaps: the authored mutants, or one function, named with its
+// source file, since two files can each have a function of one name.
 const groupOf = (gap) =>
-  gap.authored ? `authored mutants` : `fn ${gap.function}`
+  gap.authored
+    ? `authored mutants (${gap.source})`
+    : `fn ${gap.function} (${gap.source})`
 
 export function renderReport({ results, run, excluded }) {
   const gaps = gapsOf(results)
@@ -213,7 +235,7 @@ export function renderReport({ results, run, excluded }) {
     ``,
     `1. State the law it reveals: one that is missing, misstated, or not enforced. Several gaps often reveal one law.`,
     `2. Name the law's authority: a contract document and section, or a maintainer decision.`,
-    `3. Re-plan the oracle around that law: its grammar or domain, model, observations, or comparison. Do not patch the line.`,
+    `3. Re-plan the oracle around that law: its grammar or domain, model, observations, or comparison. Do not patch the line, except dead code, whose gap says to remove the code.`,
     `4. Run the check again.`,
     ``,
     `Rerun one mutant with \`--only <id>\`.`,
@@ -223,7 +245,7 @@ export function renderReport({ results, run, excluded }) {
   )
   if (gaps.length === 0) lines.push(`None.`, ``)
   for (const [group, rows] of groupBy(gaps, groupOf)) {
-    lines.push(`### ${group} (${rows[0].source})`, ``)
+    lines.push(`### ${group}`, ``)
     for (const gap of rows) {
       lines.push(
         `- **${kindOf(gap)}**, line ${gap.line}: ${change(gap)}`,
@@ -252,9 +274,9 @@ export function renderReport({ results, run, excluded }) {
       `No oracle's \`owns\` call tree contains these functions, so no test judges them.`,
       ``,
     )
-    for (const [fn, rows] of groupBy(unowned, (r) => r.function)) {
+    for (const [group, rows] of groupBy(unowned, groupOf)) {
       lines.push(
-        `### ${fn} (${rows[0].source}): ${rows.length} ${rows.length === 1 ? `mutant` : `mutants`}`,
+        `### ${group}: ${rows.length} ${rows.length === 1 ? `mutant` : `mutants`}`,
         ``,
         ...rows.map((r) => `- Unowned: ${codeSpan(r.key)}`),
         ``,
@@ -313,9 +335,9 @@ export function renderStdout({ results, run, excluded, pkg, paths }) {
   }
   if (unowned.length > 0) {
     lines.push(``, `Unowned warnings, by function:`)
-    for (const [fn, rows] of groupBy(unowned, (r) => r.function))
+    for (const [group, rows] of groupBy(unowned, groupOf))
       lines.push(
-        `  unowned fn ${fn}: ${rows.length} ${rows.length === 1 ? `mutant` : `mutants`}`,
+        `  unowned ${group}: ${rows.length} ${rows.length === 1 ? `mutant` : `mutants`}`,
       )
   }
   if (excluded.length > 0)

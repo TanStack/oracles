@@ -120,8 +120,12 @@
  *    survivor: a `not-judged` when an owner test's observation or asserted
  *    value changed, a `branch-never-taken` when an `if` on its line never took
  *    one of its outcomes in an owner test, a `not-infected` when a comparison's
- *    operators agreed on every operand an owner test reached, and
- *    `not-observed` otherwise. A test in a file that is not an
+ *    operators agreed on every operand an owner test reached, a
+ *    `not-distinguished` when its operator changes a value only on some
+ *    inputs and no capture shows which (a loop's condition, an undefined call
+ *    value, a dropped field, a skipped call, a logical operator), and
+ *    `not-observed` otherwise: the mutant changed a value that no recorded
+ *    observation showed. A test in a file that is not an
  *    oracle file never changes any of this, and runs only when the run asks
  *    for it (`--ordinary`, maintainer decision of 2026-11-06): then a
  *    survivor or an unreached mutant that an ordinary test reached reports
@@ -492,7 +496,7 @@ function namedScratch(text, names) {
 // A gap line the CLI streams to stderr as its mutant is judged (stream.mjs):
 // its class, its line, and its id.
 const streamedGap =
-  /^(?:not-judged|indeterminate|dead-code|branch-never-taken|not-infected|not-observed|unreached|random-only-kill|agreement-only-kill|unregistered-kill|framework-error|timeout|setup-error|crashed|does-not-apply) L(?:\d+|\?) (\S+) /
+  /^(?:not-judged|indeterminate|dead-code|branch-never-taken|not-infected|not-observed|not-distinguished|unreached|random-only-kill|agreement-only-kill|unregistered-kill|framework-error|timeout|setup-error|crashed|does-not-apply) L(?:\d+|\?) (\S+) /
 
 function readRun(dir, out, status, stderr, cli) {
   // The output names the CLI directory that ran and the package, as scratch
@@ -1103,6 +1107,7 @@ async function driver(plan, observe) {
       if (m.class === `branch-never-taken`) states.add(`branch never taken`)
       if (m.class === `not-infected`) states.add(`not infected`)
       if (m.class === `not-observed`) states.add(`not observed`)
+      if (m.class === `not-distinguished`) states.add(`not distinguished`)
       if (m.class === `indeterminate`) states.add(`indeterminate`)
     }
     // A batch that a hang cut off reran its other items in a new context.
@@ -1613,6 +1618,7 @@ const required = [
   `branch never taken`,
   `not infected`,
   `not observed`,
+  `not distinguished`,
   `unreached`,
   `unowned`,
   `authored mutant`,
