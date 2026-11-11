@@ -48,7 +48,11 @@
  *    an outer function's guard covers, and the older
  *    `if (devBuild() && …) probe(name)` form and its `devBuild()` helper.
  * 3. **Ownership.** The CLI discovers every oracle file in the package: a
- *    test file that calls `declareOracle({ owns })`. Each entry names a source
+ *    test file that calls `oracleProperty`, or passes a literal `owns` list
+ *    in an object-literal argument of any call, such as a wrapper's
+ *    (`registerX('id', { owns })`), which forwards it to `oracleProperty`.
+ *    An `owns` key inside an assertion's arguments is not read. The
+ *    file's owns is the union of its lists. Each entry names a source
  *    file (`src/x.ts`, owning all of it) or a function in it
  *    (`src/x.ts#run`, `src/x.ts#Class.method`, `src/x.ts#Class.#private`,
  *    the file ending at the first `#`), in any spelling that names the
@@ -391,7 +395,6 @@ import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import fc from 'fast-check'
-import { declareOracle } from '../src/oracle-declaration.ts'
 import { socketOf, stateDirOf } from './daemon.mjs'
 import { oracleProperty, pass, violation } from '../src/oracle-property.ts'
 
@@ -1921,12 +1924,6 @@ function check(plan, observations, expected) {
   return incrementalCheck(observations) ?? daemonCheck(observations) ?? pass
 }
 
-declareOracle({
-  check: [check, incrementalCheck, daemonCheck, refusalBreach],
-  model: [model, interpret, ownersOf, probeHelpers],
-  grammar: [histories],
-})
-
 // ## Calibrations
 //
 // Each one hands the check a wrong report, so a check that cannot see the
@@ -2325,17 +2322,17 @@ const witnessed = required.filter((s) => !separate.includes(s))
 
 // A constructed history builds from a generated base whose first function is
 // owned by file a (one owned function, not a whole file), so a random
-// `ownerless` or an all-unowned base cannot refuse a state it names. Its declaration
-// alternates between `declareOracle` and `oracleProperty` across the list, so
-// both forms reach the states they name; a build that names a declaration
-// (`neither`, `both`) keeps it.
+// `ownerless` or an all-unowned base cannot refuse a state it names. Where
+// its `owns` is written alternates between a wrapper's call and
+// `oracleProperty` across the list, so both forms reach the states they name;
+// a build that names a declaration (`neither`, `both`) keeps it.
 const withDeclaration = (constructed) =>
   constructed.map((item, index) => ({
     ...item,
     build: (generated) =>
       item.build({
         ...generated,
-        declaration: index % 2 === 0 ? `declareOracle` : `oracleProperty`,
+        declaration: index % 2 === 0 ? `wrapper` : `oracleProperty`,
         ownerless: false,
         owners: [`a`, ...generated.owners.slice(1)],
       }),
