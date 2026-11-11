@@ -161,11 +161,11 @@ export const registrationSkeleton = fc.record({
   // An oracle property's options: a literal with a check and a model, with a
   // check only, with no check, or a const name that the rule cannot read.
   frameworkOptions: fc.constantFrom(`check-model`, `check`, `model`, `name`),
-  // A plain registration whose body is empty: through `it`, `test`, or
-  // `it.skip` (a replay's placeholder), as an arrow, an async arrow, or a
-  // function expression.
+  // A plain registration whose body is empty: through `it`, `test`,
+  // `it.skip` (a replay's placeholder), or `it.todo` (which takes no body),
+  // as an arrow, an async arrow, or a function expression.
   empty: fc.constantFrom(false, false, false, true),
-  emptyCallee: fc.constantFrom(`it`, `test`, `it.skip`),
+  emptyCallee: fc.constantFrom(`it`, `test`, `it.skip`, `it.todo`),
   emptyFunction: fc.constantFrom(`arrow`, `async`, `function`),
 })
 
@@ -1002,7 +1002,11 @@ export function predictReports(program) {
   } else {
     for (const title of unreached) keys.push(`unit:${title}`)
   }
-  for (const test of empty) keys.push(`empty:${test.title}`)
+  // A todo with an empty body is told to drop the body.
+  for (const test of empty)
+    keys.push(
+      `${test.empty.callee === `it.todo` ? `todo` : `empty`}:${test.title}`,
+    )
   for (const name of oracle.typeNames) {
     if (!oracle.types.has(name)) keys.push(`typeModel:${name}`)
   }
@@ -1411,6 +1415,7 @@ export function keyOf(message, subjects) {
   if (subject === undefined) return `unmatched:${id}@${message.line}`
   if (id === `unitTest`) return `unit:${subject.id}`
   if (id === `emptyTest`) return `empty:${subject.id}`
+  if (id === `emptyTodo`) return `todo:${subject.id}`
   if (id === `undeclared`) return `undeclared:${subject.id}`
   if (id === `unknownTypeModel`) return `typeModel:${subject.id}`
   if (id === `importedRegistration`)
@@ -1595,6 +1600,7 @@ export function statesOf(program) {
       states.add(`empty-test-body`)
       if (test.empty.callee === `test`)
         states.add(`empty-test-body-through-test`)
+      if (test.empty.callee === `it.todo`) states.add(`todo-with-empty-body`)
     }
   }
 
@@ -2475,6 +2481,12 @@ export const WRITES = {
     'oracle.tests.0.emptyCallee': `it`,
     'oracle.tests.0.emptyFunction': `arrow`,
   },
+  'todo-with-empty-body': {
+    'oracle.tests.0.formIndex': formAt(`plain`),
+    'oracle.tests.0.empty': true,
+    'oracle.tests.0.emptyCallee': `it.todo`,
+    'oracle.tests.0.emptyFunction': `function`,
+  },
   'empty-test-body-through-test': {
     'oracle.tests.0.formIndex': formAt(`plain`),
     'oracle.tests.0.empty': true,
@@ -2837,4 +2849,5 @@ export const STATE_NAMES = [
   `oracle-imports-type-syntax-under-espree`,
   `empty-test-body`,
   `empty-test-body-through-test`,
+  `todo-with-empty-body`,
 ]

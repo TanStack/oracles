@@ -32,10 +32,18 @@ const oracleFiles = [
   `**/*oracle*.jsx`,
 ]
 
-// A tool's config file (`eslint.oracle.config.mjs`, `vite.config.ts`) is
-// never an oracle file or production source, so both configs leave it out.
-// A companion oracle module (`foo-oracle.ts`) stays in scope.
-const configFiles = [`**/*.config.{js,mjs,cjs,ts,mts,cts}`]
+// A tool's config file is never an oracle file or production source, so both
+// configs leave it out: ESLint's, Vite's, and Vitest's configs
+// (`vite.config.ts`, `vitest.unit.config.mjs`), and any config named for
+// oracles (`eslint.oracle.config.mjs`, which the setup guide suggests). A
+// source module named `*.config.ts` (`src/foo.config.ts`) and a companion
+// oracle module (`foo-oracle.ts`) stay in scope. A project that sets its own
+// `ignores` on a spread config merges them with these (README).
+const configFiles = [
+  `**/{eslint,vite,vitest}.config.*`,
+  `**/{eslint,vite,vitest}.*.config.*`,
+  `**/*.oracle.config.*`,
+]
 
 const plugin = {
   meta: { name: `eslint-plugin-oracle` },

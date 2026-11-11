@@ -88,8 +88,11 @@ import {
  * A test whose body is an empty function, such as `it('x', () => {})` or
  * `test('x', async function () {})`, checks nothing, so the rule reports it
  * as an empty test, whatever the file declares: remove it, or register it
- * with `it.todo` (maintainer decision, 2026-11-10). An empty test reaches no
- * part, and no other report counts it.
+ * with `it.todo` (maintainer decision, 2026-11-10). A todo given an empty
+ * body is told to drop the body. An empty test reaches no part, and no
+ * other report counts it. Only a function whose block holds no statement is
+ * empty: a body passed by name (`it('x', noop)`) or one holding an empty
+ * statement (`() => { ; }`) is judged as any other body.
  *
  * Files whose names start with `oracle-`, such as `oracle-replay.test.ts`,
  * test the shared oracle machinery, and the rule skips them.
@@ -1333,6 +1336,7 @@ export default {
     schema: [],
     messages: {
       emptyTest: `This test's body is empty, so it checks nothing. Remove it, or use it.todo.`,
+      emptyTodo: `it.todo takes no body; remove the body.`,
       unitTest: `This test reaches no part that this file declares with declareOracle, so its expected result has no independent source. A unit test belongs in an ordinary test file: move it there. A fixed history runs through the declared check, a model-rule expectation uses the declared model, and a grammar calibration uses the declared grammar.`,
       unknownTypeModel: `This typeModel name is not a type alias or interface in this file. A type model is the expected type that type-level tests compare with, so it must be declared here.`,
       incompleteProperty: `This oracleProperty call does not pass an object literal with a check, so the rule cannot see that the property has one. Pass its options inline as \`oracleProperty({ id, law, histories, driver, model, check })\`.`,
@@ -1395,7 +1399,9 @@ export default {
         const test = registeredTest(node, sourceCode)
         if (test === undefined) return
         if (isEmpty(test.body)) {
-          context.report({ node, messageId: `emptyTest` })
+          // `it.todo` with a body contradicts itself: a todo takes none.
+          const todo = test.modifiers.includes(`todo`)
+          context.report({ node, messageId: todo ? `emptyTodo` : `emptyTest` })
           return
         }
         // An `.each(table)` row can carry a function that the test body calls,

@@ -4,10 +4,12 @@
  * `production` config selects source under `src`, so without an exclusion a
  * config such as `eslint.oracle.config.mjs`, which the setup guide suggests,
  * gets the oracle rules (maintainer finding, 2026-11-10). Both configs ignore
- * `*.config.{js,mjs,cjs,ts,mts,cts}`. They still select every other file
- * whose name contains `oracle`: a companion oracle module such as
- * `foo-oracle.ts` keeps its rules, and so does an `oracle-config.ts` module,
- * whose name has no `.config.` part.
+ * the configs of ESLint, Vite, and Vitest (`vite.config.ts`,
+ * `vitest.unit.config.mjs`) and any `*.oracle.config.*`. They still select
+ * every other file: a companion oracle module such as `foo-oracle.ts`, an
+ * `oracle-config.ts` module, and a source module named `src/foo.config.ts`
+ * keep their rules. This repository's own eslint.config.js, which spreads the
+ * production config with its own ignores, keeps the preset's ignores too.
  *
  * The law is over a finite set of names (each tool, each placement of
  * `oracle`, and each extension the configs select), so this test enumerates
@@ -16,6 +18,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { ESLint } from 'eslint'
 import { afterAll, expect, test } from 'vitest'
 import oracles from '../src/index.js'
@@ -33,16 +36,20 @@ const oracleRules = async (path) =>
     (await eslint.calculateConfigForFile(join(root, path)))?.rules ?? {},
   ).filter((rule) => rule.startsWith(`oracle/`))
 
-const extensions = [`js`, `mjs`, `ts`]
-const configNames = [`eslint`, `vitest`, `vite`].flatMap((tool) =>
-  extensions.flatMap((ext) => [
-    `${tool}.oracle.config.${ext}`,
-    `oracle.${tool}.config.${ext}`,
-    `${tool}-oracle.config.${ext}`,
-    `packages/app/src/${tool}.config.${ext}`,
-    `src/${tool}.oracle.config.${ext}`,
-  ]),
-)
+const extensions = [`js`, `mjs`, `cjs`, `ts`, `mts`, `cts`]
+const configNames = [
+  ...[`eslint`, `vitest`, `vite`].flatMap((tool) =>
+    extensions.flatMap((ext) => [
+      `${tool}.config.${ext}`,
+      `${tool}.oracle.config.${ext}`,
+      `${tool}.unit.config.${ext}`,
+      `packages/app/src/${tool}.config.${ext}`,
+      `src/${tool}.oracle.config.${ext}`,
+    ]),
+  ),
+  `tests/playwright.oracle.config.ts`,
+  `src/app.oracle.config.ts`,
+]
 
 test(`no oracle rule applies to a tool's config file`, async () => {
   const applied = []
@@ -61,6 +68,27 @@ test(`the oracle rules still apply to companion modules and production source`, 
     `tests/config-oracle.test.js`,
   ])
     expect(await oracleRules(name)).toContain(`oracle/no-unit-test`)
-  for (const name of [`src/x.ts`, `packages/app/src/config.ts`])
+  for (const name of [
+    `src/x.ts`,
+    `packages/app/src/config.ts`,
+    `src/foo.config.ts`,
+    `packages/app/src/routes.config.mjs`,
+  ])
     expect(await oracleRules(name)).toContain(`oracle/probe-form`)
+})
+
+test(`this repository's eslint.config.js keeps the presets' ignores beside its own`, async () => {
+  const repo = fileURLToPath(new URL(`../../../`, import.meta.url))
+  const own = new ESLint({ cwd: repo })
+  const rulesOf = async (path) =>
+    Object.keys(
+      (await own.calculateConfigForFile(join(repo, path)))?.rules ?? {},
+    ).filter((rule) => rule.startsWith(`oracle/`))
+  expect(await rulesOf(`packages/oracles/src/vite.config.ts`)).toEqual([])
+  expect(
+    await rulesOf(`packages/oracles/vitest.oracle-framework.config.mjs`),
+  ).toEqual([])
+  expect(await rulesOf(`packages/oracles/src/foo.config.ts`)).toContain(
+    `oracle/probe-form`,
+  )
 })

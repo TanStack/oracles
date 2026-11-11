@@ -27,10 +27,22 @@ every commit with [pkg.pr.new](https://pkg.pr.new).
   specifier and by a relative module with its file name. A project names its
   variable prefix and its replay-selection modules in `settings.oracles`.
 
-The `recommended` and `production` configs leave out tool config files
-(`*.config.{js,mjs,cjs,ts,mts,cts}`), such as `eslint.oracle.config.mjs`: a
-config file is never an oracle file or production source. A companion oracle
-module, such as `foo-oracle.ts`, keeps the oracle rules.
+The `recommended` and `production` configs leave out tool config files: the
+configs of ESLint, Vite, and Vitest (`vite.config.ts`, `vitest.unit.config.mjs`)
+and any config named for oracles (`*.oracle.config.*`, such as
+`eslint.oracle.config.mjs`). A config file is never an oracle file or
+production source. A companion oracle module, such as `foo-oracle.ts`, keeps
+the oracle rules, and so does a source module named `src/foo.config.ts`.
+
+A config that spreads a preset and sets its own `ignores` replaces the
+preset's, so merge them:
+
+```js
+{
+  ...oracles.configs.production,
+  ignores: [...oracles.configs.production.ignores, 'packages/x/src/machinery/**'],
+}
+```
 
 ## The `oracle/no-unit-test` rule
 

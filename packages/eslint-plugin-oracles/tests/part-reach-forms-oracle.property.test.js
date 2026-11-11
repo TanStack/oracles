@@ -113,9 +113,13 @@ oracleProperty({
 oracleProperty({
   ...familyOptions({
     id: `lint.part-reach.empty-bodies`,
-    statement: `A registration whose body is empty checks nothing, so it is reported as an empty test whatever the file declares and whichever function form or registration (it, test, or a skipped placeholder) it uses; it reaches no part, and the other registrations are judged as the model predicts (maintainer decision, 2026-11-10).`,
+    statement: `A registration whose body is empty checks nothing, so it is reported as an empty test whatever the file declares and whichever function form or registration (it, test, or a skipped placeholder) it uses, and a todo given an empty body is told to drop it; it reaches no part, and the other registrations are judged as the model predicts (maintainer decision, 2026-11-10).`,
     features: { ...BASE, emptyBodies: true },
-    gated: [`empty-test-body`, `empty-test-body-through-test`],
+    gated: [
+      `empty-test-body`,
+      `empty-test-body-through-test`,
+      `todo-with-empty-body`,
+    ],
   }),
   check: checkPaths,
 })

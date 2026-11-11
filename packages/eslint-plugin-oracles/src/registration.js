@@ -254,7 +254,8 @@ export function registeredTest(node, sourceCode) {
     return undefined
   }
   const body = registrationBody(node.arguments.slice(1), sourceCode)
-  return body === undefined ? undefined : { body }
+  // The modifiers between the root and the call, such as `skip` or `todo`.
+  return body === undefined ? undefined : { body, modifiers: names }
 }
 
 /**
