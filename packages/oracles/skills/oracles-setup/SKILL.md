@@ -60,8 +60,14 @@ Never add, upgrade, or downgrade the repository's `typescript` for oracles.
 The gap check uses its own TypeScript and never reads the project's, from
 commit `d8adfee` on. Pin a commit at or after `d8adfee`. Oracle files need
 TypeScript 5 or newer. If the repository's `tsc` is older, keep the oracle
-files and the Vitest config out of its run (its `include` or `exclude`). Report any typecheck errors
-that existed before setup as pre-existing.
+files and the Vitest config out of its run (its `include` or `exclude`).
+Report any typecheck errors that existed before setup as pre-existing.
+
+Temporary, a known packaging bug: `@tanstack/oracles` depends on
+`typescript`, and npm can hoist that copy to the repository root. A
+repository that declares no `typescript` then gets one, and `npx tsc`
+resolves to it. Report it as this bug. Do not treat that copy as the
+repository's TypeScript, and do not add a typecheck that uses it.
 
 Use the repository's own package manager. With pnpm 11, an install that skips
 a dependency's build script stops every later pnpm command

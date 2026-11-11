@@ -457,6 +457,9 @@ comes with one instruction. Do what it says, within the rules below.
 - **A law that kills nothing** owns no mutated code, or its witness never
   varies in the histories. Check its witness and its constructed history. If
   the law still kills nothing, it may restate another law: compare the two.
+  Temporary: a kill is credited only to the first law that a history
+  violates, so a later law can look idle. Before you restate or delete it,
+  run hand mutants aimed at that law alone.
 - **The only exclusions are probe-only code and the `super()` region of a
   derived constructor.**
 - **A survivor that the adopted law allows is an allowed alternative.** If a
