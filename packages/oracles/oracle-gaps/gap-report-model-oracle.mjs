@@ -2390,8 +2390,13 @@ function sitesOf(plan) {
     for (const stmt of fn.body) {
       const whole = stmt.lines.join(` `)
       const probe = inHelper || probeOnly(stmt)
-      const at = (operator, role, line, text) =>
-        add(fn.id, line, operator, text, { stmt: stmt.label, role, probe })
+      const at = (operator, role, line, text, extra) =>
+        add(fn.id, line, operator, text, {
+          stmt: stmt.label,
+          role,
+          probe,
+          ...extra,
+        })
       const condition = () => {
         at(`if-true`, `true`, stmt.line, whole)
         at(`if-false`, `false`, stmt.line, whole)
@@ -2497,16 +2502,18 @@ function sitesOf(plan) {
       // code, its guard's declaration included.
       if (stmt.kind === `nearProbe`) {
         const near = { stmt: stmt.label, role: `near`, probe: inHelper }
-        const at = (line, operator, text) =>
-          add(fn.id, line, operator, text, near)
+        const at = (line, operator, text, extra) =>
+          add(fn.id, line, operator, text, { ...near, ...extra })
+        // The `&&` that guards the hook is a logical operator.
+        const and = { logical: true }
         const call = (line) => {
           const text = stmt.lines[line - stmt.line].trim()
-          at(line, `binary-swap`, text)
+          at(line, `binary-swap`, text, and)
           at(line, `value-undefined`, text)
           at(line, `binary-swap`, text)
         }
         if (stmt.variant === `former`) {
-          at(stmt.line, `binary-swap`, whole)
+          at(stmt.line, `binary-swap`, whole, and)
           at(stmt.line, `binary-swap`, whole)
           at(stmt.line, `value-undefined`, whole)
           at(stmt.line, `binary-swap`, whole)
@@ -2533,7 +2540,7 @@ function sitesOf(plan) {
       if (stmt.kind === `oldProbe`) {
         at(`if-true`, `oldTrue`, stmt.line, whole)
         at(`if-false`, `oldFalse`, stmt.line, whole)
-        at(`binary-swap`, `oldAnd`, stmt.line, whole)
+        at(`binary-swap`, `oldAnd`, stmt.line, whole, { logical: true })
         at(`value-undefined`, `oldDevBuild`, stmt.line, whole)
         at(`binary-swap`, `oldNe`, stmt.line, whole)
         at(
@@ -3210,13 +3217,14 @@ function model(plan) {
     const comparison = site.operator === `binary-swap` && site.role === `swap`
     // A mutant that changes a value only on some inputs, with no capture to
     // show which: a loop's condition, an undefined call value, a dropped
-    // field, a skipped call, and a logical operator (the old probe form's
-    // `&&`). Its directive names the input that distinguishes it.
+    // field, a skipped call, and a logical operator (the `&&` of the old
+    // probe form and of a probe in another shape). Its directive names the
+    // input that distinguishes it.
     if (
       [`loop-false`, `value-undefined`, `field-drop`, `delete-call`].includes(
         site.operator,
       ) ||
-      (site.operator === `binary-swap` && site.role === `oldAnd`)
+      site.logical === true
     )
       return `not-distinguished`
     // Code that runs at load infects every test of its file, and a
