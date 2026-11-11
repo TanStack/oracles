@@ -214,6 +214,10 @@ For the design grammar card, see the triggers in step 1.
 
 ## 3. Choose the model
 
+Build the strongest model the approved laws need: one that predicts every
+observation the laws make a claim about. The choice of model is yours, so do
+not ask the developer to pick between a complete model and partial checks.
+
 Pick by the shape of the law, in this order, and use the first style that
 can state it:
 

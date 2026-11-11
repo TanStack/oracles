@@ -345,6 +345,13 @@ Settle these privately too:
   law, a history dimension, or a constructed history. Keep a pointer to the
   probe that showed it.
 
+**Always build the strongest oracle the laws need.** Its model predicts every
+observation that the approved laws make a claim about. How the oracle is
+built is your decision, not the developer's: never offer them a weaker
+design, such as checks without a model, a partial model, or fewer
+observations, as a choice. If a law truly cannot be modeled yet, say which
+part, and state it as a limit.
+
 The law must say more than the code does. If a model of it would only repeat
 the implementation, look for the public promise that the code serves.
 
