@@ -122,10 +122,20 @@
  *   state are explored, not visited once.
  * - A **fixed history** is a named history, such as a fixed regression. It may
  *   name the states it `enters`, which its run must reach. Fixed and
- *   constructed histories must be histories the arbitrary could generate
+ *   constructed histories must be histories the arbitrary can take back
  *   (`canShrinkWithoutContext`), so they shrink like generated ones and cannot
  *   cover a dimension that the grammar lacks; such a dimension belongs in the
- *   grammar, or in the property's stated limits.
+ *   grammar, or in the property's stated limits. The property checks this when
+ *   it registers, for every fixed history and for the constructed histories
+ *   built from the first fixed seed (or seed 0 when there is none), so a
+ *   constructed history's `build` runs when the test file loads. It fails to
+ *   load naming the history, and a `build` that throws there fails to load
+ *   naming its constructed history
+ *   (maintainer decision, 2026-11-10); a campaign checks the constructed
+ *   histories its own seed builds. In fast-check 4, a `.map` without an
+ *   unmapper, at the whole history or anywhere inside it, takes no value
+ *   back, so a history inside the language fails too until its `.map` gets
+ *   an unmapper.
  * - **Resolution.** A history can name its actions indirectly, such as "settle
  *   the second active transaction". `resolve(history)` turns it into the plan
  *   of concrete actions that the driver runs and that the model and check read.
@@ -1573,6 +1583,17 @@ function rerunOf(task: NamedTask): string {
   return `-t '${pattern.replace(/'/g, `'\\''`)}'`
 }
 
+/**
+ * A fixed or constructed history whose arbitrary's `canShrinkWithoutContext`
+ * is false, so fast-check could not shrink it. fast-check 4 answers false
+ * without saying why: for a history outside the language, and for every value
+ * of a `.map` without an unmapper or of a `.chain`.
+ */
+const untakeable = (id: string, history: string) =>
+  new Error(
+    `${id}: ${history} a history the arbitrary cannot take back (its \`canShrinkWithoutContext\` is false), so its failures could not shrink. Either the arbitrary cannot generate it, or the history passes through a combinator that cannot map it back. \`.map\` needs an unmapper (its second argument). \`fc.constant\`/\`fc.constantFrom\` take back only primitives or the same object reference, so build objects with \`fc.record\`/\`fc.tuple\` over primitive leaves. \`.chain\`, \`fc.func\`, and \`fc.commands\` cannot take a value back.`,
+  )
+
 function generatedTests<THistory, TExpected, TPlan>(
   unbound: OraclePropertyOptions<THistory, TExpected, TPlan>,
   source: GeneratedHistories<THistory>,
@@ -1684,23 +1705,39 @@ function generatedTests<THistory, TExpected, TPlan>(
   // Each campaign runs every constructed history, built from histories its own
   // seed draws.
   // fast-check passes example inputs by reference, which identifies them.
-  const examplesFor = (seed: number) => {
+  // At registration, an error from sampling or building names its
+  // constructed history: it would otherwise fail the file's load unnamed.
+  const examplesFor = (seed: number, registering = false) => {
     const constructionOf = new Map<THistory, ConstructedHistory<THistory>>()
     const examples = constructions.map((construction, index) => {
-      const [generated] = fc.sample(source.arbitrary, {
-        seed: seed + index,
-        numRuns: 1,
-      })
-      const history = construction.build(generated!)
-      if (!source.arbitrary.canShrinkWithoutContext(history))
+      let history: THistory
+      try {
+        const [generated] = fc.sample(source.arbitrary, {
+          seed: seed + index,
+          numRuns: 1,
+        })
+        history = construction.build(generated!)
+      } catch (error) {
+        if (!registering) throw error
         throw new Error(
-          `${id}: constructed history "${construction.name}" built a history the arbitrary cannot generate. A constructed history must stay inside the generated language so that its failures shrink.`,
+          `oracleProperty ${id}: constructed history "${construction.name}" threw while it was built for registration: ${error instanceof Error ? error.message : reportText(error)}`,
+          { cause: error },
         )
+      }
+      if (!source.arbitrary.canShrinkWithoutContext(history))
+        throw untakeable(id, `constructed history "${construction.name}" built`)
       constructionOf.set(history, construction)
       return [history] as [THistory]
     })
     return { examples, constructionOf }
   }
+  // Registration checks every fixed history, then the constructed histories
+  // built from the first fixed seed (or seed 0 when there is none), so a
+  // history that cannot shrink fails the load rather than a full run.
+  for (const [index, fixed] of (source.fixed ?? []).entries())
+    if (!source.arbitrary.canShrinkWithoutContext(fixed.history))
+      throw untakeable(id, `fixed history ${index} ("${fixed.name}") is`)
+  examplesFor(source.fixedSeeds[0] ?? 0, true)
 
   // A campaign reports its reach counts after it passes; a failing campaign
   // reports its counterexample instead.
@@ -1760,10 +1797,6 @@ function generatedTests<THistory, TExpected, TPlan>(
     route: `fixed history`,
     replays: [],
     run: async (task) => {
-      if (!source.arbitrary.canShrinkWithoutContext(fixed.history))
-        throw new Error(
-          `${id}: fixed history "${fixed.name}" is not a history the arbitrary can generate. A fixed history must stay inside the generated language, or the property must declare the missing dimension as a limit.`,
-        )
       const { verdict, reached } = await runOne(options, fixed.history)
       if (verdict.kind === `violation`)
         throw failure(options, verdict, fixed.history, rerunOf(task))
@@ -1776,8 +1809,9 @@ function generatedTests<THistory, TExpected, TPlan>(
         )
     },
   }))
-  // Fixed histories and the constructed histories of the first fixed seed, so
-  // these checks are reproducible; they are built when a test runs, like a
+  // Fixed histories and the constructed histories of the first fixed seed (or
+  // seed 0), so these checks are reproducible. Registration built them once to
+  // check them; they are built again when a test runs, like a
   // campaign's.
   const namedHistories = () => {
     const { examples, constructionOf } = examplesFor(source.fixedSeeds[0] ?? 0)

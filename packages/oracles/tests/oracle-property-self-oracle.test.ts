@@ -11,7 +11,8 @@
  *   determinism test, and an enumerated property without a `label` gives
  *   distinct histories distinct test names, or fails to load when its id is not a registered
  *   oracle property, a required state has no constructed history, a constructed history names an
- *   undeclared state, or `owns` is not a non-empty literal list of strings (the gap report reads it
+ *   undeclared state, a fixed or constructed history is one the arbitrary cannot take back (law
+ *   `membership`), or `owns` is not a non-empty literal list of strings (the gap report reads it
  *   statically). When several of the named load errors apply, the declaration's shape reports
  *   first, in this order: an unregistered id, then `owns`, then `predict` on an enumerated source
  *   (only a generated source declares states), then a history that is not data (`data`). A load
@@ -29,7 +30,19 @@
  *   names the model (maintainer decision, 2026-11-08).
  * - `shrink`: a campaign's reported failure keeps the kind and law of its first
  *   failure, and its counterexample still has them.
- * - `membership`: a fixed history, or the history a constructed history builds, outside the language fails.
+ * - `membership`: a fixed history, or the history a constructed history builds from the first fixed
+ *   seed's sample (seed 0's when there is none), that the arbitrary cannot take back (`canShrinkWithoutContext` is false) fails
+ *   the property's load, with an error that names the property, the history (a fixed history's
+ *   index and name, or a constructed history's name), and the fix for a `.map` without an
+ *   unmapper (maintainer decision, 2026-11-10, F20). A history outside the language is one such
+ *   history; a history inside it whose arbitrary maps it, at the whole history or at an item,
+ *   through a `.map` without an unmapper is another. The same arbitrary with an unmapper takes its
+ *   histories back, and an arbitrary without an unmapper but with no fixed or constructed
+ *   history loads and runs. A load fails at the first such history, fixed histories first, after
+ *   every other load error of a generated source (analyst-chosen order, 2026-11-10). Registration
+ *   builds the constructed histories when the file loads, so a `build` that throws there fails
+ *   the load with an error that names the property and the constructed history and carries the
+ *   build's error as its cause; constructed histories are built and checked in order.
  * - `reach`: a fixed or constructed history that does not enter a state it names fails, and
  *   a passing campaign reports how many of its histories entered each declared
  *   state, whether the property names reach itself or the driver records it.
@@ -98,11 +111,18 @@
  * its state probes (user decision of 2026-11-04 adopting differential reach); the
  * maintainer decisions of 2026-11-03 on calibration candidates, failure
  * precedence, and determinism scope; the maintainer decision of 2026-11-06
- * that work which never goes quiet on a controlled clock fails its history; and the oracle rubric's replay
+ * that work which never goes quiet on a controlled clock fails its history; the maintainer
+ * decision of 2026-11-10 (F20) that a fixed or constructed history the arbitrary cannot take back
+ * fails at registration, naming the history and the fix; and the oracle rubric's replay
  * (ORC-007), calibration (ORC-006), and declared-reach (ORC-015) rules.
  *
  * Limits: synthetic properties with histories of one to three integers, held
- * as an array, a bigint-tagged object, or a Map, one or two per run. The model learns which histories a test ran from the
+ * as an array, a bigint-tagged object, or a Map, one or two per run. An
+ * arbitrary maps its histories through at most one `.map` without an
+ * unmapper, at the whole history or at each item; `.chain` and a filter are
+ * not drawn, and a constructed history whose build leaves the language only
+ * for some seeds is not drawn, so the run-time check of a later campaign's
+ * constructed histories has no witness here. The model learns which histories a test ran from the
  * synthetic driver's log, and relies on fast-check running a campaign's examples
  * (its constructed histories) first, in order. A replay or rerun probe covers
  * every failing campaign but only the first violating fixed or enumerated history of each
@@ -164,6 +184,15 @@ type Draft = {
   statesMode: `exact` | `extra` | `missing`
   constructed: Array<{ prefix: SyntheticHistory; enters: Array<string> }>
   fixed: Array<{ history: SyntheticHistory; enters: Array<string> | null }>
+  /**
+   * How a generated source's arbitrary maps its histories: not at all (only
+   * a form maps, with an unmapper), through a `.map` with an unmapper, or
+   * through one without, at the whole history or at each item.
+   */
+  arbitraryMap: `none` | `unmapper` | `no unmapper`
+  mapAt: `history` | `item`
+  /** The first constructed history's build throws. */
+  throwingBuild: boolean
   nondeterministic: boolean
   reachVia: `reached` | `observe`
   /** `slow`: 300 ms per history under a 100 ms timeout. */
@@ -252,6 +281,20 @@ const draft: fc.Arbitrary<Draft> = fc.record({
       enters: fc.option(fc.subarray(allStates), { freq: 2 }),
     }),
     { maxLength: 2 },
+  ),
+  // Rare: a `.map` with or without an unmapper, which decides whether the
+  // arbitrary can take a fixed or constructed history back.
+  arbitraryMap: fc.oneof(
+    { arbitrary: fc.constant(`none` as const), weight: 8 },
+    {
+      arbitrary: fc.constantFrom(`unmapper` as const, `no unmapper` as const),
+      weight: 2,
+    },
+  ),
+  mapAt: fc.constantFrom(`history` as const, `item` as const),
+  throwingBuild: fc.oneof(
+    { arbitrary: fc.constant(false), weight: 9 },
+    { arbitrary: fc.constant(true), weight: 1 },
   ),
   nondeterministic: fc.oneof(
     { arbitrary: fc.constant(false), weight: 4 },
@@ -462,6 +505,17 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
               ...(fixedHistory.enters ? { enters: fixedHistory.enters } : {}),
             }))
           : [],
+        ...(generated && d.arbitraryMap !== `none`
+          ? {
+              arbitraryMap: {
+                unmapper: d.arbitraryMap === `unmapper`,
+                at: d.mapAt,
+              },
+            }
+          : {}),
+        ...(generated && d.throwingBuild && d.constructed.length > 0
+          ? { throwingBuild: true }
+          : {}),
         nondeterministic: d.nondeterministic,
         reachVia: d.reachVia,
         ...(d.unregistered ? { unregistered: true } : {}),
@@ -548,8 +602,6 @@ type Kind =
   | `pass`
   | `violation`
   | `setup`
-  | `fixed-membership`
-  | `constructed-membership`
   | `fixed-reach`
   | `constructed-reach`
   | `determinism`
@@ -588,6 +640,16 @@ const member = (history: SyntheticHistory) =>
 // three items; generated items are always allowed.
 const constructedMember = (prefix: SyntheticHistory) =>
   prefix.length >= 1 && prefix.slice(0, 3).every(allowed)
+// The arbitrary takes a history back when the history is in its language and
+// no `.map` on the history's way lacks an unmapper: in fast-check 4, a `.map`
+// without one answers `canShrinkWithoutContext` with false for every value, at
+// the whole history or at an item inside it.
+const takesBack = (spec: SyntheticSpec, inLanguage: boolean) =>
+  inLanguage && spec.arbitraryMap?.unmapper !== false
+// The fix a membership load error names (maintainer decision, 2026-11-10, F20).
+const mapFix = `\`.map\` needs an unmapper (its second argument). \`fc.constant\`/\`fc.constantFrom\` take back only primitives or the same object reference, so build objects with \`fc.record\`/\`fc.tuple\` over primitive leaves. \`.chain\`, \`fc.func\`, and \`fc.commands\` cannot take a value back.`
+// What a synthetic constructed history's throwing build throws.
+const buildFailure = `synthetic build failed`
 // A 7 on a controlled clock spins it: past the clock's bound, the history
 // fails under law `bounded clock` at checkpoint `clock`, ranked as a driver
 // error is, by where it happens. A violation recorded before it still decides;
@@ -817,7 +879,21 @@ const historyFailures: Partial<
 }
 
 type SpecExpectation =
-  | { loads: false; loadError?: string; dataError?: boolean }
+  | {
+      loads: false
+      /** Text the load error holds, and, for a membership error, the fix it names too. */
+      loadError?: string
+      loadFix?: string
+      /** The message of the load error's cause. */
+      loadCause?: string
+      /** A constructed history's build threw at registration. */
+      buildError?: boolean
+      dataError?: boolean
+      /** Which history failed law `membership`. */
+      membership?: `fixed` | `constructed`
+      /** Whether that history is in the language, so only a `.map` without an unmapper failed it. */
+      unmapped?: boolean
+    }
   | {
       loads: true
       tests: Map<string, Outcome>
@@ -886,6 +962,39 @@ function predictSpec(
       [...entered].some((state) => !declared.has(state))
     )
       return { loads: false }
+    // A fixed or constructed history that the arbitrary cannot take back
+    // fails the load (law `membership`), fixed histories first, naming the
+    // property, the history, and the fix.
+    const fixedAt = spec.fixed.findIndex(
+      (fixedHistory) => !takesBack(spec, member(fixedHistory.history)),
+    )
+    if (fixedAt >= 0)
+      return {
+        loads: false,
+        loadError: `${spec.id}: fixed history ${fixedAt} ("${spec.fixed[fixedAt]!.name}")`,
+        loadFix: mapFix,
+        membership: `fixed`,
+        unmapped: member(spec.fixed[fixedAt]!.history),
+      }
+    // Registration then builds each constructed history in order: a build
+    // that throws names its constructed history and carries its error.
+    for (const [at, construction] of spec.constructed.entries()) {
+      if (at === 0 && spec.throwingBuild)
+        return {
+          loads: false,
+          loadError: `oracleProperty ${spec.id}: constructed history "${construction.name}" threw while it was built for registration: ${buildFailure}`,
+          loadCause: buildFailure,
+          buildError: true,
+        }
+      if (!takesBack(spec, constructedMember(construction.prefix)))
+        return {
+          loads: false,
+          loadError: `${spec.id}: constructed history "${construction.name}"`,
+          loadFix: mapFix,
+          membership: `constructed`,
+          unmapped: constructedMember(construction.prefix),
+        }
+    }
   }
   const names =
     spec.source.kind === `enumerated`
@@ -908,56 +1017,19 @@ function predictSpec(
   // A slow driver outlives the 100 ms limit in every test that runs a
   // history, and every test runs at least one.
   // A driver that observes a value outside the data domain fails every
-  // history at once; a history outside the language still fails its
-  // membership check first.
+  // history at once.
   const data = dataOutcome(spec)
   if (data) {
-    const constructedOutside = spec.constructed.some(
-      (construction) => !constructedMember(construction.prefix),
-    )
-    for (const name of all)
-      tests.set(
-        name,
-        constructedOutside &&
-          (isCampaign(name) ||
-            name === `determinism` ||
-            name.startsWith(`calibration:`))
-          ? { kind: `constructed-membership` }
-          : data,
-      )
-    for (const fixedHistory of spec.fixed)
-      if (!member(fixedHistory.history))
-        tests.set(`fixed history: ${fixedHistory.name}`, {
-          kind: `fixed-membership`,
-        })
+    for (const name of all) tests.set(name, data)
     return {
       loads: true,
       tests,
       reach: new Map(),
-      replays: constructedOutside ? [] : names.filter(isCampaign),
+      replays: names.filter(isCampaign),
     }
   }
-  // A history outside the language fails its membership check before any
-  // driver runs, so it fails fast even in a slow spec.
   if (spec.slow) {
-    const constructedOutside = spec.constructed.some(
-      (construction) => !constructedMember(construction.prefix),
-    )
-    for (const name of all)
-      tests.set(
-        name,
-        constructedOutside &&
-          (isCampaign(name) ||
-            name === `determinism` ||
-            name.startsWith(`calibration:`))
-          ? { kind: `constructed-membership` }
-          : { kind: `timeout` },
-      )
-    for (const fixedHistory of spec.fixed)
-      if (!member(fixedHistory.history))
-        tests.set(`fixed history: ${fixedHistory.name}`, {
-          kind: `fixed-membership`,
-        })
+    for (const name of all) tests.set(name, { kind: `timeout` })
     return { loads: true, tests, reach: new Map(), replays: [] }
   }
   // A calibration needs a candidate whose clean trace passes; it skips the
@@ -1004,12 +1076,6 @@ function predictSpec(
   // constructed history that misses a state it names (maintainer decision,
   // 2026-11-03). A campaign runs its constructed histories first, in order.
   const campaign = (test: string): Outcome => {
-    if (
-      spec.constructed.some(
-        (construction) => !constructedMember(construction.prefix),
-      )
-    )
-      return { kind: `constructed-membership` }
     for (const [at, history] of ran(test).entries()) {
       const { cause: _shrinkable, ...verdict } = judged(spec, history)
       if (verdict.kind !== `pass`) return verdict
@@ -1029,13 +1095,11 @@ function predictSpec(
       const verdict = judged(spec, fixedHistory.history)
       tests.set(
         `fixed history: ${fixedHistory.name}`,
-        !member(fixedHistory.history)
-          ? { kind: `fixed-membership` }
-          : verdict.kind !== `pass`
-            ? verdict
-            : !reaches(spec, fixedHistory.history, fixedHistory.enters ?? [])
-              ? { kind: `fixed-reach` }
-              : { kind: `pass` },
+        verdict.kind !== `pass`
+          ? verdict
+          : !reaches(spec, fixedHistory.history, fixedHistory.enters ?? [])
+            ? { kind: `fixed-reach` }
+            : { kind: `pass` },
       )
     }
   }
@@ -1058,17 +1122,6 @@ function predictSpec(
     )
   }
   tests.set(`determinism`, determinism())
-  // The determinism and calibration tests build constructed histories too, so a
-  // constructed history outside the language fails them the same way it fails a campaign.
-  if (
-    spec.constructed.some(
-      (construction) => !constructedMember(construction.prefix),
-    )
-  )
-    for (const name of all.filter(
-      (name) => name === `determinism` || name.startsWith(`calibration:`),
-    ))
-      tests.set(name, { kind: `constructed-membership` })
   // A passing campaign counts, for every declared and measured state, the
   // histories it ran that entered it.
   const reach = new Map<string, Record<string, number>>()
@@ -1085,8 +1138,7 @@ function predictSpec(
           ]),
         ),
       )
-  // A campaign that fails inside fast-check reports a seed and path to replay; a
-  // constructed history outside the language fails before fast-check runs.
+  // A campaign that fails inside fast-check reports a seed and path to replay.
   const replays = names.filter(
     (name) =>
       isCampaign(name) &&
@@ -1168,6 +1220,11 @@ const frameworkStates = [
   `fixed-reach-failure`,
   `fixed-membership-failure`,
   `constructed-membership-failure`,
+  `unmapped-history-load-error`,
+  `item-unmapped-load-error`,
+  `unmapper-history-loads`,
+  `unmapped-arbitrary-loads`,
+  `constructed-build-load-error`,
   `calibration-applied`,
   `calibration-rejected`,
   `calibration-skipped-candidate`,
@@ -1225,8 +1282,24 @@ function frameworkReach(
     if (!owed.loads) {
       reached.add(`registration-error`)
       if (owed.dataError) reached.add(`history-out-of-domain`)
+      if (owed.buildError) reached.add(`constructed-build-load-error`)
+      if (owed.membership === `fixed`) reached.add(`fixed-membership-failure`)
+      if (owed.membership === `constructed`)
+        reached.add(`constructed-membership-failure`)
+      // A history in the language that only a `.map` without an unmapper
+      // keeps the arbitrary from taking back.
+      if (owed.unmapped) {
+        reached.add(`unmapped-history-load-error`)
+        if (spec.arbitraryMap?.at === `item`)
+          reached.add(`item-unmapped-load-error`)
+      }
       continue
     }
+    const named = spec.fixed.length + spec.constructed.length > 0
+    if (spec.arbitraryMap?.unmapper === true && named)
+      reached.add(`unmapper-history-loads`)
+    if (spec.arbitraryMap?.unmapper === false && !named)
+      reached.add(`unmapped-arbitrary-loads`)
     if (spec.odd && inDomain(spec.odd)) reached.add(`observation-in-domain`)
     if (spec.emptyMessage) reached.add(`equal-data-repeats`)
     if (spec.liveDate) reached.add(`live-value`)
@@ -1283,8 +1356,6 @@ function frameworkReach(
       const failure = {
         'constructed-reach': `constructed-reach-failure`,
         'fixed-reach': `fixed-reach-failure`,
-        'fixed-membership': `fixed-membership-failure`,
-        'constructed-membership': `constructed-membership-failure`,
         'calibration-passed': `calibration-rejected`,
         'calibration-wrong-law': `calibration-rejected`,
       }[outcome.kind as string]
@@ -1439,6 +1510,8 @@ type SuiteRun = {
       loaded: boolean
       /** The file's load errors, by message. */
       loadErrors: Array<string>
+      /** Each load error's cause, by message. */
+      loadCauses: Array<string>
       tests: Array<{
         name: string
         state: string
@@ -1520,28 +1593,24 @@ function classify(error: ReportedError | undefined): Failure {
             : /timed out in \d+ms/.test(text) ||
                 /timed out in \d+ms/.test(outer)
               ? `timeout`
-              : text.includes(`is not a history the arbitrary can generate`)
-                ? `fixed-membership`
-                : text.includes(`built a history the arbitrary cannot generate`)
-                  ? `constructed-membership`
-                  : text.includes(`did not enter`) &&
-                      text.includes(`: fixed history "`)
-                    ? `fixed-reach`
-                    : text.includes(`did not enter`) &&
-                        text.includes(`: constructed history "`)
-                      ? `constructed-reach`
-                      : text.includes(`two runs of`)
-                        ? `determinism`
-                        : text.includes(`but the check passed it`)
-                          ? `calibration-passed`
-                          : text.includes(`but the check reported law`)
-                            ? `calibration-wrong-law`
-                            : text.includes(`found no history`)
-                              ? `calibration-none`
-                              : text.includes(`synthetic driver failed`) ||
-                                  text.includes(`cannot read a 7`)
-                                ? `setup`
-                                : `other`
+              : text.includes(`did not enter`) &&
+                  text.includes(`: fixed history "`)
+                ? `fixed-reach`
+                : text.includes(`did not enter`) &&
+                    text.includes(`: constructed history "`)
+                  ? `constructed-reach`
+                  : text.includes(`two runs of`)
+                    ? `determinism`
+                    : text.includes(`but the check passed it`)
+                      ? `calibration-passed`
+                      : text.includes(`but the check reported law`)
+                        ? `calibration-wrong-law`
+                        : text.includes(`found no history`)
+                          ? `calibration-none`
+                          : text.includes(`synthetic driver failed`) ||
+                              text.includes(`cannot read a 7`)
+                            ? `setup`
+                            : `other`
   return {
     kind,
     // A model error that quotes a machine path, such as an inspected stack.
@@ -1717,6 +1786,9 @@ async function driveSuite(
         loadErrors: (reported?.errors ?? []).map(
           (error) => error.message ?? ``,
         ),
+        loadCauses: (reported?.errors ?? []).map(
+          (error) => error.cause?.message ?? ``,
+        ),
         tests: (reported?.tests ?? []).map((test) => ({
           name: short(spec.id, test.name),
           state: test.state,
@@ -1854,11 +1926,9 @@ const lawOfKind = (kind: string, name: string) =>
       ? `data`
       : kind === `model-not-total`
         ? `verdict`
-        : kind.endsWith(`membership`)
-          ? `membership`
-          : kind.endsWith(`reach`)
-            ? `reach`
-            : lawOfTest(name)
+        : kind.endsWith(`reach`)
+          ? `reach`
+          : lawOfTest(name)
 
 function checkSuite(
   plan: Plan,
@@ -1880,21 +1950,30 @@ function checkSuite(
     const owed = expected.get(spec.id)!
     const seen = run.files[spec.id]!
     if (!owed.loads) {
+      const law = owed.membership ? `membership` : `registration`
       if (seen.loaded)
         return violation(
           `run`,
-          `${spec.id} loaded, but its id is unregistered, a required state has no constructed history, a constructed history names an undeclared state, \`owns\` is not a non-empty literal list of strings, or a history is not data`,
-          `registration`,
+          `${spec.id} loaded, but its id is unregistered, a required state has no constructed history, a constructed history names an undeclared state, a fixed or constructed history is one the arbitrary cannot take back, \`owns\` is not a non-empty literal list of strings, or a history is not data`,
+          law,
         )
+      const owedText = [owed.loadError, owed.loadFix].filter(
+        (text) => text !== undefined,
+      )
       if (
-        owed.loadError &&
-        !seen.loadErrors.some((message) => message.includes(owed.loadError!))
+        owedText.length > 0 &&
+        !seen.loadErrors.some(
+          (message, at) =>
+            owedText.every((text) => message.includes(text)) &&
+            (owed.loadCause === undefined ||
+              seen.loadCauses[at] === owed.loadCause),
+        )
       )
         return violation(
           `run`,
-          `${spec.id} failed to load with ${JSON.stringify(seen.loadErrors)}, owed ${JSON.stringify(owed.loadError)}`,
-          `data`,
-          { actual: seen.loadErrors, expected: owed.loadError },
+          `${spec.id} failed to load with ${JSON.stringify(seen.loadErrors)}, owed ${JSON.stringify(owedText)}`,
+          owed.membership ? law : `data`,
+          { actual: seen.loadErrors, expected: owedText },
         )
       continue
     }
@@ -2046,8 +2125,7 @@ function checkSuite(
       )
   }
   // In a run without a seed, every history of a random campaign runs under
-  // `random seed`, and a loaded campaign whose constructed histories are
-  // members runs at least one.
+  // `random seed`, and a loaded campaign runs at least one.
   const seedless = trace.find(({ checkpoint }) => checkpoint === `seedless`)
     ?.value as Record<string, Array<string | null>> | undefined
   if (seedless)
@@ -2055,8 +2133,7 @@ function checkSuite(
       const owedRoutes =
         expected.get(spec.id)!.loads &&
         spec.source.kind === `generated` &&
-        !spec.slow &&
-        spec.constructed.every(({ prefix }) => constructedMember(prefix))
+        !spec.slow
           ? [`random seed`]
           : []
       if (JSON.stringify(seedless[spec.id]) !== JSON.stringify(owedRoutes))
@@ -2162,6 +2239,9 @@ const generatedDraft = (overrides: Partial<Draft>): Draft => ({
   statesMode: `exact`,
   constructed: [],
   fixed: [],
+  arbitraryMap: `none`,
+  mapAt: `history`,
+  throwingBuild: false,
   nondeterministic: false,
   reachVia: `reached`,
   timing: `normal`,
@@ -2347,14 +2427,74 @@ oracleProperty({
         generatedDraft({ fixed: [{ history: [0], enters: [`saw-1`] }] }),
       ),
       fixedHistory(
-        `a fixed history outside the language fails`,
+        `a fixed history outside the language fails to load`,
         [`fixed-membership-failure`],
         generatedDraft({ fixed: [at([5])] }),
       ),
       fixedHistory(
-        `a constructed history outside the language fails`,
+        `a constructed history outside the language fails to load`,
         [`constructed-membership-failure`],
         generatedDraft({ constructed: [{ prefix: [5], enters: [] }] }),
+      ),
+      // The load error names the history by its index, so the second fixed
+      // history is named, and before the constructed history.
+      fixedHistory(
+        `the first fixed history the arbitrary cannot take back fails the load before a constructed one`,
+        [`fixed-membership-failure`],
+        generatedDraft({
+          fixed: [at([0]), at([5])],
+          constructed: [{ prefix: [5], enters: [] }],
+        }),
+      ),
+      // Agents lost full runs to this: a history inside the language that a
+      // `.map` without an unmapper cannot take back failed only at run time.
+      fixedHistory(
+        `a fixed history through a .map without an unmapper fails to load`,
+        [`fixed-membership-failure`, `unmapped-history-load-error`],
+        generatedDraft({ arbitraryMap: `no unmapper`, fixed: [at([0])] }),
+      ),
+      fixedHistory(
+        `a constructed history through an item .map without an unmapper fails to load`,
+        [
+          `constructed-membership-failure`,
+          `unmapped-history-load-error`,
+          `item-unmapped-load-error`,
+        ],
+        generatedDraft({
+          arbitraryMap: `no unmapper`,
+          mapAt: `item`,
+          form: `bigint`,
+          constructed: [{ prefix: [0], enters: [`saw-0`] }],
+        }),
+      ),
+      // Registration builds constructed histories when the file loads, so a
+      // build that throws there must name its history, not fail unnamed.
+      fixedHistory(
+        `a constructed history whose build throws at registration fails to load, naming it`,
+        [`registration-error`, `constructed-build-load-error`],
+        generatedDraft({
+          throwingBuild: true,
+          constructed: [
+            { prefix: [0], enters: [`saw-0`] },
+            { prefix: [5], enters: [] },
+          ],
+        }),
+      ),
+      fixedHistory(
+        `histories through a .map with an unmapper load and run`,
+        [`unmapper-history-loads`],
+        generatedDraft({
+          arbitraryMap: `unmapper`,
+          mapAt: `item`,
+          form: `bigint`,
+          fixed: [at([0])],
+          constructed: [{ prefix: [1], enters: [`saw-1`] }],
+        }),
+      ),
+      fixedHistory(
+        `an arbitrary through a .map without an unmapper loads without fixed or constructed histories`,
+        [`unmapped-arbitrary-loads`],
+        generatedDraft({ arbitraryMap: `no unmapper` }),
       ),
       fixedHistory(
         `reach the driver records counts like reach the property names`,
