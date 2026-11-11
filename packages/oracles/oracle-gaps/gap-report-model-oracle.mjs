@@ -131,6 +131,12 @@ const caseless = existsSync(fileURLToPath(import.meta.url).toUpperCase())
 // budget that the driver passes (`--first-limit`), within the 6 s full limit
 // (`--hang-limit`).
 const SLOW_MS = 3000
+// How long each slow test of `w_slowpair` waits: past its file's first
+// budget (the 1 s `--first-limit` plus three times the file's unmutated
+// time) even when a loaded machine stretches that time past half a second,
+// so its copy is always cut and confirmed; and past half the mutant's
+// budget, so two such confirmations never fit it.
+const PAIR_SLOW_MS = 4500
 // A mutant's budget for the runs that confirm its cut-off copies, which the
 // driver passes (`--mutant-limit`): the full limit of one copy, so one slow
 // owner's confirmation fits as it did before there was a budget, and two do
@@ -1377,8 +1383,16 @@ const witness = [
     owners: [`a`, `b`],
     body: [kill],
     tests: [
-      judging(`a`, `fixed seed`, 7, { judges: false, slow: true }),
-      judging(`b`, `fixed seed`, 7, { judges: false, slow: true }),
+      judging(`a`, `fixed seed`, 7, {
+        judges: false,
+        slow: true,
+        slowMs: PAIR_SLOW_MS,
+      }),
+      judging(`b`, `fixed seed`, 7, {
+        judges: false,
+        slow: true,
+        slowMs: PAIR_SLOW_MS,
+      }),
     ],
   },
   // A kill as usual. In a run that the driver stops (`GAP_STOP_DIR` set),
@@ -3513,10 +3527,10 @@ function judge(plan, tests, sites, active, { budgeted = true } = {}) {
   // earlier verdicts. A kill in another file still decides (a kill outranks
   // a timeout); failing that, the mutant is a timeout.
   const hung = new Set()
-  const slowed = new Set()
+  const slowed = new Map()
   for (const file of new Set(runs.map((r) => r.t.file)))
     for (const r of runs.filter((x) => x.t.file === file)) {
-      if (r.slowed) slowed.add(file)
+      if (r.slowed) slowed.set(file, r.t.slowMs ?? SLOW_MS)
       if (r.hang) hung.add(file)
       if (r.hang || killsIn(r)) break
     }
@@ -3532,14 +3546,14 @@ function judge(plan, tests, sites, active, { budgeted = true } = {}) {
   // (`--mutant-limit`, MUTANT_LIMIT_MS here; maintainer disposition G1,
   // 2026-11-11). Under two budgets, a slow owner file is cut at its first
   // budget and confirmed alone, and its confirmation takes longer than the
-  // SLOW_MS it waits. When the confirmations of every slow owner file do not
-  // fit the budget together, one is cut, and the mutant is a timeout; a kill
-  // still decides first. Under one budget no copy is confirmed, so the
-  // budget never binds.
+  // time its slow test waits. When the confirmations of every slow owner
+  // file do not fit the budget together, one is cut, and the mutant is a
+  // timeout; a kill still decides first. Under one budget no copy is
+  // confirmed, so the budget never binds.
   if (
     budgeted &&
     plan.budget === `two` &&
-    slowed.size * SLOW_MS >= MUTANT_LIMIT_MS
+    [...slowed.values()].reduce((sum, ms) => sum + ms, 0) >= MUTANT_LIMIT_MS
   )
     return `timeout`
   if (reproducible.length > 0) return `agreement-only-kill`
@@ -4079,7 +4093,7 @@ function oracleTestFile(plan, file) {
         // where the output differs; it then judges as usual.
         ...(t.slow
           ? [
-              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await new Promise((r) => setTimeout(r, ${SLOW_MS}))`,
+              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await new Promise((r) => setTimeout(r, ${t.slowMs ?? SLOW_MS}))`,
             ]
           : []),
         // A test that waits on I/O (a child process, about 3 s) where the
