@@ -90,7 +90,11 @@ How to fill in the fields:
   number `n` and every unit name `u` in the table, in any case and with or
   without a space, `parse(n + u)` is `n` times the length of `u`."
 - **New case:** if you cannot write one, the law is still a list of
-  examples. Write it again.
+  examples. Write it again. A new case that only renames a value in the
+  example (`/:id` for `/:foo`) does not count.
+- **Domain edges:** wider than the examples. A block whose domain is only its
+  own examples is not a law. Keep those examples as `fixed` histories, and as
+  rebuilt examples of the general law that explains them.
 - **Rebuilt examples:** an example that the law gets wrong shows a missing
   condition, a second law, or a source that disagrees. Say which.
 - **Dynamics** are the model's rules, and the histories vary them. For a pure
@@ -150,10 +154,24 @@ the user has reviewed the sheet. With no user present, write the sheet and
 stop. A law sheet has no default.
 
 Once the user approves it, the sheet becomes the **law block**: the opening
-comment of the oracle file, beside the model that enacts it. The blocks can
-be shorter there, but keep each law sentence, its authority, and its limits.
-Each law's sentence, authority, and limits also go in that property's `law`
-option. Keep the block, the `law` option, and the model in step: a change to
+comment of the oracle file. The oracle file is a literate program (ORC-003),
+so write the block as prose for a reader who has not seen the sheet. Do not
+paste the template's fields or a list of law IDs. In this order:
+
+1. A title that asks the question the oracle answers, for example "Does a
+   copy keep every value, and share nothing with its source?"
+2. How the code works at this boundary, and what goes wrong there, in plain
+   sentences.
+3. What the documentation promises, in its own words where you can, with the
+   source of each promise. These are the laws.
+4. How the model states those promises, and what it reads to predict them.
+5. What the driver does, what it observes, and what it does not observe and
+   why. Then the limits, each with its reason.
+
+The prose beside the model, the histories, the driver, and the check says why
+each one predicts or tests the promised result. The sheet's examples, rivals,
+and witnesses stay in the review record, not the file. Each law's sentence,
+authority, and limits also go in that property's `law` option. Keep the block, the `law` option, and the model in step: a change to
 one updates the others in the same change (ORC-003).
 
 ## 2. Freeze what the oracle must preserve
@@ -290,11 +308,14 @@ in the model.
   `canShrinkWithoutContext`. Give each `.map` its inverse
   (`.map(f, unmap)`, where `unmap` throws on a value it cannot map back), or build from `fc.record`, `fc.constantFrom`, and plain
   values. Run the oracle once right after you write each constructed history.
-- **Choose the string unit on purpose.** fast-check's unicode strings include
-  lone surrogates, and slicing by code unit splits astral characters. Use
-  `fc.string({ unit: 'grapheme' })` or code points when the law is about
-  characters. When the law is about any JavaScript string, lone surrogates
-  are a boundary condition that the law must decide.
+- **Choose the string unit that covers the law's domain.** fast-check's
+  default strings include lone surrogates, and slicing by code unit splits
+  astral characters. `fc.string({ unit: 'binary' })` gives every code point
+  except lone surrogates, control characters included. `unit: 'grapheme'`
+  gives printable graphemes only, so it leaves out control characters, and
+  a `fixed` history that uses one is refused. When the law is about any
+  JavaScript string, lone surrogates are a boundary condition that the law
+  must decide.
 - **Cover the law's whole domain.** A mutant can only show what the histories
   vary. If the grammar covers part of the domain the law states (for example,
   fractions in quarter steps only), say so in `limits`. Better, widen it.
@@ -447,8 +468,11 @@ comes with one instruction. Do what it says, within the rules below.
 
 - **There are no equivalent mutants.** A surviving mutant shows a missing
   history, observation, or law, or it shows dead code.
-- **An effect that no check sees is one that the driver does not record.**
-  Record it.
+- **An effect that no check sees** is one that the driver does not record,
+  or one that no history makes different. A changed condition can still lead
+  to the same result when both branches agree on every generated input. Then
+  add a history where they diverge. Otherwise, record the effect.
+  (Temporary: the `not-observed` directive names only the second case.)
 - **Code whose removal no legal history can observe is dead.** The gap check
   alone cannot show this, because its histories are a sample. First rule out
   a missing history, observation, or law. Then remove the code in the same
@@ -457,8 +481,9 @@ comes with one instruction. Do what it says, within the rules below.
 - **A law that kills nothing** owns no mutated code, or its witness never
   varies in the histories. Check its witness and its constructed history. If
   the law still kills nothing, it may restate another law: compare the two.
-  Temporary: a kill is credited only to the first law that a history
-  violates, so a later law can look idle. Before you restate or delete it,
+  If every change that breaks it also breaks the other law, it restates
+  that law: merge them, as a law change. Temporary: a kill is credited only
+  to the first law that a history violates, so a later law can look idle. Before you restate or delete it,
   run hand mutants aimed at that law alone.
 - **The only exclusions are probe-only code and the `super()` region of a
   derived constructor.**
@@ -468,6 +493,13 @@ comes with one instruction. Do what it says, within the rules below.
   strengthen the law or change production to kill it. It stays open until the
   framework recognizes allowed sets. The user decides whether that blocks the
   work.
+- **A stated limit does not close a gap.** If a survivor differs from the
+  original only on inputs that the law's limits leave out (a null-prototype
+  object, say), the gap is open. Report it with that reason, and recommend
+  widening the grammar and the law to say what the code promises there. If
+  that behavior is truly not part of the contract, the code that the mutant
+  changes is a production question for the owner. Either way, the user
+  decides.
 - **A gap that existed before your change still counts** when it is in a
   function you changed. Report it with its law question. Do not take an exit.
 - **Never propose an exit.** If a gap can be neither killed nor removed, it is
@@ -489,11 +521,14 @@ comes with one instruction. Do what it says, within the rules below.
   synchronously shows as a timeout. The framework's breakage laws will judge
   it, and they are not built yet. Report it as a known CLI limitation, not an
   oracle gap. Do not add driver timeouts for it, and keep working.
-- **Temporary, a known CLI bug:** a survivor inside an exhaustiveness guard
-  (a branch with `x satisfies never`) should never have been generated.
-  Record it in your report as "CLI bug: exhaustiveness guard mutated", and
-  keep working on the other gaps. Do not stop, do not count it as an oracle
-  limit, and do not remove the guard: it is a compile-time check.
+- **Temporary, a known CLI bug:** a gap on a guard that is constant under
+  TypeScript's narrowing is an invalid mutant that the CLI should not have
+  generated. Two forms: a branch after `x satisfies never`, and the test for
+  the last member of an exhaustive union (after the other members' branches
+  return or continue). Record it in your report under CLI limitations, with
+  its line, and keep working. Do not remove the guard and do not change
+  production: the guard protects untyped callers. Every other mutant on that
+  line must still be killed.
 - **Temporary:** in a package without `"type": "module"`, Vite may warn
   while loading the gap check's own config copies. Ignore that warning.
 
@@ -503,7 +538,9 @@ comes with one instruction. Do what it says, within the rules below.
   directory and pass it with `--mutants <dir>`. The form is in the
   [mutant gap hunt](../../docs/instruments/mutant-gap-hunt.md) card.
 - **Three or more gaps in one function** fire the design grammar trigger
-  (step 1). Apply the card before you add histories.
+  (step 1). Stop, read the card, and write its parts list for that function
+  before you add a history. Adding histories first is the shortcut "Skipped
+  design grammar".
 
 Use the [mutant gap hunt](../../docs/instruments/mutant-gap-hunt.md) card for
 a survivor whose missing history is not obvious.

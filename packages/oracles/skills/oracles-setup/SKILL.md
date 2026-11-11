@@ -12,8 +12,8 @@ your report, and continue. That default covers setup questions only. A law
 sheet has no default: write it, report it, and stop.
 
 Setup ends when one oracle passes on production and the gap check leaves no
-gap open in that oracle's own contract, outside its stated limits, unless the
-user decides otherwise. It does not end when the packages are installed.
+gap open in that oracle's own contract, unless the user decides otherwise. A
+stated limit does not close a gap. It does not end when the packages are installed.
 
 ## 1. Read the repository
 
@@ -99,7 +99,9 @@ only has to match the Vitest config and the lint glob. The gap check loads only 
 `vite.config.*`, so:
 
 - If the repository has no Vitest config, create `vitest.config.ts` for the
-  oracle files. Jest and mocha ignore that name.
+  oracle files. Jest and mocha ignore that name. In a package without
+  `"type": "module"`, name it `vitest.config.mts`, or Vite warns on every
+  run.
 - If it has one, add the oracle glob to its existing `include`. Keep the
   globs that are there: replacing them drops the existing suite, since an
   `include` replaces Vitest's default.
@@ -191,11 +193,19 @@ Add this block to `AGENTS.md` (create the file if needed). On an upgrade,
 replace everything between the markers and keep the rest of the file.
 
 ```md
-<!-- BEGIN @tanstack/oracles (template 1) -->
+<!-- BEGIN @tanstack/oracles (template 2) -->
 
 ## Oracle tests
 
 This repository tests its laws with `@tanstack/oracles`.
+
+**Who owns what.** The laws belong to the people who maintain this
+repository: what the code promises, the authority for each promise, and its
+limits. Propose a law, but do not adopt or change one without their
+approval. The production code that the oracles own is yours. How it is built
+is your call, and you will keep building on it. Make it the smallest, clearest
+code that satisfies the oracles: merge repeated code, remove code that no law
+needs (after the checks in `oracles-design` step 8), and restructure freely while the oracles pass.
 
 - Before you create or change an oracle, or change production code that an
   oracle owns, read `node_modules/@tanstack/oracles/skills/oracles-design/SKILL.md`
@@ -212,7 +222,9 @@ This repository tests its laws with `@tanstack/oracles`.
 <!-- END @tanstack/oracles -->
 ```
 
-Fill in the two placeholders in step 7, once their values exist. A run that
+If lint is an environment limit (step 3), replace the lint line with "Lint:
+not available here (<the reason>)." Fill in the two placeholders in step 7,
+once their values exist. A run that
 stops before step 7 leaves them in place, and its report says so. If the repository has a
 `CLAUDE.md` and no `AGENTS.md`, ask the user which file gets the block.
 
@@ -305,7 +317,8 @@ oracle is not declared. That is a setup failure, even when the report shows
 0 gaps and the command exits 0.
 
 In an oracle file, only `oracleProperty` registers tests. A plain Vitest test
-there is not a kill, and the gap check reports it. The driver records
+there is not a kill, and the gap check reports it. Do not leave an empty test
+there either: it checks nothing and looks like coverage. The driver records
 production errors as observations: a mutant that crashes production is not a
 kill until the check rejects the recorded error.
 
@@ -347,13 +360,16 @@ Tell the user:
 - which pointers were written, and where
 - the first oracle's law and its result
 - the gap check's totals, and every gap left, grouped as:
-  - inside a stated limit, with the limit
+  - open because the inputs that expose it lie outside the law's stated
+    limits: name those inputs, and recommend widening the grammar and the
+    law. The user decides. Do not count these as closed.
+  - allowed alternatives (`oracles-design` step 8), apart from the kills
   - framework or CLI limitations (for example a timeout from a synchronous
-    infinite loop, or an exhaustiveness-guard mutant)
+    infinite loop, or a guard that TypeScript narrowing makes constant)
   - other contracts that a whole-file entry pulled in, listed as outside
     this oracle's scope
   - every other gap, with its instruction
 - any defect the oracle found, with its witness
 
 Do not call setup done while a gap is open in the oracle's own contract,
-outside its stated limits, unless the user decides otherwise.
+unless the user decides otherwise.
