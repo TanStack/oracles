@@ -1,6 +1,16 @@
 import { spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { createRequire, isBuiltin } from 'node:module'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -202,4 +212,142 @@ console.log(JSON.stringify({ failed, unreached }))`,
     expect(load.status, load.stderr).toBe(0)
     expect(JSON.parse(load.stdout)).toEqual({ failed: [], unreached: [] })
   }, 60_000)
+
+  // The gap CLI analyzes with its own TypeScript, which the package depends
+  // on under the npm alias `typescript-for-tanstack-oracles`. npm hoists a
+  // plain `typescript` dependency to the project's root, where every tool
+  // resolves it, and dedupes the project's own range against it. Under the
+  // alias, a project without TypeScript gets no `typescript` package, and a
+  // project with its own keeps that version for `require` and for `tsc`. npm
+  // still links the alias's `tsc` into `.bin` when no other package claims
+  // it; the alias name sorts after `typescript`, so on a fresh install the
+  // project's own `typescript` claims `tsc` first. The tarball installs with
+  // npm's cache first; npm fetches only what the cache lacks, from the
+  // configured registry.
+  it(`installs with npm without a typescript the project resolves, and its gap CLI analyzes there`, () => {
+    const packageDirectory = dirname(dirname(fileURLToPath(import.meta.url)))
+    const local = createRequire(import.meta.url)
+    const versionOf = (name: string) =>
+      (local(`${name}/package.json`) as { version: string }).version
+    const scratch = mkdtempSync(join(tmpdir(), `oracles-npm-install-`))
+    // pnpm's own `npm_` variables would configure npm as pnpm runs.
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(
+        ([key]) => !key.startsWith(`npm_`) && !key.startsWith(`ORACLE_`),
+      ),
+    )
+    const run = (command: string, args: Array<string>, cwd: string) => {
+      const ran = spawnSync(command, args, { cwd, encoding: `utf8`, env })
+      expect(ran.status, `${ran.stdout}\n${ran.stderr}`).toBe(0)
+      return ran
+    }
+    try {
+      run(
+        process.execPath,
+        [
+          join(dirname(local.resolve(`vite/package.json`)), `bin/vite.js`),
+          `build`,
+        ],
+        packageDirectory,
+      )
+      run(
+        `npm`,
+        [`pack`, `--ignore-scripts`, `--pack-destination`, scratch],
+        packageDirectory,
+      )
+      const tarball = join(
+        scratch,
+        readdirSync(scratch).find((file) => file.endsWith(`.tgz`))!,
+      )
+      const project = (name: string, ...specs: Array<string>) => {
+        const directory = join(scratch, name)
+        mkdirSync(directory)
+        writeFileSync(
+          join(directory, `package.json`),
+          JSON.stringify({ name, private: true, type: `module` }),
+        )
+        run(
+          `npm`,
+          [
+            `install`,
+            `--prefer-offline`,
+            `--no-audit`,
+            `--no-fund`,
+            `--ignore-scripts`,
+            tarball,
+            ...specs,
+          ],
+          directory,
+        )
+        return directory
+      }
+
+      // A project with no TypeScript of its own.
+      const bare = project(
+        `bare`,
+        `vitest@${versionOf(`vitest`)}`,
+        `fast-check@${versionOf(`fast-check`)}`,
+      )
+      expect(existsSync(join(bare, `node_modules/typescript`))).toBe(false)
+      mkdirSync(join(bare, `src`))
+      mkdirSync(join(bare, `tests`))
+      writeFileSync(
+        join(bare, `src/order.ts`),
+        `export function larger(a: number, b: number): number {\n  return a > b ? a : b\n}\n`,
+      )
+      writeFileSync(
+        join(bare, `tests/order-oracle.test.ts`),
+        [
+          `import fc from 'fast-check'`,
+          `import { differs, oracleProperty, pass } from '@tanstack/oracles'`,
+          `import { larger } from '../src/order'`,
+          `oracleProperty({`,
+          `  id: 'scratch.larger',`,
+          `  owns: ['src/order.ts'],`,
+          `  law: { statement: 'larger returns the larger argument.', authority: 'arithmetic', limits: 'small integers' },`,
+          `  histories: { arbitrary: fc.tuple(fc.integer({ min: -3, max: 3 }), fc.integer({ min: -3, max: 3 })), runs: 20, fixedSeeds: [1] },`,
+          `  model: ([a, b]: [number, number]) => Math.max(a, b),`,
+          `  driver: ([a, b]: [number, number], observe) => observe('larger', larger(a, b)),`,
+          `  check: (_plan, trace, expected) => differs('larger', 'larger', trace[0]?.value, expected) ?? pass,`,
+          `})`,
+          ``,
+        ].join(`\n`),
+      )
+      run(
+        process.execPath,
+        [
+          join(bare, `node_modules/@tanstack/oracles/oracle-gaps/index.mjs`),
+          `--package`,
+          bare,
+          `--source`,
+          `src/order.ts`,
+          `--contexts`,
+          `1`,
+          `--out`,
+          join(scratch, `out`),
+        ],
+        bare,
+      )
+      // The analysis parsed the source with the CLI's TypeScript and found
+      // its mutants.
+      const { results } = JSON.parse(
+        readFileSync(join(scratch, `out/results.json`), `utf8`),
+      ) as { results: Array<unknown> }
+      expect(results.length).toBeGreaterThan(0)
+
+      // A project with its own TypeScript, of a version the alias's range
+      // excludes, keeps it.
+      const owned = project(`owned`, `typescript@5.4.5`)
+      const projectRequire = createRequire(join(owned, `package.json`))
+      expect(
+        (projectRequire(`typescript/package.json`) as { version: string })
+          .version,
+      ).toBe(`5.4.5`)
+      expect(readlinkSync(join(owned, `node_modules/.bin/tsc`))).toBe(
+        join(`..`, `typescript`, `bin`, `tsc`),
+      )
+    } finally {
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  }, 180_000)
 })

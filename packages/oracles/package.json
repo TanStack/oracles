@@ -67,7 +67,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "typescript": "^5.9.2"
+    "typescript-for-tanstack-oracles": "npm:typescript@^5.9.2"
   },
   "peerDependencies": {
     "fast-check": "^4.0.0",
