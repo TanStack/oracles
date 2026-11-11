@@ -280,6 +280,9 @@ export type SyntheticSpec = {
     | `null-binding`
     | `false-binding`
     | `zero-binding`
+  /** Independent public selectors for the two clean opposite premises. */
+  probeEntered?: { fixed: string } | { constructed: string }
+  probeNotEntered?: { fixed: string } | { constructed: string }
   duplicateHistoryNames?: boolean
   /** `observe`: the driver reports reach itself, the framework's default. */
   reachVia: `reached` | `observe`
@@ -1106,9 +1109,19 @@ export function syntheticProperty(spec: SyntheticSpec): void {
               )) ||
               (spec.probeBinding &&
                 spec.probeBinding !== `empty` &&
-                expect
+                ((expect
                   .getState()
-                  .currentTestName?.includes(`forced not entered`)))
+                  .currentTestName?.includes(`forced not entered`) &&
+                  (spec.probeBinding !== `explicit` ||
+                    `constructed` in
+                      (spec.probeEntered ?? {
+                        constructed: `constructed-0`,
+                      }))) ||
+                  (expect
+                    .getState()
+                    .currentTestName?.includes(`forced entered`) &&
+                    `constructed` in
+                      (spec.probeNotEntered ?? { fixed: `fixed-0` })))))
           ) {
             if (
               !built.has(history as object) ||
@@ -1202,10 +1215,14 @@ export function syntheticProperty(spec: SyntheticSpec): void {
                           : spec.probeBinding === `no-absence`
                             ? ({} as never)
                             : {
-                                notEntered: { fixed: `fixed-0` },
+                                notEntered: spec.probeNotEntered ?? {
+                                  fixed: `fixed-0`,
+                                },
                                 ...(spec.probeBinding === `explicit`
                                   ? {
-                                      entered: { constructed: `constructed-0` },
+                                      entered: spec.probeEntered ?? {
+                                        constructed: `constructed-0`,
+                                      },
                                     }
                                   : spec.probeBinding === `null-entered`
                                     ? { entered: null as never }

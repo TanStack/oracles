@@ -85,8 +85,13 @@
  *   finite ordinary/astral name families declared here; no universal collision
  *   freedom is claimed. Forced premises are judged from declared input origins
  *   and author-built callback inputs, never the framework's selected driver log.
- *   Callback errors retain calibration/history context and cause. Registration
- *   warns once per property/process, and collect-only registration stays silent.
+ *   Callback errors retain calibration/history context and cause. Both forced
+ *   premises independently select fixed or constructed originals; only omitted
+ *   entered selectors infer a unique construction. Equal data never permits
+ *   substituting another named original. Registration warns once per
+ *   property/process without dropping tests, and collect-only stays silent.
+ *   Every real child must finish with a complete report and no unmodeled
+ *   unhandled errors, including replay and registration-only children.
  * - `determinism`: the determinism test runs every fixed and constructed history
  *   and three generated ones, and fails for a driver whose trace changes,
  *   compared by their data encoding: `-0` is not `0`, and key order and
@@ -315,6 +320,8 @@ type Draft = {
     | `null-binding`
     | `false-binding`
     | `zero-binding`
+  probeEntered: NonNullable<SyntheticSpec[`probeEntered`]>
+  probeNotEntered: NonNullable<SyntheticSpec[`probeNotEntered`]>
   duplicateHistoryNames: boolean
   /** An id no oracle configuration registers. */
   unregistered: boolean
@@ -369,7 +376,15 @@ const insideOrOutside = (insideWeight: number) =>
     { arbitrary: syntheticArbitrary, weight: insideWeight },
     { arbitrary: outside, weight: 1 },
   )
+const probeSelector = fc.oneof(
+  fc.record({ fixed: fc.constantFrom(`fixed-0`, `fixed-1`, `missing`) }),
+  fc.record({
+    constructed: fc.constantFrom(`constructed-0`, `constructed-1`, `missing`),
+  }),
+)
 const draft: fc.Arbitrary<Draft> = fc.record({
+  probeEntered: probeSelector,
+  probeNotEntered: probeSelector,
   calibrationHistory: fc.option(
     fc.oneof(
       fc.record({
@@ -382,7 +397,7 @@ const draft: fc.Arbitrary<Draft> = fc.record({
         enumerated: fc.oneof(
           fc.integer({ min: -1, max: 4 }),
           fc.constant(1.5),
-          fc.constant(`items 0 | 1`),
+          fc.constantFrom(`items 0 | 1`, `items 0 | 1 ${shellText}`, `[0,1]`),
         ),
       }),
     ),
@@ -855,6 +870,8 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
         ...(d.probeBinding !== `unbound`
           ? { probeBinding: d.probeBinding }
           : {}),
+        probeEntered: d.probeEntered,
+        probeNotEntered: d.probeNotEntered,
         ...(d.duplicateHistoryNames ? { duplicateHistoryNames: true } : {}),
         calibrations: (d.calibrationNames === `indexed`
           ? d.calibrations
@@ -1240,6 +1257,32 @@ type BuildEntry = {
   generated: SyntheticHistory
   history: SyntheticHistory
 }
+// Named enumeration selectors refer to the label the author supplied, not
+// merely the underlying items. The selector string domain below includes
+// authored items labels (plain/shell) and one plain-JSON default label.
+// Other forms' encoded default labels are outside that string domain.
+const authoredEnumerationLabel = (
+  spec: SyntheticSpec,
+  history: SyntheticHistory,
+): string | undefined => {
+  if (spec.labelStyle === `default`)
+    return spec.form === undefined ? JSON.stringify(history) : undefined
+  if (
+    spec.duplicateHistoryNames &&
+    spec.calibrationHistory &&
+    `enumerated` in spec.calibrationHistory &&
+    typeof spec.calibrationHistory.enumerated === `string` &&
+    spec.source.kind === `enumerated`
+  )
+    return `items ${spec.source.histories[0]!.join(` | `)}`
+  if (
+    spec.labelStyle?.startsWith(`reserved-`) &&
+    spec.source.kind === `enumerated` &&
+    JSON.stringify(history) === JSON.stringify(spec.source.histories[0])
+  )
+    return spec.labelStyle.slice(`reserved-`.length)
+  return `items ${history.join(` | `)}${spec.labelStyle === `shell` ? ` ${shellText}` : ``}`
+}
 const authoredInput = (
   spec: SyntheticSpec,
   test: string,
@@ -1252,7 +1295,7 @@ const authoredInput = (
     return spec.source.histories.find((history, index) =>
       typeof binding.enumerated === `number`
         ? index === binding.enumerated
-        : `items ${history.join(` | `)}` === binding.enumerated,
+        : authoredEnumerationLabel(spec, history) === binding.enumerated,
     )
   if (`constructed` in binding) {
     const construction = spec.constructed.find(
@@ -1274,16 +1317,39 @@ const authoredInput = (
   }
   return undefined
 }
+// Resolve from authored declarations, never from the driver-selected input.
+// A unique state declaration is insufficient if another construction shares
+// its name: every selected name must identify exactly one original.
 const selectedControlBinding = (spec: SyntheticSpec, forced: boolean) =>
   forced
-    ? { fixed: `fixed-0` }
-    : {
-        constructed:
-          spec.probeBinding === `explicit`
-            ? `constructed-0`
-            : (spec.constructed.find(({ enters }) => enters.includes(`saw-0`))
-                ?.name ?? `missing`),
-      }
+    ? (spec.probeNotEntered ?? { fixed: `fixed-0` })
+    : spec.probeBinding === `explicit`
+      ? (spec.probeEntered ?? { constructed: `constructed-0` })
+      : {
+          constructed:
+            spec.constructed.find(({ enters }) => enters.includes(`saw-0`))
+              ?.name ?? `missing`,
+        }
+const selectedControls = (spec: SyntheticSpec, forced: boolean) => {
+  const binding = selectedControlBinding(spec, forced)
+  return `fixed` in binding
+    ? spec.fixed.filter(({ name }) => name === binding.fixed)
+    : spec.constructed.filter(({ name }) => name === binding.constructed)
+}
+const authoredOrigin = (
+  spec: SyntheticSpec,
+  binding: NonNullable<SyntheticSpec[`calibrationHistory`]>,
+): string | undefined => {
+  if (`fixed` in binding) return `fixed:${binding.fixed}`
+  if (`constructed` in binding) return `constructed:${binding.constructed}`
+  if (spec.source.kind !== `enumerated`) return undefined
+  const index = spec.source.histories.findIndex((history, at) =>
+    typeof binding.enumerated === `number`
+      ? at === binding.enumerated
+      : authoredEnumerationLabel(spec, history) === binding.enumerated,
+  )
+  return index < 0 ? undefined : `enumerated:${index}`
+}
 
 const isCampaign = (name: string) =>
   name.startsWith(`fixed seed`) || name === `random seed`
@@ -1573,7 +1639,8 @@ function predictSpec(
           ? spec.source.histories.find((history, index) =>
               typeof binding.enumerated === `number`
                 ? index === binding.enumerated
-                : `items ${history.join(` | `)}` === binding.enumerated,
+                : authoredEnumerationLabel(spec, history) ===
+                  binding.enumerated,
             )
           : undefined)
   const duplicates =
@@ -1585,13 +1652,9 @@ function predictSpec(
             .length > 1
         : typeof binding.enumerated === `string` &&
             spec.source.kind === `enumerated`
-          ? (spec.duplicateHistoryNames &&
-              binding.enumerated ===
-                `items ${spec.source.histories[0]!.join(` | `)}` &&
-              spec.source.histories.length > 1) ||
-            spec.source.histories.filter(
+          ? spec.source.histories.filter(
               (history) =>
-                `items ${history.join(` | `)}` === binding.enumerated,
+                authoredEnumerationLabel(spec, history) === binding.enumerated,
             ).length > 1
           : false)
   if (
@@ -1608,9 +1671,8 @@ function predictSpec(
     spec.probeBinding &&
     spec.probeBinding !== `empty` &&
     (spec.probeBinding === `null-entered` ||
-      !spec.fixed.some(({ name }) => name === `fixed-0`) ||
-      (spec.probeBinding === `explicit` &&
-        !spec.constructed.some(({ name }) => name === `constructed-0`)))
+      selectedControls(spec, true).length !== 1 ||
+      selectedControls(spec, false).length !== 1)
   )
     return { loads: false, loadError: `calibration history selector` }
   const names =
@@ -1836,15 +1898,7 @@ function predictSpec(
       )
       // The clean opposite-polarity premise also owes every state declared by
       // its selected fixed case or construction, not just the probe's state.
-      const selectedControl = forced
-        ? spec.fixed.find(
-            ({ name: selectedName }) => selectedName === `fixed-0`,
-          )
-        : spec.probeBinding === `explicit`
-          ? spec.constructed.find(
-              ({ name: selectedName }) => selectedName === `constructed-0`,
-            )
-          : spec.constructed.find(({ enters }) => enters.includes(`saw-0`))
+      const selectedControl = selectedControls(spec, forced)[0]
       tests.set(
         name,
         !clean || judged(spec, clean).kind !== `pass`
@@ -1942,7 +1996,10 @@ function suiteModel(
 // unhandled error per run the log records. A slow spec's driver runs on
 // after its test timed out, so its calls may land after the run ended; they
 // count at most once each.
-const lateCalls = (plan: Plan, logged: ReadonlyArray<LogEntry>) => {
+const lateCalls = (
+  plan: Plan,
+  logged: ReadonlyArray<Pick<LogEntry, `id` | `history`>>,
+) => {
   let min = 0
   let max = 0
   for (const spec of plan.specs) {
@@ -1976,6 +2033,14 @@ function owedRoute(name: string, replay = false): string {
 // about. Each fixed history names the state it witnesses, so every one is reached on
 // every run; campaigns count them.
 const frameworkStates = [
+  `auxiliary-late-error`,
+  `bound-enumerated-label-selector`,
+  `bound-control-fixed-entered`,
+  `bound-control-constructed-absent`,
+  `bound-control-inferred-ambiguous`,
+  `bound-control-explicit-ambiguous`,
+  `bound-equal-fixed-origin`,
+
   `bound-ranked-mutants`,
   `bound-independent-premise`,
   `bound-name-seed`,
@@ -2073,11 +2138,51 @@ function frameworkReach(
   expected: ReturnType<typeof suiteModel>,
 ): Iterable<string> {
   const reached = new Set<string>()
+  if (
+    trace
+      .filter(({ checkpoint }) => checkpoint === `child`)
+      .slice(1)
+      .some(({ value }) => {
+        const child = value as {
+          log: Array<Pick<LogEntry, `id` | `history`>>
+          unhandled: Array<string>
+        }
+        return (
+          child.log.some(
+            ({ id, history }) =>
+              history.includes(0) &&
+              plan.specs.some(
+                (spec) => spec.id === id && spec.probe === `late`,
+              ),
+          ) &&
+          child.unhandled.some((message) =>
+            message.includes(`was called after its history ended`),
+          )
+        )
+      })
+  )
+    reached.add(`auxiliary-late-error`)
   const run = trace.find(({ checkpoint }) => checkpoint === `run`)?.value as
     SuiteRun | undefined
   for (const spec of plan.specs) {
     const owed = expected.get(spec.id)!
+    if (
+      run?.files[spec.id] &&
+      spec.source.kind === `enumerated` &&
+      spec.calibrationHistory &&
+      `enumerated` in spec.calibrationHistory &&
+      typeof spec.calibrationHistory.enumerated === `string` &&
+      [`shell`, `default`].includes(spec.labelStyle ?? ``)
+    )
+      reached.add(`bound-enumerated-label-selector`)
     if (!owed.loads) {
+      if (
+        run?.files[spec.id]?.loaded === false &&
+        (spec.probeBinding === `explicit` ||
+          spec.probeBinding === `inferred`) &&
+        selectedControls(spec, false).length > 1
+      )
+        reached.add(`bound-control-${spec.probeBinding}-ambiguous`)
       if (
         [
           `null-entered`,
@@ -2108,6 +2213,31 @@ function frameworkReach(
       }
       continue
     }
+    if (
+      run?.files[spec.id]?.loaded &&
+      spec.probeBinding === `explicit` &&
+      `fixed` in selectedControlBinding(spec, false)
+    )
+      reached.add(`bound-control-fixed-entered`)
+    if (
+      run?.files[spec.id]?.loaded &&
+      spec.probeBinding &&
+      spec.probeBinding !== `empty` &&
+      `constructed` in selectedControlBinding(spec, true)
+    )
+      reached.add(`bound-control-constructed-absent`)
+    if (
+      run?.files[spec.id]?.loaded &&
+      spec.calibrationHistory &&
+      `fixed` in spec.calibrationHistory &&
+      spec.identityHistories &&
+      spec.fixed.filter(
+        ({ history }) =>
+          JSON.stringify(history) ===
+          JSON.stringify(authoredInput(spec, ``, spec.calibrationHistory!, [])),
+      ).length > 1
+    )
+      reached.add(`bound-equal-fixed-origin`)
     if (
       spec.calibrationHistory &&
       spec.calibrations.some(
@@ -2442,6 +2572,8 @@ type Report = {
   stdout: string
   warnings: Array<string>
   unhandled: Array<ReportedError>
+  exit: number | null
+  signal: string | null
 }
 type Failure = {
   message?: string
@@ -2710,6 +2842,8 @@ function runVitest(
     stdout: run.stdout,
     warnings: warnings ?? [],
     unhandled: unhandled ?? [],
+    exit: run.status,
+    signal: run.signal,
   }
 }
 
@@ -2782,6 +2916,46 @@ function driveSuite(
   )
   mkdirSync(directory, { recursive: true })
   try {
+    const receive: typeof runVitest = (...args) => {
+      const childLog =
+        args[2].SELF_ORACLE_LOG ?? join(directory, `child-${runCount}.jsonl`)
+      const report = runVitest(
+        args[0],
+        args[1],
+        { ...args[2], SELF_ORACLE_LOG: childLog },
+        args[3],
+        args[4],
+      )
+      observe(`child`, {
+        log: readLog(childLog).map(({ id, history }) => ({ id, history })),
+        loads: report.files.map(({ file, errors }) => ({
+          id: plan.specs[files.indexOf(file)]?.id ?? `unknown`,
+          errors: errors.map(({ message }) => message ?? ``),
+        })),
+        exit: report.exit,
+        signal: report.signal,
+        files: report.files.map(({ file }) =>
+          file.replace(`${directory}/`, ``),
+        ),
+        expectedFiles: args[1].map((file) => file.replace(`${directory}/`, ``)),
+        // Synthetic tests owe one primary failure; causes retain its nested
+        // diagnostic chain. Separate teardown/hook failures must stay visible.
+        secondaryErrors: report.files.flatMap(({ tests }) =>
+          tests.flatMap(({ name, errors }) =>
+            errors
+              .slice(1)
+              .map(({ message }) => ({ test: name, message: message ?? `` })),
+          ),
+        ),
+        unhandled: report.unhandled.map(({ message }) => message ?? ``),
+        failed: report.files.some(
+          (file) =>
+            file.errors.length > 0 ||
+            file.tests.some(({ state }) => state === `failed`),
+        ),
+      })
+      return report
+    }
     const log = join(directory, `log.jsonl`)
     const files = plan.specs.map((spec, index) => {
       const file = join(directory, `spec-${index}-oracle.test.ts`)
@@ -2791,7 +2965,7 @@ function driveSuite(
       )
       return file
     })
-    const report = runVitest(directory, files, { SELF_ORACLE_LOG: log })
+    const report = receive(directory, files, { SELF_ORACLE_LOG: log })
     const run: SuiteRun = {
       files: {},
       log: readLog(log),
@@ -2884,7 +3058,7 @@ function driveSuite(
           file,
           `import { syntheticProperty } from ${JSON.stringify(join(here, `oracle-property-self-oracle-fixture.ts`))}\nsyntheticProperty(${JSON.stringify(reordered)})\n`,
         )
-        runVitest(
+        receive(
           directory,
           [file],
           { SELF_ORACLE_LOG: reorderedLog },
@@ -2913,7 +3087,7 @@ function driveSuite(
           file,
           `import { describe } from 'vitest'\nimport { syntheticProperty } from ${JSON.stringify(join(here, `oracle-property-self-oracle-fixture.ts`))}\ndescribe('first',()=>{${call}})\ndescribe('second',()=>{${call}})\n`,
         )
-        const repeated = runVitest(
+        const repeated = receive(
           directory,
           [file],
           {},
@@ -2924,7 +3098,7 @@ function driveSuite(
           file,
           `import { describe } from 'vitest'\nimport { syntheticProperty } from ${JSON.stringify(join(here, `oracle-property-self-oracle-fixture.ts`))}\ndescribe('collect',()=>{process.env.ORACLE_MANIFEST=${JSON.stringify(manifest)};try{${call}}finally{delete process.env.ORACLE_MANIFEST}})\ndescribe('ordinary',()=>{${call}})\n`,
         )
-        const collectThenRun = runVitest(
+        const collectThenRun = receive(
           directory,
           [file],
           {},
@@ -2938,7 +3112,7 @@ function driveSuite(
           file,
           `import { syntheticProperty } from ${JSON.stringify(join(here, `oracle-property-self-oracle-fixture.ts`))}\n${call}\n`,
         )
-        const collected = runVitest(
+        const collected = receive(
           directory,
           [file],
           { ORACLE_MANIFEST: collectedManifest },
@@ -2961,6 +3135,17 @@ function driveSuite(
             collectThenRun: registered(manifest),
             collected: registered(collectedManifest),
           },
+          tests: {
+            repeated: repeated.files
+              .flatMap(({ tests }) => tests.map(({ name }) => name))
+              .sort(),
+            collectThenRun: collectThenRun.files
+              .flatMap(({ tests }) => tests.map(({ name }) => name))
+              .sort(),
+            collected: collected.files
+              .flatMap(({ tests }) => tests.map(({ name }) => name))
+              .sort(),
+          },
           loaded: {
             repeated: loaded(repeated),
             collectThenRun: loaded(collectThenRun),
@@ -2977,7 +3162,7 @@ function driveSuite(
     }
     if (plan.seedless) {
       const seedlessLog = join(directory, `seedless-${runCount}.jsonl`)
-      runVitest(
+      receive(
         directory,
         files,
         { SELF_ORACLE_LOG: seedlessLog },
@@ -3008,7 +3193,7 @@ function driveSuite(
         if (!isCampaign(campaign.name) || campaign.failure?.path === undefined)
           continue
         const replayLog = join(directory, `replay-${runCount}.jsonl`)
-        const replay = runVitest(directory, files, {
+        const replay = receive(directory, files, {
           ORACLE_SEED: String(campaign.failure.seed),
           ORACLE_PATH: campaign.failure.path,
           ORACLE_PROPERTY: spec.id,
@@ -3038,7 +3223,7 @@ function driveSuite(
       )
       if (!target) continue
       const index = plan.specs.indexOf(spec)
-      const rerun = runVitest(
+      const rerun = receive(
         directory,
         [files[index]!],
         {},
@@ -3063,7 +3248,7 @@ function driveSuite(
       const escape = (text: string) =>
         text.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
       const pattern = `^${[...(spec.nested ? [outerSuite] : []), spec.id, `reach`].map(escape).join(`(?: | > )`)}$`
-      const alone = runVitest(
+      const alone = receive(
         directory,
         [files[index]!],
         {},
@@ -3136,6 +3321,101 @@ function checkSuite(
   const run = trace.find(({ checkpoint }) => checkpoint === `run`)?.value as
     SuiteRun | undefined
   if (!run) return violation(`run`, `the driver recorded no run`, `trace`)
+  const children = trace.filter(({ checkpoint }) => checkpoint === `child`)
+  const owedChildren =
+    1 +
+    trace.reduce(
+      (count, { checkpoint }) =>
+        count +
+        (checkpoint === `registration-warnings`
+          ? 3
+          : [
+                `binding-reordered`,
+                `seedless`,
+                `replay`,
+                `rerun`,
+                `reach-alone`,
+              ].includes(checkpoint)
+            ? 1
+            : 0),
+      0,
+    )
+  if (children.length !== owedChildren)
+    return violation(
+      `child`,
+      `recorded ${children.length} child reports, owed ${owedChildren}`,
+      `trace`,
+    )
+  // Expected synthetic failures exit 1; unexpected process failures do not
+  // disappear merely because a reporter managed to write a partial result.
+  const lateMessage = `probe synthetic#saw-0 was called after its history ended. The driver must await the work it starts, so every probe call belongs to one history.`
+  for (const { value } of children) {
+    const child = value as {
+      exit: number | null
+      signal: string | null
+      files: Array<string>
+      expectedFiles: Array<string>
+      unhandled: Array<string>
+      failed: boolean
+      secondaryErrors: Array<{ test: string; message: string }>
+      log: Array<Pick<LogEntry, `id` | `history`>>
+      loads: Array<{ id: string; errors: Array<string> }>
+    }
+    if (child.secondaryErrors.length)
+      return violation(
+        `child`,
+        `unexpected secondary test errors: ${JSON.stringify(child.secondaryErrors)}`,
+        `trace`,
+      )
+    for (const file of child.loads) {
+      const owed = expected.get(file.id as SyntheticSpec[`id`])
+      if (
+        !owed ||
+        (owed.loads
+          ? file.errors.length !== 0
+          : file.errors.length !== 1 ||
+            (owed.loadError !== undefined &&
+              !file.errors[0]!.includes(owed.loadError)))
+      )
+        return violation(
+          `child`,
+          `unexpected child load/suite errors: ${JSON.stringify(file)}`,
+          `registration`,
+        )
+    }
+    const owedLate = lateCalls(plan, child.log)
+    const actualLate = child.unhandled.filter(
+      (message) => message === lateMessage,
+    ).length
+    if (actualLate < owedLate.min || actualLate > owedLate.max)
+      return violation(
+        `child`,
+        `child reported ${actualLate} late probe calls, owed ${owedLate.min} to ${owedLate.max}`,
+        `agreement`,
+      )
+    const unexpected = child.unhandled.filter(
+      (message) =>
+        message !== lateMessage ||
+        !plan.specs.some(({ probe }) => probe === `late`),
+    )
+    if (unexpected.length)
+      return violation(
+        `child`,
+        `unexpected unhandled errors: ${JSON.stringify(unexpected)}`,
+        `trace`,
+      )
+    if (
+      child.signal !== null ||
+      child.exit !== (child.failed || child.unhandled.length ? 1 : 0) ||
+      JSON.stringify([...child.files].sort()) !==
+        JSON.stringify([...child.expectedFiles].sort())
+    )
+      return violation(
+        `child`,
+        `incomplete or abnormal child process: ${JSON.stringify(child)}`,
+        `trace`,
+      )
+  }
   const probes = trace
     .filter(
       ({ checkpoint }) => checkpoint === `replay` || checkpoint === `rerun`,
@@ -3164,6 +3444,13 @@ function checkSuite(
           `run`,
           `${spec.id} loaded, but its id is unregistered, a required state has no constructed history, a constructed history names an undeclared state, a fixed or constructed history is one the arbitrary cannot take back, \`owns\` is not a non-empty literal list of strings, or a history is not data`,
           law,
+        )
+      if (seen.loadErrors.length !== 1 || seen.loadCauses.length !== 1)
+        return violation(
+          `run`,
+          `${spec.id} must report its first load error alone`,
+          `registration`,
+          { actual: seen.loadErrors, expected: `one load error` },
         )
       const owedText = [owed.loadError, owed.loadFix].filter(
         (text) => text !== undefined,
@@ -3243,6 +3530,11 @@ function checkSuite(
         (value as { id: string }).id === spec.id,
     )?.value as
       | {
+          tests: {
+            repeated: Array<string>
+            collectThenRun: Array<string>
+            collected: Array<string>
+          }
           repeated: Array<string>
           collectThenRun: Array<string>
           collected: Array<string>
@@ -3258,6 +3550,32 @@ function checkSuite(
         }
       | undefined
     if (warningProbe) {
+      // Each ordinary registration owes the full model-derived test set.
+      // Preserve suite scope and multiplicity: warning deduplication grants no
+      // permission to drop the second property's tests or either forced control.
+      const names = [...owed.tests.keys()]
+      const phaseNames = (phases: Array<string>) =>
+        phases
+          .flatMap((phase) =>
+            names.map((name) => `${phase} > ${spec.id} > ${name}`),
+          )
+          .sort()
+      for (const [phase, expectedNames] of [
+        [`repeated`, phaseNames([`first`, `second`])],
+        [`collectThenRun`, phaseNames([`collect`, `ordinary`])],
+        [`collected`, names.map((name) => `${spec.id} > ${name}`).sort()],
+      ] as const) {
+        if (
+          JSON.stringify(warningProbe.tests[phase]) !==
+          JSON.stringify(expectedNames)
+        )
+          return violation(
+            `run`,
+            `${spec.id} ${phase} omitted or duplicated registrations`,
+            `registration`,
+            { actual: warningProbe.tests[phase], expected: expectedNames },
+          )
+      }
       if (
         [
           warningProbe.manifests.collectThenRun,
@@ -3355,7 +3673,7 @@ function checkSuite(
           expectedBinding,
           run.builds,
         )
-        const expectedOrigin = `${`fixed` in expectedBinding ? `fixed` : `constructed`}:${`fixed` in expectedBinding ? expectedBinding.fixed : expectedBinding.constructed}`
+        const expectedOrigin = authoredOrigin(spec, expectedBinding)
         if (
           calls.some(
             (entry) =>
@@ -3474,13 +3792,14 @@ function checkSuite(
         if (
           fullInput &&
           calls.some(
-            ({ history }) =>
+            ({ history, origin }) =>
+              origin !== authoredOrigin(spec, binding) ||
               JSON.stringify(history) !== JSON.stringify(fullInput),
           )
         )
           return violation(
             `run`,
-            `${spec.id} selected calibration did not run its full authored input`,
+            `${spec.id} selected calibration did not run its full authored input and origin`,
             `calibration`,
           )
         const selected =
@@ -3490,7 +3809,8 @@ function checkSuite(
               ? spec.source.histories.find((history, index) =>
                   typeof binding.enumerated === `number`
                     ? index === binding.enumerated
-                    : `items ${history.join(` | `)}` === binding.enumerated,
+                    : authoredEnumerationLabel(spec, history) ===
+                      binding.enumerated,
                 )
               : undefined
         const prefix =
@@ -3891,6 +4211,8 @@ const generatedDraft = (overrides: Partial<Draft>): Draft => ({
   identityHistories: false,
   probeName: `saw-0`,
   probeBinding: `unbound`,
+  probeEntered: { constructed: `constructed-0` },
+  probeNotEntered: { fixed: `fixed-0` },
   duplicateHistoryNames: false,
   unregistered: false,
   numberDifference: false,
@@ -3949,6 +4271,13 @@ oracleProperty({
   histories: {
     arbitrary: suite,
     states: [
+      `auxiliary-late-error`,
+      `bound-enumerated-label-selector`,
+      `bound-control-fixed-entered`,
+      `bound-control-constructed-absent`,
+      `bound-control-inferred-ambiguous`,
+      `bound-control-explicit-ambiguous`,
+      `bound-equal-fixed-origin`,
       `bound-ranked-mutants`,
       `bound-independent-premise`,
       `bound-name-seed`,
@@ -3968,6 +4297,7 @@ oracleProperty({
     ],
     measured: frameworkStates.filter(
       (state) =>
+        state !== `auxiliary-late-error` &&
         !state.startsWith(`bound-`) &&
         state !== `unbound-prototype-probe` &&
         state !== `registration-warning-policy`,
@@ -3975,6 +4305,116 @@ oracleProperty({
     runs: 3,
     fixedSeeds: [1],
     constructed: [
+      {
+        name: `review auxiliary late errors`,
+        enters: [`auxiliary-late-error`],
+        build: (generated: Suite) => ({
+          ...generated,
+          drafts: [
+            generatedDraft({
+              probe: `late`,
+              clock: true,
+              strictModel: true,
+              constructed: [{ prefix: [7, 0], enters: [] }],
+            }),
+          ],
+        }),
+      },
+      {
+        name: `review enumerated selector labels`,
+        enters: [`bound-enumerated-label-selector`],
+        build: (generated: Suite) => ({
+          ...generated,
+          drafts: [
+            generatedDraft({
+              source: { kind: `enumerated`, histories: [[0, 1]] },
+              labelStyle: generated.drafts[0]!.clock ? `shell` : `default`,
+              calibrationHistory: { enumerated: `items 0 | 1` },
+              calibrations: [`right`],
+            }),
+          ],
+        }),
+      },
+      {
+        name: `review fixed entered control`,
+        enters: [`bound-control-fixed-entered`],
+        build: (generated: Suite) => ({
+          ...generated,
+          drafts: [
+            generatedDraft({
+              fixed: [at([1]), at([0, generated.drafts[0]!.clock ? 1 : 2])],
+              constructed: [{ prefix: [0], enters: [`saw-0`] }],
+              probe: `agree`,
+              probeBinding: `explicit`,
+              probeEntered: { fixed: `fixed-1` },
+              identityHistories: true,
+            }),
+          ],
+        }),
+      },
+      {
+        name: `review constructed absent control`,
+        enters: [`bound-control-constructed-absent`],
+        build: (generated: Suite) => ({
+          ...generated,
+          drafts: [
+            generatedDraft({
+              fixed: [at([1])],
+              constructed: [
+                { prefix: [0], enters: [`saw-0`] },
+                {
+                  prefix: [1, generated.drafts[0]!.clock ? 1 : 2, 2],
+                  enters: [],
+                },
+              ],
+              probe: `agree`,
+              probeBinding: generated.drafts[0]!.clock
+                ? `explicit`
+                : `inferred`,
+              probeNotEntered: { constructed: `constructed-1` },
+              isolatedPlans: true,
+            }),
+          ],
+        }),
+      },
+      ...([`inferred`, `explicit`] as const).map((probeBinding) => ({
+        name: `review ${probeBinding} ambiguous control`,
+        enters: [`bound-control-${probeBinding}-ambiguous` as const],
+        build: (generated: Suite) => ({
+          ...generated,
+          drafts: [
+            generatedDraft({
+              fixed: [at([1])],
+              constructed: [
+                { prefix: [0], enters: [`saw-0`] },
+                { prefix: [generated.drafts[0]!.clock ? 1 : 2], enters: [] },
+              ],
+              probe: `agree`,
+              probeBinding,
+              duplicateHistoryNames: true,
+              calibrationHistory: { fixed: `fixed-0` },
+            }),
+          ],
+        }),
+      })),
+      {
+        name: `review equal fixed originals`,
+        enters: [`bound-equal-fixed-origin`],
+        build: (generated: Suite) => {
+          const history = [0, generated.drafts[0]!.clock ? 1 : 2]
+          return {
+            ...generated,
+            drafts: [
+              generatedDraft({
+                fixed: [at([...history]), at([...history])],
+                calibrationHistory: { fixed: `fixed-1` },
+                calibrations: [`driver`],
+                identityHistories: true,
+              }),
+            ],
+          }
+        },
+      },
       {
         name: `round2 ranked mutant verdicts`,
         enters: [`bound-ranked-mutants`],
@@ -4283,6 +4723,91 @@ oracleProperty({
       },
     ],
     fixed: [
+      fixedHistory(
+        `review auxiliary late errors preserve counts`,
+        [`auxiliary-late-error`],
+        generatedDraft({
+          probe: `late`,
+          clock: true,
+          strictModel: true,
+          constructed: [{ prefix: [7, 0], enters: [] }],
+        }),
+      ),
+      ...([`shell`, `default`] as const).flatMap((labelStyle) =>
+        [true, false].map((valid) =>
+          fixedHistory(
+            `review ${labelStyle} enumerated selector ${valid ? `exact` : `missing`}`,
+            [`bound-enumerated-label-selector`],
+            generatedDraft({
+              source: { kind: `enumerated`, histories: [[0, 1]] },
+              labelStyle,
+              calibrationHistory: {
+                enumerated: valid
+                  ? labelStyle === `shell`
+                    ? `items 0 | 1 ${shellText}`
+                    : `[0,1]`
+                  : `items 0 | 1`,
+              },
+              calibrations: [`right`],
+              identityHistories: true,
+            }),
+          ),
+        ),
+      ),
+      ...([`inferred`, `explicit`] as const).map((probeBinding) =>
+        fixedHistory(
+          `review duplicate selected ${probeBinding} names`,
+          [`bound-control-${probeBinding}-ambiguous`],
+          generatedDraft({
+            fixed: [at([1])],
+            constructed: [
+              { prefix: [0], enters: [`saw-0`] },
+              { prefix: [1], enters: [] },
+            ],
+            probe: `agree`,
+            probeBinding,
+            duplicateHistoryNames: true,
+            calibrationHistory: { fixed: `fixed-0` },
+          }),
+        ),
+      ),
+      fixedHistory(
+        `review fixed entered selector`,
+        [`bound-control-fixed-entered`],
+        generatedDraft({
+          fixed: [at([1]), at([0, 1])],
+          constructed: [{ prefix: [0], enters: [`saw-0`] }],
+          probe: `agree`,
+          probeBinding: `explicit`,
+          probeEntered: { fixed: `fixed-1` },
+          identityHistories: true,
+        }),
+      ),
+      fixedHistory(
+        `review constructed absent selector`,
+        [`bound-control-constructed-absent`],
+        generatedDraft({
+          fixed: [at([1])],
+          constructed: [
+            { prefix: [0], enters: [`saw-0`] },
+            { prefix: [1, 2, 2], enters: [] },
+          ],
+          probe: `agree`,
+          probeBinding: `explicit`,
+          probeNotEntered: { constructed: `constructed-1` },
+          isolatedPlans: true,
+        }),
+      ),
+      fixedHistory(
+        `review equal fixed input origins`,
+        [`bound-equal-fixed-origin`],
+        generatedDraft({
+          fixed: [at([0]), at([0])],
+          calibrationHistory: { fixed: `fixed-1` },
+          calibrations: [`driver`],
+          identityHistories: true,
+        }),
+      ),
       ...([`throws`, `clock`] as const).map((kind) =>
         fixedHistory(
           `round2 ranked ${kind} bound and legacy`,
@@ -5565,6 +6090,151 @@ oracleProperty({
   reached: frameworkReach,
   driver: driveSuite,
   check: checkSuite,
+  calibrations: [
+    {
+      name: `reject missing child observation`,
+      history: { constructed: `round2 ranked mutant verdicts` },
+      law: `trace`,
+      corrupt: (trace) => {
+        const first = trace.findIndex(
+          ({ checkpoint }) => checkpoint === `child`,
+        )
+        return trace.filter((_, index) => index !== first)
+      },
+    },
+    {
+      name: `reject abnormal child exit`,
+      history: { constructed: `round2 ranked mutant verdicts` },
+      law: `trace`,
+      corrupt: (trace) => {
+        const altered = structuredClone([...trace])
+        const child = altered.find(({ checkpoint }) => checkpoint === `child`)!
+          .value as { exit: number }
+        child.exit = 2
+        return altered
+      },
+    },
+    {
+      name: `reject secondary auxiliary test errors`,
+      history: { constructed: `review auxiliary late errors` },
+      law: `trace`,
+      corrupt: (trace) => {
+        const altered = structuredClone([...trace])
+        const child = altered.filter(
+          ({ checkpoint }) => checkpoint === `child`,
+        )[1]!.value as {
+          secondaryErrors: Array<{ test: string; message: string }>
+        }
+        child.secondaryErrors.push({
+          test: `random seed`,
+          message: `unexpected replay teardown failure`,
+        })
+        return altered
+      },
+    },
+    {
+      name: `reject auxiliary teardown errors`,
+      history: { constructed: `round2 registration warning phases` },
+      law: `registration`,
+      corrupt: (trace) => {
+        const altered = structuredClone([...trace])
+        const child = altered.filter(
+          ({ checkpoint }) => checkpoint === `child`,
+        )[1]!.value as {
+          loads: Array<{ errors: Array<string> }>
+          failed: boolean
+          exit: number
+        }
+        child.loads[0]!.errors.push(`unexpected replay teardown failure`)
+        child.failed = true
+        child.exit = 1
+        return altered
+      },
+    },
+    {
+      name: `reject auxiliary late error duplicates`,
+      history: { constructed: `review auxiliary late errors` },
+      law: `agreement`,
+      corrupt: (trace) => {
+        const altered = structuredClone([...trace])
+        const child = altered
+          .filter(({ checkpoint }) => checkpoint === `child`)
+          .slice(1)
+          .map(({ value }) => value as { unhandled: Array<string> })
+          .find(({ unhandled }) => unhandled.length > 0)!
+        child.unhandled.push(child.unhandled[0]!)
+        return altered
+      },
+    },
+    {
+      name: `reject extra registration diagnostics`,
+      history: { constructed: `review inferred ambiguous control` },
+      law: `registration`,
+      corrupt: (trace) => {
+        const altered = structuredClone([...trace])
+        const run = altered.find(({ checkpoint }) => checkpoint === `run`)!
+          .value as SuiteRun
+        const file = Object.values(run.files)[0]!
+        file.loadErrors.push(file.loadErrors[0]!)
+        file.loadCauses.push(file.loadCauses[0]!)
+        return altered
+      },
+    },
+    ...[`authored`, `forced`].map((kind) => ({
+      name: `reject lost ${kind} repeated registration`,
+      history: { constructed: `round2 registration warning phases` },
+      law: `registration`,
+      corrupt: (
+        trace: ReadonlyArray<{ checkpoint: string; value: unknown }>,
+      ) => {
+        const altered = structuredClone([...trace])
+        const phase = altered.find(
+          ({ checkpoint }) => checkpoint === `registration-warnings`,
+        )!.value as {
+          tests: { repeated: Array<string> }
+        }
+        const omitted = phase.tests.repeated.findIndex(
+          (name) =>
+            name.startsWith(`second >`) &&
+            (kind === `forced`
+              ? name.includes(`forced entered`)
+              : name.includes(`calibration: cal-0`)),
+        )
+        phase.tests.repeated.splice(omitted, 1)
+        return altered
+      },
+    })),
+    {
+      name: `reject unexpected child error`,
+      history: { constructed: `round2 ranked mutant verdicts` },
+      law: `trace`,
+      corrupt: (trace) => {
+        const altered = structuredClone([...trace])
+        const child = altered.find(({ checkpoint }) => checkpoint === `child`)!
+          .value as {
+          exit: number
+          unhandled: Array<string>
+        }
+        child.exit = 1
+        child.unhandled.push(`unexpected registration rejection`)
+        return altered
+      },
+    },
+    {
+      name: `reject equal-data origin substitution`,
+      history: { constructed: `review equal fixed originals` },
+      law: `calibration`,
+      corrupt: (trace) => {
+        const altered = structuredClone([...trace])
+        const run = altered.find(({ checkpoint }) => checkpoint === `run`)!
+          .value as SuiteRun
+        for (const entry of run.log)
+          if (entry.test.includes(`calibration: cal-0`))
+            entry.origin = `fixed:fixed-0`
+        return altered
+      },
+    },
+  ],
   owns: [`src/oracle-property.ts`],
   // Each history spawns one to five child Vitest runs.
   timeout: 600_000,
