@@ -86,8 +86,14 @@ const replayPattern = (names) =>
  * tests, each with its state and names (`testNamesOf`). A file with no
  * failing test (one that did not load) replays whole. A control character
  * in a name or a failure prints as its escape, so each line stays one line.
+ * `config` is the config `--config` named, relative to the package: Vitest
+ * would discover another config or none, so the replay names it too.
  */
-export function baselineLines(files) {
+export function baselineLines(files, config) {
+  const vitest =
+    config === undefined
+      ? `vitest run`
+      : `vitest run --config ${shellWord(config)}`
   return files.flatMap(({ file, failure, tests }) => {
     if (failure === undefined) return [`pass ${file}`]
     const names = tests.find((t) => t.state === `failed`)?.names
@@ -97,7 +103,7 @@ export function baselineLines(files) {
         : ` -t ${shellWord(escapeControls(replayPattern(names)))}`
     return [
       `fail ${file}: ${escapeControls(failure)}`,
-      `  replay: vitest run ${shellWord(file)}${only}`,
+      `  replay: ${vitest} ${shellWord(file)}${only}`,
     ]
   })
 }
