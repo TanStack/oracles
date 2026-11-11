@@ -18,7 +18,7 @@
  * reproduce. A test registers its route before its campaign runs, and the
  * last registration wins.
  *
- * This module imports nothing, so the browser-safe `./declaration` entry
+ * This module imports nothing, so the browser-safe `./route` entry
  * exports it, and a module bundled into a browser or a native webview can
  * register its routes.
  */

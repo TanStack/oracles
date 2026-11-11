@@ -1,205 +1,96 @@
-import { existsSync, readFileSync, statSync } from 'node:fs'
-import { basename, dirname, join, relative, resolve, sep } from 'node:path'
-import { Linter } from 'eslint'
+import { basename } from 'node:path'
+import {
+  LintSession,
+  lintSession,
+  loadModule,
+  resolveTestModule,
+} from '../modules.js'
 import {
   findVariable,
   isFunction,
-  isOracleConfigSource,
   isPackageEntry,
+  moduleTestFunctions,
   registeredTest,
+  testFunctions,
 } from '../registration.js'
 
 /**
- * An oracle's expected results come from its model, and its check compares
- * production with them. A test that compares production with a value that a
- * person wrote down is a unit test. Its expectation has no independent
- * source, so it is not oracle coverage, even in a file named for an oracle.
+ * An oracle file registers its tests only through `oracleProperty`
+ * (maintainer decision, 2026-11-11). Its histories hold its fixed
+ * regressions, enumerated cases, and constructed histories; its calibrations
+ * show that the check rejects wrong answers; and its declared states hold its
+ * reach. A test that an oracle file registers any other way has no place in
+ * the oracle, whatever it calls: a unit test, a model-rule expectation, or a
+ * grammar-size check belongs in an ordinary test file, beside the oracle.
  *
- * An oracle file declares its parts in its `oracleProperty` call (below). A
- * legacy file, one that registers its tests through a driver in another
- * module, declares them with `declareOracle`, which the rule still reads:
+ * The rule reports, in a file whose name contains `oracle`:
  *
- *   declareOracle({ check: [checkHistory], model: [modelHistory] })
+ * - `unitTest`: a test registration (`it`, `test`, `bench`, and their
+ *   `.each`, `.for`, `.skipIf`, `.concurrent`, `.prop`, and other members),
+ *   whatever its body reaches. Its root is a test function as the oracle
+ *   rules resolve it together (registration.js, testFunctions): through an
+ *   import, a namespace member, a variable, a cast, a branch, a fixture, or
+ *   an export of a test module. A suite is exempt by the function that it
+ *   resolves to, not by its local name. A
+ *   registration inside a local helper counts once, where it is written; the
+ *   helper's calls are not registrations of their own. A call to an imported
+ *   helper that registers the body its caller passes, curried or not, is a
+ *   registration at the call: the argument at the body parameter's position
+ *   is its body.
+ * - `emptyTest` and `emptyTodo`: a registration whose body is a function
+ *   whose block holds no statement checks nothing. Remove it, or register it
+ *   with `it.todo`, which takes no body (maintainer decision, 2026-11-10). A
+ *   bare `it.todo(name)` is no registration.
+ * - `incompleteProperty`: a call to the framework's `oracleProperty` whose
+ *   options are not an object literal with a `check` property, because the
+ *   rule cannot see that the property has a check. The framework's
+ *   `oracleProperty` is the export of `@tanstack/oracles`, or of a relative
+ *   module whose file is named `oracle-property`, as a project's shim is. It
+ *   is found through a named import, an alias, or a namespace member. A
+ *   function named `oracleProperty` from any other module is an ordinary
+ *   helper and is judged like one. (Maintainer decision, oracle-framework
+ *   slice, 2026-11-02.)
+ * - `importedRegistration`: a call to an imported helper that registers a
+ *   test of its own, through a named, default, or namespace import. The
+ *   helper's tests would appear under the oracle file, so an ordinary test
+ *   file registers them instead.
  *
- * The check compares production observations with the model, or with a
- * second formulation. The grammar is the generators that produce legal
- * histories. Each is optional: a differential or metamorphic oracle has no
- * model, and a companion module can declare only the part that its importers
- * use. Every test in the file must reach a declared part:
+ * A complete `oracleProperty` call gets no report. Neither does a call to a
+ * helper in an oracle-named module, because that module's tests are linted
+ * on their own; an `oracle-` machinery module is not linted, so its helpers
+ * are judged here as an ordinary module's are. A test function that an
+ * oracle-named module exports still registers here, where it is called.
+ * Files whose names start with
+ * `oracle-`, such as `oracle-replay.test.ts`, test the shared oracle
+ * machinery, and the rule skips them.
  *
- * - A generated property or a fixed history reaches the check.
- * - A model-rule expectation reaches the model. It checks one model rule
- *   against its authority.
- * - A calibration reaches the check. It shows that the check rejects a
- *   wrong answer.
- * - A grammar calibration reaches the grammar. It shows that the generators
- *   reach the states that the laws need.
+ * To classify an imported helper, the rule reads the module that the import
+ * names, and follows its re-exports, star exports, relays of imported
+ * bindings, and default exports to the module that defines it. In a
+ * helper's body it asks only which callees are test functions, so it never
+ * walks another helper's body, and each export is answered once per lint: a
+ * cycle of modules ends, and no call graph makes a lint slow. It reads each module relative to
+ * the file, with the parser and parser options that ESLint uses for the file
+ * it lints, so it needs no TypeScript of its own. It reads no package, so a
+ * fixture that a package exports is not seen. It does
+ * not read production: `src/` modules of a published package. A private
+ * package, such as an end-to-end suite, keeps its tests in `src/`, and the
+ * rule reads those. A module that the parser cannot read classifies no
+ * helper, and the rule never throws on it.
  *
- * A generated property counts as its own check: `fc.property(...)` or
- * `fc.asyncProperty(...)` from fast-check, run by the test directly or
- * through code it calls, or a `.prop([...])` registration. Its predicate
- * states a law over inputs that nobody wrote down. It does not count when all
- * its arbitraries are `fc.constant` or `fc.constantFrom`, written inline or
- * bound to a const name, or when its predicate never reads its input: then it
- * checks written values. A predicate is read where it is defined, in this file
- * or in a test module that the file imports. One that the rule cannot read, as
- * from a package, counts.
- *
- * An oracle property is its own declaration. A call to `oracleProperty`,
- * imported from the framework module `oracle-property`, registers oracle tests
- * whose parts are the functions it is given:
- *
- *   oracleProperty({ id, law, histories, driver, model, check })
- *
- * The call counts as a test that reaches a part when its options are an object
- * literal with a `check` property. Any other call to it is reported as an
- * incomplete property, because the rule cannot see that the property has a
- * check. A function named `oracleProperty` from any other module is an ordinary
- * helper and is judged like one. (Maintainer decision, oracle-framework slice,
- * 2026-11-02.)
- *
- * A test reaches a part when its body uses the part, or uses a function or
- * value that reaches it. The rule follows bindings through the file and
- * through relative imports of other test modules, so a driver in a companion
- * module that calls the check counts. An import is followed whether it is
- * named, a default, or a namespace whose member the code reads; `export *`
- * does not carry a default. A `let` holds each value that code assigns to it,
- * such as a driver that a hook builds. A `for...of` loop variable takes each
- * element of its array in turn, and the loop registers one test per element,
- * so every element must reach. It does not follow imports of
- * production: `src/` modules of a published package, which declare no oracle
- * part. A private package, such as an end-to-end suite, keeps its tests in
- * `src/`, and the rule follows those.
- *
- * The rule reads an imported module with the parser and parser options that
- * ESLint uses for the file it lints, so it agrees with the consumer's config
- * and needs no TypeScript of its own. A module that this parser cannot read
- * reaches nothing and never makes the rule throw. When the file has a test
- * that reaches no part, each import, re-export, or star export that names
- * such a module is reported too (unparsedModule), with the parser's error, since
- * the reach may have run through it. A file whose tests all reach is not
- * judged by such a module, so a JavaScript config that imports a TypeScript
- * one is not reported.
- *
- * The rule reports each test that reaches no declared part. Move such a test
- * to an ordinary test file, where it stays as supplemental coverage. A file
- * whose tests reach no part, and that declares none itself, gets one report
- * that asks for the declaration.
- *
- * A test whose body is an empty function, such as `it('x', () => {})` or
- * `test('x', async function () {})`, checks nothing, so the rule reports it
- * as an empty test, whatever the file declares: remove it, or register it
- * with `it.todo` (maintainer decision, 2026-11-10). A todo given an empty
- * body is told to drop the body. An empty test reaches no part, and no
- * other report counts it. Only a function whose block holds no statement is
- * empty: a body passed by name (`it('x', noop)`) or one holding an empty
- * statement (`() => { ; }`) is judged as any other body.
- *
- * Files whose names start with `oracle-`, such as `oracle-replay.test.ts`,
- * test the shared oracle machinery, and the rule skips them.
- *
- * A unit test that happens to use a declared grammar passes the rule.
- * The rule cannot see whether a test that reaches a part also compares
- * production with hand-written values, or whether a declared part is really
- * a check or a model. Reviewers still check those.
- *
- * An oracle file registers only oracle tests, so it may not call an imported
- * helper that registers a test of its own. Such a call gets an
- * importedRegistration report: the author registers those tests from an
- * ordinary test file. The helper is found through a named, default, or
- * namespace import. A helper that registers the body its caller passes does not
- * register a test of its own. Its caller's body is the test, and it is judged
- * at the call, as a local parameter registration is: the argument at the body
- * parameter's position, so a trailing timeout is not the body. A helper may
- * wrap the body in a function of its own; when that wrapper uses a part, every
- * call's test reaches it. A call to a helper in an oracle-named module is not
- * judged here, because that module's tests are linted on their own. An
- * `oracle-` machinery module is not linted, so its helpers are judged here as
- * an ordinary module's are.
+ * The rule cannot see whether a complete `oracleProperty` call's check is a
+ * real check, or whether a wrapper in an oracle-named module registers its
+ * caller's body as an oracle property. Reviewers check those.
  */
 
-const declarationHelper = `declareOracle`
-
-/**
- * Every module that an earlier lint parsed, by path, with the mtime and size
- * it was read at and the language options it was parsed with. Parsing is the
- * costly part, so a module is parsed again only when it changes, or when a
- * file with other language options imports it. The reach that a lint computes
- * is never kept between lints, so an edit to any module reaches the next lint:
- * see LintSession.
- */
-const parsedModules = new Map()
-
-/**
- * The reach state of one lint run: the language options of the file it lints,
- * the modules it loaded, the parse error of each module that did not parse,
- * the production package flags it read, and the reach search that resolves
- * bindings.
- */
-class LintSession {
-  modules = new Map()
-  parseErrors = new Map()
-  published = new Map()
-  search = new ReachSearch()
-  constructor(languageOptions) {
-    this.languageOptions = languageOptions
-  }
-}
-
-/**
- * Resolves reach through cycles. A binding or export that is still being
- * computed reads as not reaching, which is its least fixed point. A value that
- * consulted such an assumption above its own computation is not kept, since the
- * assumption may not hold: it is computed again on its next read. A reaching
- * value is always kept, because reach only comes from declared parts.
- */
-class ReachSearch {
-  #frames = []
-  #active = new Map()
-
-  solve(cache, key, compute) {
-    const known = cache.get(key)
-    if (known !== undefined) return known
-    if (!this.#active.has(cache)) this.#active.set(cache, new Map())
-    const active = this.#active.get(cache)
-    const depth = active.get(key)
-    if (depth !== undefined) {
-      const frame = this.#frames.at(-1)
-      frame.low = Math.min(frame.low, depth)
-      return false
-    }
-    const frame = { depth: this.#frames.length, low: Infinity }
-    this.#frames.push(frame)
-    active.set(key, frame.depth)
-    let reaches
-    try {
-      reaches = compute()
-    } finally {
-      this.#frames.pop()
-      active.delete(key)
-    }
-    const caller = this.#frames.at(-1)
-    if (caller !== undefined) caller.low = Math.min(caller.low, frame.low)
-    if (reaches || frame.low >= frame.depth) cache.set(key, reaches)
-    return reaches
-  }
-}
-
-/**
- * Whether a binding that a module imports from `source` reaches a part. A
- * module that cannot be loaded reaches nothing.
- */
-function importedModuleReaches(fromFile, source, name, session) {
+/** How the export `name` of the module that `source` names registers tests. */
+function importedRegisters(fromFile, source, name, session) {
+  if (!source.startsWith(`.`)) return undefined
   const file = resolveTestModule(fromFile, source, session)
-  const module = file === undefined ? undefined : loadModule(file, session)
-  return module !== undefined && module.exportReaches(name)
-}
-
-/** Whether a function that a module imports from `source` registers a test. */
-function importedRegisters(fromFile, source, name, session, visiting) {
-  const file = resolveTestModule(fromFile, source, session)
-  const module = file === undefined ? undefined : loadModule(file, session)
-  return module?.registrationShape(name, visiting)
+  if (file === undefined) return undefined
+  return session.once(`shape\0${file}\0${name}`, () =>
+    registrationShape(file, name, session),
+  )
 }
 
 /**
@@ -216,7 +107,7 @@ function importedHelperShape(node, file, sourceCode, session) {
   if (target === undefined) return undefined
   const module = resolveTestModule(file, target.source, session)
   if (module === undefined || lintedOnItsOwn(module)) return undefined
-  return loadModule(module, session)?.registrationShape(target.name)
+  return importedRegisters(file, target.source, target.name, session)
 }
 
 /** The framework module, whose `oracleProperty` calls are oracle properties. */
@@ -305,964 +196,106 @@ function lintedOnItsOwn(file) {
 }
 
 /**
- * Whether a helper call reaches a part through the body its caller passes. The
- * body is the argument at the position of the helper's body parameter. It
- * reaches when it uses a part. A fast-check property (`.prop`) also reaches
- * when one of its arbitraries generates values and its body reads the value,
- * because then the body is a generated property. A wrapper that the helper
- * writes around the body, and that uses a part itself, makes the test reach.
+ * How the export `name` of a test module registers tests, or undefined when
+ * it registers none. A function registers the body that it writes ('own')
+ * or the body that its caller passes ('parameter'). A binding imported from
+ * another module, a re-export, and a star export are followed to that
+ * module. Each answer is kept for the lint, and a cycle of modules answers
+ * undefined (LintSession.once), so no export is walked twice.
  */
-function callerBodyReaches(node, helper, module) {
-  if (helper.wrapperReaches) return true
-  const body = curriedArguments(node, helper.level)[helper.index]
-  if (body === undefined) return false
-  if (module.nodeReaches(body)) return true
-  return (
-    helper.prop &&
-    isFunction(body) &&
-    generatesValues(node, module) &&
-    module.usesInput(body)
-  )
-}
-
-/**
- * The arguments of one call in a curried call: level 0 is the call of the
- * helper itself, and each later level is the call of the function before it
- * returned.
- */
-function curriedArguments(node, level) {
-  const calls = []
-  for (let call = node; call.type === `CallExpression`; call = call.callee) {
-    calls.unshift(call)
-  }
-  return calls[level]?.arguments ?? []
-}
-
-/**
- * Whether an arbitrary generates values: a call that is not a constant, or a
- * variable whose initializer is one. An identifier is followed to its definition.
- */
-function generatedArbitrary(value, module) {
-  if (value?.type === `Identifier`) {
-    const definition = findVariable(module.scopeOf(value), value.name)?.defs[0]
-    return (
-      definition?.type === `Variable` &&
-      definition.node.init !== null &&
-      generatedArbitrary(definition.node.init, module)
-    )
-  }
-  return value?.type === `CallExpression` && !isConstant(value)
-}
-
-/** Whether a curried call's arguments include a non-constant arbitrary. */
-function generatesValues(node, module) {
-  for (
-    let inner = node.callee;
-    inner.type === `CallExpression`;
-    inner = inner.callee
-  ) {
-    for (const argument of inner.arguments) {
-      const values =
-        argument.type === `ArrayExpression` ? argument.elements : [argument]
-      if (values.some((value) => generatedArbitrary(value, module))) {
-        return true
-      }
-    }
-  }
-  return false
-}
-
-/** The test module that a relative import names, or undefined. */
-function resolveTestModule(fromFile, source, session) {
-  if (!source.startsWith(`.`)) return undefined
-  const base = resolve(dirname(fromFile), source)
-  const stem = base.replace(/\.(m?js|tsx?)$/, ``)
-  // A `.js` specifier names the TypeScript source when one exists, and
-  // otherwise the JavaScript module itself.
-  const file = [
-    `${stem}.ts`,
-    `${stem}.tsx`,
-    ...(/\.m?js$/.test(base) ? [base] : []),
-    `${base}/index.ts`,
-  ].find((candidate) => existsSync(candidate))
-  // Production declares no oracle part, so the rule does not parse it.
-  if (file === undefined || isProductionModule(file, session)) return undefined
-  return file
-}
-
-/**
- * Whether a file is shipped source: under `src/` in a published package. A
- * private package, such as an end-to-end suite, keeps its tests in `src/`.
- */
-function isProductionModule(file, session) {
-  for (let directory = dirname(file); ; directory = dirname(directory)) {
-    const manifest = join(directory, `package.json`)
-    if (existsSync(manifest)) {
-      if (!session.published.has(directory)) {
-        const { private: isPrivate } = JSON.parse(
-          readFileSync(manifest, `utf8`),
-        )
-        session.published.set(directory, isPrivate !== true)
-      }
+function registrationShape(file, name, session) {
+  const module = loadModule(file, session)
+  if (module === undefined) return undefined
+  const entry = module.exported.get(name)
+  if (entry?.variable !== undefined) {
+    const definition = entry.variable.defs[0]
+    if (definition?.type === `FunctionName`)
+      return bodyShape(module, definition.node, session)
+    if (definition?.type === `Variable` && isFunction(definition.node.init))
+      return bodyShape(module, definition.node.init, session)
+    // A binding imported by name or as the default, then exported.
+    if (definition?.type === `ImportBinding`) {
+      const target = importBindingTarget(definition)
       return (
-        session.published.get(directory) &&
-        relative(directory, file).split(sep)[0] === `src`
+        target && importedRegisters(file, target.source, target.name, session)
       )
-    }
-    if (dirname(directory) === directory) return false
-  }
-}
-
-/** The name of an object property, whether its key is an identifier or a string. */
-function propertyName(property) {
-  if (property.computed) return stringValue(property.key)
-  return property.key.name ?? stringValue(property.key)
-}
-
-function inTypeQuery(identifier) {
-  for (let node = identifier.parent; node; node = node.parent) {
-    if (node.type === `TSTypeQuery`) return true
-  }
-  return false
-}
-
-/**
- * The module that a file names, for this lint. A module that cannot be read or
- * does not parse reaches nothing, and its error is kept for the import that
- * names it (see the `unparsedModule` report).
- */
-function loadModule(file, session) {
-  if (!session.modules.has(file)) {
-    // Only reading and parsing the module may fail here; an error in the
-    // rule's own analysis of a parsed module is a rule bug, not a parse
-    // failure, so it is not reported as one.
-    let parsed
-    try {
-      parsed = parseModule(file, session.languageOptions)
-    } catch (error) {
-      session.parseErrors.set(file, error.message)
-    }
-    session.modules.set(
-      file,
-      parsed &&
-        new OracleModule(file, parsed.ast, parsed.scopeManager, session),
-    )
-  }
-  return session.modules.get(file)
-}
-
-/**
- * The parsed source of a module, reused while its mtime, size, and language
- * options are unchanged. ESLint's own Linter parses it with the language
- * options of the file being linted, so an imported module is read with the
- * parser and parser options that the consumer configured, whichever parser
- * that is, and it gets the scope analysis and `parent` links that ESLint
- * gives the linted file.
- *
- * The rule reads syntax and scope, not types. typescript-eslint's `project`,
- * `projectService`, and `programs` options build a type-checked program, which
- * costs far more than the parse and changes the program that the consumer's
- * type-aware rules then read for that module, so they are left out.
- */
-function parseModule(file, languageOptions) {
-  const { mtimeMs, size } = statSync(file)
-  const cached = parsedModules.get(file)
-  if (
-    cached?.mtimeMs === mtimeMs &&
-    cached.size === size &&
-    cached.languageOptions === languageOptions
-  )
-    return cached
-  const linter = new Linter({ cwd: dirname(file) })
-  const [fatal] = linter
-    .verify(
-      readFileSync(file, `utf8`),
-      [
-        {
-          files: [`**/*.*`],
-          // The imported module's own eslint comments configure rules and
-          // environments this parse does not run.
-          linterOptions: {
-            noInlineConfig: true,
-            reportUnusedDisableDirectives: `off`,
-          },
-          languageOptions: {
-            ...languageOptions,
-            parserOptions: {
-              ...languageOptions.parserOptions,
-              project: undefined,
-              projectService: undefined,
-              programs: undefined,
-            },
-          },
-        },
-      ],
-      file,
-    )
-    .filter((message) => message.fatal)
-  if (fatal !== undefined) throw new Error(fatal.message)
-  const { ast, scopeManager } = linter.getSourceCode()
-  const parsed = { mtimeMs, size, languageOptions, ast, scopeManager }
-  parsedModules.set(file, parsed)
-  return parsed
-}
-
-class OracleModule {
-  constructor(file, ast, scopeManager, session) {
-    this.file = file
-    this.scopeManager = scopeManager
-    this.session = session
-    this.reach = new Map()
-    // Reach of a binding seen from another module, which ignores parameters.
-    this.exportedReach = new Map()
-    // Reach of an exported name, by name.
-    this.exportReachCache = new Map()
-    // Resolved references in source order, so a node's references are one
-    // contiguous range.
-    this.references = scopeManager.scopes
-      .flatMap((scope) => scope.references)
-      // A type annotation runs nothing, so only value references reach.
-      // `typeof check` in a type names a value, and still runs nothing.
-      // espree's scope analysis has no type references, so it does not mark
-      // its references as values.
-      .filter(
-        (reference) =>
-          reference.resolved !== null &&
-          reference.isValueReference !== false &&
-          !inTypeQuery(reference.identifier),
-      )
-      .sort((a, b) => a.identifier.range[0] - b.identifier.range[0])
-    this.resolvedAt = new Map(
-      this.references.map((reference) => [
-        reference.identifier,
-        reference.resolved,
-      ]),
-    )
-    // Start offsets of the generated properties in this module, in order.
-    this.properties = []
-    walk(ast, (node) => {
-      if (this.#isGeneratedProperty(node)) this.properties.push(node.range[0])
-    })
-    this.properties.sort((a, b) => a - b)
-    // Names that `typeModel` lists, with the string literal that names each.
-    this.typeModels = new Map()
-    this.declared = this.#declaredParts()
-    this.#resolveTypeModels(ast)
-    this.exported = new Map()
-    this.starSources = []
-    for (const statement of ast.body) this.#recordExports(statement)
-  }
-
-  /** The variables that `declareOracle({ check, model })` names. */
-  #declaredParts() {
-    const declared = new Set()
-    for (const reference of this.references) {
-      const call = reference.identifier.parent
-      const definition = reference.resolved.defs[0]
-      if (
-        reference.identifier.name !== declarationHelper ||
-        call.type !== `CallExpression` ||
-        call.callee !== reference.identifier ||
-        definition?.type !== `ImportBinding` ||
-        !isOracleConfigSource(definition.parent.source.value)
-      ) {
-        continue
-      }
-      for (const property of this.#declarationProperties(call.arguments[0])) {
-        const value = property.value
-        const parts =
-          value?.type === `ArrayExpression` ? value.elements : [value]
-        if (propertyName(property) === `typeModel`) {
-          for (const part of parts) {
-            const name = stringValue(part)
-            if (name !== undefined) this.typeModels.set(name, part)
-          }
-          continue
-        }
-        for (const part of parts) {
-          const variable =
-            part?.type === `Identifier` ? this.resolvedAt.get(part) : undefined
-          if (variable !== undefined) declared.add(variable)
-        }
-      }
-    }
-    return declared
-  }
-
-  /**
-   * The properties of a declaration object. A spread of a const object
-   * literal contributes that object's properties, as the type accepts it.
-   */
-  #declarationProperties(object, seen = new Set()) {
-    if (object?.type !== `ObjectExpression` || seen.has(object)) return []
-    seen.add(object)
-    return object.properties.flatMap((property) => {
-      if (property.type !== `SpreadElement`) return [property]
-      const definition =
-        property.argument.type === `Identifier`
-          ? this.resolvedAt.get(property.argument)?.defs[0]
-          : undefined
-      return definition?.type === `Variable` &&
-        definition.parent.kind === `const`
-        ? this.#declarationProperties(definition.node.init, seen)
-        : []
-    })
-  }
-
-  #recordExports(statement) {
-    if (statement.type === `ExportDefaultDeclaration`) {
-      this.#recordDefaultExport(statement.declaration)
-      return
-    }
-    if (statement.type === `ExportAllDeclaration`) {
-      if (statement.exported === null) {
-        this.starSources.push(statement.source.value)
-      }
-      return
-    }
-    if (statement.type !== `ExportNamedDeclaration`) return
-    if (statement.declaration !== null) {
-      // A class declares its name twice: in the module and inside its own
-      // scope. The module binding is the one a declaration refers to.
-      const moduleScope = this.#moduleScope()
-      for (const variable of this.scopeManager.getDeclaredVariables(
-        statement.declaration,
-      )) {
-        if (variable.scope === moduleScope)
-          this.exported.set(variable.name, { variable })
-      }
-      return
-    }
-    for (const specifier of statement.specifiers) {
-      const exported = specifier.exported.name ?? specifier.exported.value
-      const local = specifier.local.name ?? specifier.local.value
-      if (statement.source !== null) {
-        this.exported.set(exported, {
-          source: statement.source.value,
-          imported: local,
-        })
-      } else {
-        const variable = findVariable(this.#moduleScope(), local)
-        if (variable !== undefined) this.exported.set(exported, { variable })
-      }
-    }
-  }
-
-  /**
-   * `export default` names a module binding, declares a named function or
-   * class, or exports an expression, which reaches when its code does.
-   */
-  #recordDefaultExport(declaration) {
-    const moduleScope = this.#moduleScope()
-    const variable =
-      declaration.type === `Identifier`
-        ? findVariable(moduleScope, declaration.name)
-        : declaration.id
-          ? this.scopeManager
-              .getDeclaredVariables(declaration)
-              .find((declared) => declared.scope === moduleScope)
-          : undefined
-    this.exported.set(
-      `default`,
-      variable === undefined ? { node: declaration } : { variable },
-    )
-  }
-
-  #moduleScope() {
-    return (
-      this.scopeManager.scopes.find((scope) => scope.type === `module`) ??
-      this.scopeManager.globalScope
-    )
-  }
-
-  get declaresParts() {
-    return this.declared.size > 0 || this.typeModels.size > 0
-  }
-
-  /**
-   * A type model is a type alias or interface in this module's scope, which
-   * a type-level test uses as its expected type. Record where each is used,
-   * and the names that name no such type.
-   */
-  #resolveTypeModels(ast) {
-    this.typeModelUses = []
-    this.unknownTypeModels = []
-    if (this.typeModels.size === 0) return
-    const defined = new Map()
-    for (const statement of ast.body) {
-      const declaration =
-        statement.type === `ExportNamedDeclaration`
-          ? statement.declaration
-          : statement
-      if (
-        declaration?.type === `TSTypeAliasDeclaration` ||
-        declaration?.type === `TSInterfaceDeclaration`
-      ) {
-        defined.set(declaration.id.name, declaration)
-      }
-    }
-    for (const [name, literal] of this.typeModels) {
-      if (!defined.has(name)) this.unknownTypeModels.push(literal)
-    }
-    // A type built from a model, such as `PublishedValueFor<Variant>` under
-    // another name, predicts what the model predicts.
-    const models = new Set(
-      [...this.typeModels.keys()].filter((name) => defined.has(name)),
-    )
-    const namesModel = (node) => {
-      let found = false
-      walk(node, (child) => {
-        if (
-          child.type === `TSTypeReference` &&
-          child.typeName.type === `Identifier` &&
-          models.has(child.typeName.name)
-        ) {
-          found = true
-        }
-      })
-      return found
-    }
-    for (let grew = true; grew;) {
-      grew = false
-      for (const [name, declaration] of defined) {
-        if (!models.has(name) && namesModel(declaration)) {
-          models.add(name)
-          grew = true
-        }
-      }
-    }
-    walk(ast, (node) => {
-      if (
-        node.type === `TSTypeReference` &&
-        node.typeName.type === `Identifier` &&
-        models.has(node.typeName.name)
-      ) {
-        this.typeModelUses.push(node.range[0])
-      }
-    })
-    this.typeModelUses.sort((a, b) => a - b)
-  }
-
-  /**
-   * Whether a binding is a declared part, or uses one. Seen from another
-   * module (`local` false), a parameter reaches nothing: the importer passes
-   * its own arguments, so this module's call sites say nothing about it.
-   */
-  variableReaches(variable, local = true) {
-    if (variable === undefined) return false
-    if (this.declared.has(variable)) return true
-    return this.session.search.solve(
-      local ? this.reach : this.exportedReach,
-      variable,
-      () =>
-        variable.defs.some((definition) =>
-          this.#definitionReaches(definition, local),
-        ) ||
-        this.#assignedValueReaches(variable, local) ||
-        (local && this.#fedByReachingValue(variable, local)),
-    )
-  }
-
-  /**
-   * A binding that code assigns after its declaration, such as a `let` that a
-   * hook sets, holds the value assigned to it. It reaches when one does.
-   */
-  #assignedValueReaches(variable, local) {
-    return variable.references.some(
-      (reference) =>
-        reference.isWrite() &&
-        !reference.init &&
-        reference.writeExpr != null &&
-        this.nodeReaches(reference.writeExpr, local),
-    )
-  }
-
-  /**
-   * A collection that code fills with values from a declared part, such as a
-   * coverage Set that grammar-driven tests add the model's predictions to,
-   * carries those values. A test that reads it uses the part.
-   */
-  #fedByReachingValue(variable, local) {
-    return variable.references.some((reference) => {
-      const member = reference.identifier.parent
-      const call = member?.parent
-      return (
-        member?.type === `MemberExpression` &&
-        member.object === reference.identifier &&
-        !member.computed &&
-        accumulatorMethods.has(member.property.name) &&
-        call?.type === `CallExpression` &&
-        call.callee === member &&
-        call.arguments.some((argument) => this.nodeReaches(argument, local))
-      )
-    })
-  }
-
-  #definitionReaches(definition, local) {
-    switch (definition.type) {
-      case `ImportBinding`: {
-        // A namespace import reaches through the member that each use names.
-        const target = importBindingTarget(definition)
-        return (
-          target !== undefined &&
-          this.#importReaches(target.source, target.name)
-        )
-      }
-      case `FunctionName`:
-      case `ClassName`:
-        return this.nodeReaches(definition.node, local)
-      case `Variable`: {
-        const loop = definition.parent.parent
-        if (loop?.type === `ForOfStatement` && loop.left === definition.parent)
-          return this.#everyElementReaches(loop.right, local)
-        return (
-          definition.node.init !== null &&
-          this.nodeReaches(definition.node.init, local)
-        )
-      }
-      case `Parameter`:
-        return local && this.#parameterReaches(definition)
-      default:
-        return false
-    }
-  }
-
-  /**
-   * A parameter reaches a part when every call of its function passes an
-   * argument that reaches one, as when a helper registers the property that
-   * its caller passes in. A function that the file never calls by name
-   * passes nothing the rule can see.
-   */
-  #parameterReaches(definition) {
-    const index = definition.node.params.indexOf(definition.name)
-    const calls = this.#callsOf(definition)
-    return (
-      index >= 0 &&
-      calls.length > 0 &&
-      calls.every((call) => {
-        const argument = call.arguments[index]
-        return argument !== undefined && this.nodeReaches(argument)
-      })
-    )
-  }
-
-  /** The calls, by name, of the function that declares a parameter. */
-  #callsOf(definition) {
-    const fn = definition.node
-    const binding =
-      fn.type === `FunctionDeclaration`
-        ? fn.id
-        : fn.parent.type === `VariableDeclarator`
-          ? fn.parent.id
-          : undefined
-    if (binding?.type !== `Identifier`) return []
-    const variable = this.scopeManager
-      .getDeclaredVariables(fn.type === `FunctionDeclaration` ? fn : fn.parent)
-      .find((declared) => declared.name === binding.name)
-    return (variable?.references ?? [])
-      .map((reference) => reference.identifier.parent)
-      .filter(
-        (call) =>
-          call.type === `CallExpression` &&
-          call.callee.type === `Identifier` &&
-          call.callee.name === binding.name,
-      )
-  }
-
-  /**
-   * A `for...of` loop variable takes each element in turn, and a registration
-   * in the loop registers one test per element, so every element must reach.
-   * The rule reads an array written in the loop or bound to a const name.
-   */
-  #everyElementReaches(iterable, local) {
-    let array = iterable
-    if (array.type === `Identifier`) {
-      const definition = this.resolvedAt.get(array)?.defs[0]
-      array =
-        definition?.type === `Variable` && definition.parent.kind === `const`
-          ? definition.node.init
-          : undefined
-    }
-    return (
-      array?.type === `ArrayExpression` &&
-      array.elements.length > 0 &&
-      array.elements.every(
-        (element) =>
-          element !== null &&
-          element.type !== `SpreadElement` &&
-          this.nodeReaches(element, local),
-      )
-    )
-  }
-
-  #importReaches(source, name) {
-    return importedModuleReaches(this.file, source, name, this.session)
-  }
-
-  /** Whether an export of this module is a declared part, or uses one. */
-  exportReaches(name) {
-    return this.session.search.solve(this.exportReachCache, name, () => {
-      const entry = this.exported.get(name)
-      if (entry?.variable !== undefined)
-        return this.variableReaches(entry.variable, false)
-      if (entry?.node !== undefined) return this.nodeReaches(entry.node, false)
-      if (entry !== undefined)
-        return this.#importReaches(entry.source, entry.imported)
-      // `export *` does not carry a default export.
-      if (name === `default`) return false
-      return this.starSources.some((source) =>
-        this.#importReaches(source, name),
-      )
-    })
-  }
-
-  /**
-   * How an export of this module registers tests, or undefined when it
-   * registers none. A function registers the body that it writes ('own') or
-   * the body that its caller passes ('parameter'). A cycle of re-exports
-   * registers nothing.
-   */
-  registrationShape(name, visiting = new Set()) {
-    const key = `${this.file}\0${name}`
-    if (visiting.has(key)) return undefined
-    visiting.add(key)
-    const entry = this.exported.get(name)
-    if (entry?.variable !== undefined) {
-      const definition = entry.variable.defs[0]
-      const fn =
-        definition?.type === `FunctionName`
-          ? definition.node
-          : definition?.type === `Variable` && isFunction(definition.node.init)
-            ? definition.node.init
-            : undefined
-      return fn === undefined ? undefined : this.#bodyShape(fn)
-    }
-    if (entry?.node !== undefined) {
-      return isFunction(entry.node) ? this.#bodyShape(entry.node) : undefined
-    }
-    if (entry !== undefined) {
-      return importedRegisters(
-        this.file,
-        entry.source,
-        entry.imported,
-        this.session,
-        visiting,
-      )
-    }
-    if (name === `default`) return undefined
-    for (const source of this.starSources) {
-      const shape = importedRegisters(
-        this.file,
-        source,
-        name,
-        this.session,
-        visiting,
-      )
-      if (shape !== undefined) return shape
     }
     return undefined
   }
-
-  /**
-   * The shape of the registrations in a function's body. A registration
-   * registers the caller's body when its body is a parameter of the function,
-   * or of a function that it returns, or when its body is a wrapper written
-   * here that calls such a parameter. The shape records where the caller
-   * passes that body, and whether the wrapper uses a part itself. Any other
-   * registration registers a body that the function writes, which wins.
-   */
-  #bodyShape(fn) {
-    const sourceCode = { getScope: (node) => this.scopeOf(node) }
-    let shape
-    walk(fn, (node) => {
-      if (node.type !== `CallExpression`) return
-      const test = registeredTest(node, sourceCode)
-      if (test === undefined) return
-      const position = this.#passedBody(test.body, fn, sourceCode)
-      if (position === undefined) shape = { kind: `own` }
-      else if (shape?.kind !== `own`) {
-        shape = {
-          kind: `parameter`,
-          ...position,
-          prop: calleeCall(node.callee, `prop`) !== undefined,
-          // Seen from the caller, the helper's parameters reach nothing.
-          wrapperReaches:
-            isFunction(test.body) && this.nodeReaches(test.body, false),
-        }
-      }
-    })
-    return shape
+  if (entry?.node !== undefined)
+    return isFunction(entry.node)
+      ? bodyShape(module, entry.node, session)
+      : undefined
+  if (entry?.source !== undefined)
+    return importedRegisters(file, entry.source, entry.imported, session)
+  if (entry !== undefined || name === `default`) return undefined
+  for (const source of module.starSources) {
+    const shape = importedRegisters(file, source, name, session)
+    if (shape !== undefined) return shape
   }
-
-  /**
-   * Where a registration's body comes from, when its caller passes it: the
-   * body is a parameter of `fn` or of a function inside `fn`, or a wrapper
-   * that calls one. The position is `{ index, level }`: the parameter's index,
-   * and the number of functions from `fn` to the one that declares it.
-   */
-  #passedBody(body, fn, sourceCode) {
-    const positionOf = (identifier) => {
-      const definition = findVariable(
-        sourceCode.getScope(identifier),
-        identifier.name,
-      )?.defs[0]
-      if (definition?.type !== `Parameter`) return undefined
-      const owner = definition.node
-      let level = 0
-      for (let node = owner; node !== fn; node = node.parent) {
-        // A parameter of the wrapper itself, or of a function outside `fn`.
-        if (node === null || node === body) return undefined
-        if (isFunction(node)) level++
-      }
-      return { index: owner.params.indexOf(definition.name), level }
-    }
-    if (body.type === `Identifier`) return positionOf(body)
-    if (!isFunction(body)) return undefined
-    let position
-    walk(body, (node) => {
-      if (
-        position === undefined &&
-        node.type === `CallExpression` &&
-        node.callee.type === `Identifier`
-      ) {
-        position = positionOf(node.callee)
-      }
-    })
-    return position
-  }
-
-  /** The innermost scope of a node, as ESLint's `getScope` finds it. */
-  scopeOf(node) {
-    for (let current = node; current; current = current.parent) {
-      const scope = this.scopeManager.acquire(current, true)
-      if (scope) return scope
-    }
-    return this.scopeManager.globalScope
-  }
-
-  /**
-   * A generated property: `fc.property(...)` or `fc.asyncProperty(...)` from
-   * fast-check, or a `.prop([...])` registration. Its predicate states a law
-   * over inputs that nobody wrote down, so it is its own check. A property
-   * whose arbitraries are all constants checks one written input, so it does
-   * not count.
-   */
-  #isGeneratedProperty(node) {
-    if (node.type !== `CallExpression`) return false
-    const { callee } = node
-    if (callee.type !== `MemberExpression` || callee.computed) return false
-    const name = callee.property.name
-    if (name !== `property` && name !== `asyncProperty`) return false
-    if (!this.#isFastCheck(callee.object)) return false
-    const predicate = node.arguments.at(-1)
-    return (
-      node.arguments
-        .slice(0, -1)
-        .some((value) => !this.#constantArbitrary(value)) &&
-      this.#predicateUsesInput(predicate)
-    )
-  }
-
-  /**
-   * `fc.constant(x)` or `fc.constantFrom(...)`, written here or bound to a
-   * const name. An arbitrary from elsewhere cannot be seen, so it is not one.
-   */
-  #constantArbitrary(value, seen = new Set()) {
-    if (value?.type !== `Identifier`) return isConstant(value)
-    const definition = this.resolvedAt.get(value)?.defs[0]
-    if (
-      definition?.type !== `Variable` ||
-      definition.parent.kind !== `const` ||
-      seen.has(definition.node)
-    ) {
-      return false
-    }
-    seen.add(definition.node)
-    return this.#constantArbitrary(definition.node.init, seen)
-  }
-
-  /**
-   * Whether a property's predicate reads its input. A named predicate is read
-   * at its definition. One passed in as a parameter cannot be seen here, so
-   * it counts.
-   */
-  #predicateUsesInput(predicate) {
-    if (predicate?.type !== `Identifier`) return this.usesInput(predicate)
-    const definition = this.resolvedAt.get(predicate)?.defs[0]
-    if (definition?.type === `FunctionName`)
-      return this.usesInput(definition.node)
-    if (definition?.type === `Variable`)
-      return this.usesInput(definition.node.init)
-    if (definition?.type === `ImportBinding`)
-      return this.#importedFunctionUsesInput(definition) ?? true
-    return true
-  }
-
-  /**
-   * Whether an imported function reads a parameter, read at its definition.
-   * Undefined when the rule cannot load the function, as for a package.
-   */
-  #importedFunctionUsesInput(definition) {
-    const target = importBindingTarget(definition)
-    const file =
-      target === undefined
-        ? undefined
-        : resolveTestModule(this.file, target.source, this.session)
-    const module =
-      file === undefined ? undefined : loadModule(file, this.session)
-    return module?.exportedFunctionUsesInput(target.name)
-  }
-
-  /** Whether an export is a function that reads a parameter; undefined if it is not one. */
-  exportedFunctionUsesInput(name) {
-    const definition = this.exported.get(name)?.variable?.defs[0]
-    if (definition?.type === `FunctionName`)
-      return this.usesInput(definition.node)
-    if (definition?.type === `Variable`)
-      return this.usesInput(definition.node.init)
-    return undefined
-  }
-
-  /** A function that reads at least one of its parameters. */
-  usesInput(fn) {
-    if (!isFunction(fn) && fn?.type !== `FunctionDeclaration`) return false
-    return this.scopeManager
-      .getDeclaredVariables(fn)
-      .some(
-        (variable) =>
-          variable.defs[0]?.type === `Parameter` &&
-          variable.references.length > 0,
-      )
-  }
-
-  /**
-   * Whether a `.prop([...])` registration runs a generated property: some
-   * arbitrary is not a constant, and the test reads its input. A named test
-   * is checked at its definition, and a test passed in as a parameter at
-   * every call of its helper.
-   */
-  propRegistrationGenerates(registration, body, sourceCode) {
-    const prop = calleeCall(registration.callee, `prop`)
-    if (prop === undefined) return false
-    const [arbitraries] = prop.arguments
-    const values =
-      arbitraries?.type === `ArrayExpression`
-        ? arbitraries.elements
-        : arbitraries?.type === `ObjectExpression`
-          ? arbitraries.properties.map((property) => property.value)
-          : undefined
-    // Arbitraries that a caller passes in are not visible here, so only
-    // written-out constants disqualify the registration.
-    if (values?.every((value) => this.#constantArbitrary(value))) return false
-    if (isFunction(body)) return this.usesInput(body)
-    const definition = findVariable(sourceCode.getScope(body), body.name)
-      ?.defs[0]
-    // A named predicate: a function declaration or a const bound to one.
-    if (definition?.type === `FunctionName`)
-      return this.usesInput(definition.node)
-    if (definition?.type === `Variable`)
-      return this.usesInput(definition.node.init)
-    if (definition?.type === `ImportBinding`)
-      return this.#importedFunctionUsesInput(definition) ?? true
-    if (definition?.type !== `Parameter`) return false
-    const calls = this.#callsOf(definition)
-    return (
-      calls.length > 0 &&
-      calls.every((call) => {
-        const index = definition.node.params.indexOf(definition.name)
-        return this.usesInput(call.arguments[index])
-      })
-    )
-  }
-
-  #isFastCheck(node) {
-    const definition =
-      node.type === `Identifier`
-        ? this.resolvedAt.get(node)?.defs[0]
-        : undefined
-    return (
-      definition?.type === `ImportBinding` &&
-      fastCheckModules.has(definition.parent.source.value)
-    )
-  }
-
-  /** Whether code uses a declared part, directly or through a binding. */
-  nodeReaches(node, local = true) {
-    // Code that runs a generated property that it contains.
-    if (containsOffset(this.properties, node)) return true
-    // A type-level test reaches a type model by naming it in a type.
-    if (containsOffset(this.typeModelUses, node)) return true
-    const [start, end] = node.range
-    let low = 0
-    let high = this.references.length
-    while (low < high) {
-      const middle = (low + high) >> 1
-      if (this.references[middle].identifier.range[0] < start) low = middle + 1
-      else high = middle
-    }
-    for (let index = low; index < this.references.length; index++) {
-      const reference = this.references[index]
-      if (reference.identifier.range[0] >= end) break
-      if (this.#referenceReaches(reference, local)) return true
-    }
-    return false
-  }
-
-  /** A use of a namespace member, such as `model.step`, reaches through that export. */
-  #referenceReaches(reference, local) {
-    const member = reference.identifier.parent
-    const definition = reference.resolved.defs[0]
-    if (
-      definition?.type === `ImportBinding` &&
-      definition.node.type === `ImportNamespaceSpecifier` &&
-      member?.type === `MemberExpression` &&
-      member.object === reference.identifier &&
-      !member.computed
-    ) {
-      return this.#importReaches(
-        definition.parent.source.value,
-        member.property.name,
-      )
-    }
-    return this.variableReaches(reference.resolved, local)
-  }
-}
-
-const fastCheckModules = new Set([`fast-check`, `@fast-check/vitest`])
-
-// Methods that put a value into a collection.
-const accumulatorMethods = new Set([`add`, `set`, `push`, `unshift`])
-
-/** `fc.constant(x)` or `fc.constantFrom(...)`: an arbitrary of written values. */
-function isConstant(node) {
-  return (
-    node?.type === `CallExpression` &&
-    node.callee.type === `MemberExpression` &&
-    !node.callee.computed &&
-    [`constant`, `constantFrom`].includes(node.callee.property.name)
-  )
-}
-
-/** The value of a string literal or of a template with no substitutions. */
-function stringValue(node) {
-  if (node?.type === `Literal` && typeof node.value === `string`)
-    return node.value
-  if (node?.type === `TemplateLiteral` && node.expressions.length === 0)
-    return node.quasis[0].value.cooked
   return undefined
 }
 
-/** Whether a sorted list of start offsets has one inside a node. */
-function containsOffset(offsets, node) {
-  const [start, end] = node.range
-  let low = 0
-  let high = offsets.length
-  while (low < high) {
-    const middle = (low + high) >> 1
-    if (offsets[middle] < start) low = middle + 1
-    else high = middle
+/**
+ * The shape of the registrations in a function's body. A registration
+ * registers the caller's body when its body is a parameter of the function,
+ * or of a function that it returns, or when its body is a wrapper written
+ * here that calls such a parameter. The shape records where the caller
+ * passes that body. Any other registration registers a body that the
+ * function writes, which wins. The walk asks only which callees are test
+ * functions, so it never walks another helper's body.
+ */
+function bodyShape(module, fn, session) {
+  const functions = moduleTestFunctions(module, session)
+  let shape
+  walk(fn, (node) => {
+    if (node.type !== `CallExpression`) return
+    const test = registeredTest(node, functions)
+    if (test === undefined) return
+    const position = passedBody(test.body, fn, functions)
+    if (position === undefined) shape = { kind: `own` }
+    else if (shape?.kind !== `own`) {
+      shape = { kind: `parameter`, ...position }
+    }
+  })
+  return shape
+}
+
+/**
+ * Where a registration's body comes from, when its caller passes it: the
+ * body is a parameter of `fn` or of a function inside `fn`, or a wrapper
+ * that calls one. The position is `{ index, level }`: the parameter's index,
+ * and the number of functions from `fn` to the one that declares it.
+ */
+function passedBody(body, fn, functions) {
+  const positionOf = (identifier) => {
+    const definition = findVariable(
+      functions.getScope(identifier),
+      identifier.name,
+    )?.defs[0]
+    if (definition?.type !== `Parameter`) return undefined
+    const owner = definition.node
+    let level = 0
+    for (let node = owner; node !== fn; node = node.parent) {
+      // A parameter of the wrapper itself, or of a function outside `fn`.
+      if (node === null || node === body) return undefined
+      if (isFunction(node)) level++
+    }
+    return { index: owner.params.indexOf(definition.name), level }
   }
-  return low < offsets.length && offsets[low] < end
+  if (body.type === `Identifier`) return positionOf(body)
+  if (!isFunction(body)) return undefined
+  let position
+  walk(body, (node) => {
+    if (
+      position === undefined &&
+      node.type === `CallExpression` &&
+      node.callee.type === `Identifier`
+    ) {
+      position = positionOf(node.callee)
+    }
+  })
+  return position
 }
 
 function walk(node, visit) {
@@ -1273,40 +306,6 @@ function walk(node, visit) {
       if (typeof item?.type === `string`) walk(item, visit)
     }
   }
-}
-
-/** The `.<name>(...)` call in a registration's callee chain, if any. */
-function calleeCall(callee, name) {
-  for (let node = callee; node;) {
-    if (
-      node.type === `CallExpression` &&
-      node.callee.type === `MemberExpression` &&
-      !node.callee.computed &&
-      node.callee.property.name === name
-    ) {
-      return node
-    }
-    node =
-      node.type === `CallExpression`
-        ? node.callee
-        : node.type === `MemberExpression`
-          ? node.object
-          : undefined
-  }
-  return undefined
-}
-
-/** Whether a function written in an `.each(...)` table uses a declared part. */
-function tableFunctionReaches(module, table) {
-  let reaches = false
-  for (const row of table.arguments) {
-    walk(row, (node) => {
-      if (!reaches && isFunction(node) && module.nodeReaches(node)) {
-        reaches = true
-      }
-    })
-  }
-  return reaches
 }
 
 function isEmpty(body) {
@@ -1332,72 +331,61 @@ export default {
   meta: {
     type: `problem`,
     docs: {
-      description: `Report tests in oracle files that reach no declared check or model.`,
+      description: `Report tests in oracle files that do not register through oracleProperty.`,
     },
     schema: [],
     messages: {
       emptyTest: `This test's body is empty, so it checks nothing. Remove it, or use it.todo.`,
       emptyTodo: `it.todo takes no body; remove the body.`,
-      unitTest: `This test reaches no part that this file declares, so its expected result has no independent source. A unit test belongs in an ordinary test file: move it there. A fixed history runs through the declared check, a model-rule expectation uses the declared model, and a grammar calibration uses the declared grammar.`,
-      unknownTypeModel: `This typeModel name is not a type alias or interface in this file. A type model is the expected type that type-level tests compare with, so it must be declared here.`,
+      unitTest: `An oracle file registers its tests only through oracleProperty. Put a fixed history in its histories (\`fixed\`, or an enumerated source), a calibration in its calibrations, and a reach check in its declared states. Move any other test to an ordinary test file.`,
       incompleteProperty: `This oracleProperty call does not pass an object literal with a check, so the rule cannot see that the property has one. Pass its options inline as \`oracleProperty({ id, law, histories, driver, model, check })\`.`,
       importedRegistration: `This oracle file calls a helper that registers tests. An oracle file registers only oracle tests, so register those tests from an ordinary test file and keep this file to its checks and model.`,
-      unparsedModule: `This file's parser cannot parse {{module}} ({{error}}), so no test reaches a part through it. Lint this file with a parser that reads the module, or fix the module's syntax.`,
-      undeclared: `This oracle file registers tests and declares no oracle part. Register it through \`oracleProperty({ id, law, histories, driver, model, check })\` from \`@tanstack/oracles\`, which names its parts. Then move each test that reaches none of them to an ordinary test file.`,
     },
   },
   create(context) {
-    // `oracle-config`, `oracle-property`, and the other `oracle-` modules are the
-    // shared oracle machinery. Their tests check that machinery, not a law.
+    // `oracle-config`, `oracle-property`, and the other `oracle-` modules are
+    // the shared oracle machinery. Their tests check that machinery, not a law.
     if (basename(context.filename).startsWith(`oracle-`)) return {}
     const { sourceCode } = context
-    const session = new LintSession(context.languageOptions)
-    const module = new OracleModule(
-      context.filename,
-      sourceCode.ast,
-      sourceCode.scopeManager,
-      session,
-    )
-    const unreached = []
-    let anyReached = false
-    // The declarations that name another module, whose parse an unreached
-    // test's report may depend on.
-    const sources = []
-    const addSource = (node) => sources.push(node.source)
+    const session = lintSession(context)
+    const functions = testFunctions(context)
     return {
-      ImportDeclaration: addSource,
-      ExportAllDeclaration: addSource,
-      'ExportNamedDeclaration[source]': addSource,
       CallExpression(node) {
         // A curried callee is not a call of its own: the outermost call is the
         // registration.
-        const outermost = !(
-          node.parent.type === `CallExpression` && node.parent.callee === node
+        if (
+          node.parent.type === `CallExpression` &&
+          node.parent.callee === node
         )
-        // An oracle property is its own declaration: it reaches by construction
-        // when it names its check.
-        const property = outermost
-          ? oraclePropertyCall(node, context.filename, sourceCode, session)
-          : undefined
+          return
+        const property = oraclePropertyCall(
+          node,
+          context.filename,
+          sourceCode,
+          session,
+        )
         if (property !== undefined) {
-          if (property.complete) anyReached = true
-          else context.report({ node, messageId: `incompleteProperty` })
+          if (!property.complete)
+            context.report({ node, messageId: `incompleteProperty` })
           return
         }
-        const helper = outermost
-          ? importedHelperShape(node, context.filename, sourceCode, session)
-          : undefined
+        const helper = importedHelperShape(
+          node,
+          context.filename,
+          sourceCode,
+          session,
+        )
         if (helper?.kind === `own`) {
           context.report({ node, messageId: `importedRegistration` })
-        }
-        if (helper?.kind === `parameter`) {
-          // The helper registers the body its caller passes, so the caller's
-          // body is the test, judged here as a local parameter registration is.
-          if (callerBodyReaches(node, helper, module)) anyReached = true
-          else unreached.push(node)
           return
         }
-        const test = registeredTest(node, sourceCode)
+        // The helper registers the body its caller passes, so the call is a
+        // test registration of this file.
+        if (helper?.kind === `parameter`) {
+          context.report({ node, messageId: `unitTest` })
+          return
+        }
+        const test = registeredTest(node, functions)
         if (test === undefined) return
         if (isEmpty(test.body)) {
           // `it.todo` with a body contradicts itself: a todo takes none.
@@ -1405,58 +393,7 @@ export default {
           context.report({ node, messageId: todo ? `emptyTodo` : `emptyTest` })
           return
         }
-        // An `.each(table)` row can carry a function that the test body calls,
-        // such as a mutant observation each check must reject. A function in
-        // the table that uses a declared part makes the test use it. Plain
-        // data, such as the grammar's cells, does not: the body must use them.
-        const table =
-          calleeCall(node.callee, `each`) ?? calleeCall(node.callee, `for`)
-        const reaches =
-          module.propRegistrationGenerates(node, test.body, sourceCode) ||
-          (table !== undefined && tableFunctionReaches(module, table)) ||
-          (test.body.type === `Identifier`
-            ? module.variableReaches(
-                findVariable(sourceCode.getScope(test.body), test.body.name),
-              )
-            : module.nodeReaches(test.body))
-        if (reaches) anyReached = true
-        else unreached.push(node)
-      },
-      'Program:exit'() {
-        for (const node of module.unknownTypeModels) {
-          context.report({ node, messageId: `unknownTypeModel` })
-        }
-        // A test that reaches no part may reach none because a module that
-        // this file names does not parse with its parser, so each declaration
-        // that names such a module is reported beside the test's report.
-        for (const source of unreached.length > 0 ? sources : []) {
-          const file = resolveTestModule(
-            context.filename,
-            source.value,
-            session,
-          )
-          if (file === undefined || loadModule(file, session) !== undefined)
-            continue
-          context.report({
-            node: source,
-            messageId: `unparsedModule`,
-            data: {
-              module: `'${source.value}'`,
-              error: session.parseErrors.get(file),
-            },
-          })
-        }
-        // A file that relies on a companion module's declaration declares
-        // nothing itself. It is undeclared only when no test reaches a part.
-        if (!module.declaresParts && !anyReached) {
-          if (unreached.length > 0) {
-            context.report({ node: unreached[0], messageId: `undeclared` })
-          }
-          return
-        }
-        for (const node of unreached) {
-          context.report({ node, messageId: `unitTest` })
-        }
+        context.report({ node, messageId: `unitTest` })
       },
     }
   },

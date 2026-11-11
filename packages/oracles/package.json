@@ -30,14 +30,14 @@
         "default": "./dist/esm/index.js"
       }
     },
-    "./declaration": {
+    "./route": {
       "import": {
-        "types": "./dist/esm/declaration.d.ts",
-        "default": "./dist/esm/declaration.js"
+        "types": "./dist/esm/route.d.ts",
+        "default": "./dist/esm/route.js"
       },
       "require": {
-        "types": "./dist/cjs/declaration.d.cts",
-        "default": "./dist/cjs/declaration.cjs"
+        "types": "./dist/cjs/route.d.cts",
+        "default": "./dist/cjs/route.cjs"
       }
     },
     "./package.json": "./package.json"
