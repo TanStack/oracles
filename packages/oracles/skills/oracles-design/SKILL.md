@@ -89,9 +89,8 @@ reader.
    checkpoints where the promise is owed, and the owned code. A reader who
    stops here knows what the file is for. Name the promise itself. "The
    stylesheet matches the options the README documents" names no promise. For
-   example: "This oracle owns `klona`'s deep-copy promise for the default
-   mode, checked on the value that `klona(x)` returns. It owns
-   `src/index.js#klona`."
+   example: "This oracle owns `slugify`'s promise for titles, checked on the
+   string that `slugify(title)` returns. It owns `src/slugify.ts#slugify`."
 
 2. **The contract at a glance:** a short code block, right after those
    sentences, that shows the public API promises this oracle maintains. A
@@ -112,7 +111,7 @@ reader.
    answer. For example:
 
    ```ts
-   klona(x) // → a deep copy: same kind, prototype, and values as x, sharing no object with it
+   slugify('Hello, World!') // → 'hello-world': lowercase words joined by '-'
    typography({ scaleRatio: 2, baseFontSize: '16px' }) // → h1 font size 32px (ratio × base)
    typography({ scaleRatio: 2, baseFontSize: '15.5px' }) // → h1 font size 31px (open)
    ```
@@ -153,8 +152,8 @@ It never mentions a review or an open question: a point the developer has not
 decided appears only as a limit, with its reason. Nor does it tell the story
 of the session: no "the maintainer approved", "the developer deferred", or
 "as the probe showed". A developer's decision is stated as the rule it made, and
-a limit's reason is about the code ("`klona` calls the constructor with no
-arguments"), not about who has not decided yet. When a developer's decision is
+a limit's reason is about the code ("`slugify` drops every character
+outside ASCII"), not about who has not decided yet. When a developer's decision is
 the authority for a law, write it as "Decision by <name> (GitHub
 <login>), <date>: <the rule>", the same way in the `law` option's
 `authority`. On a team, a reader needs to know whom to ask. Take the login

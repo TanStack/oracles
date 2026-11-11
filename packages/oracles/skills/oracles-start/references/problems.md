@@ -37,8 +37,10 @@ the file, as `oracles-design` says.
 **The tests import a build that is not built yet.** Import the source that
 the build comes from.
 
-**Node warns about the module type.** Give the scratch directory a
-`package.json` with `"type": "module"`.
+**Node warns about the module type.** If the warning names the scratch
+directory, give it a `package.json` with `"type": "module"`. If it names the
+repository's `package.json`, the warning is harmless: run the probe with
+`node --no-warnings`, and do not change their `package.json`.
 
 **Node cannot load the source as it is** (for example, an extensionless ES
 module). Copy it unchanged into the scratch directory, under a name that

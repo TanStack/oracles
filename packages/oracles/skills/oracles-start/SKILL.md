@@ -252,7 +252,8 @@ own instead, and recommend one.
   include it: it is the quickest way for the developer to see what you mean.
 
   ```ts
-  klona(x) // → a deep copy: same kind, prototype, and values as x, sharing no object with it
+  slugify('Hello, World!') // → 'hello-world': lowercase words joined by '-'
+  slugify(slugify(title)) // → slugify(title)
   ```
 
 - Each potential law, as one "For every …" sentence, with its authority
