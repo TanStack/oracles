@@ -1218,7 +1218,7 @@ async function driver(plan, observe) {
  * Law 9: each check through the daemon reports what the cold run of the same
  * state reports. A refused state is compared by the cause it names.
  */
-function incrementalCheck(observations) {
+function incrementalCheck(observations, outKnown = true) {
   for (const { value } of observations.filter(
     (o) => o.checkpoint === `incremental`,
   )) {
@@ -1237,7 +1237,7 @@ function incrementalCheck(observations) {
     // A refusal through the daemon ends as a cold refusal does (law 11):
     // the CLI that asked the daemon writes it to its own output directory.
     if (cold.refusal !== undefined) {
-      const breach = refusalBreach(daemon.ending, { outKnown: true })
+      const breach = refusalBreach(daemon.ending, { outKnown })
       if (breach)
         return violation(
           `incremental`,
@@ -1313,12 +1313,18 @@ function check(plan, observations, expected) {
       )
     // Law 11: the refusal is one block with its fix, and the output
     // directory the run was given holds it.
+    // A refusal of the arguments themselves names no output directory.
+    const outKnown = !expected.refused.arguments
     const breach = refusalBreach(cli.ending, {
       cause: expected.refused.cause,
-      outKnown: true,
+      outKnown,
     })
     if (breach) return violation(`cli`, breach, `report-shaped ending`)
-    return incrementalCheck(observations) ?? daemonCheck(observations) ?? pass
+    return (
+      incrementalCheck(observations, outKnown) ??
+      daemonCheck(observations) ??
+      pass
+    )
   }
   if (cli.exit !== 0 || !cli.reported)
     return violation(

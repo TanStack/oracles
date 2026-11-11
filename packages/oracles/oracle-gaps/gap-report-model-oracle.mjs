@@ -2924,7 +2924,10 @@ function refusal(plan) {
   if (plan.fault === `badEntry`) return { cause: `${SOURCE}#nope` }
   if (plan.fault === `missingSource`) return { cause: `src/missing.ts` }
   if (plan.fault === `nonLiteral`) return { cause: `b.test.ts` }
-  if (plan.fault === `outsideSource`) return { cause: `outside the package` }
+  // A source outside the package is a fault of the arguments, which name
+  // no output directory until they parse (law 11).
+  if (plan.fault === `outsideSource`)
+    return { cause: `outside the package`, arguments: true }
   // A run with no oracle file, or with no owns entry, owns no selected
   // source, so every mutant would read as unowned. The analysis refuses it
   // (maintainer decision, 2026-11-10).

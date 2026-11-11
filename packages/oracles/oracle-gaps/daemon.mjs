@@ -19,8 +19,8 @@
 // request is one line of JSON, the CLI's arguments; the reply is one line of
 // JSON with the summary a cold run would have printed and its log, or the
 // error that ended the check, which the CLI ends the run with as a cold run
-// does (ending.mjs). One check runs at a time. The daemon exits when asked, or after 30 idle
-// minutes.
+// does (ending.mjs). One check runs at a time. The daemon exits when asked,
+// or after 30 idle minutes.
 //
 // The CLI starts it: node daemon.mjs --package <dir>. Each check's evidence is
 // flushed to disk before the reply, so a daemon that is killed keeps what it
@@ -128,9 +128,9 @@ function startDaemon(pkg) {
  * The CLI gets the daemon's reply, or the error of a daemon that could not
  * load or open its session since this CLI started one (as a reply's
  * `failed`), or a fresh daemon in place of one that died; a closing daemon
- * is waited for. It waits at most
- * 60 s for a daemon to answer or start; the time a daemon holds the
- * request, queued or checking, is the check's and is not counted.
+ * is waited for. It waits at most 60 s for a daemon to answer or start; the
+ * time a daemon holds the request, queued or checking, is the check's and is
+ * not counted.
  */
 export async function requestDaemon(pkg, argv) {
   const began = Date.now()
