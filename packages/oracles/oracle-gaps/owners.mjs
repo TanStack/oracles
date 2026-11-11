@@ -1,7 +1,12 @@
 // Ownership: which oracle files judge a function.
 //
-// An oracle file names what it owns in `oracleProperty({ owns: [...] })` (or
-// the older `declareOracle({ owns: [...] })`). Each
+// An oracle file names what it owns in an `owns` list: on its
+// `oracleProperty({ owns: [...] })` call, or on the call of a wrapper that
+// forwards it to `oracleProperty`, such as `registerX('id', { owns: [...] })`.
+// The CLI reads every object-literal argument of every call in the test
+// file, so it needs no knowledge of a project's wrappers (maintainer
+// decision, 2026-11-11). It cannot see whether a wrapper forwards the list;
+// one that drops it still makes the file an owner. Each
 // entry is a source path relative to the package, in any spelling that
 // names the package's file (args.mjs, packagePath), either alone (the whole
 // file) or with an entry function after the first `#` (`src/x.ts#run`,
@@ -56,31 +61,29 @@ export function splitEntry(entry) {
   return at < 0 ? [entry, undefined] : [entry.slice(0, at), entry.slice(at + 1)]
 }
 
-// The calls that declare a test file an oracle file, each with its `owns`.
-const declaringCalls = new Set([`oracleProperty`, `declareOracle`])
-
 /**
- * Whether a test file calls `oracleProperty` or `declareOracle` (which makes
- * it an oracle file), the `owns` entries it names, and a problem when the
- * list cannot be read statically: it must be a literal list of strings or
- * plain template literals, because an entry the CLI cannot read would hide
- * gaps.
+ * Whether a test file is an oracle file, the `owns` entries it names, and a
+ * problem when a list cannot be read statically. A test file is an oracle
+ * file when it calls `oracleProperty`, or passes an `owns` property in an
+ * object-literal argument of any call. Its entries are the union of those
+ * lists. Each must be a literal list of strings or plain template literals,
+ * because an entry the CLI cannot read would hide gaps.
  */
 export function readOwns(ts, path, text) {
   const file = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true)
   const result = { declares: false, entries: [], problem: undefined }
   const visit = (node) => {
-    if (
-      ts.isCallExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      declaringCalls.has(node.expression.text)
-    ) {
-      result.declares = true
-      const parts = node.arguments[0]
-      for (const property of parts && ts.isObjectLiteralExpression(parts)
-        ? parts.properties
-        : [])
+    if (ts.isCallExpression(node)) {
+      if (
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === `oracleProperty`
+      )
+        result.declares = true
+      for (const property of node.arguments.flatMap((argument) =>
+        ts.isObjectLiteralExpression(argument) ? argument.properties : [],
+      ))
         if (property.name?.getText(file) === `owns`) {
+          result.declares = true
           const list = ts.isPropertyAssignment(property)
             ? property.initializer
             : undefined
