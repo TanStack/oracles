@@ -31,7 +31,7 @@
  * - `shrink`: a campaign's reported failure keeps the kind and law of its first
  *   failure, and its counterexample still has them.
  * - `membership`: a fixed history, or the history a constructed history builds from the first fixed
- *   seed's sample, that the arbitrary cannot take back (`canShrinkWithoutContext` is false) fails
+ *   seed's sample (seed 0's when there is none), that the arbitrary cannot take back (`canShrinkWithoutContext` is false) fails
  *   the property's load, with an error that names the property, the history (a fixed history's
  *   index and name, or a constructed history's name), and the fix for a `.map` without an
  *   unmapper (maintainer decision, 2026-11-10, F20). A history outside the language is one such
@@ -39,7 +39,10 @@
  *   through a `.map` without an unmapper is another. The same arbitrary with an unmapper takes its
  *   histories back, and an arbitrary without an unmapper but with no fixed or constructed
  *   history loads and runs. A load fails at the first such history, fixed histories first, after
- *   every other load error of a generated source (analyst-chosen order, 2026-11-10).
+ *   every other load error of a generated source (analyst-chosen order, 2026-11-10). Registration
+ *   builds the constructed histories when the file loads, so a `build` that throws there fails
+ *   the load with an error that names the property and the constructed history and carries the
+ *   build's error as its cause; constructed histories are built and checked in order.
  * - `reach`: a fixed or constructed history that does not enter a state it names fails, and
  *   a passing campaign reports how many of its histories entered each declared
  *   state, whether the property names reach itself or the driver records it.
@@ -188,6 +191,8 @@ type Draft = {
    */
   arbitraryMap: `none` | `unmapper` | `no unmapper`
   mapAt: `history` | `item`
+  /** The first constructed history's build throws. */
+  throwingBuild: boolean
   nondeterministic: boolean
   reachVia: `reached` | `observe`
   /** `slow`: 300 ms per history under a 100 ms timeout. */
@@ -287,6 +292,10 @@ const draft: fc.Arbitrary<Draft> = fc.record({
     },
   ),
   mapAt: fc.constantFrom(`history` as const, `item` as const),
+  throwingBuild: fc.oneof(
+    { arbitrary: fc.constant(false), weight: 9 },
+    { arbitrary: fc.constant(true), weight: 1 },
+  ),
   nondeterministic: fc.oneof(
     { arbitrary: fc.constant(false), weight: 4 },
     { arbitrary: fc.constant(true), weight: 1 },
@@ -504,6 +513,9 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
               },
             }
           : {}),
+        ...(generated && d.throwingBuild && d.constructed.length > 0
+          ? { throwingBuild: true }
+          : {}),
         nondeterministic: d.nondeterministic,
         reachVia: d.reachVia,
         ...(d.unregistered ? { unregistered: true } : {}),
@@ -635,7 +647,9 @@ const constructedMember = (prefix: SyntheticHistory) =>
 const takesBack = (spec: SyntheticSpec, inLanguage: boolean) =>
   inLanguage && spec.arbitraryMap?.unmapper !== false
 // The fix a membership load error names (maintainer decision, 2026-11-10, F20).
-const mapFix = `\`.map\` needs an unmapper (its second argument), or build the history from fc.record / fc.tuple / fc.constantFrom`
+const mapFix = `\`.map\` needs an unmapper (its second argument). \`fc.constant\`/\`fc.constantFrom\` take back only primitives or the same object reference, so build objects with \`fc.record\`/\`fc.tuple\` over primitive leaves. \`.chain\`, \`fc.func\`, and \`fc.commands\` cannot take a value back.`
+// What a synthetic constructed history's throwing build throws.
+const buildFailure = `synthetic build failed`
 // A 7 on a controlled clock spins it: past the clock's bound, the history
 // fails under law `bounded clock` at checkpoint `clock`, ranked as a driver
 // error is, by where it happens. A violation recorded before it still decides;
@@ -870,6 +884,10 @@ type SpecExpectation =
       /** Text the load error holds, and, for a membership error, the fix it names too. */
       loadError?: string
       loadFix?: string
+      /** The message of the load error's cause. */
+      loadCause?: string
+      /** A constructed history's build threw at registration. */
+      buildError?: boolean
       dataError?: boolean
       /** Which history failed law `membership`. */
       membership?: `fixed` | `constructed`
@@ -958,18 +976,25 @@ function predictSpec(
         membership: `fixed`,
         unmapped: member(spec.fixed[fixedAt]!.history),
       }
-    const untaken = spec.constructed.find(
-      (construction) =>
-        !takesBack(spec, constructedMember(construction.prefix)),
-    )
-    if (untaken)
-      return {
-        loads: false,
-        loadError: `${spec.id}: constructed history "${untaken.name}"`,
-        loadFix: mapFix,
-        membership: `constructed`,
-        unmapped: constructedMember(untaken.prefix),
-      }
+    // Registration then builds each constructed history in order: a build
+    // that throws names its constructed history and carries its error.
+    for (const [at, construction] of spec.constructed.entries()) {
+      if (at === 0 && spec.throwingBuild)
+        return {
+          loads: false,
+          loadError: `oracleProperty ${spec.id}: constructed history "${construction.name}" threw while it was built for registration: ${buildFailure}`,
+          loadCause: buildFailure,
+          buildError: true,
+        }
+      if (!takesBack(spec, constructedMember(construction.prefix)))
+        return {
+          loads: false,
+          loadError: `${spec.id}: constructed history "${construction.name}"`,
+          loadFix: mapFix,
+          membership: `constructed`,
+          unmapped: constructedMember(construction.prefix),
+        }
+    }
   }
   const names =
     spec.source.kind === `enumerated`
@@ -1199,6 +1224,7 @@ const frameworkStates = [
   `item-unmapped-load-error`,
   `unmapper-history-loads`,
   `unmapped-arbitrary-loads`,
+  `constructed-build-load-error`,
   `calibration-applied`,
   `calibration-rejected`,
   `calibration-skipped-candidate`,
@@ -1256,6 +1282,7 @@ function frameworkReach(
     if (!owed.loads) {
       reached.add(`registration-error`)
       if (owed.dataError) reached.add(`history-out-of-domain`)
+      if (owed.buildError) reached.add(`constructed-build-load-error`)
       if (owed.membership === `fixed`) reached.add(`fixed-membership-failure`)
       if (owed.membership === `constructed`)
         reached.add(`constructed-membership-failure`)
@@ -1483,6 +1510,8 @@ type SuiteRun = {
       loaded: boolean
       /** The file's load errors, by message. */
       loadErrors: Array<string>
+      /** Each load error's cause, by message. */
+      loadCauses: Array<string>
       tests: Array<{
         name: string
         state: string
@@ -1757,6 +1786,9 @@ async function driveSuite(
         loadErrors: (reported?.errors ?? []).map(
           (error) => error.message ?? ``,
         ),
+        loadCauses: (reported?.errors ?? []).map(
+          (error) => error.cause?.message ?? ``,
+        ),
         tests: (reported?.tests ?? []).map((test) => ({
           name: short(spec.id, test.name),
           state: test.state,
@@ -1930,8 +1962,11 @@ function checkSuite(
       )
       if (
         owedText.length > 0 &&
-        !seen.loadErrors.some((message) =>
-          owedText.every((text) => message.includes(text)),
+        !seen.loadErrors.some(
+          (message, at) =>
+            owedText.every((text) => message.includes(text)) &&
+            (owed.loadCause === undefined ||
+              seen.loadCauses[at] === owed.loadCause),
         )
       )
         return violation(
@@ -2206,6 +2241,7 @@ const generatedDraft = (overrides: Partial<Draft>): Draft => ({
   fixed: [],
   arbitraryMap: `none`,
   mapAt: `history`,
+  throwingBuild: false,
   nondeterministic: false,
   reachVia: `reached`,
   timing: `normal`,
@@ -2429,6 +2465,19 @@ oracleProperty({
           mapAt: `item`,
           form: `bigint`,
           constructed: [{ prefix: [0], enters: [`saw-0`] }],
+        }),
+      ),
+      // Registration builds constructed histories when the file loads, so a
+      // build that throws there must name its history, not fail unnamed.
+      fixedHistory(
+        `a constructed history whose build throws at registration fails to load, naming it`,
+        [`registration-error`, `constructed-build-load-error`],
+        generatedDraft({
+          throwingBuild: true,
+          constructed: [
+            { prefix: [0], enters: [`saw-0`] },
+            { prefix: [5], enters: [] },
+          ],
         }),
       ),
       fixedHistory(
