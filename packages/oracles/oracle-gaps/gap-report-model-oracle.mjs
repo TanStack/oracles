@@ -2960,12 +2960,23 @@ function judge(plan, tests, sites, active) {
 }
 
 /**
- * Which fault, if any, must make the run fail, and its cause. The analysis
- * reads files before any test runs, so its refusals come first: a broken
- * declaration, then a run with no oracle file or no owner. A fault that only
- * the runner can find (`runtime`) is named only when the analysis passes.
+ * Which fault, if any, must make the run fail, and its cause, in the order the
+ * run finds them. The analysis reads the test files that the loaded Vitest
+ * config includes (check.mjs warms the contexts, then calls `analyze` with
+ * their specs), so a Vitest or config that cannot load or be honored is named
+ * first. The analysis's refusals come next: a broken declaration, then a run
+ * with no oracle file or no owner. A fault that the baseline run finds (a
+ * failing setup or owner) comes last. A fault found only at run time is
+ * tagged `runtime`, so the static oracle, which runs only the analysis, does
+ * not expect it.
  */
 function refusal(plan) {
+  // A Vitest that does not load, and a config the runner cannot honor, refuse
+  // the run rather than leave every mutant unreached (maintainer decision,
+  // 2026-11-08).
+  if (plan.fault === `brokenVitest`) return { cause: `vitest`, runtime: true }
+  if (plan.fault === `projects`)
+    return { cause: `test.projects`, runtime: true }
   if (plan.fault === `badEntry`) return { cause: `${SOURCE}#nope` }
   if (plan.fault === `missingSource`) return { cause: `src/missing.ts` }
   if (plan.fault === `nonLiteral`) return { cause: `b.test.ts` }
@@ -2991,11 +3002,6 @@ function refusal(plan) {
     plan.functions.every((fn) => fn.owners.length === 0)
   )
     return { cause: `owns any selected source` }
-  // A config the runner cannot honor refuses the run rather than leave every
-  // mutant unreached (maintainer decision, 2026-11-08).
-  if (plan.fault === `projects`)
-    return { cause: `test.projects`, runtime: true }
-  if (plan.fault === `brokenVitest`) return { cause: `vitest`, runtime: true }
   // A setup file that throws fails every oracle file before any test runs,
   // so the run refuses as for a failing owner, naming the setup's error.
   if (plan.fault === `setupThrows`)

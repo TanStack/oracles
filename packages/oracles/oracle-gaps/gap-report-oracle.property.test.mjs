@@ -999,6 +999,15 @@ async function driver(plan, observe) {
     // a history that depends on it.
     if (plan.fault !== `none` && cli.exit !== 0)
       states.add(`refused ${plan.fault}`)
+    // A config fault in a run that owns nothing: the config loads before the
+    // analysis reads ownership, so the config fault is the one named.
+    if (
+      configFaults.includes(plan.fault) &&
+      cli.exit !== 0 &&
+      plan.wholeFile === `none` &&
+      plan.functions.every((fn) => fn.owners.length === 0)
+    )
+      states.add(`a config fault in a run that owns nothing`)
     if (analyzedFaults.includes(plan.fault) && cli.exit === 0)
       states.add(`analyzed ${plan.fault}`)
     const kindAt = new Map(
@@ -1798,10 +1807,19 @@ const required = [
   `a check after the session's failure was fixed`,
   `two checks at once on a session that cannot open`,
   `a session failure larger than a socket buffer`,
+  `a config fault in a run that owns nothing`,
   ...incrementalStates,
 ]
 // The faults the CLI analyzes anyway: a package's TypeScript is no input.
 const analyzedFaults = [`noTypescript`, `apiLessTypescript`]
+// The faults found when the package's Vitest and config load, before the
+// analysis.
+const configFaults = [
+  `brokenVitest`,
+  `projects`,
+  `configThrows`,
+  `configNoDefault`,
+]
 const faults = [
   `badEntry`,
   `missingSource`,
@@ -1831,6 +1849,7 @@ const separate = [
   `a check after the session's failure was fixed`,
   `two checks at once on a session that cannot open`,
   `a session failure larger than a socket buffer`,
+  `a config fault in a run that owns nothing`,
   ...incrementalStates,
 ]
 const witnessed = required.filter((s) => !separate.includes(s))
@@ -2101,6 +2120,27 @@ oracleProperty({
           fault: `none`,
           stability: `none`,
           ordinary: false,
+          steps: null,
+        }),
+      },
+      {
+        // test.projects in a run whose owns entries own no selected source:
+        // the run refuses for the config, which loads before the analysis.
+        name: `a config fault in a run that owns nothing`,
+        enters: [`a config fault in a run that owns nothing`],
+        build: (generated) => ({
+          ...generated,
+          fault: `projects`,
+          // Nothing owns anything: no function owners, no library owners,
+          // no whole-file entry.
+          owners: [],
+          library: [],
+          libraryOwners: [],
+          containers: [],
+          overloads: [],
+          wholeFile: `none`,
+          witness: false,
+          authored: null,
           steps: null,
         }),
       },
