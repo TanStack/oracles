@@ -53,6 +53,7 @@ import {
   judgeOrdinary,
   needsOrdinary,
   outcomeOf,
+  passOf,
   reproducibleRoutes,
   targetsOf,
 } from './classify.mjs'
@@ -98,16 +99,6 @@ const span = (kind, started, fields = {}) => {
     profileFile,
     `${JSON.stringify({ kind, ms: Date.now() - started, at: started, ...fields })}\n`,
   )
-}
-
-/** A unit's first failure: a failing test and its error, or why it did not run. */
-function failureOf(unit) {
-  if (unit.timedOut) return `its run timed out`
-  const test = unit.tests.find((t) => t.state === `failed`)
-  const text = test
-    ? `${test.fullName}: ${test.message.split(`\n`)[0]}`
-    : (unit.setupErrors[0] ?? unit.unhandled[0] ?? `it failed`)
-  return text.slice(0, 300)
 }
 
 /** A hash of this CLI's own code and the framework it reads. */
@@ -1358,7 +1349,7 @@ export default async (env) => {
     const runAcross = async (files, pass, after = async () => {}) => {
       const parts = contexts.map(() => [])
       files.forEach((file, index) => parts[index % contexts.length].push(file))
-      const units = (
+      const { units, rows, failed } = passOf(
         await Promise.all(
           contexts.map(async (context, index) => {
             const done = []
@@ -1367,20 +1358,13 @@ export default async (env) => {
             await after(index)
             return done
           }),
-        )
-      ).flat()
-      const rows = new Map(units.flatMap((u) => u.rows ?? []))
+        ),
+      )
       for (const u of units)
         fileSeconds.set(
           u.file,
           Math.max(fileSeconds.get(u.file) ?? 0, u.duration ?? 0),
         )
-      // Each failing file, with its first failure, so a refusal says why.
-      const failed = new Map(
-        units
-          .filter((u) => outcomeOf([u]).outcome !== `survived`)
-          .map((u) => [u.file, failureOf(u)]),
-      )
       return {
         rows,
         units,
@@ -1856,10 +1840,10 @@ export default async (env) => {
               ignore: ignoredIn(file),
             },
           ])
-          // In its owner file's place, not in the order the contexts
-          // finish, so the outcome's tests and laws are listed alike in
-          // every run (law 9).
-          job.units[job.targets.indexOf(file)] = got
+          // In the order the contexts finish: the classification lists
+          // the tests and laws in report order (classify.mjs
+          // `inReportOrder`), so they are listed alike in every run (law 9).
+          job.units.push(got)
           serve[slot.index] = undefined
           invalidateChanged([job.path], slot.context)
         }
