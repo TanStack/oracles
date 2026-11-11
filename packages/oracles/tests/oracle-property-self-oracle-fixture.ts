@@ -97,6 +97,9 @@
  * An enumerated spec with `enumeratedStates` passes its histories as
  * `{ enumerated, states, measured }`; without it, as a plain list.
  *
+ * A slow spec's reach test starts only after every slow driver run that the
+ * file started has finished, so each history's late judgment arrives first.
+ *
  * A `throwingBuild` spec's first constructed history throws
  * `synthetic build failed` from its build. An `arbitraryMap` spec maps its
  * arbitrary through an identity `.map`, with or without an unmapper, at the
@@ -354,6 +357,24 @@ globalThis.__oracleRoute = (registered) => {
 beforeEach(() => {
   route = undefined
 })
+// Every slow driver run this file started. A slow spec's histories time out
+// and their judgments arrive late; its reach test starts only after every
+// one of them arrived, so the order is fixed whatever the machine's load.
+const slowRuns = new Set<Promise<void>>()
+beforeEach(async ({ task }) => {
+  if (task.name !== `reach` || slowRuns.size === 0) return
+  await Promise.allSettled([...slowRuns])
+  // The judgment follows the driver on microtasks, which run before a turn.
+  await new Promise((resolve) => setImmediate(resolve))
+})
+/** A slow spec's driver, whose runs the reach test waits for. */
+const trackedSlow =
+  (driver: ReturnType<typeof syntheticDriver>): typeof driver =>
+  (formed, observe) => {
+    const running = driver(formed, observe)
+    slowRuns.add(running)
+    return running
+  }
 
 /** The property's form of a history, and the items it holds. */
 type Formed = unknown
@@ -856,7 +877,9 @@ export function syntheticProperty(spec: SyntheticSpec): void {
           }),
         }
       : {}),
-    driver: syntheticDriver(spec),
+    driver: spec.slow
+      ? trackedSlow(syntheticDriver(spec))
+      : syntheticDriver(spec),
     calibrations: syntheticCalibrations(spec),
     check: (
       history: Formed,

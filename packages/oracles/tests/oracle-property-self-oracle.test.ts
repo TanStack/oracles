@@ -3050,9 +3050,9 @@ oracleProperty({
         },
       ),
       // Every history times out; the reach test runs none again, so it fails
-      // on its own counts at once. The first history's late judgment, which
-      // enters the required state, arrives before the reach test starts and
-      // must not be recorded.
+      // on its own counts at once. The fixture starts the reach test only
+      // after every late judgment arrived, so the first history's, which
+      // enters the required state, comes first and must not be recorded.
       fixedHistory(
         `the reach test does not run again a history whose test timed out`,
         [`enumerated-timed-out-not-rerun`],
@@ -3061,8 +3061,6 @@ oracleProperty({
             timing: `slow`,
             enumeratedStates: [`required`, `measured`, `measured`],
           }),
-          // Four histories, the most the grammar draws: the first's
-          // judgment arrives about 100 ms before the reach test starts.
           source: { kind: `enumerated`, histories: [[0], [1], [2], [1, 1]] },
         },
       ),
