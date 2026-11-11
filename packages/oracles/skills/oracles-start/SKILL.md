@@ -126,7 +126,10 @@ tests do. If they import a build that is not built yet, import the source
 it comes from. Run the probe from a scratch directory against the unchanged
 code, with `node` (or `npx tsx` for TypeScript). If Node warns about the
 module type, give the scratch directory a `package.json` with
-`"type": "module"`. Keep each probe and its output.
+`"type": "module"`. If Node still cannot load the source as it is (for
+example, an extensionless ES module), copy it unchanged into the scratch
+directory under a name Node can load, such as `index.mjs`, and say so.
+Keep each probe and its output.
 
 **Every finding needs a probe.** A claim without one is a suspicion: say so,
 or leave it out.
