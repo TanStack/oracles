@@ -238,7 +238,8 @@
  * drawn with path `0` and the first spec's property only, and its unit is the first random unit
  * of that spec or a missing one. A custom prefix applies to every spec of a suite. Only one fixed
  * unit's `-t` rerun is probed per property, and only the determinism of a generated source is
- * split into units.
+ * split into units. An error's raw `stack` is not observed: Vitest reprints a failure's stack
+ * header from its message.
  * A calibration's required difference is drawn only as four texts and
  * four patterns, including the empty ones, judged against the difference a wrong answer
  * reports, `item k is 3`, where k is the first item or a `driver-last` candidate's last item. A
@@ -1268,6 +1269,12 @@ const unitOf = (test: string): { seed?: number; name: string } | undefined => {
 // that fast-check samples from the property's arbitrary with its constructed
 // weighting (each constructed history weighs 1, and the language weighs their
 // count) for `runs` draws. Drawn with fast-check itself, never the framework.
+// The weighting restates how production composes its arbitrary, which the
+// design of option D authorizes the model to state (design-c-d.md, law
+// `units`: "the property's arbitrary (with its constructed weighting)"). It
+// is that composition, not a contract promise: the header promises only that
+// half of a campaign's generated histories are constructed, and a change to
+// the composition must change this model with it.
 function unitStream(
   spec: SyntheticSpec,
   seed: number,
@@ -3136,15 +3143,23 @@ const failsUnit = (
     (construction !== undefined && !reaches(spec, history, construction.enters))
   )
 }
-// A unit's log, compared with its stream: all of it when the unit passes,
-// and up to its first failure when it fails, after which it shrinks.
-const streamPrefix = (
+// A unit's log and its stream, as law `units` compares them: a unit that the
+// model owes a pass ran exactly its stream, no history more; a failing unit
+// ran its stream up to its first failure, and then its shrinks, which the
+// law does not compare.
+const comparedRun = (
   spec: SyntheticSpec,
   unit: string,
   stream: ReadonlyArray<SyntheticHistory>,
+  logged: ReadonlyArray<SyntheticHistory>,
 ) => {
   const first = stream.findIndex((history) => failsUnit(spec, unit, history))
-  return first < 0 ? stream : stream.slice(0, first + 1)
+  return first < 0
+    ? { ran: logged, owedRun: stream }
+    : {
+        ran: logged.slice(0, first + 1),
+        owedRun: stream.slice(0, first + 1),
+      }
 }
 
 // Model law `replay-config`: the first error of the drawn replay
@@ -3391,16 +3406,19 @@ function checkSuite(
           )
       }
     }
-    // Law `units`: each unit ran the stream the model draws, up to its
-    // first failure. A slow spec's driver runs on after its test timed out,
-    // so its log names other tests.
+    // Law `units`: each passing unit ran exactly the stream the model draws,
+    // and a failing unit that stream up to its first failure. A slow spec's
+    // driver runs on after its test timed out, so its log names other tests.
     if (!spec.slow)
       for (const [unit, stream] of owed.streams) {
-        const owedRun = streamPrefix(spec, unit, stream)
-        const ran = run.log
-          .filter((entry) => entry.test === `${spec.id} > ${unit}`)
-          .map((entry) => entry.history)
-          .slice(0, owedRun.length)
+        const { ran, owedRun } = comparedRun(
+          spec,
+          unit,
+          stream,
+          run.log
+            .filter((entry) => entry.test === `${spec.id} > ${unit}`)
+            .map((entry) => entry.history),
+        )
         if (JSON.stringify(ran) !== JSON.stringify(owedRun))
           return violation(
             `run`,
@@ -3490,12 +3508,12 @@ function checkSuite(
         )
       if (!generated || spec.slow) continue
       for (const unit of unitNames(spec).map(randomUnit)) {
-        const owedRun = streamPrefix(
+        const { ran: logged, owedRun } = comparedRun(
           spec,
           unit,
           unitStream(spec, seeds[0]!, unitOf(unit)!.name),
+          ran[unit] ?? [],
         )
-        const logged = (ran[unit] ?? []).slice(0, owedRun.length)
         if (JSON.stringify(logged) !== JSON.stringify(owedRun))
           return violation(
             `seedless`,

@@ -1696,8 +1696,9 @@ function judge<THistory, TExpected, TPlan>(
   return { verdict, reached }
 }
 
-const lawOf = (verdict: Extract<Verdict, { kind: `violation` }>) =>
-  verdict.law ?? verdict.checkpoint
+type Violation = Extract<Verdict, { kind: `violation` }>
+
+const lawOf = (verdict: Violation) => verdict.law ?? verdict.checkpoint
 
 /**
  * One test per calibration. It tries candidate histories in order until the
@@ -1819,18 +1820,29 @@ function calibrationTests<THistory, TExpected, TPlan>(
   )
 }
 
+/** Reports a law violation to the gap report's hook and builds its error. */
 function failure<THistory>(
   options: { id: string; law: OracleLaw },
   verdict: Extract<Verdict, { kind: `violation` }>,
   history: THistory,
-  rerun: string,
+  rerun: string | undefined,
 ): OracleViolation {
-  const { id, law } = options
   globalThis.__oracleVerdict?.({
-    property: id,
+    property: options.id,
     law: lawOf(verdict),
     checkpoint: verdict.checkpoint,
   })
+  return violationError(options, verdict, history, rerun)
+}
+
+/** A violation's error, with a rerun line when there is a command to print. */
+function violationError<THistory>(
+  options: { id: string; law: OracleLaw },
+  verdict: Extract<Verdict, { kind: `violation` }>,
+  history: THistory,
+  rerun: string | undefined,
+): OracleViolation {
+  const { id, law } = options
   const error = new OracleViolation(
     [
       `${id} violated at checkpoint "${verdict.checkpoint}"${verdict.law ? ` (law: ${verdict.law})` : ``}.`,
@@ -1839,7 +1851,7 @@ function failure<THistory>(
       `History: ${reportText(history)}`,
       `Authority: ${law.authority}`,
       `Known limits: ${law.limits}`,
-      `Rerun: ${rerun}`,
+      ...(rerun === undefined ? [] : [`Rerun: ${rerun}`]),
     ].join(`\n`),
     verdict.cause === undefined ? undefined : { cause: verdict.cause },
   )
@@ -1960,7 +1972,11 @@ function generatedTests<THistory, TExpected, TPlan>(
     constructionOf: Map<THistory, ConstructedHistory<THistory>>,
     counts: Map<string, number>,
     shrinkUntil: number,
-    rerun: string,
+    // The rerun line a violation prints; a random unit's comes only once
+    // fast-check reports its path.
+    rerun: string | undefined,
+    // Each violation thrown, with its verdict and history.
+    violations: Map<unknown, { verdict: Violation; history: THistory }>,
   ) => {
     let firstKind: string | undefined
     const keeps = (kind: string) => (firstKind ??= kind) === kind
@@ -1997,7 +2013,9 @@ function generatedTests<THistory, TExpected, TPlan>(
         )
       }
       if (!keeps(`law:${lawOf(verdict)}`)) return
-      throw failure(options, verdict, history, rerun)
+      const error = failure(options, verdict, history, rerun)
+      violations.set(error, { verdict, history })
+      throw error
     }
   }
   // Constructed history `index`, built from the history its campaign's seed
@@ -2080,7 +2098,11 @@ function generatedTests<THistory, TExpected, TPlan>(
     // random unit of its name with the fixed seed, which draws the same
     // stream.
     const replayed = { name: `random seed: ${unit}`, suite: task.suite }
-    const rerun = random ? replayPlaceholder : rerunOf(task)
+    const rerun = random ? undefined : rerunOf(task)
+    const violations = new Map<
+      unknown,
+      { verdict: Violation; history: THistory }
+    >()
     // A path replay shrinks no further than the counterexample it replays.
     // Vitest reads a timeout of 0 or less as none, which sets no budget.
     const timeout = timeoutOf(options)
@@ -2093,7 +2115,7 @@ function generatedTests<THistory, TExpected, TPlan>(
     const details = await fc.check(
       fc.asyncProperty(
         arbitrary,
-        predicateFor(constructionOf, counts, shrinkUntil, rerun),
+        predicateFor(constructionOf, counts, shrinkUntil, rerun, violations),
       ),
       run,
     )
@@ -2105,18 +2127,18 @@ function generatedTests<THistory, TExpected, TPlan>(
         path === null
           ? undefined
           : `${oracleEnvName(`SEED`)}=${details.seed} ${oracleEnvName(`PATH`)}=${path} ${oracleEnvName(`PROPERTY`)}=${shellQuoted(id)} ${oracleEnvName(`UNIT`)}=${shellQuoted(replayed.name)} vitest run ${rerunOf(replayed)}`
-      // A random unit's violation names its replay as its rerun.
-      const cause: unknown = details.errorInstance
-      if (replay !== undefined && random && cause instanceof OracleViolation)
-        cause.message = cause.message.replace(
-          `Rerun: ${replayPlaceholder}`,
-          // A function, so the command's `$'` is not a replacement pattern.
-          () => `Rerun: ${replay}`,
-        )
+      // A random unit's violation names its replay as its rerun, so it is
+      // built again, once, now that the path is known; without a path it
+      // prints no rerun line.
+      const thrown = violations.get(details.errorInstance)
+      const cause: unknown =
+        random && thrown
+          ? violationError(options, thrown.verdict, thrown.history, replay)
+          : details.errorInstance
       throw new Error(
         [
           report,
-          ...(random ? [] : [`Rerun: ${rerun}`]),
+          ...(rerun === undefined ? [] : [`Rerun: ${rerun}`]),
           ...(replay === undefined ? [] : [`Replay: ${replay}`]),
         ].join(`\n`),
         { cause },
@@ -2238,10 +2260,6 @@ function generatedTests<THistory, TExpected, TPlan>(
   )
   return tests
 }
-
-// A random unit's violation is thrown before fast-check knows its path, so
-// its rerun line is completed once the unit fails.
-const replayPlaceholder = `the replay command of this unit's failure`
 
 // A collect-only run (ORACLE_MANIFEST set) records each registration, so the
 // committed manifest can be generated without running any history.
