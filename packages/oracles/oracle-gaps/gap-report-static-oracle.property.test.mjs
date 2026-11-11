@@ -82,11 +82,13 @@
  * target. An authored mutant's `source` field is used as written.
  */
 import {
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   realpathSync,
   rmSync,
   symlinkSync,
+  writeFileSync,
 } from 'node:fs'
 import { createRequire } from 'node:module'
 import { spawnSync } from 'node:child_process'
@@ -244,19 +246,24 @@ function helpOf(dir) {
 //
 // The CLI's arguments are its documented interface (the usage text in
 // args.mjs): `--package <dir>` and `--source <src/x.ts,...>` are required,
-// each source lies inside the package, `--env-prefix` names an environment
-// variable prefix, `--seed` is an integer (the framework's `${prefix}_SEED`
-// rule), the counts and limits (`--contexts`, `--sample`, `--test-timeout`,
-// `--hang-limit`, `--first-limit`) are positive integers, `--pool` is
-// `threads` or `forks`, `--mutants` names a directory that exists, an option
-// that takes a value has one, and no other option exists. Arguments that break one of these refuse the run (law 11,
-// gap-report-model-oracle.mjs), and the cause names what the author wrote
-// wrong: the option, or the path. Each history carries one such fault, made
-// from its own fixture's valid arguments, and the driver runs the real CLI
-// (index.mjs) with it, with `--daemon` or without: a daemon run parses its
-// arguments in the CLI before it sends them, so both refuse alike. The
-// arguments name no output directory the run could have used, so the law
-// judges the block alone.
+// each source is a file that exists inside the package, `--env-prefix`
+// names an environment variable prefix, `--seed` is an integer (the
+// framework's `${prefix}_SEED` rule), the counts and limits (`--contexts`,
+// `--sample`, `--test-timeout`, `--hang-limit`, `--first-limit`) are
+// positive integers, `--pool` is `threads` or `forks`, `--mutants` names a
+// directory that exists and holds valid authored mutants (authored.mjs: JSON,
+// every field, ids of their own), an option that takes a value has one, and
+// no other option exists. Arguments that break one of these refuse the run
+// (law 11, gap-report-model-oracle.mjs), and the cause names what the author
+// wrote wrong: the option, the path, or the mutant file. Each history
+// carries one such fault, made from its own fixture's valid arguments, and
+// the driver runs the real CLI (index.mjs) with it, with `--daemon` or
+// without: a daemon run parses its arguments in the CLI before it sends
+// them, so both refuse alike. With `--out`, the run knows its output
+// directory even though the rest of its arguments do not parse, so the
+// refusal is written there; the driver first leaves an earlier run's
+// results.json and error.log in it, and the refusal must replace the one and
+// remove the other. Without `--out`, the law judges the block alone.
 const countOptions = [
   `--contexts`,
   `--sample`,
@@ -276,11 +283,17 @@ const argumentKinds = [
   `noValue`,
   `unknown`,
   `missingMutants`,
+  `absentSource`,
+  `directorySource`,
+  `badMutantJson`,
+  `mutantLacksField`,
+  `repeatedMutantIds`,
 ]
 const argumentStates = [
   ...argumentKinds.map((kind) => `refused arguments: ${kind}`),
   `refused arguments through --daemon`,
   `a refusal longer than a pipe's buffer`,
+  `a refusal written over an earlier run's output`,
 ]
 const badArguments = fc.record({
   kind: fc.constantFrom(...argumentKinds),
@@ -291,6 +304,8 @@ const badArguments = fc.record({
   // macOS), so its refusal reaches the reader only if the CLI exits after
   // its output is written.
   long: fc.boolean(),
+  // Whether the arguments name an output directory (`--out`).
+  out: fc.boolean(),
 })
 // Each history of the shared grammar, with its argument fault.
 const argumentHistories = fc.tuple(histories, badArguments).map(
@@ -300,10 +315,32 @@ const argumentHistories = fc.tuple(histories, badArguments).map(
     return [history, bad]
   },
 )
+// An authored mutant with every field (authored.mjs).
+const authoredMutant = (id) => ({
+  id,
+  source: SOURCE,
+  find: `return`,
+  replace: `return`,
+  intent: `none`,
+  author: `the static oracle`,
+})
 // The model: each fault's arguments, built from the fixture's valid ones
-// (`--package <dir> --source <sources>`), and what its cause must name.
+// (`--package <dir> --source <sources>`), the files a fault's `--mutants`
+// directory holds, and what its cause must name.
 function argumentFault(bad, dir, sources) {
   const valid = [`--package`, dir, `--source`, sources]
+  const mutantsDir = join(dir, `bad-mutants`)
+  const withMutants = [...valid, `--mutants`, mutantsDir]
+  const mutantFiles = {
+    badMutantJson: { 'broken.json': `{ "id": ` },
+    mutantLacksField: {
+      'short.json': JSON.stringify({ id: `m-short`, source: SOURCE }),
+    },
+    repeatedMutantIds: {
+      'one.json': JSON.stringify(authoredMutant(`m-twice`)),
+      'two.json': JSON.stringify(authoredMutant(`m-twice`)),
+    },
+  }[bad.kind]
   const fault = {
     noPackage: [[`--source`, sources], `--package`],
     missingPackage: [
@@ -332,26 +369,54 @@ function argumentFault(bad, dir, sources) {
       [...valid, `--mutants`, join(dir, `no-mutants`)],
       `--mutants`,
     ],
+    absentSource: [
+      [`--package`, dir, `--source`, `src/absent.ts`],
+      `src/absent.ts`,
+    ],
+    // A directory of the package, not a file.
+    directorySource: [[`--package`, dir, `--source`, `tests`], `tests`],
+    badMutantJson: [withMutants, `broken.json`],
+    mutantLacksField: [withMutants, `m-short`],
+    repeatedMutantIds: [withMutants, `m-twice`],
   }[bad.kind]
   return {
-    argv: [...(bad.daemon ? [`--daemon`] : []), ...fault[0]],
+    argv: [
+      ...(bad.daemon ? [`--daemon`] : []),
+      ...(bad.out ? [`--out`, join(dir, `given-out`)] : []),
+      ...fault[0],
+    ],
     cause: fault[1],
+    mutantsDir,
+    mutantFiles,
   }
 }
 
 /** How the real CLI ends on a history's bad arguments, run in its package. */
 function argumentsRunOf(dir, plan) {
-  const { argv } = argumentFault(
-    plan.history.badArguments,
+  const bad = plan.history.badArguments
+  const { argv, mutantsDir, mutantFiles } = argumentFault(
+    bad,
     dir,
     sourceArgument(plan, `${dir}.link`),
   )
+  if (mutantFiles) {
+    mkdirSync(mutantsDir, { recursive: true })
+    for (const [name, text] of Object.entries(mutantFiles))
+      writeFileSync(join(mutantsDir, name), text)
+  }
+  // An earlier run's ending, which this run's refusal must replace.
+  const out = bad.out ? join(dir, `given-out`) : undefined
+  if (out) {
+    mkdirSync(out, { recursive: true })
+    writeFileSync(join(out, `results.json`), `{"status":"earlier"}`)
+    writeFileSync(join(out, `error.log`), `an earlier run's stack\n`)
+  }
   const run = spawnSync(process.execPath, [join(here, `index.mjs`), ...argv], {
     cwd: dir,
     encoding: `utf8`,
     timeout: 120_000,
   })
-  return endingOf(run.status, run.stderr, undefined, (text) =>
+  return endingOf(run.status, run.stderr, out, (text) =>
     text.replaceAll(dir, `<package>`),
   )
 }
@@ -576,6 +641,7 @@ async function driver(plan, observe) {
       if (bad.daemon) states.add(`refused arguments through --daemon`)
       if (bad.kind === `unknown` && bad.long)
         states.add(`a refusal longer than a pipe's buffer`)
+      if (bad.out) states.add(`a refusal written over an earlier run's output`)
     }
     if (before.refusal && faults.includes(plan.fault))
       states.add(`refused ${plan.fault}`)
@@ -820,7 +886,7 @@ function check(plan, observations, expected) {
     )
   const breach = refusalBreach(argumentsRun, {
     cause: argumentFault(bad, `<package>`, SOURCE).cause,
-    outKnown: false,
+    outKnown: bad.out,
   })
   if (breach)
     return violation(
@@ -1131,9 +1197,9 @@ const required = [
 oracleProperty({
   id: `oracle-gaps.report-static`,
   law: {
-    statement: `The gap report's static half keeps every Svelte rune where Svelte allows it, gives each run's default output a directory of its own under its package's state, so runs of one package and of two packages never collide, enumerates the promised operator mutants, marks exactly the probe-only code, refuses broken owns declarations, gives each function the owners whose call trees contain it, anchors each mutant's key, keeps keys, probe marks, and ownership stable under unrelated edits, and keeps each derived class's \`super(...)\` call unconditional. In a derived constructor, no mutant site lies before the first statement that calls super or inside that statement (an arrow inherits super, so an arrow's call counts), and statements after it keep their sites. So no mutant, when active, prevents or delays the super call. With no mutant active the instrumented class behaves as its source does, and under every mutant the constructor completes with its base class's tag unless an early return ends it first. Bad arguments (a missing --package or --source, a --package that does not exist, a source outside the package, a bad --env-prefix, --seed, count, or limit, an unknown --pool, a --mutants directory that does not exist, an option with no value, an unknown option, one long past a pipe's buffer included) refuse the real CLI, cold or with --daemon, with exit 2 and a refused: block that names the cause, then one fix: directive that offers no way around the fix, and no stack trace.`,
+    statement: `The gap report's static half keeps every Svelte rune where Svelte allows it, gives each run's default output a directory of its own under its package's state, so runs of one package and of two packages never collide, enumerates the promised operator mutants, marks exactly the probe-only code, refuses broken owns declarations, gives each function the owners whose call trees contain it, anchors each mutant's key, keeps keys, probe marks, and ownership stable under unrelated edits, and keeps each derived class's \`super(...)\` call unconditional. In a derived constructor, no mutant site lies before the first statement that calls super or inside that statement (an arrow inherits super, so an arrow's call counts), and statements after it keep their sites. So no mutant, when active, prevents or delays the super call. With no mutant active the instrumented class behaves as its source does, and under every mutant the constructor completes with its base class's tag unless an early return ends it first. Bad arguments (a missing --package or --source, a --package that does not exist, a source outside the package, a bad --env-prefix, --seed, count, or limit, an unknown --pool, a --mutants directory that does not exist, an option with no value, an unknown option, one long past a pipe's buffer included, a --source that is missing or is a directory, and a --mutants file that is not JSON, lacks a field, or repeats an id) refuse the real CLI, cold or with --daemon, with exit 2 and a refused: block that names the cause, then one fix: directive that offers no way around the fix, and no stack trace; with --out, the refusal replaces an earlier run's results.json there and removes its error.log.`,
     authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the frozen design's plan for an oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); for rune placement, Svelte 5's placement rule for runes (state_invalid_placement, effect_invalid_placement) and the maintainer's report of svelte-db's useLiveQuery.svelte.ts failing to compile under instrumentation (2026-11-08); for derived classes, the gap report's contract that instrumentation with no mutant active does not change behavior and that a mutant is a legal program variant (the operator contract in schemata.mjs), ECMAScript's rule that a derived constructor calls \`super\` before it reads \`this\` and before it returns, the maintainer's report of TanStack DB's subscription.ts failing with no mutant active (G11, 2026-11-09), and the maintainer's decision of 2026-11-09 on the derived constructor's site region (every shape of super, including an early return before it, is covered by the one rule); for the report-shaped ending, the maintainer's decision of 2026-11-10 ("we should never just crash -- the cli should also return something sensible") and the usage text in args.mjs, the CLI's documented interface.`,
-    limits: `The grammar and model of oracle-gaps.report, with its limits. Outcomes that need test runs, and the failing-owner refusal, belong to oracle-gaps.report. Same-named functions, accessors, and field arrows are judged for ownership only; runes only as $state, $state.raw, $derived, $derived.by, $effect, and $effect.pre in a .svelte.ts module, judged by a restatement of Svelte's placement rule rather than the compiler. A derived class is judged in this oracle's in-process run and in the end-to-end oracle's static half: the end-to-end oracle instruments its file and judges its sites as unowned, but no test imports or constructs the class, so no test runs it. The in-process run transpiles the file to CommonJS at ES2022; other downlevel targets and Vitest's own transform are not exercised. The mutant switch (switchFor) is a hand copy of the switch's contract in schemata.mjs, not the capture setup's runtime: the capture setup imports Vitest and installs timers and globals when it loads, so it cannot run in-process. The derived grammar has one derived class per history, with parameter properties, a field, statements before and after super, an early return before it, and the four forms of the super call (a statement, an arrow argument, and the right operand of \`&&\` or \`||\`). It has no super call in a method, a nested class, or a \`super.method()\` call, and no default parameter. The ending law is judged here only for argument refusals, one fault per history, whose arguments name no output directory; refusals from the analysis and the runner, their results.json and summary.md, and the daemon's own path are the end-to-end oracle's. No legal history reaches an internal error, so its shape (exit 3, the stack in error.log) is not judged; a calibration shows that the check rejects a stack trace on stderr.`,
+    limits: `The grammar and model of oracle-gaps.report, with its limits. Outcomes that need test runs, and the failing-owner refusal, belong to oracle-gaps.report. Same-named functions, accessors, and field arrows are judged for ownership only; runes only as $state, $state.raw, $derived, $derived.by, $effect, and $effect.pre in a .svelte.ts module, judged by a restatement of Svelte's placement rule rather than the compiler. A derived class is judged in this oracle's in-process run and in the end-to-end oracle's static half: the end-to-end oracle instruments its file and judges its sites as unowned, but no test imports or constructs the class, so no test runs it. The in-process run transpiles the file to CommonJS at ES2022; other downlevel targets and Vitest's own transform are not exercised. The mutant switch (switchFor) is a hand copy of the switch's contract in schemata.mjs, not the capture setup's runtime: the capture setup imports Vitest and installs timers and globals when it loads, so it cannot run in-process. The derived grammar has one derived class per history, with parameter properties, a field, statements before and after super, an early return before it, and the four forms of the super call (a statement, an arrow argument, and the right operand of \`&&\` or \`||\`). It has no super call in a method, a nested class, or a \`super.method()\` call, and no default parameter. The ending law is judged here only for argument refusals, one fault per history; refusals from the analysis and the runner, and the daemon's own path, are the end-to-end oracle's. No legal history reaches an internal error, so its shape (exit 3, the stack in error.log) is not judged; a calibration shows that the check rejects a stack trace on stderr.`,
   },
   histories: {
     arbitrary: argumentHistories,
@@ -1356,6 +1422,9 @@ oracleProperty({
           ...(kind === `unknown`
             ? [`a refusal longer than a pipe's buffer`]
             : []),
+          ...(i % 3 === 0
+            ? [`a refusal written over an earlier run's output`]
+            : []),
         ],
         build: (generated) => ({
           ...generated,
@@ -1364,6 +1433,7 @@ oracleProperty({
             kind,
             daemon: i % 2 === 1,
             long: kind === `unknown`,
+            out: i % 3 === 0,
           },
           steps: null,
         }),

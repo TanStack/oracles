@@ -325,6 +325,9 @@ const edits = [
   // A change to the CLI's code followed by two checks at once, and a native
   // addon installed into the dependency tree (or removed) between checks.
   `cliAtOnce`,
+  // A check from a second install of the CLI, at another path and with
+  // other code, while the first install's daemon serves the package.
+  `otherInstall`,
   `addAddon`,
   // A daemon killed while it runs a check (under a seed no other step uses,
   // so that the check has work to do), a daemon killed before it reads
@@ -348,6 +351,7 @@ const daemonEvents = new Set([
   `crashAtOnce`,
   `stopAtOnce`,
   `resetBeforeRead`,
+  `otherInstall`,
 ])
 const histories = fc.record({
   functions: fc.array(fc.array(statement, { minLength: 1, maxLength: 5 }), {
@@ -450,6 +454,12 @@ const histories = fc.record({
     // The package's Vitest fails the same way, after waiting on I/O, so a
     // daemon has read its requests when its session fails.
     `brokenVitest`,
+    // The package's own files fail under Vitest: its config throws when it
+    // loads, its config has no default export, or a setup file throws when
+    // it loads. Each is the author's to fix, so each refuses the run.
+    `configThrows`,
+    `configNoDefault`,
+    `setupThrows`,
   ),
   stability: fc.constantFrom(
     `none`,
@@ -2924,10 +2934,19 @@ function refusal(plan) {
   if (plan.fault === `badEntry`) return { cause: `${SOURCE}#nope` }
   if (plan.fault === `missingSource`) return { cause: `src/missing.ts` }
   if (plan.fault === `nonLiteral`) return { cause: `b.test.ts` }
-  // A source outside the package is a fault of the arguments, which name
-  // no output directory until they parse (law 11).
-  if (plan.fault === `outsideSource`)
-    return { cause: `outside the package`, arguments: true }
+  if (plan.fault === `outsideSource`) return { cause: `outside the package` }
+  // The analysis reads the test files that the package's Vitest config
+  // includes (index.mjs, step 2), so a config that does not load is named
+  // before anything the analysis would find. The cause names the config
+  // file and its error.
+  if (plan.fault === `configThrows`)
+    return {
+      cause: plan.configFile,
+      detail: `the fixture config broke`,
+      runtime: true,
+    }
+  if (plan.fault === `configNoDefault`)
+    return { cause: plan.configFile, runtime: true }
   // A run with no oracle file, or with no owns entry, owns no selected
   // source, so every mutant would read as unowned. The analysis refuses it
   // (maintainer decision, 2026-11-10).
@@ -2942,6 +2961,10 @@ function refusal(plan) {
   if (plan.fault === `projects`)
     return { cause: `test.projects`, runtime: true }
   if (plan.fault === `brokenVitest`) return { cause: `vitest`, runtime: true }
+  // A setup file that throws fails every oracle file before any test runs,
+  // so the run refuses as for a failing owner, naming the setup's error.
+  if (plan.fault === `setupThrows`)
+    return { cause: `the fixture setup broke`, runtime: true }
   // A failing owner is named with its test's error, so the author can fix it.
   if (plan.fault === `brokenOwner`)
     return {
@@ -3421,7 +3444,7 @@ function fixtureFiles(plan, state = initialState(plan)) {
     plan.configEnv
       ? `process.env.VITEST === 'true' && process.env.TEST === 'true' && process.env.NODE_ENV === 'test' ? ['tests/**/*.test.ts'] : []`
       : `['tests/**/*.test.ts']`
-  }${plan.setupGlobal ? `, setupFiles: ['./tests/setup.ts']` : ``} }`
+  }${plan.setupGlobal || plan.fault === `setupThrows` ? `, setupFiles: ['./tests/setup.ts']` : ``} }`
   // A history that installs a scoped addon later declares it from the
   // start, beside a scoped package already installed in its scope.
   const scoped = plan.steps.includes(`addScopedAddon`)
@@ -3475,7 +3498,11 @@ function fixtureFiles(plan, state = initialState(plan)) {
           ].join(`\n`),
         }
       : {}),
-    [plan.configFile]: `import { defineConfig } from 'vitest/config'\nexport default defineConfig(${
+    [plan.configFile]: `import { defineConfig } from 'vitest/config'\n${
+      plan.fault === `configThrows`
+        ? `throw new Error('the fixture config broke')\n`
+        : ``
+    }export ${plan.fault === `configNoDefault` ? `const config =` : `default`} defineConfig(${
       { object: ``, function: `() => (`, async: `async () => (` }[plan.config]
     }{ test: ${
       plan.fault === `projects`
@@ -3503,9 +3530,17 @@ function fixtureFiles(plan, state = initialState(plan)) {
     // as a duplicate-instance check does in a browser window:
     // each copy must load it as a fresh worker would.
     'deps/state-dep/index.js': `const marker = Symbol.for('state-dep/loaded')\nif (globalThis[marker]) throw new Error('state-dep loaded twice in one realm')\nglobalThis[marker] = true\nconst log = []\nexport function note(entry) {\n  log.push(entry)\n}\nexport function seen() {\n  return [...log]\n}\n`,
-    ...(plan.setupGlobal
+    ...(plan.setupGlobal || plan.fault === `setupThrows`
       ? {
-          'tests/setup.ts': `Object.defineProperty(globalThis, 'fixtureStore', { value: { ready: true } })\n`,
+          'tests/setup.ts': `${
+            plan.fault === `setupThrows`
+              ? `throw new Error('the fixture setup broke')\n`
+              : ``
+          }${
+            plan.setupGlobal
+              ? `Object.defineProperty(globalThis, 'fixtureStore', { value: { ready: true } })\n`
+              : ``
+          }`,
         }
       : {}),
     // A subpath that reads the dependency's main module, so a runner that
@@ -3759,7 +3794,9 @@ function applyEdit(state, edit) {
 // When the run knows its output directory, the block ends with `output:
 // <dir>`, and the directory holds a results.json, `{ status: "refused",
 // cause, directive }`, whose cause and directive are the block's, and a
-// summary.md. Arguments the CLI cannot parse name no output directory.
+// summary.md, and no error.log: every ending removes the other ending's
+// files. Arguments the CLI cannot parse know their output directory only
+// when they name it (`--out`).
 //
 // An internal error is a bug in the CLI. It exits 3, says so, and keeps the
 // stack in an error.log rather than on stderr. No legal history reaches one,
@@ -3795,6 +3832,8 @@ function endingOf(exit, stderr, out, name = (text) => text) {
     cause: cause && name(cause).slice(0, 2000),
     fix: line(`fix`) && name(line(`fix`)),
     namesOutput: out !== undefined && line(`output`) === out,
+    // An internal error's log beside a refusal would be another run's.
+    errorLog: out !== undefined && existsSync(join(out, `error.log`)),
     stackFrames: /^\s+at /m.test(text),
     written,
   }
@@ -3826,6 +3865,8 @@ function refusalBreach(ending, { cause, outKnown }) {
   if (written.cause !== ending.cause || written.directive !== ending.fix)
     return `the output's results.json gives another cause or directive than stderr`
   if (!written.summary) return `the refusal wrote no summary.md`
+  if (ending.errorLog)
+    return `the refusal left an earlier run's error.log in its output directory`
   return undefined
 }
 

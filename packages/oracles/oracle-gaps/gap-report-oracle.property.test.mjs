@@ -162,7 +162,9 @@
  *    killed (its socket and lock left behind), after a reboot (its socket
  *    gone), after its process id went to a live process, two checks at
  *    once after a crash, a check started during a stop, two checks at
- *    once after the CLI's code changed, a check after a native addon was
+ *    once after the CLI's code changed, a check from a second install of
+ *    the CLI at another path with other code (the daemon serves only its
+ *    own code), a check after a native addon was
  *    installed into the dependency tree (the pool follows it), and a
  *    check whose daemon cannot open its session (it reports the cold
  *    run's error), two checks at once on a session whose failure is
@@ -198,7 +200,9 @@
  *    (gap-report-model-oracle.mjs states the law beside its check). Every
  *    refusal of laws 3 and 10 (a broken owns declaration, no oracle file, no
  *    owner, a source outside the package, `test.projects`, a Vitest that
- *    does not load, an owner that fails with no mutant active) exits 2 and
+ *    does not load, a config that throws when it loads or has no default
+ *    export, a setup file that throws, an owner that fails with no mutant
+ *    active) exits 2 and
  *    prints `refused: <cause>` and then `fix: <directive>`, with no stack
  *    frames; the directive offers no way around the fix. The block names the
  *    run's output directory, which holds a results.json with status
@@ -654,8 +658,8 @@ async function incremental(dir, plan, cli, copy, observe, states) {
   if (!reportText.includes(RUN_LINE))
     throw new Error(`the cli edit no longer finds the summary's run line`)
   const cold = new Map()
-  const fingerprint = (files, state) =>
-    JSON.stringify([files, state.seed, state.cliEdited])
+  const fingerprint = (files, state, other = false) =>
+    JSON.stringify([files, state.seed, state.cliEdited, other])
   cold.set(fingerprint(fixtureFiles(plan), initialState(plan)), cli)
   // A cold result without the run identity, which every edit changes, so
   // that two states compare by what they report.
@@ -675,6 +679,22 @@ async function incremental(dir, plan, cli, copy, observe, states) {
   const made = []
   let reverted
   let previous = cli
+  // A second install of the CLI, at another path, whose summary reads
+  // otherwise, so its code differs from the first install's (`otherInstall`).
+  let other
+  const otherCli = () => {
+    if (other === undefined) {
+      other = copyCli({ cliPath: `plain` })
+      writeFileSync(
+        join(other, `report.mjs`),
+        reportText.replace(
+          RUN_LINE,
+          '`Run ${run.id} (other install). Inputs: ${run.inputs}.`',
+        ),
+      )
+    }
+    return other
+  }
   const checkAt = async (step) => {
     const state = trail.at(-1)
     writeFileSync(
@@ -687,10 +707,10 @@ async function incremental(dir, plan, cli, copy, observe, states) {
         : reportText,
     )
     const files = fixtureFiles(resolveHistory(state.history), state)
-    const key = fingerprint(files, state)
+    const key = fingerprint(files, state, step === `otherInstall`)
     const how = {
       seed: state.seed,
-      cli: copy,
+      cli: step === `otherInstall` ? otherCli() : copy,
       ordinary: plan.ordinary,
       sources: sourceArgument(plan, `${dir}.link`),
       budget: plan.budget,
@@ -755,6 +775,7 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       dieMidCheck: `a check whose daemon died during it`,
       resetBeforeRead: `a check whose connection was reset`,
       fixSession: `a check after the session's failure was fixed`,
+      otherInstall: `a check from another install of the CLI`,
     }[step]
     if (after && [daemon, ...others].every((run) => run.reported))
       states.add(after)
@@ -885,6 +906,8 @@ async function incremental(dir, plan, cli, copy, observe, states) {
         await checkAt(step)
         await stopping
         continue
+      } else if (step === `otherInstall`) {
+        // The check runs from the other install; no file changes.
       } else if (step === `revert`) {
         if (trail.length > 1) trail.pop()
         reverted = made.pop()
@@ -896,6 +919,7 @@ async function incremental(dir, plan, cli, copy, observe, states) {
     }
   } finally {
     stop()
+    if (other !== undefined) rmSync(other, { recursive: true, force: true })
     // One daemon serves a package, so once it is stopped none is left. A
     // daemon that exits takes a moment to close its contexts.
     let left = daemonsOf(dir)
@@ -1218,7 +1242,7 @@ async function driver(plan, observe) {
  * Law 9: each check through the daemon reports what the cold run of the same
  * state reports. A refused state is compared by the cause it names.
  */
-function incrementalCheck(observations, outKnown = true) {
+function incrementalCheck(observations) {
   for (const { value } of observations.filter(
     (o) => o.checkpoint === `incremental`,
   )) {
@@ -1237,7 +1261,7 @@ function incrementalCheck(observations, outKnown = true) {
     // A refusal through the daemon ends as a cold refusal does (law 11):
     // the CLI that asked the daemon writes it to its own output directory.
     if (cold.refusal !== undefined) {
-      const breach = refusalBreach(daemon.ending, { outKnown })
+      const breach = refusalBreach(daemon.ending, { outKnown: true })
       if (breach)
         return violation(
           `incremental`,
@@ -1313,18 +1337,14 @@ function check(plan, observations, expected) {
       )
     // Law 11: the refusal is one block with its fix, and the output
     // directory the run was given holds it.
-    // A refusal of the arguments themselves names no output directory.
-    const outKnown = !expected.refused.arguments
+    // Every e2e run names its output directory (`--out`), so even a
+    // refusal of its arguments is written there.
     const breach = refusalBreach(cli.ending, {
       cause: expected.refused.cause,
-      outKnown,
+      outKnown: true,
     })
     if (breach) return violation(`cli`, breach, `report-shaped ending`)
-    return (
-      incrementalCheck(observations, outKnown) ??
-      daemonCheck(observations) ??
-      pass
-    )
+    return incrementalCheck(observations) ?? daemonCheck(observations) ?? pass
   }
   if (cli.exit !== 0 || !cli.reported)
     return violation(
@@ -1627,6 +1647,7 @@ const incrementalStates = [
   `two checks at once after a crash`,
   `a check during a stop`,
   `two checks at once after a code change`,
+  `a check from another install of the CLI`,
   `two checks started the daemon at once`,
   `the daemon ran from a path with a space and #`,
 ]
@@ -1731,6 +1752,9 @@ const required = [
   `analyzed noTypescript`,
   `analyzed apiLessTypescript`,
   `refused brokenVitest`,
+  `refused configThrows`,
+  `refused configNoDefault`,
+  `refused setupThrows`,
   `edit fixSession changed the cold result`,
   `a check after the session's failure was fixed`,
   `two checks at once on a session that cannot open`,
@@ -1747,6 +1771,9 @@ const faults = [
   `projects`,
   `outsideSource`,
   `brokenVitest`,
+  `configThrows`,
+  `configNoDefault`,
+  `setupThrows`,
   ...analyzedFaults,
 ]
 const separate = [
@@ -1958,6 +1985,9 @@ oracleProperty({
             `newOracle`,
             `cli`,
             `cliAtOnce`,
+            // A second install's check, then the first install's again.
+            `otherInstall`,
+            `test`,
             `restart`,
             // The daemon this check's CLI starts dies during the check.
             `dieMidCheck`,
