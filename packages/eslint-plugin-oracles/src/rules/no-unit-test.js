@@ -15,8 +15,9 @@ import {
  * person wrote down is a unit test. Its expectation has no independent
  * source, so it is not oracle coverage, even in a file named for an oracle.
  *
- * Each oracle file declares its parts with `declareOracle` from
- * oracle-declaration:
+ * An oracle file declares its parts in its `oracleProperty` call (below). A
+ * legacy file, one that registers its tests through a driver in another
+ * module, declares them with `declareOracle`, which the rule still reads:
  *
  *   declareOracle({ check: [checkHistory], model: [modelHistory] })
  *
@@ -1337,12 +1338,12 @@ export default {
     messages: {
       emptyTest: `This test's body is empty, so it checks nothing. Remove it, or use it.todo.`,
       emptyTodo: `it.todo takes no body; remove the body.`,
-      unitTest: `This test reaches no part that this file declares with declareOracle, so its expected result has no independent source. A unit test belongs in an ordinary test file: move it there. A fixed history runs through the declared check, a model-rule expectation uses the declared model, and a grammar calibration uses the declared grammar.`,
+      unitTest: `This test reaches no part that this file declares, so its expected result has no independent source. A unit test belongs in an ordinary test file: move it there. A fixed history runs through the declared check, a model-rule expectation uses the declared model, and a grammar calibration uses the declared grammar.`,
       unknownTypeModel: `This typeModel name is not a type alias or interface in this file. A type model is the expected type that type-level tests compare with, so it must be declared here.`,
       incompleteProperty: `This oracleProperty call does not pass an object literal with a check, so the rule cannot see that the property has one. Pass its options inline as \`oracleProperty({ id, law, histories, driver, model, check })\`.`,
       importedRegistration: `This oracle file calls a helper that registers tests. An oracle file registers only oracle tests, so register those tests from an ordinary test file and keep this file to its checks and model.`,
       unparsedModule: `This file's parser cannot parse {{module}} ({{error}}), so no test reaches a part through it. Lint this file with a parser that reads the module, or fix the module's syntax.`,
-      undeclared: `This oracle file registers tests and declares no oracle part. Name its check, model, and grammar with \`declareOracle({ check: [...], model: [...], grammar: [...] })\` from \`@tanstack/oracles\`. Then move each test that reaches none of them to an ordinary test file.`,
+      undeclared: `This oracle file registers tests and declares no oracle part. Register it through \`oracleProperty({ id, law, histories, driver, model, check })\` from \`@tanstack/oracles\`, which names its parts. Then move each test that reaches none of them to an ordinary test file.`,
     },
   },
   create(context) {

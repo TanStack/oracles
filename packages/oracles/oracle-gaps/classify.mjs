@@ -1,7 +1,7 @@
 // The gap report's classification: what each mutant's outcome is, from the
 // plain records of the runs that judged it (check.mjs runs them). Every
-// function here is pure, so the CLI's own oracle checks the classification
-// on generated records in-process (gap-report-classify-oracle).
+// function here is pure, so the CLI's own oracle, in its repository, checks
+// the classification on generated records in-process.
 //
 // A run record (a unit) holds one test file's tests under one mutant: each
 // test's state and error text, its setup and unhandled errors, whether it
