@@ -191,6 +191,21 @@
  *   the reported counterexample still shows the first failure (ORC-010).
  *   Within one history a driver error decides first, then a law violation,
  *   then a constructed history that missed its state.
+ * - **Shrinking ends in time.** A campaign starts no shrink run once half its
+ *   test's `timeout` has passed. A shrink it does not run counts as passing,
+ *   so fast-check ends its search and reports the smallest failure it found,
+ *   with the first failure's law. A campaign whose first failure is judged in
+ *   time, and whose runs each take less than half its timeout, so reports that
+ *   law and a replayable counterexample before its timeout, however long
+ *   shrinking would take; that counterexample can be larger than the smallest
+ *   that fails (maintainer decision, 2026-11-11). A path replay runs its
+ *   counterexample and shrinks no further, so it reports the counterexample it
+ *   replays. A `timeout` of 0 or less is no timeout, as Vitest reads it, and
+ *   sets no budget. The budget is real time, so a seed-only rerun on a slower
+ *   or faster machine can report another counterexample, under the same law;
+ *   a path replay reports the same one. The clock is `performance.now()`: a
+ *   driver that leaves fake timers installed that fake it freezes the
+ *   deadline, and shrinking then has no budget.
  * - **Bounded clock.** A driver that runs on `useOracleClock` has virtual
  *   timers and `Date`; macrotask turns stay real. The clock fires at most
  *   `maxTimers` timers (1,000 by default) in one history. Past that it stops
@@ -617,7 +632,10 @@ export interface OraclePropertyOptions<THistory, TExpected, TPlan = THistory> {
    * a prediction never sees the trace, so it cannot follow production.
    */
   predict?: (plan: TPlan) => Readonly<Record<string, boolean>>
-  /** Each registered test's limit in milliseconds; 120 seconds by default. */
+  /**
+   * Each registered test's limit in milliseconds; 120 seconds by default, and
+   * none at 0 or less. A campaign stops shrinking at half of it.
+   */
   timeout?: number
   /**
    * The production code this oracle owns: a source path relative to the
@@ -771,10 +789,12 @@ export function oracleProperty<THistory, TExpected, TPlan = THistory>(
           oracleRoute(test.route)
           return test.run(task, signal)
         },
-        options.timeout ?? 120_000,
+        timeoutOf(options),
       )
   })
 }
+
+const timeoutOf = (options: { timeout?: number }) => options.timeout ?? 120_000
 
 /** The declared states, when the source declares any. */
 const declaredOf = (source: {
@@ -2083,14 +2103,18 @@ function generatedTests<THistory, TExpected, TPlan>(
   // that shrinking must keep, a setup error, a constructed history that missed
   // its state, or one law. A
   // smaller history that fails some other way counts as passing. It counts
-  // the histories that entered each state.
+  // the histories that entered each state. After the first failure, it runs
+  // no history once `shrinkUntil` (a `performance.now()` time, which a
+  // controlled clock leaves real) has passed.
   const predicateFor = (
     constructionOf: Map<THistory, ConstructedHistory<THistory>>,
     counts: Map<string, number>,
+    shrinkUntil: number,
   ) => {
     let firstKind: string | undefined
     const keeps = (kind: string) => (firstKind ??= kind) === kind
     return async (history: THistory) => {
+      if (firstKind !== undefined && performance.now() >= shrinkUntil) return
       let outcome: Awaited<ReturnType<typeof runOne>>
       try {
         outcome = await runOne(options, history)
@@ -2165,15 +2189,30 @@ function generatedTests<THistory, TExpected, TPlan>(
     seed: number,
     parameters: (
       examples: Array<[THistory]>,
-    ) => Parameters<typeof fc.assert>[1],
+    ) => NonNullable<Parameters<typeof fc.assert>[1]>,
   ) => {
+    // Vitest's clock for the test is already running.
+    const started = performance.now()
     const { examples, constructionOf } = examplesFor(seed)
     const counts = new Map<string, number>(
       [...(declared ?? [])].map((state) => [state, 0]),
     )
+    const run = parameters(examples)
+    // A path replay shrinks no further than the counterexample it replays.
+    // Vitest reads a timeout of 0 or less as none, which sets no budget.
+    const timeout = timeoutOf(options)
+    const shrinkUntil =
+      run.path !== undefined
+        ? -Infinity
+        : timeout > 0
+          ? started + timeout / 2
+          : Infinity
     await fc.assert(
-      fc.asyncProperty(arbitrary, predicateFor(constructionOf, counts)),
-      parameters(examples),
+      fc.asyncProperty(
+        arbitrary,
+        predicateFor(constructionOf, counts, shrinkUntil),
+      ),
+      run,
     )
     // Vitest hides console output from a passing test; stdout reaches the log.
     process.stdout.write(`${id} ${name} reach ${countsText(counts)}\n`)

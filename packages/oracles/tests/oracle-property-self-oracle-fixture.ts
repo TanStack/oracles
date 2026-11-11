@@ -22,6 +22,13 @@
  * property's `reached` part or, as the framework's default, through the
  * driver's `observe("reach", state)`. A `slow` spec's driver takes about
  * 300 ms per history, so a small `timeout` fails every test that runs one.
+ * A `slowShrink` spec's driver takes about 2 s on a history that holds a 4,
+ * but only while a campaign (`fixed seed` or `random seed`) runs it, and no
+ * time elsewhere, so only shrinking is slow. Every history that holds a 4
+ * fails, so a campaign runs at most one slow history before its first
+ * failure. Under its 5 s timeout, the shrink of `[4,2,2]` (`[4,2]`, then
+ * `[4,0]`, each after histories without a 4) outlasts the timeout unless the
+ * framework stops it.
  * A spec with a `probe` binds `saw-0` to the production probe `synthetic#saw-0`
  * and predicts that a history enters it when it holds a 0. The driver calls
  * that probe first, with a condition: `agree` calls it with `true` when the
@@ -232,6 +239,8 @@ export type SyntheticSpec = {
   /** Each history takes about 300 ms; with `timeout`, tests outlive it. */
   slow?: boolean
   timeout?: number
+  /** In a campaign, a history that holds a 4 takes about 2 s; elsewhere, no time. */
+  slowShrink?: boolean
   /** Registers under an id no oracle configuration knows. */
   unregistered?: boolean
   /** How the driver calls the probe bound to `saw-0`; absent, no probe. */
@@ -686,6 +695,14 @@ function syntheticDriver(
       )
     if (spec.odd) observe(`odd`, { reason: oddValue(spec.odd) })
     if (spec.slow) await new Promise((resolve) => setTimeout(resolve, 300))
+    if (
+      spec.slowShrink &&
+      history.includes(4) &&
+      / > (?:fixed seed -?\d+|random seed)$/.test(
+        expect.getState().currentTestName ?? ``,
+      )
+    )
+      await new Promise((resolve) => setTimeout(resolve, 2000))
     // The probe form production uses, guarded in the probing function.
     const probing =
       typeof process === `undefined`
