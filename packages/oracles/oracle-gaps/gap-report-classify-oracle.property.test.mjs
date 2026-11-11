@@ -28,7 +28,10 @@
  *    law (any law but reach agreement) kills: `killed`, even when another
  *    owner file's run timed out, and the kill names at least one such law.
  *    The runner may stop at the first one (maintainer decision, 2026-11-06),
- *    so a kill names a non-empty part of them. Failing that, a run that
+ *    so a kill names a non-empty part of them. An operator mutant's owner
+ *    files run one after another in report order (law 7), and the runner
+ *    stops at the first that kills, so its kill names laws of that file
+ *    alone. Failing that, a run that
  *    timed out makes it `timeout`. Failing that, reproducible verdicts under
  *    reach agreement alone make it an `agreement-only-kill`, which names
  *    them all. Failing that, a verdict on the random campaign
@@ -71,18 +74,24 @@
  *    test names the first that its class's condition holds for: the test
  *    whose value changed, the test that infected the mutant, or the test
  *    that its kill or crash names; an operand list and a list of
- *    nondeterministic tests follow the same order. A failing test is
- *    ordered by file path too, and within a file in the order the reporter
- *    lists the file's tests, which is the order the file declares them.
+ *    nondeterministic tests follow the same order. So do the lists that name
+ *    files: a gap's `Owners` line (the owner files that reached the mutant),
+ *    and the files that failed with no mutant active (which the run's
+ *    refusal names, or results.json's `excluded` and the summary list as
+ *    left out), and results.json's nondeterministic tests. An operator
+ *    mutant's owner files also run in report order (law 3). A failing test
+ *    is ordered by file path too, and within a file in the order the
+ *    reporter lists the file's tests, which is the order the file declares
+ *    them. A file path's order is the order of its UTF-16 code units, as
+ *    JavaScript's `<` compares strings, not a locale's.
  *    Report order depends on none of the orders a run can vary: the order
  *    in which the runner joins the files' baseline records (its context
  *    count sets it), the order in which a mutant run writes a file's
  *    records, and the order in which a mutant's owners were declared. So
  *    the same project and code give the same report on any machine. The
- *    model's file order is the files' index order, which orders their paths
- *    (`f0`, `f1`, `f2`), and within a file the tests' order, in which the
- *    driver writes each file's baseline records; the grammar generates the
- *    three other orders. Authority: the gap CLI's determinism requirement,
+ *    model orders the files by their paths and, within a file, by the
+ *    tests' order, in which the driver writes each file's baseline records;
+ *    the grammar generates the three other orders. Authority: the gap CLI's determinism requirement,
  *    which the end-to-end oracle's determinism test and its law 9 (a check
  *    reports what a cold run reports) state, and which the runner's
  *    authored loop cites ("listed alike in every run", check.mjs); the
@@ -173,7 +182,14 @@
  * test is ordered within its file as the reporter lists it, which a run cut
  * off by a hang takes from the records. Of the "Changed observations in"
  * list, which holds the first three changed tests, only the first test is
- * compared (it is the not-judged message's). An authored
+ * compared (it is the not-judged message's). Every test the mutant runs
+ * record the baseline recorded too, so a test the baseline did not record,
+ * which report order puts after its file's others, is not generated. A file
+ * that fails with no mutant active keeps its records here, and its
+ * mutants are classified as if it passed: the runner refuses over a
+ * failing oracle file and leaves a failing ordinary file out, which this
+ * oracle judges only through the list of failing files. That the refusal
+ * text and the summary print that list as given is not judged here. An authored
  * mutant's intent holds no word the exit law forbids, because the stdout
  * prints it as text, and its author is not shortened.
  */
@@ -187,6 +203,8 @@ import {
   judgeMutant,
   judgeOrdinary,
   needsOrdinary,
+  outcomeOf,
+  passOf,
   targetsOf,
 } from './classify.mjs'
 import { readSummary } from './gap-report-model-oracle.mjs'
@@ -212,8 +230,10 @@ const SLOTS = MUTANTS + AUTHORED
 // route then active, or with none active), an assertion failure, a crash, a
 // timeout message, a timed-out run, a setup error, or an unhandled error.
 // Each test also has a name and enclosing suites, whose names hold regular
-// expression and shell syntax, and each oracle file a baseline: it passes,
-// a test of it fails with no mutant active, or it does not load.
+// expression and shell syntax, and each file a baseline: it passes, a test
+// of it fails with no mutant active, or it does not load. A law verdict
+// names one of two behavioral laws, `L` and `M`, or reach agreement, so
+// the laws of a kill can show which owner file decided it.
 //
 // The order of the records is also generated, because a real run's order
 // depends on how it ran (law 7). The runner deals the files round-robin over
@@ -230,7 +250,10 @@ const SLOTS = MUTANTS + AUTHORED
 // authored, lists its owners in the order they were declared, which need
 // not be file order: the runner keeps the owner files of an authored mutant
 // in the order that its `owns` declarations give them (owners.mjs, entries of
-// the function before entries of the whole file).
+// the function before entries of the whole file). Each file has a name
+// (`fileStems`) from a set in which code-unit order and a locale's order
+// disagree, by case and by `_`, `-`, and `.`, so a path order that a
+// locale's comparison decides is seen.
 //
 // The code and intents straddle the gap line's 60-character cut (exactly 60,
 // 61, and longer), span lines, and hold backticks; one holds an astral-plane
@@ -326,6 +349,11 @@ const routes = [
   `determinism`,
   `custom route`,
 ]
+// File names in which code-unit order and a locale's order disagree: an
+// upper-case letter sorts before every lower-case one by code unit and
+// beside its lower case in a locale, and `_` sorts after `-` and `.` by code
+// unit and before them in a locale. (`-` and `.` sort alike in both.)
+const fileStems = [`f0`, `f1`, `f2`, `F1`, `f-2`, `f.2`, `f_2`]
 const effect = fc.record({
   kind: fc.constantFrom(
     `same`,
@@ -341,7 +369,7 @@ const effect = fc.record({
     `setupError`,
     `unhandled`,
   ),
-  law: fc.constantFrom(`L`, `reach agreement`),
+  law: fc.constantFrom(`L`, `M`, `reach agreement`),
   // The route active when a verdict fired, when it differs from the test's.
   firedAt: fc.option(fc.constantFrom(...routes.slice(1)), { nil: undefined }),
 })
@@ -439,9 +467,20 @@ const records = fc.record({
   ),
   // Each file's place in the baseline's records (ties keep file order).
   baselineOrder: fc.array(fc.nat({ max: 2 }), { minLength: 3, maxLength: 3 }),
+  // Each file's name, before `.test.ts`.
+  fileStems: fc.uniqueArray(fc.constantFrom(...fileStems), {
+    minLength: 3,
+    maxLength: 3,
+  }),
 })
 
-const fileName = (index) => `/pkg/tests/f${index}.test.ts`
+// A file's path, and its path relative to the package.
+const relativeName = (h, fi) => `tests/${h.fileStems[fi]}.test.ts`
+const fileName = (h, fi) => `/pkg/${relativeName(h, fi)}`
+// Report order's file order (law 7): the paths compared by UTF-16 code
+// units, as JavaScript's `<` compares strings.
+const byPath = (h) => (a, b) =>
+  fileName(h, a) < fileName(h, b) ? -1 : fileName(h, a) > fileName(h, b) ? 1 : 0
 // A test's names, as the runner reports them: its suites' names, then its
 // own. Its own name holds its index, so the names within a file are
 // distinct. Its full name joins them with ` > `.
@@ -450,7 +489,7 @@ const namesOf = (h, fi, ti) => {
   return [...t.suites, `${t.label}t${ti}${t.tail}`]
 }
 const nameOf = (h, fi, ti) => namesOf(h, fi, ti).join(` > `)
-const keyOf = (h, fi, ti) => `${fileName(fi)} > ${nameOf(h, fi, ti)}`
+const keyOf = (h, fi, ti) => `${fileName(h, fi)} > ${nameOf(h, fi, ti)}`
 // A test's name as a message prints it: one line, each control character,
 // line separator, or paragraph separator as its \\uXXXX escape.
 const shownName = (h, fi, ti) =>
@@ -563,19 +602,35 @@ function modelOutcome(h, mi) {
       ? { ...result, testOutcome: ordinaryOutcome(h, mi, ordinary) }
       : result
   if (owners.size === 0) return { outcome: `unowned` }
-  // In report order (law 7): the files by index, which orders their paths,
-  // and each file's tests in their order.
-  const targets = [...owners].sort((a, b) => a - b).filter(reachingIn)
+  // In report order (law 7): the files by path, and each file's tests in
+  // their order. The gap's `Owners` line names these files in this order.
+  const targets = [...owners].sort(byPath(h)).filter(reachingIn)
   if (targets.length === 0)
     return withOrdinary({
       outcome: `unreached`,
       mention: [`line ${m.line + 1}`],
     })
+  const ownerFiles = targets.map((fi) => fileName(h, fi))
   const tests = targets.flatMap((fi) =>
     h.files[fi].tests.map((t, ti) => ({ t, fi, ti })),
   )
   const { failure, ran } = failureOf(h, mi, tests)
-  if (failure) return failure
+  // The runner runs the owner files in report order and stops at the first
+  // that kills, so a kill names laws of that file only (law 7).
+  if (failure?.outcome === `killed`) {
+    const first = targets
+      .map(
+        (fi) =>
+          failureOf(
+            h,
+            mi,
+            tests.filter((x) => x.fi === fi),
+          ).failure,
+      )
+      .find((f) => f?.outcome === `killed`)
+    return { ...failure, laws: first.laws, ownerFiles }
+  }
+  if (failure) return { ...failure, ownerFiles }
   // A survivor. Only reaching, deterministic owner tests judge it; code that
   // ran when a file loaded the module reaches every test of that file.
   const compared = ran.filter(
@@ -590,6 +645,7 @@ function modelOutcome(h, mi) {
       class: cls,
       mention: [],
       boundary: m.evidence === `boundary: -0`,
+      ownerFiles,
       ...extra,
     })
   if (changed)
@@ -647,7 +703,7 @@ function modelAuthored(h, ai) {
     ...new Set(
       a.owners.filter((fi) => fi < h.files.length && h.files[fi].oracle),
     ),
-  ].sort((x, y) => x - y)
+  ].sort(byPath(h))
   if (owners.length === 0) return { outcome: `unowned` }
   // In report order (law 7), whatever order the owners were declared in.
   const tests = owners.flatMap((fi) =>
@@ -742,7 +798,7 @@ function infects(h, mi, t) {
 // (and the nondeterministic ones too, when asked).
 function reachingTests(h, mi, owners, withFlaky = false) {
   return [...owners]
-    .sort((a, b) => a - b)
+    .sort(byPath(h))
     .flatMap((fi) =>
       h.files[fi].tests.flatMap((t, ti) =>
         t.reaches[mi] && (withFlaky || !t.flaky) ? [{ t, fi, ti }] : [],
@@ -942,6 +998,24 @@ function model(h) {
         .sort((a, b) => (a.key < b.key ? -1 : 1)),
     },
     baseline: baselineOf_(h),
+    // The unmutated pass's lists (law 7), in report order: the files that
+    // failed with no mutant active (the run refuses over the oracle files
+    // among them and leaves the rest out), and the nondeterministic tests.
+    pass: {
+      failed: h.files
+        .map((f, fi) => fi)
+        .filter((fi) => h.files[fi].baseline !== `pass`)
+        .sort(byPath(h))
+        .map((fi) => fileName(h, fi)),
+      nondeterministic: h.files
+        .map((f, fi) => fi)
+        .sort(byPath(h))
+        .flatMap((fi) =>
+          h.files[fi].tests.flatMap((t, ti) =>
+            t.flaky ? [`${fileName(h, fi)} > ${nameOf(h, fi, ti)}`] : [],
+          ),
+        ),
+    },
   }
 }
 
@@ -1062,12 +1136,30 @@ function messagesOf(summary) {
   return messages
 }
 
+// Each gap's `Owners` line, by its key: the files it lists, in order.
+function ownersLinesOf(summary) {
+  const lines = summary.split(`\n`)
+  const owners = {}
+  lines.forEach((line, i) => {
+    const key = line.startsWith(`  - Key: `)
+      ? line.slice(`  - Key: `.length).match(/^(`+) (.*) \1; rerun/)?.[2]
+      : undefined
+    if (key === undefined) return
+    for (let j = i + 1; lines[j]?.startsWith(`  - `); j += 1)
+      if (lines[j].startsWith(`  - Owners: `))
+        owners[key] = lines[j].slice(`  - Owners: `.length).split(`, `)
+  })
+  return owners
+}
+
 // ## Production driver
 //
 // The driver turns the records into the capture rows and units the CLI's
-// runner produces, calls the CLI's classification for each mutant as the
-// runner does (asking for units only of the files it targets), assigns keys,
-// and renders the summary.
+// runner produces, joins the unmutated passes' units as the runner does
+// (`passOf`), calls the CLI's classification for each mutant as the runner
+// does (asking for units only of the files it targets, in the order it
+// gives them, and stopping at the first that kills), assigns keys, and
+// renders the summary.
 const messages = {
   verdict: `Error: violation`,
   assertion: `AssertionError: expected [ 'a' ] to deeply equal [ 'b' ]`,
@@ -1142,12 +1234,20 @@ const runTestOrder = (tests) =>
   tests
     .map((t, ti) => ti)
     .sort((a, b) => tests[a].runOrder - tests[b].runOrder || a - b)
-// The baseline run's records, file by file in the order of
-// `baselineOrder`, as the runner joins its contexts' records.
-function rowsOf(h, pass) {
-  const rows = new Map()
-  for (const fi of baselineFileOrder(h)) {
+// Which tests of a file fail with no mutant active: those marked, or its
+// first test when none is marked, when its baseline is `test`.
+const failsAlone = (f, t, ti) =>
+  f.baseline === `test` && (f.tests.some((x) => x.fails) ? t.fails : ti === 0)
+// An unmutated pass's units, one per file, in the order of `baselineOrder`,
+// as the runner joins its contexts' units: each file's tests with their
+// states, a load failure as a setup error, and its records. A failing file
+// keeps its records, which the runner would refuse over or leave out; the
+// classification here reads them as if the file passed.
+function baselineUnitsOf(h, pass) {
+  return baselineFileOrder(h).map((fi) => {
     const f = h.files[fi]
+    const loads = f.baseline !== `load`
+    const rows = new Map()
     f.tests.forEach((t, ti) => {
       rows.set(keyOf(h, fi, ti), {
         key: keyOf(h, fi, ti),
@@ -1166,8 +1266,8 @@ function rowsOf(h, pass) {
         verdicts: [],
       })
     })
-    rows.set(`${fileName(fi)} > (background)`, {
-      key: `${fileName(fi)} > (background)`,
+    rows.set(`${fileName(h, fi)} > (background)`, {
+      key: `${fileName(h, fi)} > (background)`,
       background: true,
       hits: f.background.flatMap((r, mi) =>
         r && mi < h.mutants.length ? [mi] : [],
@@ -1176,8 +1276,23 @@ function rowsOf(h, pass) {
         r && f.backgroundInfects[mi] && mi < h.mutants.length ? [mi] : [],
       ),
     })
-  }
-  return rows
+    return {
+      file: fileName(h, fi),
+      timedOut: false,
+      seconds: 1,
+      setupErrors: loads ? [] : [`Error: cannot load the file`],
+      unhandled: [],
+      tests: loads
+        ? f.tests.map((t, ti) => ({
+            key: keyOf(h, fi, ti),
+            fullName: nameOf(h, fi, ti),
+            state: failsAlone(f, t, ti) ? `failed` : `passed`,
+            message: failsAlone(f, t, ti) ? `Error: violation` : ``,
+          }))
+        : [],
+      rows: [...rows],
+    }
+  })
 }
 // A file's units under the mutant in effect slot `slot`. Its tests are in
 // the order the file declares them, as the reporter lists them, and its
@@ -1186,11 +1301,11 @@ function unitOf(h, fi, slot) {
   const f = h.files[fi]
   const under = (t) => t.under[slot]
   if (f.tests.some((t) => under(t).kind === `runTimeout`))
-    return { file: fileName(fi), timedOut: true, seconds: 1 }
+    return { file: fileName(h, fi), timedOut: true, seconds: 1 }
   const loadFailed = f.tests.some((t) => under(t).kind === `setupError`)
   const tests = loadFailed ? [] : f.tests
   return {
-    file: fileName(fi),
+    file: fileName(h, fi),
     timedOut: false,
     seconds: 1,
     setupErrors: loadFailed ? [`Error: cannot load the file`] : [],
@@ -1238,7 +1353,7 @@ function unitOf(h, fi, slot) {
 // and its parent suites up to its module.
 function testCaseOf(h, fi, ti) {
   const names = namesOf(h, fi, ti)
-  let parent = { type: `module`, moduleId: fileName(fi) }
+  let parent = { type: `module`, moduleId: fileName(h, fi) }
   for (const name of names.slice(0, -1))
     parent = { type: `suite`, name, parent }
   return { type: `test`, name: names.at(-1), parent }
@@ -1249,7 +1364,7 @@ function testCaseOf(h, fi, ti) {
 function baselineFiles(h, printer) {
   return h.files.flatMap((f, fi) => {
     if (!f.oracle) return []
-    const file = `tests/f${fi}.test.ts`
+    const file = relativeName(h, fi)
     if (f.baseline === `load`)
       return [{ file, failure: `Error: cannot load the file`, tests: [] }]
     // A file whose baseline is `test` fails its marked tests, or its first
@@ -1275,7 +1390,7 @@ function baselineFiles(h, printer) {
 
 // Law 7's reach: a list of tests that an order other than file order would
 // start with another test. Each order ranks a test's place: file order (the
-// file's index, which orders the files' paths, then the test's), the order
+// file's path, by code unit, then the test's index), the order
 // the owners were declared in, the baseline's records (`baselineOrder`), and,
 // for the changed tests, a mutant run's records (`runOrder`). A state is
 // entered when that order's first test is not file order's (for operands,
@@ -1290,7 +1405,8 @@ function orderStates(h, states, what, places, declared, same = Object.is) {
   if (places.length < 2) return
   const first = (rank) =>
     places.reduce((best, p) => (before(rank(p), rank(best)) ? p : best))
-  const inFileOrder = first((p) => [p.fi, p.ti])
+  const inPaths = pathOrder(h)
+  const inFileOrder = first((p) => [inPaths.indexOf(p.fi), p.ti])
   const differs = (rank) => !same(first(rank), inFileOrder)
   const inBaseline = baselineFileOrder(h)
   if (declared && differs((p) => [declared.indexOf(p.fi), p.ti]))
@@ -1299,11 +1415,29 @@ function orderStates(h, states, what, places, declared, same = Object.is) {
     states.add(`baseline records against file order name another first ${what}`)
   if (
     what === `changed test` &&
-    differs((p) => [p.fi, h.files[p.fi].tests[p.ti].runOrder, p.ti])
+    differs((p) => [
+      inPaths.indexOf(p.fi),
+      h.files[p.fi].tests[p.ti].runOrder,
+      p.ti,
+    ])
   )
     states.add(
       `a mutant run's records against the baseline's name another first ${what}`,
     )
+}
+// The files in report order, and the index of the file at a path.
+const pathOrder = (h) => h.files.map((_, fi) => fi).sort(byPath(h))
+const fileIndexOf = (h, file) =>
+  h.files.findIndex((_, fi) => fileName(h, fi) === file)
+// Law 7's reach over lists of files: whether a list in report order would
+// read otherwise in another order, given as a comparator of file indices.
+const reordered = (h, files, compare) =>
+  files.length > 1 &&
+  [...files].sort(compare).some((fi, i) => fi !== [...files].sort(byPath(h))[i])
+const byLocale = (h) => (a, b) => fileName(h, a).localeCompare(fileName(h, b))
+const byBaselineRecords = (h) => {
+  const order = baselineFileOrder(h)
+  return (a, b) => order.indexOf(a) - order.indexOf(b)
 }
 // The outcomes whose message names a failing test.
 const namesAFailingTest = new Set([
@@ -1338,7 +1472,7 @@ function placesOfNames(h, names = [], files) {
 // the capture records as infected by it.
 const reachingPlaces = (h, mi, owners) =>
   [...owners].flatMap((file) => {
-    const fi = Number(file.match(/f(\d+)\.test/)[1])
+    const fi = fileIndexOf(h, file)
     return h.files[fi].tests.flatMap((t, ti) =>
       t.reaches[mi] ? [{ fi, ti, t }] : [],
     )
@@ -1350,9 +1484,20 @@ const infectingPlaces = (h, mi, owners) =>
 
 async function driver(h, observe) {
   const oracleFiles = new Set(
-    h.files.flatMap((f, fi) => (f.oracle ? [fileName(fi)] : [])),
+    h.files.flatMap((f, fi) => (f.oracle ? [fileName(h, fi)] : [])),
   )
-  const baseline = baselineOf(rowsOf(h, 1), rowsOf(h, 2))
+  // The two unmutated passes, each given as one context's units in the
+  // order of `baselineOrder` (any order the runner's join can give), and
+  // joined as the runner joins its contexts' units (check.mjs `runAcross`).
+  const [first, second] = [1, 2].map((pass) =>
+    passOf([baselineUnitsOf(h, pass)]),
+  )
+  const baseline = baselineOf(first.rows, second.rows)
+  // The pass's lists that results.json and the refusal print (law 7).
+  observe(`pass`, {
+    failed: [...first.failed.keys()],
+    nondeterministic: [...baseline.nondeterministic],
+  })
   // An operator mutant's change: a comparison or logical swap states its
   // operator and the swap, any other operator the code it replaces.
   const mutants = h.mutants.map((m, mi) => ({
@@ -1369,22 +1514,77 @@ async function driver(h, observe) {
     ...(m.evidence ? { evidence: m.evidence } : {}),
     ...(m.probe ? { probeGuard: true } : {}),
   }))
-  const fileIndex = (file) => Number(file.match(/f(\d+)\.test/)[1])
+  const fileIndex = (file) => fileIndexOf(h, file)
   const states = new Set()
+  const failedFiles = [...first.failed.keys()].map(fileIndex)
+  if (reordered(h, failedFiles, byBaselineRecords(h)))
+    states.add(`baseline records list the failing files against file order`)
+  if (reordered(h, failedFiles, byLocale(h)))
+    states.add(`a locale order lists the failing files another way`)
+  const flakyFiles = [
+    ...new Set(
+      [...baseline.nondeterministic].map((key) =>
+        fileIndex(key.split(` > `)[0]),
+      ),
+    ),
+  ]
+  if (reordered(h, flakyFiles, byBaselineRecords(h)))
+    states.add(
+      `baseline records list the nondeterministic tests against file order`,
+    )
   const results = mutants.map((mutant, mi) => {
     const owners = new Set(
       h.mutants[mi].owners
         .filter((fi) => fi < h.files.length)
-        .map(fileName)
+        .map((fi) => fileName(h, fi))
         .filter((file) => oracleFiles.has(file)),
     )
     const targets = targetsOf(mutant, baseline, owners, oracleFiles)
-    const units = targets.oracleTargets.map((file) =>
-      unitOf(h, fileIndex(file), mi),
-    )
+    // The runner runs the owner files in the order the targets give them,
+    // and stops at the first file that kills (check.mjs `runOwners`).
+    const units = []
+    for (const file of targets.oracleTargets) {
+      units.push(unitOf(h, fileIndex(file), mi))
+      if (
+        outcomeOf([units.at(-1)], baseline.nondeterministic).outcome ===
+        `killed`
+      )
+        break
+    }
     const result = {
       ...mutant,
+      oracleFiles: targets.oracleTargets,
       ...judgeMutant(mutant, { owners, targets, units, baseline, mutants }),
+    }
+    const targetFiles = targets.oracleTargets.map(fileIndex)
+    if (result.class !== undefined || namesAFailingTest.has(result.outcome))
+      if (reordered(h, targetFiles, byLocale(h)))
+        states.add(`a locale order lists the owner files another way`)
+    // Two owner files kill under different laws, so the laws a kill names
+    // show which file ran first: each file's behavioral laws on a
+    // reproducible route, in a run that neither timed out nor failed to load.
+    const lawsIn = (fi) => {
+      const tests = h.files[fi].tests
+      if (
+        tests.some((t) =>
+          [`runTimeout`, `setupError`].includes(t.under[mi].kind),
+        )
+      )
+        return ``
+      const laws = tests.flatMap((t) =>
+        !t.flaky &&
+        t.under[mi].kind === `verdict` &&
+        t.under[mi].law !== `reach agreement` &&
+        kindOf(t.under[mi].firedAt ?? t.route) === `reproducible`
+          ? [t.under[mi].law]
+          : [],
+      )
+      return [...new Set(laws)].sort().join()
+    }
+    if (result.outcome === `killed`) {
+      const killing = targetFiles.map(lawsIn).filter(Boolean)
+      if (new Set(killing).size > 1)
+        states.add(`two owner files kill under different laws`)
     }
     if (result.outcome === `killed` && units.some((u) => u.timedOut))
       states.add(`killed beside a timeout`)
@@ -1489,6 +1689,7 @@ async function driver(h, observe) {
     })),
     summary: readSummary(summary),
     messages: messagesOf(summary),
+    owners: ownersLinesOf(summary),
     stdout: report.renderStdout?.({
       results,
       run: { id: `r`, inputs: `records` },
@@ -1596,6 +1797,15 @@ async function driver(h, observe) {
 
 // ## Comparison
 function check(h, observations, expected) {
+  // The unmutated pass's lists, in report order (law 7).
+  const unmutated = observations.find((o) => o.checkpoint === `pass`)?.value
+  if (JSON.stringify(unmutated) !== JSON.stringify(expected.pass))
+    return violation(
+      `pass`,
+      `the unmutated pass lists ${JSON.stringify(unmutated)}, owed ${JSON.stringify(expected.pass)}`,
+      `report order`,
+      { actual: unmutated, expected: expected.pass },
+    )
   const got = observations.find((o) => o.checkpoint === `classified`)?.value
   if (!got)
     return violation(`classified`, `nothing was classified`, `completion`)
@@ -1665,6 +1875,17 @@ function check(h, observations, expected) {
           `gap ${owed.key} (${kind}) message ${JSON.stringify(message)} does not name ${JSON.stringify(text)}`,
           `messages`,
         )
+    // The gap's `Owners` line lists the owner files that reached the
+    // mutant, in report order (law 7); a gap with none has no line.
+    if (
+      JSON.stringify(got.owners?.[owed.key]) !== JSON.stringify(owed.ownerFiles)
+    )
+      return violation(
+        `classified`,
+        `gap ${owed.key} lists the owners ${JSON.stringify(got.owners?.[owed.key])}, owed ${JSON.stringify(owed.ownerFiles)}`,
+        `report order`,
+        { actual: got.owners?.[owed.key], expected: owed.ownerFiles },
+      )
     // A not-infected message names the operand pairs the model saw, in
     // order, and no printed text stands for two values the model tells
     // apart.
@@ -1862,7 +2083,7 @@ function baselineBreach(h, observations, expected) {
   if (broken !== undefined)
     return breach(`a baseline line spans lines: ${JSON.stringify(broken)}`)
   for (const owed of expected.baseline) {
-    const file = `tests/f${owed.fi}.test.ts`
+    const file = relativeName(h, owed.fi)
     const at = lines.findIndex(
       (line) => line === `pass ${file}` || line.startsWith(`fail ${file}: `),
     )
@@ -2091,6 +2312,11 @@ const required = [
   `baseline records against file order name another first infecting test`,
   `baseline records against file order name another first operand pair`,
   `baseline records against file order name another first nondeterministic test`,
+  `baseline records list the failing files against file order`,
+  `a locale order lists the failing files another way`,
+  `baseline records list the nondeterministic tests against file order`,
+  `a locale order lists the owner files another way`,
+  `two owner files kill under different laws`,
   `agreement-only-kill`,
   `random-only-kill`,
   `unregistered-kill`,
@@ -2208,6 +2434,7 @@ const single = (
       ...a,
     })),
     baselineOrder: [0, 0, 0],
+    fileStems: [`f0`, `f1`, `f2`],
   }),
 })
 // Law 7: two owner files whose tests have one effect, named apart so that a
@@ -2217,7 +2444,13 @@ const single = (
 const twoOwners = (
   name,
   enters,
-  { owners = [0, 1], baselineOrder = [0, 0, 0], second = {}, ...rest },
+  {
+    owners = [0, 1],
+    baselineOrder = [0, 0, 0],
+    fileStems = [`f0`, `f1`, `f2`],
+    second = {},
+    ...rest
+  },
 ) => ({
   name,
   enters,
@@ -2233,6 +2466,7 @@ const twoOwners = (
       mutants: [{ ...base.mutants[0], owners }],
       authored: base.authored.map((a) => ({ ...a, owners })),
       baselineOrder,
+      fileStems,
     }
   },
 })
@@ -2259,7 +2493,9 @@ const constructed = [
   }),
   single(`a crash`, [`crashed`], { effect: { kind: `crash` } }),
   {
-    // One owner file kills; another's run times out. The kill decides.
+    // One owner file's run times out; the next kills. The kill decides.
+    // (The runner stops at the first file that kills, so the timeout comes
+    // first.)
     name: `a kill beside a timed-out run`,
     enters: [`killed beside a timeout`],
     build: () => {
@@ -2267,7 +2503,6 @@ const constructed = [
       return {
         ...base,
         files: [
-          base.files[0],
           {
             ...base.files[0],
             tests: [
@@ -2281,6 +2516,7 @@ const constructed = [
               },
             ],
           },
+          base.files[0],
         ],
         mutants: [{ ...base.mutants[0], owners: [0, 1] }],
       }
@@ -2381,6 +2617,37 @@ const constructed = [
     ],
     { baselineOrder: [1, 0, 0], mutant: { operator: `if-true` } },
   ),
+  // Two files fail with no mutant active, and the baseline records them in
+  // another order than their paths', which a locale order would also
+  // change (`F1` before `f0` by code unit).
+  twoOwners(
+    `two files that fail with no mutant active, recorded and named against file order`,
+    [
+      `a baseline failing test`,
+      `baseline records list the failing files against file order`,
+      `a locale order lists the failing files another way`,
+    ],
+    { fileStems: [`f0`, `F1`, `f2`], baseline: `test` },
+  ),
+  // Owner files that a locale order sorts another way: `f-2` before `f_2`
+  // by code unit, after it in a locale.
+  twoOwners(
+    `a value changed in owner files that a locale order sorts another way`,
+    [`not-judged`, `a locale order lists the owner files another way`],
+    { fileStems: [`f_2`, `f-2`, `f0`], effect: { kind: `changed` } },
+  ),
+  // Both owner files kill, under different laws: the laws a kill names are
+  // the first file's in report order.
+  twoOwners(
+    `two owner files that kill under different laws`,
+    [`killed`, `two owner files kill under different laws`],
+    {
+      effect: { kind: `verdict` },
+      second: {
+        under: slots({ kind: `verdict`, law: `M`, firedAt: undefined }),
+      },
+    },
+  ),
   // `>` and `>=` agree on both pairs, so the comparison is not infected.
   twoOwners(
     `a comparison's operands in two owner files that the baseline records against file order`,
@@ -2400,6 +2667,7 @@ const constructed = [
     [
       `indeterminate`,
       `baseline records against file order name another first nondeterministic test`,
+      `baseline records list the nondeterministic tests against file order`,
     ],
     { baselineOrder: [1, 0, 0], test: { flaky: true } },
   ),
@@ -2655,9 +2923,9 @@ const constructed = [
 oracleProperty({
   id: `oracle-gaps.report-classify`,
   law: {
-    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, dead-code, branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. A message or list that names tests names them in report order, by test file path and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed.`,
+    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, dead-code, branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed.`,
     authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the oracle rubric's outcome kinds (ORC-006); the frozen design's oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); the maintainer's findings F22 and the leftovers of #12 (2026-11-10); for report order, the gap CLI's determinism requirement (oracle-gaps.report's determinism test and law 9, and the runner's "listed alike in every run") and the maintainer's decision of 2026-11-11 that the tests a report names depend on neither --contexts, worker timing, nor how owners are declared; Vitest's runner (@vitest/runner 4.1: -t is a regular expression matched against getTaskFullName, the suites' names and the test's joined by a space); POSIX.1-2017 Shell Command Language 2.2 and 2.6 for the replay's quoting.`,
-    limits: `That real runs produce these records is oracle-gaps.report's, and so is a real replay. The driver encodes operands as capture-setup.mjs \`shown\` does, by a copy of it; long strings are told apart by a 32-bit digest; no symbol operand is generated, and two symbols of one description print alike. Only the runner's single-file path records a test's names, and only it feeds the baseline. Test names hold no backtick and no \` > \`, and names within a file are distinct; the replay's file argument is judged as text, not as Vitest's substring filter over every file. Authored intents hold no word that the exit law forbids, and an author is not shortened. Report order within a file is the baseline's record order: that a file whose tests run concurrently writes its records in one order is not judged, and a failing test is ordered within its file as the reporter lists it, which a run cut off by a hang takes from the records. The "Changed observations in" list is the changed tests' first three, and only its first is compared.`,
+    limits: `That real runs produce these records is oracle-gaps.report's, and so is a real replay. The driver encodes operands as capture-setup.mjs \`shown\` does, by a copy of it; long strings are told apart by a 32-bit digest; no symbol operand is generated, and two symbols of one description print alike. Only the runner's single-file path records a test's names, and only it feeds the baseline. Test names hold no backtick and no \` > \`, and names within a file are distinct; the replay's file argument is judged as text, not as Vitest's substring filter over every file. Authored intents hold no word that the exit law forbids, and an author is not shortened. Report order within a file is the baseline's record order: that a file whose tests run concurrently writes its records in one order is not judged, and a failing test is ordered within its file as the reporter lists it, which a run cut off by a hang takes from the records. The "Changed observations in" list is the changed tests' first three, and only its first is compared. A test that only a mutant run records is not generated. A file that fails with no mutant active keeps its records and its mutants are classified; the refusal text and the summary's left-out list are not judged, only the list of failing files they print.`,
   },
   histories: {
     arbitrary: records,
