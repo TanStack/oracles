@@ -50,8 +50,9 @@ import { clamp } from '../src/clamp'
 
 type History = { n: number; max: number }
 
+// The type is number, so the domain includes -0.
 const histories = fc.record({
-  n: fc.integer({ min: -100, max: 100 }),
+  n: fc.oneof(fc.integer({ min: -100, max: 100 }), fc.constant(-0)),
   max: fc.integer({ min: 0, max: 50 }),
 })
 
@@ -62,13 +63,14 @@ oracleProperty({
     statement:
       'clamp(n, max) returns max when n is above max, and n otherwise.',
     authority: 'README, "clamp"',
-    limits: 'Integers in [-100, 100] for n and [0, 50] for max.',
+    limits:
+      'Integers in [-100, 100] and -0 for n, and [0, 50] for max. No NaN or infinities.',
   },
   histories: {
     arbitrary: histories,
     runs: 100,
     fixedSeeds: [1],
-    states: ['above max', 'at max'],
+    states: ['above max', 'at max', 'negative zero at max'],
     measured: ['below max'],
     constructed: [
       {
@@ -80,6 +82,12 @@ oracleProperty({
         name: 'n at max',
         enters: ['at max'],
         build: ({ max }) => ({ n: max, max }),
+      },
+      {
+        // -0 is not above 0, so the result is n (-0), not max (0).
+        name: '-0 at max 0',
+        enters: ['negative zero at max'],
+        build: () => ({ n: -0, max: 0 }),
       },
     ],
   },
@@ -95,11 +103,13 @@ oracleProperty({
       expected.result,
     ) ?? pass,
   reached: (plan) => [
-    plan.n > plan.max
-      ? 'above max'
-      : plan.n === plan.max
-        ? 'at max'
-        : 'below max',
+    Object.is(plan.n, -0) && plan.max === 0
+      ? 'negative zero at max'
+      : plan.n > plan.max
+        ? 'above max'
+        : plan.n === plan.max
+          ? 'at max'
+          : 'below max',
   ],
   calibrations: [
     {
