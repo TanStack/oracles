@@ -30,6 +30,13 @@
  *   names the model (maintainer decision, 2026-11-08).
  * - `shrink`: a campaign's reported failure keeps the kind and law of its first
  *   failure, and its counterexample still has them.
+ * - `shrink budget`: a campaign whose first failure is judged in time reports
+ *   that failure's kind and law, with a counterexample that replays, before
+ *   its timeout, however long shrinking would take: it starts no shrink run
+ *   once half its timeout has passed, so a run shorter than half the timeout
+ *   still ends in time (maintainer decision, 2026-11-11, F31; the half is
+ *   analyst-chosen). A path replay runs its counterexample and shrinks no
+ *   further, so it reports the counterexample it replays.
  * - `membership`: a fixed history, or the history a constructed history builds from the first fixed
  *   seed's sample (seed 0's when there is none), that the arbitrary cannot take back (`canShrinkWithoutContext` is false) fails
  *   the property's load, with an error that names the property, the history (a fixed history's
@@ -129,7 +136,9 @@
  * that work which never goes quiet on a controlled clock fails its history; the maintainer
  * decision of 2026-11-10 (F20) that a fixed or constructed history the arbitrary cannot take back
  * fails at registration, naming the history and the fix; and the oracle rubric's replay
- * (ORC-007), calibration (ORC-006), and declared-reach (ORC-015) rules.
+ * (ORC-007), calibration (ORC-006), and declared-reach (ORC-015) rules; and the
+ * maintainer decision of 2026-11-11 (F31) that a law violation is reported
+ * before the timeout, however slow shrinking would be.
  *
  * Limits: synthetic properties with histories of one to three integers, held
  * as an array, a bigint-tagged object, or a Map, one or two per run. An
@@ -152,7 +161,10 @@
  * the items they hold, so the shrink and replay checks cannot read it back
  * and skip it. Only generated sources bind a probe, and only
  * `saw-0`; an enumerated source declares its states by name. A late probe is judged by whether the run reports it, not by which
- * test Vitest blames.
+ * test Vitest blames. A slow-shrink spec is slow only in its campaigns and only on histories
+ * that hold a 4, so one slow history at most comes before a campaign's first failure. Whether a
+ * campaign's shrinking was cut is not observed, and how far a campaign shrinks is not judged: a
+ * framework that never shrinks passes this oracle.
  */
 import { spawnSync } from 'node:child_process'
 import {
@@ -218,8 +230,11 @@ type Draft = {
   throwingBuild: boolean
   nondeterministic: boolean
   reachVia: `reached` | `observe`
-  /** `slow`: 300 ms per history under a 100 ms timeout. */
-  timing: `normal` | `slow`
+  /**
+   * `slow`: 300 ms per history under a 100 ms timeout. `slow shrink`: 2 s on
+   * each history that holds a 4 in a campaign, under a 5 s timeout.
+   */
+  timing: `normal` | `slow` | `slow shrink`
   calibrations: Array<(typeof calibrationKinds)[number]>
   /** An id no oracle configuration registers. */
   unregistered: boolean
@@ -353,7 +368,10 @@ const draft: fc.Arbitrary<Draft> = fc.record({
   ),
   timing: fc.oneof(
     { arbitrary: fc.constant(`normal` as const), weight: 12 },
-    { arbitrary: fc.constant(`slow` as const), weight: 1 },
+    {
+      arbitrary: fc.constantFrom(`slow` as const, `slow shrink` as const),
+      weight: 2,
+    },
   ),
   calibrations: fc.array(fc.constantFrom(...calibrationKinds), {
     maxLength: 3,
@@ -604,6 +622,9 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
         ...(d.predictMode !== `match` ? { predictMode: d.predictMode } : {}),
         ...(d.ownsMode !== `none` ? { ownsMode: d.ownsMode } : {}),
         ...(d.timing === `slow` ? { slow: true, timeout: 100 } : {}),
+        ...(d.timing === `slow shrink`
+          ? { slowShrink: true, timeout: 5_000 }
+          : {}),
         ...(d.clock ? { clock: true } : {}),
         // fast-check cannot print a history whose getter throws, so only an
         // enumerated source holds one.
@@ -1426,6 +1447,7 @@ const frameworkStates = [
   `registration-error`,
   `campaign-violation`,
   `campaign-setup-failure`,
+  `slow-shrink-campaign-failure`,
   `replay-probe`,
   `rerun-probe`,
   `cause-attached`,
@@ -1548,6 +1570,8 @@ function frameworkReach(
         reached.add(`campaign-violation`)
       if (isCampaign(name) && outcome.kind === `setup`)
         reached.add(`campaign-setup-failure`)
+      if (spec.slowShrink && isCampaign(name) && outcome.kind !== `pass`)
+        reached.add(`slow-shrink-campaign-failure`)
       if (outcome.cause) reached.add(`cause-attached`)
       if (outcome.kind === `timeout`) reached.add(`timeout`)
       if (outcome.kind === `model-not-total`) reached.add(`model-not-total`)
@@ -2328,10 +2352,15 @@ function checkSuite(
         return violation(
           `run`,
           `${spec.id} "${test.name}" ${test.state} as ${JSON.stringify(failure ?? null)}, owed ${JSON.stringify(outcome)}`,
-          lawOfKind(
-            outcome.kind === `pass` ? observedKind : outcome.kind,
-            test.name,
-          ),
+          // A campaign that owes a failure and times out shrank too long.
+          isCampaign(test.name) &&
+            observedKind === `timeout` &&
+            ![`pass`, `timeout`].includes(outcome.kind)
+            ? `shrink budget`
+            : lawOfKind(
+                outcome.kind === `pass` ? observedKind : outcome.kind,
+                test.name,
+              ),
           { actual: failure ?? { kind: `pass` }, expected: outcome },
         )
       // A model error quotes the driver's error without this machine's paths.
@@ -2701,6 +2730,16 @@ oracleProperty({
         [`replay-probe`],
         generatedDraft({
           constructed: [{ prefix: [1, 3], enters: [`saw-1`] }],
+        }),
+      ),
+      // Unbounded, the shrink of [4,2,2] runs [4,2] and [4,0] for 2 s each
+      // after the first failure's 2 s, past the 5 s timeout.
+      fixedHistory(
+        `a campaign whose shrinking would outlast its timeout reports its law in time`,
+        [`slow-shrink-campaign-failure`, `campaign-violation`, `replay-probe`],
+        generatedDraft({
+          timing: `slow shrink`,
+          constructed: [{ prefix: [4, 2, 2], enters: [] }],
         }),
       ),
       fixedHistory(
