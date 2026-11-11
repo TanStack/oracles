@@ -41,11 +41,11 @@
  */
 
 import {
-  calleeChain,
   findVariable,
   isModuleFile,
-  isTestRoot,
   oracleSettings,
+  testFunctionMembers,
+  testFunctions,
 } from '../registration.js'
 
 // The modules that export fast-check's campaign functions: fast-check itself,
@@ -84,7 +84,7 @@ function importOf(identifier, sourceCode) {
  * from fast-check, or a `.prop(...)` registration of a test root, as the
  * `messageId` and `data` of the report.
  */
-function rawCampaignOf(node, sourceCode) {
+function rawCampaignOf(node, sourceCode, functions) {
   const { callee } = node
   if (callee.type === `Identifier`) {
     const binding = importOf(callee, sourceCode)
@@ -96,8 +96,11 @@ function rawCampaignOf(node, sourceCode) {
   if (callee.type !== `MemberExpression`) return undefined
   // `.prop` is checked on the call that the member is, so the curried
   // registration `fcTest.prop([...])(name, body)` reports once.
-  const chain = calleeChain(callee)
-  if (chain.names.at(-1) === `prop` && isTestRoot(chain.rootNode, sourceCode))
+  const test = functions.callee(callee)
+  if (
+    test?.own.at(-1) === `prop` &&
+    test.members.every((member) => testFunctionMembers.has(member))
+  )
     return {
       messageId: `rawProperty`,
       data: { call: sourceCode.getText(callee) },
@@ -134,6 +137,7 @@ export default {
   },
   create(context) {
     const { sourceCode } = context
+    const functions = testFunctions(context)
     const settings = oracleSettings(context)
     const problems = settings.malformed.map((name) => ({
       messageId: `malformedSetting`,
@@ -149,7 +153,7 @@ export default {
     const uses = []
     return {
       CallExpression(node) {
-        const raw = rawCampaignOf(node, sourceCode)
+        const raw = rawCampaignOf(node, sourceCode, functions)
         if (raw !== undefined) uses.push({ node, ...raw })
       },
       ImportDeclaration(node) {
