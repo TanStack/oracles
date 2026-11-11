@@ -330,6 +330,10 @@ default: with no engineer present, propose them and stop.
    from them, take only what these packages and the config need. The lint
    plugin waits for production.
 
+   Check `package.json`, not `node_modules`: npm installs the peers of
+   `@tanstack/oracles` without listing them, so add `fast-check` and
+   `vitest` to the dev dependencies even when they are already on disk.
+
    The framework needs Vitest 4.1 or later. Check before you install:
 
    - **The repository uses another runner** (mocha, uvu, Jest, node:test):
