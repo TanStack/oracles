@@ -172,7 +172,10 @@ const placeholders = {
 const legendOf = (kind) => directive[kind]({ ...placeholders, outcome: kind })
 
 // What the author does about a law that rejects no mutant: one next step.
-const killsDirective = `To find a law that rejects no mutant, add a history that varies the input the law judges, and run the check again.`
+// The table credits each history's first rejecting law only: a check returns
+// its first violation, so a later law on the same history is never judged.
+// The count says which law rejected first, not which laws can reject.
+const killsDirective = `Each count credits only the first law that rejected a history: a later law on the same history is not checked. To test a law with no count, add a history that varies the input the law judges, and run the check again.`
 
 export function gapsOf(results) {
   return results.filter(
@@ -290,11 +293,11 @@ export function renderReport({ results, run, excluded }) {
     for (const law of result.laws ?? [])
       byLaw.set(law, (byLaw.get(law) ?? 0) + 1)
   lines.push(
-    `## Kills by law`,
+    `## First law to reject, by law`,
     ``,
     killsDirective,
     ``,
-    `| Law | Mutants it rejected |`,
+    `| Law | Mutants it rejected first |`,
     `|---|---|`,
     ...[...byLaw]
       .sort((a, b) => b[1] - a[1])

@@ -53,6 +53,77 @@ const ROOT_VITE = dirname(
 // A source in a directory of the package whose name starts with `..`, which
 // is in the package all the same. No test loads it.
 const DOTGEN = `..gen/extra.ts`
+// Unnamed exports, each the one function of its own file, which no test
+// loads: an ES default function and default arrow (bare and in
+// parentheses), CommonJS's `module.exports` (alone and chained through
+// `exports`) and `exports.default`, and a CommonJS named export. An unnamed
+// export is named `default`, as an import names it, and a CommonJS named
+// export by its export's name (F24). Each calls its file's helper `help`,
+// which pushes: the export's own site is that call, on line 5, and the
+// helper's is its push, on line 2. The importer (`src/importer.ts`) imports
+// every form but `exports.default` (a default import of a CommonJS module is
+// the module, not its `default`) and calls each, so its tree holds each
+// export and, through it, its helper.
+const EXPORT_FORMS = [
+  {
+    exportForm: `esFunction`,
+    file: `src/es-function.ts`,
+    name: `default`,
+    open: `export default function (x: number, out: Array<string>): void {`,
+    close: `}`,
+    imported: `import esFunction from './es-function'`,
+  },
+  {
+    exportForm: `esArrow`,
+    file: `src/es-arrow.ts`,
+    name: `default`,
+    open: `export default (x: number, out: Array<string>): void => {`,
+    close: `};`,
+    imported: `import esArrow from './es-arrow'`,
+  },
+  {
+    exportForm: `esParen`,
+    file: `src/es-paren.ts`,
+    name: `default`,
+    open: `export default ((x: number, out: Array<string>): void => {`,
+    close: `});`,
+    imported: `import esParen from './es-paren'`,
+  },
+  {
+    exportForm: `cjs`,
+    file: `src/cjs.js`,
+    name: `default`,
+    open: `module.exports = function (x, out) {`,
+    close: `};`,
+    imported: `import cjs from './cjs'`,
+  },
+  {
+    exportForm: `cjsChained`,
+    file: `src/cjs-chained.js`,
+    name: `default`,
+    open: `module.exports = exports = function (x, out) {`,
+    close: `};`,
+    imported: `import cjsChained from './cjs-chained'`,
+  },
+  {
+    exportForm: `cjsDefault`,
+    file: `src/cjs-default.js`,
+    name: `default`,
+    open: `exports.default = (x, out) => {`,
+    close: `};`,
+  },
+  {
+    exportForm: `cjsNamed`,
+    file: `src/cjs-named.js`,
+    name: `run`,
+    open: `exports.run = function (x, out) {`,
+    close: `};`,
+    imported: `import { run as cjsNamed } from './cjs-named'`,
+  },
+]
+const IMPORTER = `src/importer.ts`
+// The model's own name for the code in no function of that file.
+const TOP_LOOP = `<module>@..gen`
 // Whether this filesystem ignores letter case, so that `src/Sut.ts` names
 // `src/sut.ts`; the `cased` spelling applies only where it does.
 const caseless = existsSync(fileURLToPath(import.meta.url).toUpperCase())
@@ -162,6 +233,12 @@ const statement = fc.oneof(
     kind: fc.constant(`libCall`),
     target: fc.nat({ max: 3 }),
     alias: fc.boolean(),
+  }),
+  // A read of module-level data (see `MODULE_DATA`): an object literal's
+  // fields, an array's first element, or a primitive constant.
+  fc.record({
+    kind: fc.constant(`readData`),
+    shape: fc.constantFrom(`object`, `array`, `primitive`, `methods`),
   }),
 )
 const libStatement = fc.oneof(
@@ -566,6 +643,19 @@ const histories = fc.record({
       }),
     },
   ),
+  // Who owns each module-level data declaration directly (`src/sut.ts#D_OBJ`),
+  // in `MODULE_DATA`'s order. A declaration is written when a function reads
+  // it or an entry names it.
+  dataOwners: fc.array(fc.constantFrom(`a`, `b`, `none`, `none`), {
+    maxLength: 4,
+  }),
+  // The unnamed exports (see `EXPORT_FORMS`), in its order: one file each
+  // for the first ones, with who names it in an owns entry.
+  exportOwners: fc.array(fc.constantFrom(`a`, `b`, `none`), {
+    maxLength: EXPORT_FORMS.length,
+  }),
+  // Who names the importer's function in an owns entry, if any.
+  importer: fc.constantFrom(`none`, `a`, `b`),
 })
 
 // The witness module: functions whose outcome classes generated histories
@@ -1303,6 +1393,18 @@ const witness = [
     body: [{ kind: `record` }],
     tests: [judging(`a`, `fixed seed`, 1)],
   },
+  // A function that reads each shape of module-level data, so each
+  // declaration's mutants are owned through it and killed by its test.
+  {
+    id: `w_data`,
+    owners: [`a`],
+    body: [
+      { kind: `readData`, shape: `object` },
+      { kind: `readData`, shape: `array` },
+      { kind: `readData`, shape: `primitive` },
+    ],
+    tests: [judging(`a`, `fixed seed`, 1)],
+  },
   // A test that waits on a child process where the output differs: an I/O
   // handle is open, so its copy is busy, never cut for idleness, and the
   // confirming run kills it.
@@ -1385,6 +1487,7 @@ const captureWitness = new Set([
   `w_cleanup`,
   `w_fcprop`,
   `w_record`,
+  `w_data`,
   `w_spin`,
 ])
 
@@ -1455,6 +1558,52 @@ const preamble = [
   `const memo = new Map<number, string>()`,
   `export const loaded: Array<string> = []`,
 ]
+// Module-level data: a declaration at the top of a module whose initializer
+// is not a function is a unit of its own, named by its variable, as a
+// function is by its name. It is in the static reference tree of every
+// function that reads it, so its sites take the readers' owners; an owns
+// entry may name it directly, and a whole-file entry owns it (F10, the
+// ownership law of owners.mjs applied to data). Its initializer runs when the
+// module loads, so its sites are reached at load. Each shape is written after
+// the preamble, once, with its sites: the object literal's two field drops,
+// the array element's `+`, and the primitive's boolean literal. A `readData`
+// statement pushes what it reads as one template string, so its only own
+// site is the push. What an initializer refers to is in the declaration's
+// tree, as what a function's body refers to is in the function's.
+const MODULE_DATA = [
+  {
+    shape: `object`,
+    id: `D_OBJ`,
+    text: `const D_OBJ = { n: 3, s: 'o' };`,
+    read: `\`\${D_OBJ.n}\${D_OBJ.s}\``,
+  },
+  {
+    shape: `array`,
+    id: `D_ARR`,
+    text: `const D_ARR = [2 + 1, devBuild];`,
+    read: `\`\${D_ARR[0]}\``,
+    // The array holds `devBuild` as a value, so its tree holds `devBuild`.
+    refers: [`devBuild`],
+  },
+  {
+    shape: `primitive`,
+    id: `D_PRIM`,
+    text: `const D_PRIM = true;`,
+    read: `\`\${D_PRIM}\``,
+  },
+  // An object of two methods, each a unit of its own: a read calls `used`,
+  // which its call brings into the reader's tree, and nothing calls
+  // `spare`. Neither belongs to the declaration because its text holds it.
+  {
+    shape: `methods`,
+    id: `D_FNS`,
+    text: `const D_FNS = { used() { return 1 + 2; }, spare() { return 3 + 4; } };`,
+    read: `\`\${D_FNS.used()}\``,
+    refers: [],
+    calls: [`used`],
+  },
+]
+const dataOf = (shape) => MODULE_DATA.find((d) => d.shape === shape)
 const preambleStatements = {
   devBuild: `return process.env.NODE_ENV !== 'production'`,
   reportTwice: `report();`,
@@ -1590,6 +1739,8 @@ function renderStatement(stmt, callText) {
       return [`out.push(String(memo.get(x)));`]
     case `pushLoaded`:
       return [`out.push(...loaded);`]
+    case `readData`:
+      return [`out.push(${dataOf(stmt.shape).read});`]
     case `call`:
     case `libCall`:
     case `valueCall`:
@@ -1900,6 +2051,45 @@ function resolveHistory(history) {
     body,
     tests: [],
   }))
+  // The unnamed exports' functions, each calling its file's helper, and the
+  // importer that calls each.
+  const exported = (history.exportOwners ?? []).flatMap((owner, index) => {
+    const form = EXPORT_FORMS[index]
+    const helper = {
+      id: `h_${form.exportForm}`,
+      name: `help`,
+      file: form.file,
+      container: `free`,
+      owners: [],
+      body: [{ kind: `push`, quote: `'` }],
+      tests: [],
+    }
+    return [
+      {
+        ...form,
+        id: `x_${form.exportForm}`,
+        container: `free`,
+        owners: owner === `none` ? [] : [owner],
+        body: [{ kind: `call`, to: helper.id }],
+        tests: [],
+      },
+      helper,
+    ]
+  })
+  const importable = exported.filter((fn) => fn.imported !== undefined)
+  const importer =
+    (history.importer ?? `none`) !== `none` && importable.length > 0
+      ? [
+          {
+            id: `importer`,
+            file: IMPORTER,
+            container: `free`,
+            owners: [history.importer],
+            body: importable.map((fn) => ({ kind: `call`, to: fn.id })),
+            tests: [],
+          },
+        ]
+      : []
   // The derived class's file, which is no function of the model's (see
   // `derivedFile`).
   const file = history.derived ? derivedFile(history.derived) : undefined
@@ -1908,6 +2098,8 @@ function resolveHistory(history) {
     ...library,
     ...dollar,
     ...runes,
+    ...exported,
+    ...importer,
     ...dotGen,
     ...(history.witness
       ? witness
@@ -1961,6 +2153,21 @@ function resolveHistory(history) {
     `import { ${imported.join(`, `)} } from './lib'; import { note, seen } from 'state-dep'${history.depSubpath ? `; import 'state-dep/extra'` : ``}`,
     ...preamble,
   ]
+  // Module-level data, after the preamble: each shape that a function reads
+  // or an owns entry names, with its direct owners.
+  const data = MODULE_DATA.flatMap((d, index) => {
+    const owners = { a: [`a`], b: [`b`], none: [] }[
+      history.dataOwners?.[index] ?? `none`
+    ]
+    const read = functions.some((fn) =>
+      fn.body.some(
+        (stmt) => stmt.kind === `readData` && stmt.shape === d.shape,
+      ),
+    )
+    if (!read && owners.length === 0) return []
+    lines.push(d.text)
+    return [{ ...d, owners, line: lines.length }]
+  })
   // A body's statements, each on its own lines. A nested function (an
   // `inner` statement) is defined where it is called: an arrow assigned to
   // its name, or a method of an object literal.
@@ -2087,8 +2294,60 @@ function resolveHistory(history) {
   for (const fn of functions) if (fn.file === RUNES) emit(fn, ``)
   const runesLines = lines.splice(0)
   for (const fn of functions) if (fn.file === DOTGEN) emit(fn, ``)
+  // A top-level loop, whose variable is no unit: its code is `<module>`'s.
+  const topLoop =
+    dotGen.length > 0
+      ? { line: lines.length + 1, text: `for (let i = 1 - 1; i < 1; i += 1);` }
+      : undefined
+  if (topLoop) lines.push(topLoop.text)
   const dotGenSource =
     dotGen.length > 0 ? `${lines.splice(0).join(`\n`)}\nexport {}\n` : undefined
+  // Each unnamed export's file: its helper, then its opening line, its call
+  // of the helper, and its close. The importer's file imports each and calls
+  // each, one per line after its opening line.
+  const exportSources = Object.fromEntries(
+    functions
+      .filter((fn) => fn.exportForm !== undefined)
+      .map((fn) => {
+        const helper = byId.get(fn.body[0].to)
+        const [push] = helper.body
+        push.lines = [pushText(push)]
+        push.line = 2
+        const [call] = fn.body
+        call.lines = [`help(out);`]
+        call.line = 5
+        const typed = fn.file.endsWith(`.ts`)
+        return [
+          fn.file,
+          [
+            typed
+              ? `function help(out: Array<string>): void {`
+              : `function help(out) {`,
+            `  ${push.lines[0]}`,
+            `}`,
+            fn.open,
+            `  ${call.lines[0]}`,
+            fn.close,
+            ``,
+          ].join(`\n`),
+        ]
+      }),
+  )
+  for (const fn of functions)
+    if (fn.file === IMPORTER) {
+      const imports = fn.body.map((stmt) => byId.get(stmt.to).imported)
+      fn.body.forEach((stmt, index) => {
+        stmt.lines = [`${byId.get(stmt.to).exportForm}(x, out);`]
+        stmt.line = imports.length + 2 + index
+      })
+      exportSources[IMPORTER] = [
+        ...imports,
+        `export function importer(x: number, out: Array<string>): void {`,
+        ...fn.body.map((stmt) => `  ${stmt.lines[0]}`),
+        `}`,
+        ``,
+      ].join(`\n`)
+    }
   lines.push(...mainLines)
   const librarySource = `${libLines.join(`\n`)}\nexport {}\n`
   const runesSource =
@@ -2159,6 +2418,7 @@ function resolveHistory(history) {
     functions: ownerless
       ? functions.map((fn) => ({ ...fn, owners: [] }))
       : functions,
+    data: ownerless ? data.map((d) => ({ ...d, owners: [] })) : data,
     tests,
     authored,
     authoredList,
@@ -2203,9 +2463,12 @@ function resolveHistory(history) {
       LIB,
       ...(runesSource ? [RUNES] : []),
       ...(dotGenSource ? [DOTGEN] : []),
+      ...Object.keys(exportSources),
       ...(file ? [DERIVED] : []),
     ],
     dotGenSource,
+    exportSources,
+    topLoop,
     history,
     source,
     librarySource,
@@ -2414,8 +2677,13 @@ function sitesOf(plan) {
     for (const stmt of fn.body) {
       const whole = stmt.lines.join(` `)
       const probe = inHelper || probeOnly(stmt)
-      const at = (operator, role, line, text) =>
-        add(fn.id, line, operator, text, { stmt: stmt.label, role, probe })
+      const at = (operator, role, line, text, extra) =>
+        add(fn.id, line, operator, text, {
+          stmt: stmt.label,
+          role,
+          probe,
+          ...extra,
+        })
       const condition = () => {
         at(`if-true`, `true`, stmt.line, whole)
         at(`if-false`, `false`, stmt.line, whole)
@@ -2504,6 +2772,9 @@ function sitesOf(plan) {
         at(`value-undefined`, `get`, stmt.line, whole)
       }
       if (stmt.kind === `primeCall`) at(`delete-call`, `call`, stmt.line, whole)
+      if (stmt.kind === `readData`) at(`delete-call`, `push`, stmt.line, whole)
+      if (stmt.kind === `readData` && stmt.shape === `methods`)
+        at(`value-undefined`, `value`, stmt.line, whole)
       if (stmt.kind === `if`) {
         condition()
         at(`delete-call`, `push`, stmt.line, pushText(stmt))
@@ -2520,28 +2791,38 @@ function sitesOf(plan) {
       // code, its guard's declaration included.
       if (stmt.kind === `nearProbe`) {
         const near = { stmt: stmt.label, role: `near`, probe: inHelper }
-        const at = (line, operator, text) =>
-          add(fn.id, line, operator, text, near)
+        const at = (line, operator, text, extra) =>
+          add(fn.id, line, operator, text, { ...near, ...extra })
+        // The `&&` that guards the hook is a logical operator. No hook is
+        // installed, so `?.()` never evaluates the condition it is passed,
+        // and `process` is defined, so a guard's `false` is never read:
+        // neither is reached.
+        const and = { logical: true }
+        const idle = { idle: true }
         const call = (line) => {
           const text = stmt.lines[line - stmt.line].trim()
-          at(line, `binary-swap`, text)
+          at(line, `binary-swap`, text, and)
           at(line, `value-undefined`, text)
-          at(line, `binary-swap`, text)
+          at(line, `binary-swap`, text, idle)
         }
         if (stmt.variant === `former`) {
-          at(stmt.line, `binary-swap`, whole)
+          at(stmt.line, `binary-swap`, whole, and)
           at(stmt.line, `binary-swap`, whole)
           at(stmt.line, `value-undefined`, whole)
-          at(stmt.line, `binary-swap`, whole)
+          at(stmt.line, `binary-swap`, whole, idle)
+        }
+        // A guard's declaration: its `===`, its `false`, and its `!==`.
+        const declared = (line, text) => {
+          at(line, `binary-swap`, text)
+          at(line, `bool-flip`, text, idle)
+          at(line, `binary-swap`, text)
         }
         if (stmt.variant === `name`) {
-          for (const op of [`binary-swap`, `bool-flip`, `binary-swap`])
-            at(stmt.line, op, stmt.lines[0])
+          declared(stmt.line, stmt.lines[0])
           call(stmt.line + 1)
         }
         if (stmt.variant === `let`) {
-          for (const op of [`binary-swap`, `bool-flip`, `binary-swap`])
-            at(stmt.line + 1, op, stmt.lines[1].trim())
+          declared(stmt.line + 1, stmt.lines[1].trim())
           call(stmt.line + 2)
         }
         if (stmt.variant === `init`) {
@@ -2556,7 +2837,7 @@ function sitesOf(plan) {
       if (stmt.kind === `oldProbe`) {
         at(`if-true`, `oldTrue`, stmt.line, whole)
         at(`if-false`, `oldFalse`, stmt.line, whole)
-        at(`binary-swap`, `oldAnd`, stmt.line, whole)
+        at(`binary-swap`, `oldAnd`, stmt.line, whole, { logical: true })
         at(`value-undefined`, `oldDevBuild`, stmt.line, whole)
         at(`binary-swap`, `oldNe`, stmt.line, whole)
         at(
@@ -2615,6 +2896,33 @@ function sitesOf(plan) {
     }
     at(`delete-call`, s.call)
   }
+  // Module-level data: each declaration's sites belong to it, by its name.
+  for (const d of plan.data ?? []) {
+    const put = (operator, role) =>
+      add(d.id, d.line, operator, d.text, { data: d.shape, role })
+    if (d.shape === `object`) {
+      put(`field-drop`, `dropN`)
+      put(`field-drop`, `dropS`)
+    }
+    if (d.shape === `array`) put(`arithmetic-swap`, `arith`)
+    if (d.shape === `primitive`) put(`bool-flip`, `flag`)
+    // A method's `+` belongs to the method, and runs only when it is called.
+    if (d.shape === `methods`)
+      for (const [name, text] of [
+        [`used`, `return 1 + 2;`],
+        [`spare`, `return 3 + 4;`],
+      ])
+        add(name, d.line, `arithmetic-swap`, text, { role: `${name}Arith` })
+  }
+  // The `..gen/` file's top-level loop: its variable's `-`, its condition,
+  // and its `<`, in no function, and owned by no entry (a whole-file entry
+  // names the main source).
+  if (plan.topLoop)
+    for (const operator of [`arithmetic-swap`, `loop-false`, `binary-swap`])
+      add(TOP_LOOP, plan.topLoop.line, operator, plan.topLoop.text, {
+        file: DOTGEN,
+        function: `<module>`,
+      })
   // A call statement to a probe helper is probe-only code (law 2), at
   // module level too.
   for (const call of plan.loadCalls)
@@ -2672,7 +2980,13 @@ function ownersOf(plan) {
                             : // A property read refers to both its accessors.
                               stmt.kind === `pushStatus`
                               ? [`W9.status#get`, `W9.status#set`]
-                              : [],
+                              : // A read of module data refers to its declaration.
+                                stmt.kind === `readData`
+                                ? [
+                                    dataOf(stmt.shape).id,
+                                    ...(dataOf(stmt.shape).calls ?? []),
+                                  ]
+                                : [],
       ),
     ]),
   )
@@ -2686,6 +3000,7 @@ function ownersOf(plan) {
   }
   // A nested function (`parent>name`) is contained in its parent's text, so
   // its parent's tree holds it, called or not.
+  for (const d of plan.data ?? []) calls.set(d.id, d.refers ?? [])
   for (const fn of plan.functions)
     if (fn.id.includes(`>`)) {
       const parent = fn.id.slice(0, fn.id.lastIndexOf(`>`))
@@ -2693,6 +3008,8 @@ function ownersOf(plan) {
     }
   for (const fn of plan.functions)
     for (const file of fn.owners) visit(fn.id, file)
+  for (const d of plan.data ?? [])
+    for (const file of d.owners) visit(d.id, file)
   // A whole-file entry names the main source, so it owns only its functions.
   const inLibrary = new Set(
     plan.functions.filter((fn) => fn.file !== SOURCE).map((fn) => fn.id),
@@ -2700,7 +3017,10 @@ function ownersOf(plan) {
   return (id) =>
     new Set([
       ...(owners.get(id) ?? []),
-      ...(plan.wholeFile === `none` || inLibrary.has(id) || id === DERIVED_FN
+      ...(plan.wholeFile === `none` ||
+      inLibrary.has(id) ||
+      id === TOP_LOOP ||
+      id === DERIVED_FN
         ? []
         : [plan.wholeFile]),
     ])
@@ -2888,6 +3208,37 @@ function interpret(plan, fnId, x, sites, active) {
           }
         }
       }
+      // A read of module data, as the module evaluated it at load under the
+      // same mutant: a dropped field reads undefined, the swapped `+` gives
+      // 1, and the flipped literal false.
+      if (stmt.kind === `readData`) {
+        const site = siteOf(stmt, `push`)
+        reached.add(site.id)
+        if (!isActive(site)) {
+          const at = (role) =>
+            isActive(
+              sites.find((s) => s.data === stmt.shape && s.role === role),
+            )
+          // A method's call: undefined in its place, or its `1 + 2`.
+          const called = () => {
+            const value = siteOf(stmt, `value`)
+            reached.add(value.id)
+            if (isActive(value)) return `undefined`
+            const arith = sites.find((s) => s.role === `usedArith`)
+            reached.add(arith.id)
+            return String(isActive(arith) ? -1 : 3)
+          }
+          trace.push(
+            stmt.shape === `methods`
+              ? called()
+              : stmt.shape === `object`
+                ? `${at(`dropN`) ? undefined : 3}${at(`dropS`) ? undefined : `o`}`
+                : stmt.shape === `array`
+                  ? String(at(`arith`) ? 1 : 3)
+                  : String(!at(`flag`)),
+          )
+        }
+      }
       if (stmt.kind === `pushTag`) {
         const site = siteOf(stmt, `push`)
         reached.add(site.id)
@@ -2910,11 +3261,11 @@ function interpret(plan, fnId, x, sites, active) {
         }
       }
       if (stmt.kind === `setTag`) object.tag = `b`
-      // A probe in another shape reaches its sites; no hook is installed, so
-      // none of it writes output.
+      // A probe in another shape reaches its sites but the idle ones; no hook
+      // is installed, so none of it writes output.
       if (stmt.kind === `nearProbe`)
         for (const site of sites)
-          if (site.stmt === stmt.label) reached.add(site.id)
+          if (site.stmt === stmt.label && !site.idle) reached.add(site.id)
       if (stmt.kind === `primeCall`) {
         const site = siteOf(stmt, `call`)
         reached.add(site.id)
@@ -3072,6 +3423,12 @@ function judge(plan, tests, sites, active) {
  * tagged `runtime`, so the static oracle, which runs only the analysis, does
  * not expect it.
  */
+/** Whether no owns entry names anything: no whole file, function, or data. */
+const ownsNothing = (plan) =>
+  plan.wholeFile === `none` &&
+  plan.functions.every((fn) => fn.owners.length === 0) &&
+  (plan.data ?? []).every((d) => d.owners.length === 0)
+
 // The suite of the failing owner test (`brokenOwner`): regular-expression
 // syntax, a dollar sign, and a quote.
 const BROKEN_SUITE = `broken (b.*) $x it's`
@@ -3106,11 +3463,7 @@ function refusal(plan) {
   // author who reads it would call it (maintainer decision, 2026-11-10: F25).
   if (plan.declaration === `neither`)
     return { cause: `no oracle file`, withheld: `declareOracle` }
-  if (
-    plan.wholeFile === `none` &&
-    plan.functions.every((fn) => fn.owners.length === 0)
-  )
-    return { cause: `owns any selected source` }
+  if (ownsNothing(plan)) return { cause: `owns any selected source` }
   // A setup file that throws fails every oracle file before any test runs,
   // so the run refuses as for a failing owner, naming the setup's error.
   if (plan.fault === `setupThrows`)
@@ -3176,7 +3529,9 @@ function model(plan) {
     interpret(plan, call.fn, 0, sites),
   )
   const ranAtLoad = (site) =>
-    site.fnId === `<module>` || loadRuns.some((run) => run.reached.has(site.id))
+    site.fnId === `<module>` ||
+    site.data !== undefined ||
+    loadRuns.some((run) => run.reached.has(site.id))
   const kindOf = (site) => {
     if (owners(site.fnId).size === 0) return `unowned`
     const tests = ownerTests(site.fnId)
@@ -3220,13 +3575,14 @@ function model(plan) {
     const comparison = site.operator === `binary-swap` && site.role === `swap`
     // A mutant that changes a value only on some inputs, with no capture to
     // show which: a loop's condition, an undefined call value, a dropped
-    // field, a skipped call, and a logical operator (the old probe form's
-    // `&&`). Its directive names the input that distinguishes it.
+    // field, a skipped call, and a logical operator (the `&&` of the old
+    // probe form and of a probe in another shape). Its directive names the
+    // input that distinguishes it.
     if (
       [`loop-false`, `value-undefined`, `field-drop`, `delete-call`].includes(
         site.operator,
       ) ||
-      (site.operator === `binary-swap` && site.role === `oldAnd`)
+      site.logical === true
     )
       return `not-distinguished`
     // Code that runs at load infects every test of its file, and a
@@ -3368,6 +3724,9 @@ function oracleTestFile(plan, file) {
     ...plan.functions
       .filter((fn) => fn.owners.includes(file))
       .map((fn) => `${spell(fn.file, plan.ownsSpelling)}#${fn.name ?? fn.id}`),
+    ...(plan.data ?? [])
+      .filter((d) => d.owners.includes(file))
+      .map((d) => `${spell(SOURCE, plan.ownsSpelling)}#${d.id}`),
     ...(file === `b` && plan.fault === `badEntry` ? [`${SOURCE}#nope`] : []),
     ...(file === `b` && plan.fault === `missingSource`
       ? [`src/missing.ts#f0`]
@@ -3783,6 +4142,7 @@ function fixtureFiles(plan, state = initialState(plan)) {
     ...(plan.runesSource ? { [RUNES]: plan.runesSource } : {}),
     ...(plan.derived ? { [DERIVED]: plan.derived.source } : {}),
     ...(plan.dotGenSource ? { [DOTGEN]: plan.dotGenSource } : {}),
+    ...plan.exportSources,
     'tests/strict.ts': `export const strict = ${state.strict}\n`,
     // A workspace dependency with module state, linked through node_modules.
     'deps/state-dep/package.json': manifest({
@@ -4253,6 +4613,9 @@ export {
   interpret,
   judge,
   refusal,
+  ownsNothing,
+  MODULE_DATA,
+  EXPORT_FORMS,
   model,
   testName,
   callFor,
