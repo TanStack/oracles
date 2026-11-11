@@ -33,7 +33,12 @@ run again.
   line (for example, a lone surrogate is half of a character that takes two
   UTF-16 units).
 - Ask one clear question when you need a decision. For a possible bug, ask
-  "Is this a bug, or is it intended?"
+  "Is this a bug, or is it intended?" When several decisions are waiting,
+  end with a short numbered list of them, most important first, so the
+  engineer can answer by number.
+- Show the engineer only what they decide on. Your private notes, their
+  labels, and their statuses ("adopted", "open") stay private. Until the
+  engineer approves it, a potential law is only a potential law.
 
 ## Where you stop
 
@@ -71,7 +76,8 @@ scripts that call your real API, and show you what I find. Then I'll write
 an oracle for it with you and run it."
 
 Then ask one question: is there a part of the code they want to try this on,
-or should you look around?
+or should you look around? Stop for the answer. If their first message
+already named a part of the code, say that you will start there, and go on.
 
 ## 2. Look around
 
@@ -132,6 +138,12 @@ comments, and any standard that the docs name. Quote it, with the file and
 line. The authority is what makes a finding credible, and it becomes the
 documentation in the oracle file. When nothing decides a behavior, it is a
 design question, not a bug.
+
+The engineer's answer to a design question is an authority too. Once they
+decide it, it becomes a potential law, and the oracle can find where the
+code breaks it, just as with a law from the docs. In a repository with few
+docs, this is the usual way to a bug: ask the question, and let the oracle
+check the answer.
 
 **Present each finding** in this shape, a light touch, with each finding
 called a possible bug or a question, never a certainty:
@@ -200,7 +212,9 @@ own instead, and recommend one.
     when set to the same value.
 - The open design questions, each with its two readings, and what the probe
   showed. Say that these can wait: the oracle's results will help decide
-  them.
+  them. List them apart from the potential laws, and do not number them as
+  laws. Until the engineer decides one, the oracle file states it as a
+  limit.
 
 **Work out each law privately before you propose it.** Fill in this
 worksheet for each one, for yourself. Do not show it. It is how you get from
@@ -296,6 +310,22 @@ default: with no engineer present, propose them and stop.
    skill's install and "where oracle files go" sections have the details:
    from them, take only what these packages and the config need. The lint
    plugin waits for production.
+
+   The framework needs Vitest 4.1 or later. Check before you install:
+
+   - **The repository uses another runner** (mocha, uvu, Jest, node:test):
+     add Vitest for the oracles only, with a config whose `include` is only
+     the oracle files. Their own suite and runner stay as they are. Tell
+     the engineer this in one line as you install.
+   - **The repository runs an older Vitest:** this is a decision for the
+     engineer. Tell them that the oracle needs Vitest 4.1 or later, and that
+     upgrading changes the runner for their own suite too. Offer to upgrade
+     and then run their suite, to show whether it still passes. Do not
+     upgrade until they agree.
+   - **An install fails:** show the error in a line or two, say what you
+     think caused it, and ask before you try anything that changes more than
+     the packages above.
+
 2. **Write the oracle file.** Follow `oracles-design` from its first step:
    the law block's prose, then the model, the histories, the driver, and the
    check. As you build, tell the engineer briefly what each part is for: the

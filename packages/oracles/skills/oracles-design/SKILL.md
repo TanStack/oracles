@@ -63,7 +63,8 @@ when any of these is true.** Do not judge whether the law is hard. Check the
 list when you propose the laws, and again after each gap check:
 
 - there are more than five laws for one boundary (adopted, observed, and
-  open ones all count)
+  open ones all count; an open question that the oracle file states only as
+  a limit is not a law)
 - a law has no new case that it predicts
 - the model has more than one branch per law
 - the work changes or simplifies an existing model
