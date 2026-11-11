@@ -15,9 +15,9 @@
  * the operator contract is skipped (the contract's own syntactic exclusions,
  * such as `return undefined`, are no sites). Dead code: a site is marked dead
  * code exactly when no input distinguishes it, by its syntax alone. The label
- * law: a mutant that no input of its declared types distinguishes, and some
- * other input does, carries the label (in the first family and for an
- * annotated optional-chain receiver; over-labelling is allowed). Boundary: a
+ * law: a mutant carries the label exactly when an annotation excludes every
+ * input that distinguishes it (in the first family and the coerced
+ * programs); everywhere else it carries none. Boundary: a
  * site marked `boundary: -0` is distinguished by a history of 0 and -0 alone.
  * Refinement: every emitted mutant's run agrees with the model. Types change
  * nothing (the hostile programs): erasing a program's types changes none of
@@ -84,9 +84,10 @@
  * a history of 0 and -0 distinguishes; and each emitted mutant is a site of
  * the grammar.
  *
- * Every returned expression is a `return-undefined` site (F17), except a
- * call, `return undefined` where nothing binds the name, and `return void
- * x`. Its mutant evaluates the returned expression and returns `undefined`
+ * Every returned expression is a `return-undefined` site (F17), returned
+ * calls and `import()` included, except `return undefined` where nothing
+ * binds the name and the file has no direct `eval` and no `with`, and
+ * `return void x`. Its mutant evaluates the returned expression and returns `undefined`
  * in its place, so the two left out are exact equivalents, and the returned
  * values family judges them. The optional chains family judges
  * `optional-chain`.
@@ -123,7 +124,7 @@ const ts = createRequire(join(here, `../package.json`))(
 const LAW_1 = `every emitted mutant that is not dead code differs from the original on some input`
 const LAW_2 = `no site is skipped on the basis of types, and a skipped site equals the original on every input`
 const LAW_DEAD = `a site is marked dead code exactly when no input distinguishes it`
-const LAW_LABEL = `a mutant that only an input outside its declared types distinguishes carries the outside-annotation label`
+const LAW_LABEL = `a mutant carries the outside-annotation label exactly when an annotation excludes every input that distinguishes it`
 const LAW_TYPELESS = `erasing the types changes no emitted site and no dead-code mark`
 const LAW_BOUNDARY = `a boundary hint sits only on a site that a 0 and -0 history distinguishes`
 const LAW_REFINE = `the mutant run agrees with the model`
@@ -728,9 +729,10 @@ function renderNarrowed(program) {
   const statement = (s, indent) => {
     if (s.kind === `return`) {
       put(`${indent}return `)
-      // `void a` is `undefined` already, and a call is `value-undefined`'s,
-      // so neither is a site.
-      if (s.expr.kind !== `voidOf` && s.expr.kind !== `call`)
+      // `void a` is `undefined` already, so it is no site. A returned call
+      // is a site (the sixth review: a test that checks only the call's
+      // effect kills `value-undefined`, never this).
+      if (s.expr.kind !== `voidOf`)
         sites.push({
           operator: `return-undefined`,
           position: text.length,
@@ -954,10 +956,12 @@ function evaluateNarrowed(program, input, change) {
 //
 // Every receiver is judged over the inputs JavaScript allows: the typed
 // objects, `undefined`, and `null`. Where the receiver is the parameter its
-// own annotation declares (`param`), in TypeScript under strict null checks,
-// the declared types' inputs are the typed objects alone: there no declared
-// input makes the present type's receiver nullish, so the plain read carries
-// the label, `null`. The other receivers: a local that holds the parameter
+// own annotation declares (`param`), no declared input makes the present
+// type's receiver nullish under strict null checks, but without them the
+// annotation admits `null`. The CLI does not read the package's strictness,
+// so the plain read carries no label (the sixth review: a label only where
+// an annotation excludes the input), and its survivor's directive already
+// names `undefined`. The other receivers: a local that holds the parameter
 // (`local`, `const p = o`), a property of a wrapper (`property`, `w.o`), the
 // same text in JavaScript with a JSDoc type, and a literal constant
 // (`constant`, `const K = 'v'`, read as `K?.length`), which is never
@@ -1136,6 +1140,361 @@ function evaluateReturned(program, [a], change, counter = { reads: 0 }) {
   return change?.kind === `undefine` ? undefined : value
 }
 const returnDomain = () => [...VALUES.number, undefined, null].map((a) => [a])
+
+// ## Scopes, bindings, and coercions (the sixth review)
+//
+// A sixth family, of short programs that the model judges by running their
+// text (round 6 of the soundness review, 2026-11-11: fixed programs missed
+// whole classes twice, so each cause is a generated dimension here). Each
+// program's sites are named with the text that applies each one's mutant,
+// and the model runs the program and each mutant on every input, counting
+// the coerced object's `valueOf` calls and a getter's reads as effects.
+// Results compare by kind and value, so a fresh function or object returned
+// by two runs is the same result.
+//
+// - `tdz`: a logical operator's operand that may be in its temporal dead
+//   zone. The condition sits in a parameter's default (`b = (c && a ? 1 :
+//   1)`), a `for (let …)` head, or a `for (const … of …)` head, and its
+//   operand names a binding declared later (still uninitialized there) or
+//   one declared earlier; a condition in the body is the control. Under
+//   identical branches the swap changes only whether the operand is read,
+//   and a read in the dead zone throws.
+// - `binds`: each form that can bind the name `undefined` (a nested `var`,
+//   a block `let`, a parameter, a destructured parameter, a caught error, a
+//   function or class declaration, a function or class expression's own
+//   name), and forms that name it without binding it (a method name, a
+//   label, an object key) or not at all. A returned bound `undefined` is a
+//   site; a returned global one is not.
+// - `scope`: a sloppy script with a direct `eval`, with a `with`, or with
+//   neither, around a returned `undefined`, an optional read of a constant,
+//   and `a && a`. `eval` can declare a `var` that shadows a name, and `with`
+//   reads names through an object, whose getter runs.
+// - `called`: a returned call, which is a site like any returned value.
+// - `coerced`: `if (c || p < q) return 1; return 1;` with `p` and `q`
+//   annotated `number`, `string | number`, `object`, or `unknown`, and in
+//   JavaScript. Only the comparison's coercion of an object distinguishes
+//   the `||` swap; the label belongs only where the annotation excludes the
+//   object (`number` and `string | number`).
+const TEXT_LOGICAL = [`&&`, `||`, `??`]
+const TEXT_PARTNER = { '&&': `||`, '||': `&&`, '??': `&&`, '<': `<=` }
+const TDZ_CONTEXTS = [`body`, `default`, `forLet`, `forOf`]
+const textPrograms = []
+// A site at the first occurrence of `marker` (after `from`), whose mutant
+// replaces `length` characters there with `replacement`, or wraps a
+// returned expression in `void (…)`, which evaluates it and returns
+// `undefined`.
+function textSite(text, operator, marker, from = 0) {
+  const position = text.indexOf(marker, from)
+  if (position < 0) throw new Error(`no ${marker} in ${text}`)
+  return { operator, position, marker }
+}
+function mutateSite(text, site) {
+  const { operator, position, marker } = site
+  const at = (replacement, length = marker.length) =>
+    `${text.slice(0, position)}${replacement}${text.slice(position + length)}`
+  if (operator === `binary-swap`) return at(TEXT_PARTNER[marker] ?? marker)
+  if (operator === `return-undefined`) return at(`void (${marker})`)
+  if (operator === `optional-chain`) return at(marker.replace(`?.`, `.`))
+  if (operator === `delete-call`) return at(`;`)
+  if (operator === `value-undefined`) return at(`void 0`)
+  if (operator === `field-drop`) return at(``)
+  if (operator === `if-true`) return at(`(${marker}) || true`)
+  if (operator === `if-false`) return at(`(${marker}) && false`)
+  throw new Error(`no text mutant for ${operator}`)
+}
+for (const context of TDZ_CONTEXTS)
+  for (const op of TEXT_LOGICAL)
+    for (const binding of context === `body`
+      ? [`earlier`]
+      : [`later`, `earlier`]) {
+      const condition = (operand) => `c ${op} ${operand} ? `
+      let text
+      let returned
+      if (context === `body`) {
+        returned = `c ${op} a ? 1 : 1`
+        text = `function f(c, a) {\n  return ${returned};\n}`
+      } else if (context === `default`) {
+        returned = `b`
+        text =
+          binding === `later`
+            ? `function f(c, b = (${condition(`a`)}1 : 1), a) {\n  return b;\n}`
+            : `function f(c, a, b = (${condition(`a`)}1 : 1)) {\n  return b;\n}`
+      } else if (context === `forLet`) {
+        returned = `i`
+        text = `function f(c, a) {\n  for (let i = (${condition(binding === `later` ? `i` : `a`)}1 : 1); ; ) return i;\n}`
+      } else {
+        returned = `x`
+        text = `function f(c, a, xs = [1]) {\n  for (const x of (${condition(binding === `later` ? `x` : `a`)}xs : xs)) return x;\n}`
+      }
+      const sites = [
+        textSite(text, `binary-swap`, op, text.indexOf(`c ${op}`)),
+        textSite(
+          text,
+          `return-undefined`,
+          returned,
+          text.lastIndexOf(`return `),
+        ),
+      ]
+      textPrograms.push({
+        kind: `text`,
+        lang: `js`,
+        family: `tdz`,
+        name: `${context} ${op} ${binding}`,
+        text,
+        sites,
+        inputs: context === `default` ? `defaultArgs` : `pairs`,
+      })
+    }
+const BINDS = {
+  none: [`function f(x) {\n  return undefined;\n}`, false],
+  varNested: [
+    `function f(x) {\n  { var undefined = x; }\n  return undefined;\n}`,
+    true,
+  ],
+  letBlock: [
+    `function f(x) {\n  {\n    let undefined = x;\n    return undefined;\n  }\n}`,
+    true,
+  ],
+  param: [`function f(undefined) {\n  return undefined;\n}`, true],
+  destructured: [`function f({ undefined }) {\n  return undefined;\n}`, true],
+  caught: [
+    `function f(x) {\n  try { throw x; } catch (undefined) {\n    return undefined;\n  }\n}`,
+    true,
+  ],
+  functionDeclaration: [
+    `function f(x) {\n  function undefined() {}\n  return undefined;\n}`,
+    true,
+  ],
+  classDeclaration: [
+    `function f(x) {\n  class undefined {}\n  return undefined;\n}`,
+    true,
+  ],
+  functionExpression: [
+    `const f = function undefined(x) {\n  return undefined;\n};`,
+    true,
+  ],
+  classExpression: [
+    `const C = class undefined {\n  static m(x) {\n    return undefined;\n  }\n};\nconst f = C.m;`,
+    true,
+  ],
+  methodName: [
+    `function f(x) {\n  const o = { undefined() {} };\n  return undefined;\n}`,
+    false,
+  ],
+  label: [
+    `function f(x) {\n  undefined: for (;;) break undefined;\n  return undefined;\n}`,
+    false,
+  ],
+}
+for (const [form, [text, bound]] of Object.entries(BINDS)) {
+  const at = text.lastIndexOf(`return undefined`) + `return `.length
+  textPrograms.push({
+    kind: `text`,
+    lang: `js`,
+    family: `binds`,
+    name: form,
+    text,
+    sites: bound
+      ? [{ operator: `return-undefined`, position: at, marker: `undefined` }]
+      : [],
+    inputs: form === `destructured` ? `objects` : `single`,
+  })
+}
+const SCOPE_PREFIX = {
+  none: ``,
+  eval: `  eval(code);\n`,
+}
+const SCOPE_TARGETS = {
+  undefined: `undefined`,
+  constant: `s?.length`,
+  local: `a && a`,
+}
+for (const scope of [`none`, `eval`, `with`])
+  for (const [target, expression] of Object.entries(SCOPE_TARGETS)) {
+    const head = target === `constant` ? `const s = 'x';\n` : ``
+    const body =
+      scope === `with`
+        ? `  with /* scope */ (o) {\n    return ${expression};\n  }\n`
+        : `${SCOPE_PREFIX[scope]}  return ${expression};\n`
+    const text = `${head}function f(a, code, o) {\n${body}}`
+    const sites = []
+    if (scope === `eval`)
+      sites.push(textSite(text, `delete-call`, `eval(code);`))
+    const returned = text.indexOf(`return `) + `return `.length
+    const bindsBreak = scope !== `none`
+    if (target !== `undefined` || bindsBreak)
+      sites.push({
+        operator: `return-undefined`,
+        position: returned,
+        marker: expression,
+      })
+    if (target === `constant`)
+      sites.push({
+        operator: `optional-chain`,
+        position: returned,
+        marker: `s?.length`,
+      })
+    if (target === `local`)
+      sites.push(textSite(text, `binary-swap`, `&&`, returned))
+    textPrograms.push({
+      kind: `text`,
+      lang: `js`,
+      family: `scope`,
+      name: `${scope} ${target}`,
+      text,
+      sites,
+      inputs: `scoped`,
+    })
+  }
+{
+  const text = `function f(a) {\n  return h(a);\n}\nfunction h(x) {\n  return x;\n}`
+  textPrograms.push({
+    kind: `text`,
+    lang: `js`,
+    family: `called`,
+    name: `a returned call`,
+    text,
+    sites: [
+      {
+        operator: `return-undefined`,
+        position: text.indexOf(`h(a)`),
+        marker: `h(a)`,
+      },
+      {
+        operator: `value-undefined`,
+        position: text.indexOf(`h(a)`),
+        marker: `h(a)`,
+      },
+      {
+        operator: `return-undefined`,
+        position: text.indexOf(`x;`),
+        marker: `x`,
+      },
+    ],
+    inputs: `single`,
+  })
+}
+const COERCED_TYPES = [
+  `number`,
+  `string | number`,
+  `object`,
+  `unknown`,
+  undefined,
+]
+for (const type of COERCED_TYPES) {
+  const annotation = (t) => (type === undefined ? `` : `: ${t}`)
+  const text = `function f(c${annotation(`boolean`)}, p${annotation(type)}, q${annotation(type)}) {\n  if (c || p < q) return 1;\n  return 1;\n}`
+  const condition = text.indexOf(`c || p < q`)
+  textPrograms.push({
+    kind: `text`,
+    family: `coerced`,
+    name: type ?? `JavaScript`,
+    lang: type === undefined ? `js` : `ts`,
+    annotation: type,
+    text,
+    sites: [
+      { operator: `if-true`, position: condition, marker: `c || p < q` },
+      { operator: `if-false`, position: condition, marker: `c || p < q` },
+      textSite(text, `binary-swap`, `||`),
+      textSite(text, `binary-swap`, `<`),
+      textSite(text, `return-undefined`, `1`, text.indexOf(`return 1`)),
+      textSite(text, `return-undefined`, `1`, text.lastIndexOf(`return 1`)),
+    ],
+    inputs: `coerced`,
+  })
+}
+// A getter read through `with`, counted as an effect.
+const READ_ONCE = () => ({
+  get a() {
+    effects.count += 1
+    return 1
+  },
+  get undefined() {
+    effects.count += 1
+    return 5
+  },
+})
+const TEXT_INPUTS = {
+  pairs: () =>
+    [true, false, 0, 1, null, undefined].flatMap((c) =>
+      [0, 1, null].map((a) => [c, a]),
+    ),
+  defaultArgs: () =>
+    [true, false, 0, 1, null, undefined].flatMap((c) =>
+      [0, 1, null].map((a) => [c, undefined, a]),
+    ),
+  single: () => [[5], [0], [null], [undefined]],
+  objects: () => [[{ undefined: 5 }], [{}]],
+  scoped: () => [
+    [1, ``, {}],
+    [1, `var undefined = 5`, {}],
+    [1, `var s = null`, {}],
+    [1, `a = 2`, {}],
+    [1, ``, READ_ONCE()],
+    [0, ``, { s: null }],
+  ],
+  coerced: () =>
+    [true, false].flatMap((c) =>
+      [1, 2, `1`, VALUED, {}].flatMap((p) =>
+        [1, 2, VALUED, {}].map((q) => [c, p, q]),
+      ),
+    ),
+}
+// The inputs of the declared types, where an annotation declares them.
+const COERCED_TYPED = {
+  number: (p) => typeof p === `number`,
+  'string | number': (p) => typeof p === `number` || typeof p === `string`,
+  object: (p) => typeof p === `object` && p !== null,
+  unknown: () => true,
+}
+// A result by kind and value: a function or an object is its kind alone,
+// since each run makes a fresh one.
+const encoded = (value) =>
+  typeof value === `function`
+    ? `function`
+    : typeof value === `object` && value !== null
+      ? value === VALUED
+        ? `the coerced object`
+        : `object`
+      : shown(value)
+const loadText = (text) => {
+  const js = ts.transpileModule(text, {
+    compilerOptions: {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.None,
+    },
+  }).outputText
+  return new Function(`${js}\nreturn f`)()
+}
+const textCache = new Map()
+function evaluateText(program, input, change) {
+  const text = change?.kind === `text` ? change.text : program.text
+  if (!textCache.has(text)) textCache.set(text, loadText(text))
+  try {
+    return encoded(textCache.get(text)(...input))
+  } catch (error) {
+    return `threw ${error.name}`
+  }
+}
+function renderText(program) {
+  return {
+    text: program.text,
+    sites: program.sites.map((site) => ({
+      operator: site.operator,
+      position: site.position,
+      change: { kind: `text`, text: mutateSite(program.text, site) },
+    })),
+  }
+}
+const textDomain = (program) => TEXT_INPUTS[program.inputs]()
+const textTypedDomain = (program) =>
+  program.family === `coerced` && program.annotation !== undefined
+    ? textDomain(program).filter(
+        ([, p, q]) =>
+          COERCED_TYPED[program.annotation](p) &&
+          COERCED_TYPED[program.annotation](q),
+      )
+    : undefined
 
 // ## Hostile programs
 //
@@ -1787,6 +2146,11 @@ const ESCAPE_PROGRAMS = [
     inputs: () => [[false], [true]],
   },
   {
+    name: `a returned dynamic import`,
+    text: `export function f() {\n  return import('./five')\n}`,
+    inputs: () => [[]],
+  },
+  {
     name: `an overloaded default export`,
     text: `export default function g<T extends string>(x: T): number\nexport default function g(x: 'a' | 'b'): number {\n  switch (x) {\n    case 'a': return 1\n    case 'b': return 2\n    default: log(); return 3\n  }\n}\nexport const f = g`,
     inputs: () => [[`a`], [`zzz`]],
@@ -1898,6 +2262,7 @@ const histories = [
   ...narrowedPrograms,
   ...chainPrograms,
   ...returnPrograms,
+  ...textPrograms,
   ...ESCAPES,
 ]
 
@@ -1913,19 +2278,22 @@ const REACH = {
   label: `a mutant that only an input outside its annotation distinguishes`,
   impure: `an ordering swap beside an impure operand that its reads distinguish`,
   hostile: (name) => `a hostile shape stays emitted: ${name}`,
-  chainLabel: `an optional read of an annotated parameter that only null reaches`,
+  chainAnnotated: `an optional read of an annotated parameter that only null reaches, unlabelled`,
   chainDead: (lang) => `an optional read of a literal constant in ${lang}`,
   returnExcluded: (form) => `a returned ${form} that is no site`,
+  text: (program) =>
+    `a ${program.family} program the law decides: ${program.name}`,
   shadowed: (form) => `a returned undefined that a ${form} shadows`,
 }
 const REQUIRED_STATES = [
   REACH.label,
   REACH.impure,
   ...ESCAPE_PROGRAMS.map(({ name }) => REACH.hostile(name)),
-  REACH.chainLabel,
+  REACH.chainAnnotated,
   ...LANGS.map(REACH.chainDead),
   ...[`voided`, `voidRead`, `undefinedName`].map(REACH.returnExcluded),
   ...[`shadowed`, `varShadowed`].map(REACH.shadowed),
+  ...textPrograms.map(REACH.text),
 ]
 // The ordering swaps of a first-family program, each with the model's site.
 const orderingSites = (program, expected) =>
@@ -1938,11 +2306,22 @@ const orderingSites = (program, expected) =>
         ORDERING.includes(site.change.node.op),
     )
 function reached(program, trace, expected) {
+  // A text program decides a law when a site there is distinguished, or
+  // when it has no site at all (a control).
+  if (program.kind === `text`)
+    return expected.sites.length === 0 ||
+      expected.sites.some((site) => site.distinct)
+      ? [REACH.text(program)]
+      : []
   if (program.kind === `optional`) {
     const chain = expected.sites.find((s) => s.operator === `optional-chain`)
     if (program.receiver === `constant`)
       return chain.dead ? [REACH.chainDead(program.lang)] : []
-    return chain.label ? [REACH.chainLabel] : []
+    return annotatedChain(program) &&
+      program.width === `present` &&
+      chain.distinct
+      ? [REACH.chainAnnotated]
+      : []
   }
   if (program.kind === `returned`) {
     if ([`shadowed`, `varShadowed`].includes(program.form))
@@ -1978,6 +2357,8 @@ function stateOf(program) {
   if (program.kind === `returned`)
     return `a ${program.form} return in ${program.lang}, ${program.strictness}`
   if (program.kind === `escape`) return `a hostile program: ${program.name}`
+  if (program.kind === `text`)
+    return `a ${program.family} program: ${program.name}`
   if (program.kind === `narrowed`)
     return `a narrowed ${program.subject} subject's ${program.form} at its ${program.width} type, ${program.strictness}`
   if (program.kind === `return`) {
@@ -2198,13 +2579,17 @@ const families = {
     render: renderChain,
     evaluate: evaluateChain,
     domain: chainDomain,
-    typedDomain: (program) =>
-      annotatedChain(program) ? chainDomain(program, true) : undefined,
   },
   returned: {
     render: renderReturned,
     evaluate: evaluateReturned,
     domain: returnDomain,
+  },
+  text: {
+    render: renderText,
+    evaluate: evaluateText,
+    domain: textDomain,
+    typedDomain: textTypedDomain,
   },
 }
 const familyOf = (program) => families[program.kind]
@@ -2334,7 +2719,9 @@ function switchFor(active) {
 // The free global `g`, whose getter counts the reads of one call.
 let globalReads = 0
 // Each input's result and the reads it made, with `g` installed as a counter.
-function runAll(f, domain) {
+// A text program's run neither copies its inputs (a getter would run in the
+// copy) nor keeps a result's identity (`encoded`).
+function runAll(f, domain, plain = false) {
   Object.defineProperty(globalThis, FREE, {
     configurable: true,
     get: () => ++globalReads,
@@ -2350,11 +2737,15 @@ function runAll(f, domain) {
       try {
         result = f(
           ...input.map((value) =>
-            typeof value === `object` && value !== null && value !== VALUED
+            !plain &&
+            typeof value === `object` &&
+            value !== null &&
+            value !== VALUED
               ? { ...value }
               : value,
           ),
         )
+        if (plain) result = encoded(result)
       } catch (error) {
         result = `threw ${error.name}`
       }
@@ -2368,11 +2759,11 @@ const sameRuns = (xs, ys) =>
   xs.every(
     (x, i) => Object.is(x.result, ys[i].result) && x.reads === ys[i].reads,
   )
-function runsUnder(code, active, domain) {
+function runsUnder(code, active, domain, plain = false) {
   const previous = globalThis.__oracleGaps
   globalThis.__oracleGaps = switchFor(active)
   try {
-    return runAll(load(code), domain)
+    return runAll(load(code), domain, plain)
   } finally {
     globalThis.__oracleGaps = previous
   }
@@ -2463,7 +2854,8 @@ function driver(program, observe) {
   if (program.kind === `escape`) return escapeDriver(program, observe)
   const { text } = sourceOf(program)
   const domain = domainOf(program)
-  const original = runAll(load(text), domain)
+  const plain = program.kind === `text`
+  const original = runAll(load(text), domain, plain)
   const ext = program.lang === `js` ? `js` : `ts`
   const path = `/mutant-validity.${ext}`
   const { code, mutants } = instrument(
@@ -2472,9 +2864,9 @@ function driver(program, observe) {
     text,
     `src/mutant-validity.${ext}`,
   )
-  const clean = sameRuns(runsUnder(code, null, domain), original)
+  const clean = sameRuns(runsUnder(code, null, domain, plain), original)
   const emitted = mutants.map((mutant) => {
-    const runs = runsUnder(code, mutant.number, domain)
+    const runs = runsUnder(code, mutant.number, domain, plain)
     return {
       operator: mutant.operator,
       position: mutant.position,
@@ -2523,28 +2915,34 @@ function checkEscape(program, found) {
     program.text,
     true,
   )
+  // Every return of a value is a site, but `return void x` and a return of
+  // the global `undefined`, which the oracle's own checker resolves to no
+  // declaration (and only where the file has no direct `eval` and no
+  // `with`, which can bind it at run time).
   const sites = new Set(found.mutants.map(keyOf))
-  const bound = []
+  const dynamic = /\beval\s*\(|\bwith\b/.test(program.text)
+  const owed = []
   const visit = (node) => {
-    if (
-      ts.isReturnStatement(node) &&
-      node.expression &&
-      ts.isIdentifier(node.expression) &&
-      node.expression.text === `undefined` &&
-      (checker.getSymbolAtLocation(node.expression)?.declarations?.length ??
-        0) > 0
-    )
-      bound.push(node.expression.getStart(file))
+    if (ts.isReturnStatement(node) && node.expression) {
+      const value = node.expression
+      const global =
+        ts.isIdentifier(value) &&
+        value.text === `undefined` &&
+        !dynamic &&
+        (checker.getSymbolAtLocation(value)?.declarations?.length ?? 0) === 0
+      if (!ts.isVoidExpression(value) && !global)
+        owed.push(value.getStart(file))
+    }
     ts.forEachChild(node, visit)
   }
   visit(file)
-  const missed = bound.find(
+  const missed = owed.find(
     (position) => !sites.has(`return-undefined@${position}`),
   )
   if (missed !== undefined)
     return violation(
       `instrumented`,
-      `leaves out the returned undefined at offset ${missed} of ${program.name}, which a declaration binds`,
+      `leaves out the returned value at offset ${missed} of ${program.name}, which is no exact equivalent of its mutant`,
       LAW_2,
     )
   return pass
@@ -2602,6 +3000,12 @@ function check(program, observations, expected) {
       return violation(
         `instrumented`,
         `emitted ${where} without the outside-annotation label, though no input of its declared types distinguishes it`,
+        LAW_LABEL,
+      )
+    if (!site.label && mutant.outside)
+      return violation(
+        `instrumented`,
+        `labels ${where} outside-annotation (${mutant.outside}), though no annotation excludes every input that distinguishes it`,
         LAW_LABEL,
       )
     if (mutant.evidence === BOUNDARY_EVIDENCE && !site.zeroDistinct)
@@ -2718,9 +3122,9 @@ const calibrations = [
 oracleProperty({
   id: `oracle-gaps.report-mutant-validity`,
   law: {
-    statement: `No mutant is skipped or marked dead code on the basis of types (maintainer decision, 2026-11-11). Over the inputs JavaScript allows (each declared type's values, and foreign ties: a string beside the number of its digits, null beside a zero, a number beside a bigint, -0 beside 0, and an object whose valueOf has an effect; with the free global g counting its reads), every emitted mutant that is not marked dead code differs from the program on some input (law 1), no site of the operator contract is skipped (law 2), and a site is marked dead code exactly when no input distinguishes it. A mutant that no input of its declared types distinguishes, and some other input does, carries the outside-annotation label, in the first family and for an annotated optional-chain receiver. A return-undefined mutant's runs and reads equal the model's, which evaluates the returned expression and then returns undefined. Erasing a hostile program's types changes none of its sites and no dead-code mark, every dead-code mark there holds on its inputs, and a returned undefined that a declaration binds is a site. Every emitted mutant's run agrees with the model, and a boundary hint sits only on a site that a history of 0 and -0 distinguishes.`,
+    statement: `No mutant is skipped or marked dead code on the basis of types (maintainer decision, 2026-11-11). Over the inputs JavaScript allows (each declared type's values, and foreign ties: a string beside the number of its digits, null beside a zero, a number beside a bigint, -0 beside 0, and an object whose valueOf has an effect; with the free global g counting its reads), every emitted mutant that is not marked dead code differs from the program on some input (law 1), no site of the operator contract is skipped (law 2), and a site is marked dead code exactly when no input distinguishes it. A mutant carries the outside-annotation label exactly when an annotation excludes every input that distinguishes it, in the first family and the coerced programs, and carries none elsewhere. A return-undefined mutant's runs and reads equal the model's, which evaluates the returned expression and then returns undefined. Erasing a hostile program's types changes none of its sites and no dead-code mark, every dead-code mark there holds on its inputs, and a returned undefined that a declaration binds is a site. Every emitted mutant's run agrees with the model, and a boundary hint sits only on a site that a history of 0 and -0 distinguishes.`,
     authority: `The maintainer's decision of 2026-11-11, relayed by the coordinator after the fifth soundness review: the gap CLI never skips a mutant, and never marks it dead code, on the basis of types; a mutant the type analysis judges undetectable by inputs of the declared types is a survivor in its own class, whose directive names the distinguishing input; an argument typed any counts as an input the types allow. The frozen design v20's decision of 2026-11-10 that anything an oracle can't possibly detect is an invalid mutant (freeze.md, "Undetectable mutants are invalid"). The dead-code and boundary evidence follow the coordinator's revision and the review of PR #8. The F17 operators follow the coordinator's F17 brief (2026-11-10).`,
-    limits: `A finite domain: each type's values, a fixed set of foreign ties, and one free name. A small grammar, without property reads, calls, getters beyond g, or equal branches with a non-operand expression. A clamp at type bigint is left out. Dead code is tagged only under a pure condition where no ordering comparison runs or not because of the site. The label law covers the first family and an annotated optional-chain receiver; the narrowed family's narrowings are not labelled. The optional chains read one property of a parameter, a local, a wrapper's property, or a literal constant. The returned values are one return of a name, \`void a\`, \`void g\`, or \`undefined\`. Only a return-undefined site's runs are compared in full with the model's. The hostile programs are fixed texts with chosen inputs, compared with their own text with the types erased, as operators and marks; their dead-code marks are judged on their inputs only. Its mutants are applied as text, and an optional chain's \`?.\` is found as the first after the access's start, which a nested chain would misplace.`,
+    limits: `A finite domain: each type's values, a fixed set of foreign ties, and one free name. A small grammar, without property reads, calls, getters beyond g, or equal branches with a non-operand expression. A clamp at type bigint is left out. Dead code is tagged only under a pure condition where no ordering comparison runs or not because of the site. The label law requires a label in the first family and the coerced programs, and forbids one everywhere else; the narrowed family's narrowings and the optional chains are not labelled. The sixth review's dimensions are small generated programs judged by running their text: a dead-zone read in a parameter default or a loop head, each binding form of \`undefined\`, a sloppy script with or without a direct \`eval\` or a \`with\`, a returned call, and a coerced comparison at five annotations. The optional chains read one property of a parameter, a local, a wrapper's property, or a literal constant. The returned values are one return of a name, \`void a\`, \`void g\`, or \`undefined\`. Only a return-undefined site's runs are compared in full with the model's. The hostile programs are fixed texts with chosen inputs, compared with their own text with the types erased, as operators and marks; their dead-code marks are judged on their inputs only. Its mutants are applied as text, and an optional chain's \`?.\` is found as the first after the access's start, which a nested chain would misplace.`,
   },
   // Enumerated: every program of the grammar is one history, in order.
   histories: { enumerated: histories, states: REQUIRED_STATES },
