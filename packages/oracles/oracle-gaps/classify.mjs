@@ -161,7 +161,7 @@ const fileOf = (key) => key.split(` > `)[0]
  * values differed between the runs, so their failures judge nothing), which
  * tests reached each site, and which `if` outcomes each oracle file saw.
  */
-export function baselineOf(firstRows, secondRows, oracleFiles) {
+export function baselineOf(firstRows, secondRows) {
   const nondeterministic = new Set()
   for (const [key, row] of firstRows) {
     const again = secondRows.get(key)
@@ -172,21 +172,10 @@ export function baselineOf(firstRows, secondRows, oracleFiles) {
       nondeterministic.add(key)
   }
   const reachedBy = new Map()
-  const outcomeSeen = new Map()
-  for (const [key, row] of firstRows) {
+  for (const [key, row] of firstRows)
     for (const id of row.hits)
       reachedBy.set(id, [...(reachedBy.get(id) ?? []), key])
-    // A file's background row holds the outcomes taken outside any test,
-    // as at module load, which reaches every test of the file.
-    if (!oracleFiles.has(fileOf(key))) continue
-    for (const [id, [truthy, falsy]] of row.outcomes ?? []) {
-      const byFile = outcomeSeen.get(id) ?? new Map()
-      const seen = byFile.get(fileOf(key)) ?? [false, false]
-      byFile.set(fileOf(key), [seen[0] || truthy, seen[1] || falsy])
-      outcomeSeen.set(id, byFile)
-    }
-  }
-  return { firstRows, nondeterministic, reachedBy, outcomeSeen }
+  return { firstRows, nondeterministic, reachedBy }
 }
 
 /** The owner tests and the ordinary tests that reached a mutant's site. */
@@ -202,28 +191,52 @@ export function targetsOf(mutant, baseline, owners, oracleFiles) {
   }
 }
 
-// An `if` on a mutant's line that its owners' tests reached but never saw
-// take both outcomes.
-function outcomeMissing(mutant, owners, mutants, baseline) {
-  return mutants.some((m) => {
-    if (
-      m.operator !== `if-true` ||
-      m.source !== mutant.source ||
-      m.line !== mutant.line
-    )
-      return false
-    let truthy = false
-    let falsy = false
-    for (const [file, seen] of baseline.outcomeSeen.get(m.number) ?? [])
-      if (owners.has(file)) {
-        truthy ||= seen[0]
-        falsy ||= seen[1]
-      }
-    const reached = (baseline.reachedBy.get(m.number) ?? []).some((k) =>
-      owners.has(fileOf(k)),
-    )
-    return reached && !(truthy && falsy)
-  })
+// The operators the capture measures: an `if`'s condition (its forced value
+// changes the condition only where the condition took the other outcome), a
+// comparison's operands (its operators disagree on them), and the operators
+// that always change a value when reached (`!`, booleans, arithmetic). The
+// rest are not measured: a logical operator, a loop's condition, an
+// `undefined` call value, a dropped property, and a skipped call change a
+// value only on some inputs, and no capture shows which.
+const comparisonOps = new Set([`===`, `!==`, `<`, `<=`, `>`, `>=`])
+const unmeasuredOps = new Set([
+  `loop-false`,
+  `value-undefined`,
+  `field-drop`,
+  `delete-call`,
+])
+const isIf = (mutant) =>
+  mutant.operator === `if-true` || mutant.operator === `if-false`
+const isComparison = (mutant) =>
+  mutant.operator === `binary-swap` && comparisonOps.has(mutant.original)
+const isUnmeasured = (mutant) =>
+  unmeasuredOps.has(mutant.operator) ||
+  (mutant.operator === `binary-swap` && !isComparison(mutant))
+
+// Whether a deterministic owner test, or the loaded code of an owner file,
+// infected the mutant (the capture's `infected` rows; a nondeterministic
+// test's infection judges nothing). `infectedBy` names the first owner test
+// with one; undefined when only loaded code did.
+function infectionOf(mutant, targets, baseline) {
+  const id = mutant.number
+  const infected = targets.oracleKeys.filter(
+    (k) =>
+      !baseline.nondeterministic.has(k) &&
+      baseline.firstRows.get(k)?.infected?.includes(id),
+  )
+  const test = infected.find((k) => !k.endsWith(` > (background)`))
+  return { infected: infected.length > 0, infectedBy: test }
+}
+
+// The operand pairs that the owner tests' comparison recorded for a mutant:
+// distinct, in test order, up to three. A nondeterministic test's do not count.
+function operandsOf(mutant, targets, baseline) {
+  const pairs = []
+  for (const k of targets.oracleKeys)
+    if (!baseline.nondeterministic.has(k))
+      for (const [id, pair] of baseline.firstRows.get(k)?.operands ?? [])
+        if (id === mutant.number) pairs.push(pair.join(` and `))
+  return [...new Set(pairs)].slice(0, 3)
 }
 
 // A changed asserted value or a changed property observation, with no
@@ -238,13 +251,17 @@ const changedIn = (rows, keys, baseline) =>
 /**
  * An operator mutant's outcome from the units of its owner files. A mutant
  * with no owner is `unowned`, and one that no owner test reached is
- * `unreached`. A survivor is a `comparison-gap`, an `indeterminate` mutant,
- * a `generator-gap`, or `no-observed-difference`.
+ * `unreached`. A survivor gets one class from what the run measured (the
+ * classes are in the design's decision 11): `not-judged` (a changed value
+ * no law rejected), `indeterminate` (only nondeterministic tests reached
+ * it), `dead-code` (no input distinguishes it), `branch-never-taken` (an
+ * `if` one of whose outcomes never occurred; `wanted` names the missing
+ * one), `not-infected` (a comparison whose operators agreed on every
+ * operand the owners reached; `operands` names them), and `not-observed`
+ * (infected, and no recorded observation changed; `infectedBy` names the
+ * test that infected it).
  */
-export function judgeMutant(
-  mutant,
-  { owners, targets, units, baseline, mutants },
-) {
+export function judgeMutant(mutant, { owners, targets, units, baseline }) {
   if (owners.size === 0) return { outcome: `unowned` }
   if (targets.oracleKeys.length === 0) return { outcome: `unreached` }
   const result = {
@@ -267,14 +284,29 @@ export function judgeMutant(
       !baseline.nondeterministic.has(k),
   )
   result.changedTests = changedIn(rows, compared, baseline)
-  result.class =
-    result.changedTests.length > 0
-      ? `comparison-gap`
-      : compared.length === 0
-        ? `indeterminate`
-        : outcomeMissing(mutant, owners, mutants, baseline)
-          ? `generator-gap`
-          : `no-observed-difference`
+  if (result.changedTests.length > 0) result.class = `not-judged`
+  else if (compared.length === 0) {
+    result.class = `indeterminate`
+    result.nondeterministicBy = targets.oracleKeys.filter((k) =>
+      baseline.nondeterministic.has(k),
+    )
+  } else if (mutant.evidence === `dead code`) result.class = `dead-code`
+  else if (isUnmeasured(mutant)) result.class = `not-distinguished`
+  else {
+    const { infected, infectedBy } = infectionOf(mutant, targets, baseline)
+    if (isIf(mutant) && !infected) {
+      // The mutant changes its condition only where the condition took the
+      // other outcome: an if-true where it was false, an if-false where true.
+      result.class = `branch-never-taken`
+      result.wanted = mutant.operator === `if-true` ? `false` : `true`
+    } else if (isComparison(mutant) && !infected) {
+      result.class = `not-infected`
+      result.operands = operandsOf(mutant, targets, baseline)
+    } else {
+      result.class = `not-observed`
+      result.infectedBy = infectedBy
+    }
+  }
   return result
 }
 
@@ -292,8 +324,8 @@ export const judgeOrdinary = (units) =>
 
 /**
  * An authored mutant's outcome from its owners' units. Its copy is not
- * instrumented, so no `if` outcomes tell a generator gap from an equivalent
- * mutant: a survivor is a `comparison-gap` or stays `survived`.
+ * instrumented, so no `if` outcomes or infections are measured for it: a
+ * survivor is `not-judged` (a changed observation) or `not-observed`.
  */
 export function judgeAuthored(units, baseline) {
   const result = {
@@ -309,6 +341,8 @@ export function judgeAuthored(units, baseline) {
     ),
     baseline,
   )
-  if (result.changedTests.length > 0) result.class = `comparison-gap`
+  // An authored mutant is not instrumented, so only its changed observations
+  // are measured: the rest is `not-observed`, the patch changed the code.
+  result.class = result.changedTests.length > 0 ? `not-judged` : `not-observed`
   return result
 }

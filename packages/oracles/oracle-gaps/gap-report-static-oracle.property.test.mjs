@@ -38,7 +38,7 @@
  *   run agree on every key they share.
  * - **Help.** `index.mjs --help` prints the usage text (args.mjs) for any
  *   package directory, with no `--package`, and exits 0.
- * - **Report-shaped ending** (law 11 of the end-to-end oracle, stated in
+ * - **Report-shaped ending** (law 12 of the end-to-end oracle, stated in
  *   gap-report-model-oracle.mjs). Bad arguments refuse the run through the
  *   real CLI, with or without `--daemon`: it exits 2 and prints a
  *   `refused:` block that names the bad option or path and a `fix:` line
@@ -247,7 +247,7 @@ function helpOf(dir) {
   return { status: run.status, printed: run.stdout.trimEnd() }
 }
 
-// ## Argument refusals (law 11)
+// ## Argument refusals (law 12)
 //
 // The CLI's arguments are its documented interface (the usage text in
 // args.mjs): `--package <dir>` and `--source <src/x.ts,...>` are required,
@@ -259,7 +259,7 @@ function helpOf(dir) {
 // directory that exists and holds valid authored mutants (authored.mjs: JSON,
 // every field, ids of their own), an option that takes a value has one, and
 // no other option exists. Arguments that break one of these refuse the run
-// (law 11, gap-report-model-oracle.mjs), and the cause names what the author
+// (law 12, gap-report-model-oracle.mjs), and the cause names what the author
 // wrote wrong: the option, the path, or the mutant file. Each history
 // carries one such fault, made from its own fixture's valid arguments, and
 // the driver runs the real CLI (index.mjs) with it, with `--daemon` or
@@ -878,7 +878,7 @@ function check(plan, observations, expected) {
       `--help exited ${got.help?.status} and printed ${JSON.stringify(got.help?.printed)}, not the usage text`,
       `help`,
     )
-  // Law 11: the history's bad arguments refuse the run, naming their cause.
+  // Law 12: the history's bad arguments refuse the run, naming their cause.
   const bad = plan.history.badArguments
   const argumentsRun = observations.find(
     (o) => o.checkpoint === `arguments`,

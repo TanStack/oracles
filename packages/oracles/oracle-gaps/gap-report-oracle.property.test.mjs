@@ -116,11 +116,16 @@
  *    would judge such a verdict, is not built.) A copy that a batch skipped
  *    because an earlier copy killed the mutant runs again, through the batch,
  *    only while no kill is in hand, so every mutant gets an outcome and no
- *    other missing unit is rerun. A mutant
- *    that no owner test fails is a survivor: a `comparison-gap` when an owner
- *    test's observation or asserted value changed, a `generator-gap` when an
- *    `if` on its line never took one of its outcomes in an owner test, and
- *    `no-observed-difference` otherwise. A test in a file that is not an
+ *    other missing unit is rerun. A mutant that no owner test fails is a
+ *    survivor: a `not-judged` when an owner test's observation or asserted
+ *    value changed, a `branch-never-taken` when an `if` on its line never took
+ *    one of its outcomes in an owner test, a `not-infected` when a comparison's
+ *    operators agreed on every operand an owner test reached, a
+ *    `not-distinguished` when its operator changes a value only on some
+ *    inputs and no capture shows which (a loop's condition, an undefined call
+ *    value, a dropped field, a skipped call, a logical operator), and
+ *    `not-observed` otherwise: the mutant changed a value that no recorded
+ *    observation showed. A test in a file that is not an
  *    oracle file never changes any of this, and runs only when the run asks
  *    for it (`--ordinary`, maintainer decision of 2026-11-06): then a
  *    survivor or an unreached mutant that an ordinary test reached reports
@@ -128,7 +133,7 @@
  *    mutant; every other class is a gap.
  * 5. **Authored mutants.** An authored mutant whose text occurs exactly once
  *    is judged by law 4 against the owners of the function it edits, without
- *    the generator-gap class, and is reported at the line of its edit; one
+ *    the branch-never-taken class, and is reported at the line of its edit; one
  *    whose text occurs zero or several times is `does-not-apply`. Its key is
  *    its id, whatever its file is called.
  * 6. **Keys.** Each mutant's key is its anchor:
@@ -196,7 +201,10 @@
  *    native addon anywhere in its dependency tree (a `binding.gyp`, or a
  *    prebuilt `.node` file in a dependency of a dependency) runs in child
  *    processes, and the run's inputs name the pool.
- * 11. **A report-shaped ending.** A run never ends with a bare stack trace
+ * 11. **Streaming.** The CLI prints each gap as its mutant is judged, one line
+ *    each (stream.mjs), and the summary repeats those gap lines: the streamed
+ *    gap lines are the report's gaps, each printed once, none missing.
+ * 12. **A report-shaped ending.** A run never ends with a bare stack trace
  *    (gap-report-model-oracle.mjs states the law beside its check). Every
  *    refusal of laws 3 and 10 (a broken owns declaration, no oracle file, no
  *    owner, a source outside the package, `test.projects`, a Vitest that
@@ -237,7 +245,7 @@
  * load, the one-daemon clause, and the builtin-spy clause of law 3 come
  * from the review of the CLI's pull request and TanStack DB's conversion
  * (2026-11-08); the refusal of `test.projects` is the maintainer's choice
- * of that date over running each project. Law 11 is the maintainer's
+ * of that date over running each project. Law 12 is the maintainer's
  * decision of 2026-11-10: "we should never just crash -- the cli should also
  * return something sensible".
  *
@@ -536,6 +544,11 @@ function namedScratch(text, names) {
 }
 
 /** What one run of the CLI reported, from its exit status and its files. */
+// A gap line the CLI streams to stderr as its mutant is judged (stream.mjs):
+// its class, its line, and its id.
+const streamedGap =
+  /^(?:not-judged|indeterminate|dead-code|branch-never-taken|not-infected|not-observed|not-distinguished|unreached|random-only-kill|agreement-only-kill|unregistered-kill|framework-error|timeout|setup-error|crashed|does-not-apply) L(?:\d+|\?) (\S+) /
+
 function readRun(dir, out, status, stderr, cli) {
   // The output names the CLI directory that ran and the package, as scratch
   // directories do, before it is cut to its last characters.
@@ -554,11 +567,21 @@ function readRun(dir, out, status, stderr, cli) {
   } catch {
     // A run that wrote no report is recorded by its exit status and output.
   }
-  // A refused run's results.json holds the refusal, not results (law 11).
+  // Each streamed gap, by its key: a line whose id names no reported mutant
+  // is kept as it is, so it cannot match.
+  const keyById = new Map((results ?? []).map((r) => [r.id, r.key]))
+  const streamed = `${stderr ?? ``}`
+    .split(`\n`)
+    .flatMap((line) => {
+      const id = line.match(streamedGap)?.[1]
+      return id === undefined ? [] : [keyById.get(id) ?? `unknown id ${id}`]
+    })
+    .sort()
+  // A refused run's results.json holds the refusal, not results (law 12).
   if (results === undefined) report = undefined
   return {
     // How a run that did not complete ended, read from the whole of its
-    // stderr and its output directory (law 11).
+    // stderr and its output directory (law 12).
     ending:
       status === 0
         ? undefined
@@ -566,6 +589,7 @@ function readRun(dir, out, status, stderr, cli) {
     exit: status,
     stderr: named === undefined ? undefined : named.slice(-1500),
     reported: results !== undefined,
+    streamed,
     // Law 9 compares everything the run reports except how it was
     // produced: durations, the options it was given (the output directory
     // and the daemon flag differ by construction), and the counts of reused
@@ -1048,7 +1072,7 @@ async function driver(plan, observe) {
         states.add(`an uncalled function in an owned function is a gap`)
       if (m.function === `w_spy` && m.outcome === `killed`)
         states.add(`a builtin spy the capture left uncalled`)
-      if (m.function === `w_shared` && m.class === `generator-gap`)
+      if (m.function === `w_shared` && m.class === `branch-never-taken`)
         states.add(`a test that depends on an earlier test`)
       if (m.function === `w_late` && m.outcome === `killed`)
         states.add(`a kill after a caught verdict`)
@@ -1128,7 +1152,7 @@ async function driver(plan, observe) {
       if (
         m.function === `w_shrink` &&
         m.operator === `if-true` &&
-        m.class === `comparison-gap`
+        m.class === `not-judged`
       )
         states.add(`a shrinking calibration passes under a mutant`)
       if (m.function === `w_fcprop` && m.outcome === `killed`)
@@ -1157,10 +1181,11 @@ async function driver(plan, observe) {
         timeout: `timeout`,
       }[m.outcome]
       if (named) states.add(named)
-      if (m.class === `comparison-gap`) states.add(`comparison gap`)
-      if (m.class === `generator-gap`) states.add(`generator gap`)
-      if (m.class === `no-observed-difference`)
-        states.add(`no observed difference`)
+      if (m.class === `not-judged`) states.add(`not judged`)
+      if (m.class === `branch-never-taken`) states.add(`branch never taken`)
+      if (m.class === `not-infected`) states.add(`not infected`)
+      if (m.class === `not-observed`) states.add(`not observed`)
+      if (m.class === `not-distinguished`) states.add(`not distinguished`)
       if (m.class === `indeterminate`) states.add(`indeterminate`)
     }
     // A batch that a hang cut off reran its other items in a new context.
@@ -1258,7 +1283,7 @@ function incrementalCheck(observations) {
         `incremental equals cold`,
         { actual: daemon, expected: cold },
       )
-    // A refusal through the daemon ends as a cold refusal does (law 11):
+    // A refusal through the daemon ends as a cold refusal does (law 12):
     // the CLI that asked the daemon writes it to its own output directory.
     if (cold.refusal !== undefined) {
       const breach = refusalBreach(daemon.ending, { outKnown: true })
@@ -1335,7 +1360,7 @@ function check(plan, observations, expected) {
         `the refusal does not give the failing test's error, ${expected.refused.detail}: ${cli.stderr}`,
         `ownership`,
       )
-    // Law 11: the refusal is one block with its fix, and the output
+    // Law 12: the refusal is one block with its fix, and the output
     // directory the run was given holds it.
     // Every e2e run names its output directory (`--out`), so even a
     // refusal of its arguments is written there.
@@ -1401,6 +1426,15 @@ function check(plan, observations, expected) {
         { actual: got, expected: owed },
       )
   }
+  // Each gap is streamed once as its mutant is judged (stream.mjs), and the
+  // streamed gaps are the report's gaps, each once.
+  if (JSON.stringify(cli.streamed) !== JSON.stringify(cli.gaps))
+    return violation(
+      `cli`,
+      `the streamed gap lines are not the report's gaps: ${cli.streamed.length} streamed, ${cli.gaps.length} reported`,
+      `streaming`,
+      { actual: cli.streamed, expected: cli.gaps },
+    )
   for (const [owed, got] of pairs)
     if (!owed.probe && got.ordinaryOutcome !== owed.ordinaryOutcome)
       return violation(
@@ -1685,9 +1719,11 @@ const required = [
   `crash gap`,
   `framework-only failure`,
   `indeterminate`,
-  `comparison gap`,
-  `generator gap`,
-  `no observed difference`,
+  `not judged`,
+  `branch never taken`,
+  `not infected`,
+  `not observed`,
+  `not distinguished`,
   `unreached`,
   `unowned`,
   `authored mutant`,
@@ -1819,7 +1855,7 @@ oracleProperty({
   law: {
     statement: `The gap report enumerates the promised operator mutants, leaves out exactly the probe-only code, discovers every oracle that owns a function's call tree and refuses broken ownership, judges each mutant only by its owners' tests on their registered routes and counts only law verdicts on reproducible routes as kills, which outrank a run that never ends, anchors each mutant by its function and normalized statement, lists every gap and unowned mutant once with consistent counts, keeps keys stable under unrelated edits, reports through one daemon per package what a cold run reports at every state of a sequence of edits, and runs the package as Vitest does from any install path and any --source spelling: one instance of each workspace dependency, no refusal over an unbuildable devDependency, child processes for a native addon anywhere in the tree, a capture that a test's builtin spies cannot see, and a refusal of test.projects; and every run that does not complete ends, cold or through the daemon, with a refusal that exits 2, prints a refused: block and one fix: directive with no stack trace, and writes the refusal to the run's output directory.`,
     authority: `The maintainer's decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), not in this package's records, including that a kill by reach agreement alone is a gap and that an incremental run through the daemon equals a cold one (v19.3); the project's oracle guide on quiet exclusions; the oracle rubric's outcome kinds (ORC-006); the CLI's documented operator list in schemata.mjs.`,
-    limits: `Law 11 judges refusals only: no legal history reaches an internal error, so its shape (exit 3, the stack in error.log) is not judged; argument refusals are the static oracle's; the check's rejection of a stack trace, a missing fix, and a wrong exit code is calibrated in the static oracle, through the same refusalBreach, and here only a refused run reported as complete is calibrated, because each calibration here runs real CLI histories. Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 6 s full limit, and a slow run only as one witness that waits 3 s before it judges; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; no --only, --sample, or --diff-base; a derived class's file is instrumented and its sites are judged as unowned, but no test imports or constructs the class, so its no-mutant and super-region behavior is the static oracle's (in-process), not this oracle's; package configs only in vite.config.ts, vitest.config.ts, or vite.config.mjs, as an object or a sync or async function, with no plugins of their own and test.projects only as a refusal; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9's edits leave out files read through fs, other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; cut-off charging judged only under one budget; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages; daemon races (two CLIs reading one error file, a CLI hearing closing from the failing daemon it started, a reset connection on macOS) fixed by inspection; a workspace dependency's one-file bundle is written in that dependency's own .oracle-gaps folder, a known stray write (date-fns report), which the stray-write check excludes; the runner's copies and Vitest configs (.oracle-gaps-PID*) sit at the package root and are removed when the run closes, so a killed run leaves them there, and the stray-write check runs after close and cannot see them.`,
+    limits: `Law 12 judges refusals only: no legal history reaches an internal error, so its shape (exit 3, the stack in error.log) is not judged; argument refusals are the static oracle's; the check's rejection of a stack trace, a missing fix, and a wrong exit code is calibrated in the static oracle, through the same refusalBreach, and here only a refused run reported as complete is calibrated, because each calibration here runs real CLI histories. Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 6 s full limit, and a slow run only as one witness that waits 3 s before it judges; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; no --only, --sample, or --diff-base; a derived class's file is instrumented and its sites are judged as unowned, but no test imports or constructs the class, so its no-mutant and super-region behavior is the static oracle's (in-process), not this oracle's; package configs only in vite.config.ts, vitest.config.ts, or vite.config.mjs, as an object or a sync or async function, with no plugins of their own and test.projects only as a refusal; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9's edits leave out files read through fs, other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; cut-off charging judged only under one budget; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages; daemon races (two CLIs reading one error file, a CLI hearing closing from the failing daemon it started, a reset connection on macOS) fixed by inspection; a workspace dependency's one-file bundle is written in that dependency's own .oracle-gaps folder, a known stray write (date-fns report), which the stray-write check excludes; the runner's copies and Vitest configs (.oracle-gaps-PID*) sit at the package root and are removed when the run closes, so a killed run leaves them there, and the stray-write check runs after close and cannot see them.`,
   },
   histories: {
     arbitrary: histories,
@@ -2012,7 +2048,7 @@ oracleProperty({
       },
       {
         // Two authored mutants in one source file, one killed and one a
-        // comparison gap: a run that let one see the other's patch would
+        // not-judged gap: a run that let one see the other's patch would
         // judge them alike.
         name: `two authored mutants`,
         enters: [

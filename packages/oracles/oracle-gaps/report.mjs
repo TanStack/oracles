@@ -2,18 +2,24 @@
 //
 // The report is evidence, not a fix. A surviving mutant or an unreached
 // branch does not say which model rule to add; it says the oracle cannot see
-// some difference in production. The author reads each gap, states the law it
-// reveals (missing, misstated, or unenforced), names that law's authority,
-// and re-plans the oracle around the law rather than around the line, then
-// runs the check again. Recording that answer as an evidence-log event, and
-// the gate that reads it, wait on the maintainer's decision about how an
-// answer maps to a law; until then the report only lists the gaps.
+// some difference in production. Each gap has one directive message (decision
+// 10 of the v20 design grammar: messages leave no outs). The message names
+// the run's data, and it never offers an equivalence, an approval, or a
+// question. The author then states the law the gap reveals and re-plans the
+// oracle around it, and runs the check again.
 //
-// A gap is identified by an anchor that survives unrelated edits and
-// reformatting: the source file, the function (`name`, or `Class.method`),
-// the operator, and the tokens of the innermost statement that holds the
-// site, joined by single spaces and kept in full, with `~n` for the nth
-// repeat of one anchor in a function. An authored mutant's key is its id.
+// Two renderings. The full report (`renderReport`, written to summary.md)
+// lists every gap with its key, owners, and data. The stdout summary
+// (`renderStdout`) prints the totals, one legend line per class present (its
+// directive, with placeholders), and every gap once, one line each, grouped
+// by function, with owners printed once per function as package-relative
+// paths. Unowned warnings are counted per function. A gap is identified by an
+// anchor that survives unrelated edits and reformatting: the source file, the
+// function (`name`, or `Class.method`), the operator, and the tokens of the
+// innermost statement that holds the site, joined by single spaces and kept in
+// full, with `~n` for the nth repeat of one anchor in a function. An authored
+// mutant's key is its source and id (`source#authored:id`).
+import { change, codeSpan, gapLine, kindOf } from './stream.mjs'
 
 /** Outcomes that are gaps. Only a law verdict on a reproducible route kills. */
 export const gapOutcomes = new Set([
@@ -69,23 +75,102 @@ export function keyAndSelect(mutants, { only, sample, sources }) {
   })
 }
 
-// What each gap shows, phrased as the question the author answers.
-const questions = {
-  'generator-gap': `An \`if\` here never took one of its outcomes in an owner's history. Which legal input makes it take the other one, and which law governs that input? If no public use can reach it, say why (an equivalent mutant, which needs a maintainer's approval).`,
-  'comparison-gap': `Observed values changed, but no law rejected them. Which law forbids the changed value? Its observation, checkpoint, or comparison is missing or too loose.`,
-  'no-observed-difference': `Every \`if\` outcome here occurred, yet nothing observed changed. Either the mutant is equivalent (say why; a maintainer approves it), or no explored history tells it apart: which history would, and which law would it test?`,
-  indeterminate: `Only nondeterministic owner tests reach this site, so their failures judge nothing. Which source of nondeterminism hides it?`,
-  survived: `The mutant changed production and no law rejected it. Which law does the intent violate? Which observation or history would show it?`,
-  unreached: `No owner's test executes this code. Which law covers its behavior? Extend the oracle's domain to reach it; a limit needs a maintainer's decision.`,
-  'random-only-kill': `Only the random campaign rejected this mutant, and its seed changes in every CI run. Which state did the counterexample reach? Keep it as a fixed or constructed history.`,
-  'agreement-only-kill': `Only reach agreement rejected this mutant: production took a different path, but no behavioral law saw a different result. Is the behavior really the same, or is a behavioral law missing?`,
-  'unregistered-kill': `Only a test with no registered route rejected this mutant, so its route is unknown. Register it through the framework, or make a reproducible test see the difference.`,
-  crashed: `Production threw where no law judged it. A crash is not a kill: which law should reject this behavior, and at which checkpoint?`,
-  'framework-error': `Only a framework check (a calibration, probe calibration, or the determinism test) failed, with no law violation. The oracle noticed the change but no law judged it.`,
-  timeout: `The run did not end. Which law does a run that never ends violate, and what bounds the driver?`,
-  'setup-error': `The run failed outside any test. The mutant may break module loading; say whether that is a detection.`,
-  'does-not-apply': `The authored mutant's text does not occur exactly once in the source. Update or retire the mutant.`,
+// The evidence tag a mutant may carry (schemata.mjs), and the sentence it adds.
+const BOUNDARY = `boundary: -0`
+const BOUNDARY_SENTENCE = `Add a boundary history with -0 and 0.`
+
+// The name of the test a key names: its path after the file.
+const testName = (key) =>
+  key ? key.split(` > `).slice(1).join(` > `) : `(background)`
+const first = (names) => names?.[0] ?? `(none)`
+// The error a crash threw, as one short line that fits a code span.
+const errorText = (text = `(no message)`) =>
+  text.replace(/`/g, `'`).split(`\n`)[0].slice(0, 120)
+
+// Each gap kind's directive, from the run's data. The legend prints each one
+// with placeholders (`legendOf`), and the messages print it with the data.
+const directive = {
+  unreached: (g) =>
+    `Add an owner test that runs line ${g.line} and asserts on its result.`,
+  'branch-never-taken': (g) =>
+    `Add an owner history where the condition on line ${g.line} is ${g.wanted}, so the branch it guards runs.`,
+  'not-infected': (g) =>
+    `Add a history whose operands are equal, where \`${g.original}\` and \`${g.replacement}\` disagree. Operands seen: ${g.operands?.length ? g.operands.join(`; `) : `none recorded`}.`,
+  'not-observed': (g) =>
+    g.infectedBy === undefined
+      ? `Observe the value this code changes in the owner tests, and assert on it.`
+      : `Observe the value this code changes in \`${testName(g.infectedBy)}\`, and assert on it.`,
+  'not-distinguished': (g) => distinguishingDirective(g),
+  'not-judged': (g) =>
+    `Make a law in \`${testName(g.changedTests?.[0])}\` reject the changed value.`,
+  indeterminate: (g) =>
+    g.nondeterministicBy?.length
+      ? `Make \`${g.nondeterministicBy.map(testName).join(`, `)}\` deterministic: control its clock and its random seed, so its failures judge this code.`
+      : `Add an owner test that runs line ${g.line} and asserts on its result.`,
+  'dead-code': (g) => `Remove the redundant code on line ${g.line}.`,
+  'random-only-kill': (g) =>
+    `Keep the counterexample that \`${first(g.by)}\` found in the random campaign as a fixed history.`,
+  'agreement-only-kill': (g) =>
+    `Assert on the value this path produces in \`${first(g.by)}\`.`,
+  'unregistered-kill': (g) =>
+    `Register the route of \`${first(g.by)}\` through the framework, so its failure counts as a kill.`,
+  'framework-error': (g) =>
+    `The framework check \`${first(g.by)}\` failed with \`${errorText(g.detail)}\`, and a calibration judges no behavior: state the oracle law that decides this input's outcome, and let it reject the change.`,
+  crashed: (g) =>
+    `Production threw \`${errorText(g.detail)}\` in \`${first(g.by)}\`; record the error as an observation in the driver, and state the law that decides this input's outcome.`,
+  timeout: () =>
+    `Bound the run of the owner tests so that they end, and let a law reject a run that does not.`,
+  'setup-error': () =>
+    `Run an owner test that loads this module and asserts on its exports, so a failed load rejects the mutant.`,
+  'does-not-apply': () =>
+    `Update the \`find\` text of this authored mutant so that it occurs exactly once in the source.`,
 }
+
+// The directive for an operator whose infection is not measured: the input
+// that makes its value differ, built from the operator (classify.mjs).
+function distinguishingDirective(g) {
+  const line = g.line
+  if (g.operator === `loop-false`)
+    return `Add an owner history that enters the loop on line ${line}, so that forcing its condition to false changes an asserted result, and assert on the result.`
+  if (g.operator === `value-undefined`)
+    return `Add an owner history where the call on line ${line} returns a value that changes an asserted result when it is \`undefined\`, and assert on the result.`
+  if (g.operator === `field-drop`)
+    return `Add an owner history that reads the property dropped on line ${line}, so that its absence changes an asserted result, and assert on the result.`
+  if (g.operator === `delete-call`)
+    return `Add an owner history where the call on line ${line} changes an asserted result when it does not run, and assert on the result.`
+  if (g.original === `??`)
+    return `Add an owner history where the left operand of \`??\` on line ${line} is truthy, so \`??\` and \`&&\` give different results, and assert on the result.`
+  if (g.original === `&&` || g.original === `||`)
+    return `Add an owner history where one operand of \`${g.original}\` on line ${line} is falsy and the other is truthy, so \`&&\` and \`||\` give different results, and assert on the result.`
+  return `Add an owner history where the input that changes the value on line ${line} gives a different result, and assert on the result.`
+}
+
+/** The gap's message: its kind's directive, with the boundary sentence if any. */
+export function messageOf(gap) {
+  const text = directive[kindOf(gap)](gap)
+  return gap.evidence === BOUNDARY && gap.outcome === `survived`
+    ? `${text} ${BOUNDARY_SENTENCE}`
+    : text
+}
+
+// The legend: each kind's directive with placeholders for its run data.
+const placeholders = {
+  line: `N`,
+  wanted: `<outcome>`,
+  original: `<operator>`,
+  replacement: `<operator>`,
+  operands: [`<a> and <b>`],
+  infectedBy: `<file> > <test>`,
+  changedTests: [`<file> > <test>`],
+  nondeterministicBy: [`<file> > <test>`],
+  by: [`<test>`],
+  detail: `<error>`,
+  operator: `<operator>`,
+}
+const legendOf = (kind) => directive[kind]({ ...placeholders, outcome: kind })
+
+// What the author does about a law that rejects no mutant: one next step.
+const killsDirective = `To find a law that rejects no mutant, add a history that varies the input the law judges, and run the check again.`
 
 export function gapsOf(results) {
   return results.filter(
@@ -93,17 +178,23 @@ export function gapsOf(results) {
   )
 }
 
-/** A key as a Markdown code span whose fence outruns any backticks in it. */
-export function codeSpan(text) {
-  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((r) => r.length))
-  const fence = `\``.repeat(longest + 1)
-  return `${fence} ${text} ${fence}`
+// Entries of a list, grouped by a key, in first-seen order.
+function groupBy(list, keyOf) {
+  const groups = new Map()
+  for (const item of list) {
+    const key = keyOf(item)
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(item)
+  }
+  return groups
 }
 
-function change(result) {
-  if (result.authored) return `${result.intent} (authored by ${result.author})`
-  return `${codeSpan(String(result.original).replace(/\s+/g, ` `))} → ${codeSpan(String(result.replacement))}`
-}
+// A group of gaps: the authored mutants, or one function, named with its
+// source file, since two files can each have a function of one name.
+const groupOf = (gap) =>
+  gap.authored
+    ? `authored mutants (${gap.source})`
+    : `fn ${gap.function} (${gap.source})`
 
 export function renderReport({ results, run, excluded }) {
   const gaps = gapsOf(results)
@@ -144,7 +235,7 @@ export function renderReport({ results, run, excluded }) {
     ``,
     `1. State the law it reveals: one that is missing, misstated, or not enforced. Several gaps often reveal one law.`,
     `2. Name the law's authority: a contract document and section, or a maintainer decision.`,
-    `3. Re-plan the oracle around that law: its grammar or domain, model, observations, or comparison. Do not patch the line.`,
+    `3. Re-plan the oracle around that law: its grammar or domain, model, observations, or comparison. Do not patch the line, except dead code, whose gap says to remove the code.`,
     `4. Run the check again.`,
     ``,
     `Rerun one mutant with \`--only <id>\`.`,
@@ -152,20 +243,14 @@ export function renderReport({ results, run, excluded }) {
     `## Gaps`,
     ``,
   )
-  const byFunction = new Map()
-  for (const gap of gaps) {
-    const group = gap.authored ? `authored mutants` : `fn ${gap.function}`
-    byFunction.set(group, [...(byFunction.get(group) ?? []), gap])
-  }
   if (gaps.length === 0) lines.push(`None.`, ``)
-  for (const [group, rows] of byFunction) {
-    lines.push(`### ${group} (${rows[0].source})`, ``)
+  for (const [group, rows] of groupBy(gaps, groupOf)) {
+    lines.push(`### ${group}`, ``)
     for (const gap of rows) {
-      const kind = gap.class ?? gap.outcome
       lines.push(
-        `- **${kind}**, line ${gap.line}: ${change(gap)}`,
+        `- **${kindOf(gap)}**, line ${gap.line}: ${change(gap)}`,
         `  - Key: ${codeSpan(gap.key)}; rerun: \`--only ${gap.id}\``,
-        `  - ${questions[kind] ?? questions.survived}`,
+        `  - ${messageOf(gap)}`,
       )
       if (gap.oracleFiles?.length)
         lines.push(`  - Owners: ${gap.oracleFiles.join(`, `)}`)
@@ -173,7 +258,7 @@ export function renderReport({ results, run, excluded }) {
         lines.push(
           `  - Changed observations in: ${gap.changedTests
             .slice(0, 3)
-            .map((k) => k.split(` > `).slice(1).join(` > `))
+            .map(testName)
             .join(`; `)}`,
         )
       if (gap.laws?.length)
@@ -182,15 +267,22 @@ export function renderReport({ results, run, excluded }) {
     }
     lines.push(``)
   }
-  if (unowned.length > 0)
+  if (unowned.length > 0) {
     lines.push(
       `## Unowned (warnings)`,
       ``,
       `No oracle's \`owns\` call tree contains these functions, so no test judges them.`,
       ``,
-      ...unowned.map((r) => `- Unowned: ${codeSpan(r.key)}`),
-      ``,
     )
+    for (const [group, rows] of groupBy(unowned, groupOf)) {
+      lines.push(
+        `### ${group}: ${rows.length} ${rows.length === 1 ? `mutant` : `mutants`}`,
+        ``,
+        ...rows.map((r) => `- Unowned: ${codeSpan(r.key)}`),
+        ``,
+      )
+    }
+  }
   const byLaw = new Map()
   for (const result of killed)
     for (const law of result.laws ?? [])
@@ -198,7 +290,7 @@ export function renderReport({ results, run, excluded }) {
   lines.push(
     `## Kills by law`,
     ``,
-    `A law that kills nothing may be untested by the mutants, or redundant.`,
+    killsDirective,
     ``,
     `| Law | Mutants it rejected |`,
     `|---|---|`,
@@ -206,5 +298,53 @@ export function renderReport({ results, run, excluded }) {
       .sort((a, b) => b[1] - a[1])
       .map(([law, count]) => `| ${law} | ${count} |`),
   )
+  return lines.join(`\n`)
+}
+
+/**
+ * The stdout summary: the totals, one legend line per class present, every
+ * gap once under its function (owners printed once per function), the
+ * unowned warnings counted per function, and the paths of the full report
+ * and the results.
+ */
+export function renderStdout({ results, run, excluded, pkg, paths }) {
+  const gaps = gapsOf(results)
+  const unowned = results.filter(
+    (r) => !r.probeGuard && r.outcome === `unowned`,
+  )
+  const killed = results.filter((r) => r.outcome === `killed` && !r.probeGuard)
+  const relative = (file) =>
+    file.startsWith(`${pkg}/`) ? file.slice(pkg.length + 1) : file
+  const lines = [
+    `Oracle gap check ${run.id}: ${results.length} mutants, ${killed.length} killed, ${gaps.length} gaps, ${unowned.length} unowned (warnings). ${run.inputs}.`,
+    ``,
+    `Legend, one directive per class:`,
+  ]
+  for (const kind of new Set(gaps.map(kindOf)))
+    lines.push(`  ${kind}: ${legendOf(kind)}`)
+  lines.push(``, `Gaps, by function:`)
+  if (gaps.length === 0) lines.push(`  none`)
+  for (const [group, rows] of groupBy(gaps, groupOf)) {
+    const owners = [
+      ...new Set(rows.flatMap((g) => g.oracleFiles ?? []).map(relative)),
+    ].sort()
+    lines.push(
+      `${group}${owners.length > 0 ? ` (owners: ${owners.join(`, `)})` : ``}`,
+    )
+    for (const gap of rows) lines.push(`  ${gapLine(gap)}`)
+  }
+  if (unowned.length > 0) {
+    lines.push(``, `Unowned warnings, by function:`)
+    for (const [group, rows] of groupBy(unowned, groupOf))
+      lines.push(
+        `  unowned ${group}: ${rows.length} ${rows.length === 1 ? `mutant` : `mutants`}`,
+      )
+  }
+  if (excluded.length > 0)
+    lines.push(
+      ``,
+      `Left out, failing with no mutant active: ${excluded.join(`, `)}.`,
+    )
+  lines.push(``, `Full report: ${paths.report}`, `Results: ${paths.results}`)
   return lines.join(`\n`)
 }

@@ -30,9 +30,12 @@ import fc from 'fast-check'
 import { afterAll, beforeAll } from 'vitest'
 import { differs, pass } from '@tanstack/oracles'
 import oraclePlugin from '../src/index.js'
+import { lintCharged, lintChargedAsync } from './lint-observation.js'
 
 export const RULE = `oracle/no-unit-test`
 export const ORACLE = `case-oracle.test.ts`
+// The oracle file of a program that ESLint lints with espree: a JavaScript file.
+export const ORACLE_JS = `case-oracle.test.js`
 export const PROPERTY = `lint.part-reach`
 export const FIXED_SEED = 2234
 export const BASE_RUNS = 30
@@ -189,6 +192,9 @@ export const programSkeleton = fc.record({
     registrarCall: fc.boolean(),
     tests: fc.array(registrationSkeleton, { maxLength: 6 }),
   }),
+  // The parser that the consumer's config gives the oracle file: typescript-eslint
+  // for a TypeScript oracle, or ESLint's default espree for a JavaScript one.
+  parser: fc.constantFrom(`typescript`, `espree`),
 })
 
 /** The grammar's feature gates. A campaign turns on one family at a time. */
@@ -209,6 +215,8 @@ export const BASE = {
   jsCompanions: false,
   // Off: every oracle property comes from the framework module, by name.
   frameworkNames: false,
+  // Off: the oracle file is TypeScript, linted with typescript-eslint.
+  parsers: false,
 }
 export const ALL = {
   companions: true,
@@ -224,6 +232,7 @@ export const ALL = {
   spreads: true,
   jsCompanions: true,
   frameworkNames: true,
+  parsers: true,
 }
 
 /** The base grammar with `forms` added, and `more` overriding any feature. */
@@ -268,6 +277,8 @@ export function buildProgram(skeleton, features) {
   )
   const brokenFile =
     features.broken && skeleton.broken ? `broken.ts` : undefined
+  const parser = features.parsers ? skeleton.parser : `typescript`
+  const oracleFile = parser === `espree` ? ORACLE_JS : ORACLE
   const registrarFile =
     features.registrar && skeleton.oracle.registrarCall
       ? skeleton.registrarName
@@ -353,7 +364,7 @@ export function buildProgram(skeleton, features) {
     : `named`
   const oracleSkeleton = skeleton.oracle
   const oracle = buildModule({
-    file: ORACLE,
+    file: oracleFile,
     role: `oracle`,
     skeleton: oracleSkeleton.module,
     targets: oracleTargets,
@@ -370,7 +381,7 @@ export function buildProgram(skeleton, features) {
     registrarFile,
     registrarImport,
   })
-  modules.set(ORACLE, oracle)
+  modules.set(oracleFile, oracle)
   const helperFile = features.helperNames
     ? skeleton.helperName
     : `reg-helper.ts`
@@ -467,7 +478,15 @@ export function buildProgram(skeleton, features) {
       })
     }
   }
-  return { oracle: ORACLE, modules, tests, calls, helperFile, frameworkFile }
+  return {
+    oracle: oracleFile,
+    parser,
+    modules,
+    tests,
+    calls,
+    helperFile,
+    frameworkFile,
+  }
 }
 
 // The helper module's exports, in the order HELPER_TEXT defines them.
@@ -660,7 +679,12 @@ export function buildRegistration(skeleton, index, context) {
   const title = `t${index}`
   const names = [...oracle.bindings.keys()]
   const aliases = [...oracle.imports.keys()]
-  const resolve = (ref) => resolveRef(ref, names, aliases)
+  // A JavaScript oracle holds no type syntax, so its type references are dropped.
+  const javascript = oracle.file.endsWith(`.js`)
+  const resolve = (ref) => {
+    const resolved = resolveRef(ref, names, aliases)
+    return javascript && resolved?.kind === `type` ? undefined : resolved
+  }
   const functionNames = names.filter(
     (name) => name.startsWith(`ofn`) && oracle.bindings.get(name).kind === `fn`,
   )
@@ -794,6 +818,49 @@ export function buildRegistration(skeleton, index, context) {
 // module, which no lint reads (rubric "Name oracle files consistently"). A
 // helper that passes on its caller's body from a module linted on its own is
 // judged there, so its calls are not judged in the oracle file.
+//
+// Parsing. The rule reads each module that the oracle file imports, directly or
+// through other modules, with the parser that ESLint uses for the oracle file,
+// so it agrees with the consumer's own config (law 3 of the consumer-parser
+// fix). typescript-eslint parses TypeScript and JavaScript. espree parses only
+// JavaScript (ECMAScript has no type syntax), so a module with a type alias or
+// a type annotation does not parse under it. The broken module parses under
+// neither. A module that does not parse exports nothing, so nothing reaches a
+// part through it. When the rule reports a test that reaches no part (a unit
+// test, or the undeclared file), the reach it judged may have run through such
+// a module, so each import, re-export, or star export in the oracle file whose
+// module does not parse is reported too, once, at that declaration. A file
+// whose tests all reach is not judged by those modules, so they are not
+// reported: a JavaScript config may import a TypeScript one that espree cannot
+// read. The rule never throws on such a module (maintainer decision
+// 2026-11-08, rules never throw).
+
+/** Whether a module holds TypeScript syntax: a type alias or a type annotation. */
+export const hasTypeSyntax = (module) =>
+  module.types.size > 0 ||
+  [...module.bindings.values()].some((binding) =>
+    binding.refs.some((ref) => ref.kind === `type`),
+  )
+
+/** Whether `file` parses under the parser that ESLint uses for the oracle file. */
+export function parsesUnder(program, file) {
+  const module = program.modules.get(file)
+  if (module === undefined) return true
+  if (module.role === `broken`) return false
+  return program.parser !== `espree` || !hasTypeSyntax(module)
+}
+
+/** The files that the oracle file names in an import, re-export, or star export, one per declaration. */
+export function oracleDeclarationTargets(program) {
+  const oracle = program.modules.get(program.oracle)
+  return [
+    ...[...oracle.imports.values()].map((link) => link.from),
+    ...oracle.exportEntries
+      .filter((entry) => entry.from !== undefined)
+      .map((entry) => entry.from),
+    ...oracle.stars,
+  ]
+}
 
 /** The reports that the rule should give for a program, as sorted keys. */
 export function predictReports(program) {
@@ -805,7 +872,7 @@ export function predictReports(program) {
     if (seen.has(nodeKey(file, name))) return []
     seen.add(nodeKey(file, name))
     const module = program.modules.get(file)
-    if (module === undefined) return []
+    if (module === undefined || !parsesUnder(program, file)) return []
     const entry = module.exportEntries.find(
       (candidate) => candidate.name === name,
     )
@@ -929,6 +996,11 @@ export function predictReports(program) {
       keys.push(`imported:oracleProperty`)
     }
   }
+  if (keys.some((key) => /^(unit|undeclared):/.test(key))) {
+    for (const file of oracleDeclarationTargets(program)) {
+      if (!parsesUnder(program, file)) keys.push(`unparsed:${file}`)
+    }
+  }
   return keys.sort()
 }
 
@@ -1037,7 +1109,9 @@ export function renderModule(module, program) {
       push(`import { test as fcTest } from '@fast-check/vitest'`)
     }
   }
-  for (const [alias, link] of module.imports) push(importText(alias, link))
+  // A declaration that names a module is the subject of its unparsed report.
+  for (const [alias, link] of module.imports)
+    push(importText(alias, link), { id: link.from })
   for (const name of module.types) push(`type ${name}<X> = X`)
   for (const [name, binding] of module.bindings) {
     if (binding.kind === `obj`) {
@@ -1063,12 +1137,14 @@ export function renderModule(module, program) {
     if (entry.from !== undefined) {
       push(
         `export { ${entry.imported} as ${entry.name} } from '${specOf(entry.from)}'`,
+        { id: entry.from },
       )
     } else if (entry.name === `default`) {
       push(`export default ${entry.local}`)
     }
   }
-  for (const star of module.stars) push(`export * from '${specOf(star)}'`)
+  for (const star of module.stars)
+    push(`export * from '${specOf(star)}'`, { id: star })
   if (module.role === `oracle`) {
     if (module.declares) renderDeclaration(module, push)
     // A call inside a registration is rendered with that registration.
@@ -1310,14 +1386,24 @@ export function keyOf(message, subjects) {
   if (id === `importedRegistration`)
     return `imported:${subject.helper ?? subject.id}`
   if (id === `incompleteProperty`) return `incomplete:${subject.id}`
+  // The report must name the module, as the oracle file's specifier writes it.
+  if (id === `unparsedModule`) {
+    const named = message.message.includes(specOf(subject.id))
+    return `unparsed:${subject.id}${named ? `` : `:unnamed`}`
+  }
   return `other:${id}@${message.line}`
 }
 
-// Without `files`, flat config applies only to the default .js patterns.
+// Without `files`, flat config applies only to the default .js patterns. A
+// TypeScript file gets typescript-eslint, and a JavaScript file ESLint's default
+// espree, as a consumer's config gives them.
 export const linterConfig = [
   {
     files: [`**/*.ts`],
     languageOptions: { parser: tsParser, sourceType: `module` },
+  },
+  {
+    files: [`**/*.ts`, `**/*.js`],
     plugins: { oracle: oraclePlugin },
     rules: { [RULE]: `error` },
   },
@@ -1402,11 +1488,7 @@ export async function lintWithEslint(program) {
     join(root, `h${historySeq++}`),
     program,
   )
-  const results = await eslint.lintFiles([oracle])
-  return keysOf(
-    results.flatMap((result) => result.messages),
-    subjects,
-  )
+  return lintInstance(oracle, subjects)
 }
 
 /**
@@ -1419,10 +1501,12 @@ export function lintWithLinter(program) {
     join(scratch, `l${historySeq++}`),
     program,
   )
-  return keysOf(
+  const run = lintCharged(() =>
     linter.verify(text, linterConfig, { filename: oracle }),
-    subjects,
   )
+  return run.threw !== undefined
+    ? [`threw:${run.threw}`]
+    : keysOf(run.messages, subjects)
 }
 
 /**
@@ -1485,6 +1569,22 @@ export function statesOf(program) {
     states.add(`caller-passed-body-helper`)
   }
   const oracle = program.modules.get(program.oracle)
+  if (program.parser === `espree`) {
+    states.add(`espree-oracle`)
+    const usesPart = (test) =>
+      test.body.kind === `arrow` &&
+      test.body.refs.some(
+        (ref) => ref.kind === `local` && oracle.parts.has(ref.name),
+      )
+    if (program.tests.some(usesPart)) states.add(`espree-oracle-test-uses-part`)
+  }
+  for (const file of oracleDeclarationTargets(program)) {
+    const module = program.modules.get(file)
+    if (module?.role === `broken`)
+      states.add(`oracle-imports-unparseable-companion`)
+    else if (program.parser === `espree` && module && hasTypeSyntax(module))
+      states.add(`oracle-imports-type-syntax-under-espree`)
+  }
   for (const [, module] of program.modules) {
     for (const [, link] of module.imports) {
       if (link.form === `namespace`) states.add(`namespace-import`)
@@ -1729,6 +1829,7 @@ export const typeRef = (index) => ({ kind: `type`, index })
 export const fixed = (fields) => ({
   companions: [],
   broken: false,
+  parser: `typescript`,
   registrarName: `reg.ts`,
   registrarImport: `named`,
   helperName: `reg-helper.ts`,
@@ -2038,11 +2139,13 @@ export const chain = fixed({
 
 /** Lints one file on the long-lived instance; returns its keys. */
 export async function lintInstance(file, subjects) {
-  const results = await eslint.lintFiles([file])
-  return keysOf(
-    results.flatMap((result) => result.messages),
-    subjects,
-  )
+  const run = await lintChargedAsync(() => eslint.lintFiles([file]))
+  return run.threw !== undefined
+    ? [`threw:${run.threw}`]
+    : keysOf(
+        run.messages.flatMap((result) => result.messages),
+        subjects,
+      )
 }
 
 // -- Oracle properties: the shared parts -------------------------------------
@@ -2056,7 +2159,7 @@ export async function lintInstance(file, subjects) {
 export const REPORTS_LAW = `part-reach reports`
 
 /** The authority and limits that every part-reach oracle file states. */
-export const PART_REACH_AUTHORITY = `The header contract of rules/no-unit-test.js (reach and report rules, laws L1, L2, L3, L6, and the oracle-property paragraph of maintainer decision 2026-11-02); docs/contributing/oracle-rubric.md, "Name oracle files consistently"; AGENTS.md, "Name Oracle Files for Discovery".`
+export const PART_REACH_AUTHORITY = `The header contract of rules/no-unit-test.js (reach and report rules, laws L1, L2, L3, L6, and the oracle-property paragraph of maintainer decision 2026-11-02); docs/contributing/oracle-rubric.md, "Name oracle files consistently"; AGENTS.md, "Name Oracle Files for Discovery". The parser rules: the consumer-parser fix (field report round 3, 2026-11-10: an imported module is parsed as ESLint parses the linted file), and the maintainer decision of 2026-11-08 that lint rules never throw (#6).`
 
 // -- Constructions ------------------------------------------------------------
 //
@@ -2233,6 +2336,38 @@ export const WRITES = {
     'oracle.tests.0.refs': [typeRef(0)],
   },
   'unparseable-companion': { broken: true },
+  // The broken module is the last of the oracle's targets, after at most three
+  // companions. A target index is taken modulo the number of targets, and with
+  // one to four targets, 5 or 3 names the last one. The first test uses only
+  // the first import, which names the broken module when there are at most
+  // two companions; then it reaches nothing, and the import is reported.
+  'oracle-imports-unparseable-companion': {
+    broken: true,
+    'oracle.module.imports': [5, 3].map((target) => ({
+      target,
+      slot: 0,
+      form: `named`,
+    })),
+    ...plainTest('oracle.tests.0'),
+    'oracle.tests.0.formIndex': formAt(`plain`),
+    'oracle.tests.0.refs': [imported(0)],
+  },
+  // The parsers.
+  'espree-oracle': { parser: `espree` },
+  'espree-oracle-test-uses-part': {
+    parser: `espree`,
+    ...plainTest('oracle.tests.0'),
+    'oracle.tests.0.formIndex': formAt(`plain`),
+    'oracle.module.slots.0.present': true,
+    'oracle.module.slots.0.part': `check`,
+    'oracle.tests.0.refs': [local(0)],
+  },
+  'oracle-imports-type-syntax-under-espree': {
+    parser: `espree`,
+    'companions.0.js': false,
+    'companions.0.typeAliases': [true, false, false],
+    'oracle.module.imports': [{ target: 0, slot: 0, form: `named` }],
+  },
   'javascript-companion-import-reaches-part': {
     ...plainTest('oracle.tests.0'),
     'oracle.registrarCall': false,
@@ -2595,7 +2730,10 @@ export function familyOptions({
   }
 }
 
-/** The 42 declared states of the grammar, in the order of the original file. */
+/**
+ * The 46 declared states of the grammar: the original file's, in its order,
+ * then the parser states.
+ */
 export const STATE_NAMES = [
   `export-star-cycle`,
   `named-reexport-cycle`,
@@ -2639,4 +2777,8 @@ export const STATE_NAMES = [
   `oracle-property-named-options`,
   `oracle-property-namespace-import`,
   `oracle-property-machinery-lookalike`,
+  `oracle-imports-unparseable-companion`,
+  `espree-oracle`,
+  `espree-oracle-test-uses-part`,
+  `oracle-imports-type-syntax-under-espree`,
 ]
