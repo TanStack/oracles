@@ -38,6 +38,10 @@ credibility. So every finding needs a probe that the developer can run again.
   rejects it), or leave the term out.
 - Talk naturally. Never name a skill, a step, or a section ("step 3", "the
   skill's fallback"). Say what you are doing, in your own words.
+- Talk about their code in its own terms, not in this skill's words. Words
+  such as "dynamics", "constraints", "boundaries", "a behavior that's easy to
+  break", or "a simple rule behind it" are for you. The developer should hear
+  about scrolling, retries, cache entries, or whatever their code does.
 - Ask in plain words. Explain any term the developer may not know in one
   line (for example, a lone surrogate is half of a character that takes two
   UTF-16 units).
@@ -106,10 +110,13 @@ repository's own lint: the oracles lint plugin comes with production, and
 its absence is not a problem to report.
 
 Your first message starts with two or three sentences on what this session
-will do, before any question. For example: "I'll
-look around your code for a behavior that's easy to break, try it with small
-scripts that call your real API, and show you what I find. Then I'll write
-an oracle for it with you and run it."
+will do, before any question. Write them for this repository, in plain words:
+name what the library does, and what you will try. For a scroll-aware header
+component, for example: "I'll read how Headroom decides when to hide and
+show the header, then mount it in a fake browser and scroll it around to see
+whether it does what the docs say. Anything odd, I'll show you with a script
+you can rerun. Then we'll write an oracle for the rules we agree on, and run
+it." Do not reuse that wording.
 
 Then ask one question: is there a part of the code they want to try this on,
 or should you look around? Stop for the answer. If their first message
@@ -153,7 +160,9 @@ Read the spot's docs, code, tests, and fix history. Then ask yourself: what
 do I not know about this code that I need to know to build its oracle? How
 does the state change with each call? Where are the boundaries? What holds
 whatever happens? Show the developer those questions in the chat, a short
-list, before you probe: it shows them how an oracle gets built. Then build a
+list, before you probe: it shows them how an oracle gets built. Write each
+question about their code ("If you scroll up by one pixel, does the header
+come back?"), not as a category ("timing", "lifecycle"). Then build a
 probe for each one, and answer each question with what its probe showed.
 
 **A probe** is a small script that calls the real public API with chosen
