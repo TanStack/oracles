@@ -2504,28 +2504,36 @@ function sitesOf(plan) {
         const near = { stmt: stmt.label, role: `near`, probe: inHelper }
         const at = (line, operator, text, extra) =>
           add(fn.id, line, operator, text, { ...near, ...extra })
-        // The `&&` that guards the hook is a logical operator.
+        // The `&&` that guards the hook is a logical operator. No hook is
+        // installed, so `?.()` never evaluates the condition it is passed,
+        // and `process` is defined, so a guard's `false` is never read:
+        // neither is reached.
         const and = { logical: true }
+        const idle = { idle: true }
         const call = (line) => {
           const text = stmt.lines[line - stmt.line].trim()
           at(line, `binary-swap`, text, and)
           at(line, `value-undefined`, text)
-          at(line, `binary-swap`, text)
+          at(line, `binary-swap`, text, idle)
         }
         if (stmt.variant === `former`) {
           at(stmt.line, `binary-swap`, whole, and)
           at(stmt.line, `binary-swap`, whole)
           at(stmt.line, `value-undefined`, whole)
-          at(stmt.line, `binary-swap`, whole)
+          at(stmt.line, `binary-swap`, whole, idle)
+        }
+        // A guard's declaration: its `===`, its `false`, and its `!==`.
+        const declared = (line, text) => {
+          at(line, `binary-swap`, text)
+          at(line, `bool-flip`, text, idle)
+          at(line, `binary-swap`, text)
         }
         if (stmt.variant === `name`) {
-          for (const op of [`binary-swap`, `bool-flip`, `binary-swap`])
-            at(stmt.line, op, stmt.lines[0])
+          declared(stmt.line, stmt.lines[0])
           call(stmt.line + 1)
         }
         if (stmt.variant === `let`) {
-          for (const op of [`binary-swap`, `bool-flip`, `binary-swap`])
-            at(stmt.line + 1, op, stmt.lines[1].trim())
+          declared(stmt.line + 1, stmt.lines[1].trim())
           call(stmt.line + 2)
         }
         if (stmt.variant === `init`) {
@@ -2931,11 +2939,11 @@ function interpret(plan, fnId, x, sites, active) {
         }
       }
       if (stmt.kind === `setTag`) object.tag = `b`
-      // A probe in another shape reaches its sites; no hook is installed, so
-      // none of it writes output.
+      // A probe in another shape reaches its sites but the idle ones; no hook
+      // is installed, so none of it writes output.
       if (stmt.kind === `nearProbe`)
         for (const site of sites)
-          if (site.stmt === stmt.label) reached.add(site.id)
+          if (site.stmt === stmt.label && !site.idle) reached.add(site.id)
       if (stmt.kind === `primeCall`) {
         const site = siteOf(stmt, `call`)
         reached.add(site.id)
