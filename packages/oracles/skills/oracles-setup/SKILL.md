@@ -205,8 +205,7 @@ export default [
   it is TypeScript. Otherwise a typed production file fails to parse before
   the probe rule runs. For JavaScript production source, set the parser for
   the oracle files only.
-- Do not add an exemption. There is none: `legacyCampaigns` is removed, and
-  setting it is reported.
+- Do not add an exemption. There is none.
 
 **An older ESLint (7 or 8, `.eslintrc`).** Do not upgrade the repository's
 lint. Lint the oracle files with a separate ESLint 9:
@@ -357,8 +356,9 @@ continue with its gap check. If there is none, build it from the potential
 laws that the engineer approved: load `oracles-design`, and follow it from
 its first step.
 
-In a first session, stop at the RED: present the bug, and leave the fix and
-the gap check for production. When taking the oracle to production:
+In a first session, stop at the RED: present the bug, and leave the fix for
+production. A first session runs the gap check only when its oracle passes
+(`oracles-start` step 5). When taking the oracle to production:
 
 If the first oracle fails on unchanged production under an adopted law, it
 found a defect. The RED is the finding: report it with its replay line, and

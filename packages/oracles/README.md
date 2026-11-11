@@ -33,8 +33,9 @@ What happens next:
    part of the code in mind.
 2. It looks around, and suggests two or three places where an oracle would
    help. You pick one.
-3. It tries that code with probes: small scripts that call your real API.
-   Each finding comes with a snippet you can rerun, and the doc or test that
+3. It tries that code with probes: small scripts that call your real API,
+   to learn how the code behaves at its edges and over a sequence of calls.
+   That is what the oracle needs. Each finding comes with a snippet you can rerun, and the doc or test that
    the behavior seems to break: possible bugs, places where the docs and the
    code disagree, behavior no test checks, and design questions nobody has
    decided.
@@ -43,12 +44,15 @@ What happens next:
    code promises.
 5. It writes the oracle file and runs it on your unchanged code, telling you
    what each part does as it goes, until the oracle has found a bug and you
-   have settled some design questions.
+   have settled some design questions. If the oracle finds no bug, the agent
+   runs the gap check, which shows production changes that no law catches,
+   to dig deeper for a bug or a design question.
 6. It shows you what it built, offers to walk you through how it works, and
    explains how to take the oracle to production.
 
 Until you choose to ship it, the agent changes nothing in your repository
-except the minimal installs and the oracle file.
+except the minimal installs, the oracle file, and the gap check's working
+directory, if it runs.
 
 The package needs Node 20 or later. The setup skill installs Vitest and
 fast-check if the repository does not have them.

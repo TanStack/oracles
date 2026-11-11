@@ -18,9 +18,12 @@ The session ends at one moment: an oracle that runs on their code, has found
 a bug, and has pushed them to settle some design questions. Then you present
 what you built, and explain how to take it to production.
 
-An agent that only says things is often wrong, and one wrong claim costs the
-tool its credibility. So every finding needs a probe that the engineer can
-run again.
+Probes are how you learn what reading the code does not tell you: its
+dynamics, boundary conditions, and constraints. You need that understanding
+to build the oracle. Bugs and inconsistencies that the probes find along the
+way are a welcome side effect. They also keep you honest: an agent that only
+says things is often wrong, and one wrong claim costs the tool its
+credibility. So every finding needs a probe that the engineer can run again.
 
 ## How to talk
 
@@ -67,12 +70,21 @@ these:
 - a minimal Vitest config that picks up the oracle file, only when the
   repository's own config does not
 - oracle files, with their prose
+- the gap check's working directory (`.oracle-gaps/`), when you run it.
+  Tell the engineer it is safe to delete, and that production adds it to
+  `.gitignore`.
 
 Findings, potential oracles, and potential laws stay in the chat. Keep
 probes in a scratch directory outside the repository. Change production code
 only when the engineer asks you to.
 
 ## 1. Open
+
+Before your first message, read the block in `oracles-setup` step 4 that
+production adds to `AGENTS.md`. It governs you from the start of this
+session, though nobody has added it to the repository yet: who owns the
+laws and who owns the code, which skill to read before each kind of oracle
+work, and the lint rule.
 
 Your first message starts with two or three sentences on what this session
 will do, before any question. For example: "I'll
@@ -118,7 +130,11 @@ They can redirect you.
 
 ## 3. Probe
 
-Read the spot's docs, code, tests, and fix history. Then probe it.
+Read the spot's docs, code, tests, and fix history. Then ask yourself: what
+do I not know about this code that I need to know to build its oracle? How
+does the state change with each call? Where are the boundaries? What holds
+whatever happens? Write those questions down for yourself, and build a probe
+for each one.
 
 **A probe** is a small script that calls the real public API with chosen
 inputs and prints what happens. Import the code the way the repository's own
@@ -374,14 +390,22 @@ default: with no engineer present, propose them and stop.
    block's prose in the same step. Before you show results, check that the
    prose still says what the code does.
 
-Do not run the gap check yet, and do not change production code. Both belong
-to taking the oracle to production.
+Do not change production code. That belongs to taking the oracle to
+production.
 
-If the oracle finds no bug, say so plainly, show what held, and offer to
-build the next oracle at another spot. To show that it would have caught
-one, make one or two small, plausible bugs in a scratch copy of the
-production code (never in the repository), run the oracle against the copy,
-and show which law catches each.
+**If the oracle finds no bug, run the gap check to go deeper.** Say so
+plainly first, and show what held. The gap check makes small changes to a
+copy of the production code that the oracle owns, and shows each change
+that no law catches. Each one points at a bug the oracle has not reached, a
+design question, or a law nobody has stated yet. Take the command and its
+flags from `oracles-setup` step 7, and put its `--out` directory in your
+scratch directory, outside the repository. Read each surviving change, probe
+it when it is unclear, and present what it shows as a finding: a possible
+bug, or a design question for the engineer. Do not try to close every gap:
+that is production work.
+
+If the gap check finds nothing worth the engineer's time either, offer to
+build the next oracle at another spot.
 
 ## 6. Present
 
@@ -393,17 +417,16 @@ bug and the engineer does not want another one:
 - an offer to walk through how it works: how the reference model was built,
   how the histories are generated, and how the driver calls their code.
   Engineers often want this, and it is the best part to teach.
+- an invitation to ask questions
 
 When they take the walk-through, follow one bug the oracle found through
 the file: the history that produced it, what the driver did and saw, what
 the model expected, and how the check reported the difference and shrank it.
 Show a few lines of the file at each part, not a description of it.
 
-- an invitation to ask questions
-
 Then explain how to take the oracle to production: a lint preset that keeps
 oracle files honest, a block in `AGENTS.md` (or `CLAUDE.md`) so every agent
-follows the same rules, and the gap check, which makes small changes to a copy of the
-production code and shows each change that no law catches. That is how the
-oracle grows toward full coverage. If they want to go ahead, load
+follows the same rules, and the gap check in CI, which makes small changes
+to a copy of the production code and shows each change that no law catches.
+Closing those gaps is how the oracle grows toward full coverage. If they want to go ahead, load
 `oracles-setup`.

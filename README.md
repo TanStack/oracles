@@ -154,12 +154,7 @@ required. The rule reports:
 
 A framework implementation module is exempt.
 
-No other configuration exempts a file. `settings.oracles.legacyCampaigns`, the
-old list of files that kept their raw campaigns while they migrated, is removed.
-A configuration that still sets it, to any value, exempts nothing. The rule
-reports it as `removedSetting` at line 1 of each oracle file that the
-configuration reaches, since ESLint runs a rule once per file. Convert the
-listed files to `oracleProperty`, then delete the setting.
+No configuration exempts any other file.
 
 A non-array `settings.oracles.implementationModules` or `replayWitnessModules` is
 reported at line 1 as `malformedSetting`, and it is read as an empty list.

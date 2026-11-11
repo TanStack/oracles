@@ -37,6 +37,3 @@ elsewhere, add `oracle/probe-form` with your own glob.
 The decided bans on snapshot matchers (B1), `fc.pre` (B3), production imports
 in a model (B4), and identical comparison operands (B7) are not rules yet.
 Reviews check them until they ship.
-
-`settings.oracles.legacyCampaigns` is removed. A configuration that still
-sets it exempts nothing.
