@@ -120,7 +120,9 @@ The gap check finds oracle files by their `oracleProperty` call, so the name
 only has to match the Vitest config and the lint glob.
 
 - If the repository has no Vitest config, create `vitest.config.ts` for the
-  oracle files. Jest and mocha ignore that name.
+  oracle files. Jest and mocha ignore that name. If its `package.json` has
+  no `"type": "module"`, name it `vitest.config.mts`, so that Vitest loads
+  it without a module-type warning.
 - If another tool would pick up `vitest.config.ts`, name it
   `vitest.oracle.config.ts`, and pass `--config vitest.oracle.config.ts` to
   the gap check (step 7) and to the Vitest script.

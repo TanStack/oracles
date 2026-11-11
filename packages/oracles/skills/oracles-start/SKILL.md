@@ -94,6 +94,8 @@ docs (the README, the API docs, the JSDoc), the existing tests, and the git
 history of fixes. The files that fixes change most often tell you more than
 a search for "fix":
 `git log -i --grep fix --name-only --format= | sort | uniq -c | sort -rn | head`.
+It is a starting point: skip build and config files, and read the commits
+that changed the public API.
 
 Look for behavior that is easy to break, and whose right answer is simpler
 to state than the code that produces it. Good signs:
@@ -120,7 +122,8 @@ Read the spot's docs, code, tests, and fix history. Then probe it.
 
 **A probe** is a small script that calls the real public API with chosen
 inputs and prints what happens. Import the code the way the repository's own
-tests do, and run the probe from a scratch directory against the unchanged
+tests do. If they import a build that is not built yet, import the source
+it comes from. Run the probe from a scratch directory against the unchanged
 code, with `node` (or `npx tsx` for TypeScript). If Node warns about the
 module type, give the scratch directory a `package.json` with
 `"type": "module"`. Keep each probe and its output.
@@ -300,9 +303,10 @@ Settle these privately too:
 The law must say more than the code does. If a model of it would only repeat
 the implementation, look for the public promise that the code serves.
 
-**A more complex design needs sign-off.** When a trigger for the
-[design grammar](../../docs/instruments/design-grammar.md) card fires (the
-list is in `oracles-design` step 1: for example, more than five laws, or a
+**A more complex design needs sign-off.** Before you propose, read the
+trigger list in `oracles-design` step 1. When a trigger for the
+[design grammar](../../docs/instruments/design-grammar.md) card fires (for
+example, more than five laws, or a
 law with no new case that it predicts), work through the card. Then show
 the engineer the design it produced, in a few plain lines: what the model
 keeps, how the laws share it, and any choice between two designs, with your
