@@ -6,7 +6,16 @@
  * does not (see part-reach-oracle-support.js for the reach relation and its
  * authority). This file owns the module shapes: export-star and named
  * re-export cycles, string-keyed and type-model declarations, an unparseable
- * companion, and a test that imports its check from a JavaScript companion.
+ * companion, a test that imports its check from a JavaScript companion, and
+ * the parser that reads each imported module.
+ *
+ * Parsers: the rule reads an imported module with the parser that ESLint uses
+ * for the oracle file, so it agrees with the consumer's config. The grammar
+ * lints a TypeScript oracle file with typescript-eslint and a JavaScript one
+ * with espree, as a consumer's config does. Under espree, a companion with type
+ * syntax does not parse. When a test reaches no part, each import of a module
+ * that does not parse is reported at that import, naming the module, and the
+ * rule does not throw on it.
  *
  * Each feature family is one oracle property. Cycles are rare in random
  * programs, so their budgets are larger (400 runs), as in the original file.
@@ -68,9 +77,23 @@ oracleProperty({
 oracleProperty({
   ...familyOptions({
     id: `lint.part-reach.unparseable-companion`,
-    statement: `A companion that does not parse reaches nothing, so a test that imports from it is unit-test shaped and the rule reports it as the model predicts.`,
+    statement: `A companion that does not parse reaches nothing, so a test that imports from it is unit-test shaped and the rule reports it as the model predicts. When a test reaches no part, each import of it in the oracle file is reported too, naming the module, and the rule never throws on it.`,
     features: { ...BASE, broken: true },
-    gated: [`unparseable-companion`],
+    gated: [`unparseable-companion`, `oracle-imports-unparseable-companion`],
+  }),
+  check: checkPaths,
+})
+oracleProperty({
+  ...familyOptions({
+    id: `lint.part-reach.parsers`,
+    statement: `The rule reads each imported module with the parser that ESLint uses for the oracle file: under espree as under typescript-eslint, a test reaches a part exactly when the model says, and a module that does not parse under that parser reaches nothing; when a test reaches no part, each import of such a module is reported, naming the module.`,
+    features: { ...BASE, parsers: true, broken: true },
+    gated: [
+      `espree-oracle`,
+      `espree-oracle-test-uses-part`,
+      `oracle-imports-type-syntax-under-espree`,
+    ],
+    runs: 100,
   }),
   check: checkPaths,
 })

@@ -27,6 +27,11 @@
  * - Dependency chain: a fixed chain, in which an oracle imports a companion
  *   that imports the check; editing the check's companion between two lints
  *   must change the reports of the next lint.
+ * - Parser switch: one ESLint instance lints a TypeScript oracle file, then a
+ *   JavaScript one, that import the same modules. The rule reads an imported
+ *   module with the parser of the file that it lints and keeps a parsed module
+ *   between lints, so the second lint must not reuse the first one's parse:
+ *   each lint agrees with its own program's model.
  *
  * Authority: see PART_REACH_AUTHORITY in part-reach-oracle-support.js; the edit laws
  * also rest on the rule's reach cache, which is stated in the no-unit-test
@@ -34,7 +39,9 @@
  *
  * Limits: the edits rewrite one companion in place, with a later mtime, so
  * the rule's cache sees a change. A history with no dependency is edited in no
- * law. The fixed inputs and the chain are enumerated, not generated.
+ * law. The fixed inputs and the chain are enumerated, not generated. The parser
+ * switch lints the TypeScript file first, so it sees a parse kept from
+ * typescript-eslint and read under espree, not the reverse order.
  */
 import fc from 'fast-check'
 import { differs, oracleProperty, pass } from '@tanstack/oracles'
@@ -42,6 +49,7 @@ import {
   ALL,
   BASE,
   BASE_RUNS,
+  CONSTRUCTIONS,
   FIXED_SEED,
   REPORTS_LAW,
   STATE_NAMES,
@@ -384,4 +392,61 @@ oracleProperty({
   check: editCheck,
   calibrations: reportCalibrations,
   timeout: 300_000,
+})
+
+// -- One module, two parsers ----------------------------------------------------
+
+const PARSERS = { ...BASE, parsers: true, broken: true }
+const SWITCH_STATE = `oracle-imports-type-syntax-under-espree`
+
+/** The program under each parser: the same modules, with a TypeScript and a JavaScript oracle file. */
+const underBothParsers = (skeleton) =>
+  [`typescript`, `espree`].map((parser) =>
+    buildProgram({ ...skeleton, parser }, PARSERS),
+  )
+
+oracleProperty({
+  id: `lint.part-reach.parser-switch`,
+  law: {
+    statement: `One ESLint instance lints a TypeScript oracle file and then a JavaScript one that import the same modules: each lint reads those modules with its own file's parser, so each agrees with its own program's model.`,
+    authority: `See PART_REACH_AUTHORITY in part-reach-oracle-support.js: an imported module is parsed as ESLint parses the linted file.`,
+    limits: `The TypeScript file is linted first, in the same directory and ESLint instance as the JavaScript file.`,
+  },
+  histories: {
+    arbitrary: programSkeleton,
+    runs: BASE_RUNS,
+    fixedSeeds: [FIXED_SEED],
+    states: [SWITCH_STATE],
+    measured: STATE_NAMES.filter((state) => state !== SWITCH_STATE),
+    constructed: [
+      {
+        name: SWITCH_STATE,
+        enters: [SWITCH_STATE],
+        build: CONSTRUCTIONS[SWITCH_STATE](PARSERS),
+      },
+    ],
+  },
+  resolve: underBothParsers,
+  reached: (programs) => programs.flatMap((program) => [...statesOf(program)]),
+  model: (programs) => programs.map(predictReports),
+  driver: async (programs, observe) => {
+    const directory = editDirectory(nextSeq())
+    const written = programs.map((program) => writeProgram(directory, program))
+    for (const [index, { oracle, subjects }] of written.entries()) {
+      observe(programs[index].parser, await lintInstance(oracle, subjects))
+    }
+  },
+  check: (programs, observations, expected) =>
+    programs
+      .map((program, index) =>
+        differs(
+          program.parser,
+          REPORTS_LAW,
+          observed(observations, program.parser),
+          expected[index],
+        ),
+      )
+      .find((verdict) => verdict !== undefined) ?? pass,
+  calibrations: reportCalibrations,
+  timeout: 900_000,
 })
