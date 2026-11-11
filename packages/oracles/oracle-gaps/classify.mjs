@@ -197,14 +197,17 @@ export function targetsOf(mutant, baseline, owners, oracleFiles) {
 // comparison's operands (its operators disagree on them), and the operators
 // that always change a value when reached (`!`, booleans, arithmetic). The
 // rest are not measured: a logical operator, a loop's condition, an
-// `undefined` call value, a dropped property, and a skipped call change a
-// value only on some inputs, and no capture shows which.
+// `undefined` call value, a dropped property, a skipped call, a returned
+// value made `undefined`, and a plain read in place of `?.` change a value
+// only on some inputs, and no capture shows which.
 const comparisonOps = new Set([`===`, `!==`, `<`, `<=`, `>`, `>=`])
 const unmeasuredOps = new Set([
   `loop-false`,
   `value-undefined`,
   `field-drop`,
   `delete-call`,
+  `return-undefined`,
+  `optional-chain`,
 ])
 const isIf = (mutant) =>
   mutant.operator === `if-true` || mutant.operator === `if-false`
@@ -273,7 +276,9 @@ const changedIn = (rows, keys, baseline) =>
  * `unreached`. A survivor gets one class from what the run measured (the
  * classes are in the design's decision 11): `not-judged` (a changed value
  * no law rejected), `indeterminate` (only nondeterministic tests reached
- * it), `dead-code` (no input distinguishes it), `branch-never-taken` (an
+ * it), `dead-code` (no input distinguishes it), `outside-annotation` (no
+ * input of the annotations distinguishes it; `input` names the input class
+ * outside them that does), `branch-never-taken` (an
  * `if` one of whose outcomes never occurred; `wanted` names the missing
  * one), `not-infected` (a comparison whose operators agreed on every
  * operand the owners reached; `operands` names them), and `not-observed`
@@ -310,7 +315,12 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
       baseline.nondeterministic.has(k),
     )
   } else if (mutant.evidence === `dead code`) result.class = `dead-code`
-  else if (isUnmeasured(mutant)) result.class = `not-distinguished`
+  else if (mutant.outside) {
+    // No input of the annotations distinguishes it: the type analysis names
+    // the input outside them that does (maintainer decision, 2026-11-11).
+    result.class = `outside-annotation`
+    result.input = mutant.outside
+  } else if (isUnmeasured(mutant)) result.class = `not-distinguished`
   else {
     const { infected, infectedBy } = infectionOf(mutant, targets, baseline)
     if (isIf(mutant) && !infected) {
