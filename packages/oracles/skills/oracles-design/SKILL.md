@@ -566,8 +566,6 @@ comes with one instruction. Do what it says, within the rules below.
   its line, and keep working. Do not remove the guard and do not change
   production: the guard protects untyped callers. Every other mutant on that
   line must still be killed.
-- **Temporary:** in a package without `"type": "module"`, Vite may warn
-  while loading the gap check's own config copies. Ignore that warning.
 
 - **Few mutants are weak evidence.** If the gap check generates few mutants
   for an owned function, or none on a law's decisions (such as a return

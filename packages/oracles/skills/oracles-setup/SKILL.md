@@ -98,16 +98,16 @@ the oracle files:
   oracle files `*.oracle.ts`, and include that name in the Vitest config.
 
 The gap check finds oracle files by their `oracleProperty` call, so the name
-only has to match the Vitest config and the lint glob. The gap check loads only `vitest.config.*` or
-`vite.config.*`, so:
+only has to match the Vitest config and the lint glob.
 
 - If the repository has no Vitest config, create `vitest.config.ts` for the
-  oracle files. Jest and mocha ignore that name. In a package without
-  `"type": "module"`, name it `vitest.config.mts`, or Vite warns on every
-  run.
-- If it has one, add the oracle glob to its existing `include`. Keep the
-  globs that are there: replacing them drops the existing suite, since an
-  `include` replaces Vitest's default.
+  oracle files. Jest and mocha ignore that name.
+- If another tool would pick up `vitest.config.ts`, name it
+  `vitest.oracle.config.ts`, and pass `--config vitest.oracle.config.ts` to
+  the gap check (step 7) and to the Vitest script.
+- If the repository has a Vitest config, add the oracle glob to its existing
+  `include`. Keep the globs that are there: replacing them drops the
+  existing suite, since an `include` replaces Vitest's default.
 
 ```ts
 // vitest.config.ts
@@ -346,6 +346,9 @@ Run the gap check on the owned source:
 pnpm exec oracle-gaps --package <package dir> --source <src/file.ts> \
   --seed <n> --out <package dir>/.oracle-gaps/out
 ```
+
+Add `--config <file>` (relative to the package) when the oracle Vitest config
+is not Vite's default name. The baseline prints which config it used.
 
 - `--source` selects files. `owns` can name a single function in a file, so
   the report judges only the owned functions. Code in the file that no oracle
