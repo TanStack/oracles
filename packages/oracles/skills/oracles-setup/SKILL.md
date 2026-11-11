@@ -54,7 +54,10 @@ pnpm add -D \
 Add `fast-check` and `vitest` beside them. For lint, also add `eslint@^9`
 if the repository has no ESLint, and `@typescript-eslint/parser@^8` if
 nothing parses TypeScript yet. Name those majors: a package manager can pick
-a prerelease otherwise. For an older ESLint, see the fallback in step 3.
+a prerelease otherwise. If the repository's ESLint is older than 9 (xo
+included), install every package here with `--legacy-peer-deps` (npm), and see
+the fallback in step 3. With that flag, npm skips peers, so check that
+Vitest's own peer `vite` is installed, and add it if it is not.
 
 Never add, upgrade, or downgrade the repository's `typescript` for oracles.
 The gap check uses its own TypeScript and never reads the project's, from
@@ -116,7 +119,9 @@ export default defineConfig({
 ```
 
 Add a script for it, such as `test:oracles`. Leave the existing suite
-unchanged.
+unchanged. In a published package, keep the new files out of the published
+package (its `files` field or `.npmignore`): the configs, `AGENTS.md`,
+`.agents/`, and `.claude/`.
 
 If the repository's own lint or formatter covers the oracle files (for
 example, an older ESLint with Prettier over `test/`), keep the oracle files
@@ -155,6 +160,9 @@ eslint@9` fallback below instead.
   TypeScript peer range ends before 7. Do not force the install. Report it as
   an environment limit, with that reason. Do not change the repository's
   TypeScript.
+- **TypeScript older than 4.8:** `@typescript-eslint/parser` 8 fails to
+  load, and the failure takes down the whole flat config. Treat it the same
+  way: an environment limit, reported, with no parser in the config.
 - The plugin parses the modules an oracle file imports with that file's
   parser. A `.js` oracle file that imports a TypeScript module gets an
   `unparsedModule` report: write the oracle file in TypeScript, with a
@@ -311,10 +319,10 @@ Setup does not skip that step to finish sooner.
 Put the oracle's `owns` list on its `oracleProperty` call. An entry is a file
 (`src/index.ts`) or one function in it (`src/index.ts#parse`, or
 `src/x.ts#Class.method`). A function entry owns that function and its static
-call tree. For a first oracle, own only the function it covers. Own the whole file only
-when module data affects an adopted law (see `oracles-design` step 6). If the gap check counts **0 oracle files**, the
-oracle is not declared. That is a setup failure, even when the report shows
-0 gaps and the command exits 0.
+call tree. For a first oracle, own only the function it covers. Own the whole
+file only when module data affects an adopted law (see `oracles-design` step
+6). If the gap check refuses with "no oracle file", the oracle is not
+declared: that is a setup failure.
 
 In an oracle file, only `oracleProperty` registers tests. A plain Vitest test
 there is not a kill, and the gap check reports it. Do not leave an empty test
@@ -337,6 +345,11 @@ pnpm exec oracle-gaps --package <package dir> --source <src/file.ts> \
 - Pass `--seed`, so the baseline and every mutant run the same histories.
   Pass `--out` inside the repository. (Both become defaults later.)
 - Add `.oracle-gaps/` to `.gitignore`.
+- Read the exit code. **0:** the run completed; work from its report.
+  **2:** refused. It prints `refused: <cause>` and one `fix: <directive>`.
+  Do what the `fix:` line says, then run again. **3:** an internal error, "a
+  bug in oracle-gaps", with the stack in `<out>/error.log`. Report it as a CLI
+  bug with that file, and do not change the oracle to get around it.
 
 Run it after the oracle passes on production. Each gap in the report comes
 with one instruction. Follow
