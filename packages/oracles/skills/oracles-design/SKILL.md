@@ -68,19 +68,24 @@ and nothing else:
    Write it as continuous prose in this order. Do not label the parts with
    the names below ("The hook", "The mechanism"): they are for you, not the
    reader.
-   1. **The contract at a glance:** a short code block, first, that a reader
-      takes in at one look. One line, or two, for each main law: the real
-      call to the public entry point, the checkpoint as an expression, and
-      the relation that must hold. Use plain operators (`===`, `<=`) or a
-      standard assertion. A helper name (`sharesNoObject`) is fine when the
-      next sentence says what it means. Mark an open law `// open`. The
-      block states the promise, not the implementation: it never shows how
-      production computes the answer. For example:
+   1. **The contract at a glance:** a short code block, first, that shows the public API promises this oracle maintains. A reader takes
+      it in at one look. Give it no title, and no sentence that introduces
+      it. Write each line as `call // → result`:
+      - the call is the public API, written the way a user writes it, with
+        concrete values where they make the promise clear.
+      - the result is what the user gets back or sees: a value, or a short
+        phrase.
+      - a condition goes at the end of the line, as "when ...".
+      - an open law ends with `(open)`.
+
+      Keep it to about five lines. Never write an assertion, a test helper,
+      or a checkpoint expression there: those belong in the code. The block
+      never shows how production computes the answer. For example:
 
       ```ts
-      // For every x in the domain below:
-      assert.deepStrictEqual(klona(x), x) // same kind, prototype, and values
-      sharesNoObject(klona(x), x) // no object of x is reachable from the copy
+      klona(x) // → a deep copy: same kind, prototype, and values as x, sharing no object with it
+      typography({ scaleRatio: 2, baseFontSize: '16px' }) // → h1 font size 32px (ratio × base)
+      typography({ scaleRatio: 2, baseFontSize: '15.5px' }) // → h1 font size 31px (open)
       ```
 
    2. **What this oracle owns**, in one or two plain sentences: the
@@ -217,8 +222,9 @@ Say in the evidence which trigger fired, or that none did.
 
 - From the prose alone, a reader can predict one observation of each law.
   For a no-throw law, the observation is that the call returns.
-- The law block starts with the contract code block, and each line in it
-  states the same law as its sentence.
+- The law block starts with the contract code block: public API calls and
+  their results, with no assertion or helper. Each line states the same law
+  as its sentence.
 - The opening names the promise that the oracle owns.
 - No law restates the code.
 - Each law sentence matches its block in the review notes. If they disagree,
