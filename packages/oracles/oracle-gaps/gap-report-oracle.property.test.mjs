@@ -51,7 +51,7 @@
  *    test file that calls `oracleProperty`, or passes a literal `owns` list
  *    in an object-literal argument of any call, such as a wrapper's
  *    (`registerX('id', { owns })`), which forwards it to `oracleProperty`.
- *    An `owns` key inside an expectation's arguments is not read. The
+ *    An `owns` key inside an assertion's arguments is not read. The
  *    file's owns is the union of its lists. Each entry names a source
  *    file (`src/x.ts`, owning all of it) or a function in it
  *    (`src/x.ts#run`, `src/x.ts#Class.method`, `src/x.ts#Class.#private`,
