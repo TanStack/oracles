@@ -176,7 +176,7 @@ const MODULE_LISTS = [`implementationModules`, `replayWitnessModules`]
  *   `oracleProperty`. An entry counts only with a non-empty reason.
  *
  * A path names a file by its end at a path boundary, relative to the
- * repository (`packages/app/tests/oracle-config.ts`). Paths are not patterns,
+ * repository (such as `<package>/tests/oracle-config.ts`). Paths are not patterns,
  * so a file named `oracle-config.ts` elsewhere is not exempt.
  */
 export function oracleSettings(context) {
@@ -254,7 +254,8 @@ export function registeredTest(node, sourceCode) {
     return undefined
   }
   const body = registrationBody(node.arguments.slice(1), sourceCode)
-  return body === undefined ? undefined : { body }
+  // The modifiers between the root and the call, such as `skip` or `todo`.
+  return body === undefined ? undefined : { body, modifiers: names }
 }
 
 /**

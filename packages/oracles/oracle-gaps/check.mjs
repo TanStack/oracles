@@ -268,8 +268,9 @@ export async function openSession(pkg) {
   // The analysis reads with this CLI's own TypeScript, never the package's: a
   // TypeScript 7 package exposes its version and no compiler API. The CLI's
   // dependency is TypeScript 5, so a copy without the API is a broken install,
-  // refused before any work.
-  const ts = createRequire(import.meta.url)(`typescript`)
+  // refused before any work. The dependency is an npm alias, so installing
+  // this package puts no `typescript` where an adopter's tools resolve it.
+  const ts = createRequire(import.meta.url)(`typescript-for-tanstack-oracles`)
   if (typeof ts.createSourceFile !== `function`)
     throw new Refusal(
       `the TypeScript this CLI depends on (${ts.version}) has no compiler API`,

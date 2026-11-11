@@ -33,5 +33,9 @@ export default [
     },
   },
   oraclePlugin.configs.recommended,
-  { ...oraclePlugin.configs.production, ignores: oracleMachinery },
+  // The preset's own ignores (tool config files) are kept.
+  {
+    ...oraclePlugin.configs.production,
+    ignores: [...oraclePlugin.configs.production.ignores, ...oracleMachinery],
+  },
 ]

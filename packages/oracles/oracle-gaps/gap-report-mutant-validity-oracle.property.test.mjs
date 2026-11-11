@@ -103,7 +103,9 @@ import { oracleProperty, pass, violation } from '../src/oracle-property.ts'
 import { instrument } from './schemata.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const ts = createRequire(join(here, `../package.json`))(`typescript`)
+const ts = createRequire(join(here, `../package.json`))(
+  `typescript-for-tanstack-oracles`,
+)
 
 const LAW_1 = `every emitted mutant that is not dead code differs from the original on some input`
 const LAW_2 = `every skipped site equals the original on every input`
