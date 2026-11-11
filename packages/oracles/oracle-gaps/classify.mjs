@@ -163,15 +163,18 @@ const byPath = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
 // Report order, the order of every list of tests that a result names: by
 // test file path, and within a file in the order of the baseline run's
 // records of that file's tests, with a test the baseline did not record
-// after them. The owner and ordinary tests that reached a mutant (and so the
-// test that infected it, its operands, and its nondeterministic tests) and
-// its changed tests are in report order. Its failing tests are by file path
-// too (`outcomeOf`), and within a file in the order the reporter lists the
-// file's tests. The runner joins the baseline's files in an order that
-// depends on its context count, and an authored mutant's owner files in the
-// order the owners were declared; this order depends on neither, so the same
-// project and code give the same report on any machine (the classify
-// oracle's law 7).
+// after them. An unmutated pass's units and records are joined in report
+// order (`passOf`), so the files that failed, the nondeterministic tests,
+// and the tests that reached a mutant (and so its owner files, the test
+// that infected it, its operands, and its nondeterministic tests) are in it.
+// A mutant's changed tests are put in it here. Its failing tests are by
+// file path too (`outcomeOf`), and within a file in the order the reporter
+// lists the file's tests, except in a batch that a hang cut off, whose tests
+// come from the run's records. The runner joins the baseline's files in an
+// order that depends on its context count, and an authored mutant's owner
+// files in the order the owners were declared; this order depends on
+// neither, so the same project and code give the same report on any machine
+// (the classify oracle's law 7).
 const inReportOrder = (keys, baseline) =>
   [...keys].sort(
     (a, b) =>
@@ -180,10 +183,43 @@ const inReportOrder = (keys, baseline) =>
       0,
   )
 
+/** A unit's first failure: a failing test and its error, or why it did not run. */
+function failureOf(unit) {
+  if (unit.timedOut) return `its run timed out`
+  const test = unit.tests.find((t) => t.state === `failed`)
+  const text = test
+    ? `${test.fullName}: ${test.message.split(`\n`)[0]}`
+    : (unit.setupErrors[0] ?? unit.unhandled[0] ?? `it failed`)
+  return text.slice(0, 300)
+}
+
+/**
+ * An unmutated pass from its contexts' units (one list per context): its
+ * units and records in report order (by file path, each file's records in
+ * the order its run wrote them), and each file that
+ * failed with no mutant active, in that order, with its first failure, so a
+ * refusal says why. The contexts' order depends on their count; this order
+ * does not, so the refusal, the files left out, and the nondeterministic
+ * tests are listed alike on any machine.
+ */
+export function passOf(parts) {
+  const units = parts.flat().sort((a, b) => byPath(a.file, b.file))
+  return {
+    units,
+    rows: new Map(units.flatMap((u) => u.rows ?? [])),
+    failed: new Map(
+      units
+        .filter((u) => outcomeOf([u]).outcome !== `survived`)
+        .map((u) => [u.file, failureOf(u)]),
+    ),
+  }
+}
+
 /**
  * What the two unmutated runs show: which tests are nondeterministic (their
  * values differed between the runs, so their failures judge nothing), which
- * tests reached each site, and which `if` outcomes each oracle file saw.
+ * tests reached each site, and which `if` outcomes each oracle file saw. The
+ * first run's records come in report order (`passOf`), and so do these lists.
  */
 export function baselineOf(firstRows, secondRows) {
   const nondeterministic = new Set()
@@ -205,13 +241,10 @@ export function baselineOf(firstRows, secondRows) {
 
 /**
  * The owner tests and the ordinary tests that reached a mutant's site, in
- * report order (`inReportOrder`).
+ * report order: the baseline's order, which `passOf` joined.
  */
 export function targetsOf(mutant, baseline, owners, oracleFiles) {
-  const keys = inReportOrder(
-    baseline.reachedBy.get(mutant.number) ?? [],
-    baseline,
-  )
+  const keys = baseline.reachedBy.get(mutant.number) ?? []
   const oracleKeys = keys.filter((k) => owners.has(fileOf(k)))
   const testKeys = keys.filter((k) => !oracleFiles.has(fileOf(k)))
   return {
