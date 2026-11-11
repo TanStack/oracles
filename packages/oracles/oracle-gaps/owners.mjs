@@ -23,7 +23,12 @@
 // function of a class (named `Class.member`), a constructor (named
 // `Class.constructor`), or any other function with a name: a function
 // assigned to a variable, or a method, accessor, or function property of an
-// object literal (named by its property). Module-level data is a unit of its
+// object literal (named by its property). A function exported with no name
+// of its own takes the name an import gives it: `default` for `export default
+// function () {}`, `export default <function>`, and CommonJS's
+// `module.exports = <function>`, and its export's name for CommonJS's
+// `exports.name = <function>` (so `exports.default` is `default`; F24).
+// Module-level data is a unit of its
 // own, as a function is: a variable declared at the top of a module whose
 // initializer is not a function, named by its variable (`src/x.ts#TABLE`), in a
 // top-level variable statement. A function that reads it brings it into its
@@ -103,6 +108,28 @@ export function functionsIn(ts, file) {
   const isFunction = (node) =>
     node !== undefined &&
     (ts.isArrowFunction(node) || ts.isFunctionExpression(node))
+  // A function exported with no name of its own, by the name an import
+  // gives it, and its node: `default` for `export default function () {}`,
+  // `export default <function>`, and CommonJS's `module.exports =
+  // <function>`; a CommonJS `exports.name = <function>` (or
+  // `module.exports.name`) by its export's name, so `exports.default` is
+  // `default` too.
+  const exportedAs = (node) => {
+    if (ts.isFunctionDeclaration(node) && !node.name && node.body)
+      return [`default`, node]
+    if (ts.isExportAssignment(node) && isFunction(node.expression))
+      return [`default`, node.expression]
+    if (
+      !ts.isBinaryExpression(node) ||
+      node.operatorToken.kind !== ts.SyntaxKind.EqualsToken ||
+      !isFunction(node.right)
+    )
+      return undefined
+    const target = /^(module\.exports|(?:module\.)?exports\.([\w$]+))$/.exec(
+      node.left.getText(file),
+    )
+    return target ? [target[2] ?? `default`, node.right] : undefined
+  }
   const visit = (node) => {
     const cls =
       node.parent && ts.isClassLike(node.parent) ? node.parent : undefined
@@ -132,7 +159,15 @@ export function functionsIn(ts, file) {
       ts.isIdentifier(node.name) &&
       ts.isVariableStatement(node.parent.parent) &&
       ts.isSourceFile(node.parent.parent.parent)
-    if (
+    const exported = exportedAs(node)
+    if (exported)
+      functions.push({
+        name: exported[0],
+        node: exported[1],
+        start: node.getStart(file),
+        end: node.end,
+      })
+    else if (
       (hasBody || valued || data) &&
       (node.name || ts.isConstructorDeclaration(node))
     )

@@ -53,6 +53,49 @@ const ROOT_VITE = dirname(
 // A source in a directory of the package whose name starts with `..`, which
 // is in the package all the same. No test loads it.
 const DOTGEN = `..gen/extra.ts`
+// Unnamed exports, each the one function of its own file, which no test
+// loads: an ES default function and default arrow, CommonJS's
+// `module.exports` and `exports.default`, and a CommonJS named export.
+// An unnamed export is named `default`, as an import names it, and a
+// CommonJS named export by its export's name (F24). Each has one site, its
+// push, on its second line.
+const EXPORT_FORMS = [
+  {
+    exportForm: `esFunction`,
+    file: `src/es-function.ts`,
+    name: `default`,
+    open: `export default function (x: number, out: Array<string>): void {`,
+    close: `}`,
+  },
+  {
+    exportForm: `esArrow`,
+    file: `src/es-arrow.ts`,
+    name: `default`,
+    open: `export default (x: number, out: Array<string>): void => {`,
+    close: `};`,
+  },
+  {
+    exportForm: `cjs`,
+    file: `src/cjs.js`,
+    name: `default`,
+    open: `module.exports = function (x, out) {`,
+    close: `};`,
+  },
+  {
+    exportForm: `cjsDefault`,
+    file: `src/cjs-default.js`,
+    name: `default`,
+    open: `exports.default = (x, out) => {`,
+    close: `};`,
+  },
+  {
+    exportForm: `cjsNamed`,
+    file: `src/cjs-named.js`,
+    name: `run`,
+    open: `exports.run = function (x, out) {`,
+    close: `};`,
+  },
+]
 // The model's own name for the code in no function of that file.
 const TOP_LOOP = `<module>@..gen`
 // Whether this filesystem ignores letter case, so that `src/Sut.ts` names
@@ -543,6 +586,11 @@ const histories = fc.record({
   // it or an entry names it.
   dataOwners: fc.array(fc.constantFrom(`a`, `b`, `none`, `none`), {
     maxLength: 4,
+  }),
+  // The unnamed exports (see `EXPORT_FORMS`), in its order: one file each
+  // for the first ones, with who names it in an owns entry.
+  exportOwners: fc.array(fc.constantFrom(`a`, `b`, `none`), {
+    maxLength: EXPORT_FORMS.length,
   }),
 })
 
@@ -1873,6 +1921,15 @@ function resolveHistory(history) {
     body,
     tests: [],
   }))
+  // The unnamed exports' functions, one push each.
+  const exported = (history.exportOwners ?? []).map((owner, index) => ({
+    ...EXPORT_FORMS[index],
+    id: `x_${EXPORT_FORMS[index].exportForm}`,
+    container: `free`,
+    owners: owner === `none` ? [] : [owner],
+    body: [{ kind: `push`, quote: `'` }],
+    tests: [],
+  }))
   // The derived class's file, which is no function of the model's (see
   // `derivedFile`).
   const file = history.derived ? derivedFile(history.derived) : undefined
@@ -1881,6 +1938,7 @@ function resolveHistory(history) {
     ...library,
     ...dollar,
     ...runes,
+    ...exported,
     ...dotGen,
     ...(history.witness
       ? witness
@@ -2083,6 +2141,17 @@ function resolveHistory(history) {
   if (topLoop) lines.push(topLoop.text)
   const dotGenSource =
     dotGen.length > 0 ? `${lines.splice(0).join(`\n`)}\nexport {}\n` : undefined
+  // Each unnamed export's file: its opening line, its push, its close.
+  const exportSources = Object.fromEntries(
+    functions
+      .filter((fn) => fn.exportForm !== undefined)
+      .map((fn) => {
+        const [stmt] = fn.body
+        stmt.lines = [pushText(stmt)]
+        stmt.line = 2
+        return [fn.file, `${fn.open}\n  ${stmt.lines[0]}\n${fn.close}\n`]
+      }),
+  )
   lines.push(...mainLines)
   const librarySource = `${libLines.join(`\n`)}\nexport {}\n`
   const runesSource =
@@ -2198,9 +2267,11 @@ function resolveHistory(history) {
       LIB,
       ...(runesSource ? [RUNES] : []),
       ...(dotGenSource ? [DOTGEN] : []),
+      ...Object.keys(exportSources),
       ...(file ? [DERIVED] : []),
     ],
     dotGenSource,
+    exportSources,
     topLoop,
     history,
     source,
@@ -3792,6 +3863,7 @@ function fixtureFiles(plan, state = initialState(plan)) {
     ...(plan.runesSource ? { [RUNES]: plan.runesSource } : {}),
     ...(plan.derived ? { [DERIVED]: plan.derived.source } : {}),
     ...(plan.dotGenSource ? { [DOTGEN]: plan.dotGenSource } : {}),
+    ...plan.exportSources,
     'tests/strict.ts': `export const strict = ${state.strict}\n`,
     // A workspace dependency with module state, linked through node_modules.
     'deps/state-dep/package.json': manifest({
@@ -4263,6 +4335,7 @@ export {
   refusal,
   ownsNothing,
   MODULE_DATA,
+  EXPORT_FORMS,
   model,
   testName,
   callFor,
