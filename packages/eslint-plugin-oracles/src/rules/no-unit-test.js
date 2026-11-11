@@ -1,13 +1,17 @@
-import { existsSync, readFileSync, statSync } from 'node:fs'
-import { basename, dirname, join, relative, resolve, sep } from 'node:path'
-import { Linter } from 'eslint'
+import { basename } from 'node:path'
+import {
+  LintSession,
+  lintSession,
+  loadModule,
+  resolveTestModule,
+} from '../modules.js'
 import {
   findVariable,
   isFunction,
   isPackageEntry,
-  isTestFunction,
+  moduleTestFunctions,
   registeredTest,
-  testRoots,
+  testFunctions,
 } from '../registration.js'
 
 /**
@@ -23,12 +27,11 @@ import {
  *
  * - `unitTest`: a test registration (`it`, `test`, `bench`, and their
  *   `.each`, `.for`, `.skipIf`, `.concurrent`, `.prop`, and other members),
- *   whatever its body reaches. Its root may be an aliased import, a member
- *   of a namespace import (`vitest.it`), a variable of any kind bound to a
- *   test function, or a fixture (`test.extend(fixtures)`), called directly
- *   or bound to a name. An import from a test module is a root when the
- *   module exports a test function: a fixture, a constant bound to one, a
- *   re-export from the framework, or a relay of an imported one. A
+ *   whatever its body reaches. Its root is a test function as the oracle
+ *   rules resolve it together (registration.js, testFunctions): through an
+ *   import, a namespace member, a variable, a cast, a branch, a fixture, or
+ *   an export of a test module. A suite is exempt by the function that it
+ *   resolves to, not by its local name. A
  *   registration inside a local helper counts once, where it is written; the
  *   helper's calls are not registrations of their own. A call to an imported
  *   helper that registers the body its caller passes, curried or not, is a
@@ -61,10 +64,12 @@ import {
  * `oracle-`, such as `oracle-replay.test.ts`, test the shared oracle
  * machinery, and the rule skips them.
  *
- * To classify an imported helper or test function, the rule reads the
- * module that the import names, and follows its re-exports, star exports,
- * relays of imported bindings, and default exports to the module that
- * defines it. A cycle of star exports ends. It reads each module relative to
+ * To classify an imported helper, the rule reads the module that the import
+ * names, and follows its re-exports, star exports, relays of imported
+ * bindings, and default exports to the module that defines it. In a
+ * helper's body it asks only which callees are test functions, so it never
+ * walks another helper's body, and each export is answered once per lint: a
+ * cycle of modules ends, and no call graph makes a lint slow. It reads each module relative to
  * the file, with the parser and parser options that ESLint uses for the file
  * it lints, so it needs no TypeScript of its own. It reads no package, so a
  * fixture that a package exports is not seen. It does
@@ -78,45 +83,14 @@ import {
  * caller's body as an oracle property. Reviewers check those.
  */
 
-/**
- * Every module that an earlier lint parsed, by path, with the mtime and size
- * it was read at and the language options it was parsed with. Parsing is the
- * costly part, so a module is parsed again only when it changes, or when a
- * file with other language options imports it. The reach that a lint computes
- * is never kept between lints, so an edit to any module reaches the next lint:
- * see LintSession.
- */
-const parsedModules = new Map()
-
-/**
- * The state of one lint run: the language options of the file it lints, the
- * modules it loaded, and the production package flags it read.
- */
-class LintSession {
-  modules = new Map()
-  published = new Map()
-  constructor(languageOptions) {
-    this.languageOptions = languageOptions
-  }
-}
-
-/** How a function that a module imports from `source` registers tests. */
-function importedRegisters(fromFile, source, name, session, visiting) {
+/** How the export `name` of the module that `source` names registers tests. */
+function importedRegisters(fromFile, source, name, session) {
+  if (!source.startsWith(`.`)) return undefined
   const file = resolveTestModule(fromFile, source, session)
-  const module = file === undefined ? undefined : loadModule(file, session)
-  return module?.registrationShape(name, visiting)
-}
-
-/**
- * The `importedTest` of `registeredTest` for the module `fromFile`: whether
- * an import names a test function that its test module exports, such as a
- * fixture (`export const myTest = test.extend({})`). A call of it registers
- * where it is written, so a module that is linted on its own counts too.
- */
-function importedTestOf(fromFile, session, visiting) {
-  return (source, name) =>
-    importedRegisters(fromFile, source, name, session, visiting ?? new Set())
-      ?.kind === `test`
+  if (file === undefined) return undefined
+  return session.once(`shape\0${file}\0${name}`, () =>
+    registrationShape(file, name, session),
+  )
 }
 
 /**
@@ -133,7 +107,7 @@ function importedHelperShape(node, file, sourceCode, session) {
   if (target === undefined) return undefined
   const module = resolveTestModule(file, target.source, session)
   if (module === undefined || lintedOnItsOwn(module)) return undefined
-  return loadModule(module, session)?.registrationShape(target.name)
+  return importedRegisters(file, target.source, target.name, session)
 }
 
 /** The framework module, whose `oracleProperty` calls are oracle properties. */
@@ -221,351 +195,108 @@ function lintedOnItsOwn(file) {
   return name.includes(`oracle`) && !name.startsWith(`oracle-`)
 }
 
-/** The test module that a relative import names, or undefined. */
-function resolveTestModule(fromFile, source, session) {
-  if (!source.startsWith(`.`)) return undefined
-  const base = resolve(dirname(fromFile), source)
-  const stem = base.replace(/\.(m?js|tsx?)$/, ``)
-  // A `.js` specifier names the TypeScript source when one exists, and
-  // otherwise the JavaScript module itself.
-  const file = [
-    `${stem}.ts`,
-    `${stem}.tsx`,
-    ...(/\.m?js$/.test(base) ? [base] : []),
-    `${base}/index.ts`,
-  ].find((candidate) => existsSync(candidate))
-  // Production declares no oracle part, so the rule does not parse it.
-  if (file === undefined || isProductionModule(file, session)) return undefined
-  return file
-}
-
 /**
- * Whether a file is shipped source: under `src/` in a published package. A
- * private package, such as an end-to-end suite, keeps its tests in `src/`.
+ * How the export `name` of a test module registers tests, or undefined when
+ * it registers none. A function registers the body that it writes ('own')
+ * or the body that its caller passes ('parameter'). A binding imported from
+ * another module, a re-export, and a star export are followed to that
+ * module. Each answer is kept for the lint, and a cycle of modules answers
+ * undefined (LintSession.once), so no export is walked twice.
  */
-function isProductionModule(file, session) {
-  for (let directory = dirname(file); ; directory = dirname(directory)) {
-    const manifest = join(directory, `package.json`)
-    if (existsSync(manifest)) {
-      if (!session.published.has(directory)) {
-        const { private: isPrivate } = JSON.parse(
-          readFileSync(manifest, `utf8`),
-        )
-        session.published.set(directory, isPrivate !== true)
-      }
+function registrationShape(file, name, session) {
+  const module = loadModule(file, session)
+  if (module === undefined) return undefined
+  const entry = module.exported.get(name)
+  if (entry?.variable !== undefined) {
+    const definition = entry.variable.defs[0]
+    if (definition?.type === `FunctionName`)
+      return bodyShape(module, definition.node, session)
+    if (definition?.type === `Variable` && isFunction(definition.node.init))
+      return bodyShape(module, definition.node.init, session)
+    // A binding imported by name or as the default, then exported.
+    if (definition?.type === `ImportBinding`) {
+      const target = importBindingTarget(definition)
       return (
-        session.published.get(directory) &&
-        relative(directory, file).split(sep)[0] === `src`
+        target && importedRegisters(file, target.source, target.name, session)
       )
-    }
-    if (dirname(directory) === directory) return false
-  }
-}
-
-/** The module that a file names, for this lint, or undefined when it cannot be read or parsed. */
-function loadModule(file, session) {
-  if (!session.modules.has(file)) {
-    // Only reading and parsing the module may fail here; an error in the
-    // rule's own analysis of a parsed module is a rule bug.
-    let parsed
-    try {
-      parsed = parseModule(file, session.languageOptions)
-    } catch {
-      parsed = undefined
-    }
-    session.modules.set(
-      file,
-      parsed &&
-        new OracleModule(file, parsed.ast, parsed.scopeManager, session),
-    )
-  }
-  return session.modules.get(file)
-}
-
-/**
- * The parsed source of a module, reused while its mtime, size, and language
- * options are unchanged. ESLint's own Linter parses it with the language
- * options of the file being linted, so an imported module is read with the
- * parser and parser options that the consumer configured, whichever parser
- * that is, and it gets the scope analysis and `parent` links that ESLint
- * gives the linted file.
- *
- * The rule reads syntax and scope, not types. typescript-eslint's `project`,
- * `projectService`, and `programs` options build a type-checked program, which
- * costs far more than the parse and changes the program that the consumer's
- * type-aware rules then read for that module, so they are left out.
- */
-function parseModule(file, languageOptions) {
-  const { mtimeMs, size } = statSync(file)
-  const cached = parsedModules.get(file)
-  if (
-    cached?.mtimeMs === mtimeMs &&
-    cached.size === size &&
-    cached.languageOptions === languageOptions
-  )
-    return cached
-  const linter = new Linter({ cwd: dirname(file) })
-  const [fatal] = linter
-    .verify(
-      readFileSync(file, `utf8`),
-      [
-        {
-          files: [`**/*.*`],
-          // The imported module's own eslint comments configure rules and
-          // environments this parse does not run.
-          linterOptions: {
-            noInlineConfig: true,
-            reportUnusedDisableDirectives: `off`,
-          },
-          languageOptions: {
-            ...languageOptions,
-            parserOptions: {
-              ...languageOptions.parserOptions,
-              project: undefined,
-              projectService: undefined,
-              programs: undefined,
-            },
-          },
-        },
-      ],
-      file,
-    )
-    .filter((message) => message.fatal)
-  if (fatal !== undefined) throw new Error(fatal.message)
-  const { ast, scopeManager } = linter.getSourceCode()
-  const parsed = { mtimeMs, size, languageOptions, ast, scopeManager }
-  parsedModules.set(file, parsed)
-  return parsed
-}
-
-/** A module that an oracle file imports, read for the helpers it exports. */
-class OracleModule {
-  constructor(file, ast, scopeManager, session) {
-    this.file = file
-    this.scopeManager = scopeManager
-    this.session = session
-    this.exported = new Map()
-    this.starSources = []
-    for (const statement of ast.body) this.#recordExports(statement)
-  }
-
-  #recordExports(statement) {
-    if (statement.type === `ExportDefaultDeclaration`) {
-      this.#recordDefaultExport(statement.declaration)
-      return
-    }
-    if (statement.type === `ExportAllDeclaration`) {
-      if (statement.exported === null) {
-        this.starSources.push(statement.source.value)
-      }
-      return
-    }
-    if (statement.type !== `ExportNamedDeclaration`) return
-    if (statement.declaration !== null) {
-      // A class declares its name twice: in the module and inside its own
-      // scope. The module binding is the one a declaration refers to.
-      const moduleScope = this.#moduleScope()
-      for (const variable of this.scopeManager.getDeclaredVariables(
-        statement.declaration,
-      )) {
-        if (variable.scope === moduleScope)
-          this.exported.set(variable.name, { variable })
-      }
-      return
-    }
-    for (const specifier of statement.specifiers) {
-      const exported = specifier.exported.name ?? specifier.exported.value
-      const local = specifier.local.name ?? specifier.local.value
-      if (statement.source !== null) {
-        this.exported.set(exported, {
-          source: statement.source.value,
-          imported: local,
-        })
-      } else {
-        const variable = findVariable(this.#moduleScope(), local)
-        if (variable !== undefined) this.exported.set(exported, { variable })
-      }
-    }
-  }
-
-  /**
-   * `export default` names a module binding, declares a named function or
-   * class, or exports an expression, which reaches when its code does.
-   */
-  #recordDefaultExport(declaration) {
-    const moduleScope = this.#moduleScope()
-    const variable =
-      declaration.type === `Identifier`
-        ? findVariable(moduleScope, declaration.name)
-        : declaration.id
-          ? this.scopeManager
-              .getDeclaredVariables(declaration)
-              .find((declared) => declared.scope === moduleScope)
-          : undefined
-    this.exported.set(
-      `default`,
-      variable === undefined ? { node: declaration } : { variable },
-    )
-  }
-
-  #moduleScope() {
-    return (
-      this.scopeManager.scopes.find((scope) => scope.type === `module`) ??
-      this.scopeManager.globalScope
-    )
-  }
-
-  /**
-   * How an export of this module registers tests, or undefined when it
-   * registers none. A function registers the body that it writes ('own') or
-   * the body that its caller passes ('parameter'). A test function, such as
-   * a fixture or an alias of `it`, is 'test': a call of it registers a test.
-   * A binding imported from another module, a re-export, and a star export
-   * are followed to that module. A cycle of re-exports registers nothing.
-   */
-  registrationShape(name, visiting = new Set()) {
-    const key = `${this.file}\0${name}`
-    if (visiting.has(key)) return undefined
-    visiting.add(key)
-    const entry = this.exported.get(name)
-    if (entry?.variable !== undefined) {
-      const definition = entry.variable.defs[0]
-      if (definition?.type === `FunctionName`)
-        return this.#bodyShape(definition.node)
-      if (definition?.type === `Variable` && isFunction(definition.node.init))
-        return this.#bodyShape(definition.node.init)
-      // A binding imported by name or as the default, then exported.
-      if (
-        definition?.type === `ImportBinding` &&
-        definition.node.type !== `ImportNamespaceSpecifier`
-      ) {
-        const { source, name: imported } = importBindingTarget(definition)
-        return this.#importShape(source, imported, visiting)
-      }
-      return definition !== undefined && this.#isTest(definition.name, visiting)
-        ? testShape
-        : undefined
-    }
-    if (entry?.node !== undefined) {
-      if (isFunction(entry.node)) return this.#bodyShape(entry.node)
-      return this.#isTest(entry.node, visiting) ? testShape : undefined
-    }
-    if (entry !== undefined) {
-      return this.#importShape(entry.source, entry.imported, visiting)
-    }
-    if (name === `default`) return undefined
-    for (const source of this.starSources) {
-      const shape = importedRegisters(
-        this.file,
-        source,
-        name,
-        this.session,
-        visiting,
-      )
-      if (shape !== undefined) return shape
     }
     return undefined
   }
-
-  /**
-   * The shape of the export `name` of the module that `source` names. A
-   * package's export is a test function when it is a test root, as in
-   * `export { it as again } from 'vitest'`. A relative module is read.
-   */
-  #importShape(source, name, visiting) {
-    if (!source.startsWith(`.`))
-      return testRoots.has(name) || name === `bench` ? testShape : undefined
-    return importedRegisters(this.file, source, name, this.session, visiting)
+  if (entry?.node !== undefined)
+    return isFunction(entry.node)
+      ? bodyShape(module, entry.node, session)
+      : undefined
+  if (entry?.source !== undefined)
+    return importedRegisters(file, entry.source, entry.imported, session)
+  if (entry !== undefined || name === `default`) return undefined
+  for (const source of module.starSources) {
+    const shape = importedRegisters(file, source, name, session)
+    if (shape !== undefined) return shape
   }
-
-  /**
-   * Whether an expression of this module, or the binding that an identifier
-   * declares, is a test function. An imported binding is followed to the
-   * module that it names.
-   */
-  #isTest(node, visiting) {
-    const sourceCode = { getScope: (at) => this.scopeOf(at) }
-    return isTestFunction(
-      node,
-      sourceCode,
-      importedTestOf(this.file, this.session, visiting),
-    )
-  }
-
-  /**
-   * The shape of the registrations in a function's body. A registration
-   * registers the caller's body when its body is a parameter of the function,
-   * or of a function that it returns, or when its body is a wrapper written
-   * here that calls such a parameter. The shape records where the caller
-   * passes that body. Any other registration registers a body that the
-   * function writes, which wins.
-   */
-  #bodyShape(fn) {
-    const sourceCode = { getScope: (node) => this.scopeOf(node) }
-    const importedTest = importedTestOf(this.file, this.session)
-    let shape
-    walk(fn, (node) => {
-      if (node.type !== `CallExpression`) return
-      const test = registeredTest(node, sourceCode, importedTest)
-      if (test === undefined) return
-      const position = this.#passedBody(test.body, fn, sourceCode)
-      if (position === undefined) shape = { kind: `own` }
-      else if (shape?.kind !== `own`) {
-        shape = { kind: `parameter`, ...position }
-      }
-    })
-    return shape
-  }
-
-  /**
-   * Where a registration's body comes from, when its caller passes it: the
-   * body is a parameter of `fn` or of a function inside `fn`, or a wrapper
-   * that calls one. The position is `{ index, level }`: the parameter's index,
-   * and the number of functions from `fn` to the one that declares it.
-   */
-  #passedBody(body, fn, sourceCode) {
-    const positionOf = (identifier) => {
-      const definition = findVariable(
-        sourceCode.getScope(identifier),
-        identifier.name,
-      )?.defs[0]
-      if (definition?.type !== `Parameter`) return undefined
-      const owner = definition.node
-      let level = 0
-      for (let node = owner; node !== fn; node = node.parent) {
-        // A parameter of the wrapper itself, or of a function outside `fn`.
-        if (node === null || node === body) return undefined
-        if (isFunction(node)) level++
-      }
-      return { index: owner.params.indexOf(definition.name), level }
-    }
-    if (body.type === `Identifier`) return positionOf(body)
-    if (!isFunction(body)) return undefined
-    let position
-    walk(body, (node) => {
-      if (
-        position === undefined &&
-        node.type === `CallExpression` &&
-        node.callee.type === `Identifier`
-      ) {
-        position = positionOf(node.callee)
-      }
-    })
-    return position
-  }
-
-  /** The innermost scope of a node, as ESLint's `getScope` finds it. */
-  scopeOf(node) {
-    for (let current = node; current; current = current.parent) {
-      const scope = this.scopeManager.acquire(current, true)
-      if (scope) return scope
-    }
-    return this.scopeManager.globalScope
-  }
+  return undefined
 }
 
-// The shape of a test function's export: a call of it registers a test.
-const testShape = { kind: `test` }
+/**
+ * The shape of the registrations in a function's body. A registration
+ * registers the caller's body when its body is a parameter of the function,
+ * or of a function that it returns, or when its body is a wrapper written
+ * here that calls such a parameter. The shape records where the caller
+ * passes that body. Any other registration registers a body that the
+ * function writes, which wins. The walk asks only which callees are test
+ * functions, so it never walks another helper's body.
+ */
+function bodyShape(module, fn, session) {
+  const functions = moduleTestFunctions(module, session)
+  let shape
+  walk(fn, (node) => {
+    if (node.type !== `CallExpression`) return
+    const test = registeredTest(node, functions)
+    if (test === undefined) return
+    const position = passedBody(test.body, fn, functions)
+    if (position === undefined) shape = { kind: `own` }
+    else if (shape?.kind !== `own`) {
+      shape = { kind: `parameter`, ...position }
+    }
+  })
+  return shape
+}
+
+/**
+ * Where a registration's body comes from, when its caller passes it: the
+ * body is a parameter of `fn` or of a function inside `fn`, or a wrapper
+ * that calls one. The position is `{ index, level }`: the parameter's index,
+ * and the number of functions from `fn` to the one that declares it.
+ */
+function passedBody(body, fn, functions) {
+  const positionOf = (identifier) => {
+    const definition = findVariable(
+      functions.getScope(identifier),
+      identifier.name,
+    )?.defs[0]
+    if (definition?.type !== `Parameter`) return undefined
+    const owner = definition.node
+    let level = 0
+    for (let node = owner; node !== fn; node = node.parent) {
+      // A parameter of the wrapper itself, or of a function outside `fn`.
+      if (node === null || node === body) return undefined
+      if (isFunction(node)) level++
+    }
+    return { index: owner.params.indexOf(definition.name), level }
+  }
+  if (body.type === `Identifier`) return positionOf(body)
+  if (!isFunction(body)) return undefined
+  let position
+  walk(body, (node) => {
+    if (
+      position === undefined &&
+      node.type === `CallExpression` &&
+      node.callee.type === `Identifier`
+    ) {
+      position = positionOf(node.callee)
+    }
+  })
+  return position
+}
 
 function walk(node, visit) {
   visit(node)
@@ -616,8 +347,8 @@ export default {
     // the shared oracle machinery. Their tests check that machinery, not a law.
     if (basename(context.filename).startsWith(`oracle-`)) return {}
     const { sourceCode } = context
-    const session = new LintSession(context.languageOptions)
-    const importedTest = importedTestOf(context.filename, session)
+    const session = lintSession(context)
+    const functions = testFunctions(context)
     return {
       CallExpression(node) {
         // A curried callee is not a call of its own: the outermost call is the
@@ -654,7 +385,7 @@ export default {
           context.report({ node, messageId: `unitTest` })
           return
         }
-        const test = registeredTest(node, sourceCode, importedTest)
+        const test = registeredTest(node, functions)
         if (test === undefined) return
         if (isEmpty(test.body)) {
           // `it.todo` with a body contradicts itself: a todo takes none.

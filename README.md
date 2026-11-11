@@ -54,20 +54,50 @@ show that the check rejects wrong answers, and its declared states hold its
 reach. The rule reports every other test registration in an oracle file as a
 unit test, whatever its body calls. Move such a test to an ordinary test file.
 
-A registration is a call of a test function: `it`, `test`, `bench`, or the
-`test` of `@fast-check/vitest`, with members such as `.each`, `.skip`, or
-`.concurrent`. The function can be an aliased import, a namespace member such
-as `vitest.it`, a variable bound to one, or a Vitest fixture
-(`test.extend(fixtures)`). It can also come from a fixtures module that the
-file imports. A call to an imported helper that registers its caller's body
-is a registration too. The rule follows imports through re-exports, star
-exports, and default exports. It does not read packages, so a fixture that a
-package exports is not seen.
+A registration is a call of a test function, with members such as `.each`,
+`.skip`, or `.concurrent`. A call to an imported helper that registers its
+caller's body is a registration too. `oracle/no-unit-test`,
+`oracle/no-disabled`, and `oracle/oracle-property-only` share one account of
+a test function, so they agree on every call. A callee's root is a test
+function when its binding resolves to `it`, `test`, `describe`, `suite`, or
+`bench` of `vitest`, `@fast-check/vitest`, or `@playwright/test`, or to a
+fixture of one (`test.extend(fixtures)`). The rules follow these bindings:
 
-A call to an imported helper that registers a test of its own is reported
-too, because that test would appear under the oracle file. An
-`oracleProperty` call whose options are not an object literal with a `check`
-is reported, because the rule cannot see its check.
+- a named, aliased, or namespace import (`vitest.it`), and an unbound name
+  that Vitest's `globals` declares;
+- a variable's initializer, a destructuring (`const { it: t } = vitest`),
+  and each plain assignment (`let t; t = it`);
+- a cast (`as`, `!`, `satisfies`), and either branch of a conditional or
+  logical expression (`flag ? it.skip : it`), so a callee that may be a
+  test function is reported;
+- a fixture, a tagged-template `.each`, and `oracleReplayTest(it)`;
+- an export of a relative test module: a constant, a re-export, `export *
+as`, a default export, and a relay of an imported binding, through star
+  exports. A cycle of modules or of variables resolves to nothing, and each
+  export is resolved once per lint.
+
+A binding that resolves to anything else is no test function, whatever its
+name: a local function named `bench`, a namespace of an ordinary module
+(`patterns.test(...)`), or an export of another package. A `describe` or
+`suite` is exempt by the function that it resolves to, not by its local
+name.
+
+The rules do not recognize these forms:
+
+- a test function passed as a parameter to a local helper
+  (`function reg(t) { t('n', fn) }`). `oracle/no-disabled` reports the
+  `reg(it)` call instead;
+- a fixture or test function that a package exports, because the rules read
+  only relative test modules;
+- a test function from a package other than the three above;
+- a computed member whose name is not a string literal, and a variable that
+  a destructuring assignment (not a declaration) writes;
+- a modifier call, such as `.skipIf(flag)`, that another module binds and
+  exports. A relayed `.skip` is counted at the call.
+  A call to an imported helper that registers a test of its own is reported
+  too, because that test would appear under the oracle file. An
+  `oracleProperty` call whose options are not an object literal with a `check`
+  is reported, because the rule cannot see its check.
 
 A test whose body is empty, such as `it('x', () => {})`, `test('x', async
 () => {})`, or a skipped placeholder `it.skip('x', () => {})`, checks

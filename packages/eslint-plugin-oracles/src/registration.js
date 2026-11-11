@@ -3,8 +3,8 @@
  * from `@tanstack/oracles`. Every rule uses these, so that the rules agree on what
  * a test is.
  */
+import { lintSession, loadModule, resolveTestModule } from './modules.js'
 
-export const testRoots = new Set([`describe`, `fcTest`, `it`, `suite`, `test`])
 export const disablingModifiers = new Set([`fixme`, `skip`, `todo`])
 export const conditionalModifiers = new Set([`runIf`, `skipIf`])
 export const aliasModifiers = new Set([
@@ -62,33 +62,6 @@ export function calleeChain(callee) {
   }
 }
 
-/**
- * Whether an identifier names a test function: `it`, `test`, and the
- * other test roots, a renamed import of one (`import { it as vitestIt }`),
- * or a constant bound to one through a selection helper or a member chain
- * (`const fixedCase = oracleReplayTest(it)`). A registration made through
- * such a constant is checked as a registration of its test.
- */
-export function isTestRoot(node, sourceCode, seen = new Set()) {
-  if (node?.type !== `Identifier`) return false
-  if (testRoots.has(node.name)) return true
-  const definition = findVariable(sourceCode.getScope(node), node.name)?.defs[0]
-  if (definition === undefined || seen.has(definition.node)) return false
-  seen.add(definition.node)
-  if (definition.type === `ImportBinding`) {
-    const imported = definition.node.imported
-    return (
-      imported !== undefined && testRoots.has(imported.name ?? imported.value)
-    )
-  }
-  return (
-    definition.type === `Variable` &&
-    definition.parent.kind === `const` &&
-    definition.node.init !== null &&
-    isTestRoot(calleeChain(definition.node.init).rootNode, sourceCode, seen)
-  )
-}
-
 export function isFunction(node) {
   return (
     node?.type === `ArrowFunctionExpression` ||
@@ -97,70 +70,293 @@ export function isFunction(node) {
   )
 }
 
-// The test functions that a namespace import's member names (`vitest.it`).
-// `bench` registers a benchmark, which an oracle file reports as a test.
-const registrationRoots = new Set([...testRoots, `bench`])
-// `test.extend(fixtures)` returns a test function with those fixtures.
-const testFunctionMembers = new Set([...registrationMembers, `extend`])
+// -- Test functions -----------------------------------------------------------
+//
+// Every oracle rule asks the same question of a callee: which test function,
+// if any, is its root? The answer is a test value, `{ root, members, own,
+// foreign }`: the framework function that it resolves to (`it`, `test`,
+// `describe`, `suite`, or `bench`), every member read after that root
+// (`skip`, `each`, `extend`), the members written since the last binding
+// (those that the expression itself spells), and the members that a binding
+// of another module carries. A namespace value, `{ member(name) }`, is a
+// namespace import of the framework or of a test module.
+//
+// A binding resolves when it is an import of the framework, a namespace
+// member, a variable (its initializer, a destructuring, and each plain
+// assignment), or an export of a test module. Casts, the branches of a
+// conditional or logical expression, `test.extend(fixtures)`, a selection
+// helper such as `oracleReplayTest(it)`, and a tagged template such as
+// `it.each` with a table keep the value. Any other binding, such as a local
+// function of the same name or another package's export, is no test
+// function. An unbound name is one of Vitest's globals.
 
-/**
- * The test function at the root of a callee chain, as `{ name, members }`:
- * its name and the members after it. Undefined when the root is no test
- * function. Beyond `isTestRoot`, the root is `bench`, a member of a
- * namespace import (`vitest.it`), a variable of any kind bound to a test
- * function or a fixture (`let t = it`, `const myTest = test.extend({})`),
- * or an import that `importedTest(source, name)` says is a test function
- * that its module exports.
- */
-function testFunction(
-  { rootNode, names },
-  sourceCode,
-  importedTest,
-  seen = new Set(),
-) {
-  if (rootNode?.type !== `Identifier`) return undefined
-  const root = { name: rootNode.name, members: names }
-  if (isTestRoot(rootNode, sourceCode) || rootNode.name === `bench`) return root
-  const definition = findVariable(sourceCode.getScope(rootNode), rootNode.name)
-    ?.defs[0]
-  if (definition === undefined || seen.has(definition.node)) return undefined
-  seen.add(definition.node)
-  if (definition.type === `ImportBinding`) {
-    const source = definition.parent.source.value
-    if (definition.node.type === `ImportNamespaceSpecifier`) {
-      const [name, ...members] = names
-      return name !== undefined &&
-        (registrationRoots.has(name) || importedTest(source, name))
-        ? { name, members }
-        : undefined
-    }
-    const { imported } = definition.node
-    return importedTest(source, imported?.name ?? imported?.value ?? `default`)
-      ? root
-      : undefined
-  }
-  return definition.type === `Variable` &&
-    definition.node.init !== null &&
-    isTestFunction(definition.node.init, sourceCode, importedTest, seen)
-    ? root
-    : undefined
+// The packages whose exports `it`, `test`, `describe`, `suite`, and `bench`
+// are test functions.
+const testPackages = new Set([
+  `vitest`,
+  `@fast-check/vitest`,
+  `@playwright/test`,
+])
+const frameworkRoots = new Set([`it`, `test`, `describe`, `suite`, `bench`])
+// Unbound names, as Vitest's `globals` declares them. `fcTest` is the name
+// that `@fast-check/vitest`'s `test` takes in an oracle file.
+const globalRoots = new Map([
+  ...[...frameworkRoots].map((name) => [name, name]),
+  [`fcTest`, `test`],
+])
+export const suiteRoots = new Set([`describe`, `suite`])
+// The members that keep a call a registration, and `extend`, which returns a
+// test function with fixtures.
+export const testFunctionMembers = new Set([...registrationMembers, `extend`])
+// Expressions that keep their operand's value: casts and parentheses.
+const transparent = new Set([
+  `ChainExpression`,
+  `ParenthesizedExpression`,
+  `TSAsExpression`,
+  `TSInstantiationExpression`,
+  `TSNonNullExpression`,
+  `TSSatisfiesExpression`,
+  `TSTypeAssertion`,
+])
+
+const framework = (root) => ({
+  kind: `test`,
+  root,
+  members: [],
+  own: [],
+  foreign: [],
+})
+
+/** The expression that casts or parentheses around `node` make. */
+export function outermostCast(node) {
+  let outer = node
+  while (transparent.has(outer.parent?.type)) outer = outer.parent
+  return outer
 }
 
 /**
- * Whether an expression yields a test function: a test root, a fixture
- * (`test.extend({})`), or a member chain that keeps one (`it.skip`).
+ * The test functions that a lint of `context`'s file can see:
+ * `value(node)` is the value of an expression, and `callee(node)` the test
+ * value of a callee, or undefined.
  */
-export function isTestFunction(
-  node,
-  sourceCode,
-  importedTest = () => false,
-  seen = new Set(),
-) {
-  const root = testFunction(calleeChain(node), sourceCode, importedTest, seen)
-  return (
-    root !== undefined &&
-    root.members.every((member) => testFunctionMembers.has(member))
+export function testFunctions(context) {
+  return scopedTestFunctions({
+    file: context.filename,
+    getScope: (node) => context.sourceCode.getScope(node),
+    session: lintSession(context),
+  })
+}
+
+/** The test functions of a test module that a session loaded. */
+export function moduleTestFunctions(module, session) {
+  return scopedTestFunctions({
+    file: module.file,
+    getScope: (node) => module.scopeOf(node),
+    session,
+  })
+}
+
+function scopedTestFunctions(scope) {
+  const value = (node) => valueOf(node, scope, new Set())
+  return {
+    value,
+    callee: (node) => testOnly(value(node)),
+    getScope: scope.getScope,
+  }
+}
+
+const testOnly = (value) => (value?.kind === `test` ? value : undefined)
+
+/**
+ * Of the values that an expression may have, the one that the rules judge:
+ * a test that is not a suite, then a suite. A branch that may be a test
+ * function makes the expression one, so a registration through it is
+ * reported, not passed.
+ */
+function pick(values) {
+  const tests = values.filter((value) => value?.kind === `test`)
+  return tests.find((value) => !suiteRoots.has(value.root)) ?? tests[0]
+}
+
+/** The name that a member expression reads, or undefined when it is computed. */
+function memberName(node) {
+  if (!node.computed && node.property.type === `Identifier`)
+    return node.property.name
+  return node.computed &&
+    node.property.type === `Literal` &&
+    typeof node.property.value === `string`
+    ? node.property.value
+    : undefined
+}
+
+/** The value of `name` read on `value`. */
+function memberOf(value, name) {
+  if (value === undefined || name === undefined) return undefined
+  if (value.kind === `namespace`) return value.member(name)
+  return {
+    ...value,
+    members: [...value.members, name],
+    own: [...value.own, name],
+  }
+}
+
+function valueOf(node, scope, seen) {
+  if (transparent.has(node.type)) return valueOf(node.expression, scope, seen)
+  switch (node.type) {
+    case `ConditionalExpression`:
+      return pick([
+        valueOf(node.consequent, scope, seen),
+        valueOf(node.alternate, scope, seen),
+      ])
+    case `LogicalExpression`:
+      return pick([
+        valueOf(node.left, scope, seen),
+        valueOf(node.right, scope, seen),
+      ])
+    case `TaggedTemplateExpression`:
+      return testOnly(valueOf(node.tag, scope, seen))
+    case `CallExpression`:
+      // `oracleReplayTest(it)` returns `it` or `it.skip`, so a registration
+      // made through it is a registration of `it`.
+      if (
+        node.callee.type === `Identifier` &&
+        selectionHelpers.has(node.callee.name) &&
+        node.arguments.length > 0
+      )
+        return valueOf(node.arguments[0], scope, seen)
+      return testOnly(valueOf(node.callee, scope, seen))
+    case `MemberExpression`:
+      return memberOf(valueOf(node.object, scope, seen), memberName(node))
+    case `Identifier`:
+      return bindingValue(node, scope, seen)
+    default:
+      return undefined
+  }
+}
+
+function bindingValue(identifier, scope, seen) {
+  const variable = findVariable(scope.getScope(identifier), identifier.name)
+  // An unbound name, or a global that the configuration declares.
+  if (variable === undefined || variable.defs.length === 0) {
+    const root = globalRoots.get(identifier.name)
+    return root === undefined ? undefined : framework(root)
+  }
+  return variableValue(variable, scope, seen)
+}
+
+/** The value of a variable: its import, or what its declaration and assignments give. */
+function variableValue(variable, scope, seen) {
+  // A cycle of variables (`let a = b; let b = a`) has no value.
+  if (seen.has(variable)) return undefined
+  seen.add(variable)
+  const definition = variable.defs[0]
+  if (definition.type === `ImportBinding`) {
+    const source = definition.parent.source.value
+    if (definition.node.type === `ImportNamespaceSpecifier`)
+      return namespaceOf(source, scope)
+    const { imported } = definition.node
+    return importedValue(
+      source,
+      imported === undefined ? `default` : (imported.name ?? imported.value),
+      scope,
+    )
+  }
+  if (definition.type !== `Variable`) return undefined
+  const { id, init } = definition.node
+  const written = [
+    init === null
+      ? undefined
+      : id.type === `Identifier`
+        ? valueOf(init, scope, seen)
+        : destructured(id, definition.name, init, scope, seen),
+    // Each plain assignment, as in `let t; t = it`.
+    ...variable.references
+      .filter(
+        (reference) =>
+          reference.isWrite() &&
+          !reference.init &&
+          reference.identifier.parent.type === `AssignmentExpression` &&
+          reference.identifier.parent.left === reference.identifier &&
+          reference.identifier.parent.operator === `=`,
+      )
+      .map((reference) =>
+        valueOf(reference.identifier.parent.right, scope, seen),
+      ),
+  ]
+  const value = pick(written)
+  return value && { ...value, own: [] }
+}
+
+/** The value that an object pattern gives `name`, as `const { it: t } = vitest` does. */
+function destructured(pattern, name, init, scope, seen) {
+  if (pattern.type !== `ObjectPattern`) return undefined
+  const property = pattern.properties.find(
+    (candidate) =>
+      candidate.type === `Property` &&
+      (candidate.value === name ||
+        (candidate.value.type === `AssignmentPattern` &&
+          candidate.value.left === name)),
   )
+  if (property === undefined) return undefined
+  const key = property.computed
+    ? typeof property.key.value === `string`
+      ? property.key.value
+      : undefined
+    : property.key.name
+  return memberOf(valueOf(init, scope, seen), key)
+}
+
+/** A namespace import of the framework or of a test module, or undefined. */
+function namespaceOf(source, scope) {
+  if (
+    !testPackages.has(source) &&
+    resolveTestModule(scope.file, source, scope.session) === undefined
+  )
+    return undefined
+  return {
+    kind: `namespace`,
+    member: (name) => importedValue(source, name, scope),
+  }
+}
+
+/**
+ * The value of the export `name` of `source`. A test module's export is
+ * resolved once for each lint, and a cycle of modules resolves to nothing.
+ * The members that it carries are foreign to the importer.
+ */
+function importedValue(source, name, scope) {
+  if (!source.startsWith(`.`))
+    return testPackages.has(source) && frameworkRoots.has(name)
+      ? framework(name)
+      : undefined
+  const file = resolveTestModule(scope.file, source, scope.session)
+  if (file === undefined) return undefined
+  const value = scope.session.once(`value\0${file}\0${name}`, () =>
+    exportValue(file, name, scope.session),
+  )
+  return value?.kind === `test`
+    ? { ...value, own: [], foreign: value.members }
+    : value
+}
+
+/** The value of a test module's export, through its re-exports and star exports. */
+function exportValue(file, name, session) {
+  const module = loadModule(file, session)
+  if (module === undefined) return undefined
+  const scope = { file, getScope: (node) => module.scopeOf(node), session }
+  const entry = module.exported.get(name)
+  if (entry?.variable !== undefined)
+    return variableValue(entry.variable, scope, new Set())
+  if (entry?.node !== undefined) return valueOf(entry.node, scope, new Set())
+  if (entry?.namespace !== undefined) return namespaceOf(entry.namespace, scope)
+  if (entry !== undefined)
+    return importedValue(entry.source, entry.imported, scope)
+  if (name === `default`) return undefined
+  for (const source of module.starSources) {
+    const value = importedValue(source, name, scope)
+    if (value !== undefined) return value
+  }
+  return undefined
 }
 
 export function findVariable(scope, name) {
@@ -304,29 +500,28 @@ export function isSharedHelperCall(node, names, sourceCode) {
 
 /**
  * The test that a call registers, as `{ body, modifiers }`, or undefined
- * when the call registers no test. A suite (`describe`) registers no test of
- * its own. The body is the function, or the name of the function, that the
- * test runs. `importedTest(source, name)` tells whether an import names a
- * test function that its module exports, such as a fixture.
+ * when the call registers no test. A suite (`describe`, or a fixture's
+ * `.describe`) registers no test of its own, whatever its local name. The
+ * body is the function, or the name of the function, that the test runs.
+ * `functions` are the test functions of the call's file (testFunctions).
  */
-export function registeredTest(node, sourceCode, importedTest = () => false) {
+export function registeredTest(node, functions) {
   if (node.parent.type === `CallExpression` && node.parent.callee === node) {
     // `it.each(table)` is the callee of the registration, not one itself.
     return undefined
   }
-  const root = testFunction(calleeChain(node.callee), sourceCode, importedTest)
+  const test = functions.callee(node.callee)
   if (
-    root === undefined ||
-    root.name === `describe` ||
-    root.name === `suite` ||
-    root.members.includes(`describe`) ||
-    !root.members.every((member) => testFunctionMembers.has(member))
+    test === undefined ||
+    suiteRoots.has(test.root) ||
+    test.members.includes(`describe`) ||
+    !test.own.every((member) => testFunctionMembers.has(member))
   ) {
     return undefined
   }
-  const body = registrationBody(node.arguments.slice(1), sourceCode)
+  const body = registrationBody(node.arguments.slice(1), functions)
   // The modifiers between the root and the call, such as `skip` or `todo`.
-  return body === undefined ? undefined : { body, modifiers: root.members }
+  return body === undefined ? undefined : { body, modifiers: test.members }
 }
 
 /**
@@ -336,13 +531,13 @@ export function registeredTest(node, sourceCode, importedTest = () => false) {
  * identifier. An options object, a number, or a value that is not a function
  * binding is never the body while another argument can be.
  */
-function registrationBody(args, sourceCode) {
+function registrationBody(args, functions) {
   return (
     args.find(isFunction) ??
     args.find(
       (argument) =>
         argument.type === `Identifier` &&
-        isFunctionBinding(argument, sourceCode),
+        isFunctionBinding(argument, functions),
     ) ??
     args.find(
       (argument) =>
@@ -364,9 +559,9 @@ const plainValueTypes = new Set([
  * Whether an identifier names a function, or may. A binding that holds a plain
  * value is not a function. An import, a parameter, or a call result may be one.
  */
-function isFunctionBinding(identifier, sourceCode) {
+function isFunctionBinding(identifier, functions) {
   const definition = findVariable(
-    sourceCode.getScope(identifier),
+    functions.getScope(identifier),
     identifier.name,
   )?.defs[0]
   if (definition?.type === `FunctionName`) return true
