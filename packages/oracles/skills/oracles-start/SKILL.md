@@ -101,7 +101,9 @@ Before your first message, read the block that production adds to
 under "Write the AGENTS.md block". It governs you from the start of this
 session, though nobody has added it to the repository yet: who owns the
 laws and who owns the code, which skill to read before each kind of oracle
-work, and the lint rule.
+work, and the lint rule. Until production, the lint rule means the
+repository's own lint: the oracles lint plugin comes with production, and
+its absence is not a problem to report.
 
 Your first message starts with two or three sentences on what this session
 will do, before any question. For example: "I'll
@@ -390,7 +392,8 @@ them and stop.
    prose still says what the code does.
 
 Do not change production code. That belongs to taking the oracle to
-production.
+production. Do not offer the gap check while the oracle fails: it cannot
+judge a failing run.
 
 **If the oracle finds no bug, run the gap check to go deeper.** Say so
 plainly first, and show what held. The gap check makes small changes to a
