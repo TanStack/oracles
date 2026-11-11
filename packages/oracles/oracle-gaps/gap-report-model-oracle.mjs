@@ -3740,6 +3740,92 @@ function applyEdit(state, edit) {
   return state
 }
 
+// ## How a run that does not complete ends (law 11)
+//
+// Every invocation of the CLI ends with a result shaped like a report, never
+// with a bare stack trace (maintainer decision, 2026-11-10: "we should never
+// just crash -- the cli should also return something sensible"). A run that
+// does not complete is either refused or an internal error.
+//
+// A refusal is a problem the author can fix: a bad argument, a broken owns
+// declaration, no oracle file or no owner, a config the runner cannot honor,
+// a Vitest that does not load, an owner that fails with no mutant active. It
+// exits 2 and prints one block on stderr with no stack frames: `refused:
+// <cause>`, then `fix: <directive>`. The directive is one next step, and it
+// offers no way around the fix (no "ignore it", no "mark it equivalent").
+// When the run knows its output directory, the block ends with `output:
+// <dir>`, and the directory holds a results.json, `{ status: "refused",
+// cause, directive }`, whose cause and directive are the block's, and a
+// summary.md. Arguments the CLI cannot parse name no output directory.
+//
+// An internal error is a bug in the CLI. It exits 3, says so, and keeps the
+// stack in an error.log rather than on stderr. No legal history reaches one,
+// so this law's check judges refusals only (see each oracle's limits).
+
+/**
+ * What a run that ended without completing printed and wrote, as the
+ * author reads it: its exit code, its `refused:` block (the cause up to its
+ * `fix:` line, cut to 2,000 characters), its `fix:` line, whether it named
+ * its output directory `out`, whether stderr holds a stack frame, and the
+ * status, cause, and directive of the results.json in `out`, if there is
+ * one. `name` replaces the scratch paths in a text, so two runs of one
+ * history in different directories record the same ending.
+ */
+function endingOf(exit, stderr, out, name = (text) => text) {
+  const text = `${stderr ?? ``}`
+  const line = (label) => text.match(new RegExp(`^${label}: (.*)$`, `m`))?.[1]
+  const cause = text.match(/^refused: ([\s\S]*?)\nfix: /m)?.[1]
+  let written
+  try {
+    const parsed = JSON.parse(readFileSync(join(out, `results.json`), `utf8`))
+    written = {
+      status: parsed.status,
+      cause: parsed.cause && name(parsed.cause).slice(0, 2000),
+      directive: parsed.directive && name(parsed.directive),
+      summary: existsSync(join(out, `summary.md`)),
+    }
+  } catch {
+    // No output directory is known, or the run wrote no results.json.
+  }
+  return {
+    exit,
+    cause: cause && name(cause).slice(0, 2000),
+    fix: line(`fix`) && name(line(`fix`)),
+    namesOutput: out !== undefined && line(`output`) === out,
+    stackFrames: /^\s+at /m.test(text),
+    written,
+  }
+}
+
+/**
+ * The first way a run's ending breaks the refusal law, or undefined. The
+ * cause must name `cause`; with `outKnown`, the run knew its output
+ * directory, so the block names it and the directory holds the refusal.
+ */
+function refusalBreach(ending, { cause, outKnown }) {
+  if (ending.exit !== 2) return `the refusal exited ${ending.exit}, not 2`
+  if (ending.stackFrames) return `the refusal printed a stack trace`
+  if (ending.cause === undefined)
+    return `the refusal printed no \`refused:\` line followed by a \`fix:\` line`
+  if (cause !== undefined && !ending.cause.includes(cause))
+    return `the refusal's cause does not name ${cause}: ${ending.cause}`
+  if (!ending.fix?.trim()) return `the refusal's \`fix:\` line is empty`
+  // A directive that offers a way around the fix lets the author leave the
+  // problem in place.
+  if (/\b(ignore|equivalent|skip)/i.test(ending.fix))
+    return `the refusal's fix offers a way around it: ${ending.fix}`
+  if (!outKnown) return undefined
+  if (!ending.namesOutput)
+    return `the refusal does not name its output directory`
+  const { written } = ending
+  if (written?.status !== `refused`)
+    return `the output's results.json has status ${written?.status ?? `(none)`}, not refused`
+  if (written.cause !== ending.cause || written.directive !== ending.fix)
+    return `the output's results.json gives another cause or directive than stderr`
+  if (!written.summary) return `the refusal wrote no summary.md`
+  return undefined
+}
+
 /**
  * The summary's counts, gap keys, unowned keys, and each listed gap's kind
  * and line, read from its text as the author reads it.
@@ -3806,6 +3892,8 @@ function readSummary(summary) {
 
 export {
   captureWitness,
+  endingOf,
+  refusalBreach,
   readSummary,
   SOURCE,
   LIB,
