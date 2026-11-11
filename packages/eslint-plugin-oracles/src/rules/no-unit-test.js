@@ -423,14 +423,20 @@ function inTypeQuery(identifier) {
  */
 function loadModule(file, session) {
   if (!session.modules.has(file)) {
-    let module
+    // Only reading and parsing the module may fail here; an error in the
+    // rule's own analysis of a parsed module is a rule bug, not a parse
+    // failure, so it is not reported as one.
+    let parsed
     try {
-      const { ast, scopeManager } = parseModule(file, session.languageOptions)
-      module = new OracleModule(file, ast, scopeManager, session)
+      parsed = parseModule(file, session.languageOptions)
     } catch (error) {
       session.parseErrors.set(file, error.message)
     }
-    session.modules.set(file, module)
+    session.modules.set(
+      file,
+      parsed &&
+        new OracleModule(file, parsed.ast, parsed.scopeManager, session),
+    )
   }
   return session.modules.get(file)
 }
@@ -464,6 +470,12 @@ function parseModule(file, languageOptions) {
       [
         {
           files: [`**/*.*`],
+          // The imported module's own eslint comments configure rules and
+          // environments this parse does not run.
+          linterOptions: {
+            noInlineConfig: true,
+            reportUnusedDisableDirectives: `off`,
+          },
           languageOptions: {
             ...languageOptions,
             parserOptions: {
