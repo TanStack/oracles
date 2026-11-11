@@ -105,6 +105,11 @@
  * arbitrary through an identity `.map`, with or without an unmapper, at the
  * whole history or at each item.
  *
+ * A calibration may require a difference, as text (`is 3` or `is 4`) or as a
+ * pattern (`/^item is \d$/` or `/^item is 4$/`). A corrupted or mutant trace
+ * reports `item is 3`, which the first of each pair matches and the second
+ * does not; only containment matches the text `is 3`.
+ *
  * The synthetic ids come from a fixed pool, which this fixture registers with
  * `configureOracles`. The framework's own id, `self-oracle.framework`, is
  * registered beside them, so the self-oracle's registration law can reject an
@@ -214,6 +219,8 @@ export type SyntheticSpec = {
   calibrations: ReadonlyArray<{
     name: string
     kind: `right` | `wrong-law` | `no-op` | `driver`
+    /** The difference the calibration requires, as text or a pattern, matching or not; absent, none. */
+    difference?: CalibrationDifference
   }>
   /** `observe`: the driver reports reach itself, the framework's default. */
   reachVia: `reached` | `observe`
@@ -763,17 +770,41 @@ function syntheticCheck(
   return pass
 }
 
+/**
+ * A required difference: text that a violation's difference must contain, or
+ * a pattern that it must match, chosen to match `item is 3` or not.
+ */
+export type CalibrationDifference =
+  `text match` | `text mismatch` | `pattern match` | `pattern mismatch`
+const differenceOf = (mode: CalibrationDifference): string | RegExp =>
+  mode === `text match`
+    ? // Part of `item is 3`, so only containment matches it.
+      `is 3`
+    : mode === `text mismatch`
+      ? `is 4`
+      : mode === `pattern match`
+        ? /^item is \d$/
+        : /^item is 4$/
+
 function syntheticCalibrations(
   spec: SyntheticSpec,
 ): Array<Calibration<Formed, Formed>> {
   return spec.calibrations.map(
-    ({ name, kind }): Calibration<Formed, Formed> => {
+    ({ name, kind, difference }): Calibration<Formed, Formed> => {
+      const required =
+        difference === undefined ? {} : { difference: differenceOf(difference) }
       // A mutant driver records a 3 in place of the first item.
       if (kind === `driver`)
-        return { name, law: `three`, driver: syntheticDriver(spec, true) }
+        return {
+          name,
+          law: `three`,
+          ...required,
+          driver: syntheticDriver(spec, true),
+        }
       return {
         name,
         law: kind === `wrong-law` ? `four` : `three`,
+        ...required,
         corrupt: (trace) => {
           const at = trace.findIndex(({ checkpoint }) =>
             checkpoint.startsWith(`item`),

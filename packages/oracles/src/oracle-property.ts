@@ -164,7 +164,12 @@
  *   wrongly. The calibration test finds a history where the corruption
  *   applies and the clean trace passes (it skips a candidate whose clean trace
  *   fails), and requires the check to report that law for the corrupted one
- *   (rubric, ORC-006).
+ *   (rubric, ORC-006). A calibration can also name a `difference`, text that
+ *   the violation's difference must contain or a pattern it must match, so
+ *   the check must reject the wrong answer for the reason the calibration
+ *   names, not only under its law (maintainer decision, 2026-11-11). The law
+ *   is judged first. A mutant driver's candidate that reports another law or
+ *   another difference is passed over for the next candidate.
  * - **Determinism.** A `determinism` test runs some histories twice and
  *   requires the same trace: every fixed and constructed history of a generated
  *   source and three generated histories, or up to eight evenly spaced
@@ -539,6 +544,12 @@ export type Calibration<THistory, TPlan> = {
   name: string
   /** The law the check must report. */
   law: string
+  /**
+   * Text that the violation's difference must contain, or a pattern that it
+   * must match. Without it, any difference under `law` rejects the wrong
+   * answer.
+   */
+  difference?: string | RegExp
 } & (
   | {
       /** A corrupted copy of the trace, or undefined when nothing applies. */
@@ -1610,6 +1621,22 @@ function calibrationTests<THistory, TExpected, TPlan>(
       route: `calibration`,
       replays: [],
       run: async () => {
+        const required =
+          `difference` in calibration ? calibration.difference : undefined
+        const owed = `law "${calibration.law}"${required === undefined ? `` : ` with a difference that ${typeof required === `string` ? `contains ${JSON.stringify(required)}` : `matches ${String(required)}`}`}`
+        // Whether a violation is the one owed: the law, then the difference.
+        // `search` ignores a pattern's `lastIndex`.
+        const rejects = (wrong: Extract<Verdict, { kind: `violation` }>) =>
+          lawOf(wrong) === calibration.law &&
+          (required === undefined ||
+            (typeof required === `string`
+              ? wrong.difference.includes(required)
+              : wrong.difference.search(required) !== -1))
+        // What a violation reported, where it differs from what is owed.
+        const reported = (wrong: Extract<Verdict, { kind: `violation` }>) =>
+          lawOf(wrong) === calibration.law
+            ? `difference ${JSON.stringify(wrong.difference)} under law "${calibration.law}"`
+            : `law "${lawOf(wrong)}"`
         const seen: Array<string> = []
         for (const { name, history } of candidates()) {
           const plan = planOf(options, history)
@@ -1636,10 +1663,9 @@ function calibrationTests<THistory, TExpected, TPlan>(
               undefined,
               probes,
             ).verdict
-            if (wrong.kind === `violation` && lawOf(wrong) === calibration.law)
-              return
+            if (wrong.kind === `violation` && rejects(wrong)) return
             throw new Error(
-              `${id}: calibration "${calibration.name}" corrupted the trace of "${name}", but the check ${wrong.kind === `pass` ? `passed it` : `reported law "${lawOf(wrong)}"`}. It must report law "${calibration.law}".`,
+              `${id}: calibration "${calibration.name}" corrupted the trace of "${name}", but the check ${wrong.kind === `pass` ? `passed it` : `reported ${reported(wrong)}`}. It must report ${owed}.`,
             )
           }
           // The real driver's trace of the candidate must pass first.
@@ -1661,11 +1687,11 @@ function calibrationTests<THistory, TExpected, TPlan>(
                 )
               : await runOne(options, history, calibration.driver)
           if (verdict.kind === `pass`) continue
-          if (lawOf(verdict) === calibration.law) return
-          seen.push(`"${name}" reported law "${lawOf(verdict)}"`)
+          if (rejects(verdict)) return
+          seen.push(`"${name}" reported ${reported(verdict)}`)
         }
         throw new Error(
-          `${id}: calibration "${calibration.name}" found no history whose clean trace passes and where the check reports law "${calibration.law}"${seen.length ? `; ${seen.slice(0, 3).join(`, `)}` : ``}. Add a passing fixed or constructed history that reaches the state its wrong answer changes.`,
+          `${id}: calibration "${calibration.name}" found no history whose clean trace passes and where the check reports ${owed}${seen.length ? `; ${seen.slice(0, 3).join(`, `)}` : ``}. Add a passing fixed or constructed history that reaches the state its wrong answer changes.`,
         )
       },
     }),

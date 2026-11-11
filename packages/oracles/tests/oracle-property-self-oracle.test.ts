@@ -63,7 +63,12 @@
  *   only it, the reach test judges every history itself and owes the same outcome and counts.
  * - `calibration`: a calibration uses the first candidate whose clean trace
  *   passes, and passes only when its wrong answer (a corrupted trace or a
- *   mutant driver) fails with the named law.
+ *   mutant driver) fails with the named law and, when the calibration names a
+ *   `difference`, with a violation whose difference contains that text or
+ *   matches that pattern. The law is judged first: a wrong law fails the
+ *   calibration as a wrong law whatever its difference. A mutant driver's
+ *   candidate that reports another difference is passed over as one that
+ *   reports another law is (maintainer decision, 2026-11-11, F27).
  * - `determinism`: the determinism test runs every fixed and constructed history
  *   and three generated ones, and fails for a driver whose trace changes,
  *   compared by their data encoding: `-0` is not `0`, and key order and
@@ -129,7 +134,9 @@
  * that work which never goes quiet on a controlled clock fails its history; the maintainer
  * decision of 2026-11-10 (F20) that a fixed or constructed history the arbitrary cannot take back
  * fails at registration, naming the history and the fix; and the oracle rubric's replay
- * (ORC-007), calibration (ORC-006), and declared-reach (ORC-015) rules.
+ * (ORC-007), calibration (ORC-006), and declared-reach (ORC-015) rules; and the
+ * maintainer decision of 2026-11-11 (F27) that a calibration can require its
+ * violation's difference.
  *
  * Limits: synthetic properties with histories of one to three integers, held
  * as an array, a bigint-tagged object, or a Map, one or two per run. An
@@ -152,7 +159,10 @@
  * the items they hold, so the shrink and replay checks cannot read it back
  * and skip it. Only generated sources bind a probe, and only
  * `saw-0`; an enumerated source declares its states by name. A late probe is judged by whether the run reports it, not by which
- * test Vitest blames.
+ * test Vitest blames. A calibration's required difference is drawn only as two texts and two
+ * patterns, judged against the one difference a corrupted or mutant trace reports (`item is 3`);
+ * a pattern with the global or sticky flag is not drawn. A calibration's failure message is judged
+ * by its kind, not by its text.
  */
 import { spawnSync } from 'node:child_process'
 import {
@@ -175,6 +185,7 @@ import {
   syntheticIds,
 } from './oracle-property-self-oracle-fixture.js'
 import type {
+  CalibrationDifference,
   OddKind,
   SyntheticHistory,
   SyntheticSpec,
@@ -193,6 +204,17 @@ const allStates = [`saw-0`, `saw-1`, `saw-2`]
 const stateRoles = [`required`, `measured`, `undeclared`] as const
 type StateRole = (typeof stateRoles)[number]
 const calibrationKinds = [`right`, `wrong-law`, `no-op`, `driver`] as const
+const calibrationDifferences = [
+  `text match`,
+  `text mismatch`,
+  `pattern match`,
+  `pattern mismatch`,
+] as const
+/** A calibration's kind and the difference it requires; `none` requires none. */
+type CalibrationDraft = {
+  kind: (typeof calibrationKinds)[number]
+  difference: CalibrationDifference | `none`
+}
 type Draft = {
   source:
     | { kind: `generated`; runs: number; seed: number }
@@ -220,7 +242,7 @@ type Draft = {
   reachVia: `reached` | `observe`
   /** `slow`: 300 ms per history under a 100 ms timeout. */
   timing: `normal` | `slow`
-  calibrations: Array<(typeof calibrationKinds)[number]>
+  calibrations: Array<CalibrationDraft>
   /** An id no oracle configuration registers. */
   unregistered: boolean
   /** How the driver calls the probe bound to `saw-0`; `none` binds no probe. */
@@ -355,9 +377,17 @@ const draft: fc.Arbitrary<Draft> = fc.record({
     { arbitrary: fc.constant(`normal` as const), weight: 12 },
     { arbitrary: fc.constant(`slow` as const), weight: 1 },
   ),
-  calibrations: fc.array(fc.constantFrom(...calibrationKinds), {
-    maxLength: 3,
-  }),
+  // A calibration may require its violation's difference, matching or not.
+  calibrations: fc.array(
+    fc.record({
+      kind: fc.constantFrom(...calibrationKinds),
+      difference: fc.oneof(
+        { weight: 3, arbitrary: fc.constant(`none` as const) },
+        { weight: 2, arbitrary: fc.constantFrom(...calibrationDifferences) },
+      ),
+    }),
+    { maxLength: 3 },
+  ),
   // Rare: a property under an id no oracle configuration registers.
   unregistered: fc.oneof(
     { weight: 9, arbitrary: fc.constant(false) },
@@ -656,9 +686,10 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
           : {}),
         ...(d.nested ? { nested: true } : {}),
         ...(d.strictModel ? { strictModel: true } : {}),
-        calibrations: d.calibrations.map((kind, at) => ({
+        calibrations: d.calibrations.map(({ kind, difference }, at) => ({
           name: `cal-${at}`,
           kind,
+          ...(difference === `none` ? {} : { difference }),
         })),
       }
     }),
@@ -688,6 +719,7 @@ type Kind =
   | `determinism`
   | `calibration-passed`
   | `calibration-wrong-law`
+  | `calibration-wrong-difference`
   | `calibration-none`
   | `timeout`
   | `model-not-total`
@@ -1215,17 +1247,28 @@ function predictSpec(
   }
   // A calibration needs a candidate whose clean trace passes; it skips the
   // others (maintainer decision, 2026-11-03). Every history has an item, so
-  // the corruption applies to every candidate.
-  const calibrate = (name: string, kind: (typeof calibrationKinds)[number]) => {
+  // the corruption applies to every candidate. A corrupted or mutant trace
+  // violates law `three` with difference `item is 3`, which a required
+  // difference matches or not, by its mode. The law is judged first. A
+  // corruption decides at its first candidate; a mutant driver passes over a
+  // candidate with another difference, and every candidate has the same one.
+  const calibrate = (
+    name: string,
+    kind: (typeof calibrationKinds)[number],
+    difference?: CalibrationDifference,
+  ): Outcome => {
     const used = ran(`calibration: ${name}`).find(
       (history) => judged(spec, history).kind === `pass`,
     )
-    if (!used) return { kind: `calibration-none` } as Outcome
-    if (kind === `right` || kind === `driver`)
-      return { kind: `pass` } as Outcome
+    if (!used) return { kind: `calibration-none` }
+    if (kind === `no-op`) return { kind: `calibration-passed` }
+    if (kind === `wrong-law`) return { kind: `calibration-wrong-law` }
+    if (difference === undefined || difference.endsWith(` match`))
+      return { kind: `pass` }
     return {
-      kind: kind === `no-op` ? `calibration-passed` : `calibration-wrong-law`,
-    } as Outcome
+      kind:
+        kind === `driver` ? `calibration-none` : `calibration-wrong-difference`,
+    }
   }
   // A generated property's determinism test also runs three generated
   // histories (maintainer decision, 2026-11-03), so a nondeterministic driver
@@ -1301,8 +1344,8 @@ function predictSpec(
       )
     }
   }
-  for (const { name, kind } of spec.calibrations)
-    tests.set(`calibration: ${name}`, calibrate(name, kind))
+  for (const { name, kind, difference } of spec.calibrations)
+    tests.set(`calibration: ${name}`, calibrate(name, kind, difference))
   // A forced-probe calibration needs a candidate whose clean trace passes and
   // whose prediction differs from the forced probe; the check must then report
   // reach agreement.
@@ -1441,6 +1484,8 @@ const frameworkStates = [
   `calibration-applied`,
   `calibration-rejected`,
   `calibration-skipped-candidate`,
+  `calibration-difference-applied`,
+  `calibration-difference-rejected`,
   `determinism-caught`,
   `observed-reach`,
   `timeout`,
@@ -1584,10 +1629,29 @@ function frameworkReach(
         'undeclared-state': `enumerated-undeclared-state`,
         'calibration-passed': `calibration-rejected`,
         'calibration-wrong-law': `calibration-rejected`,
+        'calibration-wrong-difference': `calibration-difference-rejected`,
       }[outcome.kind as string]
       if (failure) reached.add(failure)
       if (name.startsWith(`calibration:`) && outcome.kind === `pass`)
         reached.add(`calibration-applied`)
+      // A calibration that requires a difference: one that matches applies,
+      // and a mutant driver's that does not finds no history.
+      const calibration = spec.calibrations.find(
+        (candidate) => name === `calibration: ${candidate.name}`,
+      )
+      if (calibration?.difference && outcome.kind === `pass`)
+        reached.add(`calibration-difference-applied`)
+      if (
+        calibration?.kind === `driver` &&
+        calibration.difference?.endsWith(`mismatch`) &&
+        outcome.kind === `calibration-none` &&
+        (run?.log ?? []).some(
+          (entry) =>
+            entry.test === `${spec.id} > ${name}` &&
+            judged(spec, entry.history).kind === `pass`,
+        )
+      )
+        reached.add(`calibration-difference-rejected`)
       if (
         name === `reach` &&
         outcome.kind === `pass` &&
@@ -1878,12 +1942,14 @@ function classify(error: ReportedError | undefined): Failure {
                           ? `calibration-passed`
                           : text.includes(`but the check reported law`)
                             ? `calibration-wrong-law`
-                            : text.includes(`found no history`)
-                              ? `calibration-none`
-                              : text.includes(`synthetic driver failed`) ||
-                                  text.includes(`cannot read a 7`)
-                                ? `setup`
-                                : `other`
+                            : text.includes(`but the check reported difference`)
+                              ? `calibration-wrong-difference`
+                              : text.includes(`found no history`)
+                                ? `calibration-none`
+                                : text.includes(`synthetic driver failed`) ||
+                                    text.includes(`cannot read a 7`)
+                                  ? `setup`
+                                  : `other`
   return {
     kind,
     // A model error that quotes a machine path, such as an inspected stack.
@@ -2643,6 +2709,10 @@ const seedlessHistory = (
   ...drafts: Array<Draft>
 ) => ({ name, enters, history: { drafts, seedless: true } })
 const at = (history: SyntheticHistory) => ({ history, enters: null })
+const cal = (
+  kind: CalibrationDraft[`kind`],
+  difference: CalibrationDraft[`difference`] = `none`,
+): CalibrationDraft => ({ kind, difference })
 
 oracleProperty({
   id: `self-oracle.framework`,
@@ -2740,7 +2810,10 @@ oracleProperty({
       fixedHistory(
         `a calibration skips a candidate whose clean trace fails`,
         [`calibration-skipped-candidate`, `calibration-applied`],
-        generatedDraft({ fixed: [at([3]), at([0])], calibrations: [`right`] }),
+        generatedDraft({
+          fixed: [at([3]), at([0])],
+          calibrations: [cal(`right`)],
+        }),
       ),
       // A spin fails its history, so its trace is no clean candidate, though
       // every observation in it passes the check.
@@ -2750,7 +2823,7 @@ oracleProperty({
         generatedDraft({
           clock: true,
           fixed: [at([7]), at([0])],
-          calibrations: [`right`, `driver`],
+          calibrations: [cal(`right`), cal(`driver`)],
         }),
       ),
       fixedHistory(
@@ -2758,13 +2831,58 @@ oracleProperty({
         [`calibration-applied`, `calibration-rejected`],
         generatedDraft({
           fixed: [at([0])],
-          calibrations: [`right`, `wrong-law`, `no-op`],
+          calibrations: [cal(`right`), cal(`wrong-law`), cal(`no-op`)],
         }),
       ),
       fixedHistory(
         `a mutant driver calibration`,
         [`calibration-applied`],
-        generatedDraft({ fixed: [at([0])], calibrations: [`driver`] }),
+        generatedDraft({ fixed: [at([0])], calibrations: [cal(`driver`)] }),
+      ),
+      // Text and a pattern, on a corruption and on a mutant driver.
+      ...[
+        [`text match`, `pattern match`],
+        [`pattern match`, `text match`],
+      ].map(([corrupted, mutated]) =>
+        fixedHistory(
+          `a calibration that requires a difference its violation has applies (${corrupted}, ${mutated})`,
+          [`calibration-applied`, `calibration-difference-applied`],
+          generatedDraft({
+            fixed: [at([0])],
+            calibrations: [
+              cal(`right`, corrupted as CalibrationDifference),
+              cal(`driver`, mutated as CalibrationDifference),
+            ],
+          }),
+        ),
+      ),
+      ...[
+        [`text mismatch`, `pattern mismatch`],
+        [`pattern mismatch`, `text mismatch`],
+      ].map(([corrupted, mutated]) =>
+        fixedHistory(
+          `a calibration that requires a difference its violation lacks fails (${corrupted}, ${mutated})`,
+          [`calibration-difference-rejected`],
+          generatedDraft({
+            fixed: [at([0])],
+            calibrations: [
+              cal(`right`, corrupted as CalibrationDifference),
+              cal(`driver`, mutated as CalibrationDifference),
+            ],
+          }),
+        ),
+      ),
+      fixedHistory(
+        `a calibration's wrong law decides before its difference`,
+        [`calibration-rejected`],
+        generatedDraft({
+          fixed: [at([0])],
+          calibrations: [
+            cal(`wrong-law`, `text mismatch`),
+            cal(`wrong-law`, `pattern match`),
+            cal(`no-op`, `text match`),
+          ],
+        }),
       ),
       fixedHistory(
         `a law violation outranks a constructed history that misses its state`,
