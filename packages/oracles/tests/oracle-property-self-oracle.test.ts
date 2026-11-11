@@ -53,7 +53,8 @@
  *   and one that fails before a verdict counts for nothing. A judged enumerated history that
  *   enters an undeclared state fails its test, before its law violation, as a campaign's
  *   history does (maintainer decision, 2026-11-10, F23: every enumerated history runs, so a
- *   required state needs no constructed history).
+ *   required state needs no constructed history). Run alone, under a `-t` pattern that selects
+ *   only it, the reach test judges every history itself and owes the same outcome and counts.
  * - `calibration`: a calibration uses the first candidate whose clean trace
  *   passes, and passes only when its wrong answer (a corrupted trace or a
  *   mutant driver) fails with the named law.
@@ -1408,6 +1409,7 @@ const frameworkStates = [
   `enumerated-reach-failure`,
   `enumerated-undeclared-state`,
   `enumerated-reach-reruns`,
+  `enumerated-reach-alone`,
 ] as const
 
 function frameworkReach(
@@ -1589,6 +1591,8 @@ function frameworkReach(
   for (const spec of plan.specs)
     if (spec.overReport && spec.probe && expected.get(spec.id)!.loads)
       reached.add(`over-reported-reach`)
+  if (trace.some(({ checkpoint }) => checkpoint === `reach-alone`))
+    reached.add(`enumerated-reach-alone`)
   if (trace.some(({ checkpoint }) => checkpoint === `replay`))
     reached.add(`replay-probe`)
   const seedless = trace.find(({ checkpoint }) => checkpoint === `seedless`)
@@ -1617,7 +1621,10 @@ function frameworkReach(
 //   all the files again with that replay selected and its own log, which
 //   shows the history the replay started from;
 // - rerun: for each property's first failure that printed a rerun command,
-//   Vitest runs that file with the command's `-t` pattern.
+//   Vitest runs that file with the command's `-t` pattern;
+// - reach alone: for each loaded enumerated source that declares states,
+//   Vitest runs that file with a `-t` pattern that selects only its reach
+//   test.
 // Child runs fix the random campaign's seed (a seed without a path reseeds the
 // campaign and selects no replay), so a child run records the same facts every time.
 
@@ -1691,6 +1698,17 @@ type ProbeRun = {
   ran?: Array<SyntheticHistory>
   /** The routes those histories ran under. */
   routes?: Array<string | null>
+}
+
+/** A reach test run alone, under a `-t` pattern that selects only it. */
+type ReachAlone = {
+  id: string
+  state: string
+  failure?: Failure
+  /** The counts it printed, when it passed. */
+  reach?: unknown
+  /** The property's other tests that did not stand aside. */
+  others: Array<[string, string, string]>
 }
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -2051,6 +2069,42 @@ async function driveSuite(
         ...(ran ? { failure: classify(ran.errors[0]) } : {}),
       } satisfies ProbeRun)
     }
+    // reach: for each loaded enumerated source that declares states, Vitest
+    // runs that file again with a `-t` pattern that selects only its reach
+    // test, so the reach test judges histories that no test of the run
+    // recorded. A slow spec's reach test times out either way.
+    for (const [index, spec] of plan.specs.entries()) {
+      if (!spec.enumeratedStates || spec.slow || !run.files[spec.id]!.loaded)
+        continue
+      const escape = (text: string) =>
+        text.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
+      const pattern = `^${[...(spec.nested ? [outerSuite] : []), spec.id, `reach`].map(escape).join(`(?: | > )`)}$`
+      const alone = runVitest(
+        directory,
+        [files[index]!],
+        {},
+        `-t ${shellWord(pattern)}`,
+      )
+      const test = alone.files[0]?.tests.find(
+        (candidate) => short(spec.id, candidate.name) === `reach`,
+      )
+      const printed = new RegExp(
+        `^${escape(spec.id)} enumerated reach (\\{.*\\})$`,
+        `m`,
+      ).exec(alone.stdout)?.[1]
+      observe(`reach-alone`, {
+        id: spec.id,
+        state: test?.state ?? `missing`,
+        ...(test?.state === `failed`
+          ? { failure: classify(test.errors[0]) }
+          : {}),
+        ...(printed ? { reach: JSON.parse(printed) as unknown } : {}),
+        others: statesIn(alone, plan, files).filter(
+          ([id, name, state]) =>
+            id === spec.id && name !== `reach` && state !== `skipped`,
+        ),
+      } satisfies ReachAlone)
+    }
   } finally {
     rmSync(directory, { recursive: true, force: true })
   }
@@ -2304,6 +2358,34 @@ function checkSuite(
           { actual: seedless[spec.id], expected: owedRoutes },
         )
     }
+  // A reach test run alone judges every history itself, and owes the same
+  // outcome and counts as in the full run.
+  for (const spec of plan.specs) {
+    const owed = expected.get(spec.id)!
+    if (!spec.enumeratedStates || spec.slow || !owed.loads) continue
+    const alone = trace.find(
+      ({ checkpoint, value }) =>
+        checkpoint === `reach-alone` && (value as ReachAlone).id === spec.id,
+    )?.value as ReachAlone | undefined
+    const outcome = owed.tests.get(`reach`)!
+    const kind =
+      alone?.state === `passed` ? `pass` : (alone?.failure?.kind ?? `other`)
+    if (!alone || alone.others.length > 0 || kind !== outcome.kind)
+      return violation(
+        `reach-alone`,
+        `${spec.id}: its reach test run alone ${alone ? `${alone.state} as ${JSON.stringify(alone.failure ?? null)}${alone.others.length ? `, beside ${JSON.stringify(alone.others)}` : ``}` : `never ran`}, owed ${JSON.stringify(outcome)}`,
+        `reach`,
+        { actual: alone ?? null, expected: outcome },
+      )
+    const counts = owed.reach.get(`enumerated`)
+    if (counts && JSON.stringify(alone.reach) !== JSON.stringify(counts))
+      return violation(
+        `reach-alone`,
+        `${spec.id}: its reach test run alone printed ${JSON.stringify(alone.reach ?? null)}, owed ${JSON.stringify(counts)}`,
+        `reach`,
+        { actual: alone.reach, expected: counts },
+      )
+  }
   // Each late probe call surfaces as an unhandled error of the run.
   const late = run.unhandled.filter((message) =>
     message.includes(`was called after its history ended`),
@@ -2800,7 +2882,7 @@ oracleProperty({
       ),
       fixedHistory(
         `an enumerated source counts the histories that entered each declared state`,
-        [`enumerated-reach-counted`],
+        [`enumerated-reach-counted`, `enumerated-reach-alone`],
         {
           ...generatedDraft({
             enumeratedStates: [`required`, `measured`, `measured`],
