@@ -162,6 +162,10 @@ const FORMS = {
   'self-namespace': [`selfF()`, undefined],
   'mutual-oracle-named': [`mutualOracleF()`, undefined],
   'fan-out-chain': [`chainF()`, undefined],
+  // A chain of modules whose two constants each branch to both constants of
+  // the next module. A resolver that answers each export once reads 2 per
+  // module, and one that does not reads 2^depth.
+  'branching-value-chain': [`branchA('n', () => { compute() })`, undefined],
   'empty-it': [`it('n', () => {})`, `emptyTest`],
   'empty-test-function': [`test('n', function () {})`, `emptyTest`],
   'empty-skip': [`it.skip('n', () => {})`, `emptyTest`],
@@ -237,6 +241,26 @@ function fanOutChain(depth) {
   return modules
 }
 
+// A chain of `depth` modules, each of whose constants `a` and `b` is one of
+// the next module's constants, chosen by a flag. The last module's constants
+// are no test functions.
+const BRANCH_DEPTH = 22
+function branchingChain(depth) {
+  const modules = {}
+  for (let at = 0; at < depth; at++) {
+    modules[`branch-${at}.js`] =
+      at === depth - 1
+        ? `export const a = 1\nexport const b = 2\n`
+        : [
+            `import { a as nextA, b as nextB } from './branch-${at + 1}.js'`,
+            `export const a = globalThis.flag ? nextA : nextB`,
+            `export const b = globalThis.flag ? nextB : nextA`,
+            ``,
+          ].join(`\n`)
+  }
+  return modules
+}
+
 // The modules beside the oracle file. Their names decide how the rule
 // judges a call to their helpers: an ordinary module and an `oracle-`
 // machinery module are judged here, an oracle-named module on its own.
@@ -272,6 +296,7 @@ const HELPERS = {
   'mutual-oracle.js': `import { g } from './mutual-c.js'\nexport function f() {\n  return g()\n}\n`,
   'mutual-c.js': `import { f } from './mutual-oracle.js'\nexport function g() {\n  return f()\n}\n`,
   ...fanOutChain(CHAIN_DEPTH),
+  ...branchingChain(BRANCH_DEPTH),
 }
 
 const HEADER = [
@@ -307,6 +332,7 @@ const HEADER = [
   `import { f as selfF } from './self.js'`,
   `import { f as mutualOracleF } from './mutual-oracle.js'`,
   `import { f as chainF } from './chain-0.js'`,
+  `import { a as branchA } from './branch-0.js'`,
   `const propertyOptions = { id: 'p', check: checkHistory }`,
   `function namedBody() { compute() }`,
 ]
