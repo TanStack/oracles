@@ -161,7 +161,6 @@ const LAW = {
   statement: `A state probe in production source is reported exactly where the form is broken, and only in production source (src under a package in a monorepo, or src at the root of a single-package repository): each near-miss kind reports each mention of __oracleProbe on its line, a legal probe reports nothing, and the root config enables the rule for production source alone. The rule never throws on a program that parses: an error it raises fails the predicted reports.`,
   authority: `The maintainer's decisions of 2026-11-08 on the probe form (the function-local probing guard) and the state probe entry in docs/contributing/glossary.md, as recorded in this file's header.`,
   limits: `The guard is generated at the top of the function only; a module-level guard, a parameter named probing, and a guard after its probe are not generated. A call inside a condition is allowed, as the form allows it.`,
-  owner: `eslint-plugin-oracles lint rules`,
 }
 
 // The site kinds that declare a state (every kind), the legal sub-states of

@@ -14,7 +14,14 @@ every commit with [pkg.pr.new](https://pkg.pr.new).
   project's owning oracles leave unexercised or unjudged. A project runs it as
   `oracle-gaps --package <dir> --source <src/x.ts,...>`, with
   `--env-prefix` set to the prefix that the project passes to
-  `configureOracles`.
+  `configureOracles`. Each run writes its report to
+  `<dir>/.oracle-gaps/out/<run>/` (or to `--out`), and keeps its state in
+  `<dir>/.oracle-gaps/`, and keeps the last five run directories there. Add
+  `.oracle-gaps/` and `.oracle-gaps-*` to the project's `.gitignore`. The
+  `.oracle-gaps-*` files are the runner's copies of the test files and its
+  Vitest configs. They sit beside the package's config, because Vitest resolves
+  each copy's imports from the directory the copy is in; a run that is killed
+  before it cleans up leaves them there.
 - `packages/eslint-plugin-oracles` (`@tanstack/eslint-plugin-oracles`): the
   `oracle/*` lint rules. The rules recognize the framework by its package
   specifier and by a relative module with its file name. A project names its

@@ -7,6 +7,7 @@ import {
   realpathSync,
   statSync,
 } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import { availableParallelism } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
@@ -61,7 +62,10 @@ export function parseArgs(argv, cwd = process.cwd()) {
     sources: args.source.split(`,`).map((source) => packagePath(pkg, source)),
     seed: args.seed,
     diffBase: args[`diff-base`],
-    out: resolve(cwd, args.out ?? `/tmp/oracle-gaps`),
+    // Each run's output is a directory of its own under the package's state
+    // (`.oracle-gaps/out`), so runs of one package and of two packages never
+    // collide (maintainer decision, 2026-11-10: namespacing).
+    out: resolve(cwd, args.out ?? join(pkg, `.oracle-gaps`, `out`, runName())),
     only: args.only ? new Set(args.only.split(`,`)) : undefined,
     // A fixed-seed random sample of this many mutants per source file, for
     // surveys across many modules.
@@ -102,6 +106,11 @@ export function packagePath(pkg, path) {
   )
   if (isOutside(named)) throw new Error(`${path} is outside the package`)
   return named
+}
+
+/** A run's directory name: its start time, then random bytes, unique per run. */
+function runName() {
+  return `${new Date().toISOString().replace(/[:.]/g, `-`)}-${randomBytes(4).toString(`hex`)}`
 }
 
 /**

@@ -137,7 +137,6 @@ oracleProperty({
     statement: `The reviewer's fixed inputs, built with every feature family on, agree with the model on every receiving path.`,
     authority: `See PART_REACH_AUTHORITY in part-reach-oracle-support.js.`,
     limits: `The inputs are enumerated, so the grammar is not sampled here; they carry no expected answers of their own.`,
-    owner: `eslint-plugin-oracles lint rules`,
   },
   histories: fixedInputs.map(([, skeleton]) => skeleton),
   label: (skeleton) => fixedNames.get(skeleton) ?? `fixed input`,
@@ -177,7 +176,6 @@ oracleProperty({
     statement: `Permuting an oracle's registrations does not change its reports, up to the subject names: the reordered lint agrees with the model, and it names the same subjects as the original.`,
     authority: `See PART_REACH_AUTHORITY in part-reach-oracle-support.js; the reports are a pure function of the source files (law L1 of rules/no-unit-test.js).`,
     limits: `Identifier registrations in one file, the shape whose evaluation order the reach rule must not depend on. Companions are not generated here.`,
-    owner: `eslint-plugin-oracles lint rules`,
   },
   histories: {
     arbitrary: orderArbitrary,
@@ -241,7 +239,6 @@ oracleProperty({
     statement: `Linting the same program twice in one process gives the same reports.`,
     authority: `See PART_REACH_AUTHORITY in part-reach-oracle-support.js.`,
     limits: `Rerun equality only: the model is checked by the other properties, so this law has no expectation of its own.`,
-    owner: `eslint-plugin-oracles lint rules`,
   },
   histories: {
     arbitrary: programSkeleton,
@@ -378,7 +375,6 @@ oracleProperty({
     statement: `An oracle that imports a companion which imports the check: editing the check's companion between two lints changes the next lint's reports, although the middle companion is unchanged.`,
     authority: `See PART_REACH_AUTHORITY in part-reach-oracle-support.js, and the rule's reach cache (maintainer decision 2026-11-02).`,
     limits: `One fixed chain, enumerated; the generated companion edits are the companion-edits property.`,
-    owner: `eslint-plugin-oracles lint rules`,
   },
   histories: [chain],
   label: () => `a dependency chain`,

@@ -54,10 +54,13 @@ function hostFor(ts) {
  * absolute paths of every test file the package's config includes. A
  * declaration that names nothing, a list that is not a literal, or an entry
  * that names a missing file or function throws, because it would hide gaps.
+ * A run with no oracle file, or in which no function of a selected source
+ * has an owner through the call trees, throws too.
  */
 export function analyze(ts, pkg, sources, testFiles) {
   const relative = (file) => file.slice(pkg.length + 1)
-  // An oracle file is a test file that calls `declareOracle`.
+  // An oracle file is a test file that calls `oracleProperty` or
+  // `declareOracle`.
   const declarations = new Map()
   for (const file of testFiles) {
     const declared = readOwns(ts, file, readFileSync(file, `utf8`))
@@ -83,6 +86,12 @@ export function analyze(ts, pkg, sources, testFiles) {
     })
     declarations.set(file, entries)
   }
+  // A run that owns nothing would read every mutant as unowned, so it is
+  // refused here, once (maintainer decision, 2026-11-10).
+  if (declarations.size === 0)
+    throw new Error(
+      `no oracle file: no test file calls oracleProperty or declareOracle, so no file owns any selected source`,
+    )
   const instrumented = new Map()
   const mutants = []
   for (const source of sources) {
@@ -113,6 +122,8 @@ export function analyze(ts, pkg, sources, testFiles) {
     hostFor(ts),
   )
   const owned = ownership(ts, program, pkg, declarations)
+  // A bad entry is named before the run's lack of an owner, which it can
+  // cause: the entry is what the author must fix.
   for (const [file, entries] of declarations)
     for (const entry of entries) {
       const [source, fn] = splitEntry(entry)
@@ -121,6 +132,12 @@ export function analyze(ts, pkg, sources, testFiles) {
           `${relative(file)}: owns entry ${entry} names no function in ${source}`,
         )
     }
+  // Owned through the call trees, which may reach a selected source from an
+  // entry in another file.
+  if (!sources.some((source) => owned.ownsAny(source)))
+    throw new Error(
+      `no file owns any selected source: no function of a --source file has an owner`,
+    )
   // Each mutant belongs to the innermost function whose text holds its
   // site; its key reads that function's name, and its owners are that
   // function's.
