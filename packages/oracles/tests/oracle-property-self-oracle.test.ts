@@ -42,7 +42,15 @@
  *   every other load error of a generated source (analyst-chosen order, 2026-11-10).
  * - `reach`: a fixed or constructed history that does not enter a state it names fails, and
  *   a passing campaign reports how many of its histories entered each declared
- *   state, whether the property names reach itself or the driver records it.
+ *   state, whether the property names reach itself or the driver records it. An enumerated
+ *   source that declares `states` or `measured` registers a `reach` test after its histories:
+ *   it fails when no enumerated history entered a required state, and otherwise reports how
+ *   many entered each declared state. A history counts when it was judged, passing or
+ *   violating its law; the reach test runs any history that no earlier test of the run judged,
+ *   and one that fails before a verdict counts for nothing. A judged enumerated history that
+ *   enters an undeclared state fails its test, before its law violation, as a campaign's
+ *   history does (maintainer decision, 2026-11-10, F23: every enumerated history runs, so a
+ *   required state needs no constructed history).
  * - `calibration`: a calibration uses the first candidate whose clean trace
  *   passes, and passes only when its wrong answer (a corrupted trace or a
  *   mutant driver) fails with the named law.
@@ -133,7 +141,7 @@
  * oracle. A counterexample of the `errors` form prints its Errors without
  * the items they hold, so the shrink and replay checks cannot read it back
  * and skip it. Only generated sources bind a probe, and only
- * `saw-0`. A late probe is judged by whether the run reports it, not by which
+ * `saw-0`; an enumerated source declares its states by name. A late probe is judged by whether the run reports it, not by which
  * test Vitest blames.
  */
 import { spawnSync } from 'node:child_process'
@@ -172,6 +180,8 @@ import type {
 // slow under a small timeout, and its calibrations.
 
 const allStates = [`saw-0`, `saw-1`, `saw-2`]
+const stateRoles = [`required`, `measured`, `undeclared`] as const
+type StateRole = (typeof stateRoles)[number]
 const calibrationKinds = [`right`, `wrong-law`, `no-op`, `driver`] as const
 type Draft = {
   source:
@@ -188,6 +198,12 @@ type Draft = {
    */
   arbitraryMap: `none` | `unmapper` | `no unmapper`
   mapAt: `history` | `item`
+  /**
+   * An enumerated source's declared states: each of `saw-0`, `saw-1`, and
+   * `saw-2` is required, measured, or undeclared; null declares none, as a
+   * plain list of histories does.
+   */
+  enumeratedStates: Array<StateRole> | null
   nondeterministic: boolean
   reachVia: `reached` | `observe`
   /** `slow`: 300 ms per history under a 100 ms timeout. */
@@ -287,6 +303,27 @@ const draft: fc.Arbitrary<Draft> = fc.record({
     },
   ),
   mapAt: fc.constantFrom(`history` as const, `item` as const),
+  // The role of each state in an enumerated source's declaration.
+  enumeratedStates: fc.oneof(
+    { arbitrary: fc.constant(null), weight: 3 },
+    {
+      arbitrary: fc.tuple<Array<StateRole>>(
+        ...allStates.map(() =>
+          fc.oneof(
+            {
+              arbitrary: fc.constantFrom(
+                `required` as const,
+                `measured` as const,
+              ),
+              weight: 4,
+            },
+            { arbitrary: fc.constant(`undeclared` as const), weight: 1 },
+          ),
+        ),
+      ),
+      weight: 2,
+    },
+  ),
   nondeterministic: fc.oneof(
     { arbitrary: fc.constant(false), weight: 4 },
     { arbitrary: fc.constant(true), weight: 1 },
@@ -504,6 +541,18 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
               },
             }
           : {}),
+        ...(!generated && d.enumeratedStates
+          ? {
+              enumeratedStates: {
+                states: allStates.filter(
+                  (_, at) => d.enumeratedStates![at] === `required`,
+                ),
+                measured: allStates.filter(
+                  (_, at) => d.enumeratedStates![at] === `measured`,
+                ),
+              },
+            }
+          : {}),
         nondeterministic: d.nondeterministic,
         reachVia: d.reachVia,
         ...(d.unregistered ? { unregistered: true } : {}),
@@ -592,6 +641,8 @@ type Kind =
   | `setup`
   | `fixed-reach`
   | `constructed-reach`
+  | `enumerated-reach`
+  | `undeclared-state`
   | `determinism`
   | `calibration-passed`
   | `calibration-wrong-law`
@@ -792,7 +843,7 @@ const forcedCalibrationNames = (spec: SyntheticSpec) =>
 // framework; the model learns that name from the log, which records the name
 // of the test that ran each history.
 const frameworkTest = (name: string) =>
-  name === `determinism` || name.startsWith(`calibration:`)
+  name === `determinism` || name === `reach` || name.startsWith(`calibration:`)
 function enumeratedName(
   spec: SyntheticSpec,
   history: SyntheticHistory,
@@ -812,6 +863,42 @@ function enumeratedName(
 }
 const isCampaign = (name: string) =>
   name.startsWith(`fixed seed`) || name === `random seed`
+
+// Model law for an enumerated source's declared states: every history runs,
+// so each required state must be entered by at least one of them, and the
+// `reach` test counts, for each declared state, the histories that entered
+// it. A history counts when it was judged, passing or violating a law; one
+// whose driver, model, or data failed before a verdict enters nothing. A
+// judged history that enters an undeclared state fails its own test, before
+// its law violation, as a campaign's history does.
+const declaredOf = (spec: SyntheticSpec) =>
+  spec.enumeratedStates && [
+    ...spec.enumeratedStates.states,
+    ...spec.enumeratedStates.measured,
+  ]
+const judgedKind = (outcome: Outcome) =>
+  outcome.kind === `pass` || outcome.kind === `violation`
+const enumeratedReach = (
+  spec: SyntheticSpec,
+  histories: ReadonlyArray<SyntheticHistory>,
+  judgedHistory: (history: SyntheticHistory) => boolean,
+): { outcome: Outcome; counts: Record<string, number> } => {
+  const counts = Object.fromEntries(
+    [...declaredOf(spec)!]
+      .sort()
+      .map((state) => [
+        state,
+        histories.filter(
+          (history) =>
+            judgedHistory(history) && reachedOf(spec, history).includes(state),
+        ).length,
+      ]),
+  )
+  const missed = spec.enumeratedStates!.states.some(
+    (state) => counts[state] === 0,
+  )
+  return { outcome: { kind: missed ? `enumerated-reach` : `pass` }, counts }
+}
 
 // Where an odd value outside the domain fails, and how its kind is named.
 // The odd observation is a history's first, at checkpoint `odd`.
@@ -985,6 +1072,7 @@ function predictSpec(
         ]
   const all = [
     ...names,
+    ...(declaredOf(spec) ? [`reach`] : []),
     ...spec.calibrations.map(({ name }) => `calibration: ${name}`),
     ...forcedCalibrationNames(spec),
     `determinism`,
@@ -994,6 +1082,23 @@ function predictSpec(
   // A driver that observes a value outside the data domain fails every
   // history at once.
   const data = dataOutcome(spec)
+  // Every history fails before a verdict, so an enumerated source's reach
+  // test, which runs the histories no test judged, counts none.
+  if (data && spec.source.kind === `enumerated` && declaredOf(spec)) {
+    for (const name of all) tests.set(name, data)
+    const { outcome, counts } = enumeratedReach(
+      spec,
+      spec.source.histories,
+      () => false,
+    )
+    tests.set(`reach`, outcome)
+    return {
+      loads: true,
+      tests,
+      reach: new Map(outcome.kind === `pass` ? [[`enumerated`, counts]] : []),
+      replays: [],
+    }
+  }
   if (data) {
     for (const name of all) tests.set(name, data)
     return {
@@ -1060,10 +1165,27 @@ function predictSpec(
     }
     return { kind: `pass` }
   }
-  if (spec.source.kind === `enumerated`)
-    for (const history of spec.source.histories)
-      tests.set(enumeratedName(spec, history, logged), verdictOf(history, spec))
-  else {
+  if (spec.source.kind === `enumerated`) {
+    const declared = declaredOf(spec)
+    for (const history of spec.source.histories) {
+      const verdict = verdictOf(history, spec)
+      tests.set(
+        enumeratedName(spec, history, logged),
+        declared &&
+          judgedKind(verdict) &&
+          reachedOf(spec, history).some((state) => !declared.includes(state))
+          ? { kind: `undeclared-state` }
+          : verdict,
+      )
+    }
+    if (declared)
+      tests.set(
+        `reach`,
+        enumeratedReach(spec, spec.source.histories, (history) =>
+          judgedKind(verdictOf(history, spec)),
+        ).outcome,
+      )
+  } else {
     tests.set(names[0]!, campaign(names[0]!))
     tests.set(`random seed`, campaign(`random seed`))
     for (const fixedHistory of spec.fixed) {
@@ -1100,6 +1222,17 @@ function predictSpec(
   // A passing campaign counts, for every declared and measured state, the
   // histories it ran that entered it.
   const reach = new Map<string, Record<string, number>>()
+  if (
+    spec.source.kind === `enumerated` &&
+    declaredOf(spec) &&
+    tests.get(`reach`)!.kind === `pass`
+  )
+    reach.set(
+      `enumerated`,
+      enumeratedReach(spec, spec.source.histories, (history) =>
+        judgedKind(verdictOf(history, spec)),
+      ).counts,
+    )
   for (const name of names.filter(isCampaign))
     if (tests.get(name)!.kind === `pass`)
       reach.set(
@@ -1176,7 +1309,11 @@ function owedRoute(name: string, replay = false): string {
   if (name.startsWith(`fixed seed`)) return `fixed seed`
   if (name === `random seed`) return replay ? `fixed history` : `fixed seed`
   if (name.startsWith(`fixed history:`)) return `fixed history`
-  if (name.startsWith(`calibration:`) || name === `determinism`)
+  if (
+    name.startsWith(`calibration:`) ||
+    name === `determinism` ||
+    name === `reach`
+  )
     return `calibration`
   return `case`
 }
@@ -1241,6 +1378,10 @@ const frameworkStates = [
   `driver-error-carried`,
   `driver-error-after-spin`,
   `odd-thrown-value`,
+  `enumerated-reach-counted`,
+  `enumerated-reach-failure`,
+  `enumerated-undeclared-state`,
+  `enumerated-reach-reruns`,
 ] as const
 
 function frameworkReach(
@@ -1329,12 +1470,20 @@ function frameworkReach(
       const failure = {
         'constructed-reach': `constructed-reach-failure`,
         'fixed-reach': `fixed-reach-failure`,
+        'enumerated-reach': `enumerated-reach-failure`,
+        'undeclared-state': `enumerated-undeclared-state`,
         'calibration-passed': `calibration-rejected`,
         'calibration-wrong-law': `calibration-rejected`,
       }[outcome.kind as string]
       if (failure) reached.add(failure)
       if (name.startsWith(`calibration:`) && outcome.kind === `pass`)
         reached.add(`calibration-applied`)
+      if (
+        name === `reach` &&
+        outcome.kind === `pass` &&
+        (spec.enumeratedStates?.states.length ?? 0) > 0
+      )
+        reached.add(`enumerated-reach-counted`)
       if (name.startsWith(`calibration:`)) {
         const tried = (run?.log ?? []).filter(
           (entry) =>
@@ -1363,6 +1512,9 @@ function frameworkReach(
       if (spec.form === `error`) reached.add(`error-history`)
       if (spec.form === `errors`) reached.add(`errors-history`)
     }
+    // The reach test ran a history that no earlier test judged.
+    if (logged.some(({ test }) => test === `${spec.id} > reach`))
+      reached.add(`enumerated-reach-reruns`)
     if (
       spec.strictModel &&
       logged.some(({ history }) => {
@@ -1570,18 +1722,22 @@ function classify(error: ReportedError | undefined): Failure {
                 : text.includes(`did not enter`) &&
                     text.includes(`: constructed history "`)
                   ? `constructed-reach`
-                  : text.includes(`two runs of`)
-                    ? `determinism`
-                    : text.includes(`but the check passed it`)
-                      ? `calibration-passed`
-                      : text.includes(`but the check reported law`)
-                        ? `calibration-wrong-law`
-                        : text.includes(`found no history`)
-                          ? `calibration-none`
-                          : text.includes(`synthetic driver failed`) ||
-                              text.includes(`cannot read a 7`)
-                            ? `setup`
-                            : `other`
+                  : text.includes(`no enumerated history entered`)
+                    ? `enumerated-reach`
+                    : text.includes(`which the property does not declare`)
+                      ? `undeclared-state`
+                      : text.includes(`two runs of`)
+                        ? `determinism`
+                        : text.includes(`but the check passed it`)
+                          ? `calibration-passed`
+                          : text.includes(`but the check reported law`)
+                            ? `calibration-wrong-law`
+                            : text.includes(`found no history`)
+                              ? `calibration-none`
+                              : text.includes(`synthetic driver failed`) ||
+                                  text.includes(`cannot read a 7`)
+                                ? `setup`
+                                : `other`
   return {
     kind,
     // A model error that quotes a machine path, such as an inspected stack.
@@ -1748,7 +1904,9 @@ async function driveSuite(
       const reach: Record<string, Record<string, number>> = {}
       for (const line of report.stdout.split(`\n`)) {
         const match =
-          /^(\S+) (fixed seed -?\d+|random seed) reach (\{.*\})$/.exec(line)
+          /^(\S+) (fixed seed -?\d+|random seed|enumerated) reach (\{.*\})$/.exec(
+            line,
+          )
         if (match?.[1] === spec.id)
           reach[match[2]!] = JSON.parse(match[3]!) as Record<string, number>
       }
@@ -1884,9 +2042,11 @@ const lawOfTest = (name: string) =>
     ? `calibration`
     : name === `determinism`
       ? `determinism`
-      : isCampaign(name)
-        ? `shrink`
-        : `verdict`
+      : name === `reach`
+        ? `reach`
+        : isCampaign(name)
+          ? `shrink`
+          : `verdict`
 const lawOfKind = (kind: string, name: string) =>
   kind === `timeout`
     ? `timeout`
@@ -1894,7 +2054,7 @@ const lawOfKind = (kind: string, name: string) =>
       ? `data`
       : kind === `model-not-total`
         ? `verdict`
-        : kind.endsWith(`reach`)
+        : kind.endsWith(`reach`) || kind === `undeclared-state`
           ? `reach`
           : lawOfTest(name)
 
@@ -2206,6 +2366,7 @@ const generatedDraft = (overrides: Partial<Draft>): Draft => ({
   fixed: [],
   arbitraryMap: `none`,
   mapAt: `history`,
+  enumeratedStates: null,
   nondeterministic: false,
   reachVia: `reached`,
   timing: `normal`,
@@ -2586,6 +2747,59 @@ oracleProperty({
         {
           ...generatedDraft({ form: `map`, labelStyle: `default` }),
           source: { kind: `enumerated`, histories: [[0], [1]] },
+        },
+      ),
+      fixedHistory(
+        `an enumerated source counts the histories that entered each declared state`,
+        [`enumerated-reach-counted`],
+        {
+          ...generatedDraft({
+            enumeratedStates: [`required`, `measured`, `measured`],
+          }),
+          source: { kind: `enumerated`, histories: [[0], [0, 1], [2]] },
+        },
+      ),
+      fixedHistory(
+        `an enumerated source fails when no history enters a required state`,
+        [`enumerated-reach-failure`],
+        {
+          ...generatedDraft({
+            enumeratedStates: [`measured`, `measured`, `required`],
+          }),
+          source: { kind: `enumerated`, histories: [[0], [1]] },
+        },
+      ),
+      // A violating history still counts: it was judged.
+      fixedHistory(
+        `a violating enumerated history counts toward a required state, and its rerun stands the reach test aside`,
+        [`enumerated-reach-counted`, `rerun-probe`],
+        {
+          ...generatedDraft({
+            enumeratedStates: [`measured`, `required`, `measured`],
+          }),
+          source: { kind: `enumerated`, histories: [[3, 1], [0]] },
+        },
+      ),
+      fixedHistory(
+        `an enumerated history that enters an undeclared state fails before its violation`,
+        [`enumerated-undeclared-state`],
+        {
+          ...generatedDraft({
+            enumeratedStates: [`required`, `undeclared`, `measured`],
+          }),
+          source: { kind: `enumerated`, histories: [[0], [3, 1], [2]] },
+        },
+      ),
+      // A driver error leaves its history unjudged; the reach test runs it
+      // again and counts nothing for it.
+      fixedHistory(
+        `the reach test runs a history no earlier test judged and counts nothing for it`,
+        [`enumerated-reach-reruns`, `enumerated-reach-counted`],
+        {
+          ...generatedDraft({
+            enumeratedStates: [`required`, `measured`, `undeclared`],
+          }),
+          source: { kind: `enumerated`, histories: [[6, 0], [0]] },
         },
       ),
       fixedHistory(

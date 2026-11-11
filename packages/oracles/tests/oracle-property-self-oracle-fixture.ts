@@ -94,6 +94,9 @@
  * the route registered through `__oracleRoute` when each history runs, in
  * the log beside it.
  *
+ * An enumerated spec with `enumeratedStates` passes its histories as
+ * `{ enumerated, states, measured }`; without it, as a plain list.
+ *
  * The synthetic ids come from a fixed pool, which this fixture registers with
  * `configureOracles`. The framework's own id, `self-oracle.framework`, is
  * registered beside them, so the self-oracle's registration law can reject an
@@ -190,6 +193,11 @@ export type SyntheticSpec = {
    * history or to each item; absent, only a form maps, with an unmapper.
    */
   arbitraryMap?: { unmapper: boolean; at: `history` | `item` }
+  /** An enumerated source's required and measured states; absent, a plain list. */
+  enumeratedStates?: {
+    states: ReadonlyArray<string>
+    measured: ReadonlyArray<string>
+  }
   nondeterministic: boolean
   calibrations: ReadonlyArray<{
     name: string
@@ -848,10 +856,13 @@ export function syntheticProperty(spec: SyntheticSpec): void {
     afterAll(() => new Promise((resolve) => setTimeout(resolve, 50)))
   const register = () => {
     if (spec.source.kind === `enumerated`) {
+      const enumerated = spec.source.histories.map(form)
       oracleProperty({
         id,
         law,
-        histories: spec.source.histories.map(form),
+        histories: spec.enumeratedStates
+          ? { enumerated, ...spec.enumeratedStates }
+          : enumerated,
         // A label with `|`, which a rerun command must escape.
         ...(spec.labelStyle === `default`
           ? {}

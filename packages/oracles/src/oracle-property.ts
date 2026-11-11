@@ -17,9 +17,10 @@
  *
  * - `law` states the promise, its authority, and its limits. A failure names it.
  * - `histories` is either an enumerated list, which runs in full (bounded
- *   exhaustiveness, glossary), or a generated source: a fast-check arbitrary
- *   with a run budget, fixed seeds, constructed histories, and fixed histories
- *   (below).
+ *   exhaustiveness, glossary), the same list with declared states,
+ *   `{ enumerated, states, measured }`, or a generated source: a fast-check
+ *   arbitrary with a run budget, fixed seeds, constructed histories, and fixed
+ *   histories (below).
  * - `model` gives the expected result of a history and its recorded trace,
  *   without production. A model that answers from the history alone ignores
  *   the trace; a model of an environment the driver observes reads it, and
@@ -85,7 +86,18 @@
  *   reports them with `observe("reach", state)`. A state that only the model
  *   can name, such as "a failure while the seed is active", comes from
  *   `reached(history, trace, expected)` instead. Each campaign prints how many
- *   histories entered each declared state, including none (ORC-015).
+ *   histories entered each declared state, including none (ORC-015). An
+ *   enumerated source runs every history, so its required states need no
+ *   constructed history (maintainer decision, 2026-11-10): its `reach` test,
+ *   after its histories, fails when no history entered a state in `states`,
+ *   and otherwise prints the counts as `<id> enumerated reach {...}`. A history
+ *   counts once it is judged, passing or violating its law; the reach test runs
+ *   any history that no earlier test of the run judged, such as one that a
+ *   `-t` filter left out, and one that fails before a verdict counts for
+ *   nothing. A judged history that enters a state outside `states` and
+ *   `measured` fails its test, before its law violation, as a campaign's
+ *   history does. An enumerated source declares its states by name; only a
+ *   generated source binds a probe.
  * - A **state probe** binds a declared state, written `{ name, probe }` in
  *   `states` or `measured`, to a production probe. The function where
  *   production decides whether it enters that state guards the probe with
@@ -492,6 +504,22 @@ export interface GeneratedHistories<THistory> {
   fixed?: ReadonlyArray<FixedHistory<THistory>>
 }
 
+/**
+ * Every legal history in a fixed order, with the states the laws depend on.
+ * Every history runs, so each state in `states` must be entered by at least
+ * one of them; the `reach` test checks that and reports how many histories
+ * entered each declared state (ORC-015).
+ */
+export interface EnumeratedHistories<THistory> {
+  enumerated: ReadonlyArray<THistory>
+  states?: ReadonlyArray<string>
+  /**
+   * States that are counted but not required. A reached state outside
+   * `states` and `measured` fails, so a misspelled state cannot pass unseen.
+   */
+  measured?: ReadonlyArray<string>
+}
+
 /** A named fixed history, such as a fixed regression, and the states it must enter. */
 export interface FixedHistory<THistory> {
   name: string
@@ -522,8 +550,11 @@ export interface OraclePropertyOptions<THistory, TExpected, TPlan = THistory> {
   /** A stable identifier, used in failures, the manifest, and replay. */
   id: string
   law: OracleLaw
-  /** Every legal history in a fixed order, or a generated source. */
-  histories: ReadonlyArray<THistory> | GeneratedHistories<THistory>
+  /** Every legal history in a fixed order, with or without declared states, or a generated source. */
+  histories:
+    | ReadonlyArray<THistory>
+    | EnumeratedHistories<THistory>
+    | GeneratedHistories<THistory>
   /** A short, unique test name for an enumerated history. */
   label?: (history: THistory) => string
   /** The plan of concrete actions; required when Plan is not History. */
@@ -662,16 +693,24 @@ export function oracleProperty<THistory, TExpected, TPlan = THistory>(
     throw new Error(
       `${id}: \`owns\` must be a non-empty literal list of strings, which the gap report reads statically.`,
     )
-  if (Array.isArray(histories) && options.predict)
+  const enumerated: EnumeratedHistories<THistory> | undefined = Array.isArray(
+    histories,
+  )
+    ? { enumerated: histories as ReadonlyArray<THistory> }
+    : `enumerated` in histories
+      ? histories
+      : undefined
+  if (enumerated && options.predict)
     throw new Error(
       `${id}: \`predict\` needs probe-bound states, which only a generated source declares.`,
     )
-  recordRegistration(id, options.law, histories)
+  const generated = histories as GeneratedHistories<THistory>
+  recordRegistration(id, options.law, enumerated?.enumerated ?? generated)
   // The tests are built as data first, so every one registers unconditionally
   // (oracle/no-disabled).
-  const tests = Array.isArray(histories)
-    ? enumeratedTests(options, histories as ReadonlyArray<THistory>)
-    : generatedTests(options, histories as GeneratedHistories<THistory>)
+  const tests = enumerated
+    ? enumeratedTests(options, enumerated)
+    : generatedTests(options, generated)
   describe(id, () => {
     for (const test of tests)
       oracleReplayTest(it, ...test.replays)(
@@ -685,40 +724,101 @@ export function oracleProperty<THistory, TExpected, TPlan = THistory>(
   })
 }
 
+/** The declared states, when the source declares any. */
+const declaredOf = (source: {
+  states?: ReadonlyArray<DeclaredState>
+  measured?: ReadonlyArray<DeclaredState>
+}): ReadonlySet<string> | undefined =>
+  source.states || source.measured
+    ? new Set(
+        [...(source.states ?? []), ...(source.measured ?? [])].map(stateName),
+      )
+    : undefined
+
+/** Throws for a reached state that the property does not declare. */
+function assertDeclared(
+  id: string,
+  declared: ReadonlySet<string> | undefined,
+  reached: Iterable<string>,
+): void {
+  for (const state of reached)
+    if (declared !== undefined && !declared.has(state))
+      throw new Error(
+        `${id}: a history entered "${state}", which the property does not declare.`,
+      )
+}
+
+/** Reach counts as printed, in state order. */
+const countsText = (counts: Map<string, number>) =>
+  JSON.stringify(
+    Object.fromEntries([...counts].sort(([a], [b]) => (a < b ? -1 : 1))),
+  )
+
 function enumeratedTests<THistory, TExpected, TPlan>(
   options: OraclePropertyOptions<THistory, TExpected, TPlan>,
-  histories: ReadonlyArray<THistory>,
+  source: EnumeratedHistories<THistory>,
 ): Array<PropertyTest> {
+  const { id } = options
+  const histories = source.enumerated
   const spacing = Math.max(1, Math.ceil(histories.length / 8))
+  const declared = declaredOf(source)
+  // What each judged history entered, by its index, in this run.
+  const entries = new Map<number, ReadonlySet<string>>()
   // Every enumerated history is data; one that is not fails registration.
   const named = histories.map((history, index) => {
     const text = encodeData(history, `history ${index}`, `history`)
     return { name: options.label?.(history) ?? text, history }
   })
+  const historyTests = named.map(({ name, history }, index): PropertyTest => ({
+    name,
+    route: `case`,
+    replays: [],
+    run: async (task) => {
+      const { verdict, reached } = await runOne(options, history)
+      entries.set(index, reached)
+      assertDeclared(id, declared, reached)
+      if (verdict.kind === `violation`)
+        throw failure(options, verdict, history, rerunOf(task))
+    },
+  }))
+  // A check of the declaration, not of production, so its route is
+  // `calibration`.
+  const reachTest: PropertyTest = {
+    name: `reach`,
+    route: `calibration`,
+    replays: [],
+    run: async () => {
+      const counts = new Map([...(declared ?? [])].map((state) => [state, 0]))
+      for (const [index, { history }] of named.entries()) {
+        let reached = entries.get(index)
+        if (reached === undefined)
+          try {
+            reached = (await runOne(options, history)).reached
+          } catch {
+            // A history that fails before a verdict fails its own test.
+            reached = new Set()
+          }
+        for (const state of reached)
+          if (counts.has(state)) counts.set(state, counts.get(state)! + 1)
+      }
+      const missed = (source.states ?? []).filter(
+        (state) => counts.get(state) === 0,
+      )
+      if (missed.length > 0)
+        throw new Error(
+          `${id}: no enumerated history entered ${missed.join(`, `)}. Every enumerated history runs, so a required state must be entered by at least one of them; a state that is only counted belongs in \`measured\`. Reach: ${countsText(counts)}`,
+        )
+      process.stdout.write(`${id} enumerated reach ${countsText(counts)}\n`)
+    },
+  }
   return [
-    ...named.map(({ name, history }) => enumeratedTest(options, name, history)),
+    ...historyTests,
+    ...(declared ? [reachTest] : []),
     ...calibrationTests(options, () => named),
     determinismTest(options, () =>
       named.filter((_, index) => index % spacing === 0),
     ),
   ]
-}
-
-function enumeratedTest<THistory, TExpected, TPlan>(
-  options: OraclePropertyOptions<THistory, TExpected, TPlan>,
-  name: string,
-  history: THistory,
-): PropertyTest {
-  return {
-    name,
-    route: `case`,
-    replays: [],
-    run: async (task) => {
-      const { verdict } = await runOne(options, history)
-      if (verdict.kind === `violation`)
-        throw failure(options, verdict, history, rerunOf(task))
-    },
-  }
 }
 
 // The running history's trace, and where in it a controlled clock passed its
@@ -1610,10 +1710,7 @@ function generatedTests<THistory, TExpected, TPlan>(
     probes.size > 0 ? { ...unbound, probes } : unbound
   const required = (source.states ?? []).map(stateName)
   const constructions = source.constructed ?? []
-  const declared =
-    source.states || source.measured
-      ? new Set(declaredStates.map(stateName))
-      : undefined
+  const declared = declaredOf(source)
   const named = new Set(
     constructions.flatMap((construction) => construction.enters),
   )
@@ -1673,13 +1770,9 @@ function generatedTests<THistory, TExpected, TPlan>(
         return
       }
       const { verdict, reached } = outcome
-      for (const state of reached) {
-        if (declared !== undefined && !declared.has(state))
-          throw new Error(
-            `${id}: a history entered "${state}", which the property does not declare.`,
-          )
+      assertDeclared(id, declared, reached)
+      for (const state of reached)
         counts.set(state, (counts.get(state) ?? 0) + 1)
-      }
       // A law violation outranks a constructed history that missed its state.
       if (verdict.kind === `pass`) {
         const construction = constructionOf.get(history)
@@ -1743,9 +1836,7 @@ function generatedTests<THistory, TExpected, TPlan>(
       parameters(examples),
     )
     // Vitest hides console output from a passing test; stdout reaches the log.
-    process.stdout.write(
-      `${id} ${name} reach ${JSON.stringify(Object.fromEntries([...counts].sort(([a], [b]) => (a < b ? -1 : 1))))}\n`,
-    )
+    process.stdout.write(`${id} ${name} reach ${countsText(counts)}\n`)
   }
   const fixedCampaigns = source.fixedSeeds.map((seed): PropertyTest => ({
     name: `fixed seed ${seed}`,
