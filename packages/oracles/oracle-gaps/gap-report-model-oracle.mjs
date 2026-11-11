@@ -2438,6 +2438,9 @@ function resolveHistory(history) {
     stability: history.stability,
     steps: history.steps ?? [],
     ordinary: history.ordinary === true,
+    // An `owns` key in an expectation's arguments, in the ordinary file:
+    // none, a literal list, or a list that is not a literal.
+    matcherOwns: history.matcherOwns ?? `none`,
     config: history.config ?? `object`,
     ...configOf(history),
     configEnv: history.configEnv === true,
@@ -3954,6 +3957,24 @@ function ordinaryTestFile(plan) {
   })
   if (!plan.tests.some((t) => t.file === `c`))
     out.push(`test.skip('no tests', () => {})`)
+  // An `owns` key in an expectation's arguments is data that the test
+  // compares, so it declares no ownership: the file stays an ordinary test
+  // file, and a list that is not a literal refuses nothing (review of
+  // remove/declare-oracle, 2026-11-11, finding 6). The model's ownership
+  // and refusals never read it.
+  if (plan.matcherOwns === `literal`)
+    out.push(
+      `test('owns in a matcher', () => {`,
+      `  expect({ owns: ['${SOURCE}'] }).toEqual({ owns: ['${SOURCE}'] })`,
+      `})`,
+    )
+  if (plan.matcherOwns === `nonLiteral`)
+    out.push(
+      `const compared = { owns: ['${SOURCE}'] }`,
+      `test('owns in a matcher', () => {`,
+      `  expect(compared).not.toEqual({ owns: compared.owns.slice(1) })`,
+      `})`,
+    )
   return `${out.join(`\n`)}\n`
 }
 
