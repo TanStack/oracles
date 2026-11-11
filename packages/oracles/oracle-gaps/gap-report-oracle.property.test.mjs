@@ -21,7 +21,9 @@
  *    call statement. Each names its function and its line: a class's
  *    method, accessor, or field function by `Class.member`, any other
  *    function by its own name (an object literal's method by its property),
- *    module-level data (a top-level variable whose initializer is not a
+ *    a function exported with no name of its own by the name an import
+ *    gives it (`default` for `export default` and `module.exports =`, the
+ *    export's name for `exports.name =`), module-level data (a top-level variable whose initializer is not a
  *    function) by its variable, and other code in no function by
  *    `<module>`. Two functions may share a name
  *    and are still two functions. In a Svelte module (`.svelte.ts`) a rune
@@ -2207,9 +2209,10 @@ oracleProperty({
           ...generated,
           fault: `projects`,
           // Nothing owns anything: no function owners, no library owners,
-          // no module data owners, no whole-file entry.
+          // no module data or unnamed export owners, no whole-file entry.
           owners: [],
           dataOwners: [],
+          exportOwners: [],
           library: [],
           libraryOwners: [],
           containers: [],
