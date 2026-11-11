@@ -27,6 +27,35 @@ every commit with [pkg.pr.new](https://pkg.pr.new).
   specifier and by a relative module with its file name. A project names its
   variable prefix and its replay-selection modules in `settings.oracles`.
 
+The `recommended` and `production` configs leave out tool config files: the
+configs of ESLint, Vite, and Vitest (`vite.config.ts`, `vitest.unit.config.mjs`)
+and any config named for oracles (`*.oracle.config.*`, such as
+`eslint.oracle.config.mjs`). A config file is never an oracle file or
+production source. A companion oracle module, such as `foo-oracle.ts`, keeps
+the oracle rules, and so does a source module named `src/foo.config.ts`.
+
+A config that spreads a preset and sets its own `ignores` replaces the
+preset's, so merge them:
+
+```js
+{
+  ...oracles.configs.production,
+  ignores: [...oracles.configs.production.ignores, 'packages/x/src/machinery/**'],
+}
+```
+
+## The `oracle/no-unit-test` rule
+
+Each test in an oracle file must reach a part that the file declares: its
+check, model, or grammar. A test that reaches none compares production with a
+hand-written value, so the rule reports it as a unit test that belongs in an
+ordinary test file.
+
+A test whose body is empty, such as `it('x', () => {})`, `test('x', async
+() => {})`, or a skipped placeholder `it.skip('x', () => {})`, checks
+nothing. The rule reports it whatever the file declares: remove it, or use
+`it.todo`.
+
 ## The `oracle/no-oracle-disable` rule
 
 An ESLint directive that would silence an `oracle/*` rule is reported: a
