@@ -14,11 +14,11 @@ explanation to something you just showed them: a probe, a finding, a law, or
 the oracle file. Do not explain what oracles are unless they ask.
 [What an oracle is](../../docs/intro.md) is there for when they do.
 
-The session ends at one moment: an oracle that runs on their code, has found
-a bug, and has pushed them to settle some design questions. Then you present
-what you built, and explain how to take it to production. If no oracle and no
-gap check finds a bug, the session ends when the engineer wants no further
-oracle, and you present the same way.
+Work toward these milestones, in order: findings from probes of their real
+code; a potential oracle whose laws they approve; an oracle that runs on
+their code; and that oracle finding a bug, or the gap check finding what no
+law catches, while they settle some design questions. The engineer decides
+when the session ends.
 
 Probes are how you learn what reading the code does not tell you: its
 dynamics, boundary conditions, and constraints. You need that understanding
@@ -413,9 +413,9 @@ build the next oracle at another spot.
 
 ## 6. Present
 
-When the oracle has found a bug and the engineer has settled some design
-questions, stop and present. Present the same way when the oracles found no
-bug and the engineer does not want another one:
+When the oracle or the gap check has found something and the engineer has
+settled some design questions, stop and present. Present the same way
+whenever the engineer wants to stop:
 
 - what you built, and what it found
 - an offer to walk through how it works: how the reference model was built,
