@@ -6,51 +6,57 @@
  * on a fast-check binding, from `fast-check` or from `@fast-check/vitest`, or a
  * `.prop` registration of a test root. It also reports an import of a legacy
  * reach or campaign API, `createOracleReach` or `runOracleCampaign`, under any
- * module. A file that the project lists in `settings.oracles.legacyCampaigns`
- * with a reason keeps its raw campaigns and imports until it migrates. An entry
- * without a reason exempts nothing and is reported. An entry whose file has no
- * legacy use is reported as stale. A framework implementation module is exempt
- * from every report about its own uses. A configuration entry the rule cannot
- * judge is reported, never thrown: the rule never throws on a program that
- * parses (frozen design principle P8; maintainer decision 2026-11-09). A
- * reported entry exempts nothing, and the file's other entries are judged as
- * usual.
+ * module. No configuration exempts an oracle file from these reports. A
+ * framework implementation module is exempt from every report about its own
+ * uses, since `oracleProperty` itself runs `fc.assert`.
  *
- * Configuration reports, at line 1. A malformed entry (not an object with a
- * string `file`, and a `reason` that is absent or a string) is `malformedEntry`.
- * A `legacyCampaigns` value that is not an array is `malformedList`, and it
- * replaces the file's own list. An entry that names a file outside the
- * oracle-file glob (its name has no `oracle` and an extension of .ts, .tsx,
- * .js, .jsx, or .mjs), or a framework implementation module, is `refusedEntry`.
- * ESLint runs a rule once per file, so each oracle file that the configuration
- * reaches reports the entry.
+ * The removed setting. `settings.oracles.legacyCampaigns` once exempted the
+ * files it listed. It is removed. A configuration that still sets it, to any
+ * value (an empty list, a list of entries, or a value that is not a list),
+ * gets one `removedSetting` report at line 1 of each oracle file it reaches,
+ * since ESLint runs a rule once per file. The setting exempts nothing: a file
+ * that it lists reports each raw use as any other file does. A setting whose
+ * value is `undefined` is unset, as every other `settings.oracles` field is.
+ *
+ * Configuration reports, at line 1. The `removedSetting` report and a
+ * non-array `implementationModules` (`malformedSetting`, read as an empty list)
+ * are owed whatever the file, an implementation module included. The rule never
+ * throws on a program that parses (frozen design principle P8; maintainer
+ * decision 2026-11-09), so a setting it cannot use is reported, not thrown on,
+ * and not silently ignored.
  *
  * Authority: the maintainer decision of 2026-11-09 that `oracleProperty` is the
  * only campaign API in `@tanstack/oracles`. The header of
  * `packages/oracles/src/oracle-property.ts` gives the reason: only a
  * constructed history makes a state's reach required, so a raw campaign's
- * reach depends on the seed. The never-throws law rests on P8 and the same
- * maintainer decision of 2026-11-09 ("lint rules never throw").
+ * reach depends on the seed. The maintainer decision of 2026-11-10 removes the
+ * exemption list: "remove legacyCampaigns, as that's another out for agents".
+ * The never-throws law rests on P8 and the decision of 2026-11-09 ("lint rules
+ * never throw").
  *
- * Grammar: a program is one module with a fast-check import in one of three
- * forms (`alias`), one configuration entry for the file (`entry`), a file's own
- * legacy-list setting (`setting`), and one site per line. A campaign site calls
- * `assert` or `check` through the default `fc` import or the alias. A prop site
- * registers through `fcTest` or `it`. A legacy import site names one of the two
- * APIs. A quiet site is a fast-check use that runs no campaign, a text, or a
- * binding that is not fast-check, and it must stay silent. A directive is
- * one block comment written on the alias import's line, so the sites below it
- * are inside it: `eslint-disable oracle/oracle-property-only` or a bare
- * `eslint-disable`. P8 forbids a disable of an oracle rule, so the directive is
- * inert: the reports are the same as without it.
+ * Grammar: a program is one module with a fast-check import in one of four
+ * forms (`alias`), a `legacyCampaigns` setting (`legacy`), the file's own
+ * implementation-module setting (`setting`), and one site per line. The
+ * `legacy` setting is absent (no key, or the key set to `undefined`), a list of
+ * any subset of entry kinds (the empty list included), or a value that is not
+ * a list. The entry kinds are the ones that the old rule judged differently:
+ * a reasoned or reasonless entry for this file, by its tail or its full path,
+ * an entry for another file, a README, or an implementation module, and
+ * malformed entries. A campaign site calls `assert` or `check` through the
+ * default `fc` import or the alias. A prop site registers through `fcTest` or
+ * `it`. A legacy import site names one of the two APIs. A quiet site is a
+ * fast-check use that runs no campaign, a text, or a binding that is not
+ * fast-check, and it must stay silent. A directive is one block comment written
+ * on the alias import's line, so the sites below it are inside it:
+ * `eslint-disable oracle/oracle-property-only` or a bare `eslint-disable`. P8
+ * forbids a disable of an oracle rule, so the directive is inert: the reports
+ * are the same as without it.
  *
- * Model: the expected reports follow from the program alone. A configuration
- * entry owes its report at line 1, whatever the file, including an
- * implementation module. A non-array list owes `malformedList` and voids the
- * file's own entry. An implementation module is otherwise exempt from its uses.
- * A reasonless entry reports `baselineWithoutReason`. A matching entry with no
- * legacy use reports `staleBaseline`. A file with a reasoned entry exempts its
- * raw uses and imports; any other setting reports each use at its line.
+ * Model: the expected reports follow from the program alone. A present
+ * `legacyCampaigns` owes `removedSetting` at line 1, and a non-array
+ * `implementationModules` owes `malformedSetting` there. An implementation
+ * module owes nothing else. Any other file reports each use at its line,
+ * whatever `legacyCampaigns` holds.
  *
  * Driver: renders the program and lints it with the plugin's `recommended`
  * config, so the rule must be enabled there. The outcome is the rule's reports,
@@ -61,10 +67,9 @@
  *
  * Limits: an alias of a campaign (`const run = fc.assert`), a campaign held
  * in a helper, a fast-check import through a re-export, and `import()` of a
- * legacy module are not generated. The rule reads only the forms above. Only
- * `legacyCampaigns` is generated as configuration; `implementationModules` is
- * not. A baseline entry for a deleted or renamed file is not reported, because
- * no lint run sees that file.
+ * legacy module are not generated. The rule reads only the forms above. A
+ * string entry in `implementationModules` is not generated. A `legacyCampaigns`
+ * value whose reading throws (a getter or a proxy) is not generated.
  */
 import tsParser from '@typescript-eslint/parser'
 import { Linter } from 'eslint'
@@ -106,29 +111,70 @@ const site = fc.oneof(
   }),
 )
 
+// The entries a `legacyCampaigns` list can hold. The first three name the file
+// under test, so the old rule exempted it or reported its entry; the old rule
+// refused or reported the others.
+const LEGACY_ENTRIES = {
+  reasoned: { file: `tests/a-oracle.test.js`, reason: `migrating` },
+  fullPath: { file: FILE, reason: `migrating` },
+  reasonless: { file: `tests/a-oracle.test.js` },
+  otherFile: { file: `oracle.test.js`, reason: `another file` },
+  readme: { file: `packages/example/README.md`, reason: `x` },
+  implementationModule: {
+    file: `packages/oracles/src/oracle-config.ts`,
+    reason: `x`,
+  },
+  bareString: `tests/a-oracle.test.js`,
+  missingFile: { reason: `x` },
+  fileNotString: { file: 3, reason: `x` },
+  reasonNotString: { file: FILE, reason: 3 },
+}
+const NAMES_FILE = new Set([`reasoned`, `fullPath`, `reasonless`])
+const OLD_REPORTED = new Set([
+  `readme`,
+  `implementationModule`,
+  `bareString`,
+  `missingFile`,
+  `fileNotString`,
+  `reasonNotString`,
+])
+// `legacyCampaigns` values that are not a list.
+const LEGACY_VALUES = {
+  string: `tests/a-oracle.test.js`,
+  null: null,
+  object: { file: `tests/a-oracle.test.js`, reason: `migrating` },
+  zero: 0,
+  false: false,
+}
+
+const legacy = fc.oneof(
+  {
+    arbitrary: fc.record({
+      form: fc.constant(`absent`),
+      key: fc.constantFrom(`omitted`, `undefined`),
+    }),
+    weight: 2,
+  },
+  {
+    arbitrary: fc.record({
+      form: fc.constant(`list`),
+      entries: fc.subarray(Object.keys(LEGACY_ENTRIES)),
+    }),
+    weight: 2,
+  },
+  {
+    arbitrary: fc.record({
+      form: fc.constant(`value`),
+      value: fc.constantFrom(...Object.keys(LEGACY_VALUES)),
+    }),
+    weight: 1,
+  },
+)
+
 const program = fc.record({
   alias: fc.constantFrom(`default`, `namespace`, `named`, `vitest`),
-  setting: fc.constantFrom(
-    `none`,
-    `implementation`,
-    `reasoned`,
-    `reasonless`,
-    `otherFile`,
-  ),
-  // The configuration entry that the rule must report, or none. Each kind is a
-  // way that an entry, or the list itself, cannot be judged.
-  entry: fc.constantFrom(
-    `none`,
-    `none`,
-    `outsideGlob`,
-    `readme`,
-    `implementationModule`,
-    `bareString`,
-    `missingFile`,
-    `fileNotString`,
-    `reasonNotString`,
-    `notAList`,
-  ),
+  setting: fc.constantFrom(`none`, `none`, `implementation`),
+  legacy,
   // A block directive over the sites, or none. It must not change the reports.
   directive: fc.constantFrom(`none`, `none`, `oracleBlock`, `allBlock`),
   // The parser decides where ESLint's Program node begins: a leading comment, or the first statement.
@@ -152,50 +198,22 @@ const usesOf = (sites, header) =>
     return []
   })
 
-// Whether the file's own entry matches it: a reasoned or reasonless entry.
-const entryMatches = (setting) =>
-  setting === `reasoned` || setting === `reasonless`
+// Whether the file is exempt from its uses: an implementation module, by a list
+// that the rule can read (a non-array list is read as empty).
+const exemptModule = ({ setting, modules }) =>
+  setting === `implementation` && modules === `none`
 
-const MALFORMED = new Set([
-  `bareString`,
-  `missingFile`,
-  `fileNotString`,
-  `reasonNotString`,
-])
-const REFUSED = new Set([`outsideGlob`, `readme`, `implementationModule`])
-
-/** The report that a configuration entry owes at line 1, or none. */
-// A non-array implementationModules is read as an empty list (the setting is reported
-// on its own), so an entry that would name an implementation module is judged instead.
-function configurationReports(entry, modules) {
-  if (entry === `notAList`) return [{ line: 1, messageId: `malformedList` }]
-  if (MALFORMED.has(entry)) return [{ line: 1, messageId: `malformedEntry` }]
-  if (entry === `implementationModule` && modules === `notAnArray`) return []
-  if (REFUSED.has(entry)) return [{ line: 1, messageId: `refusedEntry` }]
-  return []
-}
-
-function expectedReports({ setting, entry, sites, modules, header }) {
-  // A non-array implementationModules is reported at line 1 and read as an empty list.
-  const moduleReports =
-    modules === `notAnArray` ? [{ line: 1, messageId: `malformedSetting` }] : []
+function expectedReports(plan) {
   const configuration = [
-    ...moduleReports,
-    ...configurationReports(entry, modules),
+    ...(plan.modules === `notAnArray`
+      ? [{ line: 1, messageId: `malformedSetting` }]
+      : []),
+    ...(plan.legacy.form === `absent`
+      ? []
+      : [{ line: 1, messageId: `removedSetting` }]),
   ]
-  // The configuration report is owed whatever the file, implementation or not.
-  // An empty list exempts nothing, so the implementation exemption needs a list.
-  if (setting === `implementation` && modules === `none`) return configuration
-  // A list that is not an array is ignored whole, so the file's own entry is void.
-  const effective = entry === `notAList` ? `none` : setting
-  const uses = usesOf(sites, header)
-  const reports = [...configuration]
-  if (effective === `reasonless`)
-    reports.push({ line: 1, messageId: `baselineWithoutReason` })
-  if (entryMatches(effective) && uses.length === 0)
-    reports.push({ line: 1, messageId: `staleBaseline` })
-  if (effective !== `reasoned`) reports.push(...uses)
-  return reports
+  if (exemptModule(plan)) return configuration
+  return [...configuration, ...usesOf(plan.sites, plan.header)]
 }
 
 // The states a history enters, read from the program and the model's answer.
@@ -203,47 +221,55 @@ const STATES = {
   campaign: `a raw campaign is reported`,
   property: `a raw property is reported`,
   legacy: `a legacy import is reported`,
-  exempt: `a reasoned baseline exempts its uses`,
-  reasonless: `a reasonless baseline is reported`,
-  stale: `a stale baseline is reported`,
-  refused: `an entry the rule refuses (outside the oracle glob, a README, or an implementation module) is reported`,
-  malformed: `a malformed entry is reported`,
+  removedEmpty: `an empty legacyCampaigns list is reported as removed`,
+  removedValue: `a legacyCampaigns value that is not a list is reported as removed`,
+  listedReported: `a file that a legacyCampaigns entry names still reports its raw uses`,
+  listedQuiet: `a file that a legacyCampaigns entry names, with no raw use, reports only the removal`,
+  removedJudged: `a legacyCampaigns list with entries the old rule refused or found malformed is reported once as removed`,
+  removedInModule: `an implementation module reports a present legacyCampaigns setting`,
   moduleNotArray: `an implementationModules value that is not an array is reported and exempts nothing`,
   openComment: `a program under espree opens with a comment, so its first statement is not its first line`,
-  notList: `a legacyCampaigns value that is not an array is reported`,
   vitest: `a campaign through @fast-check/vitest is reported`,
   silenced: `a disable directive is written over a reported site, and it does not silence it`,
 }
 const MEASURED = {
   implementation: `an implementation module is exempt`,
-  otherFile: `another file's entry does not apply`,
+  undefinedKey: `a legacyCampaigns key set to undefined is unset`,
   quiet: `a quiet site is not reported`,
 }
 
 function reachedStates(plan, _trace, expected) {
-  const { setting, sites, alias, entry, header, modules, parser } = plan
+  const { sites, alias, header, parser, legacy: setting } = plan
   const messages = new Set(expected.reports.map((report) => report.messageId))
+  const entries = setting.form === `list` ? setting.entries : []
+  const listed = entries.some((entry) => NAMES_FILE.has(entry))
+  const uses = usesOf(sites).length > 0
+  const checked = !exemptModule(plan)
   return [
     ...(messages.has(`rawCampaign`) ? [STATES.campaign] : []),
     ...(messages.has(`rawProperty`) ? [STATES.property] : []),
     ...(messages.has(`legacyImport`) ? [STATES.legacy] : []),
-    ...(setting === `reasoned` &&
-    entry !== `notAList` &&
-    usesOf(sites).length > 0
-      ? [STATES.exempt]
+    ...(setting.form === `list` && entries.length === 0
+      ? [STATES.removedEmpty]
       : []),
-    ...(messages.has(`baselineWithoutReason`) ? [STATES.reasonless] : []),
-    ...(messages.has(`staleBaseline`) ? [STATES.stale] : []),
-    ...(messages.has(`refusedEntry`) ? [STATES.refused] : []),
-    ...(messages.has(`malformedEntry`) ? [STATES.malformed] : []),
-    ...(messages.has(`malformedList`) ? [STATES.notList] : []),
+    ...(setting.form === `value` ? [STATES.removedValue] : []),
+    ...(listed && checked && uses ? [STATES.listedReported] : []),
+    ...(listed && checked && !uses ? [STATES.listedQuiet] : []),
+    ...(entries.some((entry) => OLD_REPORTED.has(entry))
+      ? [STATES.removedJudged]
+      : []),
+    ...(!checked && messages.has(`removedSetting`)
+      ? [STATES.removedInModule]
+      : []),
     ...(messages.has(`malformedSetting`) ? [STATES.moduleNotArray] : []),
     ...(parser === `espree` && header ? [STATES.openComment] : []),
     ...(alias === `vitest` && messages.has(`rawCampaign`)
       ? [STATES.vitest]
       : []),
-    ...(setting === `implementation` ? [MEASURED.implementation] : []),
-    ...(setting === `otherFile` ? [MEASURED.otherFile] : []),
+    ...(plan.setting === `implementation` ? [MEASURED.implementation] : []),
+    ...(setting.form === `absent` && setting.key === `undefined`
+      ? [MEASURED.undefinedKey]
+      : []),
     ...(sites.some((item) => item.kind === `quiet`) ? [MEASURED.quiet] : []),
     ...(plan.directive !== `none` &&
     expected.reports.some((report) => report.line >= FIRST_SITE_LINE)
@@ -307,78 +333,30 @@ function renderProgram({ alias, sites, directive, header }) {
   ].join(`\n`)
 }
 
-// The configuration entries that each bad-entry kind adds to the file's own.
-const entryFor = {
-  none: { legacyCampaigns: [], implementationModules: [] },
-  outsideGlob: {
-    legacyCampaigns: [{ file: `packages/example/src/app.ts`, reason: `x` }],
-    implementationModules: [],
-  },
-  readme: {
-    legacyCampaigns: [{ file: `packages/example/README.md`, reason: `x` }],
-    implementationModules: [],
-  },
-  implementationModule: {
-    legacyCampaigns: [
-      { file: `packages/oracles/src/oracle-config.ts`, reason: `x` },
-    ],
-    implementationModules: [`packages/oracles/src/oracle-config.ts`],
-  },
-  bareString: {
-    legacyCampaigns: [`tests/a-oracle.test.js`],
-    implementationModules: [],
-  },
-  missingFile: {
-    legacyCampaigns: [{ reason: `x` }],
-    implementationModules: [],
-  },
-  fileNotString: {
-    legacyCampaigns: [{ file: 3, reason: `x` }],
-    implementationModules: [],
-  },
-  reasonNotString: {
-    legacyCampaigns: [{ file: FILE, reason: 3 }],
-    implementationModules: [],
-  },
-  // The list itself is not an array: it is a string, and it replaces the file's own list.
-  notAList: {
-    legacyCampaigns: `tests/a-oracle.test.js`,
-    implementationModules: [],
-  },
-}
-
-const settingsFor = {
-  none: {},
-  implementation: { implementationModules: [FILE] },
-  reasoned: {
-    legacyCampaigns: [{ file: `tests/a-oracle.test.js`, reason: `migrating` }],
-  },
-  reasonless: { legacyCampaigns: [{ file: `tests/a-oracle.test.js` }] },
-  // A different file's name ends the same way: a path boundary is required.
-  otherFile: {
-    legacyCampaigns: [{ file: `oracle.test.js`, reason: `another file` }],
-  },
+/** The `legacyCampaigns` part of `settings.oracles` for a generated setting. */
+function legacySetting(setting) {
+  if (setting.form === `absent`)
+    return setting.key === `undefined` ? { legacyCampaigns: undefined } : {}
+  if (setting.form === `value`)
+    return { legacyCampaigns: LEGACY_VALUES[setting.value] }
+  return {
+    legacyCampaigns: setting.entries.map((entry) => LEGACY_ENTRIES[entry]),
+  }
 }
 
 const linter = new Linter({ configType: `flat` })
 
 /** The rule's reports for a rendered program, or the error the run threw. */
-function lintRendered(code, { setting, entry, modules, parser }) {
-  const own = settingsFor[setting]
-  const extra = entryFor[entry]
+function lintRendered(code, { setting, legacy: legacyPlan, modules, parser }) {
   const oracles = {
-    ...own,
     // A non-array value replaces the list, so no module is exempt.
     implementationModules:
       modules === `notAnArray`
         ? `tests/a-oracle.test.js`
-        : [
-            ...(own.implementationModules ?? []),
-            ...extra.implementationModules,
-          ],
-    legacyCampaigns: Array.isArray(extra.legacyCampaigns)
-      ? [...(own.legacyCampaigns ?? []), ...extra.legacyCampaigns]
-      : extra.legacyCampaigns,
+        : setting === `implementation`
+          ? [FILE]
+          : [],
+    ...legacySetting(legacyPlan),
   }
   const run = lintCharged(() =>
     linter.verify(
@@ -434,12 +412,18 @@ function check(plan, observations, expected) {
   )
 }
 
+// The generated sites with a raw campaign first, so the history has a use to report.
+const withCampaign = (generated, method = `assert`) => [
+  { kind: `campaign`, method, via: `alias` },
+  ...generated.sites.slice(1),
+]
+
 oracleProperty({
   id: `lint.oracle-property-only`,
   law: {
-    statement: `In an oracle file, a disable directive (eslint-disable, or a block for oracle/oracle-property-only) does not silence the rule: the reports are the same with or without it. A raw fast-check campaign (fc.assert, fc.check, or a .prop registration, through fast-check or @fast-check/vitest) and an import of createOracleReach or runOracleCampaign are reported, except in a file whose reasoned legacyCampaigns entry still matches a legacy use; a reasonless entry and a stale entry are reported; an implementation module is exempt from its own uses; a malformed or refused entry, a legacyCampaigns value that is not an array, and an implementationModules value that is not an array are reported at line 1, and the rule never throws on a program that parses. A refused entry never exempts the file under test: it names another file, or an implementation module that is exempt whatever its entries.`,
-    authority: `Maintainer decision (2026-11-09): oracleProperty is the only campaign API in @tanstack/oracles. Its header in packages/oracles/src/oracle-property.ts: constructed histories make a state's reach required, and a raw campaign has none.`,
-    limits: `Refused-entry exemption is not separately observable: a refused entry names another file (only the file under test is affected by its own entries), or an implementation module, which is exempt whatever its entries, so no history tells a refused entry that exempts from one that does not. Aliased campaigns, a campaign held in a helper, re-exported fast-check bindings, and import() of a legacy module are not generated. Only legacyCampaigns and a non-array implementationModules are generated as configuration; a string entry in implementationModules is not. A one-line directive (eslint-disable-next-line) is not generated, since it moves the site lines; the block forms are. A stale entry for a deleted file is not reported, since no lint run sees that file.`,
+    statement: `In an oracle file, a raw fast-check campaign (fc.assert, fc.check, or a .prop registration, through fast-check or @fast-check/vitest) and an import of createOracleReach or runOracleCampaign are reported, and no configuration exempts the file; an implementation module is exempt from its own uses. A disable directive (eslint-disable, or a block for oracle/oracle-property-only) does not silence the rule. A settings.oracles.legacyCampaigns value that is set, whatever it holds, is reported once at line 1 as removed and exempts nothing; a non-array implementationModules is reported at line 1; both reports are owed in an implementation module too. The rule never throws on a program that parses.`,
+    authority: `Maintainer decision (2026-11-09): oracleProperty is the only campaign API in @tanstack/oracles; its header in packages/oracles/src/oracle-property.ts: constructed histories make a state's reach required, and a raw campaign has none. Maintainer decision (2026-11-10): "remove legacyCampaigns, as that's another out for agents". Frozen principle P8: lint rules never throw.`,
+    limits: `Aliased campaigns, a campaign held in a helper, re-exported fast-check bindings, and import() of a legacy module are not generated. A string entry in implementationModules is not generated. A legacyCampaigns value whose reading throws (a getter or a proxy) is not generated. A one-line directive (eslint-disable-next-line) is not generated, since it moves the site lines; the block forms are.`,
   },
   histories: {
     arbitrary: program,
@@ -449,40 +433,73 @@ oracleProperty({
     measured: Object.values(MEASURED),
     constructed: [
       {
-        name: `an entry outside the oracle glob`,
-        enters: [STATES.refused],
+        name: `an empty legacyCampaigns list`,
+        enters: [STATES.removedEmpty],
         build: (generated) => ({
           ...generated,
-          setting: `none`,
-          entry: `outsideGlob`,
+          legacy: { form: `list`, entries: [] },
         }),
       },
       {
-        name: `a README entry`,
-        enters: [STATES.refused],
+        name: `a legacyCampaigns value that is not a list`,
+        enters: [STATES.removedValue],
         build: (generated) => ({
           ...generated,
-          setting: `none`,
-          entry: `readme`,
+          legacy: { form: `value`, value: `string` },
         }),
       },
       {
-        name: `a malformed entry`,
-        enters: [STATES.malformed],
+        name: `a reasoned legacyCampaigns entry for a file with a raw campaign`,
+        enters: [STATES.listedReported],
         build: (generated) => ({
           ...generated,
           setting: `none`,
-          entry: `bareString`,
+          legacy: { form: `list`, entries: [`reasoned`] },
+          sites: withCampaign(generated, `check`),
+        }),
+      },
+      {
+        name: `a legacyCampaigns entry for a file with no raw use`,
+        enters: [STATES.listedQuiet],
+        build: (generated) => ({
+          ...generated,
+          setting: `none`,
+          legacy: { form: `list`, entries: [`reasoned`, `reasonless`] },
+          sites: [
+            { kind: `quiet`, variant: `foreign` },
+            ...generated.sites
+              .filter((item) => item.kind === `quiet`)
+              .slice(0, 5),
+          ],
+        }),
+      },
+      {
+        name: `a legacyCampaigns list of refused and malformed entries`,
+        enters: [STATES.removedJudged],
+        build: (generated) => ({
+          ...generated,
+          legacy: {
+            form: `list`,
+            entries: [`readme`, `bareString`, `reasonNotString`],
+          },
+        }),
+      },
+      {
+        name: `an implementation module with a legacyCampaigns setting`,
+        enters: [STATES.removedInModule],
+        build: (generated) => ({
+          ...generated,
+          setting: `implementation`,
+          modules: `none`,
+          legacy: { form: `list`, entries: [`fullPath`] },
         }),
       },
       {
         name: `a program under espree that opens with a comment`,
-        enters: [STATES.openComment, STATES.malformed],
+        enters: [STATES.openComment, STATES.removedValue],
         build: (generated) => ({
           ...generated,
-          setting: `none`,
-          entry: `bareString`,
-          modules: `none`,
+          legacy: { form: `value`, value: `null` },
           parser: `espree`,
           header: true,
         }),
@@ -492,18 +509,7 @@ oracleProperty({
         enters: [STATES.moduleNotArray],
         build: (generated) => ({
           ...generated,
-          setting: `none`,
-          entry: `none`,
           modules: `notAnArray`,
-        }),
-      },
-      {
-        name: `a legacy list that is not an array`,
-        enters: [STATES.notList],
-        build: (generated) => ({
-          ...generated,
-          setting: `reasoned`,
-          entry: `notAList`,
         }),
       },
       {
@@ -512,12 +518,8 @@ oracleProperty({
         build: (generated) => ({
           ...generated,
           setting: `none`,
-          entry: `none`,
           alias: `vitest`,
-          sites: [
-            { kind: `campaign`, method: `assert`, via: `alias` },
-            ...generated.sites.slice(1),
-          ],
+          sites: withCampaign(generated),
         }),
       },
       {
@@ -526,12 +528,8 @@ oracleProperty({
         build: (generated) => ({
           ...generated,
           setting: `none`,
-          entry: `none`,
           directive: `oracleBlock`,
-          sites: [
-            { kind: `campaign`, method: `assert`, via: `alias` },
-            ...generated.sites.slice(1),
-          ],
+          sites: withCampaign(generated),
         }),
       },
       {
@@ -540,11 +538,7 @@ oracleProperty({
         build: (generated) => ({
           ...generated,
           setting: `none`,
-          entry: `none`,
-          sites: [
-            { kind: `campaign`, method: `assert`, via: `alias` },
-            ...generated.sites.slice(1),
-          ],
+          sites: withCampaign(generated),
         }),
       },
       {
@@ -553,7 +547,6 @@ oracleProperty({
         build: (generated) => ({
           ...generated,
           setting: `none`,
-          entry: `none`,
           sites: [
             { kind: `prop`, root: `fcTest` },
             ...generated.sites.slice(1),
@@ -566,47 +559,9 @@ oracleProperty({
         build: (generated) => ({
           ...generated,
           setting: `none`,
-          entry: `none`,
           sites: [
             { kind: `legacyImport`, name: `runOracleCampaign` },
             ...generated.sites.slice(1),
-          ],
-        }),
-      },
-      {
-        name: `a reasoned baseline with a raw campaign`,
-        enters: [STATES.exempt],
-        build: (generated) => ({
-          ...generated,
-          setting: `reasoned`,
-          entry: `none`,
-          sites: [
-            { kind: `campaign`, method: `check`, via: `fc` },
-            ...generated.sites.slice(1),
-          ],
-        }),
-      },
-      {
-        name: `a reasonless baseline`,
-        enters: [STATES.reasonless],
-        build: (generated) => ({
-          ...generated,
-          setting: `reasonless`,
-          entry: `none`,
-        }),
-      },
-      {
-        name: `a reasoned baseline with no legacy use`,
-        enters: [STATES.stale],
-        build: (generated) => ({
-          ...generated,
-          setting: `reasoned`,
-          entry: `none`,
-          sites: [
-            { kind: `quiet`, variant: `foreign` },
-            ...generated.sites
-              .filter((item) => item.kind === `quiet`)
-              .slice(0, 5),
           ],
         }),
       },

@@ -21,7 +21,11 @@
  *    call statement. Each names its function and its line: a class's
  *    method, accessor, or field function by `Class.member`, any other
  *    function by its own name (an object literal's method by its property),
- *    and code in no function by `<module>`. Two functions may share a name
+ *    a function exported with no name of its own by the name an import
+ *    gives it (`default` for `export default` and `module.exports =`, the
+ *    export's name for `exports.name =`), module-level data (a top-level variable whose initializer is not a
+ *    function) by its variable, and other code in no function by
+ *    `<module>`. Two functions may share a name
  *    and are still two functions. In a Svelte module (`.svelte.ts`) a rune
  *    call that Svelte allows in one place only is no site of its own, so
  *    instrumentation does not move it.
@@ -60,13 +64,22 @@
  *    its methods, because which one is called is unknown statically; `new
  *    C()` brings only C's constructor (named `C.constructor`), which brings
  *    what its body refers to, and C's methods are owned when something in
- *    the tree refers to them. A
+ *    the tree refers to them. Module-level data is a unit as a
+ *    function is (F10, the reference tree applied to data): a function that
+ *    reads it brings it into its tree, with what its initializer refers to,
+ *    an owns entry may name it (`src/x.ts#TABLE`), and a whole-file entry
+ *    owns it. Its initializer runs when the module loads, so its mutants are
+ *    reached as load-time code is. A
  *    function's owners are the oracle files whose trees contain it; a mutant
  *    in a function with no owner is `unowned` and is listed as a warning, not
  *    a gap. An owns entry that names nothing, an owns list that is not a
  *    literal, and an owner whose tests fail with no mutant active each make
  *    the run fail and name the cause, because each would otherwise hide gaps;
- *    a failing owner is named with a failing test and its error. The CLI's
+ *    a failing owner is named with a failing test and its error, and the
+ *    baseline's replay command, pasted into a POSIX shell in the package,
+ *    runs that test alone, though its suite's name holds regular-expression
+ *    and shell syntax and other tests' names extend it or repeat its own
+ *    (the classify oracle's law 9 over generated names). The CLI's
  *    capture must not change what a test observes: an owner that passes
  *    alone passes under the CLI, even when it counts the reads of a getter
  *    on a value it asserts on, or spies on the builtins a value is scanned
@@ -359,6 +372,8 @@ import {
   ownersOf,
   interpret,
   refusal,
+  ownsNothing,
+  MODULE_DATA,
   model,
   edited,
   AUTHORED,
@@ -472,6 +487,11 @@ function runCli(dir, files, how = {}) {
     env: cleanEnv(),
   })
   const run = readRun(dir, out, child.status, child.stderr, how.cli ?? here)
+  // The command the baseline printed to replay a failing owner (law 3).
+  const replay = `${child.stderr ?? ``}`
+    .split(`\n`)
+    .find((line) => line.startsWith(`  replay: `))
+    ?.slice(`  replay: `.length)
   // What the run wrote beside its output directory and outside the package's
   // own state (`.oracle-gaps`), as a path relative to the package.
   const strayWrites = filesUnder(dir).filter(
@@ -480,7 +500,42 @@ function runCli(dir, files, how = {}) {
       !KNOWN_STRAY_WRITES.test(file) &&
       !OWN_WRITES.some((home) => file === home || file.startsWith(`${home}/`)),
   )
-  return { ...run, strayWrites }
+  return { ...run, strayWrites, replay }
+}
+
+/**
+ * Runs a baseline's replay command as an author pastes it into a POSIX
+ * shell in the package, with this repository's Vitest on the path, and
+ * names the tests it ran (passed or failed) by their full names, the suites'
+ * names and the test's joined by a space.
+ */
+function replayed(dir, command) {
+  if (command === undefined) return undefined
+  const scratch = mkdtempSync(join(realpathSync(tmpdir()), `gap-replay-`))
+  try {
+    const report = join(scratch, `report.json`)
+    spawnSync(
+      `sh`,
+      [`-c`, `${command} --reporter=json --outputFile='${report}'`],
+      {
+        cwd: dir,
+        encoding: `utf8`,
+        timeout: 120_000,
+        env: {
+          ...cleanEnv(),
+          PATH: `${join(here, `..`, `node_modules`, `.bin`)}:${process.env.PATH}`,
+        },
+      },
+    )
+    if (!existsSync(report)) return []
+    return JSON.parse(readFileSync(report, `utf8`))
+      .testResults.flatMap((file) => file.assertionResults)
+      .filter((test) => test.status === `passed` || test.status === `failed`)
+      .map((test) => test.fullName)
+      .sort()
+  } finally {
+    rmSync(scratch, { recursive: true, force: true })
+  }
 }
 
 /** Relative paths of the files under a directory, not inside node_modules. */
@@ -989,10 +1044,13 @@ async function driver(plan, observe) {
       budget: plan.budget,
       cli: plan.cliPath === `spaced` ? copy : here,
     }
-    const cli = runCli(dir, files, how)
+    const { replay, ...cli } = runCli(dir, files, how)
     // How many units were computed or reused says how the result was
     // produced, not what it is, so it is not observed.
     observe(`cli`, { ...cli, evidence: undefined })
+    // A failing owner's replay, run as the author would run it (law 3).
+    if (plan.fault === `brokenOwner`)
+      observe(`replay`, { command: replay, ran: replayed(dir, replay) })
     // Reach comes from what the CLI reported, mapped onto the plan.
     const states = new Set()
     // Each kind of declaration fault is its own state, so each refusal has
@@ -1004,8 +1062,7 @@ async function driver(plan, observe) {
     if (
       configFaults.includes(plan.fault) &&
       cli.exit !== 0 &&
-      plan.wholeFile === `none` &&
-      plan.functions.every((fn) => fn.owners.length === 0)
+      ownsNothing(plan)
     )
       states.add(`a config fault in a run that owns nothing`)
     if (analyzedFaults.includes(plan.fault) && cli.exit === 0)
@@ -1092,6 +1149,11 @@ async function driver(plan, observe) {
         states.add(`a kill through state an earlier test stored`)
       if (m.function === `w_load` && m.outcome === `killed`)
         states.add(`a mutant of code run at module load killed`)
+      if (
+        MODULE_DATA.some((d) => d.id === m.function) &&
+        m.outcome === `killed`
+      )
+        states.add(`a mutant of module data killed through its reader`)
       if (
         m.function === `w_memo` &&
         m.operator === `if-false` &&
@@ -1372,6 +1434,20 @@ function check(plan, observations, expected) {
         `the refusal does not give the failing test's error, ${expected.refused.detail}: ${cli.stderr}`,
         `ownership`,
       )
+    // The baseline's replay of a failing owner runs exactly its failing test.
+    if (expected.refused.replayed) {
+      const replay = observations.find((o) => o.checkpoint === `replay`)?.value
+      if (
+        JSON.stringify(replay?.ran) !==
+        JSON.stringify(expected.refused.replayed)
+      )
+        return violation(
+          `replay`,
+          `the replay command ${JSON.stringify(replay?.command)} ran ${JSON.stringify(replay?.ran)}, owed only ${JSON.stringify(expected.refused.replayed)}`,
+          `ownership`,
+          { actual: replay?.ran, expected: expected.refused.replayed },
+        )
+    }
     // Law 12: the refusal is one block with its fix, and the output
     // directory the run was given holds it.
     // Every e2e run names its output directory (`--out`), so even a
@@ -1755,6 +1831,7 @@ const required = [
   `a kill after a caught verdict`,
   `a kill through state an earlier test stored`,
   `a mutant of code run at module load killed`,
+  `a mutant of module data killed through its reader`,
   `a module-level cache judged afresh`,
   `ordinary tests run when asked`,
   `ordinary tests left out by default`,
@@ -1877,7 +1954,7 @@ oracleProperty({
   law: {
     statement: `The gap report enumerates the promised operator mutants, leaves out exactly the probe-only code, discovers every oracle that owns a function's call tree and refuses broken ownership, judges each mutant only by its owners' tests on their registered routes and counts only law verdicts on reproducible routes as kills, which outrank a run that never ends, anchors each mutant by its function and normalized statement, lists every gap and unowned mutant once with consistent counts, keeps keys stable under unrelated edits, reports through one daemon per package what a cold run reports at every state of a sequence of edits, and runs the package as Vitest does from any install path and any --source spelling: one instance of each workspace dependency, no refusal over an unbuildable devDependency, child processes for a native addon anywhere in the tree, a capture that a test's builtin spies cannot see, and a refusal of test.projects; and every run that does not complete ends, cold or through the daemon, with a refusal that exits 2, prints a refused: block and one fix: directive with no stack trace, and writes the refusal to the run's output directory.`,
     authority: `The maintainer's decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), not in this package's records, including that a kill by reach agreement alone is a gap and that an incremental run through the daemon equals a cold one (v19.3); the project's oracle guide on quiet exclusions; the oracle rubric's outcome kinds (ORC-006); the CLI's documented operator list in schemata.mjs.`,
-    limits: `Law 12 judges refusals only: no legal history reaches an internal error, so its shape (exit 3, the stack in error.log) is not judged; argument refusals are the static oracle's; the check's rejection of a stack trace, a missing fix, and a wrong exit code is calibrated in the static oracle, through the same refusalBreach, and here only a refused run reported as complete is calibrated, because each calibration here runs real CLI histories. Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 6 s full limit, and a slow run only as one witness that waits 3 s before it judges; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; no --only, --sample, or --diff-base; a derived class's file is instrumented and its sites are judged as unowned, but no test imports or constructs the class, so its no-mutant and super-region behavior is the static oracle's (in-process), not this oracle's; package configs only in vite.config.ts, vitest.config.ts, or vite.config.mjs, as an object or a sync or async function, with no plugins of their own and test.projects only as a refusal; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9's edits leave out files read through fs, other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; cut-off charging judged only under one budget; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages; daemon races (two CLIs reading one error file, a CLI hearing closing from the failing daemon it started, a reset connection on macOS) fixed by inspection; a workspace dependency's one-file bundle is written in that dependency's own .oracle-gaps folder, a known stray write (date-fns report), which the stray-write check excludes; the runner's copies and Vitest configs (.oracle-gaps-PID*) sit at the package root and are removed when the run closes, so a killed run leaves them there, and the stray-write check runs after close and cannot see them.`,
+    limits: `Law 12 judges refusals only: no legal history reaches an internal error, so its shape (exit 3, the stack in error.log) is not judged; argument refusals are the static oracle's; the check's rejection of a stack trace, a missing fix, and a wrong exit code is calibrated in the static oracle, through the same refusalBreach, and here only a refused run reported as complete is calibrated, because each calibration here runs real CLI histories. Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 6 s full limit, and a slow run only as one witness that waits 3 s before it judges; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; no --only, --sample, or --diff-base; a derived class's file is instrumented and its sites are judged as unowned, but no test imports or constructs the class, so its no-mutant and super-region behavior is the static oracle's (in-process), not this oracle's; package configs only in vite.config.ts, vitest.config.ts, or vite.config.mjs, as an object or a sync or async function, with no plugins of their own and test.projects only as a refusal; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9's edits leave out files read through fs, other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; cut-off charging judged only under one budget; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages; daemon races (two CLIs reading one error file, a CLI hearing closing from the failing daemon it started, a reset connection on macOS) fixed by inspection; a workspace dependency's one-file bundle is written in that dependency's own .oracle-gaps folder, a known stray write (date-fns report), which the stray-write check excludes; the runner's copies and Vitest configs (.oracle-gaps-PID*) sit at the package root and are removed when the run closes, so a killed run leaves them there, and the stray-write check runs after close and cannot see them; module-level data only as four \`const\` declarations of the main source (an object literal, an array that holds a function, a boolean, and an object of two methods), read in place, with no data imported from another file, destructured, reassigned, or declared as an enum or a default export.`,
   },
   histories: {
     arbitrary: histories,
@@ -2132,8 +2209,10 @@ oracleProperty({
           ...generated,
           fault: `projects`,
           // Nothing owns anything: no function owners, no library owners,
-          // no whole-file entry.
+          // no module data or unnamed export owners, no whole-file entry.
           owners: [],
+          dataOwners: [],
+          exportOwners: [],
           library: [],
           libraryOwners: [],
           containers: [],

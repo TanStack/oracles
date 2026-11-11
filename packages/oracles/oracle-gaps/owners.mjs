@@ -23,8 +23,22 @@
 // function of a class (named `Class.member`), a constructor (named
 // `Class.constructor`), or any other function with a name: a function
 // assigned to a variable, or a method, accessor, or function property of an
-// object literal (named by its property). A mutant belongs to the innermost
-// one whose lines hold it. Two functions may share a name, as a getter and
+// object literal (named by its property). A function exported with no name
+// of its own takes the name an import gives it: `default` for `export default
+// function () {}`, `export default <function>`, and CommonJS's
+// `module.exports = <function>`, and its export's name for CommonJS's
+// `exports.name = <function>` (so `exports.default` is `default`; F24),
+// through parentheses and chained assignments. An import of it reaches it
+// through its export.
+// Module-level data is a unit of its
+// own, as a function is: a variable declared at the top of a module whose
+// initializer is not a function, named by its variable (`src/x.ts#TABLE`), in a
+// top-level variable statement. A function that reads it brings it into its
+// tree, with what its initializer refers to outside the functions it holds,
+// and an owns entry may name it. A function its initializer holds, such as an
+// object literal's method, is a unit of its own, owned where something
+// refers to it, not because the declaration's text holds it. A mutant belongs to
+// the innermost unit whose lines hold it. Two functions may share a name, as a getter and
 // its setter do, or two nested helpers; each is still its own function, and
 // owns entry that names them owns them all. A function's owners are the
 // oracle files whose trees contain it. A gap is judged across all of them: a
@@ -88,6 +102,25 @@ export function readOwns(ts, path, text) {
 }
 
 /**
+ * The value an export or an assignment gives: an export assignment's
+ * expression, or an assignment's right-hand side, through parentheses and
+ * chained assignments (`module.exports = exports = fn`).
+ */
+function assignedValue(ts, node) {
+  const assigns = (n) =>
+    ts.isBinaryExpression(n) &&
+    n.operatorToken.kind === ts.SyntaxKind.EqualsToken
+  let value = ts.isExportAssignment(node)
+    ? node.expression
+    : assigns(node)
+      ? node.right
+      : undefined
+  while (value && (ts.isParenthesizedExpression(value) || assigns(value)))
+    value = ts.isParenthesizedExpression(value) ? value.expression : value.right
+  return value
+}
+
+/**
  * The functions of one source file, in document order, each with its name,
  * its node, the class it is a member of (if any), and its line span.
  */
@@ -96,6 +129,23 @@ export function functionsIn(ts, file) {
   const isFunction = (node) =>
     node !== undefined &&
     (ts.isArrowFunction(node) || ts.isFunctionExpression(node))
+  // A function exported with no name of its own, by the name an import
+  // gives it, and its node: `default` for `export default function () {}`,
+  // `export default <function>`, and CommonJS's `module.exports =
+  // <function>`; a CommonJS `exports.name = <function>` (or
+  // `module.exports.name`) by its export's name, so `exports.default` is
+  // `default` too.
+  const exportedAs = (node) => {
+    if (ts.isFunctionDeclaration(node) && !node.name && node.body)
+      return [`default`, node]
+    const value = assignedValue(ts, node)
+    if (!isFunction(value)) return undefined
+    if (ts.isExportAssignment(node)) return [`default`, value]
+    const target = /^(module\.exports|(?:module\.)?exports\.([\w$]+))$/.exec(
+      node.left.getText(file),
+    )
+    return target ? [target[2] ?? `default`, value] : undefined
+  }
   const visit = (node) => {
     const cls =
       node.parent && ts.isClassLike(node.parent) ? node.parent : undefined
@@ -116,7 +166,27 @@ export function functionsIn(ts, file) {
         ts.isPropertyAssignment(node)) &&
       isFunction(node.initializer) &&
       (ts.isIdentifier(node.name) || ts.isPrivateIdentifier(node.name))
-    if ((hasBody || valued) && (node.name || ts.isConstructorDeclaration(node)))
+    // Module-level data: a top-level variable whose value is not a function.
+    // Its node is the declaration, whose initializer is its text.
+    const data =
+      ts.isVariableDeclaration(node) &&
+      node.initializer !== undefined &&
+      !valued &&
+      ts.isIdentifier(node.name) &&
+      ts.isVariableStatement(node.parent.parent) &&
+      ts.isSourceFile(node.parent.parent.parent)
+    const exported = exportedAs(node)
+    if (exported)
+      functions.push({
+        name: exported[0],
+        node: exported[1],
+        start: node.getStart(file),
+        end: node.end,
+      })
+    else if (
+      (hasBody || valued || data) &&
+      (node.name || ts.isConstructorDeclaration(node))
+    )
       functions.push({
         name: named(node.name ? node.name.getText(file) : `constructor`),
         node: valued ? node.initializer : node,
@@ -162,8 +232,19 @@ export function ownership(ts, program, pkg, oracles) {
           fn.cls === declaration &&
           (!constructed || ts.isConstructorDeclaration(fn.node)),
       )
+    // An unnamed export is reached through its export: an export
+    // assignment, a CommonJS assignment, or, for `exports.name`, the
+    // property its assignment sets.
+    const value =
+      declaration.initializer ??
+      assignedValue(
+        ts,
+        ts.isPropertyAccessExpression(declaration)
+          ? declaration.parent
+          : declaration,
+      )
     return functions.filter(
-      (fn) => fn.node === declaration || fn.node === declaration.initializer,
+      (fn) => fn.node === declaration || fn.node === value,
     )
   }
   // Every package function, method, or class an owned body refers to.
@@ -179,9 +260,14 @@ export function ownership(ts, program, pkg, oracles) {
         for (const declaration of symbol?.declarations ?? [])
           found.push(...targetsOf(declaration, constructed))
       }
-      ts.forEachChild(child, visit)
+      // A function in module data's initializer is a unit of its own,
+      // reached only when something refers to it.
+      if (!(data && ts.isFunctionLike(child))) ts.forEachChild(child, visit)
     }
-    if (node.body) visit(node.body)
+    // A function's body, or module data's initializer.
+    const data = node.body === undefined
+    const text = node.body ?? node.initializer
+    if (text) visit(text)
     return found
   }
   // Owners by function, and a whole file's owners by its source.
@@ -205,9 +291,10 @@ export function ownership(ts, program, pkg, oracles) {
         seen.add(fn)
         add(fn, oracle)
         // The functions in a function's text follow it in document order.
-        const functions = functionsOf(
-          relative(pkg, fn.node.getSourceFile().fileName),
-        )
+        // Module data owns only its own sites, not the functions it holds.
+        const functions = ts.isVariableDeclaration(fn.node)
+          ? []
+          : functionsOf(relative(pkg, fn.node.getSourceFile().fileName))
         for (
           let at = functions.indexOf(fn) + 1;
           at < functions.length && functions[at].start < fn.end;
@@ -225,9 +312,9 @@ export function ownership(ts, program, pkg, oracles) {
     ownsAny: (source) =>
       owners.has(source) || functionsOf(source).some((fn) => owners.has(fn)),
     /**
-     * The innermost function whose text holds a position (an offset in the
-     * source), by its name (`<module>` for none), and its owners. A
-     * whole-file entry owns every function in the file.
+     * The innermost unit (a function or module data) whose text holds a
+     * position (an offset in the source), by its name (`<module>` for none),
+     * and its owners. A whole-file entry owns every unit in the file.
      */
     at: (source, position) => {
       let best

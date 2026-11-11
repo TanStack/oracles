@@ -171,9 +171,11 @@ const MODULE_LISTS = [`implementationModules`, `replayWitnessModules`]
  *   selected through them.
  * - `replayWitnessModules`: paths of the module that writes a replay witness,
  *   whose record is serialized by the standard JSON serializer.
- * - `legacyCampaigns`: `[{ file, reason }]`, the files that still run raw
- *   campaigns or import a legacy campaign API while they migrate to
- *   `oracleProperty`. An entry counts only with a non-empty reason.
+ *
+ * `legacyCampaigns` is removed (maintainer decision 2026-11-10): it was the
+ * exemption list of `oracle/oracle-property-only`. `legacyCampaignsSet` tells
+ * whether a configuration still sets it, to any value but `undefined`. It
+ * exempts nothing, and that rule reports it.
  *
  * A path names a file by its end at a path boundary, relative to the
  * repository (such as `<package>/tests/oracle-config.ts`). Paths are not patterns,
@@ -197,7 +199,7 @@ export function oracleSettings(context) {
     },
     implementationModules: moduleList(configured, `implementationModules`),
     replayWitnessModules: moduleList(configured, `replayWitnessModules`),
-    legacyCampaigns: configured.legacyCampaigns ?? [],
+    legacyCampaignsSet: configured.legacyCampaigns !== undefined,
     malformed,
   }
 }

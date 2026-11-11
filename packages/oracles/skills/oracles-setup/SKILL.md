@@ -180,7 +180,8 @@ export default [
   it is TypeScript. Otherwise a typed production file fails to parse before
   the probe rule runs. For JavaScript production source, set the parser for
   the oracle files only.
-- Do not add `legacyCampaigns` or any other exemption. Adopters have none.
+- Do not add an exemption. There is none: `legacyCampaigns` is removed, and
+  setting it is reported.
 
 **An older ESLint (7 or 8, `.eslintrc`).** Do not upgrade the repository's
 lint. Lint the oracle files with a separate ESLint 9:
@@ -326,9 +327,9 @@ Setup does not skip that step to finish sooner.
 Put the oracle's `owns` list on its `oracleProperty` call. An entry is a file
 (`src/index.ts`) or one function in it (`src/index.ts#parse`, or
 `src/x.ts#Class.method`). A function entry owns that function and its static
-call tree. For a first oracle, own only the function it covers. Own the whole
-file only when module data affects an adopted law (see `oracles-design` step
-6). If the gap check refuses with "no oracle file", the oracle is not
+call tree, including the module-level data it reads. A default export is
+`src/index.ts#default`. For a first oracle, own only the function it covers.
+If the gap check refuses with "no oracle file", the oracle is not
 declared: that is a setup failure.
 
 In an oracle file, only `oracleProperty` registers tests. A plain Vitest test

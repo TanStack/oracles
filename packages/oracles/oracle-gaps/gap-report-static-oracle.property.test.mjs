@@ -30,7 +30,10 @@
  * - **Probe-only code.** Each mutant is marked as probe code exactly when the
  *   model says its site is probe-only code.
  * - **Ownership.** A mutant's function has an owner exactly when the model
- *   says it is not `unowned`.
+ *   says it is not `unowned`. Module-level data is a unit of its own, named
+ *   by its variable: owned through the functions that read it, by an owns
+ *   entry that names it, or by a whole-file entry, and what its initializer
+ *   holds is in its tree (F10).
  * - **Keys.** Each mutant's key is the model's anchor.
  * - **Selected keys.** A run that selects mutants (`--only`, `--sample`)
  *   keys each selected mutant as the full run does: keys are numbered over
@@ -111,7 +114,11 @@ import {
   histories,
   interpret,
   model,
+  MODULE_DATA,
+  EXPORT_FORMS,
+  DOTGEN,
   ownersOf,
+  ownsNothing,
   probeHelpers,
   refusalBreach,
   resolveHistory,
@@ -622,6 +629,58 @@ const namedStates = {
   'W10.#named': [true, `a private method named in an owns entry`],
 }
 
+// Module-level data (F10), by how its declaration is owned: through the
+// functions that read it alone, by one owned and one unowned reader, by an
+// owns entry that names it, or by a whole-file entry alone; and left unowned
+// when only unowned functions read it. Whether an owner reads it is the
+// plan's, through the model's call trees.
+const dataStates = (plan, datum, m) => {
+  const owners = ownersOf({ ...plan, wholeFile: `none` })
+  const readers = plan.functions.filter((fn) =>
+    fn.body.some((s) => s.kind === `readData` && s.shape === datum.shape),
+  )
+  const owned = readers.filter((fn) => owners(fn.id).size > 0)
+  const states = []
+  const direct = datum.owners.length > 0
+  if (m.owned && !direct && plan.wholeFile === `none` && owned.length > 0) {
+    states.push(`module ${datum.shape} data owned through its reader`)
+    if (owned.length < readers.length)
+      states.push(`module data read by an owned and an unowned function owned`)
+  }
+  if (!m.owned && readers.length > 0)
+    states.push(`module data read only by unowned functions unowned`)
+  if (m.owned && direct && readers.length === 0 && plan.wholeFile === `none`)
+    states.push(`module data named in an owns entry owned`)
+  if (m.owned && !direct && plan.wholeFile !== `none` && owned.length === 0)
+    states.push(`module data owned by a whole-file entry`)
+  return states
+}
+const exportStates = Object.fromEntries(
+  EXPORT_FORMS.map(({ exportForm, file, name }) => [
+    exportForm,
+    `an unnamed export owned through its entry ${file}#${name}`,
+  ]),
+)
+// The shapes with sites of their own (a declaration of methods has none).
+const dataShapes = MODULE_DATA.filter((d) => d.shape !== `methods`)
+const importStates = Object.fromEntries(
+  EXPORT_FORMS.filter((form) => form.imported).map(({ exportForm }) => [
+    exportForm,
+    `an unnamed export's helper owned through an import: ${exportForm}`,
+  ]),
+)
+const dataReach = [
+  ...dataShapes.map((d) => `module ${d.shape} data owned through its reader`),
+  `module data read by an owned and an unowned function owned`,
+  `module data read only by unowned functions unowned`,
+  `module data named in an owns entry owned`,
+  `module data owned by a whole-file entry`,
+  `a function that module data holds owned through it`,
+  `a method of module data owned through its call`,
+  `a method of read module data that nothing calls unowned`,
+  `a method of module data that an entry names unowned`,
+]
+
 async function driver(plan, observe) {
   const dir = realpathSync(mkdtempSync(join(here, `.scratch-`)))
   try {
@@ -657,12 +716,7 @@ async function driver(plan, observe) {
     // A bad entry in a run that owns no selected source: two refusals apply,
     // and the declaration's own fault is the one to name, since fixing it is
     // what the author must do first.
-    if (
-      before.refusal &&
-      plan.fault === `badEntry` &&
-      plan.wholeFile === `none` &&
-      plan.functions.every((fn) => fn.owners.length === 0)
-    )
+    if (before.refusal && plan.fault === `badEntry` && ownsNothing(plan))
       states.add(`refused badEntry with no owner`)
     // A runtime fault does not refuse here, so a refusal in its run is the
     // run's lack of an owner.
@@ -717,6 +771,57 @@ async function driver(plan, observe) {
         states.add(`a constructed class brings only what is referenced`)
       if (m.source === LIB && !m.owned) states.add(`unowned in another file`)
       if (m.function === `reportAndPush`) states.add(`mixed helper judged`)
+      // An unnamed export, owned through the entry that names it `default`
+      // (or its CommonJS export's name).
+      const exported = plan.functions.find(
+        (fn) => fn.exportForm !== undefined && fn.file === m.source,
+      )
+      if (exported && m.owned) states.add(exportStates[exported.exportForm])
+      // Its helper, owned through the importer's call alone.
+      if (
+        exported &&
+        m.function === `help` &&
+        m.owned &&
+        exported.owners.length === 0 &&
+        importStates[exported.exportForm]
+      )
+        states.add(importStates[exported.exportForm])
+      const datum = plan.data.find((d) => d.id === m.function)
+      if (datum)
+        for (const state of dataStates(plan, datum, m)) states.add(state)
+      // `devBuild`, owned only because the array data holds it: no owned
+      // function calls it, and no entry names a whole file.
+      if (
+        m.function === `devBuild` &&
+        m.owned &&
+        plan.wholeFile === `none` &&
+        plan.functions.every(
+          (fn) =>
+            ownersOf(plan)(fn.id).size === 0 ||
+            fn.body.every((s) => s.kind !== `oldProbe`),
+        )
+      )
+        states.add(`a function that module data holds owned through it`)
+      // A method of module data is a unit of its own: owned through a call
+      // of it, and not through the declaration whose text holds it.
+      // A top-level loop's variable is no unit.
+      if (m.source === DOTGEN && m.function === `<module>`)
+        states.add(`a top-level loop's code is the module's`)
+      const methods = plan.data.find((d) => d.shape === `methods`)
+      if (methods && plan.wholeFile === `none`) {
+        if (m.function === `used` && m.owned && methods.owners.length === 0)
+          states.add(`a method of module data owned through its call`)
+        if (
+          m.function === `spare` &&
+          !m.owned &&
+          plan.functions.some((fn) =>
+            fn.body.some((x) => x.kind === `readData` && x.shape === `methods`),
+          )
+        )
+          states.add(`a method of read module data that nothing calls unowned`)
+        if (!m.owned && methods.owners.length > 0)
+          states.add(`a method of module data that an entry names unowned`)
+      }
       const generated = plan.functions.find(
         (fn) => fn.generated && fn.id === m.function,
       )
@@ -1170,6 +1275,10 @@ const withDeclaration = (constructed) =>
       }),
   }))
 const required = [
+  ...dataReach,
+  ...Object.values(exportStates),
+  ...Object.values(importStates),
+  `a top-level loop's code is the module's`,
   ...Object.values(ownedStates),
   ...Object.values(derivedStates),
   ...Object.values(namedStates).map(([, state]) => state),
@@ -1216,7 +1325,7 @@ oracleProperty({
   law: {
     statement: `The gap report's static half keeps every Svelte rune where Svelte allows it, gives each run's default output a directory of its own under its package's state, so runs of one package and of two packages never collide, enumerates the promised operator mutants, marks exactly the probe-only code, refuses broken owns declarations, gives each function the owners whose call trees contain it, anchors each mutant's key, keeps keys, probe marks, and ownership stable under unrelated edits, and keeps each derived class's \`super(...)\` call unconditional. In a derived constructor, no mutant site lies before the first statement that calls super or inside that statement (an arrow inherits super, so an arrow's call counts), and statements after it keep their sites. So no mutant, when active, prevents or delays the super call. With no mutant active the instrumented class behaves as its source does, and under every mutant the constructor completes with its base class's tag unless an early return ends it first. Bad arguments (a missing --package or --source, a --package that does not exist, a source outside the package, a bad --env-prefix, --seed, count, or limit, an unknown --pool, a --mutants directory that does not exist, an option with no value, an unknown option, one long past a pipe's buffer included, a --source that is missing or is a directory, and a --mutants file that is not JSON, lacks a field, or repeats an id) refuse the real CLI, cold or with --daemon, with exit 2 and a refused: block that names the cause, then one fix: directive that offers no way around the fix, and no stack trace; with --out, the refusal replaces an earlier run's results.json there and removes its error.log.`,
     authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the frozen design's plan for an oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); for rune placement, Svelte 5's placement rule for runes (state_invalid_placement, effect_invalid_placement) and the maintainer's report of svelte-db's useLiveQuery.svelte.ts failing to compile under instrumentation (2026-11-08); for derived classes, the gap report's contract that instrumentation with no mutant active does not change behavior and that a mutant is a legal program variant (the operator contract in schemata.mjs), ECMAScript's rule that a derived constructor calls \`super\` before it reads \`this\` and before it returns, the maintainer's report of TanStack DB's subscription.ts failing with no mutant active (G11, 2026-11-09), and the maintainer's decision of 2026-11-09 on the derived constructor's site region (every shape of super, including an early return before it, is covered by the one rule); for the report-shaped ending, the maintainer's decision of 2026-11-10 ("we should never just crash -- the cli should also return something sensible") and the usage text in args.mjs, the CLI's documented interface.`,
-    limits: `The grammar and model of oracle-gaps.report, with its limits. Outcomes that need test runs, and the failing-owner refusal, belong to oracle-gaps.report. Same-named functions, accessors, and field arrows are judged for ownership only; runes only as $state, $state.raw, $derived, $derived.by, $effect, and $effect.pre in a .svelte.ts module, judged by a restatement of Svelte's placement rule rather than the compiler. A derived class is judged in this oracle's in-process run and in the end-to-end oracle's static half: the end-to-end oracle instruments its file and judges its sites as unowned, but no test imports or constructs the class, so no test runs it. The in-process run transpiles the file to CommonJS at ES2022; other downlevel targets and Vitest's own transform are not exercised. The mutant switch (switchFor) is a hand copy of the switch's contract in schemata.mjs, not the capture setup's runtime: the capture setup imports Vitest and installs timers and globals when it loads, so it cannot run in-process. The derived grammar has one derived class per history, with parameter properties, a field, statements before and after super, an early return before it, and the four forms of the super call (a statement, an arrow argument, and the right operand of \`&&\` or \`||\`). It has no super call in a method, a nested class, or a \`super.method()\` call, and no default parameter. The ending law is judged here only for argument refusals, one fault per history; refusals from the analysis and the runner, and the daemon's own path, are the end-to-end oracle's. No legal history reaches an internal error, so its shape (exit 3, the stack in error.log) is not judged; a calibration shows that the check rejects a stack trace on stderr.`,
+    limits: `The grammar and model of oracle-gaps.report, with its limits. Outcomes that need test runs, and the failing-owner refusal, belong to oracle-gaps.report. Same-named functions, accessors, and field arrows are judged for ownership only; runes only as $state, $state.raw, $derived, $derived.by, $effect, and $effect.pre in a .svelte.ts module, judged by a restatement of Svelte's placement rule rather than the compiler. A derived class is judged in this oracle's in-process run and in the end-to-end oracle's static half: the end-to-end oracle instruments its file and judges its sites as unowned, but no test imports or constructs the class, so no test runs it. The in-process run transpiles the file to CommonJS at ES2022; other downlevel targets and Vitest's own transform are not exercised. The mutant switch (switchFor) is a hand copy of the switch's contract in schemata.mjs, not the capture setup's runtime: the capture setup imports Vitest and installs timers and globals when it loads, so it cannot run in-process. The derived grammar has one derived class per history, with parameter properties, a field, statements before and after super, an early return before it, and the four forms of the super call (a statement, an arrow argument, and the right operand of \`&&\` or \`||\`). It has no super call in a method, a nested class, or a \`super.method()\` call, and no default parameter. Module-level data is four \`const\` declarations of the main source (an object literal, an array that holds \`devBuild\` as a value, a boolean, and an object of two methods), and a top-level loop of the \`..gen/\` file whose variable is no unit, each read in place by generated or witness functions or named by an owns entry; data imported from another file, \`let\` data, enums, and default exports are not generated. A destructured declaration (\`const { a } = obj\`) stays \`<module>\`, and a function made by a call (\`const h = memo(() => …)\`) now belongs to the unit \`h\`; neither is generated. Unnamed exports are seven files of a helper and one exported function each (an ES default function, a default arrow bare and in parentheses, CommonJS \`module.exports\` alone and chained through \`exports\`, \`exports.default\`, and \`exports.run\`), each calling its helper, owned through an owns entry that names them or through an importer that imports and calls each but \`exports.default\` (a default import of a CommonJS module resolves to the module, not its \`default\`, so a reference to \`exports.default\` through an import is not judged). TypeScript's \`export = <function>\` is named \`default\` by the same rule but is not generated, nor is \`export default class {}\` or \`module.exports = { ... }\` (whose methods are named by their properties). A mutant of these forms was keyed \`<module>\` before and is keyed \`default\` (or its export's name) now: a one-time change of saved keys. A method that module data holds references nothing, so whether a method's references stay out of the declaration's tree is not judged. The ending law is judged here only for argument refusals, one fault per history; refusals from the analysis and the runner, and the daemon's own path, are the end-to-end oracle's. No legal history reaches an internal error, so its shape (exit 3, the stack in error.log) is not judged; a calibration shows that the check rejects a stack trace on stderr.`,
   },
   histories: {
     arbitrary: argumentHistories,
@@ -1245,11 +1354,19 @@ oracleProperty({
               `refused without an owner`,
               `refused badEntry with no owner`,
               ...argumentStates,
+              // The witness reads each shape of module data and owns it; the
+              // other ways data is owned are the module-data history's.
+              ...dataReach.slice(dataShapes.length),
+              ...Object.values(importStates),
             ].includes(s),
         ),
         build: (generated) => ({
           ...generated,
           witness: true,
+          dataOwners: [],
+          // Every unnamed export, each named by an owns entry.
+          exportOwners: [`a`, `b`, `a`, `b`, `a`, `b`, `a`],
+          importer: `none`,
           wholeFile: `none`,
           fault: `none`,
           stability: `insertGuard`,
@@ -1298,23 +1415,94 @@ oracleProperty({
         enters: [
           `owned by a whole-file entry`,
           `a source spelled through a redundant segment`,
+          `module data owned by a whole-file entry`,
         ],
         build: (generated) => ({
           ...generated,
           functions: [
             [
               { kind: `push`, quote: `'` },
-              ...generated.functions[0].slice(0, 4),
+              { kind: `readData`, shape: `array` },
+              ...generated.functions[0].slice(0, 3),
             ],
             ...generated.functions.slice(1),
           ],
           owners: [],
+          dataOwners: [],
           wholeFile: `a`,
           witness: false,
           fault: `none`,
           stability: `none`,
           steps: null,
           sourceSpelling: `redundant`,
+        }),
+      },
+      {
+        // An array that an owned and an unowned function read, a primitive
+        // that only the unowned one reads, and an object that no function
+        // reads and an owns entry names.
+        name: `module data owned by readers and by name`,
+        enters: [
+          `module data read by an owned and an unowned function owned`,
+          `module data read only by unowned functions unowned`,
+          `module data named in an owns entry owned`,
+          `a function that module data holds owned through it`,
+          `a method of module data owned through its call`,
+          `a method of read module data that nothing calls unowned`,
+        ],
+        build: (generated) => ({
+          ...generated,
+          functions: [
+            [
+              { kind: `readData`, shape: `array` },
+              { kind: `readData`, shape: `methods` },
+            ],
+            [
+              { kind: `readData`, shape: `array` },
+              { kind: `readData`, shape: `primitive` },
+            ],
+          ],
+          containers: [`free`, `free`],
+          owners: [`a`, `none`],
+          dataOwners: [`a`],
+          witness: false,
+          wholeFile: `none`,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+        }),
+      },
+      {
+        // A declaration of methods that an entry names and nothing reads.
+        name: `module data named by an entry leaves its methods to their callers`,
+        enters: [`a method of module data that an entry names unowned`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [`free`],
+          owners: [`a`],
+          dataOwners: [`none`, `none`, `none`, `a`],
+          witness: false,
+          wholeFile: `none`,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+        }),
+      },
+      {
+        // No entry names an export; the importer's tree holds each, and
+        // each one's helper.
+        name: `unnamed exports owned through an import`,
+        enters: Object.values(importStates),
+        build: (generated) => ({
+          ...generated,
+          exportOwners: EXPORT_FORMS.map(() => `none`),
+          importer: `a`,
+          witness: false,
+          wholeFile: `none`,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
         }),
       },
       {

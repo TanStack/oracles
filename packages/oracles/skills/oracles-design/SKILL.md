@@ -409,14 +409,14 @@ Techniques: [guide § Histories](../../docs/guide.md#histories).
     where `#queue: QueueType`) reaches no function body, so it is not followed.
     If the law depends on that method, own the implementation too
     (`source/priority-queue.ts#PriorityQueue.filter`).
-  - Temporary: an unnamed default export (`module.exports = function ...`,
-    `export default () => ...`) cannot be named yet. Own the whole file, and
-    report the gaps that this pulls in from other code in the file as caused
-    by that CLI limitation, not as gaps in this oracle.
-  - Temporary: data outside a function (a lookup table, a constant object) is
-    not yet part of a function entry's tree. Own the whole file only when
-    that data affects an adopted law, such as a unit table that decides the
-    result. A constant that feeds no law does not need it.
+  - A default export is named `default`, in any form (`export default
+function`, `export default () => ...`, `module.exports = fn`):
+    `index.js#default`. `exports.name = fn` is named `name`.
+  - Module-level data (`const UNIT_MS = {...}`) is its own unit, named by its
+    variable. An owned function that reads it owns it, and what its
+    initializer refers to. An entry can also name it: `src/index.ts#UNIT_MS`.
+    A destructured declaration (`const { a, b } = ...`) is not a unit: if a law
+    depends on one, own the whole file.
   - When a whole-file entry pulls in another contract (for example a batching
     API in the same file), write that contract's own oracle, or report its
     gaps as outside this oracle's scope.
@@ -506,8 +506,8 @@ comes with one instruction. Do what it says, within the rules below.
 - **An effect that no check sees** is one that the driver does not record,
   or one that no history makes different. A changed condition can still lead
   to the same result when both branches agree on every generated input. Then
-  add a history where they diverge. Otherwise, record the effect.
-  (Temporary: the `not-observed` directive names only the second case.)
+  add a history where they diverge. Otherwise, record the effect. The
+  `not-observed` directive gives both steps.
 - **Code whose removal no legal history can observe is dead.** The gap check
   alone cannot show this, because its histories are a sample. First rule out
   a missing history, observation, or law. Then remove the code in the same
@@ -517,9 +517,11 @@ comes with one instruction. Do what it says, within the rules below.
   varies in the histories. Check its witness and its constructed history. If
   the law still kills nothing, it may restate another law: compare the two.
   If every change that breaks it also breaks the other law, it restates
-  that law: merge them, as a law change. Temporary: a kill is credited only
-  to the first law that a history violates, so a later law can look idle. Before you restate or delete it,
-  run hand mutants aimed at that law alone.
+  that law: merge them, as a law change. The report's "First law to reject,
+  by law" table credits a kill only to the first law that rejects a
+  history. A later law on the same history is not checked, so a law with no
+  count is not shown to be useless. Before you restate or delete it, run hand
+  mutants aimed at that law alone.
 - **The only exclusions are probe-only code and the `super()` region of a
   derived constructor.**
 - **A survivor that the adopted law allows is an allowed alternative.** If a

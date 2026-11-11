@@ -17,31 +17,19 @@
  * no reach (maintainer decision, 2026-11-09; the `oracleProperty` contract of
  * `@tanstack/oracles`).
  *
- * Exemptions:
+ * Exemption: a framework implementation module
+ * (`settings.oracles.implementationModules`) is exempt. `oracleProperty`
+ * itself runs `fc.assert`, and it is the one campaign the framework has. No
+ * other configuration exempts a file.
  *
- * - A framework implementation module (`settings.oracles.implementationModules`)
- *   is exempt. `oracleProperty` itself runs `fc.assert`, and it is the one
- *   campaign the framework has.
- * - A file named by a `settings.oracles.legacyCampaigns` entry with a non-empty
- *   `reason` keeps its raw campaigns and legacy imports while it migrates. The
- *   entry exempts only the file it names, by a path boundary.
- *
- * Entry checks. An entry without a reason exempts nothing and is reported
- * (`baselineWithoutReason`). An entry for a file that has no legacy use left is
- * reported as stale (`staleBaseline`). The rule never throws on a program that
- * parses (frozen design principle P8; maintainer decision 2026-11-09). An entry
- * that it cannot judge is reported instead, at line 1 of each oracle file that
- * the configuration reaches, since ESLint runs a rule once per file, and it
- * exempts nothing: a malformed entry (not an object with a string `file`, and a
- * `reason` that is absent or a string) is `malformedEntry`; a `legacyCampaigns`
- * value that is not an array is `malformedList`, and it replaces the file's
- * own list; a file outside the oracle-file glob, or a framework implementation
- * module, is `refusedEntry`.
- *
- * What the rule cannot do. It sees one file's source and its settings, not the
- * base commit, so it cannot tell a new entry from an old one. It does not stop
- * a baseline from growing. A project that wants the baseline to shrink only
- * enforces that in its own diff check, against the base's entries.
+ * The removed setting. `settings.oracles.legacyCampaigns` once listed files
+ * that kept their raw campaigns while they migrated. It is removed (maintainer
+ * decision 2026-11-10: "remove legacyCampaigns, as that's another out for
+ * agents"). A configuration that still sets it, to any value, exempts nothing,
+ * and gets `removedSetting` at line 1 of each oracle file it reaches, since
+ * ESLint runs a rule once per file. The rule never throws on a program that
+ * parses (frozen design principle P8; maintainer decision 2026-11-09), so the
+ * setting is reported, not thrown on, and not ignored.
  *
  * The legacy-name check is kept after the APIs are removed from
  * @tanstack/oracles, so a project that still vendors them, and reimports
@@ -49,8 +37,7 @@
  *
  * Limits: the rule reads the forms above only. A campaign held in an alias
  * (`const run = fc.assert`), called from a helper, or reached through a
- * re-exported fast-check binding is not followed. A stale entry for a deleted
- * file is not reported, since no lint run sees that file.
+ * re-exported fast-check binding is not followed.
  */
 
 import {
@@ -89,49 +76,6 @@ function importOf(identifier, sourceCode) {
     source: definition.parent.source.value,
     imported: importedName(definition.node),
   }
-}
-
-/** Whether a file is in the oracle-file glob: its name has `oracle` and a source extension. */
-const isOracleFileName = (file) => {
-  const name = file.replaceAll(`\\`, `/`).split(`/`).at(-1)
-  return name.includes(`oracle`) && /\.(ts|tsx|js|jsx|mjs)$/.test(name)
-}
-
-/**
- * Splits the configured entries into the ones the rule can judge, and the
- * problems it reports for the rest. Nothing here throws.
- */
-function judgeEntries(entries, implementationModules) {
-  if (!Array.isArray(entries))
-    return { judged: [], problems: [{ messageId: `malformedList` }] }
-  const judged = []
-  const problems = []
-  entries.forEach((entry, index) => {
-    const at = `legacyCampaigns entry ${index}`
-    if (
-      typeof entry !== `object` ||
-      entry === null ||
-      typeof entry.file !== `string` ||
-      (entry.reason !== undefined && typeof entry.reason !== `string`)
-    )
-      problems.push({ messageId: `malformedEntry`, data: { at } })
-    else if (!isOracleFileName(entry.file))
-      problems.push({
-        messageId: `refusedEntry`,
-        data: { at, file: entry.file, why: `not an oracle file` },
-      })
-    else if (isModuleFile(entry.file, implementationModules))
-      problems.push({
-        messageId: `refusedEntry`,
-        data: {
-          at,
-          file: entry.file,
-          why: `a framework implementation module`,
-        },
-      })
-    else judged.push(entry)
-  })
-  return { judged, problems }
 }
 
 /**
@@ -184,32 +128,22 @@ export default {
       rawCampaign: `\`{{call}}\` runs a raw property campaign, which ${RAW_HINT}`,
       rawProperty: `\`{{call}}\` registers a raw fast-check property, which ${RAW_HINT}`,
       legacyImport: `\`{{name}}\` is a legacy campaign API whose reach depends on the seed. Declare the law with \`oracleProperty\` and its constructed histories instead.`,
-      baselineWithoutReason: `This file's \`legacyCampaigns\` entry has no reason, so it exempts nothing. Give the reason that the file keeps its raw campaigns, or move the file to \`oracleProperty\`.`,
-      staleBaseline: `This file's \`legacyCampaigns\` entry is stale: the file runs no raw campaign and imports no legacy API. Remove the entry, so the baseline only shrinks.`,
-      malformedList: `\`legacyCampaigns\` must be an array of { file, reason } entries. The rule ignores it, so no file is exempt.`,
+      removedSetting: `\`legacyCampaigns\` is removed: convert the listed files to \`oracleProperty\`, then delete \`settings.oracles.legacyCampaigns\`. It exempts no file.`,
       malformedSetting: `\`settings.oracles.{{name}}\` must be an array of paths. The rule reads it as empty, so no module is exempt.`,
-      malformedEntry: `\`{{at}}\` is malformed: expected { file: string, reason?: string }. The rule ignores it, so it exempts nothing.`,
-      refusedEntry: `\`{{at}}\` names {{file}}, which is {{why}}. The rule never judges it, so the entry exempts nothing: remove it.`,
     },
   },
   create(context) {
     const { sourceCode } = context
     const settings = oracleSettings(context)
-    const { judged, problems } = judgeEntries(
-      settings.legacyCampaigns,
-      settings.implementationModules,
-    )
-    for (const name of settings.malformed)
-      problems.push({ messageId: `malformedSetting`, data: { name } })
+    const problems = settings.malformed.map((name) => ({
+      messageId: `malformedSetting`,
+      data: { name },
+    }))
+    if (settings.legacyCampaignsSet)
+      problems.push({ messageId: `removedSetting` })
     const implementation = isModuleFile(
       context.filename,
       settings.implementationModules,
-    )
-    const entries = judged.filter((entry) =>
-      isModuleFile(context.filename, [entry.file]),
-    )
-    const exempt = entries.some(
-      (entry) => typeof entry.reason === `string` && entry.reason.trim() !== ``,
     )
     /** @type {Array<{ node: import('estree').Node, messageId: string, data: Record<string, string> }>} */
     const uses = []
@@ -234,16 +168,6 @@ export default {
           context.report({ loc: FILE_START, ...problem })
         // A framework implementation module is exempt from its own uses.
         if (implementation) return
-        if (entries.length > 0) {
-          if (!exempt)
-            context.report({
-              loc: FILE_START,
-              messageId: `baselineWithoutReason`,
-            })
-          if (uses.length === 0)
-            context.report({ loc: FILE_START, messageId: `staleBaseline` })
-        }
-        if (exempt) return
         for (const use of uses) context.report(use)
       },
     }
