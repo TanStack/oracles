@@ -141,14 +141,10 @@ probe for each one, and answer each question with what its probe showed.
 
 **A probe** is a small script that calls the real public API with chosen
 inputs and prints what happens. Import the code the way the repository's own
-tests do. If they import a build that is not built yet, import the source
-it comes from. Run the probe from a scratch directory against the unchanged
-code, with `node` (or `npx tsx` for TypeScript). If Node warns about the
-module type, give the scratch directory a `package.json` with
-`"type": "module"`. If Node still cannot load the source as it is (for
-example, an extensionless ES module), copy it unchanged into the scratch
-directory under a name Node can load, such as `index.mjs`, and say so.
-Keep each probe and its output.
+tests do, and run the probe with `node` from a scratch directory against
+the unchanged code. If the import or Node gets in the way, open
+[Problems you may hit](references/problems.md). Keep each probe and its
+output.
 
 **Every finding needs a probe.** A claim without one is a suspicion: say so,
 or leave it out.
@@ -350,36 +346,15 @@ default: with no engineer present, propose them and stop.
 ## 5. Build and run
 
 1. **Install what is missing**, and nothing more: `fast-check@^4` and
-   `vitest@^4.1` when the repository does not have them. Vitest 4.1 runs on
-   Node 20 and later, and Vitest 5 needs Node 22.12 or later. Which Node
-   versions CI runs is a question for production: do not raise it now. Use the repository's own package
-   manager. If the repository's own Vitest config would not pick up the oracle
-   file, add a minimal config for it (or add its glob to the existing
-   `include`). Add no scripts, lint, or other config yet. The `oracles-setup`
-   skill's install and "where oracle files go" sections have the details:
-   from them, take only what these packages and the config need. The
-   oracles lint plugin waits for production. If the repository's own lint
-   already covers the oracle file's folder, run it on the file, as
-   `oracles-design` says.
-
-   Check `package.json`, not `node_modules`: npm installs the peers of
-   `@tanstack/oracles` without listing them, so add `fast-check` and
-   `vitest` to the dev dependencies even when they are already on disk.
-
-   The framework needs Vitest 4.1 or later. Check before you install:
-
-   - **The repository uses another runner** (mocha, uvu, Jest, node:test):
-     add Vitest for the oracles only, with a config whose `include` is only
-     the oracle files. Their own suite and runner stay as they are. Tell
-     the engineer this in one line as you install.
-   - **The repository runs an older Vitest:** this is a decision for the
-     engineer. Tell them that the oracle needs Vitest 4.1 or later, and that
-     upgrading changes the runner for their own suite too. Offer to upgrade
-     and then run their suite, to show whether it still passes. Do not
-     upgrade until they agree.
-   - **An install fails:** show the error in a line or two, say what you
-     think caused it, and ask before you try anything that changes more than
-     the packages above.
+   `vitest@^4.1` when `package.json` does not list them. Use the
+   repository's own package manager. If the repository's own Vitest config
+   would not pick up the oracle file, add a minimal config for it (or add
+   its glob to the existing `include`). Add no scripts, lint, or other
+   config yet. The `oracles-setup` skill's install and "where oracle files
+   go" sections have the details: take only what these packages and the
+   config need. If the repository uses another test runner or an older
+   Vitest, or an install fails, open
+   [Problems you may hit](references/problems.md).
 
 2. **Write the oracle file.** Follow `oracles-design` from its first step:
    the law block's prose, then the model, the histories, the driver, and the
