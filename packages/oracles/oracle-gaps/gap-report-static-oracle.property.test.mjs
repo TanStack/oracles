@@ -199,6 +199,11 @@ function analyzeFixture(dir, files, plan) {
 // state, and which pairs of outputs are the same directory.
 function defaultOutputsOf(dir, sources) {
   const other = realpathSync(mkdtempSync(join(here, `.scratch-`)))
+  // The other package holds the same source files, which --source must name.
+  for (const source of sources) {
+    mkdirSync(dirname(join(other, source)), { recursive: true })
+    writeFileSync(join(other, source), ``)
+  }
   try {
     const run = (pkg) =>
       parseArgs([`--package`, pkg, `--source`, sources.join(`,`)], pkg).out
@@ -894,9 +899,12 @@ function check(plan, observations, expected) {
       `with ${bad.kind} arguments${bad.daemon ? ` and --daemon` : ``}, ${breach}`,
       `report-shaped ending`,
     )
-  // An owner that fails, and a config the runner cannot honor, are found
-  // only when the runner starts, so the analysis must not refuse for them.
-  const refused = expected.refused?.runtime ? undefined : expected.refused
+  // An owner that fails, and a config the runner cannot load or honor, are
+  // found only when the runner starts, so the analysis must not refuse for
+  // them: it refuses as it would for the same plan without the fault.
+  const refused = expected.refused?.runtime
+    ? model({ ...plan, fault: `none` }).refused
+    : expected.refused
   if (refused) {
     if (!got.refusal)
       return violation(
