@@ -27,7 +27,9 @@
 // of its own takes the name an import gives it: `default` for `export default
 // function () {}`, `export default <function>`, and CommonJS's
 // `module.exports = <function>`, and its export's name for CommonJS's
-// `exports.name = <function>` (so `exports.default` is `default`; F24).
+// `exports.name = <function>` (so `exports.default` is `default`; F24),
+// through parentheses and chained assignments. An import of it reaches it
+// through its export.
 // Module-level data is a unit of its
 // own, as a function is: a variable declared at the top of a module whose
 // initializer is not a function, named by its variable (`src/x.ts#TABLE`), in a
@@ -100,6 +102,25 @@ export function readOwns(ts, path, text) {
 }
 
 /**
+ * The value an export or an assignment gives: an export assignment's
+ * expression, or an assignment's right-hand side, through parentheses and
+ * chained assignments (`module.exports = exports = fn`).
+ */
+function assignedValue(ts, node) {
+  const assigns = (n) =>
+    ts.isBinaryExpression(n) &&
+    n.operatorToken.kind === ts.SyntaxKind.EqualsToken
+  let value = ts.isExportAssignment(node)
+    ? node.expression
+    : assigns(node)
+      ? node.right
+      : undefined
+  while (value && (ts.isParenthesizedExpression(value) || assigns(value)))
+    value = ts.isParenthesizedExpression(value) ? value.expression : value.right
+  return value
+}
+
+/**
  * The functions of one source file, in document order, each with its name,
  * its node, the class it is a member of (if any), and its line span.
  */
@@ -117,18 +138,13 @@ export function functionsIn(ts, file) {
   const exportedAs = (node) => {
     if (ts.isFunctionDeclaration(node) && !node.name && node.body)
       return [`default`, node]
-    if (ts.isExportAssignment(node) && isFunction(node.expression))
-      return [`default`, node.expression]
-    if (
-      !ts.isBinaryExpression(node) ||
-      node.operatorToken.kind !== ts.SyntaxKind.EqualsToken ||
-      !isFunction(node.right)
-    )
-      return undefined
+    const value = assignedValue(ts, node)
+    if (!isFunction(value)) return undefined
+    if (ts.isExportAssignment(node)) return [`default`, value]
     const target = /^(module\.exports|(?:module\.)?exports\.([\w$]+))$/.exec(
       node.left.getText(file),
     )
-    return target ? [target[2] ?? `default`, node.right] : undefined
+    return target ? [target[2] ?? `default`, value] : undefined
   }
   const visit = (node) => {
     const cls =
@@ -216,8 +232,19 @@ export function ownership(ts, program, pkg, oracles) {
           fn.cls === declaration &&
           (!constructed || ts.isConstructorDeclaration(fn.node)),
       )
+    // An unnamed export is reached through its export: an export
+    // assignment, a CommonJS assignment, or, for `exports.name`, the
+    // property its assignment sets.
+    const value =
+      declaration.initializer ??
+      assignedValue(
+        ts,
+        ts.isPropertyAccessExpression(declaration)
+          ? declaration.parent
+          : declaration,
+      )
     return functions.filter(
-      (fn) => fn.node === declaration || fn.node === declaration.initializer,
+      (fn) => fn.node === declaration || fn.node === value,
     )
   }
   // Every package function, method, or class an owned body refers to.

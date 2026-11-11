@@ -54,11 +54,16 @@ const ROOT_VITE = dirname(
 // is in the package all the same. No test loads it.
 const DOTGEN = `..gen/extra.ts`
 // Unnamed exports, each the one function of its own file, which no test
-// loads: an ES default function and default arrow, CommonJS's
-// `module.exports` and `exports.default`, and a CommonJS named export.
-// An unnamed export is named `default`, as an import names it, and a
-// CommonJS named export by its export's name (F24). Each has one site, its
-// push, on its second line.
+// loads: an ES default function and default arrow (bare and in
+// parentheses), CommonJS's `module.exports` (alone and chained through
+// `exports`) and `exports.default`, and a CommonJS named export. An unnamed
+// export is named `default`, as an import names it, and a CommonJS named
+// export by its export's name (F24). Each calls its file's helper `help`,
+// which pushes: the export's own site is that call, on line 5, and the
+// helper's is its push, on line 2. The importer (`src/importer.ts`) imports
+// every form but `exports.default` (a default import of a CommonJS module is
+// the module, not its `default`) and calls each, so its tree holds each
+// export and, through it, its helper.
 const EXPORT_FORMS = [
   {
     exportForm: `esFunction`,
@@ -66,6 +71,7 @@ const EXPORT_FORMS = [
     name: `default`,
     open: `export default function (x: number, out: Array<string>): void {`,
     close: `}`,
+    imported: `import esFunction from './es-function'`,
   },
   {
     exportForm: `esArrow`,
@@ -73,6 +79,15 @@ const EXPORT_FORMS = [
     name: `default`,
     open: `export default (x: number, out: Array<string>): void => {`,
     close: `};`,
+    imported: `import esArrow from './es-arrow'`,
+  },
+  {
+    exportForm: `esParen`,
+    file: `src/es-paren.ts`,
+    name: `default`,
+    open: `export default ((x: number, out: Array<string>): void => {`,
+    close: `});`,
+    imported: `import esParen from './es-paren'`,
   },
   {
     exportForm: `cjs`,
@@ -80,6 +95,15 @@ const EXPORT_FORMS = [
     name: `default`,
     open: `module.exports = function (x, out) {`,
     close: `};`,
+    imported: `import cjs from './cjs'`,
+  },
+  {
+    exportForm: `cjsChained`,
+    file: `src/cjs-chained.js`,
+    name: `default`,
+    open: `module.exports = exports = function (x, out) {`,
+    close: `};`,
+    imported: `import cjsChained from './cjs-chained'`,
   },
   {
     exportForm: `cjsDefault`,
@@ -94,8 +118,10 @@ const EXPORT_FORMS = [
     name: `run`,
     open: `exports.run = function (x, out) {`,
     close: `};`,
+    imported: `import { run as cjsNamed } from './cjs-named'`,
   },
 ]
+const IMPORTER = `src/importer.ts`
 // The model's own name for the code in no function of that file.
 const TOP_LOOP = `<module>@..gen`
 // Whether this filesystem ignores letter case, so that `src/Sut.ts` names
@@ -592,6 +618,8 @@ const histories = fc.record({
   exportOwners: fc.array(fc.constantFrom(`a`, `b`, `none`), {
     maxLength: EXPORT_FORMS.length,
   }),
+  // Who names the importer's function in an owns entry, if any.
+  importer: fc.constantFrom(`none`, `a`, `b`),
 })
 
 // The witness module: functions whose outcome classes generated histories
@@ -1921,15 +1949,45 @@ function resolveHistory(history) {
     body,
     tests: [],
   }))
-  // The unnamed exports' functions, one push each.
-  const exported = (history.exportOwners ?? []).map((owner, index) => ({
-    ...EXPORT_FORMS[index],
-    id: `x_${EXPORT_FORMS[index].exportForm}`,
-    container: `free`,
-    owners: owner === `none` ? [] : [owner],
-    body: [{ kind: `push`, quote: `'` }],
-    tests: [],
-  }))
+  // The unnamed exports' functions, each calling its file's helper, and the
+  // importer that calls each.
+  const exported = (history.exportOwners ?? []).flatMap((owner, index) => {
+    const form = EXPORT_FORMS[index]
+    const helper = {
+      id: `h_${form.exportForm}`,
+      name: `help`,
+      file: form.file,
+      container: `free`,
+      owners: [],
+      body: [{ kind: `push`, quote: `'` }],
+      tests: [],
+    }
+    return [
+      {
+        ...form,
+        id: `x_${form.exportForm}`,
+        container: `free`,
+        owners: owner === `none` ? [] : [owner],
+        body: [{ kind: `call`, to: helper.id }],
+        tests: [],
+      },
+      helper,
+    ]
+  })
+  const importable = exported.filter((fn) => fn.imported !== undefined)
+  const importer =
+    (history.importer ?? `none`) !== `none` && importable.length > 0
+      ? [
+          {
+            id: `importer`,
+            file: IMPORTER,
+            container: `free`,
+            owners: [history.importer],
+            body: importable.map((fn) => ({ kind: `call`, to: fn.id })),
+            tests: [],
+          },
+        ]
+      : []
   // The derived class's file, which is no function of the model's (see
   // `derivedFile`).
   const file = history.derived ? derivedFile(history.derived) : undefined
@@ -1939,6 +1997,7 @@ function resolveHistory(history) {
     ...dollar,
     ...runes,
     ...exported,
+    ...importer,
     ...dotGen,
     ...(history.witness
       ? witness
@@ -2141,17 +2200,52 @@ function resolveHistory(history) {
   if (topLoop) lines.push(topLoop.text)
   const dotGenSource =
     dotGen.length > 0 ? `${lines.splice(0).join(`\n`)}\nexport {}\n` : undefined
-  // Each unnamed export's file: its opening line, its push, its close.
+  // Each unnamed export's file: its helper, then its opening line, its call
+  // of the helper, and its close. The importer's file imports each and calls
+  // each, one per line after its opening line.
   const exportSources = Object.fromEntries(
     functions
       .filter((fn) => fn.exportForm !== undefined)
       .map((fn) => {
-        const [stmt] = fn.body
-        stmt.lines = [pushText(stmt)]
-        stmt.line = 2
-        return [fn.file, `${fn.open}\n  ${stmt.lines[0]}\n${fn.close}\n`]
+        const helper = byId.get(fn.body[0].to)
+        const [push] = helper.body
+        push.lines = [pushText(push)]
+        push.line = 2
+        const [call] = fn.body
+        call.lines = [`help(out);`]
+        call.line = 5
+        const typed = fn.file.endsWith(`.ts`)
+        return [
+          fn.file,
+          [
+            typed
+              ? `function help(out: Array<string>): void {`
+              : `function help(out) {`,
+            `  ${push.lines[0]}`,
+            `}`,
+            fn.open,
+            `  ${call.lines[0]}`,
+            fn.close,
+            ``,
+          ].join(`\n`),
+        ]
       }),
   )
+  for (const fn of functions)
+    if (fn.file === IMPORTER) {
+      const imports = fn.body.map((stmt) => byId.get(stmt.to).imported)
+      fn.body.forEach((stmt, index) => {
+        stmt.lines = [`${byId.get(stmt.to).exportForm}(x, out);`]
+        stmt.line = imports.length + 2 + index
+      })
+      exportSources[IMPORTER] = [
+        ...imports,
+        `export function importer(x: number, out: Array<string>): void {`,
+        ...fn.body.map((stmt) => `  ${stmt.lines[0]}`),
+        `}`,
+        ``,
+      ].join(`\n`)
+    }
   lines.push(...mainLines)
   const librarySource = `${libLines.join(`\n`)}\nexport {}\n`
   const runesSource =
