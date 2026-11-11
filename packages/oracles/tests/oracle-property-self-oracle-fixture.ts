@@ -94,6 +94,12 @@
  * the route registered through `__oracleRoute` when each history runs, in
  * the log beside it.
  *
+ * An enumerated spec with `enumeratedStates` passes its histories as
+ * `{ enumerated, states, measured }`; without it, as a plain list.
+ *
+ * A slow spec's reach test starts only after every slow driver run that the
+ * file started has finished, so each history's late judgment arrives first.
+ *
  * A `throwingBuild` spec's first constructed history throws
  * `synthetic build failed` from its build. An `arbitraryMap` spec maps its
  * arbitrary through an identity `.map`, with or without an unmapper, at the
@@ -116,7 +122,7 @@ import {
   useOracleClock,
   violation,
 } from '../src/index.js'
-import type { Calibration } from '../src/index.js'
+import type { Calibration, EnumeratedHistories } from '../src/index.js'
 
 export const syntheticIds = [
   `self-oracle.synthetic-0`,
@@ -195,6 +201,13 @@ export type SyntheticSpec = {
    * history or to each item; absent, only a form maps, with an unmapper.
    */
   arbitraryMap?: { unmapper: boolean; at: `history` | `item` }
+  /** An enumerated source's required and measured states; absent, a plain list. */
+  enumeratedStates?: {
+    states: ReadonlyArray<string>
+    measured: ReadonlyArray<string>
+    /** Adds a generated source's `constructed`, or binds the first declared state to a probe. */
+    enumeratedShape?: `extra key` | `probe state`
+  }
   /** The first constructed history's build throws `synthetic build failed`. */
   throwingBuild?: boolean
   nondeterministic: boolean
@@ -223,8 +236,8 @@ export type SyntheticSpec = {
   clock?: boolean
   /** How the property holds a history's items; the array itself when absent. */
   form?: `bigint` | `map` | `lossy` | `error` | `errors` | `boxed` | `trap`
-  /** An enumerated label with shell characters, or no label at all. */
-  labelStyle?: `shell` | `default`
+  /** An enumerated label with shell characters, no label at all, or one that names a framework test for the first history. */
+  labelStyle?: `shell` | `default` | `reserved-reach` | `reserved-determinism`
   /** Registers the property inside `describe(outerSuite)`. */
   nested?: boolean
   /** Records -0 and 0 on alternate runs, last. */
@@ -344,6 +357,24 @@ globalThis.__oracleRoute = (registered) => {
 beforeEach(() => {
   route = undefined
 })
+// Every slow driver run this file started. A slow spec's histories time out
+// and their judgments arrive late; its reach test starts only after every
+// one of them arrived, so the order is fixed whatever the machine's load.
+const slowRuns = new Set<Promise<void>>()
+beforeEach(async ({ task }) => {
+  if (task.name !== `reach` || slowRuns.size === 0) return
+  await Promise.allSettled([...slowRuns])
+  // The judgment follows the driver on microtasks, which run before a turn.
+  await new Promise((resolve) => setImmediate(resolve))
+})
+/** A slow spec's driver, whose runs the reach test waits for. */
+const trackedSlow =
+  (driver: ReturnType<typeof syntheticDriver>): typeof driver =>
+  (formed, observe) => {
+    const running = driver(formed, observe)
+    slowRuns.add(running)
+    return running
+  }
 
 /** The property's form of a history, and the items it holds. */
 type Formed = unknown
@@ -773,6 +804,36 @@ const ownsOf = (spec: SyntheticSpec) =>
                 : [`src/x.ts`, 3 as unknown as string],
       }
 
+/**
+ * An enumerated source's declaration. A malformed one is what plain
+ * JavaScript, or a cast, can pass: a generated source's `constructed`, or a
+ * probe-bound state.
+ */
+function declaredEnumerated(
+  enumerated: Array<Formed>,
+  {
+    enumeratedShape,
+    states,
+    measured,
+  }: NonNullable<SyntheticSpec[`enumeratedStates`]>,
+): EnumeratedHistories<Formed> {
+  if (enumeratedShape === `extra key`)
+    return { enumerated, states, measured, constructed: [] } as never
+  if (enumeratedShape === `probe state`) {
+    const [bound] = [...states, ...measured]
+    const bind = (state: string) =>
+      (state === bound
+        ? { name: state, probe: syntheticProbe }
+        : state) as unknown as string
+    return {
+      enumerated,
+      states: states.map(bind),
+      measured: measured.map(bind),
+    }
+  }
+  return { enumerated, states, measured }
+}
+
 export function syntheticProperty(spec: SyntheticSpec): void {
   const id = spec.unregistered ? `self-oracle.unregistered` : spec.id
   const form = formOf(spec)
@@ -816,7 +877,9 @@ export function syntheticProperty(spec: SyntheticSpec): void {
           }),
         }
       : {}),
-    driver: syntheticDriver(spec),
+    driver: spec.slow
+      ? trackedSlow(syntheticDriver(spec))
+      : syntheticDriver(spec),
     calibrations: syntheticCalibrations(spec),
     check: (
       history: Formed,
@@ -855,16 +918,23 @@ export function syntheticProperty(spec: SyntheticSpec): void {
     afterAll(() => new Promise((resolve) => setTimeout(resolve, 50)))
   const register = () => {
     if (spec.source.kind === `enumerated`) {
+      const enumerated = spec.source.histories.map(form)
+      const first = JSON.stringify(spec.source.histories[0])
       oracleProperty({
         id,
         law,
-        histories: spec.source.histories.map(form),
+        histories: spec.enumeratedStates
+          ? declaredEnumerated(enumerated, spec.enumeratedStates)
+          : enumerated,
         // A label with `|`, which a rerun command must escape.
         ...(spec.labelStyle === `default`
           ? {}
           : {
               label: (history: Formed) =>
-                `items ${items(history).join(` | `)}${spec.labelStyle === `shell` ? ` ${shellText}` : ``}`,
+                spec.labelStyle?.startsWith(`reserved-`) &&
+                JSON.stringify(items(history)) === first
+                  ? spec.labelStyle.slice(`reserved-`.length)
+                  : `items ${items(history).join(` | `)}${spec.labelStyle === `shell` ? ` ${shellText}` : ``}`,
             }),
         ...parts,
       })
