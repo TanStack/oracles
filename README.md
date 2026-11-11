@@ -48,15 +48,30 @@ preset's, so merge them:
 
 ## The `oracle/no-unit-test` rule
 
-Each test in an oracle file must reach a part that the file declares: its
-check, model, or grammar. A test that reaches none compares production with a
-hand-written value, so the rule reports it as a unit test that belongs in an
-ordinary test file.
+An oracle file registers its tests only through `oracleProperty`. Its
+histories hold its fixed regressions and enumerated cases, its calibrations
+show that the check rejects wrong answers, and its declared states hold its
+reach. The rule reports every other test registration in an oracle file as a
+unit test, whatever its body calls. Move such a test to an ordinary test file.
+
+A registration is a call of a test function: `it`, `test`, `bench`, or the
+`test` of `@fast-check/vitest`, with members such as `.each`, `.skip`, or
+`.concurrent`. The function can be an aliased import, a namespace member such
+as `vitest.it`, a variable bound to one, or a Vitest fixture
+(`test.extend(fixtures)`). It can also come from a fixtures module that the
+file imports. A call to an imported helper that registers its caller's body
+is a registration too. The rule follows imports through re-exports, star
+exports, and default exports. It does not read packages, so a fixture that a
+package exports is not seen.
+
+A call to an imported helper that registers a test of its own is reported
+too, because that test would appear under the oracle file. An
+`oracleProperty` call whose options are not an object literal with a `check`
+is reported, because the rule cannot see its check.
 
 A test whose body is empty, such as `it('x', () => {})`, `test('x', async
 () => {})`, or a skipped placeholder `it.skip('x', () => {})`, checks
-nothing. The rule reports it whatever the file declares: remove it, or use
-`it.todo`.
+nothing. The rule reports it: remove it, or use `it.todo`.
 
 ## The `oracle/no-oracle-disable` rule
 

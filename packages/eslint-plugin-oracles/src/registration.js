@@ -92,7 +92,74 @@ export function isTestRoot(node, sourceCode, seen = new Set()) {
 export function isFunction(node) {
   return (
     node?.type === `ArrowFunctionExpression` ||
-    node?.type === `FunctionExpression`
+    node?.type === `FunctionExpression` ||
+    node?.type === `FunctionDeclaration`
+  )
+}
+
+// The test functions that a namespace import's member names (`vitest.it`).
+// `bench` registers a benchmark, which an oracle file reports as a test.
+const registrationRoots = new Set([...testRoots, `bench`])
+// `test.extend(fixtures)` returns a test function with those fixtures.
+const testFunctionMembers = new Set([...registrationMembers, `extend`])
+
+/**
+ * The test function at the root of a callee chain, as `{ name, members }`:
+ * its name and the members after it. Undefined when the root is no test
+ * function. Beyond `isTestRoot`, the root is `bench`, a member of a
+ * namespace import (`vitest.it`), a variable of any kind bound to a test
+ * function or a fixture (`let t = it`, `const myTest = test.extend({})`),
+ * or an import that `importedTest(source, name)` says is a test function
+ * that its module exports.
+ */
+function testFunction(
+  { rootNode, names },
+  sourceCode,
+  importedTest,
+  seen = new Set(),
+) {
+  if (rootNode?.type !== `Identifier`) return undefined
+  const root = { name: rootNode.name, members: names }
+  if (isTestRoot(rootNode, sourceCode) || rootNode.name === `bench`) return root
+  const definition = findVariable(sourceCode.getScope(rootNode), rootNode.name)
+    ?.defs[0]
+  if (definition === undefined || seen.has(definition.node)) return undefined
+  seen.add(definition.node)
+  if (definition.type === `ImportBinding`) {
+    const source = definition.parent.source.value
+    if (definition.node.type === `ImportNamespaceSpecifier`) {
+      const [name, ...members] = names
+      return name !== undefined &&
+        (registrationRoots.has(name) || importedTest(source, name))
+        ? { name, members }
+        : undefined
+    }
+    const { imported } = definition.node
+    return importedTest(source, imported?.name ?? imported?.value ?? `default`)
+      ? root
+      : undefined
+  }
+  return definition.type === `Variable` &&
+    definition.node.init !== null &&
+    isTestFunction(definition.node.init, sourceCode, importedTest, seen)
+    ? root
+    : undefined
+}
+
+/**
+ * Whether an expression yields a test function: a test root, a fixture
+ * (`test.extend({})`), or a member chain that keeps one (`it.skip`).
+ */
+export function isTestFunction(
+  node,
+  sourceCode,
+  importedTest = () => false,
+  seen = new Set(),
+) {
+  const root = testFunction(calleeChain(node), sourceCode, importedTest, seen)
+  return (
+    root !== undefined &&
+    root.members.every((member) => testFunctionMembers.has(member))
   )
 }
 
@@ -236,28 +303,30 @@ export function isSharedHelperCall(node, names, sourceCode) {
 }
 
 /**
- * The test that a call registers, as `{ body }`, or undefined when the call
- * registers no test. A suite (`describe`) registers no test of its own. The
- * body is the function, or the name of the function, that the test runs.
+ * The test that a call registers, as `{ body, modifiers }`, or undefined
+ * when the call registers no test. A suite (`describe`) registers no test of
+ * its own. The body is the function, or the name of the function, that the
+ * test runs. `importedTest(source, name)` tells whether an import names a
+ * test function that its module exports, such as a fixture.
  */
-export function registeredTest(node, sourceCode) {
+export function registeredTest(node, sourceCode, importedTest = () => false) {
   if (node.parent.type === `CallExpression` && node.parent.callee === node) {
     // `it.each(table)` is the callee of the registration, not one itself.
     return undefined
   }
-  const { root, rootNode, names } = calleeChain(node.callee)
+  const root = testFunction(calleeChain(node.callee), sourceCode, importedTest)
   if (
-    !isTestRoot(rootNode, sourceCode) ||
-    root === `describe` ||
-    root === `suite` ||
-    names.includes(`describe`) ||
-    !names.every((member) => registrationMembers.has(member))
+    root === undefined ||
+    root.name === `describe` ||
+    root.name === `suite` ||
+    root.members.includes(`describe`) ||
+    !root.members.every((member) => testFunctionMembers.has(member))
   ) {
     return undefined
   }
   const body = registrationBody(node.arguments.slice(1), sourceCode)
   // The modifiers between the root and the call, such as `skip` or `todo`.
-  return body === undefined ? undefined : { body, modifiers: names }
+  return body === undefined ? undefined : { body, modifiers: root.members }
 }
 
 /**
