@@ -2314,6 +2314,25 @@ const constructed = [
     ],
     { baselineOrder: [1, 0, 0], effect: { kind: `changed` }, authored: [{}] },
   ),
+  // The same, with names that differ only by a tail (`t0` and `t0 t0`),
+  // declared and recorded against file order: a random seed on main found
+  // this shape when the model followed the declaration order.
+  twoOwners(
+    `a value changed in two owner files whose test names differ by a tail`,
+    [
+      `not-judged`,
+      `authored not-judged`,
+      `owners declared against file order name another first changed test`,
+      `baseline records against file order name another first changed test`,
+    ],
+    {
+      owners: [1, 0],
+      baselineOrder: [1, 0, 0],
+      second: { label: ``, tail: ` t0` },
+      effect: { kind: `changed` },
+      authored: [{}],
+    },
+  ),
   // Two tests of one file change a value, and a mutant run records the
   // second first.
   single(
