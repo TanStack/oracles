@@ -454,7 +454,18 @@ export async function openSession(pkg) {
       wrapper,
       `import { realpathSync } from 'node:fs'
 import { mergeConfig } from 'vitest/config'
-${config ? `import base from ${JSON.stringify(relativePath(home, join(pkg, config)))}` : `const base = {}`}
+${
+  config
+    ? `import * as config from ${JSON.stringify(relativePath(home, join(pkg, config)))}
+// The package's config, read from its namespace at run time: a config with
+// no default export then fails as it fails under Vitest, when it loads, and
+// not when Vite bundles this wrapper, which esbuild reports on stderr
+// itself (a static \`config.default\` is a warning there).
+const base = Reflect.get(config, 'default')
+if (base === undefined)
+  throw new Error(${JSON.stringify(`${config} has no default export: config must export or return an object`)})`
+    : `const base = {}`
+}
 // Vitest accepts a config object or a function that returns one.
 export default async (env) => {
   const merged = mergeConfig(typeof base === 'function' ? await base(env) : base, {
@@ -559,6 +570,22 @@ export default async (env) => {
   }
   const closeContext = (context) =>
     context.close().finally(() => allowListeners(-1))
+  // Vite's logger, writing each message as `oracle-gaps: note vite: …`.
+  const viteNote = (message) => {
+    for (const line of String(message)
+      .replace(/\x1b\[[0-9;]*m/g, ``)
+      .split(`\n`))
+      if (line.trim() !== ``) console.error(streamLine(`note`, `vite: ${line}`))
+  }
+  const viteNotes = {
+    hasWarned: false,
+    info: () => {},
+    warn: viteNote,
+    warnOnce: viteNote,
+    error: viteNote,
+    clearScreen: () => {},
+    hasErrorLogged: () => false,
+  }
   async function warmContext(settings, index) {
     writeWrapper(index, settings.config)
     // A context that fails to open gives its listener allowance back: one
@@ -567,38 +594,45 @@ export default async (env) => {
     const context = await fromConfig(
       index,
       settings.config,
-      createVitest(`test`, {
-        root: pkg,
-        config: wrapperFor(index, settings.config),
-        watch: false,
-        maxWorkers: 1,
-        // Every test in a file runs, so a kill is attributed to each route
-        // that produces it (see routeOf). A property still stops at its first
-        // failure.
-        bail: settings.bail,
-        testTimeout: settings.testTimeout,
-        hookTimeout: settings.testTimeout,
-        teardownTimeout: settings.testTimeout,
-        typecheck: { enabled: false },
-        coverage: { enabled: false },
-        // Vitest 5 caches transformed modules on disk by default, keyed by
-        // the file, not by what this runner's plugin serves for it, so a
-        // patched or instrumented source could come back as an earlier text.
-        // Vitest 4 caches nothing unless asked.
-        fsModuleCache: false,
-        // Every module each test file imports, which a unit records as its
-        // inputs.
-        experimental: { importDurations: { limit: 1_000_000 } },
-        // A batch runs copies of test files in one worker, sharing its
-        // environment (runBatch), in the order given, so a hang is attributed
-        // to the copy that was running.
-        isolate: false,
-        // Worker threads start much faster than child processes, and each
-        // batch starts one (`--pool`; see args.mjs).
-        pool: settings.pool,
-        sequence: { sequencer: KeepOrder },
-        reporters: [{}],
-      }).catch((error) => {
+      createVitest(
+        `test`,
+        {
+          root: pkg,
+          config: wrapperFor(index, settings.config),
+          watch: false,
+          maxWorkers: 1,
+          // Every test in a file runs, so a kill is attributed to each route
+          // that produces it (see routeOf). A property still stops at its first
+          // failure.
+          bail: settings.bail,
+          testTimeout: settings.testTimeout,
+          hookTimeout: settings.testTimeout,
+          teardownTimeout: settings.testTimeout,
+          typecheck: { enabled: false },
+          coverage: { enabled: false },
+          // Vitest 5 caches transformed modules on disk by default, keyed by
+          // the file, not by what this runner's plugin serves for it, so a
+          // patched or instrumented source could come back as an earlier text.
+          // Vitest 4 caches nothing unless asked.
+          fsModuleCache: false,
+          // Every module each test file imports, which a unit records as its
+          // inputs.
+          experimental: { importDurations: { limit: 1_000_000 } },
+          // A batch runs copies of test files in one worker, sharing its
+          // environment (runBatch), in the order given, so a hang is attributed
+          // to the copy that was running.
+          isolate: false,
+          // Worker threads start much faster than child processes, and each
+          // batch starts one (`--pool`; see args.mjs).
+          pool: settings.pool,
+          sequence: { sequencer: KeepOrder },
+          reporters: [{}],
+        },
+        // Vite's own messages, such as a config that fails to load, as notes
+        // of the stream (stream.mjs), so that every line the run writes has
+        // the stream's prefix.
+        { customLogger: viteNotes },
+      ).catch((error) => {
         allowListeners(-1)
         throw error
       }),
