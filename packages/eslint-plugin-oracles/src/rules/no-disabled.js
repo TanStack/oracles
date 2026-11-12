@@ -41,8 +41,9 @@
  * - A literal run count above 1 that has no fixed history. It does not scale with
  *   the runs-multiplier variable (`${envPrefix}_RUNS_MULTIPLIER`), so `oracleRuns` must wrap it.
  * - A private replay variable: a `process.env` read whose name ends in
- *   `_SEED`, `_PATH`, `_PROPERTY`, or `_RUNS`, other than the framework's
- *   shared `${envPrefix}_SEED`, `${envPrefix}_PATH`, and `${envPrefix}_PROPERTY`. The replay manifest, the guarded replay
+ *   `_SEED`, `_PATH`, `_PROPERTY`, `_UNIT`, or `_RUNS`, other than the framework's
+ *   shared `${envPrefix}_SEED`, `${envPrefix}_PATH`, `${envPrefix}_PROPERTY`, and
+ *   `${envPrefix}_UNIT`, the random unit a path replay runs. The replay manifest, the guarded replay
  *   runner, and the retired-variable check see only the shared variables.
  *
  * The rule has no inline exception. A known counterexample is kept failing with
@@ -76,7 +77,7 @@ const replayConditions = new Set([`oracleReplayRequested`, `oracleReplaySkips`])
 // A replay-selection module (`implementationModules`) may read the replay
 // variables and select a replay from configuration.
 // Any variable whose name ends in one of these suffixes is a replay variable.
-const replayVariableName = /_(PATH|PROPERTY|RUNS|SEED)$/
+const replayVariableName = /_(PATH|PROPERTY|RUNS|SEED|UNIT)$/
 const runHelpers = new Set([
   `oraclePropertyOptions`,
   `oracleRandomParameters`,
@@ -415,7 +416,12 @@ function environmentKey(node) {
 }
 
 function isPrivateReplayVariable(name, envNames) {
-  const shared = [envNames.seed, envNames.path, envNames.property]
+  const shared = [
+    envNames.seed,
+    envNames.path,
+    envNames.property,
+    envNames.unit,
+  ]
   return replayVariableName.test(name) && !shared.includes(name)
 }
 
@@ -729,7 +735,7 @@ export default {
       aliasTest: `\`{{name}}\` is passed around as a value, so the rule cannot see what it registers or switches off. Call it directly, or select a replay with \`oracleReplayTest({{name}}, property)\` from \`@tanstack/oracles\`.`,
       guarded: `This test registers only under a condition, so it can stop running in ordinary runs. Register it unconditionally. A replay selection uses \`oracleReplayRequested()\` or \`oracleReplaySkips(property)\` from \`@tanstack/oracles\`, or \`oracleReplayTest(test, property)\`.`,
       singleRun: `A generated property with one run that has no fixed history checks one random history. Pass a base run count to oracleRuns or oraclePropertyOptions, which also selects a replay. A witness passes a recorded \`path\` or a seed that is a number literal or a constant.`,
-      replayVariable: `\`{{name}}\` selects a replay or a run count outside the shared variables, so the replay manifest, the guarded replay runner, and the retired-variable check cannot see it. Take the options from \`oraclePropertyOptions\` or \`oracleRandomParameters\` in \`@tanstack/oracles\`, which read {{seed}}, {{path}}, and {{property}}, and scale run counts with \`oracleRuns\`.`,
+      replayVariable: `\`{{name}}\` selects a replay or a run count outside the shared variables, so the replay manifest, the guarded replay runner, and the retired-variable check cannot see it. Take the options from \`oraclePropertyOptions\` or \`oracleRandomParameters\` in \`@tanstack/oracles\`, which read {{seed}}, {{path}}, {{property}}, and {{unit}}, and scale run counts with \`oracleRuns\`.`,
       literalRuns: `A literal run count does not scale with {{runsMultiplier}}. Wrap it in oracleRuns, or pass it to oraclePropertyOptions.`,
     },
   },

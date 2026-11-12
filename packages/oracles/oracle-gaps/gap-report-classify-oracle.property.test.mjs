@@ -55,6 +55,11 @@
  *    reaches every test of that file, maintainer decision of 2026-11-06);
  *    `indeterminate` when no such test judged it; `dead-code` when the
  *    mutant carries the `dead code` evidence (no input distinguishes it);
+ *    `outside-annotation` when the type analysis names an input class
+ *    outside the declared types, and none of its inputs distinguishes the
+ *    mutant (maintainer decision, 2026-11-11: types never skip a mutant or
+ *    mark it dead, they label its survivor; an argument typed \`any\` is
+ *    an input the types allow, so the class claims no more);
  *    `branch-never-taken` when it is an `if`-operator mutant and an owner
  *    test reached its `if` with one outcome only; `not-infected` when it is
  *    a comparison whose two operators agree on every operand pair the
@@ -454,6 +459,8 @@ const records = fc.record({
         `loop-false`,
         `value-undefined`,
         `field-drop`,
+        `return-undefined`,
+        `optional-chain`,
       ),
       original: fc.constantFrom(`>`, `>=`, `===`, `&&`, `||`, `??`),
       // The code any other operator replaces, and its replacement.
@@ -463,6 +470,16 @@ const records = fc.record({
         undefined,
         `dead code`,
         `boundary: -0`,
+      ),
+      // The input class that the type analysis names for a mutant that no
+      // input of the declared types distinguishes (maintainer decision,
+      // 2026-11-11): a label for the survivor, never a skip.
+      outside: fc.constantFrom(
+        undefined,
+        undefined,
+        undefined,
+        `a string of the literal's digits`,
+        `\`null\``,
       ),
       anchor: fc.constantFrom(
         `out . push ( 'a' ) ;`,
@@ -713,6 +730,12 @@ function judgedOutcome(h, mi, owners) {
   }
   if (m.evidence === `dead code`)
     return sized(`dead-code`, { mention: [`line ${m.line + 1}.`] })
+  // The type analysis found no input of the declared types that
+  // distinguishes it, and names the input class outside them that does.
+  if (m.outside)
+    return sized(`outside-annotation`, {
+      mention: [`line ${m.line + 1} with ${m.outside},`],
+    })
   // An `if` mutant forces its condition: an if-true mutant changes a value
   // only where the condition was false, an if-false mutant only where it was
   // true. Its branch is never taken when no deterministic owner test (or the
@@ -802,6 +825,10 @@ function distinguishingDirective(m) {
     return `Add an owner history that reads the property dropped on line ${line}, so that its absence changes an asserted result, and assert on the result.`
   if (m.operator === `delete-call`)
     return `Add an owner history where the call on line ${line} changes an asserted result when it does not run, and assert on the result.`
+  if (m.operator === `return-undefined`)
+    return `Add an owner history that uses the value returned on line ${line}, so that \`undefined\` in its place changes an asserted result, and assert on the result.`
+  if (m.operator === `optional-chain`)
+    return `Add an owner history where the object read with \`?.\` on line ${line} is \`undefined\`, so that a plain read throws, and assert on the result.`
   if (m.original === `??`)
     return `Add an owner history where the left operand of \`??\` on line ${line} is truthy, so \`??\` and \`&&\` give different results, and assert on the result.`
   return `Add an owner history where one operand of \`${m.original}\` on line ${line} is falsy and the other is truthy, so \`&&\` and \`||\` give different results, and assert on the result.`
@@ -1136,6 +1163,8 @@ const directives = {
   indeterminate:
     /^(Make `[^`]+` deterministic: control its clock and its random seed, so its failures judge this code|Add an owner test that runs line \d+ and asserts on its result)\.$/,
   'dead-code': /^Remove the redundant code on line \d+\.$/,
+  'outside-annotation':
+    /^Add an owner history that reaches line \d+ with .+, which the annotation excludes, so that it changes an asserted result, and assert on the result\.$/,
   'random-only-kill':
     /^Keep the counterexample that `[^`]+` found in the random campaign as a fixed history\.$/,
   'agreement-only-kill':
@@ -1147,7 +1176,7 @@ const directives = {
   crashed:
     /^Production threw `[^`]*` in `[^`]+`; record the error as an observation in the driver, and state the law that decides this input's outcome\.$/,
   'not-distinguished':
-    /^Add an owner history (where one operand of `[&|]{2}` on line \d+ is falsy and the other is truthy, so `&&` and `\|\|` give different results|where the left operand of `\?\?` on line \d+ is truthy, so `\?\?` and `&&` give different results|that enters the loop on line \d+, so that forcing its condition to false changes an asserted result|where the call on line \d+ returns a value that changes an asserted result when it is `undefined`|that reads the property dropped on line \d+, so that its absence changes an asserted result|where the call on line \d+ changes an asserted result when it does not run), and assert on the result\.$/,
+    /^Add an owner history (where one operand of `[&|]{2}` on line \d+ is falsy and the other is truthy, so `&&` and `\|\|` give different results|where the left operand of `\?\?` on line \d+ is truthy, so `\?\?` and `&&` give different results|that enters the loop on line \d+, so that forcing its condition to false changes an asserted result|where the call on line \d+ returns a value that changes an asserted result when it is `undefined`|that reads the property dropped on line \d+, so that its absence changes an asserted result|where the call on line \d+ changes an asserted result when it does not run|that uses the value returned on line \d+, so that `undefined` in its place changes an asserted result|where the object read with `\?\.` on line \d+ is `undefined`, so that a plain read throws), and assert on the result\.$/,
   timeout:
     /^Bound the run of the owner tests so that they end, and let a law reject a run that does not\.$/,
   'setup-error':
@@ -1627,6 +1656,7 @@ async function driver(h, observe) {
       ? { original: m.original, replacement: swapFor[m.original] }
       : { original: m.code[0], replacement: m.code[1] }),
     ...(m.evidence ? { evidence: m.evidence } : {}),
+    ...(m.outside ? { outside: m.outside } : {}),
     ...(m.probe ? { probeGuard: true } : {}),
   }))
   const fileIndex = (file) => fileIndexOf(h, file)
@@ -2659,6 +2689,7 @@ const required = [
   `not-observed`,
   `not-distinguished`,
   `dead-code`,
+  `outside-annotation`,
   `ordinary killed`,
   `a key with backticks`,
   `authored not-observed`,
@@ -2755,6 +2786,7 @@ const single = (
         original: `>`,
         code: codes[1],
         evidence: undefined,
+        outside: undefined,
         anchor: `out . push ( 'a' ) ;`,
         probe: false,
         ...mutant,
@@ -3080,6 +3112,17 @@ const constructed = [
     mutant: { operator: `binary-swap`, original: `>` },
     test: { pair: four([2, 2]) },
   }),
+  single(
+    `a comparison that only an input outside its annotation distinguishes`,
+    [`outside-annotation`],
+    {
+      mutant: {
+        operator: `binary-swap`,
+        original: `>`,
+        outside: `a string of the literal's digits`,
+      },
+    },
+  ),
   single(`a logical swap that is dead code`, [`dead-code`], {
     mutant: {
       operator: `binary-swap`,
@@ -3299,7 +3342,7 @@ const constructed = [
 oracleProperty({
   id: `oracle-gaps.report-classify`,
   law: {
-    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, dead-code, branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed.`,
+    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, dead-code, outside-annotation, branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed.`,
     authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the oracle rubric's outcome kinds (ORC-006); the frozen design's oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); the maintainer's findings F22 and the leftovers of #12 (2026-11-10); for report order, the gap CLI's determinism requirement (oracle-gaps.report's determinism test and law 9, and the runner's "listed alike in every run") and the maintainer's decision of 2026-11-11 that the tests a report names depend on neither --contexts, worker timing, nor how owners are declared; Vitest's runner (@vitest/runner 4.1: -t is a regular expression matched against getTaskFullName, the suites' names and the test's joined by a space); POSIX.1-2017 Shell Command Language 2.2 and 2.6 for the replay's quoting.`,
     limits: `That real runs produce these records is oracle-gaps.report's, and so is a real replay. The driver encodes operands as capture-setup.mjs \`shown\` does, by a copy of it; long strings are told apart by a 32-bit digest; no symbol operand is generated, and two symbols of one description print alike. Only the runner's single-file path records a test's names, and only it feeds the baseline. Test names hold no backtick and no \` > \`, and names within a file are distinct; the replay's file argument is judged as text, not as Vitest's substring filter over every file. Authored intents hold no word that the exit law forbids, and an author is not shortened. Report order within a file is the baseline's record order: that a file whose tests run concurrently writes its records in one order is not judged, and a failing test is ordered within its file as the reporter lists it, which a run cut off by a hang takes from the records. The "Changed observations in" list is the changed tests' first three, and only its first is compared. A test that only a mutant run records is not generated. A file that fails with no mutant active keeps its records and its mutants are classified; the refusal text and the summary's left-out list are not judged, only the list of failing files they print.`,
   },

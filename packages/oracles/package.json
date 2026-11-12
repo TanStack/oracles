@@ -64,6 +64,8 @@
     "test:oracle-framework": "vitest --run --config vitest.oracle-framework.config.mjs",
     "test:oracle-gaps": "vitest --run --config oracle-gaps/vitest.config.mjs",
     "test:oracle-gaps:fast": "vitest --run --config oracle-gaps/vitest.config.mjs gap-report-static gap-report-classify gap-report-probe-form gap-report-mutant-validity",
+    "test:oracle-gaps:shards": "node scripts/e2e-shards.mjs check",
+    "test:pr-shards": "node scripts/pr-shards.mjs check",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

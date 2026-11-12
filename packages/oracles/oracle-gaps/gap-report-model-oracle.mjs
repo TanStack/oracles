@@ -38,6 +38,8 @@ const RUNES = `src/state.svelte.ts`
 const DERIVED = `src/derived.ts`
 // The derived class's constructor, as the model names it: no oracle owns it.
 const DERIVED_FN = `Derived.constructor`
+// Its helper `nothing`, which no oracle owns either.
+const DERIVED_HELPER = `nothing`
 // The inputs a derived class is run with, each judged against the model.
 export const DERIVED_INPUTS = [0, 4, 9]
 // Where this package's own dependencies are installed.
@@ -267,6 +269,8 @@ const statement = fc.oneof(
     kind: fc.constant(`readData`),
     shape: fc.constantFrom(`object`, `array`, `primitive`, `methods`),
   }),
+  // An object that only a truthy `x` makes, read through `?.`.
+  fc.record({ kind: fc.constant(`optional`) }),
 )
 const libStatement = fc.oneof(
   fc.record({ kind: fc.constant(`push`), quote }),
@@ -420,6 +424,8 @@ const edits = [
   `config`,
   `newOracle`,
   `cli`,
+  // The module that only file b's mutated runs import (`lazyGate`).
+  `lazy`,
   `restart`,
   `revert`,
   // Events that end a daemon, not edits: a crash (killed, its socket and
@@ -592,6 +598,10 @@ const histories = fc.record({
   // Most histories have no steps, which keeps the campaign's cost down.
   // Whether the run asks for the ordinary tests' outcome (`--ordinary`).
   ordinary: fc.boolean(),
+  // File b's verdicts also wait on a module that the test imports only
+  // where the output differs, so only a mutated run loads it
+  // (`tests/lazy.ts`, which law 9's `lazy` edit changes).
+  lazyGate: fc.constantFrom(false, false, false, true),
   // A second authored mutant, on the next statement, so that two patched
   // sources are judged in the same run and neither may see the other's.
   secondAuthored: fc.boolean(),
@@ -693,10 +703,13 @@ const histories = fc.record({
   configRequire: fc.constantFrom(false, false, true),
   // The runner's warm contexts (`--contexts`): each is a Vitest instance,
   // which listens on the process (F15). Past ten, a listener that the
-  // runner does not account for warns.
+  // runner does not account for warns. With one, every run of a check takes
+  // the same context in a fixed order, so a hang replaces the context that
+  // read every file (law 9 must still invalidate what it read).
   contexts: fc.oneof(
-    { weight: 29, arbitrary: fc.constant(4) },
+    { weight: 28, arbitrary: fc.constant(4) },
     { weight: 1, arbitrary: fc.constant(11) },
+    { weight: 1, arbitrary: fc.constant(1) },
   ),
   steps: fc.oneof(
     { weight: 5, arbitrary: fc.constant(null) },
@@ -1501,6 +1514,14 @@ const witness = [
     ],
     tests: [judging(`a`, `fixed seed`, 1)],
   },
+  // An object read through `?.`, made for the test's input: the plain read
+  // in its place is not distinguished, since the object is there.
+  {
+    id: `w_optional`,
+    owners: [`a`],
+    body: [{ kind: `optional` }],
+    tests: [judging(`a`, `fixed seed`, 1)],
+  },
   // A test that waits on a child process where the output differs: an I/O
   // handle is open, so its copy is busy, never cut for idleness, and the
   // confirming run kills it.
@@ -1585,6 +1606,8 @@ const captureWitness = new Set([
   `w_fcprop`,
   `w_record`,
   `w_data`,
+  `w_optional`,
+  `w_oldprobe`,
   `w_spin`,
 ])
 
@@ -1836,6 +1859,11 @@ function renderStatement(stmt, callText) {
       return [`out.push(String(memo.get(x)));`]
     case `pushLoaded`:
       return [`out.push(...loaded);`]
+    case `optional`:
+      return [
+        `const o${stmt.label} = x ? { v: 'p${stmt.label}' } : undefined;`,
+        `out.push(\`\${o${stmt.label}?.v}\`);`,
+      ]
     case `readData`:
       return [`out.push(${dataOf(stmt.shape).read});`]
     case `call`:
@@ -1918,11 +1946,14 @@ function derivedFile(spec) {
     `function nothing(x: number): number {`,
     `  return x - x;`,
     `}`,
-    `export function derivedMake(x: number, out: Array<string>): Derived {`,
-    `  return new Derived(x, out);`,
-    `}`,
+    // A concise arrow, which has no `return` statement to mutate: what
+    // `derivedMake` returns is what the derived runs read.
+    `export const derivedMake = (x: number, out: Array<string>): Derived =>`,
+    `  new Derived(x, out);`,
   )
-  return { source: `${lines.join(`\n`)}\n`, statements }
+  // `nothing`'s `return`, a site of its own outside the constructor.
+  const returnLine = lines.indexOf(`  return x - x;`) + 1
+  return { source: `${lines.join(`\n`)}\n`, statements, returnLine }
 }
 
 // What a derived class's constructor pushes for `x`, and the fields it sets:
@@ -2543,6 +2574,7 @@ function resolveHistory(history) {
     fault: history.fault,
     stability: history.stability,
     steps: history.steps ?? [],
+    lazyGate: history.lazyGate === true,
     ordinary: history.ordinary === true,
     // An `owns` key in an assertion's arguments, in the ordinary file: its
     // assertion form and whether its list is a literal, or none.
@@ -2591,6 +2623,7 @@ function resolveHistory(history) {
       spec: history.derived,
       source: file.source,
       statements: file.statements,
+      returnLine: file.returnLine,
     },
   }
 }
@@ -2757,8 +2790,14 @@ function sitesOf(plan) {
   add(`devBuild`, 4, `binary-swap`, preambleStatements.devBuild, {
     role: `devBuild`,
   })
+  add(`devBuild`, 4, `return-undefined`, preambleStatements.devBuild, {
+    role: `devBuildReturn`,
+  })
   // Its `return false` runs only when reading the environment throws.
   add(`devBuild`, 6, `bool-flip`, `return false`, { role: `devBuildFalse` })
+  add(`devBuild`, 6, `return-undefined`, `return false`, {
+    role: `devBuildFalseReturn`,
+  })
   declaration(`report`, 10, `'`)
   guard(`report`, 11, `'gap#report'`, `true`)
   add(`reportTwice`, 14, `delete-call`, preambleStatements.reportTwice, {
@@ -2808,6 +2847,15 @@ function sitesOf(plan) {
         at(`delete-call`, `push`, stmt.line, whole)
       // A call of a nested function where it is defined.
       if (stmt.kind === `inner`) at(`delete-call`, `call`, stmt.line, whole)
+      // A returned nested function, which is not `undefined`.
+      if (stmt.kind === `innerReturned`)
+        at(`return-undefined`, `returned`, stmt.line, whole)
+      // The object literal's field, then the push and its optional read.
+      if (stmt.kind === `optional`) {
+        at(`field-drop`, `dropV`, stmt.line, stmt.lines[0])
+        at(`delete-call`, `push`, stmt.line + 1, stmt.lines[1])
+        at(`optional-chain`, `chain`, stmt.line + 1, stmt.lines[1])
+      }
       // Two arrows on one line: each property's field drop, its call, and
       // the `+ 1` belong to the arrow whose text holds them; the push and
       // its argument to `w_pair`.
@@ -2823,8 +2871,10 @@ function sitesOf(plan) {
         at(`delete-call`, `push`, stmt.line + 1, call)
         at(`value-undefined`, `string`, stmt.line + 1, call)
       }
+      // A returned call is a `return-undefined` site too (the sixth review).
       if (stmt.kind === `getterReturn`) {
         at(`value-undefined`, `string`, stmt.line, whole)
+        at(`return-undefined`, `returned`, stmt.line, whole)
         at(`bool-flip`, `flag`, stmt.line, whole)
       }
       // `$derived` is an ordinary name outside a Svelte module.
@@ -2832,8 +2882,10 @@ function sitesOf(plan) {
         at(`delete-call`, `push`, stmt.line, whole)
         at(`value-undefined`, `value`, stmt.line, whole)
       }
-      if (stmt.kind === `dollarReturn`)
+      if (stmt.kind === `dollarReturn`) {
         at(`value-undefined`, `string`, stmt.line, whole)
+        at(`return-undefined`, `returned`, stmt.line, whole)
+      }
       // A rune call stays where Svelte requires it, so it is no site of its
       // own (its value is not replaced, nor its statement skipped); the code
       // in its argument is.
@@ -2994,6 +3046,17 @@ function sitesOf(plan) {
       }
     }
   }
+  // `nothing`'s returned `x - x`, a number.
+  if (plan.derived)
+    add(
+      `nothing`,
+      plan.derived.returnLine,
+      `return-undefined`,
+      `return x - x;`,
+      {
+        file: DERIVED,
+      },
+    )
   // The derived class's file (`derivedFile`), which no oracle owns. A
   // statement before `super(...)`, and the `super` statement itself, have no
   // site: no mutant, when active, may prevent or delay the constructor's
@@ -3026,7 +3089,10 @@ function sitesOf(plan) {
         [`used`, `return 1 + 2;`],
         [`spare`, `return 3 + 4;`],
       ])
-        add(name, d.line, `arithmetic-swap`, text, { role: `${name}Arith` })
+        for (const operator of [`arithmetic-swap`, `return-undefined`])
+          add(name, d.line, operator, text, {
+            role: `${name}${operator === `arithmetic-swap` ? `Arith` : `Return`}`,
+          })
   }
   // The `..gen/` file's top-level loop: its variable's `-`, its condition,
   // and its `<`, in no function, and owned by no entry (a whole-file entry
@@ -3134,7 +3200,8 @@ function ownersOf(plan) {
       ...(plan.wholeFile === `none` ||
       inLibrary.has(id) ||
       id === TOP_LOOP ||
-      id === DERIVED_FN
+      id === DERIVED_FN ||
+      id === DERIVED_HELPER
         ? []
         : [plan.wholeFile]),
     ])
@@ -3322,6 +3389,28 @@ function interpret(plan, fnId, x, sites, active) {
           }
         }
       }
+      // `x` makes the object only when truthy, so the field drop is reached
+      // only then. A plain read in place of `?.` throws on no object.
+      if (stmt.kind === `optional`) {
+        const drop = siteOf(stmt, `dropV`)
+        if (x) reached.add(drop.id)
+        const made = x
+          ? isActive(drop)
+            ? {}
+            : { v: `p${stmt.label}` }
+          : undefined
+        const site = siteOf(stmt, `push`)
+        reached.add(site.id)
+        if (!isActive(site)) {
+          const chain = siteOf(stmt, `chain`)
+          reached.add(chain.id)
+          if (isActive(chain) && made === undefined)
+            throw new TypeError(`Cannot read properties of undefined`)
+          trace.push(String(made?.v))
+        }
+      }
+      if (stmt.kind === `innerReturned`)
+        reached.add(siteOf(stmt, `returned`).id)
       // A read of module data, as the module evaluated it at load under the
       // same mutant: a dropped field reads undefined, the swapped `+` gives
       // 1, and the flipped literal false.
@@ -3338,6 +3427,10 @@ function interpret(plan, fnId, x, sites, active) {
             const value = siteOf(stmt, `value`)
             reached.add(value.id)
             if (isActive(value)) return `undefined`
+            // Its `return`: undefined in place of what it returns.
+            const returned = sites.find((s) => s.role === `usedReturn`)
+            reached.add(returned.id)
+            if (isActive(returned)) return `undefined`
             const arith = sites.find((s) => s.role === `usedArith`)
             reached.add(arith.id)
             return String(isActive(arith) ? -1 : 3)
@@ -3403,6 +3496,9 @@ function interpret(plan, fnId, x, sites, active) {
         ])
           reached.add(siteOf(stmt, role).id)
         reached.add(sites.find((s) => s.role === `devBuild`).id)
+        // Its `return`, whose undefined value leaves the probe uncalled, and
+        // no output changes.
+        reached.add(sites.find((s) => s.role === `devBuildReturn`).id)
         outcomes.push([stmt.line, true])
         // The guard is true, so its if-false site changes it; and its `!==`
         // compares 'test' with 'production', on which `!==` and `===`
@@ -3821,9 +3917,14 @@ function model(plan) {
     // probe form and of a probe in another shape). Its directive names the
     // input that distinguishes it.
     if (
-      [`loop-false`, `value-undefined`, `field-drop`, `delete-call`].includes(
-        site.operator,
-      ) ||
+      [
+        `loop-false`,
+        `value-undefined`,
+        `field-drop`,
+        `delete-call`,
+        `return-undefined`,
+        `optional-chain`,
+      ].includes(site.operator) ||
       site.logical === true
     )
       return `not-distinguished`
@@ -3981,6 +4082,10 @@ const callFor = (fn) =>
     : `sut.${fn}`
 const quoteEntry = (plan, entry) =>
   plan.template ? `\`${entry}\`` : `'${entry}'`
+
+// Whether a test's verdict waits on file b's lazy gate (`lazyGate`).
+const lazyGated = (plan, file, t) =>
+  plan.lazyGate && file === `b` && t.judges && t.judgeBy === `verdict`
 
 function oracleTestFile(plan, file) {
   const sites = sitesOf(plan)
@@ -4183,7 +4288,10 @@ function oracleTestFile(plan, file) {
                 `    if (${when}) expect${t.judgeBy === `soft` ? `.soft` : ``}(${out}).toEqual(${expected})`,
               ]
             : [
-                `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) {`,
+                // A lazy gate is imported only where the output differs, so
+                // the unmutated run never loads it. It is open before any
+                // edit, so the model need not read it.
+                `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}${lazyGated(plan, file, t) ? ` && (await import('./lazy')).open` : ``}) {`,
                 `      g.__oracleVerdict?.({ property: 'fixture-${file}', law: '${t.law}', checkpoint: 'trace' })`,
                 `      throw new Error('violation')`,
                 `    }`,
@@ -4201,7 +4309,7 @@ function oracleTestFile(plan, file) {
         : []),
       t.asProp
         ? `  fcTest.prop([fcv.integer({ min: 0, max: 10 })], { numRuns: 20, seed: 1 })('${testName(t, index)}', async (n) => {`
-        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait ? `async ` : ``}() => {`,
+        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || lazyGated(plan, file, t) ? `async ` : ``}() => {`,
       ...partsOf(t).flatMap(campaign),
       `  })`,
       `})`,
@@ -4340,6 +4448,8 @@ const initialState = (plan) => ({
   history: plan.history,
   prepend: false,
   strict: true,
+  // What `tests/lazy.ts` exports: whether file b's lazy gate is open.
+  lazyOpen: true,
   seed: 1,
   // Whether the check's `--config` names the second config (`altConfig`).
   altConfig: false,
@@ -4522,6 +4632,9 @@ function fixtureFiles(plan, state = initialState(plan)) {
     ...(plan.dotGenSource ? { [DOTGEN]: plan.dotGenSource } : {}),
     ...plan.exportSources,
     'tests/strict.ts': `export const strict = ${state.strict}\n`,
+    ...(plan.lazyGate
+      ? { 'tests/lazy.ts': `export const open = ${state.lazyOpen}\n` }
+      : {}),
     // A workspace dependency with module state, linked through node_modules.
     'deps/state-dep/package.json': manifest({
       name: `state-dep`,
@@ -4786,6 +4899,7 @@ function applyEdit(state, edit) {
       },
     }
   if (edit === `helper`) return { ...state, strict: !state.strict }
+  if (edit === `lazy`) return { ...state, lazyOpen: !state.lazyOpen }
   if (edit === `seed`) return { ...state, seed: state.seed === 1 ? 2 : 1 }
   if (edit === `config`) return { ...state, altConfig: !state.altConfig }
   // A seed no other step uses, so the check has fresh work to be killed in.

@@ -7,9 +7,14 @@
  * process, and compares what Vitest reports with what an independent model
  * predicts. The laws, each judged per test or per probe:
  *
- * - `registration`: a property registers its campaigns, fixed histories, calibrations, and
- *   determinism test, and an enumerated property without a `label` gives
- *   distinct histories distinct test names, or fails to load when its id is not a registered
+ * - `registration`: a property registers its campaigns' units, fixed histories, calibrations, and
+ *   determinism tests, exactly: for each fixed seed N, `fixed seed N: <name>` for each constructed
+ *   history and then `fixed seed N: generated`; `random seed: <name>` for each constructed history
+ *   and then `random seed: generated`; `fixed history: <name>` for each fixed history; one test per
+ *   calibration; and, for a generated source, `determinism: fixed history: <name>`,
+ *   `determinism: constructed history: <name>`, and `determinism: generated 0` to `2`. An
+ *   enumerated source keeps one `determinism` test. An enumerated property without a `label` gives
+ *   distinct histories distinct test names. A property fails to load when its id is not a registered
  *   oracle property, a required state has no constructed history, a constructed history names an
  *   undeclared state, a fixed or constructed history is one the arbitrary cannot take back (law
  *   `membership`), or `owns` is not a non-empty literal list of strings (the gap report reads it
@@ -19,7 +24,18 @@
  *   fails with its first error alone. This precedence is analyst-chosen (2026-11-10): no contract
  *   text or maintainer decision orders these errors. The source kind decides which checks reach the
  *   histories, so fixing the shape can remove a data error, and fixing the data error first can be
- *   wasted work.
+ *   wasted work. A generated source also fails to load when two of its tests would share a name: a
+ *   constructed history named `generated`, two constructed histories of one name, or two fixed
+ *   histories of one name (maintainer decision, 2026-11-11, option D). These come after its state
+ *   checks and before law `membership`, in that order (analyst-chosen, 2026-11-11).
+ * - `units` (maintainer decision, 2026-11-11, option D): a campaign's units run exactly the
+ *   histories that the campaign ran, each in its own test. The constructed unit of history k, for
+ *   seed S, runs one history: the construction built from the arbitrary's sample at seed S + k.
+ *   The `generated` unit runs the stream that `fc.sample` draws from the property's arbitrary, with
+ *   its constructed weighting, at seed S, for the property's `runs`. The model draws these with
+ *   fast-check itself, never through the framework. A unit that fails ran that stream up to its
+ *   first failure, then its shrinks. The random units of a property run the one seed it logged: the
+ *   seed of the replay environment in a seeded run, and a drawn seed in a seedless run.
  * - `verdict`: a test fails with a violation of law L exactly when its first
  *   failing history violates L, whatever values the history holds (a bigint,
  *   a Map, NaN, or -0 too). Within one history a driver error decides
@@ -28,8 +44,9 @@
  *   accept any prefix of a trace: one that throws on a trace a driver error or
  *   a clock spin cut short fails the history with an `OracleModelError` that
  *   names the model (maintainer decision, 2026-11-08).
- * - `shrink`: a campaign's reported failure keeps the kind and law of its first
- *   failure, and its counterexample still has them.
+ * - `shrink`: a unit's reported failure keeps the kind and law of its own first
+ *   failure, and its counterexample still has them. Each unit decides its own first
+ *   failure: a failure in one unit does not change another unit's outcome.
  * - `shrink budget`: a campaign whose first failure is judged in time reports
  *   that failure's kind and law, with a counterexample that replays, before
  *   its timeout, however long shrinking would take: it starts no shrink run
@@ -54,8 +71,10 @@
  *   the load with an error that names the property and the constructed history and carries the
  *   build's error as its cause; constructed histories are built and checked in order.
  * - `reach`: a fixed or constructed history that does not enter a state it names fails, and
- *   a passing campaign reports how many of its histories entered each declared
- *   state, whether the property names reach itself or the driver records it. An enumerated
+ *   each passing unit reports how many of its histories entered each declared
+ *   state, whether the property names reach itself or the driver records it. A unit that
+ *   fails or times out prints no reach line, so the sum of a campaign's unit lines counts
+ *   only passing units. An enumerated
  *   source that declares `states` or `measured` registers a `reach` test after its histories:
  *   it fails when no enumerated history entered a required state, and otherwise reports how
  *   many entered each declared state. A history counts when it was judged, passing or
@@ -84,8 +103,10 @@
  *   matches the empty string, fails the property's load, naming the
  *   calibration. A check that gives a difference that is not text, where a
  *   calibration requires one, fails that calibration naming it and the law.
- * - `determinism`: the determinism test runs every fixed and constructed history
- *   and three generated ones, and fails for a driver whose trace changes,
+ * - `determinism`: a generated source's determinism units run every fixed and
+ *   constructed history and three generated ones, each unit its one history
+ *   twice (an enumerated source's one test runs its spaced histories), and fail
+ *   for a driver whose trace changes,
  *   compared by their data encoding: `-0` is not `0`, and key order and
  *   Map and Set order count, which a check that iterates them can see.
  * - `agreement`: for a probe-bound state, a history whose `predict` says it
@@ -112,10 +133,29 @@
  *   even when it comes right after the spin.
  *   A model that throws on the trace cut at the spin is a model error, as
  *   above.
- * - `timeout`: a property's `timeout` limits every test it registers.
- * - `replay`: replaying a failing campaign's seed and path runs only that
- *   property's random campaign, starts from the counterexample itself, and
- *   reproduces it.
+ * - `timeout`: a property's `timeout` limits every test it registers, each unit
+ *   on its own.
+ * - `replay`: a failing campaign unit prints a replay command: the seed, the
+ *   path, the property, and `${prefix}_UNIT` naming the random unit of the same
+ *   name (`random seed: <name>`), under the configured prefix, then that unit's
+ *   `-t` pattern (maintainer decisions, 2026-11-11, Q3 and Q4). A failing random
+ *   unit's violation prints the same command as its rerun line. Run as printed,
+ *   the command runs only that random unit, starts from the counterexample
+ *   itself, and reproduces it; every other test stands aside.
+ * - `replay-config`: the replay environment is read in a fixed order of
+ *   errors: a retired variable (whose message names `${prefix}_UNIT` beside the
+ *   seed, path, and property), then `PATH requires SEED`, `PROPERTY requires
+ *   PATH`, a seed that is not an integer, an empty or malformed path, `PATH
+ *   requires PROPERTY`, and an unregistered property; `${prefix}_UNIT requires
+ *   ${prefix}_PROPERTY` comes after all of them (maintainer decision,
+ *   2026-11-11, Q3). A malformed environment fails every spec file's load with
+ *   its first error. In a path replay of a generated source, `PATH` without
+ *   `UNIT` fails that property's load with "`${prefix}_PATH` of a generated
+ *   source requires `${prefix}_UNIT`" (Q4), and a `UNIT` that names no random
+ *   unit of the replayed property fails its load, an enumerated property's
+ *   included. A `UNIT` that names a random unit runs only that unit, from the
+ *   path, and every other test stands aside. These replay errors come after
+ *   every declaration error of the property (analyst-chosen, 2026-11-11).
  * - `data`: observations and enumerated histories are a closed data domain
  *   (maintainer decision, 2026-11-08): primitives (with -0, NaN, the
  *   infinities, bigints, and undefined), dense arrays, plain objects with
@@ -128,19 +168,23 @@
  *   message, not its stack).
  * - `rerun`: a violation's printed rerun command, pasted into a POSIX shell,
  *   runs exactly that test, also when its name holds a shell's special
- *   characters and when the property sits inside another suite.
+ *   characters and when the property sits inside another suite. A failing
+ *   fixed-seed unit prints `Rerun: -t` with its own pattern, which runs only
+ *   that unit, also beside a unit whose name extends its name.
  * - `route`: each history runs under the route, in the one vocabulary of
- *   `oracle-route.ts`, of the campaign that runs it: a fixed-seed campaign
- *   `fixed seed`; the random campaign `random seed`, or `fixed seed` when a
+ *   `oracle-route.ts`, of the campaign that runs it, each unit keeping its
+ *   campaign's route: a fixed-seed unit
+ *   `fixed seed`; a random unit `random seed`, or `fixed seed` when a
  *   seed-only replay reseeds it (as the main child runs here do; a seedless
  *   child run, without `ORACLE_SEED`, shows `random seed`), or `fixed
  *   history` in a path replay; a fixed history `fixed history`; an enumerated
  *   history `case`; calibrations, probe calibrations, and the determinism test
- *   `calibration` (TanStack/oracles#1 coordinator decisions, 2026-11-08: a
+ *   `calibration`, and so do the determinism units (TanStack/oracles#1 coordinator decisions, 2026-11-08: a
  *   route describes the campaign that runs, in one vocabulary).
- * - `seed-log`: a random campaign logs exactly one `ORACLE_SEED` line for its
- *   property, the seed it runs, and no other test logs one; a replay tool
- *   reads that line.
+ * - `seed-log`: a property logs exactly one `ORACLE_SEED` line, in its first
+ *   random unit, and no other test logs one; every random unit runs that seed
+ *   (maintainer decision, 2026-11-11, Q2: one seed per property per process). A
+ *   replay tool reads that line.
  *
  * Authority: the contract in the header of `oracle-property.ts`, including
  * its state probes (user decision of 2026-11-04 adopting differential reach); the
@@ -151,8 +195,13 @@
  * fails at registration, naming the history and the fix; and the oracle rubric's replay
  * (ORC-007), calibration (ORC-006), and declared-reach (ORC-015) rules; the
  * maintainer decision of 2026-11-11 (F27) that a calibration can require its
- * violation's difference; and the maintainer decision of 2026-11-11 (F31) that
- * a law violation is reported before the timeout, however slow shrinking would be.
+ * violation's difference; the maintainer decision of 2026-11-11 (F31) that
+ * a law violation is reported before the timeout, however slow shrinking would be;
+ * and the maintainer decisions of 2026-11-11 on shardable units (option D of
+ * the e2e speed plan, with Q2: one seed per property per process, Q3: a
+ * `${prefix}_UNIT` variable that requires `${prefix}_PROPERTY`, and Q4: a path
+ * replay of a generated source without `UNIT` fails at registration, and
+ * every replay line names its unit).
  *
  * Limits: synthetic properties with histories of one to three integers, held
  * as an array, a bigint-tagged object, or a Map, one or two per run. An
@@ -184,6 +233,13 @@
  * machine's speed, so a seed-only rerun can report another one; a path replay reports the same.
  * A driver that leaves fake timers installed that fake `performance` freezes the deadline; no
  * history leaves them.
+ * The units law reads only the prefix of a failing unit's log up to its first failure, and
+ * no unit of a slow spec, whose driver runs on after its test timed out. A replay environment is
+ * drawn with path `0` and the first spec's property only, and its unit is the first random unit
+ * of that spec or a missing one. A custom prefix applies to every spec of a suite. Only one fixed
+ * unit's `-t` rerun is probed per property, and only the determinism of a generated source is
+ * split into units. An error's raw `stack` is not observed: Vitest reprints a failure's stack
+ * header from its message.
  * A calibration's required difference is drawn only as four texts and
  * four patterns, including the empty ones, judged against the difference a wrong answer
  * reports, `item k is 3`, where k is the first item or a `driver-last` candidate's last item. A
@@ -210,6 +266,7 @@ import {
   syntheticArbitrary,
   syntheticIds,
 } from './oracle-property-self-oracle-fixture.js'
+import type { Verdict } from '../src/index.js'
 import type {
   CalibrationDifference,
   OddKind,
@@ -257,6 +314,17 @@ type Draft = {
   statesMode: `exact` | `extra` | `missing`
   constructed: Array<{ prefix: SyntheticHistory; enters: Array<string> }>
   fixed: Array<{ history: SyntheticHistory; enters: Array<string> | null }>
+  /**
+   * How the constructed histories are named: by index; with names that
+   * extend each other (`c`, `c.1`), which a `-t` pattern without its `$`
+   * anchor cannot tell apart; with the first named `generated`; or all with
+   * one name. The last two break registration.
+   */
+  constructedNames: `indexed` | `prefixed` | `generated` | `duplicate`
+  /** `duplicate` gives every fixed history one name, which breaks registration. */
+  fixedNames: `indexed` | `duplicate`
+  /** A second fixed seed, ten times the first, whose text the first's extends. */
+  secondSeed: boolean
   /**
    * How a generated source's arbitrary maps its histories: not at all (only
    * a form maps, with an unmapper), through a `.map` with an unmapper, or
@@ -318,8 +386,25 @@ type Draft = {
   strictModel: boolean
 }
 // `seedless`: one more child run, without `ORACLE_SEED`, records the routes
-// of each random campaign as an ordinary run draws its seed.
-type Suite = { drafts: Array<Draft>; seedless: boolean }
+// of each random unit as an ordinary run draws its seed, and the seed it logged.
+// `prefix`: every spec of the suite runs under this environment prefix.
+// `environment`: one more child run under a drawn replay environment (law
+// `replay-config`), whose path is `0` and whose property is the first spec's.
+type Suite = {
+  drafts: Array<Draft>
+  seedless: boolean
+  prefix: Prefix
+  environment: ReplayEnvironment | null
+}
+type Prefix = `ORACLE` | `SYNTH_ORACLE`
+type ReplayEnvironment = {
+  retired: boolean
+  seed: `absent` | `valid` | `invalid`
+  path: `absent` | `valid` | `empty` | `malformed`
+  property: `absent` | `first` | `empty` | `unregistered`
+  /** The first random unit of the first spec, or a unit no spec has. */
+  unit: `absent` | `named` | `missing`
+}
 
 // Outside the synthetic language: an item 5, or four items.
 const outside = fc.oneof(
@@ -370,6 +455,24 @@ const draft: fc.Arbitrary<Draft> = fc.record({
       enters: fc.option(fc.subarray(allStates), { freq: 2 }),
     }),
     { maxLength: 2 },
+  ),
+  // Names that extend each other are common; names that break registration
+  // are rare.
+  constructedNames: fc.oneof(
+    { arbitrary: fc.constant(`indexed` as const), weight: 6 },
+    { arbitrary: fc.constant(`prefixed` as const), weight: 3 },
+    {
+      arbitrary: fc.constantFrom(`generated` as const, `duplicate` as const),
+      weight: 1,
+    },
+  ),
+  fixedNames: fc.oneof(
+    { arbitrary: fc.constant(`indexed` as const), weight: 9 },
+    { arbitrary: fc.constant(`duplicate` as const), weight: 1 },
+  ),
+  secondSeed: fc.oneof(
+    { arbitrary: fc.constant(false), weight: 4 },
+    { arbitrary: fc.constant(true), weight: 1 },
   ),
   // Rare: a `.map` with or without an unmapper, which decides whether the
   // arbitrary can take a fixed or constructed history back.
@@ -606,11 +709,48 @@ const draft: fc.Arbitrary<Draft> = fc.record({
     { weight: 1, arbitrary: fc.constant(true) },
   ),
 })
+const replayEnvironment: fc.Arbitrary<ReplayEnvironment> = fc.record({
+  retired: fc.oneof(
+    { weight: 5, arbitrary: fc.constant(false) },
+    { weight: 1, arbitrary: fc.constant(true) },
+  ),
+  seed: fc.constantFrom(
+    `absent` as const,
+    `valid` as const,
+    `invalid` as const,
+  ),
+  path: fc.constantFrom(
+    `absent` as const,
+    `valid` as const,
+    `empty` as const,
+    `malformed` as const,
+  ),
+  property: fc.constantFrom(
+    `absent` as const,
+    `first` as const,
+    `empty` as const,
+    `unregistered` as const,
+  ),
+  unit: fc.constantFrom(
+    `absent` as const,
+    `named` as const,
+    `missing` as const,
+  ),
+})
 const suite: fc.Arbitrary<Suite> = fc.record({
   drafts: fc.array(draft, { minLength: 1, maxLength: 2 }),
   seedless: fc.oneof(
     { weight: 5, arbitrary: fc.constant(false) },
     { weight: 1, arbitrary: fc.constant(true) },
+  ),
+  prefix: fc.oneof(
+    { weight: 4, arbitrary: fc.constant(`ORACLE` as const) },
+    { weight: 1, arbitrary: fc.constant(`SYNTH_ORACLE` as const) },
+  ),
+  // Rare: one more child run under a replay environment.
+  environment: fc.oneof(
+    { weight: 4, arbitrary: fc.constant(null) },
+    { weight: 1, arbitrary: replayEnvironment },
   ),
 })
 
@@ -624,16 +764,35 @@ const suite: fc.Arbitrary<Suite> = fc.record({
 // constructed history that names an undeclared state). An enumerated draft has no
 // constructed or fixed histories.
 
-type Plan = { specs: Array<SyntheticSpec>; seedless: boolean }
+type Plan = {
+  specs: Array<SyntheticSpec>
+  seedless: boolean
+  prefix: Prefix
+  environment: ReplayEnvironment | null
+}
 
-function resolveSuite({ drafts, seedless }: Suite): Plan {
+// A constructed history's name under the draft's naming.
+const constructedName = (names: Draft[`constructedNames`], at: number) =>
+  names === `prefixed`
+    ? at === 0
+      ? `c`
+      : `c.${at}`
+    : names === `generated` && at === 0
+      ? `generated`
+      : names === `duplicate`
+        ? `constructed`
+        : `constructed-${at}`
+
+function resolveSuite({ drafts, seedless, prefix, environment }: Suite): Plan {
   return {
     seedless,
+    prefix,
+    environment,
     specs: drafts.map((d, index) => {
       const generated = d.source.kind === `generated`
       const constructed = generated
         ? d.constructed.map((construction, at) => ({
-            name: `constructed-${at}`,
+            name: constructedName(d.constructedNames, at),
             ...construction,
           }))
         : []
@@ -652,9 +811,10 @@ function resolveSuite({ drafts, seedless }: Suite): Plan {
         source: d.source,
         states,
         constructed,
+        ...(generated && d.secondSeed ? { secondSeed: true } : {}),
         fixed: generated
           ? d.fixed.map((fixedHistory, at) => ({
-              name: `fixed-${at}`,
+              name: d.fixedNames === `duplicate` ? `fixed` : `fixed-${at}`,
               history: fixedHistory.history,
               ...(fixedHistory.enters ? { enters: fixedHistory.enters } : {}),
             }))
@@ -1036,7 +1196,9 @@ const forcedCalibrationNames = (spec: SyntheticSpec) =>
 // framework; the model learns that name from the log, which records the name
 // of the test that ran each history.
 const frameworkTest = (name: string) =>
-  name === `determinism` || name === `reach` || name.startsWith(`calibration:`)
+  name.startsWith(`determinism`) ||
+  name === `reach` ||
+  name.startsWith(`calibration:`)
 function enumeratedName(
   spec: SyntheticSpec,
   history: SyntheticHistory,
@@ -1067,13 +1229,98 @@ const calibrationCandidates = (
   return [
     ...spec.fixed.map(({ history }) => history),
     ...spec.constructed.map(({ prefix }, at) =>
-      [
-        ...prefix,
-        ...fc.sample(syntheticArbitrary, { seed: seed + at, numRuns: 1 })[0]!,
-      ].slice(0, 3),
+      constructedAt(prefix, seed + at),
     ),
     ...fc.sample(syntheticArbitrary, { seed, numRuns: 100 }),
   ]
+}
+
+// Model law `units`. A synthetic constructed history is its prefix followed by
+// a generated history, cut to three items; the generated history is the
+// arbitrary's sample at the seed it is built from.
+const constructedAt = (prefix: SyntheticHistory, seed: number) =>
+  [...prefix, ...fc.sample(syntheticArbitrary, { seed, numRuns: 1 })[0]!].slice(
+    0,
+    3,
+  )
+// The seed every seeded child run gives the random units (`${prefix}_SEED`).
+const childSeed = 20251103
+const fixedSeedsOf = (spec: SyntheticSpec): Array<number> =>
+  spec.source.kind === `generated`
+    ? [spec.source.seed, ...(spec.secondSeed ? [spec.source.seed * 10] : [])]
+    : []
+// A campaign's units, in order: one per constructed history, then `generated`.
+const unitNames = (spec: SyntheticSpec) => [
+  ...spec.constructed.map(({ name }) => name),
+  `generated`,
+]
+const fixedUnit = (seed: number, name: string) => `fixed seed ${seed}: ${name}`
+const randomUnit = (name: string) => `random seed: ${name}`
+// The unit a campaign test runs: its seed (undefined for a random unit) and
+// its name within the campaign.
+const unitOf = (test: string): { seed?: number; name: string } | undefined => {
+  const fixed = /^fixed seed (-?\d+): (.*)$/.exec(test)
+  if (fixed) return { seed: Number(fixed[1]), name: fixed[2]! }
+  const random = /^random seed: (.*)$/.exec(test)
+  return random ? { name: random[1]! } : undefined
+}
+// The histories a unit draws at `seed`, in order: a constructed unit its one
+// construction, built from seed + its index; the `generated` unit the stream
+// that fast-check samples from the property's arbitrary with its constructed
+// weighting (each constructed history weighs 1, and the language weighs their
+// count) for `runs` draws. Drawn with fast-check itself, never the framework.
+// The weighting restates how production composes its arbitrary, which the
+// design of option D authorizes the model to state (design-c-d.md, law
+// `units`: "the property's arbitrary (with its constructed weighting)"). It
+// is that composition, not a contract promise: the header promises only that
+// half of a campaign's generated histories are constructed, and a change to
+// the composition must change this model with it.
+function unitStream(
+  spec: SyntheticSpec,
+  seed: number,
+  name: string,
+): Array<SyntheticHistory> {
+  if (spec.source.kind !== `generated`) return []
+  const at = spec.constructed.findIndex(
+    (construction) => construction.name === name,
+  )
+  if (at >= 0) return [constructedAt(spec.constructed[at]!.prefix, seed + at)]
+  const weighted =
+    spec.constructed.length === 0
+      ? syntheticArbitrary
+      : fc.oneof(
+          { arbitrary: syntheticArbitrary, weight: spec.constructed.length },
+          ...spec.constructed.map(({ prefix }) => ({
+            arbitrary: syntheticArbitrary.map((items) =>
+              [...prefix, ...items].slice(0, 3),
+            ),
+            weight: 1,
+          })),
+        )
+  return fc.sample(weighted, { seed, numRuns: spec.source.runs })
+}
+// The history each determinism unit runs twice: a generated source's fixed
+// histories, its constructed histories built from the first fixed seed, and
+// three samples at that seed.
+function determinismUnits(spec: SyntheticSpec): Map<string, SyntheticHistory> {
+  const [seed] = fixedSeedsOf(spec)
+  if (seed === undefined) return new Map()
+  return new Map([
+    ...spec.fixed.map(
+      ({ name, history }) =>
+        [`determinism: fixed history: ${name}`, history] as const,
+    ),
+    ...spec.constructed.map(
+      ({ name, prefix }, at) =>
+        [
+          `determinism: constructed history: ${name}`,
+          constructedAt(prefix, seed + at),
+        ] as const,
+    ),
+    ...fc
+      .sample(syntheticArbitrary, { seed, numRuns: 3 })
+      .map((history, k) => [`determinism: generated ${k}`, history] as const),
+  ])
 }
 // What a required difference holds, stated apart from the fixture's values:
 // text by containment, a pattern by a match anywhere. The empty ones never
@@ -1098,8 +1345,7 @@ const mutatedDifference = (
 ) => `item ${kind === `driver-last` ? history.length - 1 : 0} is 3`
 const emptyDifference = (difference: CalibrationDifference | undefined) =>
   difference === `empty text` || difference === `empty pattern`
-const isCampaign = (name: string) =>
-  name.startsWith(`fixed seed`) || name === `random seed`
+const isCampaign = (name: string) => unitOf(name) !== undefined
 
 // Model law for an enumerated source's declared states: every history runs,
 // so each required state must be entered by at least one of them, and the
@@ -1220,6 +1466,8 @@ type SpecExpectation =
       /** A label that names a framework test. */
       reservedLabel?: boolean
       dataError?: boolean
+      /** Two tests would share a name. */
+      nameError?: boolean
       /** Which history failed law `membership`. */
       membership?: `fixed` | `constructed`
       /** Whether that history is in the language, so only a `.map` without an unmapper failed it. */
@@ -1228,13 +1476,16 @@ type SpecExpectation =
   | {
       loads: true
       tests: Map<string, Outcome>
-      /** Histories a passing determinism test must run, each twice. */
-      determinismRuns?: number
-      /** For each passing campaign, the histories entering each state. */
+      /** The history each determinism unit must run, twice. */
+      determinism: Map<string, SyntheticHistory>
+      /** The histories each campaign unit draws in this run (law `units`). */
+      streams: Map<string, Array<SyntheticHistory>>
+      /** For each passing unit, the histories entering each state. */
       reach: Map<string, Record<string, number>>
-      /** Campaigns owed a replay probe, and the test owed a rerun probe. */
+      /** Units owed a replay probe, and the tests owed a rerun probe. */
       replays: Array<string>
       rerun?: string
+      unitRerun?: string
     }
 
 function predictSpec(
@@ -1313,6 +1564,21 @@ function predictSpec(
       [...entered].some((state) => !declared.has(state))
     )
       return { loads: false }
+    // Every unit and determinism test is named by its history, so two
+    // histories of one name, or a constructed history named like the
+    // generated unit, would give two tests one name.
+    const twice = (names: Array<string>) =>
+      names.find((name, at) => names.indexOf(name) !== at)
+    const constructedNames = spec.constructed.map(({ name }) => name)
+    const nameError = constructedNames.includes(`generated`)
+      ? `${spec.id}: constructed history "generated" has the name of a campaign's generated unit`
+      : twice(constructedNames) !== undefined
+        ? `${spec.id}: two constructed histories are named "${twice(constructedNames)}"`
+        : twice(spec.fixed.map(({ name }) => name)) !== undefined
+          ? `${spec.id}: two fixed histories are named "${twice(spec.fixed.map(({ name }) => name))}"`
+          : undefined
+    if (nameError)
+      return { loads: false, loadError: nameError, nameError: true }
     // A fixed or constructed history that the arbitrary cannot take back
     // fails the load (law `membership`), fixed histories first, naming the
     // property, the history, and the fix.
@@ -1358,14 +1624,30 @@ function predictSpec(
       loadError: `${spec.id}: calibration "${empty.name}" requires difference`,
       emptyDifference: true,
     }
+  // Each campaign unit's histories in this run: a fixed seed's units at that
+  // seed, and the random units at the child run's seed.
+  const streams = new Map<string, Array<SyntheticHistory>>([
+    ...fixedSeedsOf(spec).flatMap((seed) =>
+      unitNames(spec).map(
+        (name) =>
+          [fixedUnit(seed, name), unitStream(spec, seed, name)] as const,
+      ),
+    ),
+    ...(generated
+      ? unitNames(spec).map(
+          (name) =>
+            [randomUnit(name), unitStream(spec, childSeed, name)] as const,
+        )
+      : []),
+  ])
+  const determinismOf = determinismUnits(spec)
   const names =
     spec.source.kind === `enumerated`
       ? spec.source.histories.map((history) =>
           enumeratedName(spec, history, logged),
         )
       : [
-          `fixed seed ${spec.source.seed}`,
-          `random seed`,
+          ...streams.keys(),
           ...spec.fixed.map(
             (fixedHistory) => `fixed history: ${fixedHistory.name}`,
           ),
@@ -1375,8 +1657,9 @@ function predictSpec(
     ...(declaredOf(spec) ? [`reach`] : []),
     ...spec.calibrations.map(({ name }) => `calibration: ${name}`),
     ...forcedCalibrationNames(spec),
-    `determinism`,
+    ...(generated ? determinismOf.keys() : [`determinism`]),
   ]
+  const loaded = { determinism: determinismOf, streams }
   // A slow driver outlives the 100 ms limit in every test that runs a
   // history, and every test runs at least one.
   // A driver that observes a value outside the data domain fails every
@@ -1395,17 +1678,25 @@ function predictSpec(
     return {
       loads: true,
       tests,
+      ...loaded,
       reach: new Map(outcome.kind === `pass` ? [[`enumerated`, counts]] : []),
       replays: [],
     }
   }
   if (data) {
     for (const name of all) tests.set(name, data)
+    const failing = names.filter(isCampaign)
     return {
       loads: true,
       tests,
+      ...loaded,
       reach: new Map(),
-      replays: names.filter(isCampaign),
+      replays: failing,
+      ...(failing.find((name) => unitOf(name)?.seed !== undefined)
+        ? {
+            unitRerun: failing.find((name) => unitOf(name)?.seed !== undefined),
+          }
+        : {}),
     }
   }
   if (spec.slow) {
@@ -1417,7 +1708,7 @@ function predictSpec(
         `reach`,
         enumeratedReach(spec, spec.source.histories, () => false).outcome,
       )
-    return { loads: true, tests, reach: new Map(), replays: [] }
+    return { loads: true, tests, ...loaded, reach: new Map(), replays: [] }
   }
   // A calibration needs a candidate whose clean trace passes; it skips the
   // others (maintainer decision, 2026-11-03). Every history has an item, so
@@ -1454,8 +1745,9 @@ function predictSpec(
   // A generated property's determinism test also runs three generated
   // histories (maintainer decision, 2026-11-03), so a nondeterministic driver
   // fails it even without fixed or constructed histories.
-  const determinism = (): Outcome => {
-    const histories = ran(`determinism`).filter((_, at) => at % 2 === 0)
+  const determinism = (
+    histories = ran(`determinism`).filter((_, at) => at % 2 === 0),
+  ): Outcome => {
     // An unbound probe that enters on every other run changes only the probe
     // records a run keeps, which the determinism test also compares.
     const varies =
@@ -1474,16 +1766,19 @@ function predictSpec(
       if (throwsIn(history)) return { kind: `setup` }
       if (varies) return { kind: `determinism` }
     }
-    if (varies && generated) return { kind: `determinism` }
     return { kind: `pass` }
   }
   // A driver error decides a history first, then a law violation, then a
   // constructed history that misses a state it names (maintainer decision,
-  // 2026-11-03). A campaign runs its constructed histories first, in order.
+  // 2026-11-03). Each unit decides its own first failure, over the stream it
+  // draws (law `units`): a constructed unit's one history, or the generated
+  // unit's stream.
   const campaign = (test: string): Outcome => {
-    for (const [at, history] of ran(test).entries()) {
+    const construction = spec.constructed.find(
+      ({ name }) => name === unitOf(test)!.name,
+    )
+    for (const history of streams.get(test)!) {
       const { cause: _shrinkable, ...verdict } = judged(spec, history)
-      const construction = spec.constructed[at]
       // Without a budget, a constructed history's failure shrinks to the
       // end. No smaller history is a constructed one, so a missed state
       // keeps the constructed history itself.
@@ -1522,8 +1817,7 @@ function predictSpec(
         ).outcome,
       )
   } else {
-    tests.set(names[0]!, campaign(names[0]!))
-    tests.set(`random seed`, campaign(`random seed`))
+    for (const unit of streams.keys()) tests.set(unit, campaign(unit))
     for (const fixedHistory of spec.fixed) {
       const verdict = judged(spec, fixedHistory.history)
       tests.set(
@@ -1554,7 +1848,10 @@ function predictSpec(
         : { kind: `calibration-none` },
     )
   }
-  tests.set(`determinism`, determinism())
+  if (generated)
+    for (const [name, history] of determinismOf)
+      tests.set(name, determinism([history]))
+  else tests.set(`determinism`, determinism())
   // A passing campaign counts, for every declared and measured state, the
   // histories it ran that entered it.
   const reach = new Map<string, Record<string, number>>()
@@ -1569,20 +1866,23 @@ function predictSpec(
         judgedKind(verdictOf(history, spec)),
       ).counts,
     )
-  for (const name of names.filter(isCampaign))
+  // Each passing unit prints its reach: the histories of its stream that
+  // entered each state.
+  for (const [name, histories] of streams)
     if (tests.get(name)!.kind === `pass`)
       reach.set(
         name,
         Object.fromEntries(
           allStates.map((state) => [
             state,
-            ran(name).filter((history) =>
+            histories.filter((history) =>
               reachedOf(spec, history).includes(state),
             ).length,
           ]),
         ),
       )
-  // A campaign that fails inside fast-check reports a seed and path to replay.
+  // A unit that fails inside fast-check reports a seed and path to replay,
+  // and a fixed-seed unit a `-t` pattern to rerun.
   const replays = names.filter(
     (name) =>
       isCampaign(name) &&
@@ -1597,15 +1897,15 @@ function predictSpec(
   const rerun = names.find(
     (name) => !isCampaign(name) && tests.get(name)!.kind === `violation`,
   )
+  const unitRerun = replays.find((name) => unitOf(name)?.seed !== undefined)
   return {
     loads: true,
     tests,
+    ...loaded,
     reach,
     replays,
     ...(rerun ? { rerun } : {}),
-    ...(generated
-      ? { determinismRuns: spec.fixed.length + spec.constructed.length + 3 }
-      : {}),
+    ...(unitRerun ? { unitRerun } : {}),
   }
 }
 
@@ -1622,8 +1922,8 @@ function suiteModel(
 // A late spec calls its probe again, unawaited, after every run of a history
 // holding a 0, also when its driver threw, and each such call throws: one
 // unhandled error per run the log records. A slow spec's driver runs on
-// after its test timed out, so its calls may land after the run ended; they
-// count at most once each.
+// after its test timed out, so its calls may land after the run ended, and
+// the driver records no log for it: its calls are not bounded above.
 const lateCalls = (plan: Plan, logged: ReadonlyArray<LogEntry>) => {
   let min = 0
   let max = 0
@@ -1632,22 +1932,23 @@ const lateCalls = (plan: Plan, logged: ReadonlyArray<LogEntry>) => {
     const calls = logged.filter(
       (entry) => entry.id === spec.id && entry.history.includes(0),
     ).length
-    max += calls
+    max += spec.slow ? Infinity : calls
     if (!spec.slow) min += calls
   }
   return { min, max }
 }
 
-// The route of the campaign each test runs. Every child run sets a
-// seed-only replay (ORACLE_SEED), which reseeds the random campaign; a path
-// replay of it runs one recorded history.
+// The route of the campaign each test runs; a unit keeps its campaign's. Every
+// child run sets a seed-only replay (`${prefix}_SEED`), which reseeds the
+// random units; a path replay of one runs one recorded history.
 function owedRoute(name: string, replay = false): string {
-  if (name.startsWith(`fixed seed`)) return `fixed seed`
-  if (name === `random seed`) return replay ? `fixed history` : `fixed seed`
+  const unit = unitOf(name)
+  if (unit?.seed !== undefined) return `fixed seed`
+  if (unit) return replay ? `fixed history` : `fixed seed`
   if (name.startsWith(`fixed history:`)) return `fixed history`
   if (
     name.startsWith(`calibration:`) ||
-    name === `determinism` ||
+    name.startsWith(`determinism`) ||
     name === `reach`
   )
     return `calibration`
@@ -1731,6 +2032,21 @@ const frameworkStates = [
   `enumerated-timed-out-not-rerun`,
   `enumerated-shape-error`,
   `reserved-label-error`,
+  `unit-split-verdict`,
+  `unit-name-load-error`,
+  `second-fixed-seed`,
+  `unit-replay-constructed`,
+  `unit-replay-generated`,
+  `unit-replay-custom-prefix`,
+  `unit-rerun`,
+  `unit-rerun-beside-extension`,
+  `seedless-units-drawn`,
+  `replay-environment-error`,
+  `unit-requires-property`,
+  `retired-names-unit`,
+  `replay-without-unit-error`,
+  `replay-unit-missing-error`,
+  `replay-unit-selected`,
 ] as const
 
 function frameworkReach(
@@ -1751,6 +2067,7 @@ function frameworkReach(
       if (owed.buildError) reached.add(`constructed-build-load-error`)
       if (owed.emptyDifference)
         reached.add(`calibration-empty-difference-error`)
+      if (owed.nameError) reached.add(`unit-name-load-error`)
       if (owed.membership === `fixed`) reached.add(`fixed-membership-failure`)
       if (owed.membership === `constructed`)
         reached.add(`constructed-membership-failure`)
@@ -1762,6 +2079,22 @@ function frameworkReach(
           reached.add(`item-unmapped-load-error`)
       }
       continue
+    }
+    if (spec.secondSeed) reached.add(`second-fixed-seed`)
+    // A constructed unit and the generated unit of one seed that fail under
+    // different laws: each unit decided its own first failure.
+    for (const seed of fixedSeedsOf(spec)) {
+      const laws = unitNames(spec).map(
+        (unit) => owed.tests.get(fixedUnit(seed, unit))?.law,
+      )
+      const generatedLaw = laws.at(-1)
+      if (
+        generatedLaw !== undefined &&
+        laws
+          .slice(0, -1)
+          .some((law) => law !== undefined && law !== generatedLaw)
+      )
+        reached.add(`unit-split-verdict`)
     }
     const named = spec.fixed.length + spec.constructed.length > 0
     if (spec.arbitraryMap?.unmapper === true && named)
@@ -1811,7 +2144,8 @@ function frameworkReach(
         name.startsWith(`fixed history:`)
       )
         reached.add(`uncut-spin-model-error`)
-      if (name === `random seed`) reached.add(`random-campaign`)
+      if (isCampaign(name) && unitOf(name)!.seed === undefined)
+        reached.add(`random-campaign`)
       if (outcome.kind === `determinism`) reached.add(`determinism-caught`)
       if (outcome.law === agreementLaw) reached.add(`agreement-violation`)
       if (outcome.law === `bounded clock`) reached.add(`clock-violation`)
@@ -1936,7 +2270,7 @@ function frameworkReach(
       spec.probe === `late` &&
       logged.some(
         ({ test, history }) =>
-          test === `${spec.id} > determinism` &&
+          test.startsWith(`${spec.id} > determinism`) &&
           history.includes(0) &&
           history.includes(6),
       )
@@ -1951,6 +2285,30 @@ function frameworkReach(
     if (checkpoint === `rerun` && spec?.nested) reached.add(`nested-rerun`)
     if (checkpoint === `replay` && (probe.routes?.length ?? 0) > 0)
       reached.add(`replayed-route`)
+    if (checkpoint === `replay` && probe.failure) {
+      reached.add(
+        unitOf(probe.target)?.name === `generated`
+          ? `unit-replay-generated`
+          : `unit-replay-constructed`,
+      )
+      if (plan.prefix !== `ORACLE`) reached.add(`unit-replay-custom-prefix`)
+    }
+    if (checkpoint === `rerun` && spec && isCampaign(probe.target)) {
+      reached.add(`unit-rerun`)
+      // A sibling unit whose name extends the target's, which a pattern
+      // without its `$` anchor would also select.
+      if (
+        expected.get(spec.id)!.loads &&
+        [
+          ...(
+            expected.get(spec.id) as { tests: Map<string, Outcome> }
+          ).tests.keys(),
+        ].some(
+          (other) => other !== probe.target && other.startsWith(probe.target),
+        )
+      )
+        reached.add(`unit-rerun-beside-extension`)
+    }
   }
   // A history whose probe is reached without entering the state passes the
   // agreement wherever the model predicts no entry, so the state is reached.
@@ -1980,13 +2338,46 @@ function frameworkReach(
   if (trace.some(({ checkpoint }) => checkpoint === `replay`))
     reached.add(`replay-probe`)
   const seedless = trace.find(({ checkpoint }) => checkpoint === `seedless`)
+    ?.value as SeedlessRun | undefined
+  if (seedless && Object.values(seedless).some(({ routes }) => routes.length))
+    reached.add(`seedless-route`)
   if (
     seedless &&
-    Object.values(seedless.value as Record<string, Array<unknown>>).some(
-      (routes) => routes.length > 0,
+    plan.specs.some(
+      (spec) =>
+        !spec.slow && Object.keys(seedless[spec.id]?.ran ?? {}).length > 0,
     )
   )
-    reached.add(`seedless-route`)
+    reached.add(`seedless-units-drawn`)
+  // Law `replay-config`: the environment's first error, or the selection a
+  // path replay of the first spec makes.
+  const under = trace.find(({ checkpoint }) => checkpoint === `environment`)
+    ?.value as EnvironmentRun | undefined
+  if (plan.environment && under) {
+    const error = environmentError(plan)
+    if (error) reached.add(`replay-environment-error`)
+    if (error?.includes(`_UNIT requires`)) reached.add(`unit-requires-property`)
+    if (error?.startsWith(`Retired`)) reached.add(`retired-names-unit`)
+    const [first] = plan.specs
+    const errors = under.files[first!.id]?.loadErrors ?? []
+    if (
+      !error &&
+      errors.some((message) =>
+        message.includes(`of a generated source requires`),
+      )
+    )
+      reached.add(`replay-without-unit-error`)
+    if (!error && errors.some((message) => message.includes(`_UNIT names "`)))
+      reached.add(`replay-unit-missing-error`)
+    if (
+      !error &&
+      plan.environment.path === `valid` &&
+      (under.files[first!.id]?.tests ?? []).some(
+        (test) => test.state !== `skipped` && isCampaign(test.name),
+      )
+    )
+      reached.add(`replay-unit-selected`)
+  }
   if (trace.some(({ checkpoint }) => checkpoint === `rerun`))
     reached.add(`rerun-probe`)
   return reached
@@ -2001,11 +2392,15 @@ function frameworkReach(
 // records each file's load errors, each test's state and failure (with the
 // cause fast-check attaches), each passing campaign's printed reach counts, and
 // the synthetic driver's log. Then it probes:
-// - replay: for every failing campaign with a reported seed and path, Vitest runs
-//   all the files again with that replay selected and its own log, which
-//   shows the history the replay started from;
-// - rerun: for each property's first failure that printed a rerun command,
-//   Vitest runs that file with the command's `-t` pattern;
+// - replay: for every failing campaign unit that printed a replay command,
+//   /bin/sh runs that command as printed, with this child's Vitest in place
+//   of `vitest run`, over all the files and with its own log, which shows the
+//   history the replay started from;
+// - rerun: for each property's first history test that printed a rerun
+//   command, and its first fixed-seed unit that did, Vitest runs that file
+//   with the command's `-t` pattern;
+// - environment: for a suite that draws a replay environment, Vitest runs
+//   all the files once under it;
 // - reach alone: for each loaded enumerated source that declares states,
 //   Vitest runs that file with a `-t` pattern that selects only its reach
 //   test.
@@ -2040,7 +2435,12 @@ type Failure = {
   counterexample?: string
   seed?: number
   path?: string
+  /** The `-t` part of a rerun command, from the violation or from the unit's failure. */
   rerun?: string
+  /** A violation's whole rerun line, as printed. */
+  violationRerun?: string
+  /** A campaign unit's replay command, as printed. */
+  replay?: string
   /** Whether a law's failure prints the history's items. */
   showsHistory?: boolean
   /** Whether a model error quotes this machine's paths. */
@@ -2071,17 +2471,42 @@ type SuiteRun = {
 }
 type ProbeRun = {
   id: string
-  /** The probed test: a campaign for replay, a fixed or enumerated history for rerun. */
+  /** The failing test whose command ran: a campaign unit for replay, a unit or a history for rerun. */
   target: string
   original: Failure
+  /** For a replay: the printed command's variables, by name. */
+  variables?: Record<string, string>
+  /** The test the command must run: the random unit of the target's name for a replay. */
+  probed: string
   /** Each test's state in the probe run, by property id and name. */
   states: Array<[string, string, string]>
   /** The probed test's failure in the probe run. */
   failure?: Failure
-  /** Histories the replayed random campaign ran, in order. */
+  /** Histories the replayed random unit ran, in order. */
   ran?: Array<SyntheticHistory>
   /** The routes those histories ran under. */
   routes?: Array<string | null>
+}
+/** A seedless child run, per property: its random units' routes, its logged seeds, and what each unit ran. */
+type SeedlessRun = Record<
+  string,
+  {
+    routes: Array<string | null>
+    seeds: Array<number>
+    ran: Record<string, Array<SyntheticHistory>>
+  }
+>
+/** The run under a drawn replay environment. */
+type EnvironmentRun = {
+  files: Record<
+    string,
+    {
+      loaded: boolean
+      loadErrors: Array<string>
+      tests: Array<{ name: string; state: string; failure?: Failure }>
+    }
+  >
+  log: Array<LogEntry>
 }
 
 /** A reach test run alone, under a `-t` pattern that selects only it. */
@@ -2114,8 +2539,17 @@ function classify(error: ReportedError | undefined): Failure {
   const seed = /seed: (-?\d+)/.exec(outer)?.[1]
   const path = /path: "([\d:]+)"/.exec(outer)?.[1]
   const counterexample = /Counterexample: (.*)/.exec(outer)?.[1]
-  // The rerun command as printed, to be pasted into a shell.
-  const rerun = /^Rerun: (-t .*)$/m.exec(text)?.[1]
+  // The rerun command as printed, to be pasted into a shell: the violation's,
+  // or, for a campaign unit's failure, the one its message prints.
+  const rerun =
+    /^Rerun: (-t .*)$/m.exec(text)?.[1] ?? /^Rerun: (-t .*)$/m.exec(outer)?.[1]
+  const violationRerun =
+    inner.name === `OracleViolation`
+      ? /^Rerun: (.*)$/m.exec(text)?.[1]
+      : undefined
+  const replay = outer.startsWith(`Property failed`)
+    ? /^Replay: (.*)$/m.exec(outer)?.[1]
+    : undefined
   const history = /^History: (.*)$/m.exec(text)?.[1]
   const law = /\(law: ([^)]+)\)/.exec(text)?.[1]
   const checkpoint = /violated at checkpoint "([^"]+)"/.exec(text)?.[1]
@@ -2192,6 +2626,8 @@ function classify(error: ReportedError | undefined): Failure {
     ...(path !== undefined ? { path } : {}),
     ...(counterexample !== undefined ? { counterexample } : {}),
     ...(rerun !== undefined ? { rerun } : {}),
+    ...(violationRerun !== undefined ? { violationRerun } : {}),
+    ...(replay !== undefined ? { replay } : {}),
     // Only whether it shows the items: a report may print machine paths.
     ...(history !== undefined
       ? {
@@ -2210,18 +2646,34 @@ const shellWord = (word: string) => `'${word.replace(/'/g, `'\\''`)}'`
 function runVitest(
   directory: string,
   files: Array<string>,
-  env: Record<string, string>,
-  // Shell text appended to the command, which then runs in /bin/sh, as a
-  // pasted rerun command does.
-  shellTail?: string,
-  // Without a seed, the random campaigns draw theirs, as in an ordinary run.
-  seeded = true,
+  {
+    env = {},
+    shellHead,
+    shellTail,
+    seeded = true,
+    prefix,
+  }: {
+    env?: Record<string, string>
+    // Shell text before the command (variable assignments) and after it (a
+    // `-t` pattern), which then runs in /bin/sh, as a pasted command does.
+    shellHead?: string
+    shellTail?: string
+    // Without a seed, the random units draw theirs, as in an ordinary run.
+    seeded?: boolean
+    // The environment prefix every spec of the suite configures.
+    prefix: Prefix
+  },
 ): Report {
   const report = join(directory, `report-${runCount++}.json`)
-  // The child reads the default `ORACLE` variables, so none of the parent's
-  // oracle variables may leak into it.
+  // The child reads the suite's oracle variables, so none of the parent's
+  // oracle variables, under either prefix, may leak into it.
   const childEnv = Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => !key.startsWith(`ORACLE_`)),
+    Object.entries(process.env).filter(
+      ([key]) =>
+        !key.startsWith(`ORACLE_`) &&
+        !key.startsWith(`SYNTH_ORACLE_`) &&
+        !key.startsWith(`SELF_ORACLE_`),
+    ),
   )
   const argv = [
     vitest,
@@ -2235,19 +2687,21 @@ function runVitest(
     `--dir=${directory}`,
     ...files,
   ]
+  const shell = shellTail !== undefined || shellHead !== undefined
   const run = spawnSync(
-    shellTail === undefined ? process.execPath : `/bin/sh`,
-    shellTail === undefined
-      ? argv
-      : [
+    shell ? `/bin/sh` : process.execPath,
+    shell
+      ? [
           `-c`,
-          `${[process.execPath, ...argv].map(shellWord).join(` `)} ${shellTail}`,
-        ],
+          `${shellHead ?? ``} ${[process.execPath, ...argv].map(shellWord).join(` `)} ${shellTail ?? ``}`,
+        ]
+      : argv,
     {
       cwd: packageDirectory,
       env: {
         ...childEnv,
-        ...(seeded ? { ORACLE_SEED: `20251103` } : {}),
+        SELF_ORACLE_PREFIX: prefix,
+        ...(seeded ? { [`${prefix}_SEED`]: String(childSeed) } : {}),
         ...env,
         SELF_ORACLE_REPORT: report,
       },
@@ -2274,6 +2728,16 @@ const unnested = (name: string) =>
   name.startsWith(`${outerSuite} > `) ? name.slice(outerSuite.length + 3) : name
 const short = (id: string, name: string) =>
   unnested(name).replace(`${id} > `, ``)
+// A slow spec's driver runs on after its test timed out and logs under
+// whichever test runs then, which the machine's speed decides, so the driver
+// records no log entry of a slow spec; the model judges none.
+const settledLog = (plan: Plan, log: Array<LogEntry>) =>
+  log.filter(
+    ({ id }) => !plan.specs.some((spec) => spec.slow && spec.id === id),
+  )
+// Each property's entries in the order its file ran them. The child runs
+// spec files in parallel, so entries of two files interleave differently
+// from run to run; a stable sort by id keeps each file's own order.
 const readLog = (log: string): Array<LogEntry> =>
   existsSync(log)
     ? readFileSync(log, `utf8`)
@@ -2284,6 +2748,7 @@ const readLog = (log: string): Array<LogEntry> =>
           const entry = JSON.parse(line) as LogEntry
           return { ...entry, test: unnested(entry.test) }
         })
+        .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
     : []
 // The items of a counterexample that fast-check printed, in any form: the
 // first bracketed list of integers, where the lossy form's `Number.NaN` is a
@@ -2310,6 +2775,75 @@ const statesIn = (report: Report, plan: Plan, files: Array<string>) =>
     ),
   )
 
+// The variables a printed replay command sets, by name: each `NAME=value`
+// word before `vitest run`, a value single-quoted as a POSIX shell quotes it.
+const replayParts = (
+  command: string,
+):
+  | { head: string; tail: string; variables: Record<string, string> }
+  | undefined => {
+  const split = /^(.*?) vitest run (.*)$/.exec(command)
+  if (!split) return undefined
+  const variables: Record<string, string> = {}
+  for (const [, name, value] of split[1]!.matchAll(
+    /([A-Z_]+)=('(?:[^']|'\\'')*'|\S*)/g,
+  ))
+    variables[name!] = value!.startsWith(`'`)
+      ? value!.slice(1, -1).replace(/'\\''/g, `'`)
+      : value!
+  return { head: split[1]!, tail: split[2]!, variables }
+}
+
+// The `ORACLE_SEED` lines a test logged for a property, by seed.
+const seedLogsOf = (test: ReportedTest, id: string) =>
+  test.console
+    .split(`\n`)
+    .filter((line) =>
+      line.startsWith(`ORACLE_SEED {"property":${JSON.stringify(id)},`),
+    )
+    .map(
+      (line) =>
+        (JSON.parse(line.slice(`ORACLE_SEED `.length)) as { seed: number })
+          .seed,
+    )
+
+// The variables of a drawn replay environment, under the suite's prefix.
+function environmentOf(plan: Plan): Record<string, string> {
+  const drawn = plan.environment!
+  const name = (setting: string) => `${plan.prefix}_${setting}`
+  const [first] = plan.specs
+  const values: Record<string, string | undefined> = {
+    SELF_ORACLE_RETIRED: drawn.retired ? `1` : undefined,
+    [name(`SEED`)]: { absent: undefined, valid: `5`, invalid: `x` }[drawn.seed],
+    [name(`PATH`)]: {
+      absent: undefined,
+      valid: `0`,
+      empty: ``,
+      malformed: `a`,
+    }[drawn.path],
+    [name(`PROPERTY`)]: {
+      absent: undefined,
+      first: first!.id,
+      empty: ``,
+      unregistered: `self-oracle.unregistered`,
+    }[drawn.property],
+    [name(`UNIT`)]: {
+      absent: undefined,
+      named: randomUnit(
+        first!.source.kind === `generated`
+          ? unitNames(first!)[0]!
+          : `generated`,
+      ),
+      missing: randomUnit(`missing`),
+    }[drawn.unit],
+  }
+  return Object.fromEntries(
+    Object.entries(values).filter(
+      (entry): entry is [string, string] => entry[1] !== undefined,
+    ),
+  )
+}
+
 async function driveSuite(
   plan: Plan,
   observe: (checkpoint: string, value: unknown) => void,
@@ -2318,6 +2852,7 @@ async function driveSuite(
     packageDirectory,
     `.self-oracle-${process.pid}-${runCount++}`,
   )
+  const { prefix } = plan
   mkdirSync(directory, { recursive: true })
   try {
     const log = join(directory, `log.jsonl`)
@@ -2329,21 +2864,21 @@ async function driveSuite(
       )
       return file
     })
-    const report = runVitest(directory, files, { SELF_ORACLE_LOG: log })
+    const report = runVitest(directory, files, {
+      env: { SELF_ORACLE_LOG: log },
+      prefix,
+    })
     const run: SuiteRun = {
       files: {},
-      log: readLog(log),
+      log: settledLog(plan, readLog(log)),
       unhandled: report.unhandled.map((error) => error.message ?? ``),
     }
     for (const [index, spec] of plan.specs.entries()) {
       const reported = report.files.find((file) => file.file === files[index])
-      // A passing campaign prints `<id> <campaign> reach {...}`.
+      // A passing unit prints `<id> <unit> reach {...}`.
       const reach: Record<string, Record<string, number>> = {}
       for (const line of report.stdout.split(`\n`)) {
-        const match =
-          /^(\S+) (fixed seed -?\d+|random seed|enumerated) reach (\{.*\})$/.exec(
-            line,
-          )
+        const match = /^(\S+) (.+) reach (\{.*\})$/.exec(line)
         if (match?.[1] === spec.id)
           reach[match[2]!] = JSON.parse(match[3]!) as Record<string, number>
       }
@@ -2361,21 +2896,7 @@ async function driveSuite(
           ...(test.state === `failed`
             ? { failure: classify(test.errors[0]) }
             : {}),
-          seedLogs: test.console
-            .split(`\n`)
-            .filter((line) =>
-              line.startsWith(
-                `ORACLE_SEED {"property":${JSON.stringify(spec.id)},`,
-              ),
-            )
-            .map(
-              (line) =>
-                (
-                  JSON.parse(line.slice(`ORACLE_SEED `.length)) as {
-                    seed: number
-                  }
-                ).seed,
-            ),
+          seedLogs: seedLogsOf(test, spec.id),
         })),
         reach,
       }
@@ -2383,55 +2904,78 @@ async function driveSuite(
     observe(`run`, run)
     if (plan.seedless) {
       const seedlessLog = join(directory, `seedless-${runCount}.jsonl`)
-      runVitest(
-        directory,
-        files,
-        { SELF_ORACLE_LOG: seedlessLog },
-        undefined,
-        false,
-      )
+      const seedless = runVitest(directory, files, {
+        env: { SELF_ORACLE_LOG: seedlessLog },
+        seeded: false,
+        prefix,
+      })
       const logged = readLog(seedlessLog)
-      // The routes each random campaign ran under: the same whatever seed it
-      // drew, so this observation repeats.
+      const settled = new Set(settledLog(plan, logged))
+      // Per property: the routes its random units ran under, the same
+      // whatever seed it drew; the seed it logged; and what each random unit
+      // ran, which that seed decides (none for a slow spec).
       observe(
         `seedless`,
         Object.fromEntries(
-          plan.specs.map((spec) => [
-            spec.id,
-            [
-              ...new Set(
-                logged
-                  .filter((entry) => entry.test === `${spec.id} > random seed`)
-                  .map((entry) => entry.route),
-              ),
-            ].sort(),
-          ]),
-        ),
+          plan.specs.map((spec, index) => {
+            const random = logged.filter(
+              (entry) =>
+                entry.id === spec.id &&
+                unitOf(entry.test.slice(spec.id.length + 3))?.seed ===
+                  undefined &&
+                isCampaign(entry.test.slice(spec.id.length + 3)),
+            )
+            const ran: Record<string, Array<SyntheticHistory>> = {}
+            for (const entry of random.filter((kept) => settled.has(kept)))
+              (ran[entry.test.slice(spec.id.length + 3)] ??= []).push(
+                entry.history,
+              )
+            return [
+              spec.id,
+              {
+                routes: [...new Set(random.map((entry) => entry.route))].sort(),
+                seeds: (
+                  seedless.files.find((file) => file.file === files[index])
+                    ?.tests ?? []
+                ).flatMap((test) => seedLogsOf(test, spec.id)),
+                ran,
+              },
+            ]
+          }),
+        ) satisfies SeedlessRun,
       )
     }
     for (const spec of plan.specs) {
-      for (const campaign of run.files[spec.id]!.tests) {
-        if (!isCampaign(campaign.name) || campaign.failure?.path === undefined)
-          continue
+      // replay: each failing unit's printed replay command, run as printed.
+      for (const unit of run.files[spec.id]!.tests) {
+        const command = unit.failure?.replay
+        if (!isCampaign(unit.name) || command === undefined) continue
+        const parts = replayParts(command)
+        const probed = randomUnit(unitOf(unit.name)!.name)
         const replayLog = join(directory, `replay-${runCount}.jsonl`)
-        const replay = runVitest(directory, files, {
-          ORACLE_SEED: String(campaign.failure.seed),
-          ORACLE_PATH: campaign.failure.path,
-          ORACLE_PROPERTY: spec.id,
-          SELF_ORACLE_LOG: replayLog,
-        })
+        const replay = parts
+          ? runVitest(directory, files, {
+              env: { SELF_ORACLE_LOG: replayLog },
+              shellHead: parts.head,
+              shellTail: parts.tail,
+              seeded: false,
+              prefix,
+            })
+          : undefined
         const index = plan.specs.indexOf(spec)
-        const random = replay.files
+        const random = replay?.files
           .find((file) => file.file === files[index])
-          ?.tests.find((test) => test.name.endsWith(`random seed`))
+          ?.tests.find((test) => short(spec.id, test.name) === probed)
         const replayed = readLog(replayLog).filter(
-          (entry) => entry.test === `${spec.id} > random seed`,
+          (entry) => entry.test === `${spec.id} > ${probed}`,
         )
         observe(`replay`, {
           id: spec.id,
-          target: campaign.name,
-          original: campaign.failure,
-          states: statesIn(replay, plan, files),
+          target: unit.name,
+          original: unit.failure!,
+          variables: parts?.variables ?? {},
+          probed,
+          states: replay ? statesIn(replay, plan, files) : [],
           ...(random?.state === `failed`
             ? { failure: classify(random.errors[0]) }
             : {}),
@@ -2439,25 +2983,72 @@ async function driveSuite(
           routes: replayed.map((entry) => entry.route),
         } satisfies ProbeRun)
       }
-      const target = run.files[spec.id]!.tests.find(
-        (test) => test.failure?.rerun !== undefined,
-      )
-      if (!target) continue
-      const index = plan.specs.indexOf(spec)
-      const rerun = runVitest(
-        directory,
-        [files[index]!],
-        {},
-        target.failure!.rerun,
-      )
-      const ran = rerun.files[0]?.tests.find((test) => test.state === `failed`)
-      observe(`rerun`, {
-        id: spec.id,
-        target: target.name,
-        original: target.failure!,
-        states: statesIn(rerun, plan, files),
-        ...(ran ? { failure: classify(ran.errors[0]) } : {}),
-      } satisfies ProbeRun)
+      // rerun: the first history test and the first fixed-seed unit that
+      // printed a `-t` pattern.
+      const targets = [
+        run.files[spec.id]!.tests.find(
+          (test) => !isCampaign(test.name) && test.failure?.rerun !== undefined,
+        ),
+        run.files[spec.id]!.tests.find(
+          (test) =>
+            unitOf(test.name)?.seed !== undefined &&
+            test.failure?.rerun !== undefined,
+        ),
+      ]
+      for (const target of targets) {
+        if (!target) continue
+        const index = plan.specs.indexOf(spec)
+        const rerun = runVitest(directory, [files[index]!], {
+          shellTail: target.failure!.rerun,
+          prefix,
+        })
+        const ran = rerun.files[0]?.tests.find(
+          (test) => test.state === `failed`,
+        )
+        observe(`rerun`, {
+          id: spec.id,
+          target: target.name,
+          original: target.failure!,
+          probed: target.name,
+          states: statesIn(rerun, plan, files),
+          ...(ran ? { failure: classify(ran.errors[0]) } : {}),
+        } satisfies ProbeRun)
+      }
+    }
+    // environment: every file once under the drawn replay environment.
+    if (plan.environment) {
+      const environmentLog = join(directory, `environment-${runCount}.jsonl`)
+      const under = runVitest(directory, files, {
+        env: { ...environmentOf(plan), SELF_ORACLE_LOG: environmentLog },
+        seeded: false,
+        prefix,
+      })
+      observe(`environment`, {
+        files: Object.fromEntries(
+          plan.specs.map((spec, index) => {
+            const reported = under.files.find(
+              (file) => file.file === files[index],
+            )
+            return [
+              spec.id,
+              {
+                loaded: reported !== undefined && reported.errors.length === 0,
+                loadErrors: (reported?.errors ?? []).map(
+                  (error) => error.message ?? ``,
+                ),
+                tests: (reported?.tests ?? []).map((test) => ({
+                  name: short(spec.id, test.name),
+                  state: test.state,
+                  ...(test.state === `failed`
+                    ? { failure: classify(test.errors[0]) }
+                    : {}),
+                })),
+              },
+            ]
+          }),
+        ),
+        log: settledLog(plan, readLog(environmentLog)),
+      } satisfies EnvironmentRun)
     }
     // reach: for each loaded enumerated source that declares states, Vitest
     // runs that file again with a `-t` pattern that selects only its reach
@@ -2469,12 +3060,10 @@ async function driveSuite(
       const escape = (text: string) =>
         text.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
       const pattern = `^${[...(spec.nested ? [outerSuite] : []), spec.id, `reach`].map(escape).join(`(?: | > )`)}$`
-      const alone = runVitest(
-        directory,
-        [files[index]!],
-        {},
-        `-t ${shellWord(pattern)}`,
-      )
+      const alone = runVitest(directory, [files[index]!], {
+        shellTail: `-t ${shellWord(pattern)}`,
+        prefix,
+      })
       const test = alone.files[0]?.tests.find(
         (candidate) => short(spec.id, candidate.name) === `reach`,
       )
@@ -2506,17 +3095,21 @@ async function driveSuite(
 //
 // For each property: it loads exactly when the model says so; it registers
 // exactly the owed tests; each test passes, or fails with the owed kind, law,
-// and cause; a campaign's counterexample still violates the owed law; a passing
-// determinism test ran every history it owes; and each passing campaign printed
-// the owed reach counts. Then the probes: the replays and reruns the model
-// owes all happened; in each, every other test stood aside; the probed test
-// failed again the same way; and a replay started from the counterexample
-// itself, as a direct replay must, and reported the same one.
+// and cause; a unit's counterexample still violates the owed law; each unit
+// ran the stream the model draws (law `units`); a passing determinism unit
+// ran its history twice; and each passing unit printed the owed reach counts.
+// Then the probes: the replays and reruns the model owes all happened; a
+// replay command names the seed, path, property, and unit under the suite's
+// prefix; in each, every other test stood aside; the probed test failed again
+// the same way; and a replay started from the counterexample itself, as a
+// direct replay must, and reported the same one. Last, the seedless run's
+// random units ran the seed they logged, and a run under a drawn replay
+// environment failed or selected as law `replay-config` owes.
 
 const lawOfTest = (name: string) =>
   name.startsWith(`calibration:`)
     ? `calibration`
-    : name === `determinism`
+    : name.startsWith(`determinism`)
       ? `determinism`
       : name === `reach`
         ? `reach`
@@ -2534,6 +3127,68 @@ const lawOfKind = (kind: string, name: string) =>
           ? `reach`
           : lawOfTest(name)
 
+// Whether a unit's history fails it: a data error, a failing verdict, or, in
+// a constructed unit, a state its construction names and does not enter.
+const failsUnit = (
+  spec: SyntheticSpec,
+  unit: string,
+  history: SyntheticHistory,
+) => {
+  const construction = spec.constructed.find(
+    ({ name }) => name === unitOf(unit)?.name,
+  )
+  return (
+    dataOutcome(spec) !== undefined ||
+    judged(spec, history).kind !== `pass` ||
+    (construction !== undefined && !reaches(spec, history, construction.enters))
+  )
+}
+// A unit's log and its stream, as law `units` compares them: a unit that the
+// model owes a pass ran exactly its stream, no history more; a failing unit
+// ran its stream up to its first failure, and then its shrinks, which the
+// law does not compare.
+const comparedRun = (
+  spec: SyntheticSpec,
+  unit: string,
+  stream: ReadonlyArray<SyntheticHistory>,
+  logged: ReadonlyArray<SyntheticHistory>,
+) => {
+  const first = stream.findIndex((history) => failsUnit(spec, unit, history))
+  return first < 0
+    ? { ran: logged, owedRun: stream }
+    : {
+        ran: logged.slice(0, first + 1),
+        owedRun: stream.slice(0, first + 1),
+      }
+}
+
+// Model law `replay-config`: the first error of the drawn replay
+// environment, in the order the law states, or none.
+function environmentError(plan: Plan): string | undefined {
+  const drawn = plan.environment!
+  const name = (setting: string) => `${plan.prefix}_${setting}`
+  if (drawn.retired)
+    return `Retired oracle replay variables are set: SELF_ORACLE_RETIRED. Use ${name(`SEED`)}, ${name(`PATH`)}, ${name(`PROPERTY`)}, and ${name(`UNIT`)} to select a replay, and ${name(`RUNS_MULTIPLIER`)} to scale run counts.`
+  // An empty property is still set.
+  const property = drawn.property !== `absent`
+  const unit = drawn.unit !== `absent`
+  if (drawn.seed === `absent` && drawn.path !== `absent`)
+    return `${name(`PATH`)} requires ${name(`SEED`)}`
+  if (drawn.seed !== `invalid` && drawn.path === `absent`) {
+    if (property) return `${name(`PROPERTY`)} requires ${name(`PATH`)}`
+    return unit ? `${name(`UNIT`)} requires ${name(`PROPERTY`)}` : undefined
+  }
+  if (drawn.seed === `invalid`) return `${name(`SEED`)} must be an integer`
+  if (drawn.path === `empty`) return `${name(`PATH`)} must be non-empty`
+  if (drawn.path === `malformed`)
+    return `${name(`PATH`)} must contain colon-separated nonnegative integers`
+  if (!property || drawn.property === `empty`)
+    return `${name(`PATH`)} requires ${name(`PROPERTY`)}`
+  if (drawn.property === `unregistered`)
+    return `unknown oracle property: self-oracle.unregistered`
+  return undefined
+}
+
 function checkSuite(
   plan: Plan,
   trace: ReadonlyArray<{ checkpoint: string; value: unknown }>,
@@ -2550,6 +3205,7 @@ function checkSuite(
       checkpoint,
       probe: value as ProbeRun,
     }))
+  const name = (setting: string) => `${plan.prefix}_${setting}`
   for (const spec of plan.specs) {
     const owed = expected.get(spec.id)!
     const seen = run.files[spec.id]!
@@ -2558,7 +3214,7 @@ function checkSuite(
       if (seen.loaded)
         return violation(
           `run`,
-          `${spec.id} loaded, but its id is unregistered, a required state has no constructed history, a constructed history names an undeclared state, a fixed or constructed history is one the arbitrary cannot take back, \`owns\` is not a non-empty literal list of strings, or a history is not data`,
+          `${spec.id} loaded, but its id is unregistered, a required state has no constructed history, a constructed history names an undeclared state, two of its tests would share a name, a fixed or constructed history is one the arbitrary cannot take back, \`owns\` is not a non-empty literal list of strings, or a history is not data`,
           law,
         )
       const owedText = [owed.loadError, owed.loadFix].filter(
@@ -2576,7 +3232,7 @@ function checkSuite(
         return violation(
           `run`,
           `${spec.id} failed to load with ${JSON.stringify(seen.loadErrors)}, owed ${JSON.stringify(owedText)}`,
-          owed.membership ? law : `data`,
+          owed.membership || owed.nameError ? law : `data`,
           { actual: seen.loadErrors, expected: owedText },
         )
       continue
@@ -2601,6 +3257,13 @@ function checkSuite(
         `registration`,
         { actual: seenNames, expected: names },
       )
+    // The property's one logged seed, which its first random unit logs.
+    const firstRandom =
+      spec.source.kind === `generated`
+        ? randomUnit(unitNames(spec)[0]!)
+        : undefined
+    const loggedSeed = seen.tests.find((test) => test.name === firstRandom)
+      ?.seedLogs[0]
     for (const test of seen.tests) {
       const outcome = owed.tests.get(test.name)!
       const failure = test.failure
@@ -2619,7 +3282,7 @@ function checkSuite(
         return violation(
           `run`,
           `${spec.id} "${test.name}" ${test.state} as ${JSON.stringify(failure ?? null)}, owed ${JSON.stringify(outcome)}`,
-          // A campaign that owes a failure and times out shrank too long.
+          // A unit that owes a failure and times out shrank too long.
           isCampaign(test.name) &&
             observedKind === `timeout` &&
             ![`pass`, `timeout`].includes(outcome.kind)
@@ -2649,9 +3312,9 @@ function checkSuite(
           `${spec.id} "${test.name}" printed a History line that does not show the history`,
           `verdict`,
         )
-      // A random campaign selects its seed once and logs that selection once;
-      // a failing campaign's reported seed is the logged one.
-      const owedSeedLogs = test.name === `random seed` ? 1 : 0
+      // A property selects its seed once, in its first random unit, and
+      // logs that selection once; every random unit runs it.
+      const owedSeedLogs = test.name === firstRandom ? 1 : 0
       if (test.seedLogs.length !== owedSeedLogs)
         return violation(
           `run`,
@@ -2661,29 +3324,62 @@ function checkSuite(
         )
       if (
         failure?.seed !== undefined &&
-        test.name === `random seed` &&
-        test.seedLogs[0] !== failure.seed
+        unitOf(test.name) !== undefined &&
+        unitOf(test.name)!.seed === undefined &&
+        loggedSeed !== failure.seed
       )
         return violation(
           `run`,
-          `${spec.id} "${test.name}" logged seed ${test.seedLogs[0]} but ran seed ${failure.seed}`,
+          `${spec.id} "${test.name}" ran seed ${failure.seed}, but the property logged seed ${loggedSeed}`,
           `seed-log`,
-          { actual: failure.seed, expected: test.seedLogs[0] },
+          { actual: failure.seed, expected: loggedSeed },
         )
-      if (
-        test.name === `determinism` &&
-        test.state === `passed` &&
-        owed.determinismRuns !== undefined
-      ) {
-        const runs = run.log.filter(
-          (entry) =>
-            entry.id === spec.id && entry.test === `${spec.id} > determinism`,
-        ).length
-        if (runs !== 2 * owed.determinismRuns)
+      // A failing unit prints its replay command; a failing fixed-seed unit
+      // also prints its own `-t` pattern; a failing random unit's violation
+      // prints the replay command as its rerun line.
+      const unit = unitOf(test.name)
+      if (unit && failure?.seed !== undefined) {
+        if (failure.replay === undefined)
           return violation(
             `run`,
-            `${spec.id} determinism ran ${runs / 2} histories, owed ${owed.determinismRuns}`,
+            `${spec.id} "${test.name}" failed with seed ${failure.seed} and printed no replay command`,
+            `replay`,
+          )
+        if (unit.seed !== undefined && failure.rerun === undefined)
+          return violation(
+            `run`,
+            `${spec.id} "${test.name}" failed and printed no \`-t\` rerun of itself`,
+            `rerun`,
+          )
+        const owedLine =
+          unit.seed === undefined ? failure.replay : failure.rerun
+        if (
+          failure.violationRerun !== undefined &&
+          failure.violationRerun !== owedLine
+        )
+          return violation(
+            `run`,
+            `${spec.id} "${test.name}" printed the rerun line ${JSON.stringify(failure.violationRerun)} in its violation, owed ${JSON.stringify(owedLine)}`,
+            unit.seed === undefined ? `replay` : `rerun`,
+            { actual: failure.violationRerun, expected: owedLine },
+          )
+      }
+      // A passing determinism unit ran its one history twice.
+      const twice = owed.determinism.get(test.name)
+      if (twice && test.state === `passed`) {
+        const runs = run.log
+          .filter(
+            (entry) =>
+              entry.id === spec.id &&
+              entry.test === `${spec.id} > ${test.name}`,
+          )
+          .map((entry) => entry.history)
+        if (JSON.stringify(runs) !== JSON.stringify([twice, twice]))
+          return violation(
+            `run`,
+            `${spec.id} "${test.name}" ran ${JSON.stringify(runs)}, owed ${JSON.stringify(twice)} twice`,
             `determinism`,
+            { actual: runs, expected: [twice, twice] },
           )
       }
       // Without a timeout, a campaign shrinks without a budget.
@@ -2710,6 +3406,27 @@ function checkSuite(
           )
       }
     }
+    // Law `units`: each passing unit ran exactly the stream the model draws,
+    // and a failing unit that stream up to its first failure. A slow spec's
+    // driver runs on after its test timed out, so its log names other tests.
+    if (!spec.slow)
+      for (const [unit, stream] of owed.streams) {
+        const { ran, owedRun } = comparedRun(
+          spec,
+          unit,
+          stream,
+          run.log
+            .filter((entry) => entry.test === `${spec.id} > ${unit}`)
+            .map((entry) => entry.history),
+        )
+        if (JSON.stringify(ran) !== JSON.stringify(owedRun))
+          return violation(
+            `run`,
+            `${spec.id} "${unit}" ran ${JSON.stringify(ran)}, owed ${JSON.stringify(owedRun)}`,
+            `units`,
+            { actual: ran, expected: owedRun },
+          )
+      }
     for (const [campaign, counts] of owed.reach)
       if (JSON.stringify(seen.reach[campaign]) !== JSON.stringify(counts))
         return violation(
@@ -2718,6 +3435,18 @@ function checkSuite(
           `reach`,
           { actual: seen.reach[campaign], expected: counts },
         )
+    // Only a test that passes in time prints reach: a merge of the units'
+    // lines must not count a unit that failed or timed out.
+    const unowed = Object.keys(seen.reach).filter(
+      (test) => !owed.reach.has(test),
+    )
+    if (unowed.length > 0)
+      return violation(
+        `run`,
+        `${spec.id} printed reach for ${JSON.stringify(unowed)}, which passed no test in time`,
+        `reach`,
+        { actual: unowed, expected: [] },
+      )
     for (const campaign of owed.replays)
       if (
         !probes.some(
@@ -2732,37 +3461,67 @@ function checkSuite(
           `${spec.id} "${campaign}" failed but was never replayed`,
           `replay`,
         )
-    if (
-      owed.rerun &&
-      !probes.some(
-        ({ checkpoint, probe }) =>
-          checkpoint === `rerun` && probe.id === spec.id,
+    for (const [owedRerun, unitTarget] of [
+      [owed.rerun, false],
+      [owed.unitRerun, true],
+    ] as const)
+      if (
+        owedRerun &&
+        !probes.some(
+          ({ checkpoint, probe }) =>
+            checkpoint === `rerun` &&
+            probe.id === spec.id &&
+            isCampaign(probe.target) === unitTarget,
+        )
       )
-    )
-      return violation(
-        `rerun`,
-        `${spec.id} "${owed.rerun}" printed no rerun command`,
-        `rerun`,
-      )
+        return violation(
+          `rerun`,
+          `${spec.id} "${owedRerun}" printed no rerun command`,
+          `rerun`,
+        )
   }
-  // In a run without a seed, every history of a random campaign runs under
-  // `random seed`, and a loaded campaign runs at least one. A slow campaign
-  // times out, but its first history starts before it does.
+  // In a run without a seed, every history of a random unit runs under
+  // `random seed`, and a loaded property runs at least one. A slow unit
+  // times out, but its first history starts before it does. The property
+  // logged one seed, and each random unit ran the stream of that seed.
   const seedless = trace.find(({ checkpoint }) => checkpoint === `seedless`)
-    ?.value as Record<string, Array<string | null>> | undefined
+    ?.value as SeedlessRun | undefined
   if (seedless)
     for (const spec of plan.specs) {
-      const owedRoutes =
+      const generated =
         expected.get(spec.id)!.loads && spec.source.kind === `generated`
-          ? [`random seed`]
-          : []
-      if (JSON.stringify(seedless[spec.id]) !== JSON.stringify(owedRoutes))
+      const owedRoutes = generated ? [`random seed`] : []
+      const { routes, seeds, ran } = seedless[spec.id]!
+      if (JSON.stringify(routes) !== JSON.stringify(owedRoutes))
         return violation(
           `seedless`,
-          `${spec.id}: an ordinary run's random campaign ran under ${JSON.stringify(seedless[spec.id])}, owed ${JSON.stringify(owedRoutes)}`,
+          `${spec.id}: an ordinary run's random units ran under ${JSON.stringify(routes)}, owed ${JSON.stringify(owedRoutes)}`,
           `route`,
-          { actual: seedless[spec.id], expected: owedRoutes },
+          { actual: routes, expected: owedRoutes },
         )
+      if (seeds.length !== (generated ? 1 : 0))
+        return violation(
+          `seedless`,
+          `${spec.id}: an ordinary run logged ${seeds.length} ORACLE_SEED lines, owed ${generated ? 1 : 0}`,
+          `seed-log`,
+          { actual: seeds, expected: generated ? 1 : 0 },
+        )
+      if (!generated || spec.slow) continue
+      for (const unit of unitNames(spec).map(randomUnit)) {
+        const { ran: logged, owedRun } = comparedRun(
+          spec,
+          unit,
+          unitStream(spec, seeds[0]!, unitOf(unit)!.name),
+          ran[unit] ?? [],
+        )
+        if (JSON.stringify(logged) !== JSON.stringify(owedRun))
+          return violation(
+            `seedless`,
+            `${spec.id} "${unit}" ran ${JSON.stringify(logged)} in an ordinary run that logged seed ${seeds[0]}, owed ${JSON.stringify(owedRun)}`,
+            `units`,
+            { actual: logged, expected: owedRun },
+          )
+      }
     }
   // In a full run, every history's test starts, so the reach test runs
   // none of them again: it reuses what their tests recorded.
@@ -2824,20 +3583,39 @@ function checkSuite(
   for (const spec of plan.specs) {
     if (!expected.get(spec.id)!.loads || spec.slow) continue
     for (const entry of run.log.filter(({ id }) => id === spec.id)) {
-      const name = entry.test.slice(spec.id.length + 3)
-      if (entry.route !== owedRoute(name))
+      const test = entry.test.slice(spec.id.length + 3)
+      if (entry.route !== owedRoute(test))
         return violation(
           `run`,
-          `${spec.id} "${name}" ran ${JSON.stringify(entry.history)} under route ${JSON.stringify(entry.route)}, owed ${JSON.stringify(owedRoute(name))}`,
+          `${spec.id} "${test}" ran ${JSON.stringify(entry.history)} under route ${JSON.stringify(entry.route)}, owed ${JSON.stringify(owedRoute(test))}`,
           `route`,
-          { actual: entry.route, expected: owedRoute(name) },
+          { actual: entry.route, expected: owedRoute(test) },
         )
     }
   }
   for (const { checkpoint, probe } of probes) {
-    const probed = checkpoint === `replay` ? `random seed` : probe.target
+    if (checkpoint === `replay`) {
+      // The printed command names the seed, the path, the property, and the
+      // random unit of the target's name, under the suite's prefix.
+      const owedVariables = {
+        [name(`SEED`)]: String(probe.original.seed),
+        [name(`PATH`)]: probe.original.path,
+        [name(`PROPERTY`)]: probe.id,
+        [name(`UNIT`)]: probe.probed,
+      }
+      const printed = Object.fromEntries(
+        Object.keys(owedVariables).map((key) => [key, probe.variables?.[key]]),
+      )
+      if (JSON.stringify(printed) !== JSON.stringify(owedVariables))
+        return violation(
+          checkpoint,
+          `${probe.id} "${probe.target}" printed a replay command with ${JSON.stringify(probe.variables)}, owed ${JSON.stringify(owedVariables)}`,
+          `replay`,
+          { actual: printed, expected: owedVariables },
+        )
+    }
     const others = probe.states.filter(
-      ([id, name]) => !(id === probe.id && name === probed),
+      ([id, test]) => !(id === probe.id && test === probe.probed),
     )
     if (others.some(([, , state]) => state !== `skipped`))
       return violation(
@@ -2848,7 +3626,7 @@ function checkSuite(
     if (!probe.failure)
       return violation(
         checkpoint,
-        `${probe.id} ${checkpoint} of "${probe.target}": "${probed}" did not fail again`,
+        `${probe.id} ${checkpoint} of "${probe.target}": "${probe.probed}" did not fail again`,
         checkpoint,
       )
     if (
@@ -2861,7 +3639,7 @@ function checkSuite(
         checkpoint,
       )
     if (checkpoint !== `replay`) continue
-    const replayRoute = owedRoute(`random seed`, true)
+    const replayRoute = owedRoute(probe.probed, true)
     if (probe.routes?.some((route) => route !== replayRoute))
       return violation(
         checkpoint,
@@ -2888,7 +3666,104 @@ function checkSuite(
         `replay`,
       )
   }
-  return pass
+  return checkEnvironment(plan, trace, expected) ?? pass
+}
+
+// Law `replay-config`: under a malformed replay environment every file fails
+// to load with its first error. Otherwise, in a path replay of the first
+// spec's property, a generated source without `UNIT`, or with a `UNIT` that
+// names none of its random units, fails to load, and so does an enumerated
+// source with a `UNIT`; a `UNIT` that names a random unit runs only that
+// unit, the history at path `0` of its stream at seed 5. Every other spec
+// stands aside. Without a path, every spec loads as it does in the main run.
+function checkEnvironment(
+  plan: Plan,
+  trace: ReadonlyArray<{ checkpoint: string; value: unknown }>,
+  expected: ReturnType<typeof suiteModel>,
+): Verdict | undefined {
+  const under = trace.find(({ checkpoint }) => checkpoint === `environment`)
+    ?.value as EnvironmentRun | undefined
+  if (!plan.environment || !under) return undefined
+  const name = (setting: string) => `${plan.prefix}_${setting}`
+  const failed = (text: string) =>
+    violation(`environment`, text, `replay-config`)
+  const error = environmentError(plan)
+  const drawn = plan.environment
+  const replays = drawn.path === `valid` && error === undefined
+  const unit = environmentOf(plan)[name(`UNIT`)]
+  for (const [index, spec] of plan.specs.entries()) {
+    const owed = expected.get(spec.id)!
+    const seen = under.files[spec.id]!
+    const selected = replays && index === 0 && !spec.unregistered
+    // The text of the replay error the selected spec's registration owes.
+    const replayError = !selected
+      ? undefined
+      : spec.source.kind === `enumerated`
+        ? unit === undefined
+          ? undefined
+          : `${spec.id}: ${name(`UNIT`)} names "${unit}"`
+        : unit === undefined
+          ? `${spec.id}: ${name(`PATH`)} of a generated source requires ${name(`UNIT`)}`
+          : unitNames(spec).map(randomUnit).includes(unit)
+            ? undefined
+            : `${spec.id}: ${name(`UNIT`)} names "${unit}"`
+    const owedError =
+      error ?? (owed.loads ? replayError : (owed.loadError ?? undefined))
+    const owedLoads = error === undefined && owed.loads && !replayError
+    if (seen.loaded !== owedLoads)
+      return failed(
+        `${spec.id} ${seen.loaded ? `loaded` : `failed to load with ${JSON.stringify(seen.loadErrors)}`} under ${JSON.stringify(environmentOf(plan))}, owed ${owedLoads ? `a load` : JSON.stringify(owedError ?? `a load error`)}`,
+      )
+    if (
+      !seen.loaded &&
+      owedError !== undefined &&
+      !seen.loadErrors.some((message) => message.includes(owedError))
+    )
+      return failed(
+        `${spec.id} failed to load with ${JSON.stringify(seen.loadErrors)} under ${JSON.stringify(environmentOf(plan))}, owed ${JSON.stringify(owedError)}`,
+      )
+    if (!seen.loaded || !replays) continue
+    // A path replay: only the selected unit runs, if any.
+    const running = seen.tests.filter((test) => test.state !== `skipped`)
+    const owedRunning = selected && unit !== undefined ? [unit] : []
+    if (
+      JSON.stringify(running.map((test) => test.name)) !==
+      JSON.stringify(owedRunning)
+    )
+      return failed(
+        `${spec.id} ran ${JSON.stringify(running.map((test) => test.name))} in a path replay that selects ${JSON.stringify(unit ?? null)}, owed ${JSON.stringify(owedRunning)}`,
+      )
+    if (owedRunning.length === 0) continue
+    const [history] = unitStream(spec, 5, unitOf(unit!)!.name)
+    const ran = under.log
+      .filter((entry) => entry.test === `${spec.id} > ${unit}`)
+      .map((entry) => entry.history)
+    if (!spec.slow && JSON.stringify(ran) !== JSON.stringify([history]))
+      return failed(
+        `${spec.id} "${unit}" ran ${JSON.stringify(ran)} at path 0, owed ${JSON.stringify([history])}`,
+      )
+    const owedKind =
+      dataOutcome(spec)?.kind ??
+      (spec.slow
+        ? `timeout`
+        : failsUnit(spec, unit!, history!)
+          ? (() => {
+              const verdict = judged(spec, history!)
+              return verdict.kind === `pass`
+                ? `constructed-reach`
+                : verdict.kind
+            })()
+          : `pass`)
+    const observed =
+      running[0]!.state === `passed`
+        ? `pass`
+        : (running[0]!.failure?.kind ?? `other`)
+    if (observed !== owedKind)
+      return failed(
+        `${spec.id} "${unit}" ${running[0]!.state} as ${JSON.stringify(running[0]!.failure ?? null)} at path 0, owed ${owedKind}`,
+      )
+  }
+  return undefined
 }
 
 // ---------------------------------------------------------------------------
@@ -2903,6 +3778,9 @@ const generatedDraft = (overrides: Partial<Draft>): Draft => ({
   statesMode: `exact`,
   constructed: [],
   fixed: [],
+  constructedNames: `indexed`,
+  fixedNames: `indexed`,
+  secondSeed: false,
   arbitraryMap: `none`,
   mapAt: `history`,
   enumeratedStates: null,
@@ -2945,12 +3823,51 @@ const fixedHistory = (
   name: string,
   enters: Array<(typeof frameworkStates)[number]>,
   ...drafts: Array<Draft>
-) => ({ name, enters, history: { drafts, seedless: false } })
+) => ({
+  name,
+  enters,
+  history: {
+    drafts,
+    seedless: false,
+    prefix: `ORACLE` as Prefix,
+    environment: null,
+  },
+})
 const seedlessHistory = (
   name: string,
   enters: Array<(typeof frameworkStates)[number]>,
   ...drafts: Array<Draft>
-) => ({ name, enters, history: { drafts, seedless: true } })
+) => ({
+  name,
+  enters,
+  history: {
+    drafts,
+    seedless: true,
+    prefix: `ORACLE` as Prefix,
+    environment: null,
+  },
+})
+// A suite under a custom environment prefix, a drawn replay environment, or both.
+const suiteHistory = (
+  name: string,
+  enters: Array<(typeof frameworkStates)[number]>,
+  { prefix = `ORACLE`, environment = null }: Partial<Omit<Suite, `drafts`>>,
+  ...drafts: Array<Draft>
+) => ({
+  name,
+  enters,
+  history: { drafts, seedless: false, prefix, environment },
+})
+const replayOf = (
+  environment: Partial<ReplayEnvironment>,
+): ReplayEnvironment => ({
+  retired: false,
+  seed: `valid`,
+  path: `valid`,
+  property: `first`,
+  unit: `named`,
+  ...environment,
+})
 const at = (history: SyntheticHistory) => ({ history, enters: null })
 const cal = (
   kind: CalibrationDraft[`kind`],
@@ -3011,7 +3928,7 @@ oracleProperty({
       ),
       fixedHistory(
         `a replayed campaign failure reproduces its path`,
-        [`replay-probe`],
+        [`replay-probe`, `unit-replay-constructed`],
         generatedDraft({
           constructed: [{ prefix: [1, 3], enters: [`saw-1`] }],
         }),
@@ -3770,6 +4687,146 @@ oracleProperty({
         `a property timeout limits every test it registers`,
         [`timeout`],
         generatedDraft({ timing: `slow`, fixed: [at([0])] }),
+      ),
+      // Units (maintainer decision, 2026-11-11, option D). At seed 5, the
+      // generated unit's first failing history holds a 4 first, and the
+      // constructed unit's history starts with a 3.
+      fixedHistory(
+        `each unit decides its own first failure`,
+        [`unit-split-verdict`, `campaign-violation`, `replay-probe`],
+        generatedDraft({
+          source: { kind: `generated`, runs: 2, seed: 5 },
+          constructed: [{ prefix: [3], enters: [] }],
+        }),
+      ),
+      // At seed 6, without constructed histories, the generated unit fails.
+      fixedHistory(
+        `a generated unit's replay runs only that unit`,
+        [`unit-replay-generated`, `replay-probe`],
+        generatedDraft({ source: { kind: `generated`, runs: 2, seed: 6 } }),
+      ),
+      fixedHistory(
+        `a constructed history named generated fails to load`,
+        [`registration-error`, `unit-name-load-error`],
+        generatedDraft({
+          constructedNames: `generated`,
+          constructed: [{ prefix: [0], enters: [`saw-0`] }],
+        }),
+      ),
+      fixedHistory(
+        `two constructed histories of one name fail to load`,
+        [`registration-error`, `unit-name-load-error`],
+        generatedDraft({
+          constructedNames: `duplicate`,
+          constructed: [
+            { prefix: [0], enters: [`saw-0`] },
+            { prefix: [1], enters: [`saw-1`] },
+          ],
+        }),
+      ),
+      fixedHistory(
+        `two fixed histories of one name fail to load`,
+        [`registration-error`, `unit-name-load-error`],
+        generatedDraft({ fixedNames: `duplicate`, fixed: [at([0]), at([1])] }),
+      ),
+      // At seed 7, `c` fails and `c.1`, whose name extends it, passes.
+      fixedHistory(
+        `a unit's rerun runs it beside a unit whose name extends its name`,
+        [`unit-rerun`, `unit-rerun-beside-extension`],
+        generatedDraft({
+          constructedNames: `prefixed`,
+          constructed: [
+            { prefix: [3], enters: [] },
+            { prefix: [0], enters: [`saw-0`] },
+          ],
+        }),
+      ),
+      fixedHistory(
+        `a second fixed seed, whose text extends the first, runs its own units`,
+        [`second-fixed-seed`, `unit-rerun`],
+        generatedDraft({
+          source: { kind: `generated`, runs: 2, seed: 1 },
+          secondSeed: true,
+          constructed: [{ prefix: [3], enters: [] }],
+        }),
+      ),
+      seedlessHistory(
+        `an ordinary run's random units run the one seed they logged`,
+        [`seedless-units-drawn`, `seedless-route`],
+        generatedDraft({
+          constructed: [
+            { prefix: [0], enters: [`saw-0`] },
+            { prefix: [1], enters: [`saw-1`] },
+          ],
+        }),
+      ),
+      suiteHistory(
+        `a replay command under a custom prefix names its variables`,
+        [`unit-replay-custom-prefix`, `replay-probe`],
+        { prefix: `SYNTH_ORACLE` },
+        generatedDraft({ constructed: [{ prefix: [3], enters: [] }] }),
+      ),
+      // Law `replay-config` (maintainer decisions, 2026-11-11, Q3 and Q4).
+      suiteHistory(
+        `UNIT without PROPERTY fails every load`,
+        [`replay-environment-error`, `unit-requires-property`],
+        { environment: replayOf({ path: `absent`, property: `absent` }) },
+        generatedDraft({ constructed: [{ prefix: [0], enters: [`saw-0`] }] }),
+      ),
+      suiteHistory(
+        `UNIT alone fails every load under a custom prefix`,
+        [`replay-environment-error`, `unit-requires-property`],
+        {
+          prefix: `SYNTH_ORACLE`,
+          environment: replayOf({
+            seed: `absent`,
+            path: `absent`,
+            property: `absent`,
+          }),
+        },
+        generatedDraft({}),
+      ),
+      suiteHistory(
+        `PATH requires SEED before UNIT requires PROPERTY`,
+        [`replay-environment-error`],
+        {
+          environment: replayOf({ seed: `absent`, property: `absent` }),
+        },
+        generatedDraft({}),
+      ),
+      suiteHistory(
+        `a retired variable's message names UNIT`,
+        [`replay-environment-error`, `retired-names-unit`],
+        { environment: replayOf({ retired: true }) },
+        generatedDraft({}),
+      ),
+      suiteHistory(
+        `a path replay of a generated source without UNIT fails its load`,
+        [`replay-without-unit-error`],
+        { environment: replayOf({ unit: `absent` }) },
+        generatedDraft({ constructed: [{ prefix: [0], enters: [`saw-0`] }] }),
+      ),
+      suiteHistory(
+        `a UNIT that names no random unit fails its load`,
+        [`replay-unit-missing-error`],
+        { prefix: `SYNTH_ORACLE`, environment: replayOf({ unit: `missing` }) },
+        generatedDraft({}),
+      ),
+      suiteHistory(
+        `a UNIT on an enumerated property fails its load`,
+        [`replay-unit-missing-error`],
+        { environment: replayOf({}) },
+        {
+          ...generatedDraft({}),
+          source: { kind: `enumerated`, histories: [[0], [1]] },
+        },
+      ),
+      suiteHistory(
+        `a UNIT that names a random unit runs only that unit`,
+        [`replay-unit-selected`],
+        { environment: replayOf({}) },
+        generatedDraft({ constructed: [{ prefix: [3], enters: [] }] }),
+        generatedDraft({ constructed: [{ prefix: [0], enters: [`saw-0`] }] }),
       ),
     ],
   },

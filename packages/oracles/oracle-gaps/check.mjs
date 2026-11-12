@@ -818,6 +818,7 @@ export default async (env) => {
       })
     }
     const rows = []
+    let loaded = []
     if (existsSync(capture)) {
       for (const line of readFileSync(capture, `utf8`)
         .split(`\n`)
@@ -825,6 +826,7 @@ export default async (env) => {
         const row = JSON.parse(line)
         // A closing row marks the end of a file for a batch's watchdog.
         if (!row.closed && !row.idle) rows.push([row.key, row])
+        if (row.closed && row.file === file) loaded = row.loaded ?? []
       }
       rmSync(capture)
     }
@@ -869,15 +871,28 @@ export default async (env) => {
         String(error?.message ?? error),
       ),
       rows,
-      inputs: [
-        ...new Set([
-          file,
-          ...modules.flatMap((m) =>
-            Object.keys(m.diagnostic?.().importDurations ?? {}),
-          ),
-        ]),
-      ].filter((path) => path.startsWith(`/`) && !ownHarness(path)),
+      inputs: importsOf(file, modules, loaded),
     }
+  }
+
+  /**
+   * The modules a run of `file` loaded: those Vitest reports it imported,
+   * and those its copy evaluated (`loaded`, from the capture's closing row),
+   * which include a module that only a mutated branch imports at run time.
+   */
+  function importsOf(file, modules, loaded) {
+    return [
+      ...new Set([
+        file,
+        ...modules.flatMap((m) =>
+          Object.keys(m.diagnostic?.().importDurations ?? {}),
+        ),
+        ...loaded,
+      ]),
+    ].filter(
+      (path) =>
+        path.startsWith(`/`) && !ownHarness(path) && !isRunnerCopy(path),
+    )
   }
 
   /**
@@ -1007,8 +1022,11 @@ export default async (env) => {
     // Each copy's rows, and the copies that skipped their tests because an
     // earlier copy in the batch killed their mutant.
     const skipped = new Set()
+    // The files of the modules each copy evaluated (its closing row).
+    const loaded = new Map()
     const rowsOf = () => {
       const rows = new Map(copies.map((copy) => [copy, []]))
+      loaded.clear()
       if (existsSync(capture))
         for (const line of readFileSync(capture, `utf8`)
           .split(`\n`)
@@ -1018,6 +1036,7 @@ export default async (env) => {
             (c) => row.key?.startsWith(`${c} > `) || row.file === c,
           )
           if (copy && row.skipped) skipped.add(copy)
+          if (copy && row.closed) loaded.set(copy, row.loaded ?? [])
           if (copy && row.spin) spun.add(copy)
           if (copy && !row.closed && !row.idle && !row.spin && !row.started)
             rows.get(copy).push(row)
@@ -1078,6 +1097,7 @@ export default async (env) => {
                 })),
               unhandled: [],
               rows: own.map((row) => [row.key, row]),
+              inputs: importsOf(item.file, [], loaded.get(copies[i]) ?? []),
             }
           }),
           timedOutAt: current,
@@ -1130,6 +1150,7 @@ export default async (env) => {
             rows: rows
               .get(copy)
               .map((row) => [map(row.key), { ...row, key: map(row.key) }]),
+            inputs: importsOf(item.file, modules, loaded.get(copy) ?? []),
           }
         }),
       }
@@ -1281,13 +1302,67 @@ export default async (env) => {
             ([path, hash]) => servedHash(path, index) === hash,
           ),
         )
-    // A batch item reads the modules its file's unmutated run read: a mutant
-    // changes no import.
-    const remember = (id, file, result, index) => {
-      const paths = fileInputs.get(file)
-      if (!paths) return
-      const inputs = paths.map((path) => [path, servedHash(path, index)])
-      store.put(id, { inputs, unit: result })
+    // A run starts from the current text of its files' known inputs (their
+    // unmutated runs' modules): one that changed since the context read it,
+    // also during this check, is invalidated first. Returns their hashes at
+    // the start.
+    function startIn(context, files) {
+      const index = indexOf.get(context)
+      const known = [
+        ...new Set(files.flatMap((file) => fileInputs.get(file) ?? [])),
+      ]
+      invalidateChanged(known, context)
+      return new Map(known.map((path) => [path, servedHash(path, index)]))
+    }
+    // Records what a settled run read in its context's ledger, so the next
+    // check invalidates any of it that changes, and returns the inputs to
+    // store the run under: a path known at the start with its hash from
+    // then, any other with its hash now. A path that changed while the run
+    // ran is invalidated, and the run, which may have read either text, is
+    // not stored (undefined); nor is a run with no known input.
+    function settleIn(context, started, paths) {
+      const index = indexOf.get(context)
+      const served = servedBy(index)
+      let stable = paths.length > 0
+      const inputs = paths.map((path) => {
+        const now = servedHash(path, index)
+        const hash = started.get(path) ?? now
+        const read = served.get(path) ?? hash
+        // The context may hold other text than the path's text now.
+        if (read !== now || hash !== now) context.invalidateFile(path)
+        if (hash !== now) stable = false
+        served.set(path, now)
+        return [path, hash]
+      })
+      return stable ? inputs : undefined
+    }
+    const remember = (id, unit, inputs) => {
+      if (inputs) store.put(id, { inputs, unit })
+    }
+    // A batch run in a slot's context, with the inputs to store each item
+    // under: the modules its file's unmutated run read, and those its copy
+    // loaded beyond them, as a mutated branch can import a module.
+    async function batchIn(slot, items) {
+      const { context } = slot
+      const started = startIn(
+        context,
+        items.map(({ file }) => file),
+      )
+      const batch = await runBatch(
+        context,
+        options.out,
+        items,
+        options.seed ?? null,
+      )
+      const inputs = items.map(({ file }, k) =>
+        settleIn(context, started, [
+          ...new Set([
+            ...(fileInputs.get(file) ?? []),
+            ...(batch.units[k]?.inputs ?? []),
+          ]),
+        ]),
+      )
+      return { ...batch, inputs }
     }
     // A unit that depends on more than its inputs (a confirmation that its
     // mutant's budget cut short) is not kept (`keep`).
@@ -1307,6 +1382,7 @@ export default async (env) => {
           fileInputs.set(file, valid.unit.inputs)
         return valid.unit
       }
+      const started = startIn(context, [file])
       const result = await runUnit(context, options.out, file, {
         seed: options.seed ?? null,
         ...runOptions,
@@ -1316,10 +1392,9 @@ export default async (env) => {
       const paths = result.timedOut ? fileInputs.get(file) : result.inputs
       if (!result.timedOut && spec.startsWith(`unmutated:`))
         fileInputs.set(file, result.inputs)
-      if (paths && keep) {
-        const inputs = paths.map((path) => [path, servedHash(path, index)])
-        for (const [path, hash] of inputs) servedBy(index).set(path, hash)
-        store.put(id, { inputs, unit: result })
+      if (paths) {
+        const inputs = settleIn(context, started, paths)
+        if (keep) remember(id, result, inputs)
       }
       return result
     }
@@ -1335,10 +1410,10 @@ export default async (env) => {
       const index = indexOf.get(slot.context)
       const got = new Array(requests.length)
       let rest = []
-      const settle = (request, u, at) => {
+      const settle = (request, u, inputs) => {
         if (u.skipped) return
         got[request.i] = u
-        remember(request.id, request.file, u, at)
+        remember(request.id, u, inputs)
         evidence.computed += 1
       }
       requests.forEach((request, i) => {
@@ -1357,12 +1432,7 @@ export default async (env) => {
       for (;;) {
         rest = rest.filter((r) => needed(r, got))
         if (rest.length === 0) break
-        const batch = await runBatch(
-          slot.context,
-          options.out,
-          rest,
-          options.seed ?? null,
-        )
+        const batch = await batchIn(slot, rest)
         if (batch.unattributed) {
           for (const r of rest)
             if (needed(r, got)) got[r.i] = await runAlone(slot, r)
@@ -1374,7 +1444,7 @@ export default async (env) => {
           got[rest[k].i] = u
           if (u.skipped) return
           if (u.spin) evidence.spin += 1
-          remember(rest[k].id, rest[k].file, u, index)
+          remember(rest[k].id, u, batch.inputs[k])
           evidence.computed += 1
         })
         if (batch.timedOutAt === undefined) break
@@ -1394,7 +1464,7 @@ export default async (env) => {
           settle(
             hung,
             { file: hung.file, timedOut: true, seconds: full / 1000 },
-            index,
+            batch.inputs[batch.timedOutAt],
           )
         else got[hung.i] = { file: hung.file, cut: true }
         rest = [
@@ -1443,16 +1513,12 @@ export default async (env) => {
         evidence.budget += 1
         return confirmed({ file: hung.file, timedOut: true, seconds: 0 })
       }
-      const alone = await runBatch(
-        slot.context,
-        options.out,
-        [{ ...hung, limitMs: limit }],
-        options.seed ?? null,
-      )
+      const alone = await batchIn(slot, [{ ...hung, limitMs: limit }])
       if (alone.unattributed)
         return confirmed(
           await runAlone(slot, { ...hung, limitMs: limit }, limit >= full),
         )
+      const [inputs] = alone.inputs
       if (alone.timedOutAt === 0) {
         evidence.cut += 1
         if (alone.idle) evidence.idle += 1
@@ -1462,13 +1528,12 @@ export default async (env) => {
           timedOut: true,
           seconds: limit / 1000,
         })
-        if (limit >= full)
-          remember(hung.id, hung.file, u, indexOf.get(slot.context))
+        if (limit >= full) remember(hung.id, u, inputs)
         await replace(slot)
         return u
       }
       const u = confirmed(alone.units[0])
-      remember(hung.id, hung.file, u, indexOf.get(slot.context))
+      remember(hung.id, u, inputs)
       evidence.computed += 1
       return u
     }
