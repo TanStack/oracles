@@ -83,6 +83,12 @@ every commit with [pkg.pr.new](https://pkg.pr.new).
   A run through the daemon prints the same lines, at the end of its check.
   `--help` is not a check, so its usage text has no prefix.
 
+  For contributors: two environment variables in the `ORACLE_GAPS_TEST_`
+  namespace are test-only hooks for the CLI's own oracle, not settings for
+  users. `ORACLE_GAPS_TEST_HOLD_EXIT_MS` holds the run's exit after its done
+  line, and `ORACLE_GAPS_TEST_WARM_PROBE` makes the first config warm-up
+  wait where a stop signal can reach it.
+
   A few endings print no done line, or one more line: a SIGKILL of the CLI,
   a signal sent to the run's own child process rather than the CLI's, or a
   signal that comes while Node is still starting the CLI, before its first

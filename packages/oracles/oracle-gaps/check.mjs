@@ -618,7 +618,8 @@ export default async (env) => {
       )
     }
   }
-  // A hook for the CLI's oracle (ORACLE_GAPS_WARM_PROBE, a marker's path):
+  // A test-only hook for the CLI's own oracle, not for users
+  // (ORACLE_GAPS_TEST_WARM_PROBE, a marker's path):
   // the first warm-up stands still as a config load can, on a service in
   // the run's process group, which a stop signal ends (as it ends the
   // esbuild service that bundles a config), while a handler that exits
@@ -626,7 +627,7 @@ export default async (env) => {
   // the path when it starts, so the oracle sends its signal then.
   let warmProbed = false
   async function warmProbe() {
-    const marker = process.env.ORACLE_GAPS_WARM_PROBE
+    const marker = process.env.ORACLE_GAPS_TEST_WARM_PROBE
     if (!marker || warmProbed) return
     warmProbed = true
     const exitLater = (signal) =>

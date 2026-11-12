@@ -292,12 +292,13 @@ else if (main) {
   // Ends the run once. A write to a pipe is asynchronous on macOS, and
   // exiting at once cuts it off at the pipe's buffer, so the process exits
   // once both streams have written everything before it.
-  // ORACLE_GAPS_HOLD_EXIT_MS holds the exit after the done line, so the
+  // A test-only hook for the CLI's own oracle, not for users:
+  // ORACLE_GAPS_TEST_HOLD_EXIT_MS holds the exit after the done line, so the
   // CLI's oracle can send a signal in that window.
   const end = (exitCode) => {
     if (ended) return
     ended = true
-    const hold = Number(process.env.ORACLE_GAPS_HOLD_EXIT_MS ?? 0)
+    const hold = Number(process.env.ORACLE_GAPS_TEST_HOLD_EXIT_MS ?? 0)
     process.stdout.write(``, () =>
       process.stderr.write(``, () =>
         setTimeout(() => process.exit(exitCode), hold),

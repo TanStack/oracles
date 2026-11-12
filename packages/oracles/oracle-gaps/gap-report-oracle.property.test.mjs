@@ -677,11 +677,11 @@ const strays = (dir, before, running = false) =>
  *
  * With `when` `after`, the run is not stopped while it runs: the witness
  * does not spin, the run's process holds its exit for 500 ms once it has
- * printed its done line (`ORACLE_GAPS_HOLD_EXIT_MS`, a hook for this
+ * printed its done line (`ORACLE_GAPS_TEST_HOLD_EXIT_MS`, a hook for this
  * driver), and the driver sends the signal once that line is on stdout
  * (review of #46, F3). The run then ends as it completed, with exactly one
  * done line. With `warm`, the driver sends the signal while the run warms
- * its config (`ORACLE_GAPS_WARM_PROBE`, a hook that writes its marker there
+ * its config (`ORACLE_GAPS_TEST_WARM_PROBE`, a hook that writes its marker there
  * and then waits, as a config load does, on a service in the run's group
  * that the signal ends, with a handler that takes 200 ms to exit, as
  * Vitest's does; re-review N1). The run then ends stopped, with exactly
@@ -703,9 +703,9 @@ async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
   const child = spawn(process.execPath, args, {
     cwd: repo,
     env: after
-      ? { ...cleanEnv(), ORACLE_GAPS_HOLD_EXIT_MS: `500` }
+      ? { ...cleanEnv(), ORACLE_GAPS_TEST_HOLD_EXIT_MS: `500` }
       : warm
-        ? { ...cleanEnv(), ORACLE_GAPS_WARM_PROBE: join(pids, `warming`) }
+        ? { ...cleanEnv(), ORACLE_GAPS_TEST_WARM_PROBE: join(pids, `warming`) }
         : { ...cleanEnv(), GAP_STOP_DIR: pids },
     stdio: [`ignore`, `pipe`, `pipe`],
   })
