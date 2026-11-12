@@ -305,12 +305,15 @@ tried." Show what held, and the design questions that came up.
 
 ## 4. Propose a potential oracle
 
-Say why an oracle would help here. It tries the whole space of inputs and
-sequences, not a few probes, states the rule that the probes point at, and
-holds the answer for every later change.
+Say why an oracle would help here. An oracle both captures the design
+intent, as its laws, and enforces it: it tries the whole space of inputs
+and sequences, not a few probes, and holds the answer for every later
+change.
 
-Then present it in the chat: "Here's a potential oracle that owns
-<the public behavior>, and its potential laws as I see them." If two
+Then present it in the chat by the classes of bugs it would catch: "Here's
+a potential oracle that owns <the public behavior>. It would catch these
+classes of bugs: …. Its potential laws, the rules behind them, as I see
+them: …." Each class from the probes maps to the law it breaks. If two
 potential oracles fit the spot well (two public behaviors, or two ways to
 draw the boundary), name the second one in a sentence, say what it would
 own instead, and recommend one.
@@ -466,21 +469,33 @@ them and stop.
    oracle until it passes, and show both runs: the failure before, the pass
    after. Follow the defect path in `oracles-design` step 7. Most developers
    want the fix at once; with the oracle failing first, the fix is proved.
+
+   After the first fix, offer the walk-through at once (see step 6),
+   following the bug you just fixed. The oracle is at its simplest now, so
+   it is the best moment to see how it is built. Then go on.
+
 5. **As the developer settles questions, change the law** and rewrite the law
    block's prose in the same step. Before you show results, check that the
    prose still says what the code does.
 
-**When the oracle passes, close gaps at once, without stopping.** Say in a
-line that the oracle passed and what held, then run the gap check, and
-explain what it does the first time you mention it. Take the command and
+**When the oracle passes, close gaps at once, without stopping.** The goal
+is to enforce the design fully: every change to the owned code that
+changes what it does should break some law. The gap check is the tool for
+that. It makes each small semantic change it can to a copy of the owned
+code, and shows each one that the oracle does not notice: a gap. Explain
+that in a line or two the first time, then show the count shrinking as you
+work ("74 of 216 changes went unnoticed; now 38"). Take the command and
 its flags from `oracles-setup` step 7, with `--out` in a temporary directory
 outside the repository. Do not run it while the oracle fails: it cannot
 judge a failing run.
 
-For each gap, oracle first: ask why the oracle missed it. Usually the
-histories never reach the case, or the check does not look at that result.
-Widen the histories or the check, under the laws already approved, and run
-the oracle again on the unchanged code:
+Closing gaps is how the oracle reverse-engineers the production code into
+design: each gap is behavior the code has that the oracle does not yet
+hold. Capturing it is where new design questions and bugs come from, not a
+separate step. For each gap, oracle first: ask why the oracle missed it.
+Usually the histories never reach the case, or the check does not look at
+that result. Widen the histories or the check, under the laws already
+approved, and run the oracle again on the unchanged code:
 
 - If the oracle now fails, it found a bug. Present it, and fix it as above
   once the developer confirms it.
@@ -489,20 +504,20 @@ the oracle again on the unchanged code:
 - If the oracle passes and the gap is closed, go on to the next one.
 
 Group the gaps by function, and tell the developer what you are doing as
-you go. Keep going until a bug or a design question turns up. When the
-gaps under the approved laws are closed and nothing has turned up, say so,
-pick the next spot from your look-around, and keep going.
+you go. After each answer, keep closing gaps: stop only for the developer's
+decisions. When the gaps under the approved laws are closed, present.
 
 ## 6. Present
 
-When the oracle has found bugs, or brought up design questions that the
-developer has settled, stop and present. Present the same way whenever the
-developer wants to stop:
+When the gaps under the approved laws are closed, and the oracle has found
+bugs or brought up design questions that the developer has settled, stop
+and present. Present the same way whenever the developer wants to stop:
 
 - what it found, first: each bug, with what it was, its fix, and the oracle
   run before and after
 - what you built
-- an offer to walk through how it works: how the reference model was built,
+- if they did not take it after the first fix, an offer to walk through
+  how it works: how the reference model was built,
   how the histories are generated, and how the driver calls their code.
   Developers often want this, and it is the best part to teach.
 - an invitation to ask questions
@@ -514,9 +529,11 @@ the file: the history that produced it, what the driver did and saw, what
 the model expected, and how the check reported the difference and shrank it.
 Show a few lines of the file at each part, not a description of it.
 
-When the developer wants to keep the work (commit it, or open a pull
-request), say what finishing the repository's setup adds: a lint preset
+End with a choice: ship it, or keep going. Keeping going means the next
+oracle, at another spot from your look-around. Shipping means keeping the
+work (a commit, or a pull request): finishing the repository's setup adds a lint preset
 that keeps oracle files honest, a block in `AGENTS.md` (or `CLAUDE.md`) so
 every agent follows the same rules, and the gap check over all the owned
-code. Then load `oracles-setup`, and do it. Do not call this "production"
-or "shipping": it is setting up their repository for oracles.
+code. If they choose to ship, load `oracles-setup`, and do it. Do not call
+it "taking it to production": it is finishing the setup of their
+repository for oracles.
