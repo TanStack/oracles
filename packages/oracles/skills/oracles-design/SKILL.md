@@ -407,7 +407,14 @@ Techniques: [guide § Histories](../../docs/guide.md#histories).
   `differs(...) ?? pass`. For an allowed set, accept any member.
 - **Calibration.** Give at least one `calibration`: a wrong answer, as a
   corrupted trace or a mutant driver, and the law that must reject it
-  (ORC-006).
+  (ORC-006). Bind each one to the history it corrupts, so that it runs only
+  that history: `history: { constructed: 'a name' }`, `{ fixed: 'a name' }`,
+  or `{ enumerated: 0 }`. The selected history must pass clean and reach
+  every state it declares, and the check must reject the wrong answer under
+  exactly the named law. An unbound calibration searches the histories
+  instead, and registration warns about it; that search goes away before
+  the first release. A state's forced-probe controls bind the same way,
+  through the property's `probeHistories`.
 - **Ownership.** Put the owned code on the property's `owns` list. An entry is
   a file (`src/x.ts`) or one function and its static call tree
   (`src/x.ts#run`, `src/x.ts#Class.method`). Own only what the laws cover. The
