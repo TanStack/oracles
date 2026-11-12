@@ -52,10 +52,11 @@ export const partitions = {
     },
   },
   // The end-to-end gap oracle's fixed-seed units, which a pull request runs
-  // (`-t "fixed seed"`): 31 units, 325 s in all. A unit's cost follows the
-  // generated history its constructed history is built from, so a grammar
-  // change can move cost between units. The first shard takes the units
-  // that cost most at 908b1f9: 168 s and 157 s.
+  // (`-t "fixed seed"`): 32 units, 245 s in all, measured on the witness
+  // edit-sequence branch (option M) at load average 4. A unit's cost follows
+  // the generated history its constructed history is built from, so a
+  // grammar change can move cost between units. The first shard takes the
+  // two edit sequences, 85 s and 45 s; the second the rest, 115 s.
   'oracle-gaps-fixed-seed': {
     args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-oracle`],
     suite: `oracle-gaps.report`,
@@ -65,11 +66,8 @@ export const partitions = {
     previously: `fixed seed`,
     shards: {
       1: anyOf([
-        `a declaration fault: missingSource`,
+        `an edit sequence over the witness module`,
         `an edit sequence through the daemon`,
-        `a declaration fault: configNoDefault`,
-        `an edit that changed the cold result after a hang replaced the only context`,
-        `a lazy module loaded before a hang in the same batch`,
       ]),
       2: rest,
     },
