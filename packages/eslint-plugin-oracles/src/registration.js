@@ -3,7 +3,12 @@
  * from `@tanstack/oracles`. Every rule uses these, so that the rules agree on what
  * a test is.
  */
-import { lintSession, loadModule, resolveTestModule } from './modules.js'
+import {
+  lintSession,
+  loadModule,
+  resolveTestModule,
+  subpathPackage,
+} from './modules.js'
 import { classifySource, frameworkNames, globalRoles } from './sources.js'
 
 export const disablingModifiers = new Set([`fixme`, `ignore`, `skip`, `todo`])
@@ -330,13 +335,12 @@ function variableValue(variable, scope, seen) {
     const source = definition.parent.source.value
     if (definition.node.type === `ImportNamespaceSpecifier`)
       return namespaceOf(source, scope, definition.node)
-    const { imported, local } = definition.node
+    const { imported } = definition.node
     return importedValue(
       source,
       imported === undefined ? `default` : (imported.name ?? imported.value),
       scope,
       definition.node,
-      local.name,
     )
   }
   if (definition.type !== `Variable`) return undefined
@@ -425,8 +429,13 @@ function isRequire(node, scope) {
  * are foreign to the importer. Any other package is an unknown source
  * (unknownValue).
  */
-function importedValue(source, name, scope, site, local) {
+function importedValue(source, name, scope, site) {
   const { sources } = scope.session
+  // A `#` import whose target is a package is that package's import.
+  const target = source.startsWith(`#`)
+    ? subpathPackage(scope.file, source, scope.session)
+    : undefined
+  if (target !== undefined) return importedValue(target, name, scope, site)
   const classified = source.startsWith(`.`)
     ? undefined
     : classifySource(source, sources)
@@ -439,7 +448,7 @@ function importedValue(source, name, scope, site, local) {
   if (file === undefined)
     return source.startsWith(`.`)
       ? undefined
-      : unknownValue(source, name === `default` ? local : name, site, sources)
+      : unknownValue(source, name, site, sources)
   const value = scope.session.once(`value\0${file}\0${name}`, () =>
     exportValue(file, name, scope.session),
   )
@@ -451,18 +460,19 @@ function importedValue(source, name, scope, site, local) {
 }
 
 /**
- * An export of a package that no table or setting classifies. Only a name
- * that some framework exports as a test function or suite (frameworkNames)
- * can be one, and `unknownSources` decides: `report` (the default) gives an
- * unknown value, which the rules report where a registration-shaped call
- * uses it; `test` reads the name as the framework's; `ignore` as none.
+ * An export of a package that no table or setting classifies, whatever its
+ * name, and `unknownSources` decides: `report` (the default) gives an
+ * unknown value, which the rules report where a title-shaped call uses it
+ * (unknownRegistration); `test` reads a name that some framework exports as
+ * a test function or suite (frameworkNames) as the framework's, and any
+ * other export as none; `ignore` reads every export as none.
  */
 function unknownValue(source, name, site, sources) {
-  if (name === undefined || !Object.hasOwn(frameworkNames, name))
-    return undefined
   if (sources.unknownSources === `ignore`) return undefined
   if (sources.unknownSources === `test`)
-    return roleValue(frameworkNames[name], name)
+    return Object.hasOwn(frameworkNames, name)
+      ? roleValue(frameworkNames[name], name)
+      : undefined
   return { kind: `unknown`, source, name, site, members: [], own: [] }
 }
 
@@ -647,7 +657,14 @@ export function registeredTest(node, functions) {
   ) {
     return undefined
   }
-  const body = registrationBody(node.arguments.slice(1), functions)
+  // The body follows the title, or it comes first, as in node:test's
+  // `test(fn)` and Playwright's `test.skip(condition, description)`.
+  const [first, ...rest] = node.arguments
+  const body =
+    registrationBody(rest, functions) ??
+    (first !== undefined && isFunctionValue(first, functions)
+      ? first
+      : undefined)
   // The modifiers between the root and the call, such as `skip` or `todo`.
   return body === undefined ? undefined : { body, modifiers: test.members }
 }
@@ -656,20 +673,40 @@ export function registeredTest(node, functions) {
  * The unknown source that a call would register through, or undefined: the
  * callee resolves to an unknown value (an export of a package that the
  * rules cannot classify), its members are ones that keep a registration,
- * and the call passes a body. Such a call is a registration if the source
- * is a test framework.
+ * and the call is title-shaped: a string or template title first, and a
+ * function after it, as every framework's registration is. Such a call is a
+ * registration if the source is a test framework. A library's `pMap(xs,
+ * fn)`, `debounce(fn, 10)`, and `effect(fn)` are not title-shaped
+ * (coordinator decision under the maintainer decision of 2026-11-12).
  */
 export function unknownRegistration(node, functions) {
   if (node.parent.type === `CallExpression` && node.parent.callee === node)
     return undefined
   const unknown = functions.unknown(node.callee)
+  const [title, ...rest] = node.arguments
   if (
     unknown === undefined ||
     !unknown.members.every((member) => testFunctionMembers.has(member)) ||
-    registrationBody(node.arguments.slice(1), functions) === undefined
+    !(
+      title?.type === `TemplateLiteral` ||
+      (title?.type === `Literal` && typeof title.value === `string`)
+    ) ||
+    !rest.some((argument) => isFunctionValue(argument, functions))
   )
     return undefined
   return unknown
+}
+
+/** Whether an argument is a function: written inline, or a binding of one. */
+function isFunctionValue(argument, functions) {
+  if (isFunction(argument)) return true
+  if (argument.type !== `Identifier`) return false
+  const definition = findVariable(functions.getScope(argument), argument.name)
+    ?.defs[0]
+  return (
+    definition?.type === `FunctionName` ||
+    (definition?.type === `Variable` && isFunction(definition.node.init))
+  )
 }
 
 /**

@@ -31,22 +31,35 @@
  *   (`base.skip`) there are test functions, and the wrapper carries its
  *   `skip`. A package whose real path is under `node_modules` is never read,
  *   whatever its file says.
+ *   A project whose own real path is under a `node_modules` directory is
+ *   read all the same. A `#` import whose target is a package
+ *   (`"#vitest": "vitest"`) is that package.
  * - **Settings.** `settings.oracles.testPackages` maps a specifier to a
  *   framework's specifier, or to a table of its exports (`{ authTest:
  *   'test' }`). `nonTestPackages` lists specifiers that export no test
- *   function. Both are read before the built-in tables.
- * - **An unknown source is reported, not guessed.** An import from any
- *   other package, of a name that some framework exports as a test function
- *   (or a default import bound to such a name), is a source the rules cannot
- *   classify. With `unknownSources: 'report'`, the default, a call that
- *   would be a registration if the source were a test framework gets one
- *   `unknownTestSource` report, at its import, once per import, and no other
- *   report. A call to a relative helper that makes such a call gets the
- *   report at the call. `unknownSources: 'test'` treats such a name as the
- *   framework's name, and `'ignore'` as no test function. The report is
- *   owed in an `oracle-` machinery file too, where `no-unit-test` judges
- *   nothing else, because there `no-disabled` alone guards a switched-off
- *   law.
+ *   function. Both are read before the built-in tables. A setting that the
+ *   rules cannot use (a `settings.oracles` that is null, a string, a
+ *   number, or an array; a `testPackages` array or an entry naming
+ *   `constructor` or `toString`; a `nonTestPackages` string; an unknown
+ *   `unknownSources` mode) gets one `malformedSourceSetting` report at line
+ *   1, is read as unset, all of it, and never makes a rule throw.
+ * - **An unknown source is reported, not guessed.** Every import from any
+ *   other package, named, default, or namespace, under any local name, is a
+ *   source the rules cannot classify. With `unknownSources: 'report'`, the
+ *   default, a title-shaped call through it (a string or template title,
+ *   then a function) gets one `unknownTestSource` report, at its import,
+ *   once per import, and no other report. A call with no title before its
+ *   function (`pMap(xs, fn)`, `debounce(fn, 10)`, `effect(fn)`) gets none:
+ *   that is the precision law. A call to a relative helper that makes a
+ *   title-shaped call gets the report at the call. `unknownSources: 'test'`
+ *   reads a framework's name as the framework's and any other export as
+ *   none, and `'ignore'` reads every export as none. The report is owed in
+ *   an `oracle-` machinery file too, where `no-unit-test` judges nothing
+ *   else, because there `no-disabled` alone guards a switched-off law.
+ * - **A body may come first.** A framework's test function called with its
+ *   function before any title (`test(fn)`, `test(fn, 10)`,
+ *   `test.skip(condition, 'description')`) or after data (`test([1], fn)`)
+ *   is a registration.
  *
  * What each rule owes for a call is the account of `lint.registration-only`
  * and `lint.test-function-agreement`: `unitTest` for a test (not a suite),
@@ -54,11 +67,14 @@
  * precedence), and `rawProperty` for `.prop`. A call to a relative helper
  * that registers a test of its own gets `importedRegistration`.
  *
- * Authority: the maintainer decision of 2026-11-12 ("agree with reversed
- * decision -- false positives are annoying and we should be able to be
- * precise"), which replaces the coordinator decision of 2026-11-11 that
- * failed closed on any package's import of a test-function name, and sets
- * `unknownSources` to `'report'` by default. The framework rows come from
+ * Authority: the decisions recorded in the repository README, "Decisions":
+ * the maintainer decision of 2026-11-12 ("agree with reversed decision --
+ * false positives are annoying and we should be able to be precise"), which
+ * replaces the coordinator decision of 2026-11-11 that failed closed on any
+ * package's import of a test-function name, and sets `unknownSources` to
+ * `'report'` by default; and the coordinator's decisions under it, of the
+ * same day, that an unknown source is judged by the call's title shape, not
+ * by its name, and that a registration's body may come first. The framework rows come from
  * each package's own files, as the research of 2026-11-12 read them (each
  * row cites its source: a `package.json` `exports`, a `.d.ts`, or the
  * framework's documentation). The no-disabled and registration accounts are
@@ -73,17 +89,19 @@
  * the three rules on each path, and the slower path's time against the
  * budget.
  *
- * Limits: one oracle file per history, with fixed workspace and package
- * fixtures. A test function passed as a parameter (`t.test` in a body,
- * `it.layer(L)(name, (it) => ...)`), QUnit's `test.if(name, condition, fn)`,
- * Japa's chain after the call (`test('n').skip(true)`), an options object
- * that disables a test (`{ skip: true }`), a dynamic `import()`, TypeScript
- * `paths` aliases, a workspace package that exports only built files that do
- * not exist, a published workspace package's `src/` (production, which no
- * rule reads), and a third-party fixture package's exports under names that
- * no framework uses (silent unless `testPackages` names them) are not
- * generated or not recognized. The version of each row is the one its
- * citation names.
+ * Limits (the README's "Decisions" lists the accepted ones): one oracle file
+ * per history, with fixed workspace and package fixtures. A test function
+ * passed as a parameter (`t.test` in a body, `it.layer(L)(name, (it) =>
+ * ...)`), QUnit's `test.if(name, condition, fn)`, Japa's chain after the
+ * call (`test('n').skip(true)`), an options object that disables a test
+ * (`{ skip: true }`), a dynamic `import()`, TypeScript `paths` aliases, a
+ * nested `exports` condition other than `import` and `default`, a workspace
+ * package that exports only built files that do not exist, and a published
+ * workspace package's `src/` (production, which no rule reads) are not
+ * generated or not recognized. An unknown source's untitled call is silent
+ * by law, and its title-shaped call that is no test (`step('install', fn)`)
+ * is reported by law. The parse cost of a fresh process is not observed.
+ * The version of each row is the one its citation names.
  */
 import {
   mkdirSync,
@@ -117,10 +135,24 @@ const RULES = [
 // (Playwright's `test.describe`), and `nothing` makes it no registration
 // (`test.step`). A chain with no effect keeps the registration.
 
-const plainCall = (members) => (c, b) => `${c}${members}('n', ${b.body})`
-const curried = (member, argument) => (c, b) =>
-  `${c}.${member}(${argument})('n', ${b.body})`
-const tabled = (member) => (c, b) => `${c}.${member}([1])('n %s', ${b.row})`
+// The arguments of the call, by shape. A title-shaped call passes a string
+// title first and a function after it, as every framework's registration
+// does; the other shapes pass a function in another position, as node:test's
+// `test(fn)` and Playwright's `test.skip(condition, description)` do, or as
+// a library's `pMap(xs, fn)`, `debounce(fn, 10)`, and `effect(fn)` do.
+const SHAPES = {
+  title: (b, table) => (table ? `'n %s', ${b.row}` : `'n', ${b.body}`),
+  'fn-first': (b, table) => (table ? `${b.row}, 'n %s'` : `${b.body}, 'n'`),
+  'data-first': (b) => `[1], ${b.body}`,
+  'fn-only': (b) => b.body,
+  'fn-number': (b) => `${b.body}, 10`,
+}
+const plainCall = (members) => (c, b, args) =>
+  `${c}${members}(${args(b, false)})`
+const curried = (member, argument) => (c, b, args) =>
+  `${c}.${member}(${argument})(${args(b, false)})`
+const tabled = (member) => (c, b, args) =>
+  `${c}.${member}([1])(${args(b, true)})`
 
 const CHAINS = {
   none: { render: plainCall(``), effects: [] },
@@ -768,6 +800,22 @@ const SOURCES = [
     entries: fixtureEntries,
     cite: `the package.json imports written by this oracle`,
   },
+  // `#` imports whose `imports` target is a package: classified as the
+  // package is.
+  {
+    id: `#vitest`,
+    spec: `#vitest`,
+    class: `framework`,
+    entries: vitestEntries,
+    cite: `the package.json imports written by this oracle ("#vitest": "vitest")`,
+  },
+  {
+    id: `#ramda`,
+    spec: `#ramda`,
+    class: `non-test`,
+    entries: [entry(`test`, noRole)],
+    cite: `the package.json imports written by this oracle ("#ramda": "ramda")`,
+  },
   // A fixture package in node_modules: never read, so only the settings
   // classify it. Its file is deliberately not what it claims.
   {
@@ -862,17 +910,21 @@ const SOURCES = [
     ],
     cite: `no package: the source that the rules cannot read`,
   },
+  // An unknown package whose name is a member of every object's prototype.
+  {
+    id: `constructor`,
+    spec: `constructor`,
+    class: `unknown`,
+    entries: [entry(`test`, testRole(REGEX_LIB_TEST))],
+    cite: `no package: a specifier that a plain object lookup would find on Object.prototype`,
+  },
 ]
-
-// The local name that a default import of an unknown source binds. A
-// framework's export of that name is a test function.
-const UNKNOWN_DEFAULT_LOCAL = `testProp`
 
 /**
  * The names that some framework or test environment exports as a test
  * function or suite: every framework or global entry that is its export
- * itself. An unknown source's import of one of these names is the source
- * the rules cannot classify.
+ * itself. `unknownSources: 'test'` reads an unknown source's export of one
+ * of these names as the framework's.
  */
 const frameworkNameRoles = new Map()
 for (const source of SOURCES) {
@@ -910,10 +962,11 @@ function roleOf(source, e, settings) {
   if (source.id === `pw-fixtures` && settings.pwFixtures === `exports`)
     return testRole(NONE)
   if (source.class === `unknown` || source.class === `package`) {
-    const name = e.import === `default` ? UNKNOWN_DEFAULT_LOCAL : e.import
-    if (!frameworkNameRoles.has(name)) return noRole
+    // Whatever the export and its local name: only the call's shape decides
+    // (reportKeys).
     if (settings.unknownSources === `ignore`) return noRole
-    if (settings.unknownSources === `test`) return frameworkNameRoles.get(name)
+    if (settings.unknownSources === `test`)
+      return frameworkNameRoles.get(e.import) ?? noRole
     return { kind: `unknown`, chains: e.role.chains }
   }
   return e.role
@@ -930,6 +983,12 @@ function roleOf(source, e, settings) {
 //   global of the environment;
 // - `helper`: a relative module whose function registers a test with the
 //   entry, called with no arguments.
+//
+// A statement also has a shape (SHAPES) and a local name: `p`, the
+// source's prefixed name (`n3_test`), `l`, a library's name (`pMap3_0`),
+// or, for the unknown package's default import, `f`, a framework's name
+// (`testProp`). The rules may not read the local name: a binding is what
+// its source makes it.
 
 const FORMS = [
   `named`,
@@ -943,7 +1002,6 @@ const FORMS = [
 
 function formsOf(source, e) {
   if (source.class === `global`) return [`global`]
-  if (source.class === `unknown` && e.import === `default`) return [`default`]
   const forms =
     e.import === `default`
       ? [`default`, `namespace`, `relay`]
@@ -951,19 +1009,37 @@ function formsOf(source, e) {
   return e.helper ? [...forms, `helper`] : forms
 }
 
-/** Every legal statement, as a key `source|form|entry|chain`. */
+/**
+ * Every legal statement, as a key `source|form|entry|chain|shape|local`.
+ * Each form takes each chain with a title and the prefixed name. The first
+ * form of an entry also takes the other shapes (with no chain, and with
+ * `.skip` where the entry has it), and a named or default import also takes
+ * a library's local name.
+ */
 const STATEMENTS = SOURCES.flatMap((source, s) =>
   source.entries.flatMap((e, i) =>
-    formsOf(source, e).flatMap((form) =>
-      (form === `helper` ? [`none`] : e.role.chains).map(
-        (chainId) => `${s}|${form}|${i}|${chainId}`,
-      ),
-    ),
+    formsOf(source, e).flatMap((form, at) => {
+      const key = (chainId, shape, local) =>
+        `${s}|${form}|${i}|${chainId}|${shape}|${local}`
+      if (form === `helper`) return [key(`none`, `title`, `p`)]
+      const keys = e.role.chains.map((chainId) => key(chainId, `title`, `p`))
+      if (at === 0)
+        for (const shape of Object.keys(SHAPES).slice(1)) {
+          keys.push(key(`none`, shape, `p`))
+          if (shape === `fn-first` && e.role.chains.includes(`skip`))
+            keys.push(key(`skip`, shape, `p`))
+        }
+      if (form === `named` || form === `default`)
+        keys.push(key(`none`, `title`, `l`))
+      if (source.id === `regex-lib` && form === `default`)
+        keys.push(key(`none`, `title`, `f`))
+      return keys
+    }),
   ),
 )
 
 function parse(key) {
-  const [s, form, i, chainId] = key.split(`|`)
+  const [s, form, i, chainId, shape, local] = key.split(`|`)
   const source = SOURCES[Number(s)]
   return {
     s: Number(s),
@@ -972,18 +1048,73 @@ function parse(key) {
     e: source.entries[Number(i)],
     i: Number(i),
     chainId,
+    shape,
+    local,
   }
 }
 
+// `malformed` replaces part of the settings with a value that the rules
+// cannot use: `settings.oracles` itself (null, a string, a number, an
+// array), `testPackages` (an array, or an entry that names a member of
+// every object's prototype as its framework), `nonTestPackages` (a string),
+// or `unknownSources` (an unknown mode).
 const SETTINGS = {
   unknownSources: [`report`, `test`, `ignore`],
   regexLib: [`default`, `nonTest`, `vitest`],
   pwFixtures: [`default`, `playwright`, `exports`],
+  malformed: [
+    `none`,
+    `oracles null`,
+    `oracles string`,
+    `oracles number`,
+    `oracles array`,
+    `testPackages array`,
+    `framework constructor`,
+    `framework toString`,
+    `nonTestPackages string`,
+    `unknownSources mode`,
+  ],
 }
 const DEFAULT_SETTINGS = {
   unknownSources: `report`,
   regexLib: `default`,
   pwFixtures: `default`,
+  malformed: `none`,
+}
+
+/**
+ * The setting that a malformation spoils, and the settings that the rules
+ * then read: a malformed setting is read as unset, all of it, and a
+ * malformed `settings.oracles` leaves every setting unset.
+ */
+function effectiveSettings(settings) {
+  const { malformed } = settings
+  if (malformed === `none`) return { settings, spoiled: undefined }
+  if (malformed.startsWith(`oracles `))
+    return { settings: DEFAULT_SETTINGS, spoiled: `oracles` }
+  if (malformed === `testPackages array` || malformed.startsWith(`framework `))
+    return {
+      settings: {
+        ...settings,
+        regexLib:
+          settings.regexLib === `vitest` ? `default` : settings.regexLib,
+        pwFixtures: `default`,
+      },
+      spoiled: `testPackages`,
+    }
+  if (malformed === `nonTestPackages string`)
+    return {
+      settings: {
+        ...settings,
+        regexLib:
+          settings.regexLib === `nonTest` ? `default` : settings.regexLib,
+      },
+      spoiled: `nonTestPackages`,
+    }
+  return {
+    settings: { ...settings, unknownSources: `report` },
+    spoiled: `unknownSources`,
+  }
 }
 
 const weighted = (values) =>
@@ -1005,7 +1136,18 @@ const historyArbitrary = fc.record({
     unknownSources: weighted(SETTINGS.unknownSources),
     regexLib: weighted(SETTINGS.regexLib),
     pwFixtures: weighted(SETTINGS.pwFixtures),
+    malformed: fc.oneof(
+      { weight: 9, arbitrary: fc.constant(`none`) },
+      { weight: 1, arbitrary: fc.constantFrom(...SETTINGS.malformed.slice(1)) },
+    ),
   }),
+  // The project's real path: a plain directory, or one under a node_modules
+  // directory, as a project checked out inside another package's
+  // node_modules is.
+  root: fc.oneof(
+    { weight: 4, arbitrary: fc.constant(`plain`) },
+    { weight: 1, arbitrary: fc.constant(`under node_modules`) },
+  ),
   statements: fc.array(fc.constantFrom(...STATEMENTS), {
     maxLength: MAX_STATEMENTS,
   }),
@@ -1026,22 +1168,22 @@ const HEADER = [
 const PLAIN = `export function compute() {\n  return 1\n}\nexport function checkHistory() {\n  return 1\n}\n`
 
 /** The import that a statement needs: its key, line, and binding. */
-function importOf({ s, source, form, e, i }) {
-  const local = (prefix) => `${prefix}${s}_${safe(e.import)}`
+function importOf({ s, source, form, e, i, local: name }) {
+  const local = (prefix) =>
+    name === `l` ? `pMap${s}_${i}` : `${prefix}${s}_${safe(e.import)}`
   switch (form) {
     case `named`: {
       const binding = local(`n`)
       return {
-        key: `${form}|${s}|${e.import}`,
+        key: `${form}|${s}|${e.import}|${name}`,
         line: `import { ${e.import} as ${binding} } from '${source.spec}'`,
         binding,
       }
     }
     case `default`: {
-      const binding =
-        source.class === `unknown` ? UNKNOWN_DEFAULT_LOCAL : local(`d`)
+      const binding = name === `f` ? `testProp` : local(`d`)
       return {
-        key: `${form}|${s}`,
+        key: `${form}|${s}|${name}`,
         line: `import ${binding} from '${source.spec}'`,
         binding,
       }
@@ -1133,7 +1275,11 @@ function layout(history) {
         chainSpec.effects.includes(`suite`) || e.role.kind === `suite`
           ? `suite`
           : `test`
-      text = chainSpec.render(e.expr(imported.binding), BODIES[kind])
+      text = chainSpec.render(
+        e.expr(imported.binding),
+        BODIES[kind],
+        SHAPES[statement.shape],
+      )
     }
     lines.push(text)
     return {
@@ -1177,10 +1323,12 @@ function callReports(kind, carries, effects) {
 }
 
 function reportKeys(history) {
-  const keys = []
+  const { settings, spoiled } = effectiveSettings(history.settings)
+  const keys =
+    spoiled === undefined ? [] : [`1:no-unit-test:malformedSourceSetting`]
   const diagnosed = new Set()
   for (const placed of layout(history).placed) {
-    const role = roleOf(placed.source, placed.e, history.settings)
+    const role = roleOf(placed.source, placed.e, settings)
     if (role.kind === `none`) continue
     if (placed.form === `helper`) {
       // The helper registers a test of its own, or makes a call that the
@@ -1195,6 +1343,9 @@ function reportKeys(history) {
     const { effects } = CHAINS[placed.chainId]
     if (effects.includes(`nothing`)) continue
     if (role.kind === `unknown`) {
+      // Only a title-shaped call through an unknown source can be a
+      // registration: `pMap(xs, fn)` and `effect(fn)` are not.
+      if (placed.shape !== `title`) continue
       if (!diagnosed.has(placed.importKey)) {
         diagnosed.add(placed.importKey)
         keys.push(`${placed.importLine}:no-unit-test:unknownTestSource`)
@@ -1218,8 +1369,11 @@ function model(history) {
 // -- Production paths ---------------------------------------------------------
 
 let scratch
+const roots = {}
 const instances = new Map()
-const linter = new Linter({ configType: `flat`, cwd: `/` })
+// One Linter per project root: ESLint ignores files under node_modules
+// below its cwd, so each path lints from the project's own root.
+const linters = {}
 let sequence = 0
 
 /** The `settings.oracles` that a history's settings name. */
@@ -1235,16 +1389,44 @@ function settingsOf(settings) {
     testPackages[`pw-fixtures`] = { test: `test`, authTest: `test` }
   if (Object.keys(testPackages).length > 0) oracles.testPackages = testPackages
   if (settings.regexLib === `nonTest`) oracles.nonTestPackages = [`regex-lib`]
-  return { oracles }
+  switch (settings.malformed) {
+    case `oracles null`:
+      return { oracles: null }
+    case `oracles string`:
+      return { oracles: `regex-lib` }
+    case `oracles number`:
+      return { oracles: 42 }
+    case `oracles array`:
+      return { oracles: [`regex-lib`] }
+    case `testPackages array`:
+      return { oracles: { ...oracles, testPackages: [] } }
+    case `framework constructor`:
+    case `framework toString`:
+      return {
+        oracles: {
+          ...oracles,
+          testPackages: {
+            ...oracles.testPackages,
+            'other-lib': settings.malformed.split(` `)[1],
+          },
+        },
+      }
+    case `nonTestPackages string`:
+      return { oracles: { ...oracles, nonTestPackages: `regex-lib` } }
+    case `unknownSources mode`:
+      return { oracles: { ...oracles, unknownSources: `warn` } }
+    default:
+      return { oracles }
+  }
 }
 
-function eslintFor(settings) {
-  const key = JSON.stringify(settings)
+function eslintFor(settings, root) {
+  const key = JSON.stringify([settings, root])
   if (!instances.has(key))
     instances.set(
       key,
       new ESLint({
-        cwd: scratch,
+        cwd: roots[root],
         overrideConfigFile: true,
         overrideConfig: [
           { files: [`**/*.ts`], languageOptions: { parser: tsParser } },
@@ -1278,7 +1460,11 @@ function writeWorkspace(root) {
     join(root, `package.json`),
     JSON.stringify({
       name: `scratch`,
-      imports: { '#test/*': `./support/*.js` },
+      imports: {
+        '#test/*': `./support/*.js`,
+        '#vitest': `vitest`,
+        '#ramda': `ramda`,
+      },
     }),
   )
   mkdirSync(join(root, `support`))
@@ -1314,7 +1500,14 @@ function writeWorkspace(root) {
 
 beforeAll(() => {
   scratch = mkdtempSync(join(tmpdir(), `test-source-oracle-`))
-  writeWorkspace(scratch)
+  roots.plain = join(scratch, `plain`)
+  roots[`under node_modules`] = join(scratch, `node_modules`, `project`)
+  for (const root of Object.values(roots)) {
+    mkdirSync(root, { recursive: true })
+    writeWorkspace(root)
+  }
+  for (const [name, root] of Object.entries(roots))
+    linters[name] = new Linter({ configType: `flat`, cwd: root })
 }, 60_000)
 afterAll(() => rmSync(scratch, { recursive: true, force: true }), 60_000)
 
@@ -1324,7 +1517,7 @@ afterAll(() => rmSync(scratch, { recursive: true, force: true }), 60_000)
 const BUDGET_MS = 2000
 
 async function driver(history, observe) {
-  const directory = join(scratch, `h${sequence++}`)
+  const directory = join(roots[history.root], `h${sequence++}`)
   mkdirSync(directory)
   const files = render(history)
   for (const [name, text] of files) writeFileSync(join(directory, name), text)
@@ -1339,13 +1532,15 @@ async function driver(history, observe) {
       .sort()
   let started = performance.now()
   const instance = await lintChargedAsync(async () => {
-    const [result] = await eslintFor(history.settings).lintFiles([file])
+    const [result] = await eslintFor(history.settings, history.root).lintFiles([
+      file,
+    ])
     return result.messages
   })
   const instanceMs = performance.now() - started
   started = performance.now()
   const single = lintCharged(() =>
-    linter.verify(
+    linters[history.root].verify(
       files.get(oracleName(history)),
       linterConfigFor(history.settings),
       {
@@ -1392,6 +1587,11 @@ function check(_history, observations, expected) {
 const formState = (source, form) => `${source.id} via ${form}`
 const entryState = (source, e) => `${source.id} ${e.label}`
 const chainState = (source, chainId) => `${source.id} with ${chainId}`
+const shapeState = (source, shape) => `${source.id} shaped ${shape}`
+const localState = (source, form, local) =>
+  `${source.id} via ${form} named ${local}`
+const ROOT_STATE = `project under a node_modules path`
+const malformedState = (value) => `malformed ${value}`
 const SETTING_STATES = {
   'unknown sources test': (h) => h.settings.unknownSources === `test`,
   'unknown sources ignore': (h) => h.settings.unknownSources === `ignore`,
@@ -1411,38 +1611,62 @@ const SETTING_SOURCE = {
   'pw-fixtures configured by exports': `pw-fixtures`,
 }
 const ONCE = `two calls through one unknown import`
+const UNTITLED = `unknown calls without a title`
 
 function statementStates(key) {
-  const { source, form, e, chainId } = parse(key)
+  const { source, form, e, chainId, shape, local } = parse(key)
   return [
     formState(source, form),
     entryState(source, e),
     chainState(source, chainId),
+    shapeState(source, shape),
+    localState(source, form, local),
   ]
 }
 
 const STATES = [
   ...new Set(STATEMENTS.flatMap(statementStates)),
   ...Object.keys(SETTING_STATES),
+  ...SETTINGS.malformed.slice(1).map(malformedState),
   ONCE,
+  UNTITLED,
   `machinery file`,
   `javascript under espree`,
+  ROOT_STATE,
 ]
 
 function reached(history) {
   const states = new Set(history.statements.flatMap(statementStates))
   const sources = new Set(history.statements.map((key) => parse(key).source.id))
+  const { settings } = effectiveSettings(history.settings)
   for (const [state, holds] of Object.entries(SETTING_STATES))
-    if (holds(history) && sources.has(SETTING_SOURCE[state])) states.add(state)
+    if (holds({ settings }) && sources.has(SETTING_SOURCE[state]))
+      states.add(state)
+  if (history.settings.malformed !== `none`)
+    states.add(malformedState(history.settings.malformed))
+  if (history.root !== `plain`) states.add(ROOT_STATE)
   const unknownImports = layout(history)
     .placed.filter(
       (placed) =>
         placed.form !== `helper` &&
+        placed.shape === `title` &&
         !CHAINS[placed.chainId].effects.includes(`nothing`) &&
-        roleOf(placed.source, placed.e, history.settings).kind === `unknown`,
+        roleOf(placed.source, placed.e, settings).kind === `unknown`,
     )
     .map((placed) => placed.importKey)
   if (new Set(unknownImports).size < unknownImports.length) states.add(ONCE)
+  const placed = layout(history).placed
+  if (
+    placed.some(
+      (statement) =>
+        statement.source.class === `unknown` && statement.shape !== `title`,
+    ) &&
+    placed.every(
+      (statement) =>
+        statement.source.class !== `unknown` || statement.shape !== `title`,
+    )
+  )
+    states.add(UNTITLED)
   if (history.machinery) states.add(`machinery file`)
   if (history.language === `js`) states.add(`javascript under espree`)
   return states
@@ -1465,7 +1689,12 @@ function coveringStatements() {
 const sourceStatements = (id, form = `named`) =>
   STATEMENTS.filter((key) => {
     const statement = parse(key)
-    return statement.source.id === id && statement.form === form
+    return (
+      statement.source.id === id &&
+      statement.form === form &&
+      statement.shape === `title` &&
+      statement.local === `p`
+    )
   })
 
 function packed() {
@@ -1484,6 +1713,42 @@ function packed() {
     }),
   }))
 }
+
+/**
+ * A history whose settings are malformed one way, beside the valid
+ * settings that the malformation spoils, so that a rule that reads part of
+ * a malformed setting, or ignores the malformation, answers differently.
+ */
+function malformedConstruction(value) {
+  const statements = [
+    sourceStatements(`regex-lib`)[0],
+    sourceStatements(`pw-fixtures`)[0],
+    sourceStatements(`vitest`)[0],
+  ]
+  const spoiled =
+    value === `nonTestPackages string`
+      ? { regexLib: `nonTest` }
+      : value === `unknownSources mode`
+        ? { unknownSources: `ignore` }
+        : { regexLib: `vitest`, pwFixtures: `playwright` }
+  return {
+    name: malformedState(value),
+    enters: [malformedState(value)],
+    build: (generated) => ({
+      ...generated,
+      settings: { ...DEFAULT_SETTINGS, ...spoiled, malformed: value },
+      statements,
+    }),
+  }
+}
+
+// An unknown source's calls that pass a function but no title, with no
+// title-shaped call beside them: none is a registration, so the history
+// owes no report (the precision law).
+const untitledStatements = STATEMENTS.filter((key) => {
+  const { source, shape } = parse(key)
+  return source.class === `unknown` && shape !== `title`
+})
 
 /** A history with one setting and statements of the source it governs. */
 function settingConstruction(state) {
@@ -1512,17 +1777,44 @@ function settingConstruction(state) {
   }
 }
 
-const unknownTest = sourceStatements(`regex-lib`).filter((key) =>
-  key.endsWith(`|none`),
-)[0]
+const unknownTest = sourceStatements(`regex-lib`).find(
+  (key) => parse(key).chainId === `none`,
+)
 const unknownSkip = sourceStatements(`regex-lib`).find(
   (key) =>
-    key.split(`|`)[2] === unknownTest.split(`|`)[2] && key.endsWith(`|skip`),
+    parse(key).i === parse(unknownTest).i && parse(key).chainId === `skip`,
 )
 
 const constructed = [
   ...packed(),
   ...Object.keys(SETTING_STATES).map(settingConstruction),
+  ...SETTINGS.malformed.slice(1).map(malformedConstruction),
+  {
+    name: UNTITLED,
+    enters: [UNTITLED],
+    build: (generated) => ({
+      ...generated,
+      settings: DEFAULT_SETTINGS,
+      statements: untitledStatements.slice(0, MAX_STATEMENTS),
+    }),
+  },
+  {
+    name: ROOT_STATE,
+    enters: [ROOT_STATE],
+    build: (generated) => ({
+      ...generated,
+      root: `under node_modules`,
+      settings: DEFAULT_SETTINGS,
+      statements: [
+        sourceStatements(`@acme/fixtures`)[0],
+        sourceStatements(`#test/fixtures`)[0],
+        sourceStatements(`pw-fixtures`)[0],
+        sourceStatements(`regex-lib`, `relay`)[0],
+        sourceStatements(`regex-lib`, `helper`)[0],
+        sourceStatements(`vitest`, `relay`)[0],
+      ],
+    }),
+  },
   {
     name: ONCE,
     enters: [ONCE],
@@ -1543,7 +1835,9 @@ const constructed = [
         sourceStatements(`vitest`)[0],
         unknownTest,
         sourceStatements(`regex-lib`, `helper`)[0],
-        sourceStatements(`node:test`).find((key) => key.endsWith(`|skip`)),
+        sourceStatements(`node:test`).find(
+          (key) => parse(key).chainId === `skip`,
+        ),
       ],
     }),
   },
@@ -1572,9 +1866,9 @@ function corruptFirst(trace, change) {
 oracleProperty({
   id: `lint.test-source-recognition`,
   law: {
-    statement: `A callee is a test function by the source of its binding: a framework's export (named, default, namespace, require, relay, or global, with the modifier it carries and the factories that return one) is one, a known non-test library's export of the same name is none, a project's relative, # and workspace modules are read and node_modules packages never are, testPackages and nonTestPackages decide first, and an unknown source's registration-shaped call gets one unknownTestSource report per import (or per helper call) unless unknownSources is test or ignore.`,
-    authority: `The maintainer decision of 2026-11-12 ("agree with reversed decision -- false positives are annoying and we should be able to be precise"), which replaces the fail-closed decision of 2026-11-11 and makes unknownSources default to report; each source row's citation (package exports, .d.ts, or the framework's documentation, read 2026-11-12); the D2 law of lint.registration-only and the no-disabled rule's header for what each rule owes a registration.`,
-    limits: `One oracle file per history with fixed workspace fixtures. Not generated or not recognized: a test function passed as a parameter (t.test, it.layer), QUnit's test.if(name, condition, fn), Japa's chain after the call, a disabling options object, dynamic import(), TypeScript paths aliases, a workspace package whose exports name missing built files, a published package's src/ (production), and a third-party fixture package's exports under names no framework uses unless testPackages names them. Each row holds for the version its citation names.`,
+    statement: `A callee is a test function by the source of its binding: a framework's export (named, default, namespace, require, relay, or global, with the modifier it carries and the factories that return one) is one, a known non-test library's export of the same name is none, a project's relative, # and workspace modules are read and node_modules packages never are, testPackages and nonTestPackages decide first, and an unknown source's title-shaped call (a string title, then a function), under any import and local name, gets one unknownTestSource report per import (or per helper call) unless unknownSources is test or ignore, while its untitled calls get none; a registration's body may come first; and a malformed source setting gets malformedSourceSetting, is read as unset, and never throws.`,
+    authority: `README "Decisions": the maintainer decision of 2026-11-12 ("agree with reversed decision -- false positives are annoying and we should be able to be precise"), which replaces the fail-closed decision of 2026-11-11 and makes unknownSources default to report, and the coordinator decisions under it (title shape for unknown sources; a body in any argument position); each source row's citation (package exports, .d.ts, or the framework's documentation, read 2026-11-12); the D2 law of lint.registration-only and the no-disabled rule's header for what each rule owes a registration.`,
+    limits: `One oracle file per history with fixed workspace fixtures. Not generated or not recognized: a test function passed as a parameter (t.test, it.layer), QUnit's test.if(name, condition, fn), Japa's chain after the call, a disabling options object, dynamic import(), TypeScript paths aliases, a nested exports condition other than import and default, a workspace package whose exports name missing built files, and a published package's src/ (production). An unknown source's untitled call is silent by law, and its title-shaped call that is no test is reported by law (README "Decisions"). The parse cost of a fresh process is not observed. Each row holds for the version its citation names.`,
   },
   histories: {
     arbitrary: historyArbitrary,

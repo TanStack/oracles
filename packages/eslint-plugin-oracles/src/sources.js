@@ -166,7 +166,7 @@ const frameworkPatterns = [
  * Packages that export other functions under a test function's name, by
  * exact specifier, or by prefix when the entry ends in `*`.
  */
-const nonTestPackages = [
+const knownNonTestPackages = [
   `ramda`,
   `ramda/*`,
   `rambda`,
@@ -250,53 +250,66 @@ const matches = (pattern, specifier) =>
 const UNKNOWN_MODES = [`report`, `test`, `ignore`]
 const ROLE_NAMES = new Set([`test`, `suite`])
 
+const isPlainObject = (value) =>
+  typeof value === `object` && value !== null && !Array.isArray(value)
+
+/** The table that a `testPackages` value names, or undefined when it names none. */
+function configuredTable(value) {
+  if (typeof value === `string`) return frameworkTable(value)
+  return isPlainObject(value) &&
+    Object.values(value).every((role) => ROLE_NAMES.has(role))
+    ? value
+    : undefined
+}
+
 /**
  * The source settings of `settings.oracles`, and the names of those that
  * are malformed. `testPackages` maps a specifier (or a prefix ending in
  * `*`) to a framework's specifier or to a table of export roles;
  * `nonTestPackages` lists specifiers; `unknownSources` is `report` (the
- * default), `test`, or `ignore`. A malformed setting is read as unset.
+ * default), `test`, or `ignore`. A setting that is not `undefined` and
+ * that the rules cannot use is malformed, and it is read as unset, all of
+ * it. A `settings.oracles` that is not an object is malformed as a whole.
  */
-export function sourceSettings(configured = {}) {
+export function sourceSettings(configured) {
+  const unset = { tables: {}, nonTest: [], unknownSources: `report` }
+  if (configured === undefined) return { ...unset, malformed: [] }
+  if (!isPlainObject(configured)) return { ...unset, malformed: [`oracles`] }
   const malformed = []
-  const { testPackages = {}, nonTestPackages: listed = [] } = configured
-  const tables = {}
-  if (typeof testPackages !== `object` || testPackages === null)
-    malformed.push(`testPackages`)
-  else
-    for (const [pattern, value] of Object.entries(testPackages)) {
-      const table =
-        typeof value === `string`
-          ? frameworkTable(value)
-          : typeof value === `object` &&
-              value !== null &&
-              Object.values(value).every((role) => ROLE_NAMES.has(role))
-            ? value
-            : undefined
-      if (table === undefined) malformed.push(`testPackages`)
-      else tables[pattern] = table
-    }
-  const nonTest =
-    Array.isArray(listed) && listed.every((entry) => typeof entry === `string`)
-      ? listed
-      : (malformed.push(`nonTestPackages`), [])
-  const unknownSources = configured.unknownSources ?? `report`
-  if (!UNKNOWN_MODES.includes(unknownSources)) malformed.push(`unknownSources`)
-  return {
-    tables,
-    nonTest,
-    unknownSources: UNKNOWN_MODES.includes(unknownSources)
-      ? unknownSources
-      : `report`,
-    malformed: [...new Set(malformed)],
+  const { testPackages, nonTestPackages, unknownSources } = configured
+  let tables = unset.tables
+  if (testPackages !== undefined) {
+    const entries = isPlainObject(testPackages)
+      ? Object.entries(testPackages).map(([pattern, value]) => [
+          pattern,
+          configuredTable(value),
+        ])
+      : undefined
+    if (entries?.every(([, table]) => table !== undefined))
+      tables = Object.fromEntries(entries)
+    else malformed.push(`testPackages`)
   }
+  let nonTest = unset.nonTest
+  if (nonTestPackages !== undefined) {
+    if (
+      Array.isArray(nonTestPackages) &&
+      nonTestPackages.every((entry) => typeof entry === `string`)
+    )
+      nonTest = nonTestPackages
+    else malformed.push(`nonTestPackages`)
+  }
+  let mode = unset.unknownSources
+  if (unknownSources !== undefined) {
+    if (UNKNOWN_MODES.includes(unknownSources)) mode = unknownSources
+    else malformed.push(`unknownSources`)
+  }
+  return { tables, nonTest, unknownSources: mode, malformed }
 }
 
 function frameworkTable(specifier) {
-  return (
-    frameworks[specifier] ??
-    frameworkPatterns.find(([prefix]) => specifier.startsWith(prefix))?.[1]
-  )
+  return Object.hasOwn(frameworks, specifier)
+    ? frameworks[specifier]
+    : frameworkPatterns.find(([prefix]) => specifier.startsWith(prefix))?.[1]
 }
 
 /**
@@ -314,7 +327,7 @@ export function classifySource(specifier, settings) {
     return `none`
   const table = frameworkTable(specifier)
   if (table !== undefined) return { table }
-  return nonTestPackages.some((pattern) => matches(pattern, specifier))
+  return knownNonTestPackages.some((pattern) => matches(pattern, specifier))
     ? `none`
     : undefined
 }

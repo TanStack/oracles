@@ -56,11 +56,11 @@ import { classifySource } from '../sources.js'
  *   test of its own, through a named, default, or namespace import. The
  *   helper's tests would appear under the oracle file, so an ordinary test
  *   file registers them instead.
- * - `unknownTestSource`: a call that would be a registration through an
- *   import from a source that the rules cannot classify (sources.js: no
- *   setting or table names it, and no project module is found), once per
- *   import, at the import; and a call to a helper that makes such a call,
- *   at the call. The rule cannot tell whether such a call registers a test,
+ * - `unknownTestSource`: a title-shaped call (a string or template title,
+ *   then a function) through an import from a source that the rules cannot
+ *   classify (sources.js: no setting or table names it, and no project
+ *   module is found), whatever the import's name, once per import, at the
+ *   import; and a call to a helper that makes such a call, at the call. The rule cannot tell whether such a call registers a test,
  *   so it neither reports nor passes it as one (maintainer decision,
  *   2026-11-12). It is reported in an `oracle-` machinery file too, where
  *   `oracle/no-disabled` alone guards the tests. `settings.oracles.

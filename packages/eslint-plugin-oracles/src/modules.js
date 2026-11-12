@@ -14,7 +14,9 @@ import { sourceSettings } from './sources.js'
  * Every module that an earlier lint parsed, by path, with the mtime and size
  * it was read at and the language options it was parsed with. Parsing is the
  * costly part, so a module is parsed again only when it changes, or when a
- * file with other language options imports it. What a lint resolves is never
+ * file with other language options imports it. The options are compared by
+ * identity, so a long-lived ESLint process reuses a parse, and a fresh
+ * process parses again. What a lint resolves is never
  * kept between lints, so an edit to any module reaches the next lint: see
  * LintSession.
  */
@@ -25,9 +27,8 @@ const parsedModules = new Map()
  * (sources.js) of the file it lints, the modules it loaded and the paths it
  * resolved, the package manifests it read, and what it answered. `resolved`
  * holds one answer for each question about a module's export, keyed by the
- * question, the module, and
- * the export's name, so no export is resolved twice, whatever the call
- * graph of the modules.
+ * question, the module, and the export's name, so no export is resolved
+ * twice, whatever the call graph of the modules.
  */
 export class LintSession {
   modules = new Map()
@@ -134,10 +135,38 @@ function findTestModule(fromFile, source, session) {
   if (
     file === undefined ||
     isProductionModule(file, session) ||
-    realpathSync(file).split(sep).includes(`node_modules`)
+    isInstalled(file, dirname(fromFile))
   )
     return undefined
   return file
+}
+
+/**
+ * Whether `path` is inside an installed package, as the project in
+ * `directory` sees it: below the directories that the two share, its real
+ * path enters a node_modules directory. A project whose own path is under
+ * a node_modules directory is not installed for that.
+ */
+function isInstalled(path, directory) {
+  const from = realPath(directory).split(sep)
+  const to = realPath(path).split(sep)
+  let shared = 0
+  while (shared < from.length && to[shared] === from[shared]) shared++
+  // The last shared directory counts: a sibling package in node_modules
+  // shares the node_modules directory itself.
+  return to.slice(Math.max(shared - 1, 0)).includes(`node_modules`)
+}
+
+/**
+ * The real path of `path`, or the path itself when it does not exist, as
+ * the directory of a file that a lint names but that is not on disk.
+ */
+function realPath(path) {
+  try {
+    return realpathSync(path)
+  } catch {
+    return resolve(path)
+  }
 }
 
 /** The parsed package.json in `directory`, or null when there is none. */
@@ -207,15 +236,32 @@ function mappedTarget(map, subpath) {
   return undefined
 }
 
-/** The module that a `#` import names, through the nearest package.json. */
-function subpathImport(directory, source, session) {
+/** The target that a `#` import names through the nearest package.json. */
+function subpathTarget(directory, source, session) {
   const owner = packageDirectory(directory, session)
   const imports = owner && manifest(owner, session).imports
   if (imports === null || typeof imports !== `object`) return undefined
   const target = mappedTarget(imports, source)
-  // A target that names a package is that package's import, not a module
-  // of this one.
-  return target?.startsWith(`./`) ? resolve(owner, target) : undefined
+  return target === undefined ? undefined : { owner, target }
+}
+
+/** The module that a `#` import names, when its target is a file of the package. */
+function subpathImport(directory, source, session) {
+  const found = subpathTarget(directory, source, session)
+  return found?.target.startsWith(`./`)
+    ? resolve(found.owner, found.target)
+    : undefined
+}
+
+/**
+ * The package specifier that a `#` import names in `fromFile`, as in
+ * `"#vitest": "vitest"`, or undefined when it names a file or nothing.
+ */
+export function subpathPackage(fromFile, source, session) {
+  const found = subpathTarget(dirname(fromFile), source, session)
+  return found === undefined || found.target.startsWith(`.`)
+    ? undefined
+    : found.target
 }
 
 /**
@@ -234,8 +280,8 @@ function workspaceModule(directory, source, session) {
   for (let at = directory; ; at = dirname(at)) {
     const linked = join(at, `node_modules`, name)
     if (existsSync(linked)) {
-      const real = realpathSync(linked)
-      if (real.split(sep).includes(`node_modules`)) return undefined
+      const real = realPath(linked)
+      if (isInstalled(real, directory)) return undefined
       const { exports, main } = manifest(real, session) ?? {}
       const target =
         exports === undefined
