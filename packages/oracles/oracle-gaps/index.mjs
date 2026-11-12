@@ -105,10 +105,11 @@
 // 130 or 143 when SIGINT or SIGTERM stopped it.
 //
 // No process outlives the CLI (maintainer disposition G2, 2026-11-11). The
-// CLI starts the run as a child in a process group of its own, which every
+// CLI starts a check as a child in a process group of its own, which every
 // Vitest worker joins, and every process a test starts unless it starts it
 // detached (in a session of its own, as a browser driver can), and waits
-// for it. Windows has no process groups, so there the run is not supervised.
+// for it. Help, --stop-daemon, and arguments that refuse start no process,
+// so they end in the CLI's own process, without a second Node start. Windows has no process groups, so there the run is not supervised.
 // SIGINT or SIGTERM is sent on to the whole group; a process that has not
 // ended 2 s later is killed, and so is any process left in the group when
 // the run ends. The run kills its group itself if the CLI dies first.
@@ -186,6 +187,19 @@ function watchSupervisor(supervisor) {
   }, 1000).unref()
 }
 
+/**
+ * Whether arguments `argv` ask for a check, the only run that starts
+ * processes; a refusal of them is written by the run itself.
+ */
+function asksForCheck(argv) {
+  try {
+    const options = parseArgs(argv)
+    return !options.help && !options.stop
+  } catch {
+    return false
+  }
+}
+
 /** The summary of a check run in this process. */
 async function checkCold(options) {
   const session = await openSession(options.pkg)
@@ -214,10 +228,16 @@ const main =
   import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
 // Windows has no process groups: there the run is the CLI's own process.
 const supervised = process.platform !== `win32`
-if (main && supervised && process.env.ORACLE_GAPS_GROUP === undefined)
+const supervisor = process.env.ORACLE_GAPS_GROUP
+if (
+  main &&
+  supervised &&
+  supervisor === undefined &&
+  asksForCheck(process.argv.slice(2))
+)
   superviseRun()
 else if (main) {
-  if (supervised) watchSupervisor(Number(process.env.ORACLE_GAPS_GROUP))
+  if (supervisor !== undefined) watchSupervisor(Number(supervisor))
   // A test that runs this CLI starts a run of its own, in a group of its own.
   delete process.env.ORACLE_GAPS_GROUP
   // The run's options, once its arguments parse; a refusal or an error is
