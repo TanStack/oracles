@@ -164,8 +164,8 @@ export const shards = {
     `calibration: a stopped run leaves a process it started running`,
     `calibration: a busy mutant is named in no heartbeat`,
     // Law 15's calibrations (the greppable stream), measured at ab18c60:
-    // 79 s and 70 s; the daemon-notes one is bound to its history, after
-    // it took 433 s searching for one.
+    // 79 s and 70 s; the daemon-notes one, bound to its history, 2 s (it
+    // took 433 s searching for one).
     `calibration: a streamed line has no prefix`,
     `calibration: a refusal through the daemon drops the cold run's notes`,
     `calibration: a completed run ends without its done line`,
