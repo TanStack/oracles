@@ -66,6 +66,7 @@ noDisabledTester.run(`oracle/no-disabled`, noDisabled, {
             seed: `ORACLE_SEED`,
             path: `ORACLE_PATH`,
             property: `ORACLE_PROPERTY`,
+            unit: `ORACLE_UNIT`,
             runsMultiplier: `ORACLE_RUNS_MULTIPLIER`,
           },
         },
@@ -100,6 +101,11 @@ projectTester.run(`oracle/no-disabled with a project's settings`, noDisabled, {
       code: `const seed = process.env.TANSTACK_DB_ORACLE_SEED`,
       filename: `/repo/tests/checks-oracle.test.ts`,
     },
+    // The unit a path replay runs is a shared replay variable.
+    {
+      code: `const unit = process.env.TANSTACK_DB_ORACLE_UNIT`,
+      filename: `/repo/tests/checks-oracle.test.ts`,
+    },
     // The configured replay module, named by its path, may read a private
     // replay variable.
     {
@@ -116,6 +122,18 @@ projectTester.run(`oracle/no-disabled with a project's settings`, noDisabled, {
     // The default prefix is not the project's, so its variables are private.
     {
       code: `const runs = process.env.ORACLE_RUNS`,
+      filename: `/repo/tests/checks-oracle.test.ts`,
+      errors: [{ messageId: `replayVariable` }],
+    },
+    // A unit under another prefix selects a replay the shared variables do
+    // not see.
+    {
+      code: `const unit = process.env.ORACLE_UNIT`,
+      filename: `/repo/tests/checks-oracle.test.ts`,
+      errors: [{ messageId: `replayVariable` }],
+    },
+    {
+      code: `const { UTILS_ORACLE_UNIT } = process.env`,
       filename: `/repo/tests/checks-oracle.test.ts`,
       errors: [{ messageId: `replayVariable` }],
     },

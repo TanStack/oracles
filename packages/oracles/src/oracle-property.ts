@@ -77,15 +77,52 @@
  * so the gap report can tell an output the check does not compare from one
  * that never changed.
  *
- * A generated source runs one test per fixed seed and one random test, with
- * the same arbitrary, check, and budget (ORC-007). The random test reads the
- * replay variables through `oraclePropertyOptions`, and every test stands
- * aside during another property's path replay.
+ * A generated source runs one campaign per fixed seed and one random
+ * campaign, with the same arbitrary, check, and budget (ORC-007), and every
+ * test stands aside during another property's path replay.
+ *
+ * - **Units** (maintainer decision, 2026-11-11, option D). A generated source
+ *   registers each part of a campaign as its own test, so a runner can shard
+ *   them. For each fixed seed N, it registers `fixed seed N: <name>` for each
+ *   constructed history, which runs only that history, built from seed N +
+ *   its index, as a fast-check example with no generated runs; and then
+ *   `fixed seed N: generated`, which runs the campaign's generated histories:
+ *   the same seed and the same `oracleRuns(runs)`, with no examples.
+ *   fast-check draws its generated histories independently of its examples,
+ *   so the units of seed N run exactly the histories that the campaign ran.
+ *   The random campaign registers `random seed: <name>` and `random seed:
+ *   generated` in the same way. Its units share one seed per registration:
+ *   the first random unit that runs selects it through
+ *   `oraclePropertyOptions`, which reads the replay variables and logs the one
+ *   `ORACLE_SEED` line (maintainer decision, 2026-11-11, Q2). Each unit keeps
+ *   its campaign's route, decides its own first failure, shrinks on its own
+ *   within its own timeout, and prints its own reach line, `<id> <unit> reach
+ *   {...}`; a campaign's reach is the sum of its units' lines. A constructed
+ *   history named `generated`, or two constructed or two fixed histories of one
+ *   name, would give two tests one name, so the property fails to load.
+ * - **Unit replay** (maintainer decisions, 2026-11-11, Q3 and Q4). A path
+ *   indexes one unit's stream, so a path replay names its unit in
+ *   `${prefix}_UNIT`, such as `random seed: generated`, which requires
+ *   `${prefix}_PROPERTY`. During a path replay of a property, only its random
+ *   unit of that name runs, and every other test stands aside. A path replay
+ *   of a generated source without `UNIT` fails when the property registers,
+ *   with "`${prefix}_PATH` of a generated source requires `${prefix}_UNIT`",
+ *   and so does a `UNIT` that names no random unit of the replayed property,
+ *   an enumerated property's included; these come after every other load
+ *   error of the property. A failing unit prints its replay command, `Replay:
+ *   ${prefix}_SEED=... ${prefix}_PATH=... ${prefix}_PROPERTY=... ${prefix}_UNIT=...
+ *   vitest run -t '...'`, which names the random unit of its own name: a
+ *   fixed-seed unit's replay runs that random unit with the fixed seed, which
+ *   draws the same stream. Run with the project's test command in place of
+ *   `vitest run`, it runs only that unit and reproduces the counterexample. A
+ *   failing random unit's violation prints the same command as its rerun
+ *   line, and a failing fixed-seed unit prints `Rerun: -t '...'`, which reruns
+ *   it, shrinking included.
  *
  * - **Reach** names the states a history entered. By default the driver
  *   reports them with `observe("reach", state)`. A state that only the model
  *   can name, such as "a failure while the seed is active", comes from
- *   `reached(history, trace, expected)` instead. Each campaign prints how many
+ *   `reached(history, trace, expected)` instead. Each unit prints how many
  *   histories entered each declared state, including none (ORC-015). An
  *   enumerated source runs every history, so its required states need no
  *   constructed history (maintainer decision, 2026-11-10): its `reach` test,
@@ -128,7 +165,7 @@
  *   driver must await the work it starts.
  * - A **constructed history** is built from a generated history so that it
  *   reaches states that the laws need, and it names those declared states.
- *   Every campaign runs every constructed history once as an example, and a
+ *   Every campaign runs every constructed history once, in its own unit, and a
  *   constructed history that does not enter a named state fails. Only
  *   constructed histories make reach required: a state that random histories
  *   reach is measured, never gated. So every state in `states` must be named
@@ -174,10 +211,14 @@
  *   start. A required difference that the empty difference holds, the empty
  *   text or a pattern that matches the empty string, fails registration, and
  *   a difference that is not text fails the calibration.
- * - **Determinism.** A `determinism` test runs some histories twice and
- *   requires the same trace: every fixed and constructed history of a generated
- *   source and three generated histories, or up to eight evenly spaced
- *   enumerated histories. Two runs are compared by their observations' data
+ * - **Determinism.** The determinism tests run some histories twice and
+ *   require the same trace. A generated source registers one test
+ *   `determinism: <history name>` for each history it compares: every fixed
+ *   history (`determinism: fixed history: <name>`), every constructed history
+ *   built from the first fixed seed (`determinism: constructed history:
+ *   <name>`), and three generated histories (`determinism: generated 0` to
+ *   `2`). An enumerated source registers one `determinism` test over up to
+ *   eight evenly spaced enumerated histories. Two runs are compared by their observations' data
  *   encodings, so `-0` and `0`, key order, and Map and Set order count, as a
  *   check that iterates them can see. A trace
  *   that differs between runs of one history breaks replay, shrinking, and the gap
@@ -190,10 +231,10 @@
  *   the reported counterexample still shows the first failure (ORC-010).
  *   Within one history a driver error decides first, then a law violation,
  *   then a constructed history that missed its state.
- * - **Shrinking ends in time.** A campaign starts no shrink run once half its
+ * - **Shrinking ends in time.** A unit starts no shrink run once half its
  *   test's `timeout` has passed. A shrink it does not run counts as passing,
  *   so fast-check ends its search and reports the smallest failure it found,
- *   with the first failure's law. A campaign whose first failure is judged in
+ *   with the first failure's law. A unit whose first failure is judged in
  *   time, and whose runs each take less than half its timeout, so reports that
  *   law and a replayable counterexample before its timeout, however long
  *   shrinking would take; that counterexample can be larger than the smallest
@@ -235,7 +276,8 @@ import {
   oracleRuns,
   withOracleFixedHistories,
 } from './oracle-config.js'
-import { oracleEnvName } from './oracle-environment.js'
+import { oracleEnvName, replayConfig } from './oracle-environment.js'
+import { recordOracleReplay } from './oracle-replay-witness.js'
 import { oracleFixedSeed, oracleRoute, oracleRouteOf } from './oracle-route.js'
 import type { OracleRoute } from './oracle-route.js'
 
@@ -622,7 +664,7 @@ export interface OraclePropertyOptions<THistory, TExpected, TPlan = THistory> {
   predict?: (plan: TPlan) => Readonly<Record<string, boolean>>
   /**
    * Each registered test's limit in milliseconds; 120 seconds by default, and
-   * none at 0 or less. A campaign stops shrinking at half of it.
+   * none at 0 or less. Each unit of a campaign stops shrinking at half of it.
    */
   timeout?: number
   /**
@@ -784,6 +826,37 @@ export function oracleProperty<THistory, TExpected, TPlan = THistory>(
 
 const timeoutOf = (options: { timeout?: number }) => options.timeout ?? 120_000
 
+/** Whether no path replay is selected, or the selected one names this unit. */
+const replaySelects = (unit: string) =>
+  replayConfig().replayPath === undefined || replayConfig().replayUnit === unit
+
+/**
+ * During a path replay of this property, the replay's unit must name one of
+ * its random units: a path indexes one unit's stream, so a replay without a
+ * unit, or with another, would run an unrelated history or nothing at all.
+ */
+function assertReplayUnit(id: string, randomUnits: ReadonlyArray<string>) {
+  const { replayPath, replayProperty, replayUnit } = replayConfig()
+  if (replayPath === undefined || replayProperty !== id) return
+  const unitName = oracleEnvName(`UNIT`)
+  const units = randomUnits.map((unit) => JSON.stringify(unit)).join(`, `)
+  if (randomUnits.length === 0) {
+    if (replayUnit !== undefined)
+      throw new Error(
+        `${id}: ${unitName} names "${replayUnit}", but an enumerated source has no random units to replay.`,
+      )
+    return
+  }
+  if (replayUnit === undefined)
+    throw new Error(
+      `${id}: ${oracleEnvName(`PATH`)} of a generated source requires ${unitName}, the random unit whose path it replays: one of ${units}. A failing unit's replay line prints it.`,
+    )
+  if (!randomUnits.includes(replayUnit))
+    throw new Error(
+      `${id}: ${unitName} names "${replayUnit}", which is no random unit of this property; its random units are ${units}.`,
+    )
+}
+
 /** The declared states, when the source declares any. */
 const declaredOf = (source: {
   states?: ReadonlyArray<DeclaredState>
@@ -888,14 +961,16 @@ function enumeratedTests<THistory, TExpected, TPlan>(
       process.stdout.write(`${id} enumerated reach ${countsText(counts)}\n`)
     },
   }
-  return [
+  const tests = [
     ...historyTests,
     ...(declared ? [reachTest] : []),
     ...calibrationTests(options, () => named),
-    determinismTest(options, () =>
+    determinismTest(options, `determinism`, () =>
       named.filter((_, index) => index % spacing === 0),
     ),
   ]
+  assertReplayUnit(id, [])
+  return tests
 }
 
 // The running history's trace, and where in it a controlled clock passed its
@@ -1357,10 +1432,11 @@ function reportText(value: unknown): string {
 
 function determinismTest<THistory, TExpected, TPlan>(
   options: BoundOptions<THistory, TExpected, TPlan>,
+  testName: string,
   histories: () => ReadonlyArray<{ name: string; history: THistory }>,
 ): PropertyTest {
   return {
-    name: `determinism`,
+    name: testName,
     route: `calibration`,
     replays: [],
     run: async () => {
@@ -1620,8 +1696,9 @@ function judge<THistory, TExpected, TPlan>(
   return { verdict, reached }
 }
 
-const lawOf = (verdict: Extract<Verdict, { kind: `violation` }>) =>
-  verdict.law ?? verdict.checkpoint
+type Violation = Extract<Verdict, { kind: `violation` }>
+
+const lawOf = (verdict: Violation) => verdict.law ?? verdict.checkpoint
 
 /**
  * One test per calibration. It tries candidate histories in order until the
@@ -1743,18 +1820,29 @@ function calibrationTests<THistory, TExpected, TPlan>(
   )
 }
 
+/** Reports a law violation to the gap report's hook and builds its error. */
 function failure<THistory>(
   options: { id: string; law: OracleLaw },
   verdict: Extract<Verdict, { kind: `violation` }>,
   history: THistory,
-  rerun: string,
+  rerun: string | undefined,
 ): OracleViolation {
-  const { id, law } = options
   globalThis.__oracleVerdict?.({
-    property: id,
+    property: options.id,
     law: lawOf(verdict),
     checkpoint: verdict.checkpoint,
   })
+  return violationError(options, verdict, history, rerun)
+}
+
+/** A violation's error, with a rerun line when there is a command to print. */
+function violationError<THistory>(
+  options: { id: string; law: OracleLaw },
+  verdict: Extract<Verdict, { kind: `violation` }>,
+  history: THistory,
+  rerun: string | undefined,
+): OracleViolation {
+  const { id, law } = options
   const error = new OracleViolation(
     [
       `${id} violated at checkpoint "${verdict.checkpoint}"${verdict.law ? ` (law: ${verdict.law})` : ``}.`,
@@ -1763,7 +1851,7 @@ function failure<THistory>(
       `History: ${reportText(history)}`,
       `Authority: ${law.authority}`,
       `Known limits: ${law.limits}`,
-      `Rerun: ${rerun}`,
+      ...(rerun === undefined ? [] : [`Rerun: ${rerun}`]),
     ].join(`\n`),
     verdict.cause === undefined ? undefined : { cause: verdict.cause },
   )
@@ -1787,9 +1875,11 @@ function rerunOf(task: NamedTask): string {
   for (let at: NamedTask | undefined = task; at; at = at.suite)
     names.unshift(at.name)
   const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
-  const pattern = `^${names.map(escape).join(`(?: | > )`)}$`
-  return `-t '${pattern.replace(/'/g, `'\\''`)}'`
+  return `-t ${shellQuoted(`^${names.map(escape).join(`(?: | > )`)}$`)}`
 }
+
+/** Text in a POSIX shell's single quotes. */
+const shellQuoted = (text: string) => `'${text.replace(/'/g, `'\\''`)}'`
 
 /**
  * A fixed or constructed history whose arbitrary's `canShrinkWithoutContext`
@@ -1851,8 +1941,27 @@ function generatedTests<THistory, TExpected, TPlan>(
         `${id}: constructed history "${construction.name}" names undeclared states ${undeclared.join(`, `)}.`,
       )
   }
+  // Each unit and determinism test is named by its history, so two tests
+  // would share a name.
+  const twice = (names: ReadonlyArray<string>) =>
+    names.find((name, at) => names.indexOf(name) !== at)
+  const constructedNames = constructions.map(({ name }) => name)
+  if (constructedNames.includes(`generated`))
+    throw new Error(
+      `${id}: constructed history "generated" has the name of a campaign's generated unit, so two tests would share a name. Rename the constructed history.`,
+    )
+  const constructedTwice = twice(constructedNames)
+  if (constructedTwice !== undefined)
+    throw new Error(
+      `${id}: two constructed histories are named "${constructedTwice}", so two tests would share a name. Give each constructed history its own name.`,
+    )
+  const fixedTwice = twice((source.fixed ?? []).map(({ name }) => name))
+  if (fixedTwice !== undefined)
+    throw new Error(
+      `${id}: two fixed histories are named "${fixedTwice}", so two tests would share a name. Give each fixed history its own name.`,
+    )
 
-  // Each campaign gets a fresh predicate: its first failure fixes the kind
+  // Each unit gets a fresh predicate: its first failure fixes the kind
   // that shrinking must keep, a setup error, a constructed history that missed
   // its state, or one law. A
   // smaller history that fails some other way counts as passing. It counts
@@ -1863,6 +1972,11 @@ function generatedTests<THistory, TExpected, TPlan>(
     constructionOf: Map<THistory, ConstructedHistory<THistory>>,
     counts: Map<string, number>,
     shrinkUntil: number,
+    // The rerun line a violation prints; a random unit's comes only once
+    // fast-check reports its path.
+    rerun: string | undefined,
+    // Each violation thrown, with its verdict and history.
+    violations: Map<unknown, { verdict: Violation; history: THistory }>,
   ) => {
     let firstKind: string | undefined
     const keeps = (kind: string) => (firstKind ??= kind) === kind
@@ -1899,42 +2013,34 @@ function generatedTests<THistory, TExpected, TPlan>(
         )
       }
       if (!keeps(`law:${lawOf(verdict)}`)) return
-      throw failure(
-        options,
-        verdict,
-        history,
-        `${oracleEnvName(`PROPERTY`)}=${id} with the seed and path that fast-check reports`,
-      )
+      const error = failure(options, verdict, history, rerun)
+      violations.set(error, { verdict, history })
+      throw error
     }
   }
-  // Each campaign runs every constructed history, built from histories its own
-  // seed draws.
-  // fast-check passes example inputs by reference, which identifies them.
-  // At registration, an error from sampling or building names its
-  // constructed history: it would otherwise fail the file's load unnamed.
-  const examplesFor = (seed: number, registering = false) => {
-    const constructionOf = new Map<THistory, ConstructedHistory<THistory>>()
-    const examples = constructions.map((construction, index) => {
-      let history: THistory
-      try {
-        const [generated] = fc.sample(source.arbitrary, {
-          seed: seed + index,
-          numRuns: 1,
-        })
-        history = construction.build(generated!)
-      } catch (error) {
-        if (!registering) throw error
-        throw new Error(
-          `oracleProperty ${id}: constructed history "${construction.name}" threw while it was built for registration: ${error instanceof Error ? error.message : reportText(error)}`,
-          { cause: error },
-        )
-      }
-      if (!source.arbitrary.canShrinkWithoutContext(history))
-        throw untakeable(id, `constructed history "${construction.name}" built`)
-      constructionOf.set(history, construction)
-      return [history] as [THistory]
-    })
-    return { examples, constructionOf }
+  // Constructed history `index`, built from the history its campaign's seed
+  // draws at seed + index. At registration, an error from sampling or
+  // building names its constructed history: it would otherwise fail the
+  // file's load unnamed.
+  const constructedAt = (seed: number, index: number, registering = false) => {
+    const construction = constructions[index]!
+    let history: THistory
+    try {
+      const [generated] = fc.sample(source.arbitrary, {
+        seed: seed + index,
+        numRuns: 1,
+      })
+      history = construction.build(generated!)
+    } catch (error) {
+      if (!registering) throw error
+      throw new Error(
+        `oracleProperty ${id}: constructed history "${construction.name}" threw while it was built for registration: ${error instanceof Error ? error.message : reportText(error)}`,
+        { cause: error },
+      )
+    }
+    if (!source.arbitrary.canShrinkWithoutContext(history))
+      throw untakeable(id, `constructed history "${construction.name}" built`)
+    return history
   }
   // Registration checks every fixed history, then the constructed histories
   // built from the first fixed seed (or seed 0 when there is none), so a
@@ -1942,24 +2048,61 @@ function generatedTests<THistory, TExpected, TPlan>(
   for (const [index, fixed] of (source.fixed ?? []).entries())
     if (!source.arbitrary.canShrinkWithoutContext(fixed.history))
       throw untakeable(id, `fixed history ${index} ("${fixed.name}") is`)
-  examplesFor(source.fixedSeeds[0] ?? 0, true)
+  const firstSeed = source.fixedSeeds[0] ?? 0
+  for (const index of constructions.keys())
+    constructedAt(firstSeed, index, true)
 
-  // A campaign reports its reach counts after it passes; a failing campaign
-  // reports its counterexample instead.
-  const runCampaign = async (
-    name: string,
+  // A campaign's units: one per constructed history, then `generated`.
+  const unitNames = [...constructedNames, `generated`]
+  /**
+   * Runs one unit of a campaign whose parameters are `base`. A constructed
+   * unit runs its one history, built from the campaign's seed, as an
+   * example with no generated runs; the `generated` unit runs the
+   * campaign's generated runs, with no examples, so fast-check draws the
+   * same histories that the whole campaign drew. A unit reports its reach
+   * counts after it passes, and its rerun and replay commands when it fails.
+   */
+  const runUnit = async (
+    task: NamedTask,
+    signal: AbortSignal,
+    unit: string,
     seed: number,
-    parameters: (
-      examples: Array<[THistory]>,
-    ) => NonNullable<Parameters<typeof fc.assert>[1]>,
+    base: NonNullable<Parameters<typeof fc.check>[1]> & {
+      numRuns: number
+      path?: string
+    },
+    random: boolean,
   ) => {
     // Vitest's clock for the test is already running.
     const started = performance.now()
-    const { examples, constructionOf } = examplesFor(seed)
+    const index = constructedNames.indexOf(unit)
+    const constructionOf = new Map<THistory, ConstructedHistory<THistory>>()
+    // fast-check reports a run's details itself; the replay witness is
+    // recorded from them below.
+    const { reporter: _reporter, asyncReporter: _asyncReporter, ...rest } = base
+    let run: typeof rest = rest
+    if (index >= 0) {
+      const history = constructedAt(seed, index)
+      // fast-check passes example inputs by reference, which identifies them.
+      constructionOf.set(history, constructions[index]!)
+      run = withOracleFixedHistories(
+        run.path === undefined ? { ...run, numRuns: 0 } : run,
+        [[history]],
+      )
+    }
+    oracleRoute(oracleRouteOf(run))
     const counts = new Map<string, number>(
       [...(declared ?? [])].map((state) => [state, 0]),
     )
-    const run = parameters(examples)
+    // A random unit's replay runs itself; a fixed-seed unit's replay runs the
+    // random unit of its name with the fixed seed, which draws the same
+    // stream.
+    const replayed = { name: `random seed: ${unit}`, suite: task.suite }
+    const rerun = random ? undefined : rerunOf(task)
+    const violations = new Map<
+      unknown,
+      { verdict: Violation; history: THistory }
+    >()
     // A path replay shrinks no further than the counterexample it replays.
     // Vitest reads a timeout of 0 or less as none, which sets no budget.
     const timeout = timeoutOf(options)
@@ -1969,47 +2112,84 @@ function generatedTests<THistory, TExpected, TPlan>(
         : timeout > 0
           ? started + timeout / 2
           : Infinity
-    await fc.assert(
+    const details = await fc.check(
       fc.asyncProperty(
         arbitrary,
-        predicateFor(constructionOf, counts, shrinkUntil),
+        predicateFor(constructionOf, counts, shrinkUntil, rerun, violations),
       ),
       run,
     )
+    recordOracleReplay(id, details)
+    if (details.failed) {
+      const report = await fc.asyncDefaultReportMessage(details)
+      const path = details.counterexamplePath
+      const replay =
+        path === null
+          ? undefined
+          : `${oracleEnvName(`SEED`)}=${details.seed} ${oracleEnvName(`PATH`)}=${path} ${oracleEnvName(`PROPERTY`)}=${shellQuoted(id)} ${oracleEnvName(`UNIT`)}=${shellQuoted(replayed.name)} vitest run ${rerunOf(replayed)}`
+      // A random unit's violation names its replay as its rerun, so it is
+      // built again, once, now that the path is known; without a path it
+      // prints no rerun line.
+      const thrown = violations.get(details.errorInstance)
+      const cause: unknown =
+        random && thrown
+          ? violationError(options, thrown.verdict, thrown.history, replay)
+          : details.errorInstance
+      throw new Error(
+        [
+          report,
+          ...(rerun === undefined ? [] : [`Rerun: ${rerun}`]),
+          ...(replay === undefined ? [] : [`Replay: ${replay}`]),
+        ].join(`\n`),
+        { cause },
+      )
+    }
     // Vitest hides console output from a passing test; stdout reaches the log.
-    process.stdout.write(`${id} ${name} reach ${countsText(counts)}\n`)
+    // A unit that passes after its test timed out did not pass this run, so a
+    // sum of the units' lines never counts it.
+    if (!signal.aborted)
+      process.stdout.write(`${id} ${task.name} reach ${countsText(counts)}\n`)
   }
-  const fixedCampaigns = source.fixedSeeds.map((seed): PropertyTest => ({
-    name: `fixed seed ${seed}`,
-    route: `fixed seed`,
-    replays: [],
-    run: () => {
-      const parameters = oracleFixedSeed(seed, {
-        numRuns: oracleRuns(source.runs),
-      })
-      oracleRoute(oracleRouteOf(parameters))
-      return runCampaign(`fixed seed ${seed}`, seed, (examples) =>
-        withOracleFixedHistories(parameters, examples),
+  const fixedUnits = source.fixedSeeds.flatMap((seed) =>
+    unitNames.map((unit): PropertyTest => ({
+      name: `fixed seed ${seed}: ${unit}`,
+      route: `fixed seed`,
+      replays: [],
+      run: (task, signal) =>
+        runUnit(
+          task,
+          signal,
+          unit,
+          seed,
+          oracleFixedSeed(seed, { numRuns: oracleRuns(source.runs) }),
+          false,
+        ),
+    })),
+  )
+  // The random units share one seed per registration: the first random unit
+  // that runs selects and logs it, and a replay reads that log line. A
+  // replay of that seed rebuilds the same constructed histories, which the
+  // replay path counts.
+  let randomParameters: ReturnType<typeof oraclePropertyOptions> | undefined
+  const randomUnits = unitNames.map((unit): PropertyTest => ({
+    name: `random seed: ${unit}`,
+    route: `random seed`,
+    // During a path replay, only the unit the replay names runs.
+    replays: replaySelects(`random seed: ${unit}`) ? [id] : [],
+    run: (task, signal) => {
+      randomParameters ??= oraclePropertyOptions(source.runs, id)
+      // A path replay runs one recorded history, a seed from the replay
+      // environment reseeds the units, and a drawn seed is random.
+      return runUnit(
+        task,
+        signal,
+        unit,
+        randomParameters.seed!,
+        randomParameters,
+        true,
       )
     },
   }))
-  // The random campaign picks its seed itself, so a replay of that seed
-  // rebuilds the same constructed histories, which the replay path counts.
-  const randomCampaign: PropertyTest = {
-    name: `random seed`,
-    route: `random seed`,
-    replays: [id],
-    run: () => {
-      // One call selects and logs the seed; a replay reads that log line.
-      const parameters = oraclePropertyOptions(source.runs, id)
-      // A path replay runs one recorded history, a seed from the replay
-      // environment reseeds the campaign, and a drawn seed is random.
-      oracleRoute(oracleRouteOf(parameters))
-      return runCampaign(`random seed`, parameters.seed!, (examples) =>
-        withOracleFixedHistories(parameters, examples),
-      )
-    },
-  }
   const fixedTests = (source.fixed ?? []).map((fixed): PropertyTest => ({
     name: `fixed history: ${fixed.name}`,
     route: `fixed history`,
@@ -2029,46 +2209,56 @@ function generatedTests<THistory, TExpected, TPlan>(
   }))
   // Fixed histories and the constructed histories of the first fixed seed (or
   // seed 0), so these checks are reproducible. Registration built them once to
-  // check them; they are built again when a test runs, like a
-  // campaign's.
-  const namedHistories = () => {
-    const { examples, constructionOf } = examplesFor(source.fixedSeeds[0] ?? 0)
-    return [
-      ...(source.fixed ?? []).map(({ name, history }) => ({
-        name: `fixed history: ${name}`,
-        history,
-      })),
-      ...examples.map(([history]) => ({
-        name: `constructed history: ${constructionOf.get(history)!.name}`,
-        history,
-      })),
-    ]
-  }
+  // check them; they are built again when a test runs, like a unit's. Each
+  // is built only when its test asks for it.
+  const namedHistories = () => [
+    ...(source.fixed ?? []).map(({ name, history }) => ({
+      name: `fixed history: ${name}`,
+      history: () => history,
+    })),
+    ...constructions.map(({ name }, index) => ({
+      name: `constructed history: ${name}`,
+      history: () => constructedAt(firstSeed, index),
+    })),
+  ]
   // Determinism also covers three generated histories, so a property whose
   // driver varies is caught even without fixed or constructed histories.
-  const determinism = determinismTest(options, () => [
+  // Each history is its own test.
+  const sampled = () =>
+    fc.sample(source.arbitrary, { seed: firstSeed, numRuns: 3 })
+  const determinism = [
     ...namedHistories(),
-    ...fc
-      .sample(source.arbitrary, { seed: source.fixedSeeds[0] ?? 0, numRuns: 3 })
-      .map((history, index) => ({ name: `generated ${index}`, history })),
-  ])
+    ...[0, 1, 2].map((index) => ({
+      name: `generated ${index}`,
+      history: () => sampled()[index]!,
+    })),
+  ].map(({ name, history }) =>
+    determinismTest(options, `determinism: ${name}`, () => [
+      { name, history: history() },
+    ]),
+  )
   // A calibration also tries a fixed sample of generated histories.
   const calibrations = calibrationTests(options, () => [
-    ...namedHistories(),
+    ...namedHistories().map(({ name, history }) => ({
+      name,
+      history: history(),
+    })),
     ...fc
-      .sample(source.arbitrary, {
-        seed: source.fixedSeeds[0] ?? 0,
-        numRuns: 100,
-      })
+      .sample(source.arbitrary, { seed: firstSeed, numRuns: 100 })
       .map((history, index) => ({ name: `sample ${index}`, history })),
   ])
-  return [
-    ...fixedCampaigns,
-    randomCampaign,
+  const tests = [
+    ...fixedUnits,
+    ...randomUnits,
     ...fixedTests,
     ...calibrations,
-    determinism,
+    ...determinism,
   ]
+  assertReplayUnit(
+    id,
+    randomUnits.map(({ name }) => name),
+  )
+  return tests
 }
 
 // A collect-only run (ORACLE_MANIFEST set) records each registration, so the
