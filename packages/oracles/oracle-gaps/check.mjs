@@ -1762,8 +1762,11 @@ export default async (env) => {
     // hang), so a result never depends on how its evidence was produced. The
     // ordinary tier, when asked for, runs the same way afterwards.
     const GROUP = 4
+    // A copy that a batch skipped, or cut off for its confirmation, has no
+    // verdicts of its own yet.
     const kills = (u) =>
       !u.skipped &&
+      !u.cut &&
       outcomeOf([u], baseline.nondeterministic).outcome === `killed`
     const runOwners = async (slot, states, filesOf, keysOf) => {
       const active = states.filter((st) => !st.done)
