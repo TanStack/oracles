@@ -244,27 +244,27 @@ Find the login with `gh api user --jq .login`. If that fails, ask for it
 with the first finding or design question you bring them, not with the
 question of where to look.
 
-**Present each finding** in this shape, a light touch, with each finding
-called a possible bug or a question, never a certainty:
+**Present each finding as a class of bugs**, not as one bad input: the
+rule the code breaks, and every input that breaks it. One failing case is
+the example, not the finding. Call each one a possible bug or a question,
+never a certainty, and never minimize one ("minor", "trivial", "an edge
+case"). The count says how much of the input space the class covers; the
+design the oracle enforces says why it counts. Use this shape:
 
-1. A title that names the behavior: "Retry delay: the second wait is
-   shorter than the first".
-2. The smallest case, expected against observed, as a short snippet the
+1. A title that names the class: "Retry delay: every wait after the first
+   is too short".
+2. **The class:** the rule it breaks, and which inputs break it, in a
+   sentence.
+3. The smallest case, expected against observed, as a short snippet the
    developer can run.
-3. **Why I think it's wrong:** the authority, quoted, with its file and line.
-4. **Why it matters:** who would hit it, and what would happen to them.
-5. **Why the tests miss it:** what the existing tests check instead.
-6. **How often:** how many of the probe's inputs failed, out of how many.
+4. **Why I think it's wrong:** the authority, quoted, with its file and line.
+5. **Why it matters:** who would hit it, and what would happen to them.
+6. **Why the tests miss it:** what the existing tests check instead.
+7. **How often:** how many of the probe's inputs fall in the class, out of
+   how many.
 
 Put the findings in order of their potential impact on users, the worst
-first. The first time you show a small finding, say in a line why it is
-there: an oracle captures the code's design and then enforces all of it,
-trying every input it can generate, so it turns up small bugs as well as
-serious ones. Expect a mix.
-
-Leave out a bug so trivial that no real user would ever hit it. Keep a note
-of it: the oracle will catch it too, and you fix it with the others when it
-comes time to fix, and list it in the wrap-up.
+first. Show every class you found.
 
 Give each finding its kind:
 
@@ -277,7 +277,10 @@ Give each finding its kind:
 
 For example:
 
-> **Retry delay: the second wait is shorter than the first.**
+> **Retry delay: every wait after the first is too short.**
+>
+> **The class:** the delay should double after each failed try, and every
+> schedule with two or more failures breaks it: each later wait halves.
 >
 > ```ts
 > await retry(failTwice, { retries: 3, delay: 100 }) // waits 100 ms, then 50 ms; expected 100, then 200
@@ -455,8 +458,9 @@ them and stop.
    generated inputs and sequences, the driver calls their real code, and the
    check compares the two at each step.
 3. **Run it on the unchanged code.** A failure under an adopted law is a
-   possible bug. Present it like a probe finding, with the oracle's smallest
-   failing case as the snippet.
+   possible bug. Present it like a probe finding, as a class of bugs, with
+   the oracle's smallest failing case as the example and the share of its
+   histories that failed.
 4. **Fix each bug the developer confirms, right away, oracle first.** The
    oracle already fails on it. Make the smallest production fix, rerun the
    oracle until it passes, and show both runs: the failure before, the pass
@@ -497,8 +501,6 @@ developer wants to stop:
 
 - what it found, first: each bug, with what it was, its fix, and the oracle
   run before and after
-- the trivial bugs you left out of the findings and fixed along the way, in
-  one line each
 - what you built
 - an offer to walk through how it works: how the reference model was built,
   how the histories are generated, and how the driver calls their code.
