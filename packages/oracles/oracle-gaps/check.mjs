@@ -26,6 +26,7 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  promises,
   readFileSync,
   readdirSync,
   realpathSync,
@@ -33,7 +34,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { createRequire, isBuiltin } from 'node:module'
+import { createRequire, isBuiltin, syncBuiltinESMExports } from 'node:module'
 import { basename, dirname, join, relative as relativePath } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { applyAuthored, loadAuthored } from './authored.mjs'
@@ -86,6 +87,34 @@ function alive(pid) {
   } catch (error) {
     return error.code === `EPERM`
   }
+}
+
+/**
+ * Serves a copy of a test file (runBatch) to Vitest's own read of it. Each
+ * copy exists only in memory, and Vitest reads every test file in its main
+ * process to find its per-file pragmas (`@vitest-environment`,
+ * `@module-tag`; cli-api's `promises.readFile(filepath)`, which gives "" for
+ * a file that is not there), so a copy would run in the config's default
+ * environment instead of its file's. The read of a copy's path returns its
+ * text; any other read is Node's own.
+ */
+let copiesServed = false
+function serveCopies() {
+  if (copiesServed) return
+  copiesServed = true
+  const readFile = promises.readFile
+  promises.readFile = function (path, options, ...rest) {
+    const text =
+      typeof path === `string`
+        ? globalThis.__oracleGapsCopies?.get(path)
+        : undefined
+    if (text === undefined) return readFile.call(this, path, options, ...rest)
+    const encoded =
+      typeof options === `string` || typeof options?.encoding === `string`
+    return Promise.resolve(encoded ? text : Buffer.from(text))
+  }
+  // The named exports of `node:fs/promises`, which Vitest imports too.
+  syncBuiltinESMExports()
 }
 
 // This CLI's own code and the framework it reads. They are part of the run
@@ -452,6 +481,7 @@ export default async (env) => {
   globalThis.__oracleGapsServe = []
   // The text of each copy of a test file that a batch runs, by its path.
   globalThis.__oracleGapsCopies = new Map()
+  serveCopies()
   // Vitest resolves test-file filters and parts of its project setup against
   // the working directory, so the runner works from the package directory.
   process.chdir(pkg)
@@ -1094,6 +1124,10 @@ export default async (env) => {
   async function check(options, store, log = console.error) {
     const authored = options.mutants ? loadAuthored(options.mutants) : []
     seedVariable = `${options.envPrefix}_SEED`
+    if (options.hangLimit > options.mutantLimit)
+      log(
+        `note: --hang-limit ${options.hangLimit} ms is above --mutant-limit ${options.mutantLimit} ms; a mutant's confirmations together get at most the larger of --mutant-limit and ten times its owner files' unmutated time`,
+      )
     pulse = {
       log,
       every: Number(process.env.ORACLE_GAPS_HEARTBEAT_MS ?? 30_000),
@@ -1194,6 +1228,7 @@ export default async (env) => {
         settings,
         // A run cut off under one limit may end under a longer one.
         options.hangLimit,
+        options.mutantLimit,
       ]),
     )
     // How the evidence was produced: units reused and computed, runs cut off
@@ -1236,7 +1271,9 @@ export default async (env) => {
       const inputs = paths.map((path) => [path, servedHash(path, index)])
       store.put(id, { inputs, unit: result })
     }
-    async function unit(context, file, spec, runOptions = {}) {
+    // A unit that depends on more than its inputs (a confirmation that its
+    // mutant's budget cut short) is not kept (`keep`).
+    async function unit(context, file, spec, keep, runOptions = {}) {
       const index = indexOf.get(context)
       const id = idOf(file, spec, runOptions.select, runOptions.ignore)
       const looked = Date.now()
@@ -1261,7 +1298,7 @@ export default async (env) => {
       const paths = result.timedOut ? fileInputs.get(file) : result.inputs
       if (!result.timedOut && spec.startsWith(`unmutated:`))
         fileInputs.set(file, result.inputs)
-      if (paths) {
+      if (paths && keep) {
         const inputs = paths.map((path) => [path, servedHash(path, index)])
         for (const [path, hash] of inputs) servedBy(index).set(path, hash)
         store.put(id, { inputs, unit: result })
@@ -1280,8 +1317,6 @@ export default async (env) => {
       const index = indexOf.get(slot.context)
       const got = new Array(requests.length)
       let rest = []
-      // The confirming runs of hung copies, which may run on other slots.
-      const confirming = []
       const settle = (request, u, at) => {
         if (u.skipped) return
         got[request.i] = u
@@ -1335,40 +1370,27 @@ export default async (env) => {
         if (batch.spin) evidence.spin += 1
         await replace(slot)
         // A copy that already had the full limit, or that sat idle, is
-        // final; any other is confirmed on the next free slot, so a mutant
-        // that hangs in several files confirms them in parallel.
+        // final; any other comes back marked `cut`, for its mutant's own
+        // confirmation (`runOwners`).
         if (hung.limitMs >= full || batch.idle || batch.spin)
           settle(
             hung,
             { file: hung.file, timedOut: true, seconds: full / 1000 },
             index,
           )
-        else
-          confirming.push(
-            new Promise((resolve, reject) =>
-              confirm((other) =>
-                confirmAlone(other, hung, full).then(resolve, reject),
-              ),
-            ).then(({ unit: u, at }) =>
-              // A run with errors outside any test is not remembered.
-              at === undefined ? (got[hung.i] = u) : settle(hung, u, at),
-            ),
-          )
+        else got[hung.i] = { file: hung.file, cut: true }
         rest = [
           ...rest.slice(0, batch.timedOutAt).filter((_, k) => !batch.units[k]),
           ...rest.slice(batch.timedOutAt + 1),
         ]
         evidence.rerun += rest.length
       }
-      // This slot takes what no other slot has, then waits for the rest.
-      await confirmOn(slot)
-      await Promise.all(confirming)
       return got
     }
     // A request run alone in the slot's context: a copy that a batch did not
     // judge, or one whose errors outside any test cannot be attributed.
-    async function runAlone(slot, r) {
-      const u = await unit(slot.context, r.file, r.spec, {
+    async function runAlone(slot, r, keep = true) {
+      const u = await unit(slot.context, r.file, r.spec, keep, {
         label: r.label,
         mutant: r.mutant,
         select: r.select,
@@ -1382,47 +1404,49 @@ export default async (env) => {
       return u
     }
     // A hung copy's confirming run: alone, in a clean context, with the full
-    // limit. Only a run cut off there too is a timeout. An idle copy in a
-    // file with no I/O is final at once (see unitsBatch): it waits on
-    // nothing that can come.
-    //
-    // A mutant's confirmations share its budget (`budgetOf`): one gets at
-    // most what the budget has left after the confirmations before it and
-    // those still running, and gives back what it did not use. One that gets
-    // nothing does not run, and one that the budget cuts short times out;
-    // neither is remembered, since it depends on the mutant's other runs.
-    async function confirmAlone(slot, hung, full) {
-      const budget = hung.st && budgetOf(hung.st)
-      const limit = budget ? Math.min(full, budget.left) : full
-      if (budget) budget.left -= limit
-      const began = Date.now()
-      try {
-        if (limit < full) evidence.budget += 1
-        if (limit <= 0)
-          return { unit: { file: hung.file, timedOut: true, seconds: 0 } }
-        const alone = await runBatch(
-          slot.context,
-          options.out,
-          [{ ...hung, limitMs: limit }],
-          options.seed ?? null,
-        )
-        if (alone.unattributed)
-          return { unit: await runAlone(slot, { ...hung, limitMs: limit }) }
-        // The index of the context that ran it, before any replacement.
-        const at = indexOf.get(slot.context)
-        if (alone.timedOutAt === 0) {
-          evidence.cut += 1
-          if (alone.idle) evidence.idle += 1
-          await replace(slot)
-          return {
-            unit: { file: hung.file, timedOut: true, seconds: limit / 1000 },
-            at: limit < full ? undefined : at,
-          }
-        }
-        return { unit: alone.units[0], at }
-      } finally {
-        if (budget) budget.left += Math.max(0, limit - (Date.now() - began))
+    // limit, or with what is left of its mutant's budget when that is less
+    // (`left`, in milliseconds). Only a run cut off there too is a timeout.
+    // An idle copy in a file with no I/O is final at once (see unitsBatch):
+    // it waits on nothing that can come. The unit is marked `confirmed`, so
+    // its seconds count against the budget whenever it is used, reused ones
+    // too. One that the budget cut short, or left no time, depends on the
+    // mutant's other units, so it is not kept.
+    async function confirmAlone(slot, hung, left) {
+      const full = limitFor(hung.file)
+      const limit = Math.min(full, left)
+      const confirmed = (u) => ({ ...u, confirmed: true })
+      if (limit <= 0) {
+        evidence.budget += 1
+        return confirmed({ file: hung.file, timedOut: true, seconds: 0 })
       }
+      const alone = await runBatch(
+        slot.context,
+        options.out,
+        [{ ...hung, limitMs: limit }],
+        options.seed ?? null,
+      )
+      if (alone.unattributed)
+        return confirmed(
+          await runAlone(slot, { ...hung, limitMs: limit }, limit >= full),
+        )
+      if (alone.timedOutAt === 0) {
+        evidence.cut += 1
+        if (alone.idle) evidence.idle += 1
+        if (limit < full) evidence.budget += 1
+        const u = confirmed({
+          file: hung.file,
+          timedOut: true,
+          seconds: limit / 1000,
+        })
+        if (limit >= full)
+          remember(hung.id, hung.file, u, indexOf.get(slot.context))
+        await replace(slot)
+        return u
+      }
+      const u = confirmed(alone.units[0])
+      remember(hung.id, hung.file, u, indexOf.get(slot.context))
+      evidence.computed += 1
+      return u
     }
 
     const vitest = contexts[0]
@@ -1456,29 +1480,27 @@ export default async (env) => {
         options.firstLimit + 3000 * (fileSeconds.get(file) ?? 10),
       )
     // Each mutant's budget (maintainer disposition G1, 2026-11-11), for the
-    // runs that confirm its cut-off copies (confirmAlone): the larger of
-    // `--mutant-limit` (30 s by default) and ten times its owner files'
-    // unmutated time. With the default limits the floor holds three
-    // confirmations at the full limit of a fast file, and ten times the
-    // owners' time covers a confirmation at the full limit, which allows a
-    // copy three times its file's time, in every owner. Each first run of a
-    // copy is bounded by its first budget, so a mutant's whole time is
-    // bounded: one that makes every test wait for its own timeout is a
-    // timeout within its budget, whatever `--hang-limit` allows one copy.
-    const budgets = new Map()
-    const budgetOf = (st) => {
-      if (!budgets.has(st.mutant)) {
-        const owners = [...st.targets.oracleTargets, ...st.targets.testTargets]
-        const seconds = owners.reduce(
-          (sum, file) => sum + (fileSeconds.get(file) ?? 0),
-          0,
-        )
-        budgets.set(st.mutant, {
-          left: Math.max(options.mutantLimit, 10_000 * seconds),
-        })
-      }
-      return budgets.get(st.mutant)
-    }
+    // runs that confirm its cut-off copies: the larger of `--mutant-limit`
+    // (30 s by default) and ten times its owner files' unmutated time. Its
+    // confirmations run in its owner files' order, and each gets at most the
+    // smaller of its full limit and what the budget has left after the
+    // seconds of the mutant's earlier confirmed units, reused ones included
+    // (`runOwners`), so the outcome is a function of the units, whatever ran
+    // first or was reused. With the default limits the budget cuts a
+    // confirmation below its full limit (10 s plus three times its file's
+    // time t) only when the mutant's confirmations together pass it: for
+    // one owner file that is never, since 10t >= 10 + 3t once t >= 1.43 s
+    // and the 30 s floor covers a smaller t; it binds when `--hang-limit` is
+    // raised past the budget, or when several owner files need long
+    // confirmations. It does not bound a mutant's first runs (each has its
+    // first budget) or the context replacements after cuts (each up to a
+    // 10 s close and a warm start).
+    const budgetOf = (files) =>
+      Math.max(
+        options.mutantLimit,
+        10_000 *
+          files.reduce((sum, file) => sum + (fileSeconds.get(file) ?? 0), 0),
+      )
     // A run cut off is still running, so its context is replaced; closing
     // it stops the worker.
     const replace = async (slot) => {
@@ -1492,22 +1514,6 @@ export default async (env) => {
       contexts[slot.index] = slot.context
       span(`replace context`, started, { slot: slot.index })
     }
-    // Confirming runs of hung copies (unitsBatch), waiting for a free slot.
-    // A slot takes them before its next group, and a slot with no groups
-    // left waits for more until every slot is done with its groups.
-    const confirmations = []
-    const waiting = []
-    const wake = () => {
-      for (const resolve of waiting.splice(0)) resolve()
-    }
-    const confirm = (job) => {
-      confirmations.push(job)
-      wake()
-    }
-    const confirmOn = async (slot) => {
-      for (let job = confirmations.shift(); job; job = confirmations.shift())
-        await job(slot)
-    }
     // `after(index)` is more work for context `index` once its files ran.
     const runAcross = async (files, pass, after = async () => {}) => {
       const parts = contexts.map(() => [])
@@ -1517,7 +1523,7 @@ export default async (env) => {
           contexts.map(async (context, index) => {
             const done = []
             for (const file of parts[index])
-              done.push(await unit(context, file, `unmutated:${pass}`))
+              done.push(await unit(context, file, `unmutated:${pass}`, true))
             await after(index)
             return done
           }),
@@ -1774,7 +1780,7 @@ export default async (env) => {
         selectionChecks.set(
           id,
           (async () => {
-            const run = await unit(slot.context, file, `selected`, {
+            const run = await unit(slot.context, file, `selected`, true, {
               select: selection,
               limitMs: limitFor(file),
             })
@@ -1838,6 +1844,10 @@ export default async (env) => {
         (request, found) => !killedBefore(request, found),
       )
       for (const st of active) {
+        // The mutant's budget, spent in its files' order by the seconds of
+        // each confirmed unit, reused or run now, so its outcome is a
+        // function of its units, whatever ran first or was reused.
+        let left = budgetOf(filesOf(st))
         for (const [i, request] of requests.entries()) {
           if (request.st !== st) continue
           // A copy its batch skipped (an earlier copy killed the mutant)
@@ -1855,6 +1865,8 @@ export default async (env) => {
               `${st.mutant.id}: ${relative(request.file)} has no unit and no earlier kill`,
             )
           }
+          if (got[i].cut) got[i] = await confirmAlone(slot, request, left)
+          if (got[i].confirmed) left -= got[i].seconds * 1000
           st.units.push(got[i])
           if (kills(got[i])) break
         }
@@ -1941,7 +1953,6 @@ export default async (env) => {
     const total = queue.length
     let judged = 0
     let gaps = 0
-    let evaluating = contexts.length
     await Promise.all(
       contexts.map(async (context, index) => {
         const slot = { context, index }
@@ -1949,17 +1960,8 @@ export default async (env) => {
           let group = queue.splice(0, GROUP);
           group.length > 0;
           group = queue.splice(0, GROUP)
-        ) {
-          await confirmOn(slot)
+        )
           await evaluateGroup(group, slot)
-        }
-        evaluating -= 1
-        wake()
-        for (;;) {
-          await confirmOn(slot)
-          if (evaluating === 0) break
-          await new Promise((resolve) => waiting.push(resolve))
-        }
       }),
     )
     results.sort(

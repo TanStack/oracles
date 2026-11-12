@@ -127,22 +127,24 @@ const TOP_LOOP = `<module>@..gen`
 // Whether this filesystem ignores letter case, so that `src/Sut.ts` names
 // `src/sut.ts`; the `cased` spelling applies only where it does.
 const caseless = existsSync(fileURLToPath(import.meta.url).toUpperCase())
+// The full limit of a cut-off copy's confirmation that the driver passes
+// (`--hang-limit`), and, under one budget, the first budget too.
+const FULL_LIMIT_MS = 20000
 // How long a slow test waits, in real milliseconds: past the 1 s first
-// budget that the driver passes (`--first-limit`), within the 6 s full limit
-// (`--hang-limit`).
+// budget that the driver passes (`--first-limit`), within the full limit.
 const SLOW_MS = 3000
 // How long each slow test of `w_slowpair` waits: past its file's first
 // budget (the 1 s `--first-limit` plus three times its one-test file's
-// unmutated time), so its copy is always cut and confirmed; and past half
-// the mutant's budget, so two such confirmations never fit it.
-const PAIR_SLOW_MS = 4500
+// unmutated time t), so its copy is always cut and confirmed; past half the
+// mutant's budget, so two such confirmations never fit it; and under the
+// full limit, so each would fit alone. The window holds while t < 3 s and
+// ten times the two files' time stays under 2 × 10 s (their sum under 2 s).
+const PAIR_SLOW_MS = 10000
 // A mutant's budget for the runs that confirm its cut-off copies, which the
-// driver passes (`--mutant-limit`): the full limit of one copy, so one slow
-// owner's confirmation fits as it did before there was a budget, and two do
-// not, since each takes longer than the SLOW_MS it waits. The fixture's
-// files run in milliseconds, so ten times their unmutated time stays far
-// under it, and the floor is the budget.
-const MUTANT_LIMIT_MS = 6000
+// driver passes (`--mutant-limit`): one slow owner's confirmation fits it
+// (SLOW_MS), and two of `w_slowpair`'s do not. Ten times the fixture's
+// one-test files' time stays under it, so the floor is the budget.
+const MUTANT_LIMIT_MS = 15000
 // How often the CLI says which mutant a busy copy runs (its heartbeat): the
 // driver shortens it from 30 s (`ORACLE_GAPS_HEARTBEAT_MS`), so that a slow
 // test's wait of SLOW_MS spans it at least twice.
@@ -453,6 +455,8 @@ const edits = [
   // lock, log, and evidence) between checks: the next check is a cold
   // start, never a failure.
   `cleanState`,
+  // A second check through the daemon of a state that nothing changed.
+  `recheck`,
 ]
 // The steps that act on the daemon and change no file.
 const daemonEvents = new Set([
@@ -465,6 +469,7 @@ const daemonEvents = new Set([
   `resetBeforeRead`,
   `otherInstall`,
   `cleanState`,
+  `recheck`,
 ])
 const histories = fc.record({
   functions: fc.array(fc.array(statement, { minLength: 1, maxLength: 5 }), {
@@ -515,7 +520,7 @@ const histories = fc.record({
   tests: fc.array(testCase, { minLength: 1, maxLength: 5 }),
   // The witness module: all of it, or only the functions whose outcomes
   // need real test runs (see `captureWitness`).
-  witness: fc.constantFrom(false, true, `capture`),
+  witness: fc.constantFrom(false, true, `capture`, `budget`),
   authored: fc.option(
     fc.record({
       stmt: fc.nat({ max: 20 }),
@@ -642,6 +647,10 @@ const histories = fc.record({
   // A second run with `--only`, of one owned function's mutants: its
   // baseline runs only their owners (law 14). It costs a run of its own.
   onlyRun: fc.constantFrom(false, false, false, false, false, true),
+  // Oracle file a names its own Vitest environment in a pragma
+  // (`// @vitest-environment`), another than the config's, and fails to load
+  // outside it: every copy of it must run in that environment too.
+  pragma: fc.constantFrom(false, false, false, true),
   // Where the CLI is installed: a plain path, or one with a space and `#`,
   // which a file URL spells with escapes.
   cliPath: fc.constantFrom(`plain`, `plain`, `plain`, `spaced`),
@@ -2196,7 +2205,12 @@ function resolveHistory(history) {
     ...dotGen,
     ...(history.witness
       ? witness
-          .filter((w) => history.witness === true || captureWitness.has(w.id))
+          .filter(
+            (w) =>
+              history.witness === true ||
+              (history.witness === `capture` && captureWitness.has(w.id)) ||
+              (history.witness === `budget` && w.id === `w_slowpair`),
+          )
           .map((w) => ({
             ...w,
             container:
@@ -2546,6 +2560,7 @@ function resolveHistory(history) {
     budget: history.budget ?? `two`,
     stopRuns: history.stopRuns ?? [],
     onlyRun: history.onlyRun === true,
+    pragma: history.pragma === true,
     cliPath: history.cliPath ?? `plain`,
     concurrentStart: history.concurrentStart === true,
     setupGlobal: history.setupGlobal === true,
@@ -4013,6 +4028,8 @@ function oracleTestFile(plan, file) {
       : `function ${name}(_parts: { owns: Array<string> }): void {}`,
   )
   const out = [
+    // A per-file environment, which Vitest reads from the file's text.
+    ...(plan.pragma && file === `a` ? [`// @vitest-environment marked`] : []),
     `import { ${plan.tests.some((t) => t.file === file && t.cleanupThrows) ? `afterEach, ` : ``}describe, expect, test${plan.tests.some((t) => t.file === file && t.spies) ? `, vi` : ``} } from 'vitest'`,
     ...(plan.tests.some((t) => t.file === file && t.shrinks)
       ? [`import fc from 'fast-check'`]
@@ -4044,6 +4061,11 @@ function oracleTestFile(plan, file) {
     `const stored: { value: Array<string> } = { value: [] }`,
     ...owns,
     `const g = globalThis as { __oracleRoute?: (route: string) => void; __oracleObserve?: (c: string, v: unknown) => void; __oracleVerdict?: (v: { property: string; law: string; checkpoint: string }) => void }`,
+    ...(plan.pragma && file === `a`
+      ? [
+          `if ((globalThis as { __gapEnvironment?: string }).__gapEnvironment !== 'marked') throw new Error('the file ran outside the environment its pragma names')`,
+        ]
+      : []),
   ]
   // Whether the file's tests judge, which law 9's edits change: file b's
   // follow its helper module, and file a's hold only under seed 1. The
@@ -4587,6 +4609,24 @@ function fixtureFiles(plan, state = initialState(plan)) {
         }
       : {}),
     'tests/c.test.ts': ordinaryTestFile(plan),
+    // The environment oracle file a's pragma names (`pragma`), a package
+    // as Vitest finds one (`vitest-environment-<name>`).
+    ...(plan.pragma
+      ? {
+          'node_modules/vitest-environment-marked/package.json': `${JSON.stringify({ name: `vitest-environment-marked`, type: `module`, exports: `./index.js` })}\n`,
+          'node_modules/vitest-environment-marked/index.js': [
+            `export default {`,
+            `  name: 'marked',`,
+            `  viteEnvironment: 'ssr',`,
+            `  setup(global) {`,
+            `    global.__gapEnvironment = 'marked'`,
+            `    return { teardown() { delete global.__gapEnvironment } }`,
+            `  },`,
+            `}`,
+            ``,
+          ].join(`\n`),
+        }
+      : {}),
     // A copy that a check which died left behind (the runner names its
     // copies `.oracle-gaps-<pid>-<n>-<file>`). It is no test file: a check
     // that took it for one would refuse the run.
@@ -4980,6 +5020,7 @@ export {
   slowedFiles,
   MUTANT_LIMIT_MS,
   HEARTBEAT_MS,
+  FULL_LIMIT_MS,
   refusal,
   ownsNothing,
   MODULE_DATA,
