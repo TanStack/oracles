@@ -240,11 +240,13 @@ Add this block to `AGENTS.md` (create the file if needed). On an upgrade,
 replace everything between the markers and keep the rest of the file.
 
 ```md
-<!-- BEGIN @tanstack/oracles (template 3) -->
+<!-- BEGIN @tanstack/oracles (template 4) -->
 
 ## Oracle tests
 
-This repository tests its laws with `@tanstack/oracles`.
+This repository tests its design with `@tanstack/oracles`. An oracle
+captures the code's design as laws and enforces them against an independent
+model. Work oracle first, production second.
 
 **Who owns what.** The laws belong to the people who maintain this
 repository: what the code promises, the authority for each promise, and its
@@ -257,6 +259,38 @@ fine when it makes the code better; the oracle is the review. Keep it in
 proportion to the task: improve the code the work touches, and when you see
 a larger win elsewhere, offer it instead of turning the task into a long
 optimization project.
+
+**How the work goes.**
+
+- **Probe first.** Before you propose anything, call the real code with
+  small scripts and show what they print. Every law and every finding comes
+  with a probe that can be rerun.
+- **Propose the laws, then build only the approved ones.** Each law is a
+  "For every …" sentence with where its promise is written: the docs, a
+  test, or a maintainer's decision. A question nobody has decided is fine:
+  state it as a limit.
+- **Red first, like TDD, but the oracle goes red.** A bug becomes a law and
+  a history that fail on the unchanged code. Then fix production at once,
+  and show the run going green.
+- **Never weaken or quarantine an oracle:** no skip, no `test.fails`, no
+  loosened expectation, no switch that turns a check off.
+- **Build the strongest model the laws need.** Compare every observable
+  result they speak about. The model states the rule a user relies on,
+  never the code's algorithm, even when the docs describe that algorithm.
+  Give each law a calibration: a wrong answer the check must reject.
+- **Run the oracles only through the gap check, never Vitest alone.** It
+  prints each test file's result first, then each gap as it is judged. A run
+  can take minutes: start it in the background with output to a log, and
+  read the new lines every few seconds, acting on a failure first. Stop a
+  run only by the process ID you recorded, never by name.
+- **Green is not done.** A gap is a change to the owned code that no law
+  notices. There are no equivalent mutants: never call one equivalent.
+  Widen the histories or the check until the oracle sees it, and keep going
+  until a bug or a design question turns up.
+- **Report classes of bugs:** the rule broken, and the measured share of
+  generated inputs that break it. Never call one minor.
+
+**Skills.**
 
 - To find where an oracle would help, or to propose a new one, read
   `node_modules/@tanstack/oracles/skills/oracles-start/SKILL.md` in full and
@@ -272,8 +306,6 @@ optimization project.
 - Lint each oracle file and each changed production file after you edit it.
   Fix every report. Do not disable a rule.
 - Oracle files: `<oracle file glob>`. Gap check: `<gap check command>`.
-  Run the oracles through the gap check, not Vitest alone: it reports
-  each oracle file's result first, then the gaps once all of them pass.
 
 <!-- END @tanstack/oracles -->
 ```
