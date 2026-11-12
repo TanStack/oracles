@@ -114,6 +114,10 @@ const directive = {
   'not-distinguished': (g) => distinguishingDirective(g),
   'not-judged': (g) =>
     `Make a law in \`${testName(g.changedTests?.[0])}\` reject the changed value.`,
+  // No observation changed, and a test did more work: a shortcut for speed,
+  // which only a cost law sees (maintainer decision, 2026-11-12).
+  'extra-work': ({ work }) =>
+    `Declare \`work: { ratio: ${work.bound} }\` on the \`oracleProperty\` that registers \`${testName(work.test)}\`, so that its work bound rejects this mutant: there it changed no observation, and its work rose from ${work.before} to ${counted(work.after, `site evaluation`)}${work.ratio === undefined ? `` : ` (${work.ratio}× the unmodified run's)`}.`,
   indeterminate: (g) =>
     g.nondeterministicBy?.length
       ? `Make \`${g.nondeterministicBy.map(testName).join(`, `)}\` deterministic: control its clock and its random seed, so its failures judge this code.`
@@ -194,6 +198,13 @@ const placeholders = {
   operator: `<operator>`,
   input: `<input>`,
   blockedBy: [`<file>`],
+  work: {
+    bound: `<ratio>`,
+    test: `<file> > <test>`,
+    before: `<n>`,
+    after: `<m>`,
+    ratio: `<m/n>`,
+  },
 }
 const legendOf = (kind) =>
   `${meanings[kind] ?? ``}${directive[kind]({ ...placeholders, outcome: kind })}`

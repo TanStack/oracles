@@ -52,6 +52,26 @@ every commit with [pkg.pr.new](https://pkg.pr.new).
   in its `detail` in `results.json`. Record the error in the driver, and
   state the law that decides that input's outcome.
 
+  A survivor that changed no observation but made a test do more work is
+  `extra-work`: the mutant deleted a shortcut that exists only for speed,
+  such as an early return or an assignment in place of a slower call. A
+  test's work is the number of site evaluations that its instrumented
+  production code makes (calls, comparisons, `if`s, and each pass of a
+  loop's condition), a deterministic count, never a time. A test whose work
+  varied between the two unmutated runs, or that is one of the framework's
+  own checks, does not judge work. The gap's directive names the first such
+  test, its work before and after, and the bound that rejects the mutant.
+  Declare it on the owning property, for example
+  `oracleProperty({ ..., work: { ratio: 1.1 } })`: a mutant whose work in
+  one of the property's tests is more than `ratio` times the unmodified
+  code's work there is killed under law `work bound`. `ratio` is a finite
+  number of at least 1, and 1 rejects any extra work. A plain Vitest run has
+  no unmodified run to compare with, so there the bound judges nothing. The
+  count does not see work without a site, such as a plain assignment, a
+  `for...of` pass, or a builtin's own work, so a call to a builtin counts
+  once, whatever it costs. An authored mutant's copy is not instrumented, so
+  a work bound does not judge it.
+
   Exit codes: 0 the check completed, whatever its gaps (the last stdout line
   is `completed: <n> gaps`); 2 the run was refused, with `refused:` and
   `fix:` on stderr; 3 an internal error of the CLI; 130 or 143 stopped by

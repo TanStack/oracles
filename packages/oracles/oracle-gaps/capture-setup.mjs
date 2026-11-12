@@ -252,7 +252,13 @@ const active = state.mutant
 // copy's budget (`callBudget`, from check.mjs: a hundred times the most calls
 // any unmutated test of the file made, and at least 100,000), the copy throws
 // from every helper call and writes a spin row, and the batch reports it as a
-// timeout. A count, unlike a clock, does not depend on load.
+// timeout. A count, unlike a clock, does not depend on load. It is also the
+// test's work, which a work bound judges (classify.mjs): each site
+// evaluation counts once, so a call statement, a call whose value is used, a
+// comparison, a logical operator, an `if`, and each pass of a loop's
+// condition count, and code with no site (a plain assignment, a `for...of`
+// pass, a builtin's own work, code outside the instrumented sources) counts
+// nothing.
 let calls = 0
 let spun = false
 const hit = (id) => {
@@ -656,6 +662,12 @@ let route
 globalThis.__oracleRoute = (registered) => {
   if (inTest) route = registered
 }
+// The work bound the current test's property declares (oracle-property.ts
+// `work`): classify.mjs judges the test's work, its `calls`, against it.
+let workBound
+globalThis.__oracleWorkBound = (ratio) => {
+  if (inTest) workBound = ratio
+}
 
 globalThis.__oracleObserve = (checkpoint, value) => {
   observed.update(`${checkpoint}(${render(value)})\n`)
@@ -695,6 +707,7 @@ beforeEach((context) => {
   histories = 0
   siteHistories = new Map()
   route = undefined
+  workBound = undefined
   inTest = true
 })
 
@@ -734,6 +747,7 @@ function finishTest(context) {
       outcomes: [...outcomes],
       verdicts: [...verdicts.values()],
       route,
+      work: workBound,
       ms: Math.round(performance.now() - testStarted),
       // The test's own result, so a batch cut short by a hang still has the
       // results of the copies that finished.
