@@ -3881,6 +3881,40 @@ const declarationFaults = [
 const reachesRun = (history) =>
   !declarationFaults.includes(history.fault ?? `none`)
 
+// Law 15, the stream's lines (the maintainer's request of 2026-11-12,
+// relayed by the coordinator: an agent acts on a check's results as they
+// stream, so one `grep '^oracle-gaps: '` finds every line the CLI writes
+// for it, and the kind's word right after the prefix filters one kind; the
+// same prefixes on stdout and stderr, in a cold run and through the
+// daemon). The kinds:
+const streamKinds = [
+  `config`,
+  `note`,
+  `baseline`,
+  `blocked`,
+  `progress`,
+  `gap`,
+  `busy`,
+  `done`,
+]
+// The one decisive baseline line, before any mutant runs: every oracle
+// file passed, or how many of them failed, which makes the report
+// provisional.
+const baselineVerdict =
+  /^oracle-gaps: baseline (?:all \d+ oracle files? pass|\d+ of \d+ oracle files? failed \(provisional\))$/
+const countedFiles = (n) => `${n} oracle file${n === 1 ? `` : `s`}`
+/** The decisive baseline line of a run with `files` oracle files, `failing` of them failing. */
+const verdictLine = (files, failing) =>
+  failing === 0
+    ? `oracle-gaps: baseline all ${countedFiles(files)} pass`
+    : `oracle-gaps: baseline ${failing} of ${countedFiles(files)} failed (provisional)`
+/**
+ * The last line of a completed run's stdout: its status, its gap count, and
+ * the path of its full report in output directory `out`.
+ */
+const doneLine = (gaps, provisional, out) =>
+  `oracle-gaps: done completed, ${gaps} gap${gaps === 1 ? `` : `s`}${provisional ? ` (provisional)` : ``}, report ${out}/summary.md`
+
 function model(plan) {
   const refused = refusal(plan)
   // The config the run names (F12) once its contexts have loaded it: the
@@ -3898,8 +3932,8 @@ function model(plan) {
     ? []
     : [
         plan.configPath === undefined
-          ? `no config file: Vitest's default discovery`
-          : `config: ${plan.configPath}`,
+          ? `oracle-gaps: config none, Vitest's default discovery`
+          : `oracle-gaps: config ${plan.configPath}`,
       ]
   if (refused) return { refused, configLines }
   const sites = sitesOf(plan)
@@ -5035,11 +5069,18 @@ function endingOf(exit, stderr, out, name = (text) => text) {
   } catch {
     // No output directory is known, or the run wrote no results.json.
   }
+  // The run's last line: what follows `oracle-gaps: done ` there (law 15).
+  const last = text.split(`\n`).filter(Boolean).at(-1) ?? ``
+  const done = last.startsWith(`oracle-gaps: done `)
+    ? name(last.slice(`oracle-gaps: done `.length))
+    : undefined
   return {
     exit,
     cause: cause && name(cause).slice(0, 2000),
     fix: line(`fix`) && name(line(`fix`)),
-    namesOutput: out !== undefined && line(`output`) === out,
+    done,
+    namesOutput:
+      out !== undefined && done === name(`refused, report ${out}/summary.md`),
     // An internal error's log beside a refusal would be another run's.
     errorLog: out !== undefined && existsSync(join(out, `error.log`)),
     stackFrames: /^\s+at /m.test(text),
@@ -5064,9 +5105,16 @@ function refusalBreach(ending, { cause, outKnown }) {
   // problem in place.
   if (/\b(ignore|equivalent|skip)/i.test(ending.fix))
     return `the refusal's fix offers a way around it: ${ending.fix}`
+  // Its last line says that it refused (law 15), with its report once the
+  // run knows its output directory.
+  if (
+    ending.done === undefined ||
+    !/^refused(?:, report .+)?$/.test(ending.done)
+  )
+    return `the refusal's last line is not \`oracle-gaps: done refused\``
   if (!outKnown) return undefined
   if (!ending.namesOutput)
-    return `the refusal does not name its output directory`
+    return `the refusal does not name its report in its output directory: done ${ending.done}`
   const { written } = ending
   if (written?.status !== `refused`)
     return `the output's results.json has status ${written?.status ?? `(none)`}, not refused`
@@ -5171,6 +5219,10 @@ export {
   histories,
   witnessSteps,
   budgetSteps,
+  streamKinds,
+  baselineVerdict,
+  verdictLine,
+  doneLine,
   kill,
   push,
   judging,

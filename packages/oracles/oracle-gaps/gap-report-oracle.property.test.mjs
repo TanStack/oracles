@@ -312,8 +312,25 @@
  *    RED baseline gives a provisional report). With `--only`, the baseline
  *    runs only the selected mutants' owners (and the ordinary files with
  *    `--ordinary`), and each selected mutant is judged as the full run
- *    judges it. The last stdout line is `completed: <n> gaps` (G6): exit 0
+ *    judges it. The last stdout line is the run's done line (law 15),
+ *    `oracle-gaps: done completed, <n> gaps, report <path>` (G6): exit 0
  *    means the check ran to its end, not that it found no gaps.
+ * 15. **The stream's lines are greppable** (the maintainer's request of
+ *    2026-11-12, relayed by the coordinator, with its decisions of the same
+ *    day: the same prefixes on stdout and stderr, and a line for a stopped
+ *    run). An agent acts on a check's results as they stream, so every line
+ *    the CLI writes for the check starts with `oracle-gaps: ` and then its
+ *    kind: `config`, `note`, `baseline`, `blocked`, `progress`, `gap`,
+ *    `busy`, or `done`. Only an indented line under a baseline failure, a
+ *    refusal's `refused:` and `fix:` block, and a line Node writes for the
+ *    process are not. The baseline ends with one decisive line before any
+ *    mutant runs: `oracle-gaps: baseline all <n> oracle files pass`, or
+ *    `oracle-gaps: baseline <k> of <n> oracle files failed (provisional)`.
+ *    The stdout's baseline, blocked, and gap lines carry the same prefixes.
+ *    The run's last line is its done line: `completed, <n> gaps[
+ *    (provisional)], report <its summary.md>` on stdout, `refused[, report
+ *    <its summary.md>]` after a refusal's block, or `stopped (<signal>)`
+ *    after a stop. A check through the daemon streams the same lines.
  *
  * Authority: the maintainer's decisions in the gap-check design runs v11, v14,
  * and v19 (2026-11-04 and 2026-11-05; the design notes are kept by the project
@@ -462,6 +479,10 @@ import {
   histories,
   witnessSteps,
   budgetSteps,
+  streamKinds,
+  baselineVerdict,
+  verdictLine,
+  doneLine,
   push,
   judging,
   witness,
@@ -668,7 +689,11 @@ async function stoppedRun(dir, files, how, ids, { signal, pool }) {
   const child = spawn(process.execPath, args, {
     cwd: repo,
     env: { ...cleanEnv(), GAP_STOP_DIR: pids },
-    stdio: `ignore`,
+    stdio: [`ignore`, `ignore`, `pipe`],
+  })
+  let stderr = ``
+  child.stderr.on(`data`, (chunk) => {
+    stderr += chunk
   })
   let exited = false
   const exit = new Promise((resolvePromise) =>
@@ -716,6 +741,13 @@ async function stoppedRun(dir, files, how, ids, { signal, pool }) {
     ended,
     survivors: alive.length,
     strayWhileRunning,
+    // Its stderr's lines (law 15), with the scratch paths named.
+    stream: streamOf(stderr.split(`\n`), (text) =>
+      namedScratch(text, [
+        [how.cli ?? here, `<cli>`],
+        [dir, `<package>`],
+      ]),
+    ),
     // The session directories in the package once it has ended: a stopped
     // run leaves its own, and the next run removes it.
     sessions: readdirSync(dir).filter((name) =>
@@ -835,9 +867,55 @@ function namedScratch(text, names) {
 
 /** What one run of the CLI reported, from its exit status and its files. */
 // A gap line the CLI streams to stderr as its mutant is judged (stream.mjs):
-// its class, its line, and its id.
+// its class, its line, and its id, after the stream's prefix (law 15).
 const streamedGap =
-  /^(?:not-judged|indeterminate|dead-code|outside-annotation|branch-never-taken|not-infected|not-observed|not-distinguished|unreached|random-only-kill|agreement-only-kill|unregistered-kill|framework-error|timeout|setup-error|crashed|does-not-apply|blocked) L(?:\d+|\?) (\S+) /
+  /^oracle-gaps: gap (?:not-judged|indeterminate|dead-code|outside-annotation|branch-never-taken|not-infected|not-observed|not-distinguished|unreached|random-only-kill|agreement-only-kill|unregistered-kill|framework-error|timeout|setup-error|crashed|does-not-apply|blocked) L(?:\d+|\?) (\S+) /
+
+/**
+ * What law 15 judges of a run's stderr, as relations that do not depend on
+ * the order in which its contexts finished:
+ * - `strays`: each line, once, that is neither a line of a stream kind
+ *   (`oracle-gaps: <kind> `), an indented line under a baseline failure, a
+ *   refusal's block (`refused:` up to its `fix:` line), nor a line Node
+ *   writes for the process (a warning);
+ * - `verdicts`: the decisive baseline lines;
+ * - `mutantBeforeVerdict`: whether a gap line, a count of judged mutants,
+ *   or a heartbeat that names a mutant came before the first verdict;
+ * - `last`: the last line, which ends a run that did not complete.
+ */
+function streamOf(lines, name) {
+  const kinds = new RegExp(`^oracle-gaps: (?:${streamKinds.join(`|`)}) `)
+  const strays = new Set()
+  let inRefusal = false
+  for (const line of lines) {
+    if (line === ``) continue
+    if (line.startsWith(`refused: `)) inRefusal = true
+    const ending = inRefusal
+    if (line.startsWith(`fix: `)) inRefusal = false
+    if (
+      ending ||
+      kinds.test(line) ||
+      line.startsWith(`  `) ||
+      /^\((?:node:\d+|Use `node)/.test(line)
+    )
+      continue
+    strays.add(name(line).slice(0, 300))
+  }
+  const verdict = (line) => baselineVerdict.test(line)
+  const first = lines.findIndex(verdict)
+  const mutantLine = (line) =>
+    streamedGap.test(line) ||
+    line.startsWith(`oracle-gaps: progress judged `) ||
+    (line.startsWith(`oracle-gaps: busy `) &&
+      !line.startsWith(`oracle-gaps: busy baseline `))
+  const before = first < 0 ? lines : lines.slice(0, first)
+  return {
+    strays: [...strays].sort().slice(0, 10),
+    verdicts: lines.filter(verdict),
+    mutantBeforeVerdict: before.some(mutantLine),
+    last: name(lines.filter((line) => line !== ``).at(-1) ?? ``),
+  }
+}
 
 function readRun(dir, out, status, stderr, cli, stdout) {
   // The output names the CLI directory that ran and the package, as scratch
@@ -877,7 +955,7 @@ function readRun(dir, out, status, stderr, cli, stdout) {
   const heartbeats = [
     ...new Set(
       lines.flatMap((line) => {
-        const beat = line.match(/^busy: (\S+) in (\S+) for \d+s$/)
+        const beat = line.match(/^oracle-gaps: busy (\S+) in (\S+) for \d+s$/)
         return beat ? [JSON.stringify({ label: beat[1], file: beat[2] })] : []
       }),
     ),
@@ -892,17 +970,28 @@ function readRun(dir, out, status, stderr, cli, stdout) {
   const blank = printed.indexOf(``)
   return {
     lead: blank < 0 ? printed : printed.slice(0, blank),
-    lastLine: printed.at(-1),
+    lastLine: printed.at(-1) && namedScratch(printed.at(-1), scratch),
+    // The stdout's own lines of the stream's kinds: the gap lines under
+    // their functions, as the stream prints them (law 15).
+    stdoutGaps: printed.filter((line) => streamedGap.test(line)).length,
     baselineFiles: lines.flatMap((line) => {
-      const file = line.match(/^(?:pass|fail) (\S+)(?: \(ordinary\))?: /)?.[1]
+      const file = line.match(
+        /^oracle-gaps: baseline (?:pass|fail) (\S+)(?: \(ordinary\))?: /,
+      )?.[1]
       return file === undefined ? [] : [file]
     }),
     heartbeats,
     // The config the run says it used (law 3), and the warnings Node printed
     // for the process.
     configLines: lines.filter((line) =>
-      /^(config: |no config file: )/.test(line),
+      line.startsWith(`oracle-gaps: config `),
     ),
+    // The stream's grammar (law 15), recorded as relations so that a trace
+    // does not depend on the order in which contexts finished.
+    stream: streamOf(lines, (text) => namedScratch(text, scratch)),
+    // The output directory the run was given, as the trace names it: the
+    // final line names its report there.
+    outDir: namedScratch(out, scratch),
     warnings: lines.filter((line) => /MaxListenersExceededWarning/.test(line)),
     // How a run that did not complete ended, read from the whole of its
     // stderr and its output directory (law 12).
@@ -1106,6 +1195,10 @@ async function incremental(dir, plan, cli, copy, observe, states) {
           refusal: run.refusal,
           ending: run.ending,
           report: run.report,
+          // The stream through the daemon (law 15): its lines, and the
+          // completed check's last stdout line.
+          stream: run.stream,
+          lastLine: run.lastLine,
           // The first line of a failure, for the message; readRun has named
           // the scratch package and CLI copy in it.
           stderr: run.stderr?.split(`\n`)[0],
@@ -1874,6 +1967,38 @@ function check(plan, observations, expected) {
       `config`,
       { actual: cli.configLines, expected: expected.configLines },
     )
+  const stream = streamBreach(`cli`, cli, expected)
+  if (stream) return stream
+  // Through the daemon, each check streams the same kinds of line, and a
+  // completed one ends with its done line (law 15). The state of each step
+  // differs, so its verdict and counts are judged by law 9's comparison.
+  for (const { value } of observations.filter(
+    (o) => o.checkpoint === `incremental`,
+  )) {
+    const { daemon } = value
+    if (daemon.stream.strays.length > 0)
+      return violation(
+        `incremental`,
+        `the check through the daemon at ${value.step} wrote a line that is not a line of the stream: ${daemon.stream.strays[0]}`,
+        `greppable stream`,
+        { actual: daemon.stream.strays, expected: [] },
+      )
+    if (daemon.stream.mutantBeforeVerdict)
+      return violation(
+        `incremental`,
+        `through the daemon at ${value.step}, a line about a mutant came before the decisive baseline line`,
+        `greppable stream`,
+      )
+    if (
+      daemon.exit === 0 &&
+      !`${daemon.lastLine}`.startsWith(`oracle-gaps: done completed, `)
+    )
+      return violation(
+        `incremental`,
+        `the completed check through the daemon at ${value.step} ends with ${JSON.stringify(daemon.lastLine)}, not its done line`,
+        `greppable stream`,
+      )
+  }
   if (expected.refused) {
     if (cli.exit === 0)
       return violation(
@@ -2115,6 +2240,20 @@ function check(plan, observations, expected) {
         `stopping`,
         { actual: value.survivors, expected: 0 },
       )
+    // A stopped run's last line says so, with the signal (law 15).
+    if (value.stream.strays.length > 0)
+      return violation(
+        `stopped`,
+        `the stopped run wrote a line that is not a line of the stream: ${value.stream.strays[0]}`,
+        `greppable stream`,
+        { actual: value.stream.strays, expected: [] },
+      )
+    if (value.stream.last !== `oracle-gaps: done stopped (${value.signal})`)
+      return violation(
+        `stopped`,
+        `the stopped run's last line is ${JSON.stringify(value.stream.last)}, not \`oracle-gaps: done stopped (${value.signal})\``,
+        `greppable stream`,
+      )
   }
   const lead = leadBreach(plan, cli, observations, expected)
   if (lead) return lead
@@ -2145,6 +2284,48 @@ function check(plan, observations, expected) {
 }
 
 /**
+ * Law 15: the stream's lines are greppable. Every line a run writes to
+ * stderr is a line of one of the stream's kinds, `oracle-gaps: <kind> `
+ * (config, note, baseline, blocked, progress, gap, busy, done), an indented
+ * line under a baseline failure, a refusal's block, or a line Node writes
+ * for the process. A run that judges mutants prints its one decisive
+ * baseline line before any gap line, count of judged mutants, or heartbeat
+ * that names a mutant, and its stdout prints each gap once, on a line of
+ * the gap kind. The ends of a run (`oracle-gaps: done …`) are judged with
+ * the lead (completed), the refusal law (refused), and the stop law
+ * (stopped). `run` is a run as readRun records it, observed at
+ * `checkpoint`.
+ */
+function streamBreach(checkpoint, run, expected) {
+  const breach = (difference, extra) =>
+    violation(checkpoint, difference, `greppable stream`, extra)
+  if (run.stream.strays.length > 0)
+    return breach(
+      `the run wrote a line that is not a line of the stream: ${run.stream.strays[0]}`,
+      { actual: run.stream.strays, expected: [] },
+    )
+  if (run.stream.mutantBeforeVerdict)
+    return breach(
+      `a line about a mutant came before the decisive baseline line`,
+    )
+  if (run.exit !== 0 || expected.refused) return undefined
+  const verdict = verdictLine(
+    expected.baseline.filter((b) => !b.ordinary).length,
+    expected.blocking.length,
+  )
+  if (JSON.stringify(run.stream.verdicts) !== JSON.stringify([verdict]))
+    return breach(
+      `the stream's decisive baseline lines are ${JSON.stringify(run.stream.verdicts)}, owed ${JSON.stringify([verdict])}`,
+      { actual: run.stream.verdicts, expected: [verdict] },
+    )
+  if (run.stdoutGaps !== expected.gaps.length)
+    return breach(
+      `the stdout has ${run.stdoutGaps} gap lines for ${expected.gaps.length} gaps`,
+    )
+  return undefined
+}
+
+/**
  * Law 14: the report leads with the baseline. The stdout opens with each
  * test file's result and its test counts, a failing file's failing test and
  * its error, and a line for each failing oracle file that names it, its
@@ -2164,14 +2345,15 @@ function leadBreach(plan, cli, observations, expected) {
     const name = `${b.file}${b.ordinary ? ` (ordinary)` : ``}`
     const at = cli.lead.findIndex(
       (line) =>
-        line.startsWith(`pass ${name}: `) || line.startsWith(`fail ${name}: `),
+        line.startsWith(`oracle-gaps: baseline pass ${name}: `) ||
+        line.startsWith(`oracle-gaps: baseline fail ${name}: `),
     )
     if (at < 0) return breach(`the stdout gives no baseline line for ${name}`)
     const owed = !b.loads
-      ? `fail ${name}: did not load: `
+      ? `oracle-gaps: baseline fail ${name}: did not load: `
       : b.failed > 0
-        ? `fail ${name}: ${b.failed} of ${counted(b.ran, `test`)} failed`
-        : `pass ${name}: ${counted(b.ran, `test`)}${b.skipped > 0 ? `, ${b.skipped} skipped` : ``}`
+        ? `oracle-gaps: baseline fail ${name}: ${b.failed} of ${counted(b.ran, `test`)} failed`
+        : `oracle-gaps: baseline pass ${name}: ${counted(b.ran, `test`)}${b.skipped > 0 ? `, ${b.skipped} skipped` : ``}`
     if (b.loads ? cli.lead[at] !== owed : !cli.lead[at].startsWith(owed))
       return breach(
         `the baseline line of ${name} is ${cli.lead[at]}, owed ${owed}`,
@@ -2184,14 +2366,27 @@ function leadBreach(plan, cli, observations, expected) {
         `the baseline of ${name} does not name its failing test ${b.test} and its error`,
       )
   }
-  const blocked = cli.lead.filter((line) => line.startsWith(`blocked: `))
+  // The one decisive baseline line (law 15): every oracle file passed, or
+  // how many failed.
+  const verdict = verdictLine(
+    expected.baseline.filter((b) => !b.ordinary).length,
+    expected.blocking.length,
+  )
+  const verdicts = cli.lead.filter((line) => baselineVerdict.test(line))
+  if (verdicts.length !== 1 || verdicts[0] !== verdict)
+    return breach(
+      `the stdout's decisive baseline lines are ${JSON.stringify(verdicts)}, owed ${JSON.stringify([verdict])}`,
+    )
+  const blocked = cli.lead.filter((line) =>
+    line.startsWith(`oracle-gaps: blocked `),
+  )
   if (blocked.length !== expected.blocking.length)
     return breach(
       `${blocked.length} blocked lines for ${expected.blocking.length} failing oracle files`,
     )
   for (const f of expected.blocking) {
     const at = f.test === undefined ? `` : ` at ${span(f.test)}`
-    const line = `blocked: ${span(`tests/${f.file}.test.ts`)} fails with no mutant active${at}, `
+    const line = `oracle-gaps: blocked ${span(`tests/${f.file}.test.ts`)} fails with no mutant active${at}, `
     if (
       !blocked.some(
         (l) => l.startsWith(line) && l.endsWith(`then check again.`),
@@ -2217,10 +2412,15 @@ function leadBreach(plan, cli, observations, expected) {
     return breach(
       `the stdout does not say that the report is provisional, with ${blockedCount} blocked mutants`,
     )
-  if (cli.lastLine !== `completed: ${counted(expected.gaps.length, `gap`)}`)
+  const done = doneLine(
+    expected.gaps.length,
+    expected.blocking.length > 0,
+    cli.outDir,
+  )
+  if (cli.lastLine !== done)
     return violation(
       `cli`,
-      `the last stdout line is ${JSON.stringify(cli.lastLine)}, not the completion with ${expected.gaps.length} gaps`,
+      `the last stdout line is ${JSON.stringify(cli.lastLine)}, not ${JSON.stringify(done)}`,
       `baseline lead`,
     )
   // The failing owner's replay runs exactly its failing test (law 3).
@@ -2464,6 +2664,41 @@ calibrations.push(
         heartbeats: [{ ...beat, file: `tests/elsewhere.test.ts` }],
       }
     }),
+  },
+  // Law 15: a line without the stream's prefix, the decisive baseline line
+  // after a mutant's line, a completed run that ends with the old
+  // completion line, and a stopped run that ends with no done line.
+  {
+    name: `a streamed line has no prefix`,
+    law: `greppable stream`,
+    corrupt: corruptCli((cli) => ({
+      ...cli,
+      stream: { ...cli.stream, strays: [`judged 25 of 100 mutants`] },
+    })),
+  },
+  {
+    name: `the decisive baseline line comes after a mutant's line`,
+    law: `greppable stream`,
+    corrupt: corruptCli((cli) =>
+      cli.exit !== 0
+        ? undefined
+        : { ...cli, stream: { ...cli.stream, mutantBeforeVerdict: true } },
+    ),
+  },
+  {
+    name: `a completed run ends without its done line`,
+    law: `baseline lead`,
+    corrupt: corruptCli((cli) =>
+      cli.exit !== 0 ? undefined : { ...cli, lastLine: `completed: 3 gaps` },
+    ),
+  },
+  {
+    name: `a stopped run ends without its done line`,
+    law: `greppable stream`,
+    corrupt: corruptStopped((value) => ({
+      ...value,
+      stream: { ...value.stream, last: `` },
+    })),
   },
 )
 
@@ -2729,8 +2964,8 @@ const withDeclaration = (constructed) =>
 oracleProperty({
   id: `oracle-gaps.report`,
   law: {
-    statement: `The gap report enumerates the promised operator mutants, leaves out exactly the probe-only code, discovers every oracle that owns a function's call tree and refuses broken ownership, judges each mutant only by its owners' tests on their registered routes and counts only law verdicts on reproducible routes as kills, which outrank a run that never ends, anchors each mutant by its function and normalized statement, lists every gap and unowned mutant once with consistent counts, keeps keys stable under unrelated edits, reports through one daemon per package what a cold run reports at every state of a sequence of edits, and bounds the runs that confirm a mutant's cut-off copies by one budget per mutant and names each busy mutant in a heartbeat while it runs, leaves nothing in the package and writes nothing where Vitest's include could find it while it runs, leaves no process running once it is stopped, runs the package as Vitest does from any install path and any --source spelling: one instance of each workspace dependency, no refusal over an unbuildable devDependency, child processes for a native addon anywhere in the tree, a capture that a test's builtin spies cannot see, and a refusal of test.projects; leads its report with every test file's baseline, blocks only the mutants a failing oracle file owns and judges the rest, and every run that does not complete ends, cold or through the daemon, with a refusal that exits 2, prints a refused: block and one fix: directive with no stack trace, and writes the refusal to the run's output directory.`,
-    authority: `The maintainer's decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), not in this package's records, including that a kill by reach agreement alone is a gap and that an incremental run through the daemon equals a cold one (v19.3); the project's oracle guide on quiet exclusions; the oracle rubric's outcome kinds (ORC-006); the CLI's documented operator list in schemata.mjs; the maintainer's dispositions G1, G2, G4, G5, G6, and G13 of the framework papercut ledger (2026-11-11) and the v20 freeze's namespacing, one-loop, and provisional-report decisions (2026-11-10).`,
+    statement: `The gap report enumerates the promised operator mutants, leaves out exactly the probe-only code, discovers every oracle that owns a function's call tree and refuses broken ownership, judges each mutant only by its owners' tests on their registered routes and counts only law verdicts on reproducible routes as kills, which outrank a run that never ends, anchors each mutant by its function and normalized statement, lists every gap and unowned mutant once with consistent counts, keeps keys stable under unrelated edits, reports through one daemon per package what a cold run reports at every state of a sequence of edits, and bounds the runs that confirm a mutant's cut-off copies by one budget per mutant and names each busy mutant in a heartbeat while it runs, leaves nothing in the package and writes nothing where Vitest's include could find it while it runs, leaves no process running once it is stopped, runs the package as Vitest does from any install path and any --source spelling: one instance of each workspace dependency, no refusal over an unbuildable devDependency, child processes for a native addon anywhere in the tree, a capture that a test's builtin spies cannot see, and a refusal of test.projects; leads its report with every test file's baseline, blocks only the mutants a failing oracle file owns and judges the rest, prints every line of its stream with the prefix oracle-gaps: and its kind, one decisive baseline line before any mutant, and a done line last, and every run that does not complete ends, cold or through the daemon, with a refusal that exits 2, prints a refused: block and one fix: directive with no stack trace, and writes the refusal to the run's output directory.`,
+    authority: `The maintainer's decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), not in this package's records, including that a kill by reach agreement alone is a gap and that an incremental run through the daemon equals a cold one (v19.3); the project's oracle guide on quiet exclusions; the oracle rubric's outcome kinds (ORC-006); the CLI's documented operator list in schemata.mjs; the maintainer's dispositions G1, G2, G4, G5, G6, and G13 of the framework papercut ledger (2026-11-11) and the v20 freeze's namespacing, one-loop, and provisional-report decisions (2026-11-10); the maintainer's request for a greppable stream (2026-11-12, relayed by the coordinator with its decisions of that day: the same prefixes on stdout and stderr, a done line for a stopped run, and no --max-gaps).`,
     limits: `Law 12 judges refusals only: no legal history reaches an internal error, so its shape (exit 3, the stack in error.log) is not judged; argument refusals are the static oracle's; the check's rejection of a stack trace, a missing fix, and a wrong exit code is calibrated in the static oracle, through the same refusalBreach, and here only a refused run reported as complete is calibrated, because each calibration here runs real CLI histories. Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 20 s full limit, and a slow run only as two witnesses whose tests wait where the output changed, 3 s in one that then judges and 10 s in two one-test owners of one that does not; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; --only only in a stopped run and a partial run of one function's mutants, and no --sample or --diff-base; the baseline's failures only as one failing owner test that throws an error and a setup file that throws, so a baseline law violation's law and counterexample lines are the classify oracle's; a derived class's file is instrumented and its sites are judged as unowned, but no test imports or constructs the class, so its no-mutant and super-region behavior is the static oracle's (in-process), not this oracle's; package configs only as vite.config or vitest.config with one of the extensions .ts, .mts, .cts, .js, .mjs, and .cjs (not every pair), as config/gap-vitest with the same extension through --config, or none, as an object or a sync or async function, with no plugins of their own and test.projects only as a refusal, and only under the package's own package.json; a top-level await only in an ES module config and require only in a CommonJS one, as Vitest itself loads no other; a --config outside the package is refused by design, through the rule for paths outside the package (args.mjs), and no history generates one; contexts only one, four, or eleven, and process warnings judged only as MaxListenersExceededWarning on the CLI's own stderr (a daemon's process warnings go to its log); a context that fails to open gives back its listener allowance, which no observation shows (a kept allowance only raises the limit, so no warning follows), so that accounting is fixed by inspection; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9 judges the witness module's outcome classes along one constructed edit sequence only (a test edit, a helper edit, and a revert), and the budget witness's along one constructed second check with nothing changed, because a generated history with the witness module or the budget witness takes no steps (maintainer decision, 2026-11-11, and the runtime review's P1-a, 2026-11-12; this oracle owns the gap); law 9's edits come only between checks, so a file saved during a check is not generated (the runner invalidates a known input that changed while a run ran and does not store that run, which only inspection fixes; a witness needs a step that edits a file between a unit's start and its end), and a module that a run first loads and that changes during that same run is stored under its later hash; law 9's edits leave out files read through fs, other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; cut-off charging judged only under one budget; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages; daemon races (two CLIs reading one error file, a CLI hearing closing from the failing daemon it started, a reset connection on macOS) fixed by inspection; the runner's copies of the test files exist only in memory, and its harness and Vitest configs sit in the package's .oracle-gaps-<pid>, which the next run removes once a killed run has left it (judged after two stopped runs, not after a SIGKILL); a default --out is judged by the static oracle, and these runs name --out in the package; the namespace is checked after each run and, in a stopped run, while the run runs; a slow kill in a later owner, after earlier owners' confirmations spent the budget, becomes a timeout (owner order; not generated); the Vitest 5 path of the copies' pragma read and of the runner is verified from Vitest 5's source only, since the Vitest 5 CI job runs no gap oracle; a batch whose run reports an error outside any test reruns each copy alone (unitsBatch, runAlone) with its first budget, and a copy cut there is kept as a timeout with no confirmation, a defect older than this oracle's budget work that no history reaches (no history has an error outside any test beside a slow copy), recorded here with that trace for the maintainer; stale-session removal is scoped to this host's session directories (a host file), and is not judged across pid namespaces; the stop law covers SIGTERM and SIGINT sent to the CLI, not a SIGKILL of the CLI (its group then ends at the next check of its parent, by inspection) or a signal sent to the daemon, and its witness is one test that spins synchronously and starts one child process; the mutant budget is witnessed as two slow owners whose confirmations pass the --mutant-limit floor, not through its multiple of the owners' unmutated time, and authored mutants have no confirmations to budget; the witness w_slowpair is a wall-clock window, since the CLI's budget has no controlled clock and a fixture cannot see the time the CLI measures for its file: with one-test owner files p and q of measured unmutated time t each (a file first in its context pays the instrumented transform too), a wait W of 10 s, a 20 s --hang-limit and a 15 s --mutant-limit, it tells a budget from none only while (a) its first attempt is cut, W > 1 s + 3t, (b) its two confirmations do not fit the budget, 2W > max(15 s, 10 x 2t), and (c) each would fit its own full limit, W < 20 s + 3t; (b) is the binding one, so it holds while the two files' time stays under about 2 s together (about 1 s each, some 20 times the authoring machine's idle and 5 to 10 times its loaded measurements), and under one budget a run's overhead must stay under 10 s + 3t; CI runners measure 1.5 to 2.3 times the idle machine; beyond that w_slowpair would read not-judged; a heartbeat is owed only where a slow test waits 3 s against a 2 s interval, twice the first budget, so that no copy cut at its first budget beats, and each beat is observed as its mutant and file, not how long or how often it beat; a config only in the package's parent directory is generated one level up, in a temporary directory with no package.json (so its .js or .ts name is CommonJS), as a plain config, one that throws, one with no default export, or one that defines test.projects; a config two or more levels up, or a parent config beside a package config, is not generated, and the order in one directory follows Vitest's configFiles list by inspection; a package with no config lives in a temporary directory, where no parent has a config; a counterexample shrinks through at most six histories, so it can be larger than the smallest that fails; module-level data only as four \`const\` declarations of the main source (an object literal, an array that holds a function, a boolean, and an object of two methods), read in place, with no data imported from another file, destructured, reassigned, or declared as an enum or a default export.`,
   },
   histories: {
