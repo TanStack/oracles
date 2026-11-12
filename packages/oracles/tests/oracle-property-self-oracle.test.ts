@@ -383,6 +383,8 @@ type Suite = {
   seedless: boolean
   /** A controlled host draw, independent of the framework's seed selection. */
   seedlessDraw?: number
+  /** Exercise equivalent warning-name presentations across repeated drives. */
+  permuteWarnings?: boolean
 }
 
 // Outside the synthetic language: an item 5, or four items.
@@ -780,6 +782,7 @@ const suite: fc.Arbitrary<Suite> = fc.record(
       nil: undefined,
       freq: 8,
     }),
+    permuteWarnings: fc.option(fc.boolean(), { nil: undefined, freq: 12 }),
   },
   { requiredKeys: [`drafts`, `seedless`] },
 )
@@ -798,12 +801,19 @@ type Plan = {
   specs: Array<SyntheticSpec>
   seedless: boolean
   seedlessDraw?: number
+  permuteWarnings?: boolean
 }
 
-function resolveSuite({ drafts, seedless, seedlessDraw }: Suite): Plan {
+function resolveSuite({
+  drafts,
+  seedless,
+  seedlessDraw,
+  permuteWarnings,
+}: Suite): Plan {
   return {
     seedless,
     ...(seedlessDraw === undefined ? {} : { seedlessDraw }),
+    ...(permuteWarnings ? { permuteWarnings: true } : {}),
     specs: drafts.map((d, index) => {
       const generated = d.source.kind === `generated`
       const hasBinding =
@@ -1400,13 +1410,33 @@ const registeredSpec = (spec: SyntheticSpec, context: ChildContext) =>
     : spec
 const propertyWarnings = (warnings: ReadonlyArray<string>, id: string) =>
   warnings.filter((warning) => warning.startsWith(`${id}:`))
-const warningNameCount = (warning: string, name: string) => {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
-  return [
-    ...warning.matchAll(
-      new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, `gu`),
-    ),
-  ].length
+const unattributedWarnings = (
+  warnings: ReadonlyArray<string>,
+  ids: ReadonlyArray<string>,
+) =>
+  warnings.filter((warning) => !ids.some((id) => warning.startsWith(`${id}:`)))
+// Decode the actual rendered list, without consulting expected names. The
+// finite name grammar includes inner quotes in forced-control state labels,
+// but no name contains the list delimiter `", "`. Malformed lists stay raw.
+const warningParts = (warning: string) => {
+  const match =
+    /^(.*?: calibrations )"(.*)"( have no history binding;.*)$/s.exec(warning)
+  return match
+    ? { prefix: match[1]!, names: match[2]!.split(`", "`), suffix: match[3]! }
+    : undefined
+}
+const renderWarning = (
+  parts: NonNullable<ReturnType<typeof warningParts>>,
+  names: ReadonlyArray<string>,
+) =>
+  `${parts.prefix}${names.map((name) => `"${name}"`).join(`, `)}${parts.suffix}`
+const semanticWarning = (warning: string) => {
+  const parts = warningParts(warning)
+  return parts ? renderWarning(parts, [...parts.names].sort()) : warning
+}
+const reversedWarning = (warning: string) => {
+  const parts = warningParts(warning)
+  return parts ? renderWarning(parts, [...parts.names].reverse()) : warning
 }
 const warningMismatch = (
   spec: SyntheticSpec,
@@ -1417,15 +1447,10 @@ const warningMismatch = (
   const own = propertyWarnings(warnings, spec.id)
   if (own.length !== (unbound.length ? 1 : 0)) return true
   if (own.length === 0) return false
-  const names = [
-    ...spec.calibrations.map(({ name }) => name),
-    ...forcedCalibrationNames(spec).map((name) =>
-      name.slice(`calibration: `.length),
-    ),
-  ]
-  return names.some(
-    (name) =>
-      warningNameCount(own[0]!, name) !== (unbound.includes(name) ? 1 : 0),
+  const actual = warningParts(own[0]!)?.names
+  return (
+    actual === undefined ||
+    JSON.stringify([...actual].sort()) !== JSON.stringify([...unbound].sort())
   )
 }
 const boundTest = (spec: SyntheticSpec, name: string) => {
@@ -2244,6 +2269,7 @@ const passingBudgetLanes = [
   { context: `seedless`, lane: `random` },
 ] as const
 const round4FrameworkStates = [
+  `warning-order-equivalence`,
   ...warningReceivingKinds.map((kind) => `warning-receiving-${kind}` as const),
   ...passingBudgetLanes.map(
     ({ context, lane }) => `passing-budget-${context}-${lane}` as const,
@@ -2381,6 +2407,15 @@ function frameworkReach(
   expected: ReturnType<typeof suiteModel>,
 ): Iterable<string> {
   const reached = new Set<string>()
+  if (
+    trace.some(
+      ({ checkpoint, value }) =>
+        checkpoint === `warning-permutation` &&
+        (value as { lists: number; stable: boolean }).lists > 0 &&
+        (value as { stable: boolean }).stable,
+    )
+  )
+    reached.add(`warning-order-equivalence`)
   // Count the real host receiving cut, not a plan flag or a derived summary.
   // Registration-only children owe a loaded test inventory; every other cut
   // additionally owes a test that actually ran in that child.
@@ -2973,6 +3008,7 @@ type Report = {
   files: Array<ReportedFile>
   stdout: string
   warnings: Array<string>
+  warningPermutation?: { lists: number; stable: boolean }
   unhandled: Array<ReportedError>
   exit: number | null
   signal: string | null
@@ -3089,6 +3125,7 @@ const vitest = join(
   `vitest.mjs`,
 )
 let runCount = 0
+let warningPresentationCount = 0
 
 function classifyKind(
   inner: ReportedError,
@@ -3215,6 +3252,9 @@ function runVitest(
   shellTail?: string,
   // Without a seed, the random campaigns draw theirs, as in an ordinary run.
   seeded = true,
+  // An authored representation control alternates across repeated drives.
+  // Its raw report stays unchanged; projection sees either legal ordering.
+  warningPresentation?: boolean,
 ): Report {
   const report = join(directory, `report-${runCount++}.json`)
   // The child reads the default `ORACLE` variables, so none of the parent's
@@ -3272,10 +3312,39 @@ function runVitest(
     unhandled?: Array<ReportedError>
     warnings?: Array<string>
   }
+  const presentedWarnings = (warnings ?? []).map((warning) =>
+    warningPresentation === true ? reversedWarning(warning) : warning,
+  )
+  const projectedWarnings = presentedWarnings.map(semanticWarning)
+  const warningPermutation =
+    warningPresentation === undefined
+      ? undefined
+      : {
+          lists: presentedWarnings.filter(
+            (warning) => reversedWarning(warning) !== warning,
+          ).length,
+          stable:
+            JSON.stringify([...projectedWarnings].sort()) ===
+            JSON.stringify(
+              presentedWarnings
+                .map(reversedWarning)
+                .map(semanticWarning)
+                .sort(),
+            ),
+        }
+  if (warningPresentation !== undefined)
+    writeFileSync(
+      `${report}.presented-warnings.json`,
+      JSON.stringify({
+        reversed: warningPresentation,
+        warnings: presentedWarnings,
+      }),
+    )
   return {
     files: reported,
     stdout: run.stdout,
-    warnings: warnings ?? [],
+    warnings: projectedWarnings,
+    ...(warningPermutation ? { warningPermutation } : {}),
     unhandled: unhandled ?? [],
     exit: run.status,
     signal: run.signal,
@@ -3387,6 +3456,9 @@ function driveSuite(
   plan: Plan,
   observe: (checkpoint: string, value: unknown) => void,
 ) {
+  const warningPresentation = plan.permuteWarnings
+    ? warningPresentationCount++ % 2 === 0
+    : undefined
   const directory = join(
     packageDirectory,
     `.self-oracle-${process.pid}-${runCount++}`,
@@ -3405,7 +3477,13 @@ function driveSuite(
         { ...args[2], SELF_ORACLE_LOG: childLog },
         args[3],
         args[4],
+        warningPresentation,
       )
+      if (report.warningPermutation)
+        observe(`warning-permutation`, {
+          context,
+          ...report.warningPermutation,
+        })
       observe(`child`, {
         context,
         log: readLog(childLog),
@@ -3876,6 +3954,19 @@ function childExpectation(
           ({ id }) => id === context.id || context.kind === `replay`,
         )
       : plan.specs
+  if (
+    unattributedWarnings(
+      child.warnings,
+      selectedSpecs.map(({ id }) => id),
+    ).length
+  )
+    return {
+      failure: violation(
+        `child`,
+        `registration reported a warning for no declared property: ${JSON.stringify(child.warnings)}`,
+        `calibration`,
+      ),
+    }
   let failed = false
   for (const original of selectedSpecs) {
     const spec = registeredSpec(original, context)
@@ -4063,6 +4154,27 @@ function checkSuite(
   const run = trace.find(({ checkpoint }) => checkpoint === `run`)?.value as
     SuiteRun | undefined
   if (!run) return violation(`run`, `the driver recorded no run`, `trace`)
+  if (
+    unattributedWarnings(
+      run.warnings,
+      plan.specs.map(({ id }) => id),
+    ).length
+  )
+    return violation(
+      `run`,
+      `ordinary warnings name an undeclared property: ${JSON.stringify(run.warnings)}`,
+      `calibration`,
+    )
+  for (const { checkpoint, value } of trace)
+    if (
+      checkpoint === `warning-permutation` &&
+      !(value as { stable: boolean }).stable
+    )
+      return violation(
+        `child`,
+        `permuting actual warning names changed their semantic observation`,
+        `calibration`,
+      )
   const children = trace.filter(({ checkpoint }) => checkpoint === `child`)
   const owedChildren =
     1 +
@@ -4323,20 +4435,20 @@ function checkSuite(
           `${spec.id} did not complete its collect-only registration in each phase`,
           `calibration`,
         )
-      const forId = (warnings: Array<string>) =>
-        warnings.filter(
-          (warning) =>
-            warning.startsWith(`${spec.id}:`) &&
-            warning.includes(`history binding`),
-        )
-      const expectedWarnings = unboundCalibrationNames(spec).length ? 1 : 0
       if (
         !warningProbe.loaded.repeated ||
         !warningProbe.loaded.collectThenRun ||
         !warningProbe.loaded.collected ||
-        forId(warningProbe.repeated).length !== expectedWarnings ||
-        forId(warningProbe.collectThenRun).length !== expectedWarnings ||
-        forId(warningProbe.collected).length !== 0
+        [
+          warningProbe.repeated,
+          warningProbe.collectThenRun,
+          warningProbe.collected,
+        ].some(
+          (warnings) => unattributedWarnings(warnings, [spec.id]).length > 0,
+        ) ||
+        warningMismatch(spec, warningProbe.repeated, false) ||
+        warningMismatch(spec, warningProbe.collectThenRun, false) ||
+        warningMismatch(spec, warningProbe.collected, true)
       )
         return violation(
           `run`,
@@ -4346,16 +4458,8 @@ function checkSuite(
     }
     // The compatibility route must be visible before any selected test runs,
     // including automatic controls; bound calibrations must never warn search.
-    const unbound = unboundCalibrationNames(spec)
-    const warnings = run.warnings.filter(
-      (warning) =>
-        warning.startsWith(`${spec.id}:`) &&
-        warning.includes(`history binding`),
-    )
-    if (
-      warnings.length !== (unbound.length ? 1 : 0) ||
-      unbound.some((name) => !warnings[0]?.includes(name))
-    )
+    const warnings = propertyWarnings(run.warnings, spec.id)
+    if (warningMismatch(spec, run.warnings, false))
       return violation(
         `run`,
         `${spec.id} did not report unbound calibrations once per property: ${JSON.stringify(warnings)}`,
@@ -5068,6 +5172,7 @@ const receivingCutDrafts = (tail: 1 | 2 = 1): Array<Draft> => [
     calibrations: [
       `right`,
       { kind: `driver`, difference: `none`, history: null },
+      { kind: `right`, difference: `none`, history: null },
     ],
     isolatedPlans: true,
     warningProbe: true,
@@ -5097,6 +5202,16 @@ const campaignBudgetSuite = (
       constructed: [{ prefix: [3, 6], enters: [] }],
     }),
   ],
+})
+const warningRepresentationSuite = (): Suite => ({
+  drafts: [
+    generatedDraft({
+      source: { kind: `enumerated`, histories: [[0], [1]] },
+      calibrations: [`right`, `driver`],
+    }),
+  ],
+  seedless: false,
+  permuteWarnings: true,
 })
 const cal = (
   kind: CalibrationDraft[`kind`],
@@ -5226,6 +5341,7 @@ oracleProperty({
         name: `round3 every actual receiving cut`,
         enters: [
           ...receivingCutStates,
+          `warning-order-equivalence`,
           ...warningReceivingKinds.map(
             (kind) => `warning-receiving-${kind}` as const,
           ),
@@ -5233,6 +5349,7 @@ oracleProperty({
         build: (generated: Suite) => ({
           ...generated,
           seedless: true,
+          permuteWarnings: true,
           drafts: receivingCutDrafts(generated.drafts[0]!.clock ? 1 : 2),
         }),
       },
@@ -5776,16 +5893,26 @@ oracleProperty({
       },
     ],
     fixed: [
-      seedlessHistory(
-        `round3 every actual receiving cut`,
-        [
+      {
+        name: `round3 every actual receiving cut`,
+        enters: [
           ...receivingCutStates,
+          `warning-order-equivalence`,
           ...warningReceivingKinds.map(
             (kind) => `warning-receiving-${kind}` as const,
           ),
         ],
-        ...receivingCutDrafts(),
-      ),
+        history: {
+          drafts: receivingCutDrafts(),
+          seedless: true,
+          permuteWarnings: true,
+        },
+      },
+      {
+        name: `round5 warning-order equivalence`,
+        enters: [`warning-order-equivalence`],
+        history: warningRepresentationSuite(),
+      },
       {
         name: `round4 successful campaign budgets and failing neighbor`,
         enters: [
@@ -7250,6 +7377,112 @@ oracleProperty({
   driver: driveSuite,
   check: checkSuite,
   calibrations: [
+    ...([`child`, `run`, `phase`] as const).map((receiver) => ({
+      name: `reject unrelated ${receiver} warning property`,
+      history: {
+        fixed:
+          receiver === `phase`
+            ? `round3 every actual receiving cut`
+            : `round5 warning-order equivalence`,
+      },
+      law: `calibration`,
+      corrupt: (
+        trace: ReadonlyArray<{ checkpoint: string; value: unknown }>,
+      ) => {
+        const altered = structuredClone([...trace])
+        const unknown = `self-oracle.unrelated: calibrations "cal-0" have no history binding; using transitional candidate search.`
+        if (receiver === `phase`) {
+          const phase = altered.find(
+            ({ checkpoint }) => checkpoint === `registration-warnings`,
+          )!.value as { repeated: Array<string> }
+          phase.repeated.push(unknown)
+        } else {
+          const observation = altered.find(
+            ({ checkpoint }) => checkpoint === receiver,
+          )!.value as { warnings: Array<string> }
+          observation.warnings.push(unknown)
+        }
+        return altered
+      },
+    })),
+    ...([`suffix`, `replacement`, `malformed`] as const).map((mutation) => ({
+      name: `reject ${mutation} actual warning identity`,
+      history: { fixed: `round5 warning-order equivalence` },
+      law: `calibration`,
+      corrupt: (
+        trace: ReadonlyArray<{ checkpoint: string; value: unknown }>,
+      ) => {
+        const altered = structuredClone([...trace])
+        const child = altered.find(({ checkpoint }) => checkpoint === `child`)!
+          .value as ChildRun
+        child.warnings = child.warnings.map((warning) => {
+          if (mutation === `malformed`)
+            return warning.replace(`: calibrations `, `: malformed names `)
+          const parts = warningParts(warning)!
+          return renderWarning(
+            parts,
+            parts.names.map((name, index) =>
+              mutation === `suffix`
+                ? `${name}-extra`
+                : index === 0
+                  ? `replacement calibration`
+                  : name,
+            ),
+          )
+        })
+        return altered
+      },
+    })),
+    {
+      name: `reject suffixed ordinary warning summary identity`,
+      history: { fixed: `round5 warning-order equivalence` },
+      law: `calibration`,
+      corrupt: (trace) => {
+        const altered = structuredClone([...trace])
+        const run = altered.find(({ checkpoint }) => checkpoint === `run`)!
+          .value as SuiteRun
+        run.warnings = run.warnings.map((warning) => {
+          const parts = warningParts(warning)!
+          return renderWarning(
+            parts,
+            parts.names.map((name) => `${name}-extra`),
+          )
+        })
+        return altered
+      },
+    },
+    {
+      name: `reject suffixed registration phase summary identity`,
+      history: { fixed: `round3 every actual receiving cut` },
+      law: `calibration`,
+      corrupt: (trace) => {
+        const altered = structuredClone([...trace])
+        const phase = altered.find(
+          ({ checkpoint }) => checkpoint === `registration-warnings`,
+        )!.value as { repeated: Array<string> }
+        phase.repeated = phase.repeated.map((warning) => {
+          const parts = warningParts(warning)!
+          return renderWarning(
+            parts,
+            parts.names.map((name) => `${name}-extra`),
+          )
+        })
+        return altered
+      },
+    },
+    {
+      name: `reject lost warning permutation equivalence`,
+      history: { fixed: `round5 warning-order equivalence` },
+      law: `calibration`,
+      corrupt: (trace) => {
+        const altered = structuredClone([...trace])
+        const permutation = altered.find(
+          ({ checkpoint }) => checkpoint === `warning-permutation`,
+        )!.value as { stable: boolean }
+        permutation.stable = false
+        return altered
+      },
+    },
     ...warningReceivingKinds.flatMap((context) =>
       ([`omit`, `duplicate`] as const).map((mutation) => ({
         name: `reject ${mutation} ${context} registration warning`,

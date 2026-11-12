@@ -292,3 +292,67 @@ executions, whose raw warning spelling also reaches outer determinism. This is
 a remaining representation question for the next independent review, not an
 asserted full closure of every legal warning representation. Source and fixture
 remain byte-identical to b09a403. Historical CHRON-1 remains unchanged.
+
+## Fresh warning-observation review from 68ed541
+
+Four new scoped reviews found two P2 self-oracle defects. Warning-name order is
+not promised, but its raw spelling reached outer determinism. Alternating only
+valid name order passed the shared judgment and failed outer determinism. The
+warning-name matcher also accepted `cal-0-extra` as `cal-0`: both the ordinary
+case and outer determinism stayed green under that wrong-name renderer. These
+are distinct observation/formulation and enforcement defects under the README's
+once-per-property/process, exact-unbound-names promise.
+
+The owner now decodes the actual finite quoted-name list, retaining duplicates
+and unknown names, and sorts its entries before any child, ordinary-run or
+registration-phase observation. The authored expected-name multiset remains
+independent of the warning renderer. Malformed lists stay observable and fail;
+unknown-property warnings fail at each full-list checkpoint. The finite grammar
+allows inner state-name quotes but excludes the list delimiter inside a name;
+no claim about arbitrary future warning prose or arbitrary JavaScript strings
+is made.
+
+An authored representation dimension alternates valid name presentation across
+real executions. The existing seven-context receiver carries multiple unbound
+names and measures nontrivial permutation reach. Its ordinary case and actual
+outer determinism reuse the same model, driver and check. Raw reports remain
+unchanged; sidecars preserve the presented ordering. Permanent corruptions add
+wrong suffixed/replaced names, malformed lists and unrelated-property warnings,
+while retaining missing/duplicate warnings and names, all-bound silence and
+collect-only silence. No framework production or fixture edit is part of this
+repair.
+
+The frozen pre-repair experiment passed forward2/2 and consistent reverse2/2,
+but alternating representation failed outer determinism. The wrong suffix
+renderer survived2/2 before repair. With the repaired observation it fails the
+intended `child` / `calibration` comparison; the actual ordinary/determinism
+representation control passes2/2. Four live neighboring receivers pass. Package
+TypeScript and scoped lint pass. Final warning-calibration completion is
+recorded in the next entry, without claiming a whole-suite GREEN.
+
+Reviewed owner SHA256:
+`18a5c3e091cf7b218f2d08fad99df51aa548ec2daca4ab7df27973d074b776ac`.
+Production and fixture hashes remain those of b09a403. Independent grammar,
+seed/premise/identity, and execution-semantics reviewers found no new supported
+defect in their bounded scopes. The independence review accepted an alternative
+stable hash, preserving implementation freedom. Their negative results are not
+whole-framework correctness claims. Historical CHRON-1 remains unchanged.
+
+The semantics review also preserved an optional policy question: a deliberately
+wrong driver may enter an undeclared state while its designated visible-result
+violation is accepted as a successful calibration. The current contract scopes
+declared-reach validation to the clean run and describes shared verdict rules
+for recorded violation/clock/error priority. No stronger mutant-reach obligation
+has been established or silently added. A maintainer clarification was requested
+separately; the executed trace and its authority qualification remain in the
+audit.
+
+The completed frozen warning sweep passes **27/27** in 184.04 seconds: nine
+identity/property/permutation controls and eighteen retained warning controls
+across seven receiving contexts. Together with the four positive receivers,
+two actual ordinary/outer-determinism checks and the rejected suffix renderer,
+this completes the two warning findings within the stated finite grammar. An
+independent reviewer is challenging this frozen repair before main integration.
+The superseded full68ed541 run completed both campaigns, including required
+warning/budget reach, then was explicitly interrupted before the incoming
+source/fixture integration. It is incomplete, not a full-suite GREEN.
