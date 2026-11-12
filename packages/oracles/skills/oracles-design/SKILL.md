@@ -60,7 +60,8 @@ the [law discovery](../../docs/instruments/law-discovery.md) card.
 
 **Use the [design grammar](../../docs/instruments/design-grammar.md) card
 when any of these is true.** Do not judge whether the law is hard. Check the
-list when you propose the laws, and again after each gap check:
+list when you propose the laws, again when the developer adds or splits a
+law, and again after each gap check:
 
 - there are more than five laws for one boundary (adopted, observed, and
   open ones all count; an open question that the oracle file states only as
@@ -412,8 +413,9 @@ Techniques: [guide § Histories](../../docs/guide.md#histories).
   (`src/x.ts#run`, `src/x.ts#Class.method`). Own only what the laws cover. The
   gap check judges only owned code, and the gap check's `--source` selects
   files.
-  - A method of an object that a function returns (`mitt().emit`) has no name
-    of its own. Own it through the enclosing function (`src/index.ts#mitt`).
+  - A method of an object that a function returns (`createEmitter().emit`)
+    has no name of its own. Own it through the enclosing function
+    (`src/index.ts#createEmitter`).
     That entry also brings in the sibling methods: cover them, or report their
     gaps as outside this oracle's scope.
   - The tree follows what the TypeScript checker resolves. A call whose

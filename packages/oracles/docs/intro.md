@@ -33,8 +33,8 @@ that produces the answers.
 
 ## What oracles find
 
-Oracles find bugs that example tests miss, because the generator tries the
-combinations nobody wrote down. They also find design questions: places
+Oracles can find bugs that example tests miss, because the generator tries
+the combinations nobody wrote down. They also find design questions: places
 where the docs, the code, and the tests disagree, or behavior that nobody
 decided. Writing the oracle forces each decision, and the oracle then holds
 it.

@@ -23,14 +23,27 @@ of "impress me". Show, don't tell. Bring up interesting findings about their
 own code, and explain what you are doing and why as you go. Tie each
 explanation to something you just showed them: a probe, a finding, a law, or
 the oracle file. Do not explain what oracles are unless they ask.
-[What an oracle is](../../docs/intro.md) is there for when they do.
+[What an oracle is](../../docs/intro.md) is there for when they do,
+including how an oracle differs from unit tests, property tests, fuzzing,
+and formal models.
 
-Work toward these milestones, in order: findings from probes of their real
-code; a potential oracle whose laws they approve; an oracle that runs on
-their code; and that oracle finding a bug, or closing gaps until one turns
-up, while they settle some design questions. Do not wrap up before the
-oracle has found a bug or brought up a design question. The developer can
-stop you at any time.
+Work toward these milestones, in order:
+
+1. findings from probes of their real code
+2. a potential oracle whose laws they approve
+3. an oracle that runs on their code
+4. that oracle finding a bug, or closing gaps until one turns up, while
+   they settle some design questions
+
+Each time you reach one, say so in a line, with the time since the session
+started ("Milestone 3 of 4: the oracle runs on your code. 14 minutes in.").
+When you start something long, such as a gap check, say about how long it
+will take, and that they can step away: you will keep working, and when
+they come back, your latest message says where things stand.
+
+The session has no end of its own. Do not wrap up before the oracle has
+found a bug or brought up a design question; after that, keep going until
+the developer stops you, which they can do at any time.
 
 Part of what the session shows, without saying so, is how an oracle works
 through a codebase: each bug goes into the oracle first, the fix follows,
@@ -71,7 +84,9 @@ credibility. So every finding needs a probe that the developer can run again.
   | calibration         | a wrong answer planted in a run, to show that the check rejects it                                    |
   | owns                | the functions an oracle answers for                                                                   |
   | gap check           | makes small changes to a copy of the owned code, and shows each change that no law notices            |
-  | gap                 | one such change: behavior the oracle does not check yet                                               |
+  | mutant              | one small change the gap check makes to a copy of your code, such as `<` for `<=`                     |
+  | mutation testing    | the older technique the gap check builds on: change the code, and see whether the tests notice        |
+  | gap                 | a mutant that no law notices: behavior the oracle does not check yet                                  |
   | authority           | where a promise is written: the docs, a test, a comment, or your decision                             |
   | limit               | what the oracle does not check, and why                                                               |
 
@@ -87,7 +102,13 @@ credibility. So every finding needs a probe that the developer can run again.
 - Ask in plain words. Explain any term the developer may not know in one
   line (for example, a lone surrogate is half of a character that takes two
   UTF-16 units).
-- Ask one clear question when you need a decision. For a possible bug, ask
+- Ask questions only where you stop for a decision (see "Where you stop").
+  Everything else you write is narration, in statements, so the developer
+  never wonders whether they must answer. A message that needs no answer
+  contains no question mark, and does not call anything "my questions". When
+  you show what you will find out next, write it as statements and say that
+  no answer is needed (see step 3).
+- When you need a decision, ask one clear question. For a possible bug, ask
   "Is this a bug, or is it intended?" When several decisions are waiting,
   end with a short numbered list of them, most important first, so the
   developer can answer by number.
@@ -119,22 +140,24 @@ repository, change only these:
 - a minimal Vitest config that picks up the oracle file, only when the
   repository's own config does not
 - oracle files, with their prose
-- the feedback log, `oracles-feedback.md`, while this is a preview
+- the feedback log, `oracles-feedback.md`, only if the developer agrees to
+  keep one
 - the smallest production fix for a bug the developer confirmed, after the
   oracle fails on it (see step 5)
 
 Findings, potential oracles, and potential laws stay in the chat. Keep
 probes in a temporary directory outside the repository (`mktemp -d`). The
-gap check writes its report to the OS temp directory on its own. Say
-nothing about cleaning either up.
+gap check writes its report to the OS temp directory on its own. Neither
+needs cleaning up. If you delete or replace any file, name it, and say why.
 
 ## A feedback log, while this is a preview
 
 `@tanstack/oracles` is in preview, and its maintainers want to know where
-this session was rough. Create `oracles-feedback.md` at the root of the
-repository when the session starts, and do not commit it.
-Append a short entry whenever a skill or doc was unclear, wrong, or
-contradicted another; whenever you had to guess; whenever a command,
+this session was rough. With your first decision question, ask in one line
+whether you may keep a short log of rough spots in `oracles-feedback.md`,
+at the root of the repository, uncommitted, for them to send to the
+maintainers. If they say no, keep none. If they agree, append a short
+entry whenever a skill or doc was unclear, wrong, or contradicted another; whenever you had to guess; whenever a command,
 install, or config step failed or needed a workaround; and whenever
 something took much longer than it should have. Each entry gives the time,
 what you were doing, what happened, the skill file and section, and what
@@ -143,24 +166,37 @@ is for later, not a reason to stop.
 
 ## 1. Open
 
-Before your first message, read the block that finishing the setup adds to
-`AGENTS.md`: it is in [`oracles-setup` step 4](../oracles-setup/SKILL.md),
-under "Write the AGENTS.md block". It governs you from the start of this
-session, though nobody has added it to the repository yet: who owns the
-laws and who owns the code, how the work goes (probe first, red first,
-run through the gap check, green is not done), which skill to read before
-each kind of oracle work, and the lint rule. Until the setup is finished, the lint rule means
-the repository's own lint: the oracles lint plugin comes with the setup,
-and its absence is not a problem to report.
+(first session) Send your first message before you read anything else
+beyond this skill and a glance at the repository's README and
+`package.json`. The developer should see what is about to happen right
+away. Write it for this repository, in plain words, in your own sentences,
+in a short paragraph and a short list:
 
-(first session) Your first message starts with two or three sentences on
-what this session will do, before any question. Write them for this repository, in plain words,
-in your own sentences: name what the library does, which of its behaviors
-you will try, how you will try them (calling the real code with chosen
-inputs), and that you will then write an oracle with them for the rules you
-agree on. Mention nothing about this skill or its steps.
+- what you will do: look around their code, try the behaviors that matter
+  most by calling the real code with chosen inputs, and then write an
+  oracle for the rules you agree on, which checks those rules over many
+  generated inputs and holds them for every later change
+- what you will add to the repository: the test packages it needs
+  (`@tanstack/oracles`, with Vitest and fast-check if they are not there),
+  one oracle file, and production changes only for bugs they confirm
+- the milestones (see "Your goal"), and your rough estimate, from the size
+  of the code, of how long the first oracle will take
+- that it all runs on their machine, and nothing is published or committed
+  unless they ask
+
+Mention nothing about this skill or its steps.
 
 In a later session, say in one line which area you will explore, and start.
+
+Then read the block that finishing the setup adds to `AGENTS.md`: it is in
+[`oracles-setup` step 4](../oracles-setup/SKILL.md), under "Write the
+AGENTS.md block". It governs you from the start of this session, though
+nobody has added it to the repository yet: who owns the laws and who owns
+the code, how the work goes (probe first, red first, run through the gap
+check, green is not done), which skill to read before each kind of oracle
+work, and the lint rule. Until the setup is finished, the lint rule means
+the repository's own lint: the oracles lint plugin comes with the setup,
+and its absence is not a problem to report.
 
 Then go straight on to look around. If they named an area, say that you
 will start there, and go on. They can name a part at any time, and you
@@ -197,8 +233,9 @@ bug there would hurt the people who use the code. Good signs:
 Avoid an internal helper whose only law would restate its code. Avoid
 behavior that nothing documents, unless the developer wants to decide it.
 
-Quick probes to choose the spots are fine. Show a result only later, with
-the probe that proves it.
+Quick probes to choose the spots are fine. You may mention an early result
+with a spot, as long as you call it a quick check, and show the probe that
+proves it later.
 
 Present two or three spots, a short paragraph each: what the code seems to
 promise, where that is stated, why a bug there would matter, and why it
@@ -211,11 +248,13 @@ picked and why, and go on to probe it.
 Read the spot's docs, code, tests, and fix history. Then ask yourself: what
 do I not know about this code that I need to know to build its oracle? How
 does the state change with each call? Where are the boundaries? What holds
-whatever happens? Show the developer those questions in the chat, a short
-list, before you probe: it shows them how an oracle gets built. Write each
-question about their code ("If the second try fails too, does it wait
-longer than after the first?"), not as a category ("timing", "lifecycle"). Then build a
-probe for each one, and answer each question with what its probe showed.
+whatever happens? Before you probe, show the developer what you will find
+out, as a short list under a heading such as "What I'll find out next (no
+answer needed)": it shows them how an oracle gets built. Write each item as
+a statement about their code ("whether the wait after a second failed try
+is longer than after the first"), not as a category ("timing",
+"lifecycle"), and not as a question to them. Then build a probe for each
+item, and report what each probe showed.
 
 **A probe** is a small script that calls the real public API with chosen
 inputs and prints what happens. Import the code the way the repository's own
@@ -265,12 +304,18 @@ rule the code breaks, and every input that breaks it. One failing case is
 the example, not the finding. Call each one a possible bug or a question,
 never a certainty, and never minimize one ("minor", "trivial", "an edge
 case"). The count says how much of the input space the class covers; the
-design the oracle enforces says why it counts. Use this shape:
+design the oracle enforces says why it counts.
+
+Say each class in terms of what a caller of the public API does and sees,
+not in terms of internal functions or variables. Before you present one,
+reproduce it through the public API, the way a user would call it: a
+finding that only an internal call shows may be unreachable, and says so.
+Use this shape:
 
 1. A title that names the class: "Retry delay: every wait after the first
    is too short".
-2. **The class:** the rule it breaks, and which inputs break it, in a
-   sentence.
+2. **The class:** the rule it breaks, and which calls break it, in a
+   sentence a user of the library would recognize.
 3. The smallest case, expected against observed, as a short snippet the
    developer can run.
 4. **Why I think it's wrong:** the authority, quoted, with its file and line.
@@ -384,12 +429,13 @@ a few examples to a general law:
 
 How to fill in the fields:
 
-- **Examples** and **What varies, what stays:** for example, `ms('2 hrs')`
-  is `7200000` (README, Examples). The number, the spelling, and the spacing
-  can change. The unit's length decides the answer.
+- **Examples** and **What varies, what stays:** for example,
+  `parseDuration('2 hrs')` is `7200000` (README, Examples). The number, the
+  spelling, and the spacing can change. The unit's length decides the
+  answer.
 - **Law:** one sentence over the domain. For example: "For every finite
   number `n` and every unit name `u` in the table, in any case and with or
-  without a space, `parse(n + u)` is `n` times the length of `u`."
+  without a space, `parseDuration(n + u)` is `n` times the length of `u`."
 - **New case:** if you cannot write one, the law is still a list of
   examples. Write it again. A new case that only renames a value in the
   example (`/:id` for `/:foo`) does not count.
@@ -448,7 +494,9 @@ law with no new case that it predicts), work through the card. Then show
 the developer the design it produced, in a few plain lines: what the model
 keeps, how the laws share it, and any choice between two designs, with your
 recommendation. Leave out the card's own terms (preservation relation,
-primitives, ablation). Ask them to approve it with the laws.
+primitives, ablation). Ask them to approve it with the laws. When the
+developer adds or splits a law, check the triggers again before you write
+the oracle: a sixth law fires one.
 
 Then ask the developer to approve the potential laws that the authority
 decides. When the developer approves a potential law, it becomes an adopted
@@ -482,21 +530,33 @@ them and stop.
    failing law's replay, then each gap as it is judged: one command gives
    you the test results and the gaps together. Start it in the background
    and read its new lines every few seconds, as `oracles-setup` step 7
-   says, so you act on the first results while it runs. A failure under an
-   adopted law is a
-   possible bug. Present it like a probe finding, as a class of bugs, with
-   the oracle's smallest failing case as the example and the share of its
-   histories that failed.
+   says, so you act on the first results while it runs.
+
+   A first red run is often the oracle's own setup: an import, a driver
+   that calls the code wrongly, or a model that disagrees with an approved
+   law. Check that first, and say so in a line if that is what it was. A
+   failure that remains under an adopted law is a possible bug. Present it
+   like a probe finding, as a class of bugs, with the oracle's smallest
+   failing case as the example and the share of its histories that failed.
+   If the oracle file throws before any test runs, open
+   [Problems you may hit](references/problems.md).
+
+   When it passes, tell the developer what a pass means, the first time:
+   "A pass means every law held on every input the oracle tried. The gap
+   check shows what it has not tried yet."
+
 4. **Fix each bug the developer confirms, right away, oracle first.** The
    oracle already fails on it. Make the smallest production fix, rerun the
    oracle until it passes, and show both runs: the failure before, the pass
-   after. Follow the defect path in `oracles-design` step 7. Most developers
-   want the fix at once; with the oracle failing first, the fix is proved.
+   after. Follow the defect path in `oracles-design` step 7. With the
+   oracle failing first, the fix is proved.
 
-   (first session) After the first fix, offer the walk-through at once (see
-   step 6),
-   following the bug you just fixed. The oracle is at its simplest now, so
-   it is the best moment to see how it is built. Then go on.
+   (first session) After the first fix, offer the walk-through at once. The
+   oracle is at its simplest now, so it is the best moment to see how it is
+   built. If they take it, follow the bug you just fixed through the file:
+   the history that produced it, what the driver did and saw, what the model
+   expected, and how the check reported the difference and shrank it. Show a
+   few lines of the file at each part, not a description of it. Then go on.
 
 5. **As the developer settles questions, change the law** and rewrite the law
    block's prose in the same step. Before you show results, check that the
@@ -507,8 +567,9 @@ is to enforce the design fully: every change to the owned code that
 changes what it does should break some law. The gap check is the tool for
 that. It makes each small semantic change it can to a copy of the owned
 code, and shows each one that the oracle does not notice: a gap. Explain
-that in a line or two the first time, then show the count shrinking as you
-work ("74 of 216 changes went unnoticed; now 38"). Take the command and
+that in a line or two the first time, then show the count of gaps
+shrinking as you work. Never call a gap an equivalent mutant: every gap is
+behavior the oracle cannot see yet. Take the command and
 its flags from `oracles-setup` step 7. Its report goes to the OS temp
 directory, outside the repository. While an oracle file fails, the mutants it owns
 are blocked, and the rest of the report is provisional: fix the failure
@@ -548,22 +609,24 @@ and present. Present the same way whenever the developer wants to stop:
 - what it found, first: each bug, with what it was, its fix, and the oracle
   run before and after
 - what you built
-- if they did not take it after the first fix, an offer to walk through
-  how it works: how the reference model was built,
-  how the histories are generated, and how the driver calls their code.
-  Developers often want this, and it is the best part to teach.
+- if they did not take it after the first fix, an offer of the
+  walk-through (step 5), following one bug the oracle found
+- (first oracle) a suggestion for a second opinion: they can ask you to
+  "run several subagents with oracles-review" on the new oracle. If they
+  do, start a few subagents, each told to load `oracles-review` and review
+  the oracle file on its own. Do not act on what they report directly:
+  load `oracles-evaluate-review`, and evaluate their findings with it
+  first. Show the developer what it confirmed, and what it rejected and
+  why.
 - an invitation to ask questions
-- the path to the feedback log, and a request to send it to Kyle Mathews
-  (GitHub KyleAMathews) when they are done
-
-When they take the walk-through, follow one bug the oracle found through
-the file: the history that produced it, what the driver did and saw, what
-the model expected, and how the check reported the difference and shrank it.
-Show a few lines of the file at each part, not a description of it.
+- if they agreed to the feedback log, its path, and a request to send it
+  to Kyle Mathews (GitHub KyleAMathews) when they are done
 
 End with a choice. If the repository's setup is not finished yet: ship it,
 or keep going. Once it is set up, the choice is only where to go next. Keeping going means the next
-oracle, at another spot from your look-around. Shipping means keeping the
+oracle, at another spot from your look-around. Name the other spots you
+found, in a line each: each one can be its own session, and they can run
+side by side, one agent per spot. Shipping means keeping the
 work (a commit, or a pull request): finishing the repository's setup adds a lint preset
 that keeps oracle files honest, a block in `AGENTS.md` (or `CLAUDE.md`) so
 every agent follows the same rules, and the gap check over all the owned

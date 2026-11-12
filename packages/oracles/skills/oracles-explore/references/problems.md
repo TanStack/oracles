@@ -1,4 +1,4 @@
-# Problems you may hit in a first session
+# Problems you may hit
 
 Open this file when one of these happens. Each entry says what to do, and
 what to tell the developer.
@@ -27,7 +27,9 @@ now.
 
 **An install fails.** Show the error in a line or two, say what you think
 caused it, and ask before you try anything that changes more than the
-packages the oracle needs.
+packages the oracle needs. Once the install works, go on from where you
+were: the findings and the approved laws still stand, so do not probe or
+propose again.
 
 **Lint.** The oracles lint plugin comes when the repository's setup is
 finished. If the
@@ -49,6 +51,14 @@ you run it, and undo any that changes what the driver observes.
 over every file) now fails on the oracle file or the Vitest config, tell the
 developer in one line. Leaving them out of that lint is part of finishing
 the setup. Do not change their lint config in a first session.
+
+## Runs
+
+**The oracle file throws before any test runs** (a syntax error, a failed
+import, a generator that throws while it is built). The gap check reports
+the file as failing, with the error but no law. Fix the oracle file, and
+run the gap check again. This is the oracle's own setup, not a finding: say
+so in a line.
 
 ## Probes
 
