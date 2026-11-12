@@ -472,3 +472,88 @@ determinism still passes, isolating enforcement from nondeterminism. Package
 types, scoped lint and diff checks pass. Production and fixture retain the
 hashes above. Full frozen-head validation and three fresh owner reviewers start
 next; no whole-PR readiness claim is made by these focused results.
+
+## Fresh merged-head review: callback diagnostics and calibration instrument
+
+Three fresh reviewers examined immutable `8b4543aa5fd0e887ddf77ed2765fe43d76eb116c`.
+Independence and grammar/reach reviews found no new supported defect in their
+bounded scopes. They executed lawful name-mixer/forwarding variants, original
+identity/forced-premise attacks, exact UNIT stream/budget attacks and actual
+receiving reach. The observation review found two oracle defects; its context
+and cause subclaims are retained separately below. Current production preserves
+the disputed diagnostics. No production or fixture repair is indicated.
+
+The law comes from original user-authorized review item 6: failures retain the
+calibration and selected history names. The accepted owner also retains the
+original cause. The README supplies neighboring selection semantics; it does
+not prescribe this callback diagnostic template. Exact punctuation, hash/seed
+arithmetic, stack paths and an unbound-callback context promise are not added.
+
+| ID                             | Verified gap                                                                                                                                | Repair and evidence                                                                                                                                                                                  |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R7-OBS-CONTEXT                 | Reordered, seedless and environment callback errors could lose their selected calibration/history context while the shared judgment passed. | Semantic identity survives every active child/summary projection and is compared with authored selection. Actual reordered source mutant now fails child/calibration.                                |
+| R7-OBS-CAUSE                   | Those auxiliary errors could lose or replace their original cause.                                                                          | The same independent diagnostic judgment requires the finite callback cause; separate cause-loss source mutant now fails child/calibration.                                                          |
+| R7-OBS-SELECTED-NAME           | Ordinary and reordered errors could falsely name another declared history of the same kind.                                                 | Exact authored selected name is checked; a same-kind source substitution now fails.                                                                                                                  |
+| R7-CI-ORIGIN                   | Permanent origin corruption changed a stale summary log while the comparison consumed the ordinary child log.                               | The control now changes the exact semantic invocation in both representations; identity comparison is unchanged. Same calibration passes and a real wrong-origin source still fails run/calibration. |
+| R7-SIB-CALLBACK-REPRESENTATION | Initial repair falsely rejected harmless separator whitespace.                                                                              | An actual legal renderer failed before normalization and passes after it; wrong selected names still fail.                                                                                           |
+
+All findings were grouped before owner repair. The existing Suite arbitrary now
+has a weighted legal callback branch crossing three callback kinds, three
+selection kinds, two tails and both prefixes. Fixed inputs and required
+constructions use the same model, real driver and comparison. Callbacks actually
+execute in ordinary, reordered, seedless and seed-only environment paths; each
+has required measured callback-failure reach. Registration phases, path replay,
+rerun and reach-alone keep their full registration/skipped checks and do not
+claim callback execution. Across nine clean kind/selection neighbors, actual
+counts are ordinary 9, reordered 6, seedless 9 and environment 9. Enumerated
+sources have no reordered-construction receiver under this driver.
+
+Three bad-source variants survive the frozen owner and fail the repaired
+comparison; clean source passes both. Thirty-six independent wrong diagnostics
+are rejected across four child cuts plus ordinary/environment summaries.
+Opaque default enumeration names are associated with the public direct-history
+name of the authored index/origin, independently of callback text. Five opaque
+forms pass; fifteen wrong-name, missing-association and ambiguous-association
+controls fail. The codec and name hash are not copied into the expectation.
+
+The callback scratch candidate passed eighteen focused checks, followed by five
+on the final whitespace-normalized bytes, and all thirty-six controls were
+rerun. One earlier scratch run overlapped source-mutant experiments; its four
+failures are contaminated evidence, superseded by the restored-source clean
+gates. No setup/runtime failure is counted as an assertion rejection.
+
+Exact-head Vitest 5 CI on 8b4543a passed 729 of 730 checks and exposed the stale
+origin corruption. The same calibration failed on installed Vitest 4, ruling
+out a version-only flake. Captured traces show the summary changed to fixed-0
+while the canonical child retained correctly selected fixed-1; changing the
+canonical or both logs triggers the intended identity assertion. The nearby
+permanent-control audit found no other log/build/resolve corruption with this
+stale target. Ten focused origin and adjacent controls pass after the repair;
+a genuine wrong-fixed-original source mutant still fails the primary law.
+
+The superseded local 8b4543a run completed both campaigns' forty-five named
+units, retaining their full reach counts, then was explicitly interrupted with
+exit 130 after the confirmed CI/focused failure. It is not a full-suite GREEN.
+Core/package, plugin, Vitest 5 core and both gap-oracle jobs on that head passed;
+the consumer-install CI path supplies the witness blocked by local registry403.
+
+Combined live owner SHA256 is
+`b6efd19d8dd086ed73d65c36e3b471685cc96789d055dcfcb82d94c972d4b3ad`.
+The actual combined focused gate passes **19/19** in 84.90 seconds, including
+callback fixed histories/outer determinism, twelve corruptions and the origin
+control. Full package TypeScript, scoped lint, formatting and diff checks pass.
+Production/fixture/reporter retain the a1c/e2d/1918 identities above. Complete
+final-head framework validation and fresh focused re-review start next; this
+entry makes no full-framework GREEN or whole-PR readiness claim.
+
+Loss accounting: two raw observation findings retain three independently
+verified obligations, plus one CI instrument finding and one repair-discovered
+representation sibling. All have applied repairs and focused enforcement; none
+is deferred or resolved by a policy change. Other reviewer scopes retain their
+negative evidence and limits. Strong hire for each reviewer in its demonstrated
+scope, particularly the observation review's actual source survivors and the
+CI diagnosis that distinguished an inert instrument from missing law enforcement.
+Historical CHRON-1 remains irreversible; optional mutant-only undeclared-state
+policy remains a separate unapproved proposal. The finite synthetic grammar,
+Node/Vitest receiving boundary and absence of downstream DB/browser/performance
+claims remain unchanged.
