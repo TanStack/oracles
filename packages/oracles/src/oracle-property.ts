@@ -716,7 +716,12 @@ export interface OraclePropertyOptions<THistory, TExpected, TPlan = THistory> {
    * in that test fails it under law `work bound`, so a mutant that deletes a
    * shortcut, and changes no observation, is killed. A plain Vitest run has
    * no unmodified run to compare with, so there the bound judges nothing.
-   * `ratio` is a finite number of at least 1; 1 rejects any extra work.
+   * `ratio` is a finite number of at least 1, read to the hundredth; 1
+   * rejects any extra work. The bound is the property's, so it judges every
+   * test the property registers (each fixed seed's units and the random
+   * campaign's), though the gap report's directive names one of them. A
+   * test that made a timer or held I/O open, whose work can follow a clock,
+   * is not judged.
    */
   work?: { ratio: number }
 }
@@ -823,7 +828,7 @@ export function oracleProperty<THistory, TExpected, TPlan = THistory>(
       `${id}: \`owns\` must be a non-empty literal list of strings, which the gap report reads statically.`,
     )
   // A ratio below 1 would reject a mutant that does no more work.
-  if (work !== undefined && !(Number.isFinite(work.ratio) && work.ratio >= 1))
+  if (work !== undefined && !(Number.isFinite(work?.ratio) && work.ratio >= 1))
     throw new Error(
       `${id}: \`work.ratio\` must be a finite number of at least 1, the most work a mutant may do as a multiple of the unmodified code's.`,
     )

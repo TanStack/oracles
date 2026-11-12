@@ -71,7 +71,7 @@ const realUse = real.use
 // install over the wrappers and give them back.
 const pending = (globalThis.__oracleGapsPendingTimers ??= (() => {
   const handles = new Map()
-  const wrap = (make, clear, once) => {
+  const wrap = (make, clear, once, timed) => {
     globalThis[make.name] = function (callback, ...rest) {
       if (typeof callback !== `function`) return make(callback, ...rest)
       // An immediate is due at once; a timer or interval after its delay.
@@ -85,6 +85,11 @@ const pending = (globalThis.__oracleGapsPendingTimers ??= (() => {
         ...rest,
       )
       handles.set(handle, real.now() + delay)
+      // The copy now running hears of a timer or an interval: a test that
+      // made one can do work that follows the clock, as a polling or a
+      // deadline loop does (classify.mjs). An immediate waits a turn, not a
+      // time, as the framework's `withinTurns` does.
+      if (timed) globalThis.__oracleGapsTimer?.()
       return handle
     }
     globalThis[clear.name] = function (handle) {
@@ -92,9 +97,9 @@ const pending = (globalThis.__oracleGapsPendingTimers ??= (() => {
       return clear(handle)
     }
   }
-  wrap(globalThis.setTimeout, globalThis.clearTimeout, true)
-  wrap(globalThis.setInterval, globalThis.clearInterval, false)
-  wrap(globalThis.setImmediate, globalThis.clearImmediate, true)
+  wrap(globalThis.setTimeout, globalThis.clearTimeout, true, true)
+  wrap(globalThis.setInterval, globalThis.clearInterval, false, true)
+  wrap(globalThis.setImmediate, globalThis.clearImmediate, true, false)
   return handles
 })())
 const unit = run.units?.[globalThis.__vitest_worker__?.filepath]
@@ -668,6 +673,13 @@ let workBound
 globalThis.__oracleWorkBound = (ratio) => {
   if (inTest) workBound = ratio
 }
+// Whether the current test made a real timer or interval (the wrappers
+// above; a fake clock replaces them, and its work does not follow the real
+// clock).
+let madeTimer = false
+globalThis.__oracleGapsTimer = () => {
+  if (inTest) madeTimer = true
+}
 
 globalThis.__oracleObserve = (checkpoint, value) => {
   observed.update(`${checkpoint}(${render(value)})\n`)
@@ -708,6 +720,7 @@ beforeEach((context) => {
   siteHistories = new Map()
   route = undefined
   workBound = undefined
+  madeTimer = false
   inTest = true
 })
 
@@ -744,6 +757,7 @@ function finishTest(context) {
       infected: [...infected],
       operands: [...operands],
       ...(sawIo ? { io: true } : {}),
+      ...(madeTimer ? { timers: true } : {}),
       outcomes: [...outcomes],
       verdicts: [...verdicts.values()],
       route,

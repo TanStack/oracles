@@ -251,13 +251,17 @@ export function baselineOf(firstRows, secondRows) {
       reachedBy.set(id, [...(reachedBy.get(id) ?? []), key])
   const rank = new Map([...firstRows.keys()].map((key, i) => [key, i]))
   // Each deterministic test's work, the site evaluations its production
-  // code made (capture-setup.mjs `calls`), where the two runs agree: only
-  // such a test's work judges a mutant.
+  // code made (capture-setup.mjs `calls`), where the two runs agree and
+  // neither made a timer or held I/O open, after which a count can follow a
+  // clock: only such a test's work judges a mutant.
+  const clocked = (row) => row?.timers || row?.io
   const work = new Map()
   for (const [key, row] of firstRows)
     if (
       !row.background &&
       !nondeterministic.has(key) &&
+      !clocked(row) &&
+      !clocked(secondRows.get(key)) &&
       secondRows.get(key)?.calls === row.calls
     )
       work.set(key, row.calls)
@@ -398,11 +402,14 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
       !baseline.nondeterministic.has(k),
   )
   // A compared test's work judges the mutant when the two unmutated runs
-  // agree on it and its route judges production, not the framework's own
-  // checks; it rose when the mutant's run did more.
+  // agree on it, no run of it made a timer or held I/O open, and its route
+  // is one that oracleProperty registers for production, which can carry a
+  // work bound; it rose when the mutant's run did more.
   const rose = (k) =>
     baseline.work.has(k) &&
-    routeOf(rows.get(k).route) !== `framework` &&
+    [`reproducible`, `random`].includes(routeOf(rows.get(k).route)) &&
+    !rows.get(k).timers &&
+    !rows.get(k).io &&
     rows.get(k).calls > baseline.work.get(k)
   const compares = new Set(compared)
   const result = {
@@ -414,7 +421,8 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
         compares.has(k) &&
         rose(k) &&
         row.work !== undefined &&
-        row.calls > row.work * baseline.work.get(k),
+        // In hundredths, exactly: 29 is not past 1.16 times 25.
+        100 * row.calls > Math.round(100 * row.work) * baseline.work.get(k),
     ),
     seconds: units.reduce((sum, u) => sum + u.seconds, 0),
   }
@@ -439,7 +447,7 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
       test: roseIn,
       before,
       after,
-      ratio: before > 0 ? (after / before).toFixed(2) : undefined,
+      ratio: before > 0 ? (after / before).toFixed(3) : undefined,
       bound: (
         (before > 0 ? Math.floor((100 * after - 1) / before) : 100) / 100
       ).toFixed(2),

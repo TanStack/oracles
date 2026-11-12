@@ -59,15 +59,22 @@ every commit with [pkg.pr.new](https://pkg.pr.new).
   such as an early return or an assignment in place of a slower call. A
   test's work is the number of site evaluations that its instrumented
   production code makes (calls, comparisons, `if`s, and each pass of a
-  loop's condition), a deterministic count, never a time. A test whose work
-  varied between the two unmutated runs, or that is one of the framework's
-  own checks, does not judge work. The gap's directive names the first such
+  loop's condition), a deterministic count, never a time. Only a test on a
+  route that `oracleProperty` registers for production (a fixed seed, a
+  fixed history, a case, or the random campaign) judges work, since only
+  such a test can carry a bound. A test whose work varied between the two
+  unmutated runs, or that made a real timer or interval or held I/O open
+  (its count can follow the clock, as a polling or a deadline loop's
+  does), does not judge work. A count that varies with the clock but
+  agreed in both unmutated runs, without a timer or I/O, is not caught. The gap's directive names the first such
   test, its work before and after, and the bound that rejects the mutant.
   Declare it on the owning property, for example
   `oracleProperty({ ..., work: { ratio: 1.1 } })`: a mutant whose work in
   one of the property's tests is more than `ratio` times the unmodified
   code's work there is killed under law `work bound`. `ratio` is a finite
-  number of at least 1, and 1 rejects any extra work. A plain Vitest run has
+  number of at least 1, read to the hundredth and compared exactly, and 1
+  rejects any extra work. The bound is the property's, so it judges every
+  test the property registers, though the directive names one of them. A plain Vitest run has
   no unmodified run to compare with, so there the bound judges nothing. The
   count does not see work without a site, such as a plain assignment, a
   `for...of` pass, or a builtin's own work, so a call to a builtin counts
