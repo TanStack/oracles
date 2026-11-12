@@ -1842,6 +1842,27 @@ const loadText = (text) => {
   }).outputText
   return new Function(`${js}\nreturn f`)()
 }
+// A thrown value's name: an error's name, and otherwise the value's kind. A
+// `throw null`, or an object whose `name` getter throws, has a name too.
+function errorName(error) {
+  try {
+    return error instanceof Error ? String(error.name) : typeof error
+  } catch {
+    return `unnamed`
+  }
+}
+// A run that has not settled after this long is reported, not awaited.
+const SETTLE_LIMIT = 2_000
+const UNSETTLED = `did not settle`
+const bounded = (promise) => {
+  let timer
+  return Promise.race([
+    promise,
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(UNSETTLED), SETTLE_LIMIT)
+    }),
+  ]).finally(() => clearTimeout(timer))
+}
 // A result as it settles (the eighth review: a promise, or an iterator, is
 // a result only once it settles). A promise is awaited: fulfilled with an
 // encoded value, or rejected with an error's name. An iterator is driven,
@@ -1852,7 +1873,7 @@ async function settled(value) {
     try {
       return `fulfilled ${encoded(await value)}`
     } catch (error) {
-      return `rejected ${error?.name}`
+      return `rejected ${errorName(error)}`
     }
   }
   if (
@@ -1867,7 +1888,7 @@ async function settled(value) {
         if (step.done) break
       }
     } catch (error) {
-      steps.push(`threw ${error?.name}`)
+      steps.push(`threw ${errorName(error)}`)
     }
     return `iterated ${steps.join(`, `)}`
   }
@@ -1880,9 +1901,9 @@ async function settledRuns(f, domain) {
     const before = effects.count
     let result
     try {
-      result = await settled(f(...input))
+      result = await bounded(settled(f(...input)))
     } catch (error) {
-      result = `threw ${error.name}`
+      result = `threw ${errorName(error)}`
     }
     runs.push({ result, reads: effects.count - before })
   }
@@ -1910,8 +1931,17 @@ const sameRun = (x, y) => x.result === y.result && x.reads === y.reads
 function textModel(program) {
   const original = textRuns.get(textKey(program, program.text))
   const typed = textTypedMask(program)
+  const unsettled = [
+    program.text,
+    ...program.sites.map((site) => mutateSite(program.text, site)),
+  ].some((text) =>
+    textRuns
+      .get(textKey(program, text))
+      .some((run) => run.result === UNSETTLED),
+  )
   return {
     source: program.text,
+    unsettled,
     sites: program.sites.map((site) => {
       const runs = textRuns.get(
         textKey(program, mutateSite(program.text, site)),
@@ -2702,7 +2732,7 @@ function runEscape(program, text) {
     try {
       result = shown(exported.f(...input))
     } catch (error) {
-      result = `threw ${error.name}`
+      result = `threw ${errorName(error)}`
     }
     return `${result}:${calls()}`
   })
@@ -3224,7 +3254,7 @@ function runAll(f, domain) {
           ),
         )
       } catch (error) {
-        result = `threw ${error.name}`
+        result = `threw ${errorName(error)}`
       }
       return { result, reads: globalReads + effects.count - before }
     })
@@ -3467,6 +3497,12 @@ function check(program, observations, expected) {
   if (!found)
     return violation(`instrumented`, `nothing was instrumented`, LAW_INERT)
   if (program.kind === `escape`) return checkEscape(program, found)
+  if (expected.unsettled)
+    return violation(
+      `instrumented`,
+      `a run of ${JSON.stringify(expected.source)} or of one of its mutants did not settle within ${SETTLE_LIMIT} ms`,
+      LAW_INERT,
+    )
   if (!found.clean)
     return violation(
       `instrumented`,
@@ -3632,7 +3668,7 @@ oracleProperty({
   law: {
     statement: `No mutant is skipped or marked dead code on the basis of types (maintainer decision, 2026-11-11). Over the inputs JavaScript allows (each declared type's values, and foreign ties: a string beside the number of its digits, null beside a zero, a number beside a bigint, -0 beside 0, and an object whose valueOf has an effect; with the free global g counting its reads), every emitted mutant that is not marked dead code differs from the program on some input (law 1), no site of the operator contract is skipped (law 2), and a site is marked dead code exactly when no input distinguishes it. A mutant carries the outside-annotation label exactly when an annotation excludes every input that distinguishes it, in the first family and the coerced programs, and carries none elsewhere. A return-undefined mutant's runs and reads equal the model's, which evaluates the returned expression and then returns undefined. Erasing a hostile program's types changes none of its sites and no dead-code mark, every dead-code mark there holds on its inputs, and a returned undefined that a declaration binds is a site. Every emitted mutant's run agrees with the model, and a boundary hint sits only on a site that a history of 0 and -0 distinguishes.`,
     authority: `The maintainer's decision of 2026-11-11, relayed by the coordinator after the fifth soundness review: the gap CLI never skips a mutant, and never marks it dead code, on the basis of types; a mutant the type analysis judges undetectable by inputs of the declared types is a survivor in its own class, whose directive names the distinguishing input; an argument typed any counts as an input the types allow. The frozen design v20's decision of 2026-11-10 that anything an oracle can't possibly detect is an invalid mutant (freeze.md, "Undetectable mutants are invalid"). The dead-code and boundary evidence follow the coordinator's revision and the review of PR #8. The F17 operators follow the coordinator's F17 brief (2026-11-10).`,
-    limits: `A finite domain: each type's values, a fixed set of foreign ties, and one free name. A small grammar, without property reads, calls, getters beyond g, or equal branches with a non-operand expression. A clamp at type bigint is left out. Dead code is tagged only under a pure condition where no ordering comparison runs or not because of the site. The label law requires a label in the first family and the coerced programs, and forbids one everywhere else; the narrowed family's narrowings and the optional chains are not labelled. The sixth review's dimensions are small generated programs judged by running their text: a dead-zone read in a parameter default or a loop head, each binding form of \`undefined\`, a sloppy script with or without a direct \`eval\` or a \`with\`, a returned call, and a coerced comparison at five annotations. The optional chains read one property of a parameter, a local, a wrapper's property, or a literal constant. The returned values are one return of a name, \`void a\`, \`void g\`, or \`undefined\`. Only a return-undefined site's runs are compared in full with the model's. The hostile programs are fixed texts with chosen inputs, compared with their own text with the types erased, as operators and marks; their dead-code marks are judged on their inputs only. Its mutants are applied as text, and an optional chain's \`?.\` is found as the first after the access's start, which a nested chain would misplace.`,
+    limits: `A finite domain: each type's values, a fixed set of foreign ties, and one free name. A small grammar, without property reads, calls, getters beyond g, or equal branches with a non-operand expression. A clamp at type bigint is left out. Dead code is tagged only under a pure condition where no ordering comparison runs or not because of the site. The label law requires a label in the first family and the coerced programs, and forbids one everywhere else; the narrowed family's narrowings and the optional chains are not labelled. The sixth review's dimensions are small generated programs judged by running their text: a dead-zone read in a parameter default or a loop head, each binding form of \`undefined\`, a sloppy script with or without a direct \`eval\` or a \`with\`, a returned call, and a coerced comparison at five annotations. The optional chains read one property of a parameter, a local, a wrapper's property, or a literal constant. The returned values are one return of a name, \`void a\`, \`void g\`, or \`undefined\`. Only a return-undefined site's runs are compared in full with the model's. The hostile programs are fixed texts with chosen inputs, compared with their own text with the types erased, as operators and marks; their dead-code marks are judged on their inputs only. Its mutants are applied as text, and an optional chain's \`?.\` is found as the first after the access's start, which a nested chain would misplace. The settled comparison of a text program has blind spots, none of which reaches a defect in today's grammar (the ninth review): an iterator is compared for at most eight steps; only \`next()\` is driven, never \`return()\`, \`throw()\`, or a \`finally\`; a rejection or a throw compares by its error's name, not its message, and a thrown value that is no error by its kind alone, so \`throw 1\` and \`throw 2\` are alike; a fulfilled object compares by its kind; a thenable is awaited as a promise is; and a rejection that floats unhandled is not compared. A run that does not settle within two seconds fails its test.`,
   },
   // Enumerated: every program of the grammar is one history, in order.
   histories: { enumerated: histories, states: REQUIRED_STATES },
