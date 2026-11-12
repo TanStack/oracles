@@ -78,7 +78,10 @@ every commit with [pkg.pr.new](https://pkg.pr.new).
   no unmodified run to compare with, so there the bound judges nothing. The
   count does not see work without a site, such as a plain assignment, a
   `for...of` pass, or a builtin's own work, so a call to a builtin counts
-  once, whatever it costs. Work is counted per test, not per history: a
+  once, whatever it costs. Where a shortcut's cost is in such a builtin
+  (`Object.defineProperty` and the like), make that cost an explicit
+  observation of the driver, such as a count of those calls, and let a law
+  judge it, in place of a very tight work bound. Work is counted per test, not per history: a
   test that runs many histories, such as a `generated` unit, is judged by
   their sum, so a slowdown in a few of its histories is diluted, and a
   constructed or fixed history isolates it. An authored mutant's copy is

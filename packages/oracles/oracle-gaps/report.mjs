@@ -150,6 +150,9 @@ const directive = {
 // crash is a gap, not a kill (the v20 freeze, P3 and C1).
 const meanings = {
   crashed: `Production threw where no law judged it: a gap, not a kill. Its error is on the gap's Detail line in summary.md, and in its \`detail\` in results.json. `,
+  // A builtin counts as one site, so a tight bound is a poor witness of its
+  // cost (maintainer, 2026-11-12).
+  'extra-work': `A call to a builtin counts as one site evaluation, whatever it costs (\`Object.defineProperty\`): where a shortcut's cost is in one, make that cost an observation of the driver, such as a count of those calls, and let a law judge it, in place of a very tight bound. `,
 }
 
 // The directive for an operator whose infection is not measured: the input
