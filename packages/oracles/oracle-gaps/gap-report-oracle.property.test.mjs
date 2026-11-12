@@ -818,6 +818,8 @@ async function incremental(dir, plan, cli, copy, observe, states) {
   // context that ran it. With one context, that is the context that read
   // every file before.
   let replacedOnly = false
+  // Whether the daemon's last check cut a batch off.
+  let cutBefore = false
   // A second install of the CLI, at another path, whose summary reads
   // otherwise, so its code differs from the first install's (`otherInstall`).
   let other
@@ -962,8 +964,17 @@ async function incremental(dir, plan, cli, copy, observe, states) {
         states.add(
           `an edit that changed the cold result after a hang replaced the only context`,
         )
+      // A batch of the daemon's previous check was cut off by a hang, and
+      // the edit changed a module that only mutated runs load: the copies
+      // that finished before the hang must keep it as an input. Which copy
+      // loaded it is not observed; the history's order puts it before the hang.
+      if (step === `lazy` && plan.lazyGate && cutBefore)
+        states.add(
+          `a lazy edit changed the cold result after a batch was cut off`,
+        )
     }
-    replacedOnly = plan.contexts === 1 && (daemon.evidence?.cut ?? 0) > 0
+    cutBefore = (daemon.evidence?.cut ?? 0) > 0
+    replacedOnly = plan.contexts === 1 && cutBefore
     previous = coldRun
   }
   const stop = () =>
@@ -2028,6 +2039,7 @@ const required = [
   ...incrementalStates,
   `an edit that changed the cold result after a hang replaced the only context`,
   `edit lazy changed the cold result`,
+  `a lazy edit changed the cold result after a batch was cut off`,
 ]
 // The faults the CLI analyzes anyway: a package's TypeScript is no input.
 const analyzedFaults = [`noTypescript`, `apiLessTypescript`]
@@ -2081,6 +2093,7 @@ const separate = [
   ...incrementalStates,
   `an edit that changed the cold result after a hang replaced the only context`,
   `edit lazy changed the cold result`,
+  `a lazy edit changed the cold result after a batch was cut off`,
 ]
 const witnessed = required.filter((s) => !separate.includes(s))
 
@@ -2598,6 +2611,56 @@ oracleProperty({
           boot: false,
           cliPath: `plain`,
           concurrentStart: false,
+          lazyGate: true,
+          steps: [`lazy`],
+        }),
+      },
+      {
+        // The same lazy gate in one context, where a hang later in a batch
+        // cuts it off: the copies before the hang finished, and one of them
+        // loaded the lazy module, so their units must keep it as an input.
+        name: `a lazy module loaded before a hang in the same batch`,
+        enters: [
+          `a lazy edit changed the cold result after a batch was cut off`,
+        ],
+        build: (generated) => ({
+          ...generated,
+          functions: [
+            [{ kind: `push`, quote: `'` }],
+            [{ kind: `if`, op: `>`, k: 4, not: false, quote: `'` }],
+          ],
+          containers: [],
+          overloads: [],
+          owners: [`a`, `b`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          derived: null,
+          dotGen: false,
+          dataOwners: [],
+          exportOwners: [],
+          importer: `none`,
+          wholeFile: `none`,
+          template: false,
+          tests: [
+            { ...judging(`b`, `fixed seed`, 1), fn: 1 },
+            {
+              ...judging(`b`, `fixed seed`, 7, { judges: false, hangs: true }),
+              fn: 1,
+            },
+          ],
+          witness: false,
+          authored: null,
+          secondAuthored: false,
+          fault: `none`,
+          stability: `none`,
+          ordinary: false,
+          native: `none`,
+          boot: false,
+          budget: `two`,
+          cliPath: `plain`,
+          concurrentStart: false,
+          contexts: 1,
           lazyGate: true,
           steps: [`lazy`],
         }),
