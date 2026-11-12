@@ -38,6 +38,8 @@ const RUNES = `src/state.svelte.ts`
 const DERIVED = `src/derived.ts`
 // The derived class's constructor, as the model names it: no oracle owns it.
 const DERIVED_FN = `Derived.constructor`
+// Its helper `nothing`, which no oracle owns either.
+const DERIVED_HELPER = `nothing`
 // The inputs a derived class is run with, each judged against the model.
 export const DERIVED_INPUTS = [0, 4, 9]
 // Where this package's own dependencies are installed.
@@ -240,6 +242,8 @@ const statement = fc.oneof(
     kind: fc.constant(`readData`),
     shape: fc.constantFrom(`object`, `array`, `primitive`, `methods`),
   }),
+  // An object that only a truthy `x` makes, read through `?.`.
+  fc.record({ kind: fc.constant(`optional`) }),
 )
 const libStatement = fc.oneof(
   fc.record({ kind: fc.constant(`push`), quote }),
@@ -1407,6 +1411,14 @@ const witness = [
     ],
     tests: [judging(`a`, `fixed seed`, 1)],
   },
+  // An object read through `?.`, made for the test's input: the plain read
+  // in its place is not distinguished, since the object is there.
+  {
+    id: `w_optional`,
+    owners: [`a`],
+    body: [{ kind: `optional` }],
+    tests: [judging(`a`, `fixed seed`, 1)],
+  },
   // A test that waits on a child process where the output differs: an I/O
   // handle is open, so its copy is busy, never cut for idleness, and the
   // confirming run kills it.
@@ -1490,6 +1502,8 @@ const captureWitness = new Set([
   `w_fcprop`,
   `w_record`,
   `w_data`,
+  `w_optional`,
+  `w_oldprobe`,
   `w_spin`,
 ])
 
@@ -1741,6 +1755,11 @@ function renderStatement(stmt, callText) {
       return [`out.push(String(memo.get(x)));`]
     case `pushLoaded`:
       return [`out.push(...loaded);`]
+    case `optional`:
+      return [
+        `const o${stmt.label} = x ? { v: 'p${stmt.label}' } : undefined;`,
+        `out.push(\`\${o${stmt.label}?.v}\`);`,
+      ]
     case `readData`:
       return [`out.push(${dataOf(stmt.shape).read});`]
     case `call`:
@@ -1823,11 +1842,14 @@ function derivedFile(spec) {
     `function nothing(x: number): number {`,
     `  return x - x;`,
     `}`,
-    `export function derivedMake(x: number, out: Array<string>): Derived {`,
-    `  return new Derived(x, out);`,
-    `}`,
+    // A concise arrow, which has no `return` statement to mutate: what
+    // `derivedMake` returns is what the derived runs read.
+    `export const derivedMake = (x: number, out: Array<string>): Derived =>`,
+    `  new Derived(x, out);`,
   )
-  return { source: `${lines.join(`\n`)}\n`, statements }
+  // `nothing`'s `return`, a site of its own outside the constructor.
+  const returnLine = lines.indexOf(`  return x - x;`) + 1
+  return { source: `${lines.join(`\n`)}\n`, statements, returnLine }
 }
 
 // What a derived class's constructor pushes for `x`, and the fields it sets:
@@ -2482,6 +2504,7 @@ function resolveHistory(history) {
       spec: history.derived,
       source: file.source,
       statements: file.statements,
+      returnLine: file.returnLine,
     },
   }
 }
@@ -2648,8 +2671,14 @@ function sitesOf(plan) {
   add(`devBuild`, 4, `binary-swap`, preambleStatements.devBuild, {
     role: `devBuild`,
   })
+  add(`devBuild`, 4, `return-undefined`, preambleStatements.devBuild, {
+    role: `devBuildReturn`,
+  })
   // Its `return false` runs only when reading the environment throws.
   add(`devBuild`, 6, `bool-flip`, `return false`, { role: `devBuildFalse` })
+  add(`devBuild`, 6, `return-undefined`, `return false`, {
+    role: `devBuildFalseReturn`,
+  })
   declaration(`report`, 10, `'`)
   guard(`report`, 11, `'gap#report'`, `true`)
   add(`reportTwice`, 14, `delete-call`, preambleStatements.reportTwice, {
@@ -2699,6 +2728,15 @@ function sitesOf(plan) {
         at(`delete-call`, `push`, stmt.line, whole)
       // A call of a nested function where it is defined.
       if (stmt.kind === `inner`) at(`delete-call`, `call`, stmt.line, whole)
+      // A returned nested function, which is not `undefined`.
+      if (stmt.kind === `innerReturned`)
+        at(`return-undefined`, `returned`, stmt.line, whole)
+      // The object literal's field, then the push and its optional read.
+      if (stmt.kind === `optional`) {
+        at(`field-drop`, `dropV`, stmt.line, stmt.lines[0])
+        at(`delete-call`, `push`, stmt.line + 1, stmt.lines[1])
+        at(`optional-chain`, `chain`, stmt.line + 1, stmt.lines[1])
+      }
       // Two arrows on one line: each property's field drop, its call, and
       // the `+ 1` belong to the arrow whose text holds them; the push and
       // its argument to `w_pair`.
@@ -2714,8 +2752,10 @@ function sitesOf(plan) {
         at(`delete-call`, `push`, stmt.line + 1, call)
         at(`value-undefined`, `string`, stmt.line + 1, call)
       }
+      // A returned call is a `return-undefined` site too (the sixth review).
       if (stmt.kind === `getterReturn`) {
         at(`value-undefined`, `string`, stmt.line, whole)
+        at(`return-undefined`, `returned`, stmt.line, whole)
         at(`bool-flip`, `flag`, stmt.line, whole)
       }
       // `$derived` is an ordinary name outside a Svelte module.
@@ -2723,8 +2763,10 @@ function sitesOf(plan) {
         at(`delete-call`, `push`, stmt.line, whole)
         at(`value-undefined`, `value`, stmt.line, whole)
       }
-      if (stmt.kind === `dollarReturn`)
+      if (stmt.kind === `dollarReturn`) {
         at(`value-undefined`, `string`, stmt.line, whole)
+        at(`return-undefined`, `returned`, stmt.line, whole)
+      }
       // A rune call stays where Svelte requires it, so it is no site of its
       // own (its value is not replaced, nor its statement skipped); the code
       // in its argument is.
@@ -2885,6 +2927,17 @@ function sitesOf(plan) {
       }
     }
   }
+  // `nothing`'s returned `x - x`, a number.
+  if (plan.derived)
+    add(
+      `nothing`,
+      plan.derived.returnLine,
+      `return-undefined`,
+      `return x - x;`,
+      {
+        file: DERIVED,
+      },
+    )
   // The derived class's file (`derivedFile`), which no oracle owns. A
   // statement before `super(...)`, and the `super` statement itself, have no
   // site: no mutant, when active, may prevent or delay the constructor's
@@ -2917,7 +2970,10 @@ function sitesOf(plan) {
         [`used`, `return 1 + 2;`],
         [`spare`, `return 3 + 4;`],
       ])
-        add(name, d.line, `arithmetic-swap`, text, { role: `${name}Arith` })
+        for (const operator of [`arithmetic-swap`, `return-undefined`])
+          add(name, d.line, operator, text, {
+            role: `${name}${operator === `arithmetic-swap` ? `Arith` : `Return`}`,
+          })
   }
   // The `..gen/` file's top-level loop: its variable's `-`, its condition,
   // and its `<`, in no function, and owned by no entry (a whole-file entry
@@ -3025,7 +3081,8 @@ function ownersOf(plan) {
       ...(plan.wholeFile === `none` ||
       inLibrary.has(id) ||
       id === TOP_LOOP ||
-      id === DERIVED_FN
+      id === DERIVED_FN ||
+      id === DERIVED_HELPER
         ? []
         : [plan.wholeFile]),
     ])
@@ -3213,6 +3270,28 @@ function interpret(plan, fnId, x, sites, active) {
           }
         }
       }
+      // `x` makes the object only when truthy, so the field drop is reached
+      // only then. A plain read in place of `?.` throws on no object.
+      if (stmt.kind === `optional`) {
+        const drop = siteOf(stmt, `dropV`)
+        if (x) reached.add(drop.id)
+        const made = x
+          ? isActive(drop)
+            ? {}
+            : { v: `p${stmt.label}` }
+          : undefined
+        const site = siteOf(stmt, `push`)
+        reached.add(site.id)
+        if (!isActive(site)) {
+          const chain = siteOf(stmt, `chain`)
+          reached.add(chain.id)
+          if (isActive(chain) && made === undefined)
+            throw new TypeError(`Cannot read properties of undefined`)
+          trace.push(String(made?.v))
+        }
+      }
+      if (stmt.kind === `innerReturned`)
+        reached.add(siteOf(stmt, `returned`).id)
       // A read of module data, as the module evaluated it at load under the
       // same mutant: a dropped field reads undefined, the swapped `+` gives
       // 1, and the flipped literal false.
@@ -3229,6 +3308,10 @@ function interpret(plan, fnId, x, sites, active) {
             const value = siteOf(stmt, `value`)
             reached.add(value.id)
             if (isActive(value)) return `undefined`
+            // Its `return`: undefined in place of what it returns.
+            const returned = sites.find((s) => s.role === `usedReturn`)
+            reached.add(returned.id)
+            if (isActive(returned)) return `undefined`
             const arith = sites.find((s) => s.role === `usedArith`)
             reached.add(arith.id)
             return String(isActive(arith) ? -1 : 3)
@@ -3294,6 +3377,9 @@ function interpret(plan, fnId, x, sites, active) {
         ])
           reached.add(siteOf(stmt, role).id)
         reached.add(sites.find((s) => s.role === `devBuild`).id)
+        // Its `return`, whose undefined value leaves the probe uncalled, and
+        // no output changes.
+        reached.add(sites.find((s) => s.role === `devBuildReturn`).id)
         outcomes.push([stmt.line, true])
         // The guard is true, so its if-false site changes it; and its `!==`
         // compares 'test' with 'production', on which `!==` and `===`
@@ -3581,9 +3667,14 @@ function model(plan) {
     // probe form and of a probe in another shape). Its directive names the
     // input that distinguishes it.
     if (
-      [`loop-false`, `value-undefined`, `field-drop`, `delete-call`].includes(
-        site.operator,
-      ) ||
+      [
+        `loop-false`,
+        `value-undefined`,
+        `field-drop`,
+        `delete-call`,
+        `return-undefined`,
+        `optional-chain`,
+      ].includes(site.operator) ||
       site.logical === true
     )
       return `not-distinguished`
