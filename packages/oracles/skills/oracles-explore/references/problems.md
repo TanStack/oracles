@@ -75,3 +75,9 @@ module). Copy it unchanged into the scratch directory, under a name that
 Node can load, such as `index.mjs`, and tell the developer that you did.
 
 **The code is TypeScript.** Run the probe with `npx tsx`.
+
+**A probe needs `fast-check` or another package from the repository.** A
+probe in the scratch directory cannot import the repository's packages by
+name. Load them from the repository with `createRequire`:
+`const require = createRequire('<repo>/package.json')`, then
+`require('fast-check')`.

@@ -35,7 +35,15 @@ Work toward these milestones, in order:
 4. that oracle finding a bug, or closing gaps until one turns up, while
    they settle some design questions
 
-Each time you reach one, say so in a line, with the time since the session
+Two things are tied to these milestones. (first session) Right after the
+first bug is fixed, offer the walk-through (step 5). When the gaps under
+the approved laws are closed, or the developer wants to stop, present
+(step 6): what it found first, the review suggestion, and the choice of
+shipping or keeping going, with the other spots.
+
+A milestone is reached only when it is true: findings proved by probes,
+not quick checks; laws the developer approved, not ones you proposed. Each
+time you reach one, say so in a line, with the time since the session
 started ("Milestone 3 of 4: the oracle runs on your code. 14 minutes in.").
 When you start something long, such as a gap check, say about how long it
 will take, and that they can step away: you will keep working, and when
@@ -166,10 +174,11 @@ is for later, not a reason to stop.
 
 ## 1. Open
 
-(first session) Send your first message before you read anything else
-beyond this skill and a glance at the repository's README and
-`package.json`. The developer should see what is about to happen right
-away. Write it for this repository, in plain words, in your own sentences,
+(first session) Send your first message as soon as you have read this
+skill and glanced at the repository's README and `package.json`, before
+any other tool call: before reading the code, the tests, or the other
+skills, and before any probe. The developer should see what is about to
+happen right away. Write it for this repository, in plain words, in your own sentences,
 in a short paragraph and a short list:
 
 - what you will do: look around their code, try the behaviors that matter
@@ -515,8 +524,8 @@ them and stop.
    config yet. The `oracles-setup` skill's install and "where oracle files
    go" sections have the details: take only what these packages and the
    config need. If the repository uses another test runner or an older
-   Vitest, or an install fails, open
-   [Problems you may hit](references/problems.md).
+   Vitest, if npm installed Vitest or fast-check without listing them, or
+   if an install fails, open [Problems you may hit](references/problems.md).
 
 2. **Write the oracle file.** Follow `oracles-design` from its first step:
    the law block's prose, then the model, the histories, the driver, and the
