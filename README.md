@@ -89,6 +89,79 @@ preset's, so merge them:
 }
 ```
 
+## Bind calibrations to histories
+
+A calibration's `history` selects an existing input directly:
+
+```ts
+calibrations: [
+  {
+    name: 'drops the committed row',
+    law: 'durable publication',
+    history: { constructed: 'a committed write' },
+    corrupt: dropCommittedRow,
+  },
+]
+```
+
+Generated sources accept `{ constructed: name }` and `{ fixed: name }`.
+Enumerated sources accept `{ enumerated: index }` (zero-based) or
+`{ enumerated: name }`, using `label` or the framework's default data label.
+Unknown or duplicate names, invalid indices, and incompatible source kinds fail
+registration before a driver runs.
+
+The selected clean run must pass and actually enter every state the history
+declares. When the property declares states, every state the clean run enters
+must also be declared. The mutation must apply, and the check must reject it
+under exactly the named law. A failed clean run, missing reach, inapplicable corruption,
+passing mutant, wrong-law rejection, or driver setup error fails the calibration
+directly. It never searches another history.
+
+Mutant drivers use the same verdict rules as ordinary histories. A violation at
+a recorded checkpoint decides before a later driver error. A controlled clock
+that exceeds its timer bound reports `bounded clock`, unless an earlier recorded
+violation already decides.
+
+An optional `difference: string | RegExp` also requires the violation's
+difference to contain the text or match the pattern. The law is checked first.
+A bound mismatch fails directly. An unbound mutant driver can still try a later
+candidate, as it can for a wrong law.
+
+A selected construction uses one deterministic seed derived from the property
+id and calibration name. Inserting or reordering other calibrations leaves this
+seed unchanged. Each driver execution builds from that seed afresh and resolves
+its plan once. This preserves builder-created metadata, including WeakMap
+associations, and avoids reusing consumed plans. Fixed and enumerated selectors
+preserve the existing history's identity and semantics. Use `resolve` to create a
+fresh mutable execution plan from those histories for each driver run. Each
+calibration remains on the `calibration` route, so a failed self-check is a
+framework error in the gap report. Campaign units now support `UNIT` replay.
+Bound calibrations still use their stable name-derived seed; fresh-seed
+calibrations and their replay support remain follow-up work.
+
+For automatic forced-probe controls, opt a state into direct selection:
+
+```ts
+probeHistories: {
+  'committed write': {
+    notEntered: { fixed: 'no writes' },
+    // Optional: entered: { constructed: 'a committed write' }
+  },
+}
+```
+
+The clean-entered history detects the probe forced not entered. If `entered`
+is omitted, exactly one construction must declare the state in `enters`.
+The clean-not-entered history detects the probe forced entered and always needs
+an explicit selection. Neither control may silently disappear.
+
+During consumer migration, an unbound authored calibration or entirely unbound
+probe state retains candidate search. Registration warns once per property per
+process, naming its unbound calibrations. Collect-only runs (`ORACLE_MANIFEST`)
+stay silent and do not consume that warning. Bind both probe controls together with
+`probeHistories`. Search will be removed after consumers migrate, before the
+first npm release.
+
 ## The `oracle/no-unit-test` rule
 
 An oracle file registers its tests only through `oracleProperty`. Its
