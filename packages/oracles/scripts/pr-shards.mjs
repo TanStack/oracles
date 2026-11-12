@@ -51,6 +51,23 @@ export const partitions = {
       2: rest,
     },
   },
+  // The gap report's static oracle, the slowest of the fast gap suites and
+  // a file whose units run one after another: 171 units, 136 s on the gap
+  // CLI's runtime branch, against 98 s on main at 09f5b9d, in one local run
+  // under other agents' load. CI took 4.5 to 5 times its local time in
+  // #39's run, since each history runs the CLI. The first shard takes the
+  // two generated units and the calibrations, 66 s; the second the rest,
+  // 70 s. The classify, probe-form, and mutant-validity oracles run whole
+  // in a third job (`.github/workflows/pr.yml`).
+  'oracle-gaps-static': {
+    args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-static`],
+    suite: `oracle-gaps.report-static`,
+    select: ``,
+    shards: {
+      1: `(?:fixed seed 20261105: generated|random seed: generated|calibration: .*)`,
+      2: rest,
+    },
+  },
   // The end-to-end gap oracle's fixed-seed units, which a pull request runs
   // (`-t "fixed seed"`): 33 units, 475 s in all, measured on this
   // branch in one local run under other agents' load (load average about 3).
