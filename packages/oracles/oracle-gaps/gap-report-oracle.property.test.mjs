@@ -1415,9 +1415,20 @@ async function driver(plan, observe) {
       .filter((m) => m.function === `w_stop`)
       .map((m) => m.id)
     let previousSessions = []
+    // A session directory is named by the process that made it, which
+    // differs on every run. The law reads only whether a later run kept an
+    // earlier run's directory, so each is recorded by its identity: the
+    // nth distinct directory of this history is `session#n`.
+    const sessionNames = new Map()
+    const sessionOf = (name) => {
+      if (!sessionNames.has(name))
+        sessionNames.set(name, `session#${sessionNames.size}`)
+      return sessionNames.get(name)
+    }
     if (cli.exit === 0 && stopIds.length > 0)
       for (const stop of plan.stopRuns) {
-        const stopped = await stoppedRun(dir, files, how, stopIds, stop)
+        const run = await stoppedRun(dir, files, how, stopIds, stop)
+        const stopped = { ...run, sessions: run.sessions.map(sessionOf) }
         observe(`stopped`, stopped)
         if (previousSessions.length > 0)
           states.add(`a run after a stopped one that left its session`)
