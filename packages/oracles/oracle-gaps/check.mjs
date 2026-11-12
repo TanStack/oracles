@@ -19,7 +19,7 @@
 // the harness, the Vite config and the files it loads, the package's
 // manifest and the lockfile, the Node version, and the options that change a
 // run (the seed, the test timeout, and bail).
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   appendFileSync,
@@ -35,7 +35,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { createRequire, isBuiltin, syncBuiltinESMExports } from 'node:module'
-import { hostname } from 'node:os'
+import { constants, hostname } from 'node:os'
 import { basename, dirname, join, relative as relativePath } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { applyAuthored, loadAuthored } from './authored.mjs'
@@ -618,7 +618,32 @@ export default async (env) => {
       )
     }
   }
+  // A hook for the CLI's oracle (ORACLE_GAPS_WARM_PROBE, a marker's path):
+  // the first warm-up stands still as a config load can, on a service in
+  // the run's process group, which a stop signal ends (as it ends the
+  // esbuild service that bundles a config), while a handler that exits
+  // 200 ms after the signal holds the process (as Vitest's does). It marks
+  // the path when it starts, so the oracle sends its signal then.
+  let warmProbed = false
+  async function warmProbe() {
+    const marker = process.env.ORACLE_GAPS_WARM_PROBE
+    if (!marker || warmProbed) return
+    warmProbed = true
+    const exitLater = (signal) =>
+      setTimeout(() => process.exit(128 + constants.signals[signal]), 200)
+    process.once(`SIGINT`, exitLater)
+    process.once(`SIGTERM`, exitLater)
+    const service = spawn(
+      process.execPath,
+      [`-e`, `setInterval(() => {}, 1000)`],
+      { stdio: `ignore` },
+    )
+    writeFileSync(marker, ``)
+    await new Promise((resolve) => service.on(`exit`, resolve))
+    throw new Error(`The service was stopped`)
+  }
   async function warmContext(settings, index) {
+    await fromConfig(index, settings.config, warmProbe())
     writeWrapper(index, settings.config)
     // A context that fails to open gives its listener allowance back: one
     // that never opened, at once, and one that opened, when it closes.
