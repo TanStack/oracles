@@ -415,7 +415,7 @@ Run the gap check on the owned source:
 
 ```sh
 pnpm exec oracle-gaps --package <package dir> --source <src/file.ts> \
-  --seed <n> --out <package dir>/.oracle-gaps/out
+  --seed <n>
 ```
 
 Add `--config <file>` (relative to the package) when the oracle Vitest config
@@ -425,8 +425,8 @@ is not Vite's default name. The baseline prints which config it used.
   the report judges only the owned functions. Code in the file that no oracle
   owns appears as unowned warnings.
 - Pass `--seed`, so the baseline and every mutant run the same histories.
-  Pass `--out` inside the repository. (Both become defaults later.)
-- Add `.oracle-gaps/` to `.gitignore`.
+  The report goes to a directory in the OS temp directory, and its path is
+  printed at the end. Nothing is written into the repository.
 - Read the exit code. **0:** the run completed; work from its report.
   **2:** refused. It prints `refused: <cause>` and one `fix: <directive>`.
   Do what the `fix:` line says, then run again. **3:** an internal error, "a

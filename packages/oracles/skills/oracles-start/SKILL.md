@@ -112,8 +112,9 @@ repository, change only these:
   oracle fails on it (see step 5)
 
 Findings, potential oracles, and potential laws stay in the chat. Keep
-probes, and the gap check's report, in a temporary directory outside the
-repository (`mktemp -d`). Say nothing about cleaning them up.
+probes in a temporary directory outside the repository (`mktemp -d`). The
+gap check writes its report to the OS temp directory on its own. Say
+nothing about cleaning either up.
 
 ## A feedback log, while this is a preview
 
@@ -492,8 +493,8 @@ that. It makes each small semantic change it can to a copy of the owned
 code, and shows each one that the oracle does not notice: a gap. Explain
 that in a line or two the first time, then show the count shrinking as you
 work ("74 of 216 changes went unnoticed; now 38"). Take the command and
-its flags from `oracles-setup` step 7, with `--out` in a temporary directory
-outside the repository. While an oracle file fails, the mutants it owns
+its flags from `oracles-setup` step 7. Its report goes to the OS temp
+directory, outside the repository. While an oracle file fails, the mutants it owns
 are blocked, and the rest of the report is provisional: fix the failure
 first.
 
