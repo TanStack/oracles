@@ -322,12 +322,12 @@ import { fileURLToPath } from 'node:url'
 import fc from 'fast-check'
 import { oracleProperty, pass, violation } from '../src/index.js'
 import {
+  WORK_RATIO,
   oddKinds,
   outerSuite,
   shellText,
   syntheticArbitrary,
   syntheticIds,
-  WORK_RATIO,
 } from './oracle-property-self-oracle-fixture.js'
 import type {
   CalibrationDifference,

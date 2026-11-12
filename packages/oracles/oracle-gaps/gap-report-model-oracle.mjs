@@ -911,20 +911,6 @@ const witness = [
     body: [{ kind: `memoSet`, label: 21 }],
     tests: [judging(`a`, `fixed seed`, 4)],
   },
-  // A cache that an earlier test of the file warmed: `w_unseen`'s test
-  // caches under 4 first, so in the whole file `w_cold`'s write is
-  // skipped. A run of the tests from `w_cold`'s on, without the one that
-  // warmed the cache, observes the same and does one call more, so the
-  // runner owes a selection only where it reproduces the whole file's work
-  // as well as its observations. Its `drop-not` mutant writes again in the
-  // whole file (`extra-work`), and writes nothing in such a selection.
-  {
-    id: `w_cold`,
-    owners: [`a`],
-    warm: true,
-    body: [{ kind: `memoSet` }],
-    tests: [judging(`a`, `fixed seed`, 4)],
-  },
   // Shortcuts for speed (klona's early return for a primitive, and its
   // assignment in place of `Object.defineProperty`): the general path gives
   // the same output for every input, with more work, so forcing the
@@ -1656,6 +1642,22 @@ const witness = [
     owners: [`a`],
     body: [kill],
     tests: [judging(`a`, `fixed seed`, 7, { asProp: true })],
+  },
+  // A cache that an earlier test of the file warmed: `w_unseen`'s test
+  // caches under 4 first, so in the whole file `w_cold`'s write is
+  // skipped. A run of the tests from `w_cold`'s on, without the one that
+  // warmed the cache, observes the same and does one call more, so the
+  // runner owes a selection only where it reproduces the whole file's work
+  // as well as its observations. Its `drop-not` mutant writes again in the
+  // whole file (`extra-work`), and writes nothing in such a selection.
+  // It is the last test of its file, so its selection holds no
+  // nondeterministic test, which would fail any selection to reproduce.
+  {
+    id: `w_cold`,
+    owners: [`a`],
+    warm: true,
+    body: [{ kind: `memoSet` }],
+    tests: [judging(`a`, `fixed seed`, 4)],
   },
   { id: `wg0`, file: LIB, owners: [], body: [push], tests: [] },
   { id: `wg1`, file: LIB, owners: [], body: [push], tests: [] },
