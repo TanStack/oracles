@@ -1374,7 +1374,13 @@ export default async (env) => {
     // its seconds count against the budget whenever it is used, reused ones
     // too. One that the budget cut short, or left no time, depends on the
     // mutant's other units, so it is not kept.
-    async function confirmAlone(slot, hung, left) {
+    async function confirmAlone(slot, request, left) {
+      // The confirmation is kept under the request's own identity, so a
+      // later check reuses it in place of the request's first run.
+      const hung = {
+        ...request,
+        id: idOf(request.file, request.spec, request.select, request.ignore),
+      }
       const full = limitFor(hung.file)
       const limit = Math.min(full, left)
       const confirmed = (u) => ({ ...u, confirmed: true })
