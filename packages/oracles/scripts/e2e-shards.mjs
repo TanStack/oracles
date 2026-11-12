@@ -59,6 +59,9 @@ export const shards = {
     `determinism: constructed history: a declaration fault: projects`,
     `determinism: constructed history: a package with no config`,
     `determinism: constructed history: an edit sequence through the daemon`,
+    // The witness module's edit sequence (option M): 189 s here, measured
+    // with the daemon fix of fix/daemon-current-inputs.
+    `determinism: constructed history: an edit sequence over the witness module`,
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-2': [
@@ -125,6 +128,9 @@ export const shards = {
     `determinism: constructed history: an ambiguous authored mutant`,
     `determinism: constructed history: every outcome class`,
     `determinism: constructed history: two authored mutants`,
+    // The witness module's edit sequence (option M): 97 s here, measured
+    // with the daemon fix of fix/daemon-current-inputs.
+    `fixed seed 20261105: an edit sequence over the witness module`,
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-5': [
@@ -148,6 +154,9 @@ export const shards = {
     `determinism: constructed history: a declaration fault: noTypescript`,
     `determinism: constructed history: a failing owner under a config that --config names`,
     `determinism: generated 2`,
+    // The witness module's edit sequence (option M): about 97 s here, measured
+    // with the daemon fix of fix/daemon-current-inputs.
+    `random seed: an edit sequence over the witness module`,
   ],
 }
 
