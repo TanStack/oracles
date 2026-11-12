@@ -35,6 +35,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { createRequire, syncBuiltinESMExports } from 'node:module'
+import { hostname } from 'node:os'
 import { basename, dirname, join, relative as relativePath } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { applyAuthored, loadAuthored } from './authored.mjs'
@@ -71,6 +72,15 @@ const IDLE_MS = 500
 // a hundred times the most calls any of its unmutated tests made, if more.
 const CALL_FLOOR = 100_000
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+/** The host that a session directory names, if it names one. */
+function sessionHostOf(dir) {
+  try {
+    return readFileSync(join(dir, `host`), `utf8`)
+  } catch {
+    return undefined
+  }
+}
+
 /** Whether process `pid` runs. */
 function alive(pid) {
   try {
@@ -362,13 +372,20 @@ export async function openSession(pkg) {
   // killed run leaves its directory there, where no include finds it.
   const home = join(pkg, `.oracle-gaps`, `session-${process.pid}`)
   // A session directory that a stopped or killed run left behind, whose
-  // process is gone, is removed now.
+  // process is gone, is removed now. Only one of this host's (its `host`
+  // file): a process id names a process only in its own pid namespace, so
+  // a container and its host sharing the package keep each other's.
   for (const name of existsSync(dirname(home))
     ? readdirSync(dirname(home))
     : [])
-    if (/^session-\d+$/.test(name) && !alive(Number(name.slice(8))))
+    if (
+      /^session-\d+$/.test(name) &&
+      !alive(Number(name.slice(8))) &&
+      sessionHostOf(join(dirname(home), name)) === hostname()
+    )
       rmSync(join(dirname(home), name), { recursive: true, force: true })
   mkdirSync(home, { recursive: true })
+  writeFileSync(join(home, `host`), hostname())
   const harness = join(home, `capture-setup.mjs`)
   copyFileSync(join(here, `capture-setup.mjs`), harness)
   // One wrapper config per context, over the package's own config (a path
@@ -1795,6 +1812,20 @@ export default async (env) => {
               `${st.mutant.id}: ${relative(request.file)} has no unit and no earlier kill`,
             )
           }
+          // A cut copy is confirmed only while no later owner's unit already
+          // killed the mutant: a kill decides, so its confirmation would
+          // spend time for nothing.
+          if (
+            got[i].cut &&
+            requests.some(
+              (other, j) =>
+                other.st === st &&
+                j > i &&
+                got[j] !== undefined &&
+                kills(got[j]),
+            )
+          )
+            continue
           if (got[i].cut) got[i] = await confirmAlone(slot, request, left)
           if (got[i].confirmed) left -= got[i].seconds * 1000
           st.units.push(got[i])
