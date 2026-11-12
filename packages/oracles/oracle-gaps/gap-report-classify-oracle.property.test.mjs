@@ -1314,10 +1314,14 @@ const directives = {
 // What a legend line says a class is, before its directive, where the
 // class's name alone misleads (maintainer disposition G3, 2026-11-11): a
 // crash is a gap, not a kill (the v20 freeze, P3 and C1), and its error is
-// in the gap's Detail line.
+// in the gap's Detail line. The extra-work line says first that a builtin
+// counts as one site, so a shortcut whose cost is in one is owed an
+// observation of that cost, not a very tight bound (maintainer, 2026-11-12).
 const meanings = {
   crashed:
     /^Production threw where no law judged it: a gap, not a kill\. Its error is on the gap's Detail line in summary\.md, and in its `detail` in results\.json\. /,
+  'extra-work':
+    /^A call to a builtin counts as one site evaluation, whatever it costs \(`Object\.defineProperty`\): where a shortcut's cost is in one, make that cost an observation of the driver, such as a count of those calls, and let a law judge it, in place of a very tight bound\. /,
 }
 // A count of things, as the report words it.
 const counted = (n, thing) => `${n} ${thing}${n === 1 ? `` : `s`}`
@@ -2380,6 +2384,7 @@ function check(h, observations, expected) {
     line.startsWith(`Provisional: `),
   )
   const crashedLegend = legend.find((line) => line.startsWith(`  crashed: `))
+  const workLegend = legend.find((line) => line.startsWith(`  extra-work: `))
   const leadProblem =
     stdoutLines.slice(0, baselineGot.length).join(`\n`) !==
     baselineGot.join(`\n`)
@@ -2416,7 +2421,12 @@ function check(h, observations, expected) {
                     crashedLegend.slice(`  crashed: `.length),
                   )
                 ? `the crashed legend line does not say a crash is a gap and where its error is`
-                : undefined
+                : workLegend !== undefined &&
+                    !meanings[`extra-work`].test(
+                      workLegend.slice(`  extra-work: `.length),
+                    )
+                  ? `the extra-work legend line does not say that a builtin counts as one site, and what is owed for its cost`
+                  : undefined
   if (leadProblem)
     return violation(`classified`, leadProblem, `stdout`, { actual: stdout })
   // The full report leads with the same baseline, before its gaps.
