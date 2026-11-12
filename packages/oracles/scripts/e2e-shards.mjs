@@ -21,35 +21,133 @@ import { fileURLToPath } from 'node:url'
 
 const suite = `oracle-gaps.report`
 
-// The shards balance the costs measured in one full local run on main
-// (84cd34a, 2026-11-11, an idle 18-core Mac, one Vitest worker), in local
-// seconds: determinism about 345 (all 30 histories, twice each), the random
-// seed 160 to 600 by its seed, the fixed seed 157, the refused-run
-// calibration 102, the two daemon calibrations 56 and 53, and each other
-// calibration 38 to 46. CI took 2.31 times as long. The property registers
-// each campaign, each calibration, and the determinism test as one test, so
-// a shard cannot be smaller than its largest test, and the determinism test
-// alone sets the slowest shard. CI keeps its one fixed-seed job until the
-// property registers its parts as units that a shard can split.
+// The shards balance the costs measured in one full run of every unit on
+// feat/unit-replay (2026-11-11, an 18-core Mac under other agents' load, one
+// Vitest worker): 2,610 s in all, 370 s for the fixed-seed units, 605 s for
+// the random units (their cost varies with the drawn seed), 917 s for the
+// calibrations, and 718 s for the determinism units. The fixed-seed units
+// took 2.36 times the 157 s of an idle run (84cd34a), and CI took 2.31 times
+// an idle run, so a shard of about 522 s here is about 221 s idle and 5.5 to
+// 8.5 minutes in CI, before job setup. The property registers each campaign
+// part, each calibration, and each determinism history as its own test
+// (units), so a shard can hold any of them; the slowest unit, the
+// determinism of the edit sequence, is 236 s here. The shards are a
+// longest-first packing of those costs, listed by kind. A random unit's
+// cost follows its seed, so a shard's time varies from run to run. CI keeps
+// its one fixed-seed job until the random units' tail is bounded (option M
+// of the e2e speed plan): a random unit that draws a long edit sequence over
+// the witness module can pass 10 minutes in CI.
 export const shards = {
-  'e2e-1': [`determinism`],
-  'e2e-2': [`random seed`],
-  'e2e-3': [
-    `fixed seed 20261105`,
-    `calibration: a refused run is reported as complete`,
-  ],
-  'e2e-4': [
-    `calibration: the daemon reports another outcome than the cold run`,
-    `calibration: a daemon is left after --stop-daemon`,
-    `calibration: a mutant is dropped from the enumeration`,
-    `calibration: an owned mutant is reported as unowned`,
-  ],
-  'e2e-5': [
-    `calibration: a crash is reported as a kill`,
+  // 522 s in the measured run, about 221 s idle.
+  'e2e-1': [
+    `fixed seed 20261105: a .cjs config that calls require`,
+    `fixed seed 20261105: a declaration fault: missingSource`,
+    `fixed seed 20261105: a declaration fault: noTypescript`,
+    `fixed seed 20261105: a declaration fault: outsideSource`,
+    `fixed seed 20261105: a declaration fault: projects`,
+    `random seed: a config that --config names`,
+    `random seed: a declaration fault: badEntry`,
+    `random seed: a failing owner under a config that --config names`,
+    `random seed: a load failure beside a hang`,
     `calibration: a key drops its statement text`,
-    `calibration: the summary omits a gap`,
+    `calibration: a mutant is dropped from the enumeration`,
     `calibration: an edit moves a key`,
+    `determinism: constructed history: a .ts config in a package with no module type that calls require`,
+    `determinism: constructed history: a config that --config names`,
+    `determinism: constructed history: a declaration fault: badEntry`,
+    `determinism: constructed history: a declaration fault: missingSource`,
+    `determinism: constructed history: a declaration fault: projects`,
+    `determinism: constructed history: a package with no config`,
+    `determinism: constructed history: an edit sequence through the daemon`,
+  ],
+  // 522 s in the measured run, about 221 s idle.
+  'e2e-2': [
+    `fixed seed 20261105: a declaration fault: setupThrows`,
+    `fixed seed 20261105: a package with no config`,
+    `fixed seed 20261105: an ambiguous authored mutant`,
+    `fixed seed 20261105: generated`,
+    `random seed: a config fault in a run that owns nothing`,
+    `random seed: a declaration fault: apiLessTypescript`,
+    `calibration: a crash is reported as a kill`,
+    `calibration: a daemon is left after --stop-daemon`,
+    `calibration: a refused run is reported as complete`,
+    `determinism: constructed history: a .cjs config that calls require`,
+    `determinism: constructed history: a declaration fault: configNoDefault`,
+    `determinism: constructed history: a declaration fault: outsideSource`,
+    `determinism: constructed history: a declaration fault: setupThrows`,
+    `determinism: constructed history: a load failure beside a hang`,
+    `determinism: constructed history: a stale authored mutant and a reformat`,
+    `determinism: constructed history: an awaiting config in a package with no module type`,
+    `determinism: constructed history: ordinary tests left out by default`,
+    `determinism: generated 0`,
+    `determinism: generated 1`,
+  ],
+  // 522 s in the measured run, about 221 s idle.
+  'e2e-3': [
+    `fixed seed 20261105: a config fault in a run that owns nothing`,
+    `fixed seed 20261105: a declaration fault: brokenOwner`,
+    `fixed seed 20261105: a declaration fault: configThrows`,
+    `fixed seed 20261105: a run with eleven contexts`,
+    `fixed seed 20261105: a stale authored mutant and a reformat`,
+    `fixed seed 20261105: an awaiting config in a package with no module type`,
+    `fixed seed 20261105: every outcome class`,
+    `random seed: a .ts config in a package with no module type that calls require`,
+    `random seed: a declaration fault: configThrows`,
+    `random seed: a declaration fault: noTypescript`,
+    `random seed: a declaration fault: outsideSource`,
+    `random seed: a stale authored mutant and a reformat`,
+    `random seed: an edit sequence through the daemon`,
+    `random seed: every outcome class`,
+    `random seed: generated`,
+    `random seed: two authored mutants`,
+    `determinism: constructed history: a declaration fault: brokenOwner`,
+    `determinism: constructed history: a declaration fault: configThrows`,
+    `determinism: constructed history: a declaration fault: nonLiteral`,
+  ],
+  // 522 s in the measured run, about 221 s idle.
+  'e2e-4': [
+    `fixed seed 20261105: a .ts config in a package with no module type that calls require`,
+    `fixed seed 20261105: a config that --config names`,
+    `fixed seed 20261105: a declaration fault: apiLessTypescript`,
+    `fixed seed 20261105: a declaration fault: badEntry`,
+    `fixed seed 20261105: a declaration fault: brokenVitest`,
+    `fixed seed 20261105: a declaration fault: configNoDefault`,
+    `fixed seed 20261105: a declaration fault: nonLiteral`,
+    `fixed seed 20261105: a failing owner under a config that --config names`,
+    `fixed seed 20261105: a load failure beside a hang`,
+    `random seed: a .cjs config that calls require`,
+    `random seed: a declaration fault: configNoDefault`,
+    `random seed: an awaiting config in a package with no module type`,
     `calibration: production code is reported as probe code`,
+    `calibration: the daemon reports another outcome than the cold run`,
+    `calibration: the summary omits a gap`,
+    `determinism: constructed history: a run with eleven contexts`,
+    `determinism: constructed history: an ambiguous authored mutant`,
+    `determinism: constructed history: every outcome class`,
+    `determinism: constructed history: two authored mutants`,
+  ],
+  // 522 s in the measured run, about 221 s idle.
+  'e2e-5': [
+    `fixed seed 20261105: an edit sequence through the daemon`,
+    `fixed seed 20261105: ordinary tests left out by default`,
+    `fixed seed 20261105: two authored mutants`,
+    `random seed: a declaration fault: brokenOwner`,
+    `random seed: a declaration fault: brokenVitest`,
+    `random seed: a declaration fault: missingSource`,
+    `random seed: a declaration fault: nonLiteral`,
+    `random seed: a declaration fault: projects`,
+    `random seed: a declaration fault: setupThrows`,
+    `random seed: a package with no config`,
+    `random seed: a run with eleven contexts`,
+    `random seed: an ambiguous authored mutant`,
+    `random seed: ordinary tests left out by default`,
+    `calibration: an owned mutant is reported as unowned`,
+    `determinism: constructed history: a config fault in a run that owns nothing`,
+    `determinism: constructed history: a declaration fault: apiLessTypescript`,
+    `determinism: constructed history: a declaration fault: brokenVitest`,
+    `determinism: constructed history: a declaration fault: noTypescript`,
+    `determinism: constructed history: a failing owner under a config that --config names`,
+    `determinism: generated 2`,
   ],
 }
 
