@@ -99,6 +99,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { createRequire } from 'node:module'
+import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { dirname, join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -221,11 +222,25 @@ function defaultOutputsOf(dir, sources) {
   try {
     const run = (pkg) =>
       parseArgs([`--package`, pkg, `--source`, sources.join(`,`)], pkg).out
-    const home = (pkg) => join(pkg, `.oracle-gaps`, `out`) + sep
     const outs = [run(dir), run(dir), run(other)]
-    const homes = [home(dir), home(dir), home(other)]
+    const temp = realpathSync(tmpdir()) + sep
     return {
-      contained: outs.map((out, i) => out.startsWith(homes[i])),
+      // Under the OS temp directory, which the OS cleans, and never in the
+      // package (maintainer decision, 2026-11-11).
+      contained: outs.map(
+        (out, i) =>
+          (out.startsWith(temp) || out.startsWith(tmpdir() + sep)) &&
+          !out.startsWith([dir, dir, other][i] + sep),
+      ),
+      // Each package's outputs lie in a directory of their own, which is not
+      // the temp directory itself or a shared `oracle-gaps` directory.
+      keyed: [
+        dirname(dirname(outs[0])) === dirname(dirname(outs[1])),
+        dirname(dirname(outs[0])) !== dirname(dirname(outs[2])),
+        ![`oracle-gaps`, ``].includes(
+          dirname(dirname(outs[0])).slice(temp.length),
+        ),
+      ],
       // Pairs: the two runs of one package, then each with the other package.
       same: [outs[0] === outs[1], outs[0] === outs[2], outs[1] === outs[2]],
     }
@@ -235,12 +250,21 @@ function defaultOutputsOf(dir, sources) {
 }
 
 // Each run's default output is a directory of its own under its package's
-// state, so runs of one package and of two packages never collide.
-function outputNamespace({ contained, same }) {
+// state in the OS temp directory, keyed by the package (the freeze's
+// namespacing decision of 2026-11-10: never a shared /tmp/oracle-gaps; the
+// maintainer's decision of 2026-11-11: nothing in the repository), so runs
+// of one package and of two packages never collide.
+function outputNamespace({ contained, same, keyed }) {
   if (!contained.every(Boolean))
     return violation(
       `static`,
-      `a run's default output is not a directory under its package's .oracle-gaps/out`,
+      `a run's default output is not under the OS temp directory, or is in its package`,
+      `output namespace`,
+    )
+  if (!keyed.every(Boolean))
+    return violation(
+      `static`,
+      `the default outputs of two packages share one state directory, or one package's runs do not`,
       `output namespace`,
     )
   if (same.some(Boolean))

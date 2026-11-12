@@ -27,7 +27,6 @@
 // flushed to disk before the reply, so a daemon that is killed keeps what it
 // ran.
 import { spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import { randomUUID } from 'node:crypto'
 import {
   linkSync,
@@ -41,22 +40,19 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { connect, createServer } from 'node:net'
-import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Refusal } from './ending.mjs'
+import { socketOf, stateDirOf } from './evidence.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const idleMs = 30 * 60_000
 
-/** The socket of a package's daemon. A socket path must stay short. */
-export const socketOf = (pkg) =>
-  join(
-    tmpdir(),
-    `oracle-gaps-${createHash(`sha1`).update(pkg).digest(`hex`).slice(0, 12)}.sock`,
-  )
-/** Where a package's daemon keeps its evidence and its log. */
-export const stateDirOf = (pkg) => join(pkg, `.oracle-gaps`)
+// The package's socket and state directory (evidence.mjs). They live there,
+// not here: args.mjs and check.mjs need them, and this module, run as the
+// daemon, awaits its serving at its top level, so a module it imports must
+// not import it back.
+export { socketOf, stateDirOf } from './evidence.mjs'
 
 // An error that ended a check, as the daemon sends it, and as the CLI
 // receives it: a refusal stays a refusal.
