@@ -182,7 +182,7 @@ export function patternOf(shard) {
     throw new Error(
       `no shard ${JSON.stringify(shard)}; the shards are ${Object.keys(shards).join(`, `)}`,
     )
-  return `^${escape(suite)}(?: | > )(?:${tests.map(escape).join(`|`)})$`
+  return `^${escape(suite)}(?: > | (?!> ))(?:${tests.map(escape).join(`|`)})$`
 }
 
 /**
@@ -199,12 +199,17 @@ export function partitionErrors(listed) {
     // `vitest list` joins the names with ` > `; Vitest 4's `-t` reads them
     // joined with a space, so a pattern must select the test both ways.
     const joined = [name, name.replace(/ > /, ` `)]
+    // A shard that selects either join owns the test, and it must select
+    // both: in each Vitest version, exactly one shard runs the test.
     const owners = patterns.filter(({ pattern }) =>
-      joined.every((full) => pattern.test(full)),
+      joined.some((full) => pattern.test(full)),
     )
-    if (owners.length !== 1)
+    const whole =
+      owners.length === 1 &&
+      joined.every((full) => owners[0].pattern.test(full))
+    if (!whole)
       errors.push(
-        `${JSON.stringify(name)} is in ${owners.length === 0 ? `no shard` : `shards ${owners.map(({ shard }) => shard).join(`, `)}`}`,
+        `${JSON.stringify(name)} is in ${owners.length === 0 ? `no shard` : owners.length === 1 ? `shard ${owners[0].shard} under only one of Vitest's name joins` : `shards ${owners.map(({ shard }) => shard).join(`, `)}`}`,
       )
   }
   for (const [shard, tests] of Object.entries(shards))
