@@ -26,13 +26,16 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  promises,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { createRequire } from 'node:module'
+import { createRequire, syncBuiltinESMExports } from 'node:module'
+import { hostname } from 'node:os'
 import { basename, dirname, join, relative as relativePath } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { applyAuthored, loadAuthored } from './authored.mjs'
@@ -43,11 +46,18 @@ import {
   renderReport,
   renderStdout,
 } from './report.mjs'
-import { baselineLines, gapLine, progressLine, testNamesOf } from './stream.mjs'
+import {
+  baselineLines,
+  blockedLines,
+  gapLine,
+  progressLine,
+  testNamesOf,
+} from './stream.mjs'
 import { analyze, isRunnerCopy } from './analysis.mjs'
 import { Refusal } from './ending.mjs'
 import {
   baselineOf,
+  blockedOr,
   judgeAuthored,
   judgeMutant,
   judgeOrdinary,
@@ -69,6 +79,52 @@ const IDLE_MS = 500
 // a hundred times the most calls any of its unmutated tests made, if more.
 const CALL_FLOOR = 100_000
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+/** The host that a session directory names, if it names one. */
+function sessionHostOf(dir) {
+  try {
+    return readFileSync(join(dir, `host`), `utf8`)
+  } catch {
+    return undefined
+  }
+}
+
+/** Whether process `pid` runs. */
+function alive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error.code === `EPERM`
+  }
+}
+
+/**
+ * Serves a copy of a test file (runBatch) to Vitest's own read of it. Each
+ * copy exists only in memory, and Vitest reads every test file in its main
+ * process to find its per-file pragmas (`@vitest-environment`,
+ * `@module-tag`; cli-api's `promises.readFile(filepath)`, which gives "" for
+ * a file that is not there), so a copy would run in the config's default
+ * environment instead of its file's. The read of a copy's path returns its
+ * text; any other read is Node's own.
+ */
+let copiesServed = false
+function serveCopies() {
+  if (copiesServed) return
+  copiesServed = true
+  const readFile = promises.readFile
+  promises.readFile = function (path, options, ...rest) {
+    const text =
+      typeof path === `string`
+        ? globalThis.__oracleGapsCopies?.get(path)
+        : undefined
+    if (text === undefined) return readFile.call(this, path, options, ...rest)
+    const encoded =
+      typeof options === `string` || typeof options?.encoding === `string`
+    return Promise.resolve(encoded ? text : Buffer.from(text))
+  }
+  // The named exports of `node:fs/promises`, which Vitest imports too.
+  syncBuiltinESMExports()
+}
 
 // This CLI's own code and the framework it reads. They are part of the run
 // identity and of every unit's identity.
@@ -250,15 +306,24 @@ export async function workspaceBundles(pkg) {
   return bundles
 }
 
-/** The config file Vitest itself loads in a package: a vitest.config first. */
+/**
+ * The config file Vitest itself loads in a package, relative to it: the
+ * first of Vitest's config names (a vitest.config first, in Vitest's
+ * extension order) in the package's directory, or, failing that, in the
+ * nearest parent directory that has one, as Vitest's own find-up does
+ * (cli-api, over `configFiles`; maintainer decision, 2026-11-11).
+ */
 function discoveredConfig(pkg) {
-  return [`vitest`, `vite`]
-    .flatMap((name) =>
-      [`ts`, `mts`, `cts`, `js`, `mjs`, `cjs`].map(
-        (extension) => `${name}.config.${extension}`,
-      ),
-    )
-    .find((file) => existsSync(join(pkg, file)))
+  const names = [`vitest`, `vite`].flatMap((name) =>
+    [`ts`, `mts`, `cts`, `js`, `mjs`, `cjs`].map(
+      (extension) => `${name}.config.${extension}`,
+    ),
+  )
+  for (let dir = pkg; ; dir = dirname(dir)) {
+    const name = names.find((file) => existsSync(join(dir, file)))
+    if (name) return relativePath(pkg, join(dir, name))
+    if (dirname(dir) === dir) return undefined
+  }
 }
 
 /**
@@ -316,7 +381,28 @@ export async function openSession(pkg) {
   process.env.TEST = `true`
   process.env.VITEST = `true`
   process.env.NODE_ENV ??= `test`
-  const harness = join(pkg, `.oracle-gaps-${process.pid}.capture-setup.mjs`)
+  // This process's own files, in the package's state directory and never
+  // beside the tests, where a Vitest run started meanwhile would find them
+  // (maintainer disposition G4, 2026-11-11; the freeze's namespacing
+  // decision): the capture setup and one wrapper config per context. A
+  // killed run leaves its directory there, where no include finds it.
+  const home = join(pkg, `.oracle-gaps`, `session-${process.pid}`)
+  // A session directory that a stopped or killed run left behind, whose
+  // process is gone, is removed now. Only one of this host's (its `host`
+  // file): a process id names a process only in its own pid namespace, so
+  // a container and its host sharing the package keep each other's.
+  for (const name of existsSync(dirname(home))
+    ? readdirSync(dirname(home))
+    : [])
+    if (
+      /^session-\d+$/.test(name) &&
+      !alive(Number(name.slice(8))) &&
+      sessionHostOf(join(dirname(home), name)) === hostname()
+    )
+      rmSync(join(dirname(home), name), { recursive: true, force: true })
+  mkdirSync(home, { recursive: true })
+  writeFileSync(join(home, `host`), hostname())
+  const harness = join(home, `capture-setup.mjs`)
   copyFileSync(join(here, `capture-setup.mjs`), harness)
   // One wrapper config per context, over the package's own config (a path
   // relative to the package, or undefined for none). Each serves its own
@@ -326,11 +412,10 @@ export async function openSession(pkg) {
   // format Vite would load that config in: an `.mts` wrapper for an ES
   // module config (where a top-level await works), and a `.cts` one for a
   // CommonJS config (where `require` works).
-  const wrappers = new Set()
   const wrapperFor = (index, config) =>
     join(
-      pkg,
-      `.oracle-gaps-${process.pid}-${index}.vitest.config.${config === undefined || isModuleConfig(pkg, config) ? `mts` : `cts`}`,
+      home,
+      `vitest-${index}.config.${config === undefined || isModuleConfig(pkg, config) ? `mts` : `cts`}`,
     )
   const writeWrapper = (index, config) => {
     const wrapper = wrapperFor(index, config)
@@ -338,15 +423,21 @@ export async function openSession(pkg) {
       wrapper,
       `import { realpathSync } from 'node:fs'
 import { mergeConfig } from 'vitest/config'
-${config ? `import base from ${JSON.stringify(`./${config}`)}` : `const base = {}`}
+${config ? `import base from ${JSON.stringify(relativePath(home, join(pkg, config)))}` : `const base = {}`}
 // Vitest accepts a config object or a function that returns one.
 export default async (env) => {
   const merged = mergeConfig(typeof base === 'function' ? await base(env) : base, {
   plugins: [{
     name: 'oracle-gaps-schemata',
     enforce: 'pre',
-    // A workspace dependency loads from its one-file bundle (workspaceBundles).
+    // A copy of a test file (runBatch) exists only here, so no other Vitest
+    // run finds it; Vite names a file in the package by its path from the
+    // package. A workspace dependency loads from its one-file bundle
+    // (workspaceBundles).
     resolveId(source) {
+      const copies = globalThis.__oracleGapsCopies
+      for (const path of [source, ${JSON.stringify(pkg)} + source])
+        if (copies?.has(path)) return path
       return globalThis.__oracleGapsBundles?.get(source)
     },
     load(id) {
@@ -357,6 +448,8 @@ export default async (env) => {
       const at = id.indexOf('?')
       if (at >= 0 && [...new URLSearchParams(id.slice(at + 1)).keys()].every((key) => ['raw', 'url', 'worker', 'sharedworker', 'inline'].includes(key))) return undefined
       const path = at < 0 ? id : id.slice(0, at)
+      const copy = globalThis.__oracleGapsCopies?.get(path)
+      if (copy !== undefined) return copy
       // This context's authored patch, or else the instrumented source of the
       // current check, both set by the runner in this process.
       try {
@@ -368,14 +461,16 @@ export default async (env) => {
   })
   // The harness runs before the package's own setup files, so that it sees
   // the worker's globals before a setup file adds to them.
-  merged.test = { ...merged.test, setupFiles: ['./${harness.split(`/`).at(-1)}', ...[merged.test?.setupFiles ?? []].flat()] }
+  merged.test = { ...merged.test, setupFiles: [${JSON.stringify(harness)}, ...[merged.test?.setupFiles ?? []].flat()] }
   return merged
 }
 `,
     )
-    wrappers.add(wrapper)
   }
   globalThis.__oracleGapsServe = []
+  // The text of each copy of a test file that a batch runs, by its path.
+  globalThis.__oracleGapsCopies = new Map()
+  serveCopies()
   // Vitest resolves test-file filters and parts of its project setup against
   // the working directory, so the runner works from the package directory.
   process.chdir(pkg)
@@ -412,8 +507,13 @@ export default async (env) => {
   const fromConfig = (index, config, loading) =>
     loading.catch((error) => {
       const name = config ?? `the default Vitest config`
+      const wrapper = wrapperFor(index, config)
       throw new Refusal(
-        `the package's Vitest config (${name}) failed to load: ${String(error?.message ?? error).replaceAll(basename(wrapperFor(index, config)), name)}`,
+        `the package's Vitest config (${name}) failed to load: ${String(
+          error?.message ?? error,
+        )
+          .replaceAll(wrapper, config === undefined ? name : join(pkg, config))
+          .replaceAll(basename(wrapper), name)}`,
         `Make ${name} load under Vitest: run vitest --run in the package and fix the error it reports.`,
       )
     })
@@ -522,10 +622,9 @@ export default async (env) => {
     lastServed.clear()
   }
   // This process's harness files are generated from this CLI's own files,
-  // which every key covers, and their names carry the process id, so they
+  // which every key covers, and their directory names the process, so they
   // are left out of every key and input.
-  const ownHarness = (path) =>
-    path.startsWith(`${pkg}/.oracle-gaps-${process.pid}`)
+  const ownHarness = (path) => path.startsWith(`${home}/`)
   // The files the Vite config loaded, for the global key.
   const configFiles = () =>
     (contexts[0]?.vite?.config?.configFileDependencies ?? []).filter(
@@ -543,6 +642,30 @@ export default async (env) => {
         context.invalidateFile(path)
         served.set(path, hash)
       }
+    }
+  }
+
+  // The heartbeat (maintainer disposition G1, 2026-11-11): while one copy
+  // runs, each interval it passes prints what it runs, in which test file,
+  // and for how long, so that a long run never looks frozen. Its label is
+  // its mutant's id, an authored mutant's `authored:<id>`, or `baseline`
+  // for a run with no mutant. The interval is 30 s; the CLI's oracle
+  // shortens it (ORACLE_GAPS_HEARTBEAT_MS). Each check sets where it logs.
+  let pulse = { log: () => {}, every: 30_000 }
+  function heartbeat() {
+    let since
+    let sent = 0
+    return (label, file, started) => {
+      if (started !== since) {
+        since = started
+        sent = 0
+      }
+      const elapsed = Date.now() - started
+      if (Math.floor(elapsed / pulse.every) <= sent) return
+      sent = Math.floor(elapsed / pulse.every)
+      pulse.log(
+        `busy: ${label} in ${relativePath(pkg, file)} for ${Math.floor(elapsed / 1000)}s`,
+      )
     }
   }
 
@@ -569,6 +692,7 @@ export default async (env) => {
       stopOnKill = false,
       ignore = [],
       callBudget = null,
+      label = `baseline`,
     } = {},
   ) {
     const capture = join(out, `run-${process.pid}-${++runCounter}.jsonl`)
@@ -602,22 +726,23 @@ export default async (env) => {
       existsSync(capture) &&
       readFileSync(capture, `utf8`).includes(`"spin":true`)
     let spunAt
-    const result =
-      limitMs === undefined
-        ? await running
-        : await Promise.race([
-            running,
-            new Promise((resolve) => {
-              timer = setTimeout(() => resolve(undefined), limitMs)
-              const poll = () => {
-                if (spinRow()) spunAt ??= Date.now()
-                if (spunAt !== undefined && Date.now() - spunAt > IDLE_MS)
-                  return resolve(undefined)
-                poller = setTimeout(poll, 50)
-              }
-              poller = setTimeout(poll, 50)
-            }),
-          ])
+    const beat = heartbeat()
+    // A run with no time limit (an unmutated one) only beats.
+    const result = await Promise.race([
+      running,
+      new Promise((resolve) => {
+        if (limitMs !== undefined)
+          timer = setTimeout(() => resolve(undefined), limitMs)
+        const poll = () => {
+          beat(label, file, started)
+          if (limitMs !== undefined && spinRow()) spunAt ??= Date.now()
+          if (spunAt !== undefined && Date.now() - spunAt > IDLE_MS)
+            return resolve(undefined)
+          poller = setTimeout(poll, 50)
+        }
+        poller = setTimeout(poll, 50)
+      }),
+    ])
     clearTimeout(timer)
     clearTimeout(poller)
     const seconds = (Date.now() - started) / 1000
@@ -664,6 +789,7 @@ export default async (env) => {
       })
     }
     const rows = []
+    let loaded = []
     if (existsSync(capture)) {
       for (const line of readFileSync(capture, `utf8`)
         .split(`\n`)
@@ -671,6 +797,7 @@ export default async (env) => {
         const row = JSON.parse(line)
         // A closing row marks the end of a file for a batch's watchdog.
         if (!row.closed && !row.idle) rows.push([row.key, row])
+        if (row.closed && row.file === file) loaded = row.loaded ?? []
       }
       rmSync(capture)
     }
@@ -715,15 +842,28 @@ export default async (env) => {
         String(error?.message ?? error),
       ),
       rows,
-      inputs: [
-        ...new Set([
-          file,
-          ...modules.flatMap((m) =>
-            Object.keys(m.diagnostic?.().importDurations ?? {}),
-          ),
-        ]),
-      ].filter((path) => path.startsWith(`/`) && !ownHarness(path)),
+      inputs: importsOf(file, modules, loaded),
     }
+  }
+
+  /**
+   * The modules a run of `file` loaded: those Vitest reports it imported,
+   * and those its copy evaluated (`loaded`, from the capture's closing row),
+   * which include a module that only a mutated branch imports at run time.
+   */
+  function importsOf(file, modules, loaded) {
+    return [
+      ...new Set([
+        file,
+        ...modules.flatMap((m) =>
+          Object.keys(m.diagnostic?.().importDurations ?? {}),
+        ),
+        ...loaded,
+      ]),
+    ].filter(
+      (path) =>
+        path.startsWith(`/`) && !ownHarness(path) && !isRunnerCopy(path),
+    )
   }
 
   /**
@@ -738,12 +878,15 @@ export default async (env) => {
   let copyCounter = 0
   async function runBatch(context, out, items, seed) {
     const capture = join(out, `run-${process.pid}-${++runCounter}.jsonl`)
+    // Each copy is named beside its file, so that its imports resolve as the
+    // file's do, and the wrapper's plugin serves its text: nothing is
+    // written there.
     const copies = items.map((item) => {
       const copy = join(
         dirname(item.file),
         `.oracle-gaps-${process.pid}-${++copyCounter}-${basename(item.file)}`,
       )
-      writeFileSync(copy, readFileSync(item.file))
+      globalThis.__oracleGapsCopies.set(copy, readFileSync(item.file, `utf8`))
       return copy
     })
     const keyFor = (copy, file) => (key) =>
@@ -820,6 +963,7 @@ export default async (env) => {
     let current = 0
     let copyStarted = Date.now()
     let timer
+    const beat = heartbeat()
     const watchdog = new Promise((resolve) => {
       const poll = () => {
         const at = finished()
@@ -828,6 +972,11 @@ export default async (env) => {
           current = at
           copyStarted = Date.now()
         }
+        beat(
+          items[current].label ?? `baseline`,
+          items[current].file,
+          copyStarted,
+        )
         if (
           idle.has(copies[current]) ||
           Date.now() - (spunAt.get(copies[current]) ?? Infinity) > IDLE_MS ||
@@ -844,8 +993,11 @@ export default async (env) => {
     // Each copy's rows, and the copies that skipped their tests because an
     // earlier copy in the batch killed their mutant.
     const skipped = new Set()
+    // The files of the modules each copy evaluated (its closing row).
+    const loaded = new Map()
     const rowsOf = () => {
       const rows = new Map(copies.map((copy) => [copy, []]))
+      loaded.clear()
       if (existsSync(capture))
         for (const line of readFileSync(capture, `utf8`)
           .split(`\n`)
@@ -855,6 +1007,7 @@ export default async (env) => {
             (c) => row.key?.startsWith(`${c} > `) || row.file === c,
           )
           if (copy && row.skipped) skipped.add(copy)
+          if (copy && row.closed) loaded.set(copy, row.loaded ?? [])
           if (copy && row.spin) spun.add(copy)
           if (copy && !row.closed && !row.idle && !row.spin && !row.started)
             rows.get(copy).push(row)
@@ -915,6 +1068,7 @@ export default async (env) => {
                 })),
               unhandled: [],
               rows: own.map((row) => [row.key, row]),
+              inputs: importsOf(item.file, [], loaded.get(copies[i]) ?? []),
             }
           }),
           timedOutAt: current,
@@ -967,11 +1121,12 @@ export default async (env) => {
             rows: rows
               .get(copy)
               .map((row) => [map(row.key), { ...row, key: map(row.key) }]),
+            inputs: importsOf(item.file, modules, loaded.get(copy) ?? []),
           }
         }),
       }
     } finally {
-      for (const copy of copies) rmSync(copy, { force: true })
+      for (const copy of copies) globalThis.__oracleGapsCopies.delete(copy)
       rmSync(capture, { force: true })
     }
   }
@@ -979,6 +1134,14 @@ export default async (env) => {
   async function check(options, store, log = console.error) {
     const authored = options.mutants ? loadAuthored(options.mutants) : []
     seedVariable = `${options.envPrefix}_SEED`
+    if (options.hangLimit > options.mutantLimit)
+      log(
+        `note: --hang-limit ${options.hangLimit} ms is above --mutant-limit ${options.mutantLimit} ms; a mutant's confirmations together get at most the larger of --mutant-limit and ten times its owner files' unmutated time`,
+      )
+    pulse = {
+      log,
+      every: Number(process.env.ORACLE_GAPS_HEARTBEAT_MS ?? 30_000),
+    }
     mkdirSync(options.out, { recursive: true })
     // An earlier run's internal error; a completed check writes the other
     // files of an ending over the earlier ones (ending.mjs).
@@ -1075,6 +1238,7 @@ export default async (env) => {
         settings,
         // A run cut off under one limit may end under a longer one.
         options.hangLimit,
+        options.mutantLimit,
       ]),
     )
     // How the evidence was produced: units reused and computed, runs cut off
@@ -1089,6 +1253,8 @@ export default async (env) => {
       spin: 0,
       rerun: 0,
       unchanged: 0,
+      // Confirmations that a mutant's budget cut short or left no time.
+      budget: 0,
     }
     // Each file's imports in its unmutated run. A run that timed out reports
     // none, so it is stored under these: a mutant changes no import.
@@ -1107,15 +1273,71 @@ export default async (env) => {
             ([path, hash]) => servedHash(path, index) === hash,
           ),
         )
-    // A batch item reads the modules its file's unmutated run read: a mutant
-    // changes no import.
-    const remember = (id, file, result, index) => {
-      const paths = fileInputs.get(file)
-      if (!paths) return
-      const inputs = paths.map((path) => [path, servedHash(path, index)])
-      store.put(id, { inputs, unit: result })
+    // A run starts from the current text of its files' known inputs (their
+    // unmutated runs' modules): one that changed since the context read it,
+    // also during this check, is invalidated first. Returns their hashes at
+    // the start.
+    function startIn(context, files) {
+      const index = indexOf.get(context)
+      const known = [
+        ...new Set(files.flatMap((file) => fileInputs.get(file) ?? [])),
+      ]
+      invalidateChanged(known, context)
+      return new Map(known.map((path) => [path, servedHash(path, index)]))
     }
-    async function unit(context, file, spec, runOptions = {}) {
+    // Records what a settled run read in its context's ledger, so the next
+    // check invalidates any of it that changes, and returns the inputs to
+    // store the run under: a path known at the start with its hash from
+    // then, any other with its hash now. A path that changed while the run
+    // ran is invalidated, and the run, which may have read either text, is
+    // not stored (undefined); nor is a run with no known input.
+    function settleIn(context, started, paths) {
+      const index = indexOf.get(context)
+      const served = servedBy(index)
+      let stable = paths.length > 0
+      const inputs = paths.map((path) => {
+        const now = servedHash(path, index)
+        const hash = started.get(path) ?? now
+        const read = served.get(path) ?? hash
+        // The context may hold other text than the path's text now.
+        if (read !== now || hash !== now) context.invalidateFile(path)
+        if (hash !== now) stable = false
+        served.set(path, now)
+        return [path, hash]
+      })
+      return stable ? inputs : undefined
+    }
+    const remember = (id, unit, inputs) => {
+      if (inputs) store.put(id, { inputs, unit })
+    }
+    // A batch run in a slot's context, with the inputs to store each item
+    // under: the modules its file's unmutated run read, and those its copy
+    // loaded beyond them, as a mutated branch can import a module.
+    async function batchIn(slot, items) {
+      const { context } = slot
+      const started = startIn(
+        context,
+        items.map(({ file }) => file),
+      )
+      const batch = await runBatch(
+        context,
+        options.out,
+        items,
+        options.seed ?? null,
+      )
+      const inputs = items.map(({ file }, k) =>
+        settleIn(context, started, [
+          ...new Set([
+            ...(fileInputs.get(file) ?? []),
+            ...(batch.units[k]?.inputs ?? []),
+          ]),
+        ]),
+      )
+      return { ...batch, inputs }
+    }
+    // A unit that depends on more than its inputs (a confirmation that its
+    // mutant's budget cut short) is not kept (`keep`).
+    async function unit(context, file, spec, keep, runOptions = {}) {
       const index = indexOf.get(context)
       const id = idOf(file, spec, runOptions.select, runOptions.ignore)
       const looked = Date.now()
@@ -1131,6 +1353,7 @@ export default async (env) => {
           fileInputs.set(file, valid.unit.inputs)
         return valid.unit
       }
+      const started = startIn(context, [file])
       const result = await runUnit(context, options.out, file, {
         seed: options.seed ?? null,
         ...runOptions,
@@ -1141,9 +1364,8 @@ export default async (env) => {
       if (!result.timedOut && spec.startsWith(`unmutated:`))
         fileInputs.set(file, result.inputs)
       if (paths) {
-        const inputs = paths.map((path) => [path, servedHash(path, index)])
-        for (const [path, hash] of inputs) servedBy(index).set(path, hash)
-        store.put(id, { inputs, unit: result })
+        const inputs = settleIn(context, started, paths)
+        if (keep) remember(id, result, inputs)
       }
       return result
     }
@@ -1159,12 +1381,10 @@ export default async (env) => {
       const index = indexOf.get(slot.context)
       const got = new Array(requests.length)
       let rest = []
-      // The confirming runs of hung copies, which may run on other slots.
-      const confirming = []
-      const settle = (request, u, at) => {
+      const settle = (request, u, inputs) => {
         if (u.skipped) return
         got[request.i] = u
-        remember(request.id, request.file, u, at)
+        remember(request.id, u, inputs)
         evidence.computed += 1
       }
       requests.forEach((request, i) => {
@@ -1183,12 +1403,7 @@ export default async (env) => {
       for (;;) {
         rest = rest.filter((r) => needed(r, got))
         if (rest.length === 0) break
-        const batch = await runBatch(
-          slot.context,
-          options.out,
-          rest,
-          options.seed ?? null,
-        )
+        const batch = await batchIn(slot, rest)
         if (batch.unattributed) {
           for (const r of rest)
             if (needed(r, got)) got[r.i] = await runAlone(slot, r)
@@ -1200,7 +1415,7 @@ export default async (env) => {
           got[rest[k].i] = u
           if (u.skipped) return
           if (u.spin) evidence.spin += 1
-          remember(rest[k].id, rest[k].file, u, index)
+          remember(rest[k].id, u, batch.inputs[k])
           evidence.computed += 1
         })
         if (batch.timedOutAt === undefined) break
@@ -1214,40 +1429,28 @@ export default async (env) => {
         if (batch.spin) evidence.spin += 1
         await replace(slot)
         // A copy that already had the full limit, or that sat idle, is
-        // final; any other is confirmed on the next free slot, so a mutant
-        // that hangs in several files confirms them in parallel.
+        // final; any other comes back marked `cut`, for its mutant's own
+        // confirmation (`runOwners`).
         if (hung.limitMs >= full || batch.idle || batch.spin)
           settle(
             hung,
             { file: hung.file, timedOut: true, seconds: full / 1000 },
-            index,
+            batch.inputs[batch.timedOutAt],
           )
-        else
-          confirming.push(
-            new Promise((resolve, reject) =>
-              confirm((other) =>
-                confirmAlone(other, hung, full).then(resolve, reject),
-              ),
-            ).then(({ unit: u, at }) =>
-              // A run with errors outside any test is not remembered.
-              at === undefined ? (got[hung.i] = u) : settle(hung, u, at),
-            ),
-          )
+        else got[hung.i] = { file: hung.file, cut: true }
         rest = [
           ...rest.slice(0, batch.timedOutAt).filter((_, k) => !batch.units[k]),
           ...rest.slice(batch.timedOutAt + 1),
         ]
         evidence.rerun += rest.length
       }
-      // This slot takes what no other slot has, then waits for the rest.
-      await confirmOn(slot)
-      await Promise.all(confirming)
       return got
     }
     // A request run alone in the slot's context: a copy that a batch did not
     // judge, or one whose errors outside any test cannot be attributed.
-    async function runAlone(slot, r) {
-      const u = await unit(slot.context, r.file, r.spec, {
+    async function runAlone(slot, r, keep = true) {
+      const u = await unit(slot.context, r.file, r.spec, keep, {
+        label: r.label,
         mutant: r.mutant,
         select: r.select,
         stopOnKill: r.stopOnKill,
@@ -1260,30 +1463,50 @@ export default async (env) => {
       return u
     }
     // A hung copy's confirming run: alone, in a clean context, with the full
-    // limit. Only a run cut off there too is a timeout. An idle copy in a
-    // file with no I/O is final at once (see unitsBatch): it waits on
-    // nothing that can come.
-    async function confirmAlone(slot, hung, full) {
-      const alone = await runBatch(
-        slot.context,
-        options.out,
-        [{ ...hung, limitMs: full }],
-        options.seed ?? null,
-      )
+    // limit, or with what is left of its mutant's budget when that is less
+    // (`left`, in milliseconds). Only a run cut off there too is a timeout.
+    // An idle copy in a file with no I/O is final at once (see unitsBatch):
+    // it waits on nothing that can come. The unit is marked `confirmed`, so
+    // its seconds count against the budget whenever it is used, reused ones
+    // too. One that the budget cut short, or left no time, depends on the
+    // mutant's other units, so it is not kept.
+    async function confirmAlone(slot, request, left) {
+      // The confirmation is kept under the request's own identity, so a
+      // later check reuses it in place of the request's first run.
+      const hung = {
+        ...request,
+        id: idOf(request.file, request.spec, request.select, request.ignore),
+      }
+      const full = limitFor(hung.file)
+      const limit = Math.min(full, left)
+      const confirmed = (u) => ({ ...u, confirmed: true })
+      if (limit <= 0) {
+        evidence.budget += 1
+        return confirmed({ file: hung.file, timedOut: true, seconds: 0 })
+      }
+      const alone = await batchIn(slot, [{ ...hung, limitMs: limit }])
       if (alone.unattributed)
-        return { unit: await runAlone(slot, { ...hung, limitMs: full }) }
-      // The index of the context that ran it, before any replacement.
-      const at = indexOf.get(slot.context)
+        return confirmed(
+          await runAlone(slot, { ...hung, limitMs: limit }, limit >= full),
+        )
+      const [inputs] = alone.inputs
       if (alone.timedOutAt === 0) {
         evidence.cut += 1
         if (alone.idle) evidence.idle += 1
+        if (limit < full) evidence.budget += 1
+        const u = confirmed({
+          file: hung.file,
+          timedOut: true,
+          seconds: limit / 1000,
+        })
+        if (limit >= full) remember(hung.id, u, inputs)
         await replace(slot)
-        return {
-          unit: { file: hung.file, timedOut: true, seconds: full / 1000 },
-          at,
-        }
+        return u
       }
-      return { unit: alone.units[0], at }
+      const u = confirmed(alone.units[0])
+      remember(hung.id, u, inputs)
+      evidence.computed += 1
+      return u
     }
 
     const vitest = contexts[0]
@@ -1316,6 +1539,28 @@ export default async (env) => {
         limitFor(file),
         options.firstLimit + 3000 * (fileSeconds.get(file) ?? 10),
       )
+    // Each mutant's budget (maintainer disposition G1, 2026-11-11), for the
+    // runs that confirm its cut-off copies: the larger of `--mutant-limit`
+    // (30 s by default) and ten times its owner files' unmutated time. Its
+    // confirmations run in its owner files' order, and each gets at most the
+    // smaller of its full limit and what the budget has left after the
+    // seconds of the mutant's earlier confirmed units, reused ones included
+    // (`runOwners`), so the outcome is a function of the units, whatever ran
+    // first or was reused. With the default limits the budget cuts a
+    // confirmation below its full limit (10 s plus three times its file's
+    // time t) only when the mutant's confirmations together pass it: for
+    // one owner file that is never, since 10t >= 10 + 3t once t >= 1.43 s
+    // and the 30 s floor covers a smaller t; it binds when `--hang-limit` is
+    // raised past the budget, or when several owner files need long
+    // confirmations. It does not bound a mutant's first runs (each has its
+    // first budget) or the context replacements after cuts (each up to a
+    // 10 s close and a warm start).
+    const budgetOf = (files) =>
+      Math.max(
+        options.mutantLimit,
+        10_000 *
+          files.reduce((sum, file) => sum + (fileSeconds.get(file) ?? 0), 0),
+      )
     // A run cut off is still running, so its context is replaced; closing
     // it stops the worker.
     const replace = async (slot) => {
@@ -1329,22 +1574,6 @@ export default async (env) => {
       contexts[slot.index] = slot.context
       span(`replace context`, started, { slot: slot.index })
     }
-    // Confirming runs of hung copies (unitsBatch), waiting for a free slot.
-    // A slot takes them before its next group, and a slot with no groups
-    // left waits for more until every slot is done with its groups.
-    const confirmations = []
-    const waiting = []
-    const wake = () => {
-      for (const resolve of waiting.splice(0)) resolve()
-    }
-    const confirm = (job) => {
-      confirmations.push(job)
-      wake()
-    }
-    const confirmOn = async (slot) => {
-      for (let job = confirmations.shift(); job; job = confirmations.shift())
-        await job(slot)
-    }
     // `after(index)` is more work for context `index` once its files ran.
     const runAcross = async (files, pass, after = async () => {}) => {
       const parts = contexts.map(() => [])
@@ -1354,7 +1583,7 @@ export default async (env) => {
           contexts.map(async (context, index) => {
             const done = []
             for (const file of parts[index])
-              done.push(await unit(context, file, `unmutated:${pass}`))
+              done.push(await unit(context, file, `unmutated:${pass}`, true))
             await after(index)
             return done
           }),
@@ -1372,12 +1601,39 @@ export default async (env) => {
         seconds: Math.max(0, ...units.map((u) => u.seconds)),
       }
     }
-    // Without --ordinary, only oracle files run.
-    let files = [...fileSpecs.keys()].filter(
-      (file) => options.ordinary || oracleFiles.has(file),
-    )
-    const first = await runAcross(files, 1)
-    endPhase(`unmutated pass 1`, { files: files.length })
+    const ownersOf = (mutant) => owned.at(mutant.source, mutant.position).owners
+    // Keys are numbered over every mutant before the selection (report.mjs).
+    let queue = keyAndSelect(mutants, options)
+    // With --only, the baseline runs only the owners of the selected mutants
+    // (maintainer disposition G5, 2026-11-11), operator and authored.
+    const selectedOwners =
+      options.only &&
+      new Set([
+        ...queue.flatMap((mutant) => [...ownersOf(mutant)]),
+        ...authored
+          .filter((mutant) => options.only.has(`authored:${mutant.id}`))
+          .flatMap((mutant) => {
+            const path = realpathSync(join(pkg, mutant.source))
+            const patched = applyAuthored(readFileSync(path, `utf8`), mutant)
+            return patched
+              ? [...owned.at(mutant.source, patched.position).owners]
+              : []
+          }),
+      ])
+    // The first pass runs every test file, ordinary ones too, so the report
+    // leads with each file's result (the v20 freeze's one loop: test results
+    // and gaps together); with --only, the selected mutants' owners, and the
+    // ordinary files only with --ordinary. Ordinary files run again, and
+    // against mutants, only with --ordinary.
+    const firstFiles = [...fileSpecs.keys()]
+      .filter((file) =>
+        oracleFiles.has(file)
+          ? !selectedOwners || selectedOwners.has(file)
+          : !selectedOwners || options.ordinary,
+      )
+      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+    const first = await runAcross(firstFiles, 1)
+    endPhase(`unmutated pass 1`, { files: firstFiles.length })
     if (profileFile)
       for (const [key, row] of first.rows)
         if (row.histories)
@@ -1386,40 +1642,48 @@ export default async (env) => {
             histories: row.histories,
             sites: row.siteHistories,
           })
-    // An oracle file that fails with no mutant active cannot judge the code
-    // it owns, so the run refuses rather than report that code as unowned.
-    // The baseline first: each oracle file's result, and a failing law's replay.
-    const baseline0 = baselineLines(
-      [...oracleFiles].map((file) => ({
-        file: relative(file),
-        failure: first.failed.get(file),
-        tests: first.units.find((u) => u.file === file)?.tests ?? [],
-      })),
-      options.config,
+    // The baseline first: each test file's result, a failing test's error,
+    // law, and counterexample, and its replay; then each failing oracle
+    // file, with the step that unblocks what it owns (G13).
+    const baselineFiles = firstFiles.map((file) => ({
+      file: relative(file),
+      ordinary: !oracleFiles.has(file),
+      failure: first.failed.get(file),
+      tests: first.units.find((u) => u.file === file)?.tests ?? [],
+    }))
+    for (const line of [
+      ...baselineLines(baselineFiles, options.config),
+      ...blockedLines(baselineFiles),
+    ])
+      log(line)
+    // An oracle file that fails with no mutant active judges nothing, so it
+    // blocks the mutants it owns, and the rest are judged; the report is
+    // provisional (maintainer disposition G5; the v20 freeze's decision 2,
+    // Vitest's model: a failing baseline does not stop the run). A failing
+    // ordinary file is left out. Neither runs again, and an ordinary file
+    // runs again only with --ordinary.
+    const blocking = new Set(
+      [...first.failed.keys()].filter((file) => oracleFiles.has(file)),
     )
-    for (const line of baseline0) log(line)
-    const failingOwners = [...first.failed.keys()].filter((file) =>
-      oracleFiles.has(file),
+    const excluded = [...first.failed.keys()].filter(
+      (file) => !oracleFiles.has(file),
     )
-    if (failingOwners.length > 0)
-      throw new Refusal(
-        `oracle files fail with no mutant active, so their owned code cannot be judged: ${failingOwners.map((file) => `${relative(file)} (${first.failed.get(file)})`).join(`, `)}`,
-        `Make these oracle files pass with no mutant active, then check again.`,
-      )
-    const excluded = [...first.failed.keys()]
-    if (excluded.length > 0) {
+    if (excluded.length > 0)
       log(`left out, failing with no mutant active: ${excluded.join(`, `)}`)
-      files = files.filter((file) => !first.failed.has(file))
-      for (const file of excluded) {
+    for (const file of firstFiles)
+      if (
+        first.failed.has(file) ||
+        (!options.ordinary && !oracleFiles.has(file))
+      ) {
         fileSpecs.delete(file)
-        oracleFiles.delete(file)
         for (const key of [...first.rows.keys()])
           if (fileOf(key) === file) first.rows.delete(key)
       }
-    }
-    const ownersOf = (mutant) => owned.at(mutant.source, mutant.position).owners
-    // Keys are numbered over every mutant before the selection (report.mjs).
-    let queue = keyAndSelect(mutants, options)
+    const files = firstFiles.filter((file) => fileSpecs.has(file))
+    // A mutant's owners that failed: their rows are gone, so its targets
+    // name only its passing owners.
+    const blockersOf = (owners) =>
+      [...owners].filter((file) => blocking.has(file))
     // The tests of a file that a mutant must run: every test from the first
     // one that reached its site. A later test can see the mutant through
     // state that a reaching test changed, so only the tests before the
@@ -1576,7 +1840,7 @@ export default async (env) => {
         selectionChecks.set(
           id,
           (async () => {
-            const run = await unit(slot.context, file, `selected`, {
+            const run = await unit(slot.context, file, `selected`, true, {
               select: selection,
               limitMs: limitFor(file),
             })
@@ -1595,8 +1859,11 @@ export default async (env) => {
     // hang), so a result never depends on how its evidence was produced. The
     // ordinary tier, when asked for, runs the same way afterwards.
     const GROUP = 4
+    // A copy that a batch skipped, or cut off for its confirmation, has no
+    // verdicts of its own yet.
     const kills = (u) =>
       !u.skipped &&
+      !u.cut &&
       outcomeOf([u], baseline.nondeterministic).outcome === `killed`
     const runOwners = async (slot, states, filesOf, keysOf) => {
       const active = states.filter((st) => !st.done)
@@ -1608,6 +1875,7 @@ export default async (env) => {
           if (file === undefined) continue
           requests.push({
             st,
+            label: st.mutant.id,
             position,
             file,
             spec: `mutant:${st.mutant.number}`,
@@ -1639,6 +1907,10 @@ export default async (env) => {
         (request, found) => !killedBefore(request, found),
       )
       for (const st of active) {
+        // The mutant's budget, spent in its files' order by the seconds of
+        // each confirmed unit, reused or run now, so its outcome is a
+        // function of its units, whatever ran first or was reused.
+        let left = budgetOf(filesOf(st))
         for (const [i, request] of requests.entries()) {
           if (request.st !== st) continue
           // A copy its batch skipped (an earlier copy killed the mutant)
@@ -1656,6 +1928,22 @@ export default async (env) => {
               `${st.mutant.id}: ${relative(request.file)} has no unit and no earlier kill`,
             )
           }
+          // A cut copy is confirmed only while no later owner's unit already
+          // killed the mutant: a kill decides, so its confirmation would
+          // spend time for nothing.
+          if (
+            got[i].cut &&
+            requests.some(
+              (other, j) =>
+                other.st === st &&
+                j > i &&
+                got[j] !== undefined &&
+                kills(got[j]),
+            )
+          )
+            continue
+          if (got[i].cut) got[i] = await confirmAlone(slot, request, left)
+          if (got[i].confirmed) left -= got[i].seconds * 1000
           st.units.push(got[i])
           if (kills(got[i])) break
         }
@@ -1696,13 +1984,16 @@ export default async (env) => {
           ...st.mutant,
           oracleFiles: st.targets.oracleTargets,
           ordinaryFiles: st.targets.testTargets,
-          ...judgeMutant(st.mutant, {
-            owners: st.owners,
-            targets: st.targets,
-            units: st.units,
-            baseline,
-            mutants,
-          }),
+          ...blockedOr(
+            judgeMutant(st.mutant, {
+              owners: st.owners,
+              targets: st.targets,
+              units: st.units,
+              baseline,
+              mutants,
+            }),
+            blockersOf(st.owners),
+          ),
         }
         if (needsOrdinary(st.result, st.targets))
           ordinary.push({ ...st, units: [], done: false })
@@ -1739,7 +2030,6 @@ export default async (env) => {
     const total = queue.length
     let judged = 0
     let gaps = 0
-    let evaluating = contexts.length
     await Promise.all(
       contexts.map(async (context, index) => {
         const slot = { context, index }
@@ -1747,17 +2037,8 @@ export default async (env) => {
           let group = queue.splice(0, GROUP);
           group.length > 0;
           group = queue.splice(0, GROUP)
-        ) {
-          await confirmOn(slot)
+        )
           await evaluateGroup(group, slot)
-        }
-        evaluating -= 1
-        wake()
-        for (;;) {
-          await confirmOn(slot)
-          if (evaluating === 0) break
-          await new Promise((resolve) => waiting.push(resolve))
-        }
       }),
     )
     results.sort(
@@ -1806,6 +2087,7 @@ export default async (env) => {
         path,
         patched,
         result,
+        owners,
         targets: [...owners].filter((file) => fileSpecs.has(file)),
       })
     }
@@ -1832,6 +2114,7 @@ export default async (env) => {
           const [got] = await unitsBatch(slot, [
             {
               file,
+              label: job.id,
               spec: job.id,
               mutant: -1,
               select: null,
@@ -1849,9 +2132,11 @@ export default async (env) => {
         }
       }),
     )
-    for (const job of authoredJobs) {
-      Object.assign(job.result, judgeAuthored(job.units, baseline))
-    }
+    for (const job of authoredJobs)
+      Object.assign(
+        job.result,
+        blockedOr(judgeAuthored(job.units, baseline), blockersOf(job.owners)),
+      )
     endPhase(`authored mutants`, { mutants: authored.length })
     // Every authored gap is streamed once, judged or not (a stale `find` is
     // judged by nothing). Keys were numbered by keyAndSelect (operator
@@ -1869,6 +2154,16 @@ export default async (env) => {
         {
           run: runIdentity,
           options: { ...options, only: options.only && [...options.only] },
+          // A report with a failing oracle file is provisional: the mutants
+          // it owns are blocked (G5). Each test file's baseline, as the
+          // report leads with it.
+          provisional: blocking.size > 0,
+          baseline: baselineFiles.map(({ tests, ...file }) => ({
+            ...file,
+            passed: tests.filter((t) => t.state === `passed`).length,
+            failed: tests.filter((t) => t.state === `failed`).length,
+            skipped: tests.filter((t) => t.state === `skipped`).length,
+          })),
           excluded,
           nondeterministic: [...nondeterministic],
           mutantSeconds,
@@ -1889,6 +2184,8 @@ export default async (env) => {
         results,
         run: runIdentity,
         excluded: excluded.map(relative),
+        baseline: baselineFiles,
+        config: options.config,
       }),
     )
     return renderStdout({
@@ -1896,17 +2193,19 @@ export default async (env) => {
       run: runIdentity,
       excluded: excluded.map(relative),
       pkg,
+      baseline: baselineFiles,
+      config: options.config,
       paths: {
         report: join(options.out, `summary.md`),
         results: join(options.out, `results.json`),
+        out: options.out,
       },
     })
   }
 
   async function close() {
     await closeContexts()
-    for (const wrapper of wrappers.values()) rmSync(wrapper, { force: true })
-    rmSync(harness, { force: true })
+    rmSync(home, { recursive: true, force: true })
   }
 
   return { check, close }

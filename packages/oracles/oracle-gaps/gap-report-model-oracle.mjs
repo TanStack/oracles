@@ -129,11 +129,41 @@ const TOP_LOOP = `<module>@..gen`
 // Whether this filesystem ignores letter case, so that `src/Sut.ts` names
 // `src/sut.ts`; the `cased` spelling applies only where it does.
 const caseless = existsSync(fileURLToPath(import.meta.url).toUpperCase())
+// The full limit of a cut-off copy's confirmation that the driver passes
+// (`--hang-limit`), and, under one budget, the first budget too.
+const FULL_LIMIT_MS = 20000
 // How long a slow test waits, in real milliseconds: past the 1 s first
-// budget that the driver passes (`--first-limit`), within the 6 s full limit
-// (`--hang-limit`).
+// budget that the driver passes (`--first-limit`), within the full limit.
 const SLOW_MS = 3000
+// How long each slow test of `w_slowpair` waits: past its file's first
+// budget (the 1 s `--first-limit` plus three times its one-test file's
+// unmutated time t), so its copy is always cut and confirmed; past half the
+// mutant's budget, so two such confirmations never fit it; and under the
+// full limit, so each would fit alone. The window holds while t < 3 s and
+// ten times the two files' time stays under 2 × 10 s (their sum under 2 s).
+const PAIR_SLOW_MS = 10000
+// A mutant's budget for the runs that confirm its cut-off copies, which the
+// driver passes (`--mutant-limit`): one slow owner's confirmation fits it
+// (SLOW_MS), and two of `w_slowpair`'s do not. Ten times the fixture's
+// one-test files' time stays under it, so the floor is the budget.
+const MUTANT_LIMIT_MS = 15000
+// How often the CLI says which mutant a busy copy runs (its heartbeat): the
+// driver shortens it from 30 s (`ORACLE_GAPS_HEARTBEAT_MS`), so that a slow
+// test's wait of SLOW_MS passes it. A copy beats once its own run has lasted
+// an interval, so the interval is twice the 1 s first budget: a copy cut at
+// its first budget never lasts it, and whether a run beats is a function of
+// the history, not of the machine's load, as the determinism tests require.
+const HEARTBEAT_MS = 2000
 const ORACLE_FILES = [`a`, `b`]
+// The owners of the budget witness (`w_slowpair`): two oracle files of one
+// test each, so that their unmutated time stays short on a loaded machine,
+// and ten times it stays under the mutant's budget floor.
+const PAIR_FILES = [`p`, `q`]
+/** The oracle files a plan's fixture has. */
+const oracleFilesOf = (plan) => [
+  ...ORACLE_FILES,
+  ...(plan.functions.some((fn) => fn.id === `w_slowpair`) ? PAIR_FILES : []),
+]
 const METHOD_NAMES = [`run`, `step`, `tick`]
 
 // ## History grammar
@@ -345,6 +375,8 @@ const testCase = fc.record({
   shrinks: fc.constant(false),
   // Only a witness waits on a child process: seconds of real time.
   ioWait: fc.constant(false),
+  // Only a witness spins when the driver stops a run.
+  stops: fc.constant(false),
   // A test may import its owned module through a query (`?raw`, as a Vite
   // worker's `?worker&url` import is), and must read the module's own text:
   // the import is Vite's, not the instrumented copy's. The test judges nothing
@@ -395,6 +427,8 @@ const edits = [
   `config`,
   `newOracle`,
   `cli`,
+  // The module that only file b's mutated runs import (`lazyGate`).
+  `lazy`,
   `restart`,
   `revert`,
   // Events that end a daemon, not edits: a crash (killed, its socket and
@@ -426,6 +460,8 @@ const edits = [
   // A scoped package with a prebuilt addon installed into a scope directory
   // that already exists, so only the scope directory changes.
   `addScopedAddon`,
+  // A second check through the daemon of a state that nothing changed.
+  `recheck`,
 ]
 // The steps that act on the daemon and change no file.
 const daemonEvents = new Set([
@@ -437,8 +473,9 @@ const daemonEvents = new Set([
   `stopAtOnce`,
   `resetBeforeRead`,
   `otherInstall`,
+  `recheck`,
 ])
-const histories = fc.record({
+const drawn = fc.record({
   functions: fc.array(fc.array(statement, { minLength: 1, maxLength: 5 }), {
     minLength: 1,
     maxLength: 3,
@@ -487,7 +524,13 @@ const histories = fc.record({
   tests: fc.array(testCase, { minLength: 1, maxLength: 5 }),
   // The witness module: all of it, or only the functions whose outcomes
   // need real test runs (see `captureWitness`).
-  witness: fc.constantFrom(false, true, `capture`),
+  // The budget witness alone (`budget`) costs two 10 s confirmations per
+  // mutant in every CLI run of a history, so generated histories rarely
+  // draw it; its constructed history (the daemon recheck) always does.
+  witness: fc.oneof(
+    { weight: 30, arbitrary: fc.constantFrom(false, true, `capture`) },
+    { weight: 1, arbitrary: fc.constant(`budget`) },
+  ),
   authored: fc.option(
     fc.record({
       stmt: fc.nat({ max: 20 }),
@@ -556,9 +599,12 @@ const histories = fc.record({
     `insertGuard`,
     `reformat`,
   ),
-  // Most histories have no steps, which keeps the campaign's cost down.
   // Whether the run asks for the ordinary tests' outcome (`--ordinary`).
   ordinary: fc.boolean(),
+  // File b's verdicts also wait on a module that the test imports only
+  // where the output differs, so only a mutated run loads it
+  // (`tests/lazy.ts`, which law 9's `lazy` edit changes).
+  lazyGate: fc.constantFrom(false, false, false, true),
   // A second authored mutant, on the next statement, so that two patched
   // sources are judged in the same run and neither may see the other's.
   secondAuthored: fc.boolean(),
@@ -595,6 +641,29 @@ const histories = fc.record({
   // with the full limit, or one budget (`--first-limit` equal to
   // `--hang-limit`), where a run past it is a timeout at once.
   budget: fc.constantFrom(`two`, `two`, `two`, `one`),
+  // Runs that the driver stops by a signal while the stop witness's test
+  // spins (`w_stop`), each in a pool: Vitest's workers as child processes or
+  // as threads. Each costs a run of its own, so few histories have one.
+  stopRuns: fc.oneof(
+    { weight: 9, arbitrary: fc.constant([]) },
+    {
+      weight: 1,
+      arbitrary: fc.array(
+        fc.record({
+          signal: fc.constantFrom(`SIGTERM`, `SIGINT`),
+          pool: fc.constantFrom(`forks`, `threads`),
+        }),
+        { minLength: 1, maxLength: 2 },
+      ),
+    },
+  ),
+  // A second run with `--only`, of one owned function's mutants: its
+  // baseline runs only their owners (law 14). It costs a run of its own.
+  onlyRun: fc.constantFrom(false, false, false, false, false, true),
+  // Oracle file a names its own Vitest environment in a pragma
+  // (`// @vitest-environment`), another than the config's, and fails to load
+  // outside it: every copy of it must run in that environment too.
+  pragma: fc.constantFrom(false, false, false, true),
   // Where the CLI is installed: a plain path, or one with a space and `#`,
   // which a file URL spells with escapes.
   cliPath: fc.constantFrom(`plain`, `plain`, `plain`, `spaced`),
@@ -615,14 +684,17 @@ const histories = fc.record({
   ),
   // Where the config is (maintainer finding F12, 2026-11-10): where Vitest
   // discovers it; under a name it does not discover, which `--config`
-  // names; or nowhere, so Vitest's defaults apply. The run names the config
-  // it used, or says that it found none.
+  // names; nowhere, so Vitest's defaults apply; or in the package's parent
+  // directory only, where Vitest finds it too (its cli-api's find-up over
+  // `configFiles`; maintainer decision, 2026-11-11). The run names the
+  // config it used, or says that it found none.
   configPlace: fc.constantFrom(
     `discovered`,
     `discovered`,
     `discovered`,
     `named`,
     `none`,
+    `parent`,
   ),
   // The package's module type: `module`, or none, in which Node and Vite
   // read a `.js` or `.ts` file as CommonJS (F13).
@@ -634,11 +706,16 @@ const histories = fc.record({
   configRequire: fc.constantFrom(false, false, true),
   // The runner's warm contexts (`--contexts`): each is a Vitest instance,
   // which listens on the process (F15). Past ten, a listener that the
-  // runner does not account for warns.
+  // runner does not account for warns. With one, every run of a check takes
+  // the same context in a fixed order, so a hang replaces the context that
+  // read every file (law 9 must still invalidate what it read).
   contexts: fc.oneof(
-    { weight: 29, arbitrary: fc.constant(4) },
+    { weight: 28, arbitrary: fc.constant(4) },
     { weight: 1, arbitrary: fc.constant(11) },
+    { weight: 1, arbitrary: fc.constant(1) },
   ),
+  // Most histories have no steps, which keeps the campaign's cost down. A
+  // history with the witness module has none (see `histories`).
   steps: fc.oneof(
     { weight: 5, arbitrary: fc.constant(null) },
     {
@@ -664,6 +741,51 @@ const histories = fc.record({
   importer: fc.constantFrom(`none`, `a`, `b`),
 })
 
+// The edit sequence over the witness module, the one list of steps that a
+// history with the witness module takes. A test edit makes the daemon
+// recompute file a's runs, the hangs among them; the helper edit changes
+// only file b, so the daemon reuses file a's timed-out runs; the revert
+// returns to a state that the daemon has seen. The budget witness alone
+// (`budget`) takes its own one step instead: a second daemon check with
+// nothing changed, which reuses the confirmations that the first check ran.
+const witnessSteps = [`test`, `helper`, `revert`]
+const budgetSteps = [`recheck`]
+const keepsSteps = (history) => {
+  if (history.witness === false || history.steps === null) return true
+  const kept = history.witness === `budget` ? budgetSteps : witnessSteps
+  return (
+    history.steps.length === kept.length &&
+    history.steps.every((step, i) => step === kept[i])
+  )
+}
+
+// The histories. The witness module makes each cold run about 20 s (its
+// hangs, slow kills, and stability rerun), and each step adds a cold run and
+// a daemon check, so a generated history with both could run past the
+// test's time limit: about one campaign in six drew a witness history with
+// eight or more steps. A generated history with the witness module
+// therefore has no steps. The constructed history "an edit sequence over the
+// witness module" takes `witnessSteps`, so every campaign still judges law
+// 9 over the witness module's outcome classes, along one short sequence
+// (maintainer decision, 2026-11-11, option M of the CI plan; a stated
+// limit of the property). The budget witness's confirmations cost about
+// 15 s a mutant, so its histories follow the same rule, and its constructed
+// history "a second daemon check of the budget witness" takes
+// `budgetSteps` (the review of the gap CLI's runtime fixes, 2026-11-12,
+// P1-a: the budget witness only in its own histories). The map is its own
+// inverse on the histories it keeps, so fast-check takes every one of them
+// back and shrinks it.
+const histories = drawn.map(
+  (history) => (keepsSteps(history) ? history : { ...history, steps: null }),
+  (value) => {
+    const history =
+      /** @type {{ witness: unknown, steps: unknown[] | null }} */ (value)
+    if (!keepsSteps(history))
+      throw new Error(`a history with the witness module takes no steps`)
+    return value
+  },
+)
+
 // The witness module: functions whose outcome classes generated histories
 // reach rarely, each with its own owners and tests.
 const kill = { kind: `if`, op: `>`, k: 4, not: false, quote: `'` }
@@ -686,6 +808,7 @@ const judging = (file, route, input, extra = {}) => ({
   rawImport: false,
   cleanupThrows: false,
   asProp: false,
+  stops: false,
   then: null,
   ...extra,
 })
@@ -1340,6 +1463,36 @@ const witness = [
     body: [kill],
     tests: [judging(`a`, `fixed seed`, 7, { slow: true })],
   },
+  // Slow in both owners, and judged by neither: each owner's copy is cut at
+  // its first budget, and the two confirmations together need more than the
+  // mutant's budget, so the mutant is a timeout, not a survivor.
+  {
+    id: `w_slowpair`,
+    owners: PAIR_FILES,
+    body: [kill],
+    tests: [
+      judging(`p`, `fixed seed`, 7, {
+        judges: false,
+        slow: true,
+        slowMs: PAIR_SLOW_MS,
+      }),
+      judging(`q`, `fixed seed`, 7, {
+        judges: false,
+        slow: true,
+        slowMs: PAIR_SLOW_MS,
+      }),
+    ],
+  },
+  // A kill as usual. In a run that the driver stops (`GAP_STOP_DIR` set),
+  // the test instead starts a child process, records its own process id and
+  // the child's, and spins synchronously where it would judge, so the
+  // driver can stop the run while a worker is busy.
+  {
+    id: `w_stop`,
+    owners: [`a`],
+    body: [kill],
+    tests: [judging(`a`, `fixed seed`, 7, { stops: true })],
+  },
   // Each owner makes only one of this `if`'s two mutants change a value:
   // owner a calls it with 1, owner b with 7.
   {
@@ -1492,6 +1645,7 @@ const captureWitness = new Set([
   `w_flakykill`,
   `w_crosskill`,
   `w_slowkill`,
+  `w_stop`,
   `w_otherinfect`,
   `w_shrink`,
   `w_flag`,
@@ -1919,7 +2073,9 @@ function configOf(history) {
       : (history.configPlace ?? `discovered`)
   const packageType = history.packageType ?? `module`
   const named = history.configFile ?? `vite.config.ts`
-  const format = formatOf(named, packageType)
+  // A config in the parent directory has no package.json beside or above
+  // it, so Node and Vite read its `.js` or `.ts` name as CommonJS.
+  const format = formatOf(named, place === `parent` ? `commonjs` : packageType)
   const discovered =
     history.fault === `configNoDefault` && format === `cjs`
       ? named.replace(/\.c?js$/, (ext) => (ext === `.cjs` ? `.cts` : `.ts`))
@@ -1929,7 +2085,9 @@ function configOf(history) {
       ? undefined
       : place === `named`
         ? `config/gap-vitest.${discovered.split(`.`).at(-1)}`
-        : discovered
+        : place === `parent`
+          ? `../${discovered}`
+          : discovered
   return {
     configFile: discovered,
     configPath,
@@ -2127,7 +2285,14 @@ function resolveHistory(history) {
     ...dotGen,
     ...(history.witness
       ? witness
-          .filter((w) => history.witness === true || captureWitness.has(w.id))
+          .filter(
+            (w) =>
+              // The budget witness costs two 10 s confirmations per mutant,
+              // so only histories of the `budget` mode carry it.
+              (history.witness === true && w.id !== `w_slowpair`) ||
+              (history.witness === `capture` && captureWitness.has(w.id)) ||
+              (history.witness === `budget` && w.id === `w_slowpair`),
+          )
           .map((w) => ({
             ...w,
             container:
@@ -2459,6 +2624,7 @@ function resolveHistory(history) {
     fault: history.fault,
     stability: history.stability,
     steps: history.steps ?? [],
+    lazyGate: history.lazyGate === true,
     ordinary: history.ordinary === true,
     // An `owns` key in an assertion's arguments, in the ordinary file: its
     // assertion form and whether its list is a literal, or none.
@@ -2475,6 +2641,9 @@ function resolveHistory(history) {
     depSubpath: history.depSubpath === true,
     unbuiltDep: history.unbuiltDep === true,
     budget: history.budget ?? `two`,
+    stopRuns: history.stopRuns ?? [],
+    onlyRun: history.onlyRun === true,
+    pragma: history.pragma === true,
     cliPath: history.cliPath ?? `plain`,
     concurrentStart: history.concurrentStart === true,
     setupGlobal: history.setupGlobal === true,
@@ -3342,9 +3511,16 @@ function interpret(plan, fnId, x, sites, active) {
           if (isActive(value)) trace.push(undefined)
           else {
             const [inner] = plan.functions.find((f) => f.id === `$derived`).body
+            // Its `return String(x)` is a `value-undefined` site (the call)
+            // and a `return-undefined` site (the returned value), both
+            // reached when `$derived` runs, and either gives `undefined`.
             const string = siteOf(inner, `string`)
+            const returned = siteOf(inner, `returned`)
             reached.add(string.id)
-            trace.push(isActive(string) ? undefined : String(x))
+            reached.add(returned.id)
+            trace.push(
+              isActive(string) || isActive(returned) ? undefined : String(x),
+            )
           }
         }
       }
@@ -3429,16 +3605,22 @@ function interpret(plan, fnId, x, sites, active) {
 /** A loop that never ends, as the interpreter sees one. */
 class Spin extends Error {}
 
-function judge(plan, tests, sites, active) {
+/**
+ * Each owner test's run under a mutant: whether it hung, crashed, or waited
+ * slowly, its verdicts, and whether its output changed.
+ */
+function runsOf(plan, tests, sites, active) {
   // A test runs its campaigns in order. Each failing judgment is a verdict
   // that carries its campaign's route; an assertion is a verdict under an
   // unnamed law. A verdict or a crash stops the test, except a soft
   // assertion, which lets it go on. A failed test's own route is the route
-  // active when it ended.
-  const runs = tests
+  // active when it ended. A slow test, or one that waits on a child
+  // process, waits where its output changed, before it would hang or judge.
+  return tests
     .filter((t) => !t.flaky)
     .map((t) => {
       let changedAny = false
+      let slowed = false
       const found = []
       for (const part of partsOf(t)) {
         const base = interpret(plan, t.fn, part.input, sites)
@@ -3450,8 +3632,16 @@ function judge(plan, tests, sites, active) {
         const changed =
           !mutated.threw && mutated.trace.join() !== base.trace.join()
         changedAny ||= changed
+        slowed ||= changed && (t.slow || t.ioWait)
         if (mutated.threw)
-          return { t, route, crash: true, verdicts: found, changed: changedAny }
+          return {
+            t,
+            route,
+            crash: true,
+            verdicts: found,
+            changed: changedAny,
+            slowed,
+          }
         // A test that hangs where another would judge never ends.
         if (changed && t.hangs)
           return { t, route, hang: true, verdicts: found, changed: true }
@@ -3461,7 +3651,7 @@ function judge(plan, tests, sites, active) {
             law: t.judgeBy === `verdict` ? t.law : `(unnamed)`,
           })
           if (t.judgeBy !== `soft`)
-            return { t, route, verdicts: found, changed: true }
+            return { t, route, verdicts: found, changed: true, slowed }
         }
       }
       return {
@@ -3469,22 +3659,69 @@ function judge(plan, tests, sites, active) {
         route: routeOf(t, partsOf(t).at(-1)),
         verdicts: found,
         changed: changedAny,
+        slowed,
       }
     })
+}
+
+// A kill: a behavioral verdict on a reproducible route.
+const killsIn = (r) =>
+  r.verdicts.some(
+    (v) => v.route === `reproducible` && v.law !== `reach agreement`,
+  )
+
+/**
+ * The runs that each owner file runs under a mutant, file by file in path
+ * order, each file's up to its first hang or kill (a kill stops the file),
+ * and the files the mutant's run reaches: those up to the first file that
+ * kills it.
+ */
+function filesRun(runs) {
+  const files = [...new Set(runs.map((r) => r.t.file))].sort()
+  const ran = new Map()
+  for (const file of files) {
+    const own = []
+    for (const r of runs.filter((x) => x.t.file === file)) {
+      own.push(r)
+      if (r.hang || killsIn(r)) break
+    }
+    ran.set(file, own)
+    if (own.some(killsIn)) break
+  }
+  return ran
+}
+
+/**
+ * The owner files in which a slow test waits under a mutant, among the
+ * files its run reaches: each copy of such a file is busy for SLOW_MS, so
+ * the CLI owes a heartbeat for it.
+ */
+function slowedFiles(plan, tests, sites, active) {
+  const slowed = new Set()
+  for (const [file, own] of filesRun(runsOf(plan, tests, sites, active)))
+    if (own.some((r) => r.slowed)) slowed.add(file)
+  return slowed
+}
+
+/**
+ * A mutant's kind from its owner tests' runs. An operator mutant's
+ * confirming runs share its budget (`budgeted`); an authored mutant's runs
+ * are each final at the full limit, so it has no confirmations to budget.
+ */
+function judge(plan, tests, sites, active, { budgeted = true } = {}) {
+  const runs = runsOf(plan, tests, sites, active)
   // A file's tests run in order, and a kill (a behavioral verdict on a
   // reproducible route) stops the file. A hang before that cuts the file's
   // run off, and a run that was cut off records nothing, not even its
   // earlier verdicts. A kill in another file still decides (a kill outranks
   // a timeout); failing that, the mutant is a timeout.
-  const kills = (r) =>
-    r.verdicts.some(
-      (v) => v.route === `reproducible` && v.law !== `reach agreement`,
-    )
   const hung = new Set()
+  const slowed = new Map()
   for (const file of new Set(runs.map((r) => r.t.file)))
     for (const r of runs.filter((x) => x.t.file === file)) {
+      if (r.slowed) slowed.set(file, r.t.slowMs ?? SLOW_MS)
       if (r.hang) hung.add(file)
-      if (r.hang || kills(r)) break
+      if (r.hang || killsIn(r)) break
     }
   const live = runs.filter((r) => !hung.has(r.t.file))
   const verdicts = (route) =>
@@ -3494,6 +3731,20 @@ function judge(plan, tests, sites, active) {
   const reproducible = verdicts(`reproducible`)
   if (reproducible.some((law) => law !== `reach agreement`)) return `killed`
   if (hung.size > 0) return `timeout`
+  // The runs that confirm a mutant's cut-off copies share its budget
+  // (`--mutant-limit`, MUTANT_LIMIT_MS here; maintainer disposition G1,
+  // 2026-11-11). Under two budgets, a slow owner file is cut at its first
+  // budget and confirmed alone, and its confirmation takes longer than the
+  // time its slow test waits. When the confirmations of every slow owner
+  // file do not fit the budget together, one is cut, and the mutant is a
+  // timeout; a kill still decides first. Under one budget no copy is
+  // confirmed, so the budget never binds.
+  if (
+    budgeted &&
+    plan.budget === `two` &&
+    [...slowed.values()].reduce((sum, ms) => sum + ms, 0) >= MUTANT_LIMIT_MS
+  )
+    return `timeout`
   if (reproducible.length > 0) return `agreement-only-kill`
   if (verdicts(`random`).length > 0) return `random-only-kill`
   if (verdicts(`unknown`).length > 0) return `unregistered-kill`
@@ -3552,21 +3803,62 @@ function refusal(plan) {
   // (maintainer decision, 2026-11-10).
   if (plan.declaration === `neither`) return { cause: `no oracle file` }
   if (ownsNothing(plan)) return { cause: `owns any selected source` }
-  // A setup file that throws fails every oracle file before any test runs,
-  // so the run refuses as for a failing owner, naming the setup's error.
-  if (plan.fault === `setupThrows`)
-    return { cause: `the fixture setup broke`, runtime: true }
-  // A failing owner is named with its test's error, so the author can fix it,
-  // and its baseline's replay runs that test alone, under the config the run
-  // loaded: a config that only `--config` names, too (F12 with law 3).
-  if (plan.fault === `brokenOwner`)
-    return {
-      cause: `b.test.ts`,
-      detail: `this owner fails with no mutant active`,
-      replayed: [`${BROKEN_SUITE} fixed seed 999`],
-      runtime: true,
-    }
+  // A failing owner, and a setup file that throws (which fails every test
+  // file before any test runs), refuse nothing: they block the mutants the
+  // failing files own (`blockingOf`).
   return undefined
+}
+
+/**
+ * The test files that fail with no mutant active, each with its failing
+ * test (none for a file that does not load). An oracle file among them
+ * judges nothing: each mutant it owns that no passing owner kills is
+ * `blocked`, and the report is provisional (maintainer disposition G5,
+ * 2026-11-11; the v20 freeze's decision 2). Its baseline's replay runs its
+ * failing test alone, under the config the run loaded: a config that only
+ * `--config` names, too (F12 with law 3).
+ */
+function blockingOf(plan) {
+  if (plan.fault === `setupThrows`)
+    return [
+      ...oracleFilesOf(plan).map((file) => ({ file })),
+      { file: `c`, ordinary: true },
+    ]
+  if (plan.fault === `brokenOwner`)
+    return [
+      {
+        file: `b`,
+        test: `${BROKEN_SUITE} > fixed seed 999`,
+        error: `Error: this owner fails with no mutant active`,
+        replayed: [`${BROKEN_SUITE} fixed seed 999`],
+      },
+    ]
+  return []
+}
+
+/**
+ * Each test file's baseline (law 14): its tests that ran and those skipped
+ * (a file with no tests of the plan holds one skipped placeholder), how
+ * many failed, and its failing test, or that it did not load.
+ */
+function baselineOf(plan) {
+  const failing = blockingOf(plan)
+  return [...oracleFilesOf(plan), `c`].map((file) => {
+    const own = plan.tests.filter((t) => t.file === file).length
+    const broken = failing.find((f) => f.file === file)
+    // The failing owner's suite holds two tests and a third of its name.
+    const extra = broken?.test === undefined ? 0 : 3
+    return {
+      file: `tests/${file}.test.ts`,
+      ordinary: file === `c`,
+      ran: own + extra,
+      skipped: own + extra === 0 ? 1 : 0,
+      failed: broken?.test === undefined ? 0 : 1,
+      loads: broken === undefined || broken.test !== undefined,
+      test: broken?.test,
+      error: broken?.error,
+    }
+  })
 }
 
 // The faults the analysis refuses before it reads ownership: their plans may
@@ -3607,10 +3899,25 @@ function model(plan) {
   if (refused) return { refused, configLines }
   const sites = sitesOf(plan)
   const owners = ownersOf(plan)
+  // The oracle files that fail with no mutant active judge nothing.
+  const blocking = new Set(
+    blockingOf(plan)
+      .filter((f) => !f.ordinary)
+      .map((f) => f.file),
+  )
   const ownerTests = (id) =>
     plan.tests.filter(
-      (t) => ORACLE_FILES.includes(t.file) && owners(id).has(t.file),
+      (t) =>
+        oracleFilesOf(plan).includes(t.file) &&
+        owners(id).has(t.file) &&
+        !blocking.has(t.file),
     )
+  // A mutant that a failing oracle file owns, and no passing owner kills,
+  // is blocked: it waits for that file.
+  const blockedOr = (id, kind) =>
+    kind !== `killed` && [...owners(id)].some((file) => blocking.has(file))
+      ? `blocked`
+      : kind
   // Code that ran when the module loaded: the calls at the end of the
   // source, and the sites that each call reached (with 0).
   const loadRuns = plan.loadCalls.map((call) =>
@@ -3715,7 +4022,11 @@ function model(plan) {
     `unreached`,
   ])
   const mutants = sites.map((site) => {
-    const kind = site.probe ? undefined : kindOf(site)
+    const kind = site.probe
+      ? undefined
+      : owners(site.fnId).size === 0
+        ? `unowned`
+        : blockedOr(site.fnId, kindOf(site))
     return {
       key: site.key,
       source: site.file,
@@ -3726,6 +4037,15 @@ function model(plan) {
       ordinal: site.ordinal,
       probe: site.probe,
       kind,
+      // A mutant whose run reaches a slow owner test keeps a copy busy for
+      // SLOW_MS, so the CLI must name it in a heartbeat while it runs.
+      heartbeat:
+        kind !== undefined &&
+        ![`unowned`, `unreached`, `setup-error`, `indeterminate`].includes(
+          kind,
+        ) &&
+        slowedFiles(plan, ownerTests(site.fnId), sites, { site: site.id })
+          .size > 0,
       ordinaryOutcome:
         plan.ordinary && survivorKinds.has(kind) && ordinaryReaches(site),
     }
@@ -3741,8 +4061,15 @@ function model(plan) {
       ? `does-not-apply`
       : owners(a.fn).size === 0
         ? `unowned`
-        : ((kind) => (kind === `survived` ? `not-observed` : kind))(
-            judge(plan, ownerTests(a.fn), sites, { authored: a.label }),
+        : ((kind) =>
+            blockedOr(a.fn, kind === `survived` ? `not-observed` : kind))(
+            judge(
+              plan,
+              ownerTests(a.fn),
+              sites,
+              { authored: a.label },
+              { budgeted: false },
+            ),
           ),
     line: a.applies ? a.line : undefined,
   }))
@@ -3762,6 +4089,9 @@ function model(plan) {
   const gaps = entries.map((e) => e.key)
   return {
     configLines,
+    baseline: baselineOf(plan),
+    blocking: blockingOf(plan).filter((f) => !f.ordinary),
+    replayed: blockingOf(plan).find((f) => f.replayed)?.replayed,
     // A native addon can crash the whole process from a worker thread, so a
     // package that depends on one runs its tests in child processes.
     pool:
@@ -3810,6 +4140,10 @@ const callFor = (fn) =>
 const quoteEntry = (plan, entry) =>
   plan.template ? `\`${entry}\`` : `'${entry}'`
 
+// Whether a test's verdict waits on file b's lazy gate (`lazyGate`).
+const lazyGated = (plan, file, t) =>
+  plan.lazyGate && file === `b` && t.judges && t.judgeBy === `verdict`
+
 function oracleTestFile(plan, file) {
   const sites = sitesOf(plan)
   const entries = [
@@ -3857,12 +4191,20 @@ function oracleTestFile(plan, file) {
       : `function ${name}(_parts: { owns: Array<string> }): void {}`,
   )
   const out = [
+    // A per-file environment, which Vitest reads from the file's text.
+    ...(plan.pragma && file === `a` ? [`// @vitest-environment marked`] : []),
     `import { ${plan.tests.some((t) => t.file === file && t.cleanupThrows) ? `afterEach, ` : ``}describe, expect, test${plan.tests.some((t) => t.file === file && t.spies) ? `, vi` : ``} } from 'vitest'`,
     ...(plan.tests.some((t) => t.file === file && t.shrinks)
       ? [`import fc from 'fast-check'`]
       : []),
-    ...(plan.tests.some((t) => t.file === file && t.ioWait)
+    ...(plan.tests.some((t) => t.file === file && (t.ioWait || t.stops))
       ? [`import { spawn } from 'node:child_process'`]
+      : []),
+    ...(plan.tests.some((t) => t.file === file && t.stops)
+      ? [
+          `import { writeFileSync as recordPid } from 'node:fs'`,
+          `import { join as pidPath } from 'node:path'`,
+        ]
       : []),
     // A module's text through a query import, which Vite loads (see rawImport).
     ...(plan.tests.some((t) => t.file === file && t.rawImport)
@@ -3882,6 +4224,11 @@ function oracleTestFile(plan, file) {
     `const stored: { value: Array<string> } = { value: [] }`,
     ...owns,
     `const g = globalThis as { __oracleRoute?: (route: string) => void; __oracleObserve?: (c: string, v: unknown) => void; __oracleVerdict?: (v: { property: string; law: string; checkpoint: string }) => void }`,
+    ...(plan.pragma && file === `a`
+      ? [
+          `if ((globalThis as { __gapEnvironment?: string }).__gapEnvironment !== 'marked') throw new Error('the file ran outside the environment its pragma names')`,
+        ]
+      : []),
   ]
   // Whether the file's tests judge, which law 9's edits change: file b's
   // follow its helper module, and file a's hold only under seed 1. The
@@ -3954,7 +4301,7 @@ function oracleTestFile(plan, file) {
         // where the output differs; it then judges as usual.
         ...(t.slow
           ? [
-              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await new Promise((r) => setTimeout(r, ${SLOW_MS}))`,
+              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await new Promise((r) => setTimeout(r, ${t.slowMs ?? SLOW_MS}))`,
             ]
           : []),
         // A test that waits on I/O (a child process, about 3 s) where the
@@ -3971,6 +4318,20 @@ function oracleTestFile(plan, file) {
               `    if (shrunk${i}.counterexample?.[0] !== 5) throw new Error('the injected failure did not shrink')`,
             ]
           : []),
+        // In a run the driver stops, a test that stops starts a child
+        // process, records its own process id and the child's in the
+        // directory the driver names, and spins where its output differs.
+        // In any other run it judges as usual.
+        ...(t.stops
+          ? [
+              `    if (${when} && process.env.GAP_STOP_DIR && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) {`,
+              `      const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })`,
+              `      recordPid(pidPath(process.env.GAP_STOP_DIR, String(child.pid)), '')`,
+              `      recordPid(pidPath(process.env.GAP_STOP_DIR, String(process.pid)), '')`,
+              `      for (;;) {}`,
+              `    }`,
+            ]
+          : []),
         // A flaky test never hangs: the model leaves flaky tests out.
         ...(t.hangs && !t.flaky
           ? [
@@ -3984,7 +4345,10 @@ function oracleTestFile(plan, file) {
                 `    if (${when}) expect${t.judgeBy === `soft` ? `.soft` : ``}(${out}).toEqual(${expected})`,
               ]
             : [
-                `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) {`,
+                // A lazy gate is imported only where the output differs, so
+                // the unmutated run never loads it. It is open before any
+                // edit, so the model need not read it.
+                `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}${lazyGated(plan, file, t) ? ` && (await import('./lazy')).open` : ``}) {`,
                 `      g.__oracleVerdict?.({ property: 'fixture-${file}', law: '${t.law}', checkpoint: 'trace' })`,
                 `      throw new Error('violation')`,
                 `    }`,
@@ -4002,7 +4366,7 @@ function oracleTestFile(plan, file) {
         : []),
       t.asProp
         ? `  fcTest.prop([fcv.integer({ min: 0, max: 10 })], { numRuns: 20, seed: 1 })('${testName(t, index)}', async (n) => {`
-        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait ? `async ` : ``}() => {`,
+        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || lazyGated(plan, file, t) ? `async ` : ``}() => {`,
       ...partsOf(t).flatMap(campaign),
       `  })`,
       `})`,
@@ -4141,6 +4505,8 @@ const initialState = (plan) => ({
   history: plan.history,
   prepend: false,
   strict: true,
+  // What `tests/lazy.ts` exports: whether file b's lazy gate is open.
+  lazyOpen: true,
   seed: 1,
   // Whether the check's `--config` names the second config (`altConfig`).
   altConfig: false,
@@ -4197,6 +4563,33 @@ function configText(plan, test) {
 }
 
 /** The fixture package's files in one state. */
+/**
+ * Whether the scratch package lies outside this repository: one that must
+ * resolve no TypeScript, one with no Vitest config, and one whose config is
+ * in its parent directory. Vitest looks for a config in the package's parent
+ * directories too (its cli-api's find-up over `configFiles`), so a package
+ * with no config inside the CLI's directory would run under the CLI's own
+ * config; outside, "no config" is what Vitest sees, and a parent's config
+ * is the only one above the package. A package whose config is in its
+ * parent lies in a directory of a temporary directory, which holds the
+ * config and the linked dependencies (`parentModules`).
+ */
+const outsideRepository = (plan) =>
+  plan.fault === `noTypescript` ||
+  plan.configPlace === `none` ||
+  plan.configPlace === `parent`
+
+/**
+ * Where an outside package's linked dependencies live: in the package, or,
+ * for a package whose config is in its parent directory, in the parent, so
+ * that the config resolves them as the package does. The package's own
+ * Vitest after `fixSession` is the package's.
+ */
+const parentModules = (plan, state) =>
+  plan.configPlace === `parent` && !state.linked
+    ? `../node_modules`
+    : `node_modules`
+
 function fixtureFiles(plan, state = initialState(plan)) {
   const manifest = (fields) =>
     `${JSON.stringify({ private: true, type: `module`, ...fields })}\n`
@@ -4296,6 +4689,9 @@ function fixtureFiles(plan, state = initialState(plan)) {
     ...(plan.dotGenSource ? { [DOTGEN]: plan.dotGenSource } : {}),
     ...plan.exportSources,
     'tests/strict.ts': `export const strict = ${state.strict}\n`,
+    ...(plan.lazyGate
+      ? { 'tests/lazy.ts': `export const open = ${state.lazyOpen}\n` }
+      : {}),
     // A workspace dependency with module state, linked through node_modules.
     'deps/state-dep/package.json': manifest({
       name: `state-dep`,
@@ -4334,18 +4730,26 @@ function fixtureFiles(plan, state = initialState(plan)) {
     'deps/state-dep/build/Release/.keep': ``,
     ...(plan.release ? { 'deps/state-dep/build/Release/state.node': `` } : {}),
     // The runner's own dependencies, linked into the package. A package with
-    // no TypeScript sits outside this repository, so it links them, and Vite
-    // too: the CLI bundles a workspace dependency with the package's Vite.
-    ...(state.linked || plan.fault === `noTypescript`
+    // no TypeScript, or with no config, sits outside this repository
+    // (`outsideRepository`), so it links them, and Vite too: the CLI bundles
+    // a workspace dependency with the package's Vite. A Vitest that does not
+    // load stays the package's own until `fixSession` links this one.
+    ...(state.linked ||
+    (outsideRepository(plan) && plan.fault !== `brokenVitest`)
       ? Object.fromEntries(
           [`vitest`, `fast-check`, `@fast-check`].map((name) => [
-            `node_modules/${name}`,
+            `${parentModules(plan, state)}/${name}`,
             link(join(OWN_MODULES, name)),
           ]),
         )
       : {}),
-    ...(plan.fault === `noTypescript`
-      ? { 'node_modules/vite': link(ROOT_VITE) }
+    ...(outsideRepository(plan)
+      ? { [`${parentModules(plan, state)}/vite`]: link(ROOT_VITE) }
+      : {}),
+    // A parent's config imports `vitest/config` from the parent directory,
+    // which a broken Vitest in the package does not change.
+    ...(plan.configPlace === `parent` && plan.fault === `brokenVitest`
+      ? { '../node_modules/vitest': link(join(OWN_MODULES, `vitest`)) }
       : {}),
     ...(plan.native === `gyp`
       ? { 'deps/state-dep/binding.gyp': `{ "targets": [] }\n` }
@@ -4376,6 +4780,24 @@ function fixtureFiles(plan, state = initialState(plan)) {
         }
       : {}),
     'tests/c.test.ts': ordinaryTestFile(plan),
+    // The environment oracle file a's pragma names (`pragma`), a package
+    // as Vitest finds one (`vitest-environment-<name>`).
+    ...(plan.pragma
+      ? {
+          'node_modules/vitest-environment-marked/package.json': `${JSON.stringify({ name: `vitest-environment-marked`, type: `module`, exports: `./index.js` })}\n`,
+          'node_modules/vitest-environment-marked/index.js': [
+            `export default {`,
+            `  name: 'marked',`,
+            `  viteEnvironment: 'ssr',`,
+            `  setup(global) {`,
+            `    global.__gapEnvironment = 'marked'`,
+            `    return { teardown() { delete global.__gapEnvironment } }`,
+            `  },`,
+            `}`,
+            ``,
+          ].join(`\n`),
+        }
+      : {}),
     // A copy that a check which died left behind (the runner names its
     // copies `.oracle-gaps-<pid>-<n>-<file>`). It is no test file: a check
     // that took it for one would refuse the run.
@@ -4389,7 +4811,7 @@ function fixtureFiles(plan, state = initialState(plan)) {
       ``,
     ].join(`\n`),
   }
-  for (const file of ORACLE_FILES)
+  for (const file of oracleFilesOf(plan))
     files[`tests/${file}.test.ts`] = oracleTestFile(plan, file)
   // The new oracle file d owns the first generated function and judges it.
   if (state.newOracle) {
@@ -4534,6 +4956,7 @@ function applyEdit(state, edit) {
       },
     }
   if (edit === `helper`) return { ...state, strict: !state.strict }
+  if (edit === `lazy`) return { ...state, lazyOpen: !state.lazyOpen }
   if (edit === `seed`) return { ...state, seed: state.seed === 1 ? 2 : 1 }
   if (edit === `config`) return { ...state, altConfig: !state.altConfig }
   // A seed no other step uses, so the check has fresh work to be killed in.
@@ -4716,6 +5139,7 @@ function readSummary(summary) {
 
 export {
   captureWitness,
+  outsideRepository,
   endingOf,
   refusalBreach,
   readSummary,
@@ -4728,6 +5152,7 @@ export {
   removePath,
   sourceArgument,
   ORACLE_FILES,
+  oracleFilesOf,
   METHOD_NAMES,
   comparison,
   quote,
@@ -4739,6 +5164,8 @@ export {
   edits,
   daemonEvents,
   histories,
+  witnessSteps,
+  budgetSteps,
   kill,
   push,
   judging,
@@ -4764,6 +5191,10 @@ export {
   ownersOf,
   interpret,
   judge,
+  slowedFiles,
+  MUTANT_LIMIT_MS,
+  HEARTBEAT_MS,
+  FULL_LIMIT_MS,
   refusal,
   ownsNothing,
   MODULE_DATA,

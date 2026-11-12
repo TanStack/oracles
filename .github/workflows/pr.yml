@@ -37,6 +37,11 @@ jobs:
       # (packages/oracles/scripts/e2e-shards.mjs) ahead of the shard jobs,
       # which CI does not run yet: every test is in exactly one shard.
       - run: pnpm --filter @tanstack/oracles run test:oracle-gaps:shards
+      # The framework self-oracle, the gap report's static oracle, and the
+      # end-to-end oracle's fixed seed each run as several jobs. Together
+      # they run exactly the tests one job ran
+      # (packages/oracles/scripts/pr-shards.mjs).
+      - run: pnpm --filter @tanstack/oracles run test:pr-shards
       - run: pnpm run test:publint
       - run: pnpm run test:sherif
   test-eslint-plugin:
@@ -54,8 +59,12 @@ jobs:
       - run: pnpm run build
       - run: pnpm --filter @tanstack/eslint-plugin-oracles run test
   test-oracle-framework:
-    name: Framework self-oracle
+    name: Framework self-oracle (${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -64,11 +73,19 @@ jobs:
       - name: Setup Tools
         uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
       # The oracleProperty self-oracle spawns real Vitest runs, so the
-      # default test run leaves it out; it runs here on its own.
-      - run: pnpm --filter @tanstack/oracles run test:oracle-framework
+      # default test run leaves it out; it runs here on its own, in two
+      # shards.
+      - run: pnpm exec vitest --run --config vitest.oracle-framework.config.mjs -t "$(node scripts/pr-shards.mjs pattern oracle-framework "$SHARD")"
+        working-directory: packages/oracles
+        env:
+          SHARD: ${{ matrix.shard }}
   test-oracle-gaps-fast:
-    name: Gap report oracles
+    name: Gap report oracles (${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -77,12 +94,23 @@ jobs:
       - name: Setup Tools
         uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
       # The gap report's own oracles also run real Vitest runs on fixture
-      # packages: the static, classify, probe-form, and mutant-validity
-      # oracles.
-      - run: pnpm --filter @tanstack/oracles run test:oracle-gaps:fast
+      # packages (test:oracle-gaps:fast): the static oracle in two shards,
+      # and the classify, probe-form, and mutant-validity oracles in a third.
+      - run: |
+          if [ "$SHARD" = 3 ]; then
+            exec pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-classify gap-report-probe-form gap-report-mutant-validity
+          fi
+          pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-static -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-static "$SHARD")"
+        working-directory: packages/oracles
+        env:
+          SHARD: ${{ matrix.shard }}
   test-oracle-gaps-end-to-end:
-    name: Gap report end-to-end oracle (fixed seed)
+    name: Gap report end-to-end oracle (fixed seed, ${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -90,19 +118,21 @@ jobs:
           persist-credentials: false
       - name: Setup Tools
         uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
-      # The end-to-end oracle's fixed seed. Its random campaign, calibrations,
-      # and determinism check run locally.
-      - run: pnpm --filter @tanstack/oracles exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "fixed seed"
+      # The end-to-end oracle's fixed-seed units, in three shards. Its random
+      # units, calibrations, and determinism units run locally.
+      - run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-fixed-seed "$SHARD")"
+        working-directory: packages/oracles
+        env:
+          SHARD: ${{ matrix.shard }}
   test-vitest-5:
     name: Test on Vitest 5 (${{ matrix.suite }})
     # The package's vitest peer range includes 5; this job is the evidence.
-    # Each suite is its own job, so the self-oracle does not wait for the
-    # unit tests.
+    # The unit tests and each self-oracle shard are their own jobs.
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        suite: [test, test:oracle-framework]
+        suite: [test, oracle-framework 1, oracle-framework 2]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -112,7 +142,10 @@ jobs:
         uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
       - run: pnpm --filter @tanstack/oracles add --save-dev vitest@^5.0.5
       - run: pnpm --filter @tanstack/oracles exec vitest --version
-      - run: pnpm --filter @tanstack/oracles run "$SUITE"
+      - run: |
+          if [ "$SUITE" = test ]; then pnpm run test; exit; fi
+          pnpm exec vitest --run --config vitest.oracle-framework.config.mjs -t "$(node scripts/pr-shards.mjs pattern $SUITE)"
+        working-directory: packages/oracles
         env:
           SUITE: ${{ matrix.suite }}
   preview:

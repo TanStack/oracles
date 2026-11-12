@@ -33,10 +33,11 @@ const suite = `oracle-gaps.report`
 // (units), so a shard can hold any of them; the slowest unit, the
 // determinism of the edit sequence, is 236 s here. The shards are a
 // longest-first packing of those costs, listed by kind. A random unit's
-// cost follows its seed, so a shard's time varies from run to run. CI keeps
-// its one fixed-seed job until the random units' tail is bounded (option M
-// of the e2e speed plan): a random unit that draws a long edit sequence over
-// the witness module can pass 10 minutes in CI.
+// cost follows its seed, so a shard's time varies from run to run. Option M
+// of the e2e speed plan bounds the random units' tail: a generated history
+// with the witness module takes no steps, and the one edit sequence over it
+// is a constructed history. CI keeps its one fixed-seed job until the
+// maintainer decides which units run on a pull request.
 export const shards = {
   // 522 s in the measured run, about 221 s idle.
   'e2e-1': [
@@ -59,6 +60,17 @@ export const shards = {
     `determinism: constructed history: a declaration fault: projects`,
     `determinism: constructed history: a package with no config`,
     `determinism: constructed history: an edit sequence through the daemon`,
+    // The witness module's edit sequence (option M): 189 s here, measured
+    // with the daemon fix of fix/daemon-current-inputs.
+    `determinism: constructed history: an edit sequence over the witness module`,
+    // The daemon's law 9 histories cost 3 to 13 s each here (their replays).
+    `fixed seed 20261105: an edit that changed the cold result after a hang replaced the only context`,
+    `random seed: an edit that changed the cold result after a hang replaced the only context`,
+    `determinism: constructed history: an edit that changed the cold result after a hang replaced the only context`,
+    // Added with the CLI's parent-config discovery (not yet measured).
+    `fixed seed 20261105: a package whose parent directory has its config`,
+    `random seed: test.projects in a parent's config`,
+    `determinism: constructed history: a failing owner under its parent's config`,
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-2': [
@@ -81,6 +93,14 @@ export const shards = {
     `determinism: constructed history: ordinary tests left out by default`,
     `determinism: generated 0`,
     `determinism: generated 1`,
+    // The daemon's law 9 histories cost 3 to 13 s each here (their replays).
+    `fixed seed 20261105: an edit to a module that only mutated runs load`,
+    `random seed: an edit to a module that only mutated runs load`,
+    `determinism: constructed history: an edit to a module that only mutated runs load`,
+    // Added with the CLI's parent-config discovery (not yet measured).
+    `fixed seed 20261105: a failing owner under its parent's config`,
+    `random seed: a package whose parent directory has its config`,
+    `determinism: constructed history: test.projects in a parent's config`,
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-3': [
@@ -103,6 +123,14 @@ export const shards = {
     `determinism: constructed history: a declaration fault: brokenOwner`,
     `determinism: constructed history: a declaration fault: configThrows`,
     `determinism: constructed history: a declaration fault: nonLiteral`,
+    // The daemon's law 9 histories cost 3 to 13 s each here (their replays).
+    `fixed seed 20261105: a lazy module loaded before a hang in the same batch`,
+    `random seed: a lazy module loaded before a hang in the same batch`,
+    `determinism: constructed history: a lazy module loaded before a hang in the same batch`,
+    // Added with the CLI's parent-config discovery (not yet measured).
+    `fixed seed 20261105: test.projects in a parent's config`,
+    `random seed: a failing owner under its parent's config`,
+    `determinism: constructed history: a package whose parent directory has its config`,
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-4': [
@@ -125,6 +153,14 @@ export const shards = {
     `determinism: constructed history: an ambiguous authored mutant`,
     `determinism: constructed history: every outcome class`,
     `determinism: constructed history: two authored mutants`,
+    // Added with the gap CLI's runtime fixes (not yet measured).
+    `fixed seed 20261105: a second daemon check of the budget witness`,
+    `calibration: a stopped run leaves a process it started running`,
+    `calibration: a busy mutant is named in no heartbeat`,
+    `determinism: constructed history: a second daemon check of the budget witness`,
+    // The witness module's edit sequence (option M): 97 s here, measured
+    // with the daemon fix of fix/daemon-current-inputs.
+    `fixed seed 20261105: an edit sequence over the witness module`,
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-5': [
@@ -148,6 +184,13 @@ export const shards = {
     `determinism: constructed history: a declaration fault: noTypescript`,
     `determinism: constructed history: a failing owner under a config that --config names`,
     `determinism: generated 2`,
+    // Added with the gap CLI's runtime fixes (not yet measured).
+    `random seed: a second daemon check of the budget witness`,
+    `calibration: a stopped run had written a copy beside the tests`,
+    `calibration: a heartbeat names a file that does not run its mutant`,
+    // The witness module's edit sequence (option M): about 97 s here, measured
+    // with the daemon fix of fix/daemon-current-inputs.
+    `random seed: an edit sequence over the witness module`,
   ],
 }
 
@@ -160,7 +203,7 @@ export function patternOf(shard) {
     throw new Error(
       `no shard ${JSON.stringify(shard)}; the shards are ${Object.keys(shards).join(`, `)}`,
     )
-  return `^${escape(suite)}(?: | > )(?:${tests.map(escape).join(`|`)})$`
+  return `^${escape(suite)}(?: > | (?!> ))(?:${tests.map(escape).join(`|`)})$`
 }
 
 /**
@@ -177,12 +220,17 @@ export function partitionErrors(listed) {
     // `vitest list` joins the names with ` > `; Vitest 4's `-t` reads them
     // joined with a space, so a pattern must select the test both ways.
     const joined = [name, name.replace(/ > /, ` `)]
+    // A shard that selects either join owns the test, and it must select
+    // both: in each Vitest version, exactly one shard runs the test.
     const owners = patterns.filter(({ pattern }) =>
-      joined.every((full) => pattern.test(full)),
+      joined.some((full) => pattern.test(full)),
     )
-    if (owners.length !== 1)
+    const whole =
+      owners.length === 1 &&
+      joined.every((full) => owners[0].pattern.test(full))
+    if (!whole)
       errors.push(
-        `${JSON.stringify(name)} is in ${owners.length === 0 ? `no shard` : `shards ${owners.map(({ shard }) => shard).join(`, `)}`}`,
+        `${JSON.stringify(name)} is in ${owners.length === 0 ? `no shard` : owners.length === 1 ? `shard ${owners[0].shard} under only one of Vitest's name joins` : `shards ${owners.map(({ shard }) => shard).join(`, `)}`}`,
       )
   }
   for (const [shard, tests] of Object.entries(shards))

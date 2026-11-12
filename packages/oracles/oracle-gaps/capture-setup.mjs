@@ -848,9 +848,19 @@ afterAll(() => {
       `${JSON.stringify({ key: `${currentFile} > (background)`, background: true, hits: [...background], infected: [...backgroundInfected], outcomes: [...backgroundOutcomes] })}\n`,
     )
   // A batch's watchdog reads this row to know that the copy finished; a
-  // skipped copy says so, and its run is no evidence.
+  // skipped copy says so, and its run is no evidence. It also lists the
+  // files of the modules the copy evaluated, which include a module that
+  // only a mutated branch imports at run time: the daemon stores the run
+  // under them (check.mjs).
+  const evaluated = globalThis.__vitest_worker__?.evaluatedModules
+  // The map keeps every module the worker evaluated, and the copy's module
+  // reset only marks them unevaluated, so the copy's own are those marked.
+  const loaded = [...(evaluated?.idToModuleMap ?? [])]
+    .filter(([, node]) => node.evaluated)
+    .map(([id]) => id.split(`?`)[0])
+    .filter((path) => path.startsWith(`/`))
   appendFileSync(
     state.capture,
-    `${JSON.stringify({ file: thisFile, closed: true, ...(skippedCopy ? { skipped: true } : {}) })}\n`,
+    `${JSON.stringify({ file: thisFile, closed: true, loaded, ...(skippedCopy ? { skipped: true } : {}) })}\n`,
   )
 })

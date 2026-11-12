@@ -17,12 +17,17 @@
 //    function owns its static call tree (owners.mjs). A declaration that
 //    names nothing or is not a literal list refuses the run, because it would
 //    hide gaps.
-// 3. Runs every test file twice with no mutant active. Each test reports the
+// 3. Runs every test file with no mutant active, the oracle files twice
+//    (with --only, only the selected mutants' owners). Each test reports the
 //    mutation sites it reached, the outcomes each `if` took, the values it
 //    asserted on and observed, its registered route, and its law verdicts
 //    (capture-setup.mjs). A test whose values differ between the runs is
-//    nondeterministic and judges nothing. An oracle file that fails here
-//    refuses the run; an ordinary file is left out and listed.
+//    nondeterministic and judges nothing. The report leads with this
+//    baseline: each file's result and test counts, and a failing test's
+//    error, law, counterexample, and replay command. An oracle file that
+//    fails here blocks the mutants it owns: each that no passing owner kills
+//    is `blocked`, the rest are judged, and the report is provisional. A
+//    failing ordinary file is left out and listed.
 // 4. Runs each mutant against the owner files whose tests reached it, in a
 //    warm Vitest process, and classifies it (see `outcomeOf`): `killed` only
 //    by a law verdict on a reproducible route; otherwise a gap. A mutant in a
@@ -61,8 +66,7 @@
 // A run that does not complete never ends with a bare stack trace
 // (ending.mjs; maintainer decision, 2026-11-10). A problem the author can
 // fix (bad arguments, a broken owns declaration, no oracle file or owner,
-// `test.projects`, a Vitest that does not load, an owner that fails with no
-// mutant active) refuses the run: exit 2, `refused: <cause>` and `fix:
+// `test.projects`, a Vitest that does not load) refuses the run: exit 2, `refused: <cause>` and `fix:
 // <directive>` on stderr, and results.json and summary.md in the output
 // directory once the arguments name one. Any other error is a bug in the
 // CLI: exit 3, and its stack in error.log. A check through the daemon ends
@@ -82,6 +86,10 @@
 //     [--diff-base <rev>]
 //     [--first-limit <ms>]    (a copy's first budget; default 2000)
 //     [--hang-limit <ms>]     (the full limit a cut copy gets again; default 10000)
+//     [--mutant-limit <ms>]   (the floor of each mutant's budget, which the
+//                              runs that confirm its cut copies share; the
+//                              budget is the larger of this and ten times
+//                              its owner files' unmutated time; default 30000)
 //     [--test-timeout <ms>]   (default 15000; also bounds hooks and teardown.
 //                              Each mutant run also has a wall-clock limit of
 //                              10 s plus three times its file's unmutated time.)
@@ -97,14 +105,105 @@
 //                              the config it loaded, or says it found none)
 //   oracle-gaps --stop-daemon --package <dir>
 //   oracle-gaps --help      (prints the usage text, args.mjs)
-// Exit codes: 0 the check completed, 2 refused, 3 an internal error.
+// Exit codes: 0 the check completed, whatever its gaps (the last stdout
+// line is `completed: <n> gaps`), 2 refused, 3 an internal error, and 130
+// or 143 when SIGINT or SIGTERM stopped it.
+//
+// No process outlives the CLI (maintainer disposition G2, 2026-11-11). The
+// CLI starts a check as a child in a process group of its own, which every
+// Vitest worker joins, and every process a test starts unless it starts it
+// detached (in a session of its own, as a browser driver can), and waits
+// for it. Help, --stop-daemon, and arguments that refuse start no process,
+// so they end in the CLI's own process, without a second Node start. Windows has no process groups, so there the run is not supervised.
+// SIGINT or SIGTERM is sent on to the whole group; a process that has not
+// ended 2 s later is killed, and so is any process left in the group when
+// the run ends. The run kills its group itself if the CLI dies first.
+import { spawn } from 'node:child_process'
 import { realpathSync } from 'node:fs'
+import { constants } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { parseArgs, usage } from './args.mjs'
 import { codeIdentity, openSession } from './check.mjs'
 import { received, requestDaemon, stopDaemon } from './daemon.mjs'
 import { endRun } from './ending.mjs'
 import { memoryStore } from './evidence.mjs'
+
+// How long the group has to end after a stop signal before it is killed.
+const STOP_GRACE_MS = 2000
+
+/** Signals every process of group `group`; false when none is left. */
+function signalGroup(group, signal) {
+  try {
+    process.kill(-group, signal)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Runs this CLI again as a child in a process group of its own, and ends
+ * with it: with its exit code, or, once a stop signal has ended its group,
+ * with 128 plus the signal's number.
+ */
+function superviseRun() {
+  // An inspector flag would bind the CLI's own port a second time.
+  const child = spawn(
+    process.execPath,
+    [
+      ...process.execArgv.filter((flag) => !/^--inspect/.test(flag)),
+      ...process.argv.slice(1),
+    ],
+    {
+      detached: true,
+      stdio: `inherit`,
+      env: { ...process.env, ORACLE_GAPS_GROUP: String(process.pid) },
+    },
+  )
+  let stopped
+  const stop = (signal) => {
+    if (stopped) return
+    stopped = signal
+    signalGroup(child.pid, signal)
+    const deadline = Date.now() + STOP_GRACE_MS
+    const poll = setInterval(() => {
+      if (signalGroup(child.pid, 0) && Date.now() < deadline) return
+      clearInterval(poll)
+      signalGroup(child.pid, `SIGKILL`)
+      process.exit(128 + constants.signals[signal])
+    }, 50)
+  }
+  process.on(`SIGINT`, stop)
+  process.on(`SIGTERM`, stop)
+  child.on(`exit`, (code, signal) => {
+    if (stopped) return
+    signalGroup(child.pid, `SIGKILL`)
+    process.exit(code ?? 128 + constants.signals[signal])
+  })
+}
+
+/**
+ * The run's side of the group: once the CLI that started it is gone, the
+ * run kills its group, itself included.
+ */
+function watchSupervisor(supervisor) {
+  setInterval(() => {
+    if (process.ppid !== supervisor) process.kill(-process.pid, `SIGKILL`)
+  }, 1000).unref()
+}
+
+/**
+ * Whether arguments `argv` ask for a check, the only run that starts
+ * processes; a refusal of them is written by the run itself.
+ */
+function asksForCheck(argv) {
+  try {
+    const options = parseArgs(argv)
+    return !options.help && !options.stop
+  } catch {
+    return false
+  }
+}
 
 /** The summary of a check run in this process. */
 async function checkCold(options) {
@@ -130,7 +229,22 @@ async function checkThroughDaemon(options) {
 
 // A file URL escapes a space, `#`, and the like, so the script's own URL is
 // compared with the URL of the path it was started as.
-if (import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
+const main =
+  import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
+// Windows has no process groups: there the run is the CLI's own process.
+const supervised = process.platform !== `win32`
+const supervisor = process.env.ORACLE_GAPS_GROUP
+if (
+  main &&
+  supervised &&
+  supervisor === undefined &&
+  asksForCheck(process.argv.slice(2))
+)
+  superviseRun()
+else if (main) {
+  if (supervisor !== undefined) watchSupervisor(Number(supervisor))
+  // A test that runs this CLI starts a run of its own, in a group of its own.
+  delete process.env.ORACLE_GAPS_GROUP
   // The run's options, once its arguments parse; a refusal or an error is
   // written to their output directory.
   let options
@@ -160,10 +274,11 @@ if (import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
     if (options.help) console.log(usage)
     else if (options.stop) await stopDaemon(options.pkg)
     else {
+      // The summary ends with the output directory and the completion
+      // line (report.mjs).
       console.log(
         await (options.daemon ? checkThroughDaemon : checkCold)(options),
       )
-      console.log(`output: ${options.out}`)
     }
     end(0)
   } catch (error) {
