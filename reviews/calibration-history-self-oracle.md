@@ -685,3 +685,74 @@ callback and timeout controls, and the canonical origin calibration. It is a
 focused GREEN, not a complete framework run. The final workflow runs the whole
 framework on both supported Vitest major versions. No campaign budget was
 lowered and no dependency or lockfile workaround is included.
+
+### Original review loss accounting at the combined executable tree
+
+The original review targeted `329dbd4`. All nine technical findings were valid
+there. Their current implementation dispositions are **nine already-fixed**;
+the diagnostic follow-up supplies the remaining R6 recorder enforcement. This
+table preserves each original cure and durable obligation separately.
+
+| Original item | Claim and proposed cure                                                                                                      | Current evidence and durable obligation                                                                                                                                                                |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1             | Bound mutant verdict ranking differs from unbound; reuse `runOne`.                                                           | Bound/unbound ranking shares `runOne`; recorded violation before later throw/spin and bounded-clock controls remain enforced.                                                                          |
+| 2             | Forced premise is learned from the selected driver log; reconstruct it independently.                                        | Authored selectors/origins determine both forced premises, including equal-data originals and explicit opposite orientations.                                                                          |
+| 3             | Reorder invariance misses the property-fixed-seed mutant; compare full named builds.                                         | Distinct ordinary/astral name families and complete construction inputs reject the fixed-seed substitution while allowing other stable mixers.                                                         |
+| 4             | Clean selected reach checks missing states but allows undeclared states; validate both directions.                           | Clean declaration checks cover both directions. Mutant-only undeclared reach remains a separate, unapproved stronger policy.                                                                           |
+| 5             | UTF-16 high-surrogate hashing collides for emoji names; use code points.                                                     | Code-point hashing and finite astral full-input controls distinguish the original defect without promising universal hash injectivity.                                                                 |
+| 6             | Corruption and judgment callback throws lose calibration/history names; contextualize them.                                  | Production catches preserve context/cause. Four actual receiving cuts now enforce exact authored identity and finite cause while accepting lawful representation changes.                              |
+| 7             | Explicit `entered: null` is silently inferred; infer only on `undefined`.                                                    | Omitted versus malformed controls remain distinct; null/false/zero and inherited/own binding cases retain registration-before-driver enforcement.                                                      |
+| 8             | An impossible `if (!kind)` branch remains; remove it.                                                                        | The branch is absent after exact-one-key validation; this is control-flow/build evidence, not an invented behavioral RED.                                                                              |
+| 9             | Transitional warnings repeat, collect-only warns and successful bound calibrations print announcements; deduplicate/silence. | Once-per-property warnings retain exact unbound names and registrations; collection and successful bound runs stay silent. The original announcement gate's retrospective chronology remains recorded. |
+
+Coordination is also complete: main/F27 was merged normally, `difference` has
+bound/unbound parity after designated-law selection, and main's named UNIT
+support is integrated. Fresh calibration seeds remain the explicitly separate
+follow-up. No published branch was rebased or force-pushed.
+
+The eight current follow-up IDs remain separate from the original nine:
+R8-REPRESENTATION, R9-REP-SEAM, R9-REP-RANGE, R10-REP-REASON, R11-DIAG-1 and
+T1–T3. Each has an applied oracle repair and targeted sensitivity evidence above.
+The original reviewer merits a strong hire recommendation: nine accurate
+findings, independent-judgment attacks, useful cures and sound prioritization.
+Later review results remain bounded to their recorded artifacts; full CI and
+the final fresh review reports are not implied by this accounting table.
+
+### Final independent reviews of the combined executable
+
+Both fresh R12 reviewers found **no new supported defect** on owner `5b85ea79`
+and fixture `bad74feb`. Neither changed the live tree. Their interventions were
+sequential in isolated copies, and all source/owner/fixture/reporter hashes were
+restored. The executable commit is `1fdf731`; this subsequent record-only append
+does not change those reviewed bytes.
+
+The timeout reviewer passed 24/24 final checks, including twenty permanent
+controls and the actual fixed/random required receiver units. A real delay
+change from 300 ms to 450 ms, with a 100 ms timeout, changed a reordered
+calibration from two actual started calls to one. Both shared comparison and
+outer determinism passed. An actual discarded extra `selected.build()` was
+rejected at child/calibration with build difference one, while determinism
+passed. Each campaign measured all four input receivers, continuation cut and
+presentation equivalence once. An initial all-skipped selector is retained as
+unreached, not a kill.
+
+The diagnostic reviewer passed 18/18 baseline checks, then 5/5 with actual
+source changes combining tabs/mixed spaces, bracketed labels/seed decoration,
+custom outer name and category-marker opaque reason. Both matching fixed and
+random units measured every callback-failure and presentation receiver once.
+Actual wrong sibling, wrong cause and environment-only cause omission each
+failed child/calibration while determinism passed. The restored-source gate
+passed 2/2. Its public observation hook recorded three complete children, three
+presentations and three matching identity/cause failures for each of ordinary,
+reordered, seedless and environment receivers. A failed pre-write script path
+and redundant clean run are explicitly excluded from source-variant evidence.
+
+The separate read-only final loss audit found no lost obligation: original nine
+already-fixed, eight follow-ups fixed-now, coordination already-fixed. It
+retained historical CHRON-1 and every chronology, corrected nonfinding and
+policy qualification above. Both R12 reviewers merit strong positive assessment
+within their scopes: they independently challenged actual permitted timing and
+diagnostic representations, then demonstrated intended comparison rejection
+for adjacent wrong implementations. No further confirmed repair remains in
+these bounded reviews. Complete final pushed-head CI remains required; this
+record does not promote focused results to full-suite success.
