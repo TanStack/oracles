@@ -1737,10 +1737,13 @@ export default async (env) => {
       return (
         !run.timedOut &&
         outcomeOf([run]).outcome === `survived` &&
+        // Its work too, which a work bound judges (classify.mjs): a skipped
+        // test that warmed a cache leaves a later test more to do.
         selection.every(
           (k) =>
             rows.get(k)?.hash === first.rows.get(k)?.hash &&
-            rows.get(k)?.observed === first.rows.get(k)?.observed,
+            rows.get(k)?.observed === first.rows.get(k)?.observed &&
+            rows.get(k)?.calls === first.rows.get(k)?.calls,
         )
       )
     }
