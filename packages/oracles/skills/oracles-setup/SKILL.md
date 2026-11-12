@@ -253,9 +253,10 @@ approval. The production code that the oracles own is yours. Whenever you
 change it, do a good job, not a minimal or lazy one: the fast, small,
 elegant version, as an optimizing compiler for the oracle would write it.
 Anything that keeps every oracle passing is allowed, so a big refactor is
-fine when it makes the code better; the oracle is the review. This is how
-you work, not a separate task: do not go looking for things to optimize
-when the task is something else.
+fine when it makes the code better; the oracle is the review. Keep it in
+proportion to the task: improve the code the work touches, and when you see
+a larger win elsewhere, offer it instead of turning the task into a long
+optimization project.
 
 - To find where an oracle would help, or to propose a new one, read
   `node_modules/@tanstack/oracles/skills/oracles-start/SKILL.md` in full and
