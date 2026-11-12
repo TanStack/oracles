@@ -181,7 +181,8 @@ is for later, not a reason to stop.
 (first session) Send your first message as soon as you have read this
 skill and glanced at the repository's README and `package.json`, before
 any other tool call: before reading the code, the tests, or the other
-skills, and before any probe. The developer should see what is about to
+skills, and before any probe. Installing this package, when the prompt
+that brought you here asked for it, does not count: it comes first. The developer should see what is about to
 happen right away. Write it for this repository, in plain words, in your own sentences,
 in a short paragraph and a short list:
 
