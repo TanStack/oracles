@@ -1561,13 +1561,13 @@ async function driver(plan, observe) {
     // How many units were computed or reused says how the result was
     // produced, not what it is, so it is not observed.
     observe(`cli`, { ...cli, evidence: undefined })
-    if (cli.exit === 0 && !plan.consoleOutput)
-      states.add(`a completed run whose tests wrote nothing`)
     // A failing owner's replay, run as the author would run it (law 3).
     if (plan.fault === `brokenOwner`)
       observe(`replay`, { command: replay, ran: replayed(dir, replay) })
     // Reach comes from what the CLI reported, mapped onto the plan.
     const states = new Set()
+    if (cli.exit === 0 && !plan.consoleOutput)
+      states.add(`a completed run whose tests wrote nothing`)
     // Law 14: a partial run of one owned function's mutants, whose baseline
     // runs only their owners.
     const chosen = cli.mutants.find(
