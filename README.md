@@ -29,7 +29,7 @@ every commit with [pkg.pr.new](https://pkg.pr.new).
   up leaves that directory, and the next run removes it.
 
   While one copy of a test file runs for 30 s or more, the CLI prints
-  `busy: <mutant id> in <test file> for <n>s` every 30 s. A run of many fast
+  `oracle-gaps: busy <mutant id> in <test file> for <n>s` every 30 s. A run of many fast
   copies prints none, and a check through `--daemon` prints its heartbeats
   only when the check ends. The runs that confirm a mutant's cut-off copies
   share one budget: the larger of `--mutant-limit` (30 s by default) and ten
@@ -67,13 +67,29 @@ every commit with [pkg.pr.new](https://pkg.pr.new).
   | `gap`                                    | `oracle-gaps: gap <kind> L<line> <id> <change>`                                                                                                                                                                                                             |
   | `progress`                               | `oracle-gaps: progress judged 25 of 120 mutants: 7 gaps so far, 18 not gaps`                                                                                                                                                                                |
   | `busy`                                   | `oracle-gaps: busy <mutant id or baseline> in <test file> for <n>s`                                                                                                                                                                                         |
-  | `note`                                   | `oracle-gaps: note …`                                                                                                                                                                                                                                       |
+  | `note`                                   | `oracle-gaps: note …`: the `--hang-limit` note, Vite's own messages (`note vite: …`), ordinary files left out, the provisional count, unowned counts, the results' path, and where the tests' console output went (`note test output in <path>`)            |
+  | `summary`                                | `oracle-gaps: summary <run id>: 120 mutants, 98 killed, 12 gaps, 10 unowned (warnings). …`                                                                                                                                                                  |
+  | `legend`                                 | `oracle-gaps: legend <class>: <what it means and what to do>`, once for each class of gap the run found                                                                                                                                                     |
+  | `function`                               | `oracle-gaps: function fn <name> (<source>) (owners: <files>)`, the heading over that function's gap lines                                                                                                                                                  |
   | `done` (last)                            | `oracle-gaps: done completed, 12 gaps, report <path>/summary.md` (`(provisional)` after the count when an oracle file failed), `oracle-gaps: done refused[, report <path>]`, `oracle-gaps: done error, log <path>`, or `oracle-gaps: done stopped (SIGINT)` |
 
-  The lines indented under a failing baseline file (`failing:`, `law:`,
-  `counterexample:`, `replay:`) and a refusal's `refused:` and `fix:` block
-  have no prefix. A run through the daemon prints the same lines, at the end
-  of its check.
+  Only two kinds of line have no prefix: the lines indented under a failing
+  baseline file (`failing:`, `law:`, `counterexample:`, `replay:`), and a
+  refusal's `refused:` and `fix:` block on stderr. No line is blank. The
+  done line is the last line of both stdout and stderr, once each, for
+  every ending, and its status matches the exit code. A test's own output
+  to the process's stdout and stderr goes to `test-output.log` in the output
+  directory, which a note names; `summary.md` holds the report for reading.
+  A run through the daemon prints the same lines, at the end of its check.
+  `--help` is not a check, so its usage text has no prefix.
+
+  A few endings print no done line, or one more line: a SIGKILL of the CLI,
+  or a signal sent to the run's own child process rather than the CLI's,
+  ends it with no done line. An internal error's own message lines
+  (`oracle-gaps internal error: …`) have no prefix. A config's syntax error
+  is refused with its first error; a syntax error in a module the config
+  imports still lets esbuild print its own error block, which has no
+  prefix.
 
   Exit codes: 0 the check completed, whatever its gaps (its last line is
   `oracle-gaps: done completed, …`); 2 the run was refused, with `refused:`

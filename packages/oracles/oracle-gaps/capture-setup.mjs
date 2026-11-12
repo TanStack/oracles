@@ -25,6 +25,7 @@
 // of shrinking it: a kill needs one failing history, not the smallest one.
 import { createHash } from 'node:crypto'
 import { appendFileSync, readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { afterAll, beforeEach, chai, expect, inject, vi } from 'vitest'
 
 const run =
@@ -151,6 +152,26 @@ if (run.units && !skippedCopy) {
   vi.resetModules()
 }
 const state = unit ? { ...run, ...unit } : run
+// A test's own writes to the process's stdout and stderr (a debugging
+// `process.stdout.write`) go to the run's test-output.log, beside its
+// capture, not to the CLI's streams, whose every line is a line of the
+// gap report's stream (review of #46, F2). The check names the log.
+if (state.capture)
+  globalThis.__oracleGapsOutput = join(
+    dirname(state.capture),
+    `test-output.log`,
+  )
+if (!globalThis.__oracleGapsStreams) {
+  globalThis.__oracleGapsStreams = true
+  for (const stream of [process.stdout, process.stderr])
+    stream.write = (chunk, encoding, callback) => {
+      const done = typeof encoding === `function` ? encoding : callback
+      const output = globalThis.__oracleGapsOutput
+      if (output) appendFileSync(output, chunk)
+      if (typeof done === `function`) done()
+      return true
+    }
+}
 // A batch's watchdog reads this row to know which copy is running. A copy
 // whose test file fails to load runs no `afterAll` and so writes no closing
 // row; the next copy's start ends its turn.

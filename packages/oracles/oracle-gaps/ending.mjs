@@ -35,13 +35,16 @@ export function endRun(error, out = error?.out) {
     const block = [`refused: ${message}`, `fix: ${error.fix}`]
     const results = { status: `refused`, cause: message, directive: error.fix }
     // The last line says the run refused, and where its report is once the
-    // run knows its output directory (the stream's done line, stream.mjs).
-    block.push(
-      write(out, results, `Refused: ${message}\n\nFix: ${error.fix}\n`)
-        ? `oracle-gaps: done refused, report ${join(out, `summary.md`)}`
-        : `oracle-gaps: done refused`,
+    // run knows its output directory (the stream's done line, stream.mjs);
+    // it ends stdout too (index.mjs).
+    const done = write(
+      out,
+      results,
+      `Refused: ${message}\n\nFix: ${error.fix}\n`,
     )
-    return { exitCode: 2, stderr: `${block.join(`\n`)}\n` }
+      ? `oracle-gaps: done refused, report ${join(out, `summary.md`)}`
+      : `oracle-gaps: done refused`
+    return { exitCode: 2, stderr: `${[...block, done].join(`\n`)}\n`, done }
   }
   const results = { status: `internal-error`, message }
   const stack = `${error?.stack ?? message}\n`
@@ -50,9 +53,11 @@ export function endRun(error, out = error?.out) {
     log = join(tmpdir(), `oracle-gaps-error-${process.pid}.log`)
     writeFileSync(log, stack)
   }
+  const done = `oracle-gaps: done error, log ${log}`
   return {
     exitCode: 3,
-    stderr: `oracle-gaps internal error: ${message}\nThis is a bug in oracle-gaps, not in your oracle. Its stack is in ${log}.\noracle-gaps: done error, log ${log}\n`,
+    stderr: `oracle-gaps internal error: ${message}\nThis is a bug in oracle-gaps, not in your oracle. Its stack is in ${log}.\n${done}\n`,
+    done,
   }
 }
 

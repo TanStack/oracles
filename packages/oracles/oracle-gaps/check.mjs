@@ -461,14 +461,17 @@ ${
 // no default export then fails as it fails under Vitest, when it loads, and
 // not when Vite bundles this wrapper, which esbuild reports on stderr
 // itself (a static \`config.default\` is a warning there).
-const base = Reflect.get(config, 'default')
-if (base === undefined)
-  throw new Error(${JSON.stringify(`${config} has no default export: config must export or return an object`)})`
+const base = Reflect.get(config, 'default')`
     : `const base = {}`
 }
-// Vitest accepts a config object or a function that returns one.
+// Vitest accepts a config object, a promise of one, or a function that
+// returns one, as Vite reads it: a function is called and awaited, anything
+// else is awaited, and what is not an object is refused.
 export default async (env) => {
-  const merged = mergeConfig(typeof base === 'function' ? await base(env) : base, {
+  const loaded = typeof base === 'function' ? await base(env) : await base
+  if (loaded === null || typeof loaded !== 'object')
+    throw new Error(${JSON.stringify(`${config ?? `the config`}: config must export or return an object.`)})
+  const merged = mergeConfig(loaded, {
   plugins: [{
     name: 'oracle-gaps-schemata',
     enforce: 'pre',
@@ -575,7 +578,7 @@ export default async (env) => {
     for (const line of String(message)
       .replace(/\x1b\[[0-9;]*m/g, ``)
       .split(`\n`))
-      if (line.trim() !== ``) console.error(streamLine(`note`, `vite: ${line}`))
+      if (line.trim() !== ``) pulse.log(streamLine(`note`, `vite: ${line}`))
   }
   const viteNotes = {
     hasWarned: false,
@@ -585,6 +588,35 @@ export default async (env) => {
     error: viteNote,
     clearScreen: () => {},
     hasErrorLogged: () => false,
+  }
+  // Whether the config's own text parses, by the esbuild that Vite bundles
+  // configs with, with its messages silenced: a syntax error rejects with
+  // its first error. A Vite that does not load is the context's to report.
+  async function configParses(config) {
+    // The esbuild of the Vite that the package's Vitest loads.
+    let esbuild
+    try {
+      const requireVite = createRequire(
+        createRequire(requireTarget.resolve(`vitest/node`)).resolve(`vite`),
+      )
+      esbuild = await import(pathToFileURL(requireVite.resolve(`esbuild`)).href)
+    } catch {
+      return
+    }
+    try {
+      await esbuild.transform(readFileSync(join(pkg, config), `utf8`), {
+        loader: /\.[cm]?ts$/.test(config) ? `ts` : `js`,
+        logLevel: `silent`,
+        sourcefile: config,
+      })
+    } catch (error) {
+      const first = error?.errors?.[0]
+      throw new Error(
+        first
+          ? `${config}:${first.location?.line}:${first.location?.column}: ${first.text}`
+          : String(error?.message ?? error),
+      )
+    }
   }
   async function warmContext(settings, index) {
     writeWrapper(index, settings.config)
@@ -1214,6 +1246,9 @@ export default async (env) => {
     // An earlier run's internal error; a completed check writes the other
     // files of an ending over the earlier ones (ending.mjs).
     rmSync(join(options.out, `error.log`), { force: true })
+    // The tests' own output to the process's streams (capture-setup.mjs).
+    const testOutput = join(options.out, `test-output.log`)
+    rmSync(testOutput, { force: true })
     profileFile = process.env.ORACLE_GAPS_PROFILE
       ? join(options.out, `profile.jsonl`)
       : undefined
@@ -1240,6 +1275,11 @@ export default async (env) => {
       // Vitest discovers; undefined for none.
       config: options.config ?? discoveredConfig(pkg),
     }
+    // A config that does not parse is refused here, with the error, before
+    // Vite bundles it: esbuild, which bundles it, prints its own error on
+    // the CLI's streams (review of #46, F7).
+    if (settings.config !== undefined)
+      await fromConfig(0, settings.config, configParses(settings.config))
     // Contexts are warmed again when their settings or the Vite config they
     // loaded changed.
     const configHash = () =>
@@ -2266,6 +2306,8 @@ export default async (env) => {
         config: options.config,
       }),
     )
+    if (existsSync(testOutput) && statSync(testOutput).size > 0)
+      log(streamLine(`note`, `test output in ${testOutput}`))
     return renderStdout({
       results,
       run: runIdentity,

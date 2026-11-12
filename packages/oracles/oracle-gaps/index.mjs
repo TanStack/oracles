@@ -164,29 +164,48 @@ function superviseRun() {
     },
   )
   let stopped
+  // How the run ended: its exit code, or the signal that ended it.
+  let ended
+  // Ends the CLI once the run has ended (or the grace has passed), with
+  // what is left of the group killed. A run that ended with its own code
+  // (0 completed, 2 refused, 3 an error) wrote its done line, the last on
+  // each stream, so the CLI ends with that code and writes none. A run that
+  // a stop ended wrote none, so the CLI writes the stopped line on both
+  // streams. A write to a pipe is asynchronous on macOS, so the process
+  // exits once it is written.
+  const finish = () => {
+    signalGroup(child.pid, `SIGKILL`)
+    if (stopped && ![0, 2, 3].includes(ended?.code)) {
+      const line = `oracle-gaps: done stopped (${stopped})\n`
+      process.stdout.write(line, () =>
+        process.stderr.write(line, () =>
+          process.exit(128 + constants.signals[stopped]),
+        ),
+      )
+      return
+    }
+    process.exit(ended.code ?? 128 + constants.signals[ended.signal])
+  }
   const stop = (signal) => {
     if (stopped) return
     stopped = signal
     signalGroup(child.pid, signal)
     const deadline = Date.now() + STOP_GRACE_MS
     const poll = setInterval(() => {
-      if (signalGroup(child.pid, 0) && Date.now() < deadline) return
-      clearInterval(poll)
-      signalGroup(child.pid, `SIGKILL`)
-      // The stream's done line, last: the run stopped, and by which signal.
-      // A write to a pipe is asynchronous on macOS, so the process exits
-      // once it is written.
-      process.stderr.write(`oracle-gaps: done stopped (${signal})\n`, () =>
-        process.exit(128 + constants.signals[signal]),
+      if (
+        (ended === undefined || signalGroup(child.pid, 0)) &&
+        Date.now() < deadline
       )
+        return
+      clearInterval(poll)
+      finish()
     }, 50)
   }
   process.on(`SIGINT`, stop)
   process.on(`SIGTERM`, stop)
   child.on(`exit`, (code, signal) => {
-    if (stopped) return
-    signalGroup(child.pid, `SIGKILL`)
-    process.exit(code ?? 128 + constants.signals[signal])
+    ended = { code, signal }
+    if (!stopped) finish()
   })
 }
 
@@ -260,17 +279,31 @@ else if (main) {
   // Ends the run once. A write to a pipe is asynchronous on macOS, and
   // exiting at once cuts it off at the pipe's buffer, so the process exits
   // once both streams have written everything before it.
+  // ORACLE_GAPS_HOLD_EXIT_MS holds the exit after the done line, so the
+  // CLI's oracle can send a signal in that window.
   const end = (exitCode) => {
     if (ended) return
     ended = true
+    const hold = Number(process.env.ORACLE_GAPS_HOLD_EXIT_MS ?? 0)
     process.stdout.write(``, () =>
-      process.stderr.write(``, () => process.exit(exitCode)),
+      process.stderr.write(``, () =>
+        setTimeout(() => process.exit(exitCode), hold),
+      ),
     )
+  }
+  // Once the run writes its ending, a stop signal no longer cuts it off:
+  // its done line is then the last line of each stream, and the
+  // supervisor adds none (review of #46, F3).
+  const holdStops = () => {
+    process.on(`SIGINT`, () => {})
+    process.on(`SIGTERM`, () => {})
   }
   const fail = (error) => {
     if (ended) return
     const ending = endRun(error, options?.out)
+    holdStops()
     process.stderr.write(ending.stderr)
+    process.stdout.write(`${ending.done}\n`)
     end(ending.exitCode)
   }
   // An error thrown outside the awaited check, by a timer or a promise no
@@ -282,11 +315,14 @@ else if (main) {
     if (options.help) console.log(usage)
     else if (options.stop) await stopDaemon(options.pkg)
     else {
-      // The summary ends with the output directory and the completion
-      // line (report.mjs).
-      console.log(
-        await (options.daemon ? checkThroughDaemon : checkCold)(options),
+      const summary = await (options.daemon ? checkThroughDaemon : checkCold)(
+        options,
       )
+      holdStops()
+      // The summary ends with the done line (report.mjs), which ends stderr
+      // too.
+      console.log(summary)
+      process.stderr.write(`${summary.split(`\n`).at(-1)}\n`)
     }
     end(0)
   } catch (error) {
