@@ -144,7 +144,7 @@ settingsTester.run(`oracle/no-unit-test settings`, noUnitTest, {
       },
       errors: [
         {
-          messageId: `malformedSourceSetting`,
+          messageId: `malformedSetting`,
           line: 1,
           data: { path: `settings.oracles.testPackages` },
         },
@@ -159,7 +159,7 @@ settingsTester.run(`oracle/no-unit-test settings`, noUnitTest, {
       },
       errors: [
         {
-          messageId: `malformedSourceSetting`,
+          messageId: `malformedSetting`,
           line: 1,
           data: { path: `settings.oracles.testPackages` },
         },
@@ -172,9 +172,23 @@ settingsTester.run(`oracle/no-unit-test settings`, noUnitTest, {
       settings: { oracles: { nonTestPackages: `regex-lib` } },
       errors: [
         {
-          messageId: `malformedSourceSetting`,
+          messageId: `malformedSetting`,
           line: 1,
           data: { path: `settings.oracles.nonTestPackages` },
+        },
+        { messageId: `unknownTestSource`, line: 1 },
+      ],
+    },
+    // `ignore` is no mode (2026-11-12): it is malformed and read as `report`.
+    {
+      code: unknownCall,
+      filename,
+      settings: { oracles: { unknownSources: `ignore` } },
+      errors: [
+        {
+          messageId: `malformedSetting`,
+          line: 1,
+          data: { path: `settings.oracles.unknownSources` },
         },
         { messageId: `unknownTestSource`, line: 1 },
       ],
@@ -186,7 +200,7 @@ settingsTester.run(`oracle/no-unit-test settings`, noUnitTest, {
       settings: { oracles: { unknownSources: `warn` } },
       errors: [
         {
-          messageId: `malformedSourceSetting`,
+          messageId: `malformedSetting`,
           line: 1,
           data: { path: `settings.oracles.unknownSources` },
         },
@@ -200,7 +214,7 @@ settingsTester.run(`oracle/no-unit-test settings`, noUnitTest, {
       settings: { oracles: { unknownSources: 3 } },
       errors: [
         {
-          messageId: `malformedSourceSetting`,
+          messageId: `malformedSetting`,
           line: 1,
           data: { path: `settings.oracles.unknownSources` },
         },
