@@ -2635,7 +2635,7 @@ const calibrations = [
       const value = structuredClone(trace[index].value)
       const line = value.stdout
         ?.split(`\n`)
-        .find((l) => /^  \S+ L\d+ m\d+ /.test(l))
+        .find((l) => /^oracle-gaps: gap \S+ L\d+ m\d+ /.test(l))
       if (line === undefined) return undefined
       value.stdout = value.stdout.replace(`${line}\n`, ``)
       return trace.map((o, i) => (i === index ? { ...o, value } : o))
