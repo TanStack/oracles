@@ -11,6 +11,6 @@ Show me what oracle testing with @tanstack/oracles can find in this repository.
    the first 7 characters of the hash as <sha>.
 2. Install https://pkg.pr.new/TanStack/oracles/@tanstack/oracles@<sha> as a dev
    dependency, with this repository's package manager.
-3. Read node_modules/@tanstack/oracles/skills/oracles-start/SKILL.md in full,
+3. Read node_modules/@tanstack/oracles/skills/oracles-explore/SKILL.md in full,
    and follow it. Use <sha> wherever a skill asks for the commit to pin.
 ```

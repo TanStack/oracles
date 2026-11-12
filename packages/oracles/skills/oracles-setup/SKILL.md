@@ -11,13 +11,13 @@ developer is available, choose the default this skill gives, record each choice 
 your report, and continue. That default covers setup questions only.
 Potential laws have no default: propose them, report them, and stop.
 
-This skill has two uses. A first session (`oracles-start`) uses only its
+This skill has two uses. A first session (`oracles-explore`) uses only its
 install section and its "where oracle files go" section, for the minimal
 setup that an oracle needs to run, and step 7's command, when its oracle
 passes and it runs the gap check. Finishing the setup uses all of it. That
 usually starts after a first session, when the developer wants to keep the
 work: to commit it, or to open a pull request. If there is
-no oracle yet, load `oracles-start` first.
+no oracle yet, load `oracles-explore` first.
 
 Setup ends when one oracle passes on production and the gap check leaves no
 gap open in that oracle's own contract, unless the developer decides otherwise. A
@@ -292,9 +292,10 @@ optimization project.
 
 **Skills.**
 
-- To find where an oracle would help, or to propose a new one, read
-  `node_modules/@tanstack/oracles/skills/oracles-start/SKILL.md` in full and
-  follow it.
+- To explore an area of the code (or the whole repository), find where an
+  oracle would help, or propose a new one, read
+  `node_modules/@tanstack/oracles/skills/oracles-explore/SKILL.md` in full
+  and follow it.
 - Before you create or change an oracle, or change production code that an
   oracle owns, read `node_modules/@tanstack/oracles/skills/oracles-design/SKILL.md`
   in full and follow it.
@@ -347,7 +348,7 @@ choices. They can pick more than one.
 | **Global pointers**     | A pointer skill per skill in `~/.agents/skills/` and `~/.claude/skills/` (and any other skills directory the developer's agents read) | The developer wants the skills in every repository that uses `@tanstack/oracles`. |
 
 Write a pointer skill as `<directory>/<name>/SKILL.md` for each of
-`oracles-start`, `oracles-design`, `oracles-review`,
+`oracles-explore`, `oracles-design`, `oracles-review`,
 `oracles-evaluate-review`, and `oracles-setup`.
 
 Before you write repository pointers, check that git does not ignore their
@@ -396,7 +397,7 @@ laws that the developer approved: load `oracles-design`, and follow it from
 its first step.
 
 A first session fixes each bug the developer confirms right away, oracle
-first, and runs the gap check only when its oracle passes (`oracles-start`
+first, and runs the gap check only when its oracle passes (`oracles-explore`
 step 5). When finishing the setup:
 
 If the first oracle fails on unchanged production under an adopted law, it

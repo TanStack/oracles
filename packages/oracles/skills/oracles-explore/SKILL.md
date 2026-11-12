@@ -1,9 +1,20 @@
 ---
-name: oracles-start
-description: Run a first session with @tanstack/oracles in a developer's codebase. Say what the session will do, look around and present a few spots, probe the real API to prove each finding, propose a potential oracle and its potential laws, then build it and run it, fix confirmed bugs oracle first, and close gaps until it finds bugs or design questions. Present the work, and say what finishing the repository's setup would add. Use when someone is trying @tanstack/oracles, or asks where an oracle would help.
+name: oracles-explore
+description: Explore an area of a codebase with @tanstack/oracles, or the whole repository. Probe the real API to prove each finding, propose a potential oracle and its potential laws, build it, fix confirmed bugs oracle first, and close gaps until bugs or design questions turn up. The first time in a repository, it also onboards the developer: what the session will do, new words explained as they come up, a walk-through, and the choice to finish setting up. Use when someone is trying @tanstack/oracles, asks where an oracle would help, or asks to explore an area ("explore the clearQueue API").
 ---
 
-# A first session with oracles
+# Explore with oracles
+
+## First session, or a later one
+
+The developer may name an area: in their message, or as this skill's
+argument (`/oracles-explore the clearQueue API`). Start there. With no area,
+look around the whole repository and present a few spots.
+
+A **first session** is one in a repository with no oracle files yet, or one
+the developer says is their first. It includes everything below. A later
+session skips the parts marked "(first session)", and keeps the rest of the
+workflow the same.
 
 ## Your goal
 
@@ -38,7 +49,8 @@ credibility. So every finding needs a probe that the developer can run again.
   **potential oracle** that owns a public behavior, its **potential laws**,
   and the **oracle file**. Once the developer approves a potential law, it is
   a **law**; once the oracle runs, it is the **oracle**.
-- Explain each uncommon word in one line the first time you use it, tied to
+- Explain each uncommon word in one line the first time you use it with
+  this developer (in a later session, only words they have not seen yet), tied to
   what is on the screen. Do not explain them all up front. The words, and a
   line for each:
 
@@ -141,16 +153,18 @@ each kind of oracle work, and the lint rule. Until the setup is finished, the li
 the repository's own lint: the oracles lint plugin comes with the setup,
 and its absence is not a problem to report.
 
-Your first message starts with two or three sentences on what this session
-will do, before any question. Write them for this repository, in plain words,
+(first session) Your first message starts with two or three sentences on
+what this session will do, before any question. Write them for this repository, in plain words,
 in your own sentences: name what the library does, which of its behaviors
 you will try, how you will try them (calling the real code with chosen
 inputs), and that you will then write an oracle with them for the rules you
 agree on. Mention nothing about this skill or its steps.
 
-Then go straight on to look around. If their first message named a part of
-the code, say that you will start there, and go on. They can name a part at
-any time, and you start there.
+In a later session, say in one line which area you will explore, and start.
+
+Then go straight on to look around. If they named an area, say that you
+will start there, and go on. They can name a part at any time, and you
+start there.
 
 ## 2. Look around
 
@@ -479,7 +493,8 @@ them and stop.
    after. Follow the defect path in `oracles-design` step 7. Most developers
    want the fix at once; with the oracle failing first, the fix is proved.
 
-   After the first fix, offer the walk-through at once (see step 6),
+   (first session) After the first fix, offer the walk-through at once (see
+   step 6),
    following the bug you just fixed. The oracle is at its simplest now, so
    it is the best moment to see how it is built. Then go on.
 
@@ -546,7 +561,8 @@ the file: the history that produced it, what the driver did and saw, what
 the model expected, and how the check reported the difference and shrank it.
 Show a few lines of the file at each part, not a description of it.
 
-End with a choice: ship it, or keep going. Keeping going means the next
+End with a choice. If the repository's setup is not finished yet: ship it,
+or keep going. Once it is set up, the choice is only where to go next. Keeping going means the next
 oracle, at another spot from your look-around. Shipping means keeping the
 work (a commit, or a pull request): finishing the repository's setup adds a lint preset
 that keeps oracle files honest, a block in `AGENTS.md` (or `CLAUDE.md`) so

@@ -24,10 +24,10 @@ failure goes away, and pinning one example. `oracles-review` §2 lists them all.
 ## 1. Start from approved potential laws, then write the oracle file
 
 **A new oracle starts from potential laws that the developer approved**, usually
-in a first session (`oracles-start`): the laws that the authority decides.
+in an explore session (`oracles-explore`): the laws that the authority decides.
 Open design questions may still be open: they are limits until the developer
 settles them. If no laws are approved yet, probe the behavior and propose
-them first, as `oracles-start` does, and stop for approval. Exploration and
+them first, as `oracles-explore` does, and stop for approval. Exploration and
 review stay in the conversation, never in the oracle file. The file is
 written with its law block and its code together.
 
@@ -162,7 +162,7 @@ from `gh api user --jq .login`, or ask the developer. Write the login without an
 
 **Then write the code under it.** Each boundary condition from the probes
 and the law worksheet becomes a constructed history. If there was no first
-session, fill in the worksheet from `oracles-start` for each law first. Each `oracleProperty` carries one law: give
+session, fill in the worksheet from `oracles-explore` for each law first. Each `oracleProperty` carries one law: give
 each law its own property, so a failure names the law it breaks. The
 properties can share one model, grammar, and driver. Each law's sentence,
 authority, and limits go in that property's `law` option. Put prose beside the model, the histories,
