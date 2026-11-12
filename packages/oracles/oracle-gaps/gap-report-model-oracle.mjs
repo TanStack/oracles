@@ -408,7 +408,8 @@ const testCase = fc.record({
   // A test may declare a work bound, as an oracle property's `work` does:
   // a ratio of 1 rejects a mutant that does any more work there.
   work: fc.constantFrom(null, null, null, 1),
-  // Only a witness waits on a timer: its work could follow the clock.
+  // Only a witness waits on a timer, sleeps, reads the clock, or waits a
+  // turn: its work could follow the clock.
   timed: fc.constant(false),
 })
 // Law 9's edits. Each content edit changes what some evidence depends on:
@@ -953,21 +954,30 @@ const witness = [
       judging(`a`, `fixed seed`, 1, { work: 1 }),
     ],
   },
-  // The early return again, in two tests that the work law does not judge:
-  // tests that wait on a timer before they run it (as a polling or a
-  // deadline loop does, whose count can follow the clock), with a bound of
-  // 1, and tests that register no route, which can carry no bound. Its
-  // `if-false` mutant costs work there, deterministically, and stays
-  // `not-observed`.
-  {
-    id: `w_fasttimed`,
+  // The early return again, in tests that the work law does not judge,
+  // with a bound of 1: tests whose count could follow the clock, as a
+  // polling or a deadline loop's does (a kill must replay on an idle
+  // machine, the maintainer's decision of 2026-11-12 under P3), which wait
+  // on a timer, sleep through `node:timers/promises`, or read the clock
+  // before they run it; and tests that register no route, which can carry
+  // no bound. Its `if-false` mutant costs work there, deterministically, and
+  // stays `not-observed`. Tests that wait one turn (`setImmediate`, as
+  // `withinTurns` does) and read no clock still judge work, so there it is
+  // killed.
+  ...[
+    [`w_fasttimed`, `timer`],
+    [`w_fastsleep`, `sleep`],
+    [`w_fastclock`, `clock`],
+    [`w_fastturn`, `turn`],
+  ].map(([id, timed]) => ({
+    id,
     owners: [`a`],
     body: [{ kind: `shortcut`, op: `>`, k: 2, not: false }],
     tests: [
-      judging(`a`, `fixed seed`, 7, { timed: true, work: 1 }),
-      judging(`a`, `fixed seed`, 1, { timed: true, work: 1 }),
+      judging(`a`, `fixed seed`, 7, { timed, work: 1 }),
+      judging(`a`, `fixed seed`, 1, { timed, work: 1 }),
     ],
-  },
+  })),
   {
     id: `w_fastplain`,
     owners: [`a`],
@@ -1717,6 +1727,9 @@ const captureWitness = new Set([
   `w_fastcall`,
   `w_fastcallbound`,
   `w_fasttimed`,
+  `w_fastsleep`,
+  `w_fastclock`,
+  `w_fastturn`,
   `w_fastplain`,
   `w_noobs`,
   `w_unreached`,
@@ -3864,7 +3877,7 @@ function runsOf(plan, tests, sites, active) {
         found.length === 0 &&
         active?.site !== undefined &&
         [`reproducible`, `random`].includes(route) &&
-        !t.timed
+        (!t.timed || t.timed === `turn`)
       return {
         t,
         route,
@@ -4424,6 +4437,9 @@ function oracleTestFile(plan, file) {
     ...(plan.tests.some((t) => t.file === file && (t.ioWait || t.stops))
       ? [`import { spawn } from 'node:child_process'`]
       : []),
+    ...(plan.tests.some((t) => t.file === file && t.timed === `sleep`)
+      ? [`import { setTimeout as sleep } from 'node:timers/promises'`]
+      : []),
     ...(plan.tests.some((t) => t.file === file && t.stops)
       ? [
           `import { writeFileSync as recordPid } from 'node:fs'`,
@@ -4482,7 +4498,16 @@ function oracleTestFile(plan, file) {
           ? [`    g.__oracleWorkBound?.(${t.work})`]
           : []),
         // A test that waits on a timer before it runs production.
-        ...(t.timed ? [`    await new Promise((r) => setTimeout(r, 0))`] : []),
+        ...(t.timed
+          ? [
+              {
+                timer: `    await new Promise((r) => setTimeout(r, 0))`,
+                sleep: `    await sleep(0)`,
+                clock: `    if (Date.now() < 0) throw new Error('the clock reads before 1970')`,
+                turn: `    await new Promise((r) => setImmediate(r))`,
+              }[t.timed],
+            ]
+          : []),
         `    const ${out}: Array<string> = []`,
         ...(t.setsShared ? [`    shared.value = 5`] : []),
         t.readsShared

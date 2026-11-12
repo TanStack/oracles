@@ -469,13 +469,24 @@ const testRecord = fc.record({
   // The test's work with no mutant active, in site evaluations; whether its
   // second unmutated run did one more (its observations still agreeing);
   // the work bound its property declares (`work: { ratio }`), if any, in
-  // hundredths; whether it made a timer or held I/O open, so its work can
-  // follow a clock; and its time in the two unmutated runs, which judges
-  // nothing.
+  // hundredths; whether its count could follow the clock, and by which
+  // path (a timer or interval, a timer of `node:timers/promises`, a read of
+  // a clock such as `Date.now()`, or I/O held open), all of which the
+  // capture records as one flag, `clocked`, beside `io`; and its time in the
+  // two unmutated runs, which judges nothing.
   work: fc.constantFrom(0, 10, 25, 100),
   workFlaky: fc.constantFrom(false, false, false, true),
   bound: fc.constantFrom(undefined, undefined, 100, 116, 150, 200),
-  clocked: fc.constantFrom(`none`, `none`, `none`, `timers`, `io`),
+  clocked: fc.constantFrom(
+    `none`,
+    `none`,
+    `none`,
+    `none`,
+    `timer`,
+    `timers/promises`,
+    `clock read`,
+    `io`,
+  ),
   ms: fc.nat({ max: 40 }),
 })
 const records = fc.record({
@@ -626,8 +637,10 @@ const swapFor = { '>': `>=`, '>=': `>`, '===': `!==`, '&&': `||` }
 const workUnder = (t, slot) => Math.max(0, t.work + t.under[slot].work)
 // Whether a test's work judges operator mutant `mi`: it passed under the
 // mutant, it reached the mutant or its file loaded code that did, its
-// observations and its work agreed between the unmutated runs, it made no
-// timer and held no I/O open (its work could follow a clock), and its
+// observations and its work agreed between the unmutated runs, its count
+// could not follow the clock (it made no timer by any path, read no clock,
+// and held no I/O open: a kill must replay on an idle machine, the
+// maintainer's decision of 2026-11-12 under P3), and its
 // route is one that `oracleProperty` registers for production, a
 // reproducible or a random one, so it can carry a declared bound.
 const passedKinds = new Set([`same`, `changed`, `observedChanged`, `unhandled`])
@@ -1536,7 +1549,7 @@ function baselineUnitsOf(h, pass) {
         // The ratio the property declares, as an author writes it.
         work: t.bound === undefined ? undefined : t.bound / 100,
         // A timer the test made, or I/O it held open (capture-setup.mjs).
-        ...(t.clocked === `timers` ? { timers: true } : {}),
+        ...(t.clocked === `none` ? {} : { clocked: true }),
         ...(t.clocked === `io` ? { io: true } : {}),
         ms: t.ms + pass,
       })
@@ -1612,7 +1625,7 @@ function unitOf(h, fi, slot) {
           // work.
           calls: slot < MUTANTS ? workUnder(t, slot) : 0,
           work: t.bound === undefined ? undefined : t.bound / 100,
-          ...(t.clocked === `timers` ? { timers: true } : {}),
+          ...(t.clocked === `none` ? {} : { clocked: true }),
           ...(t.clocked === `io` ? { io: true } : {}),
           ms: under(t).ms,
           verdicts:
@@ -3300,12 +3313,18 @@ const constructed = [
       effect: { work: 4 },
     },
   ),
-  // A test that made a timer, or held I/O open, can do work that follows a
-  // clock: a polling or a deadline loop. Its rise judges nothing, so a
-  // bound cannot kill on it and the mutant is not extra-work.
-  ...[`timers`, `io`].map((clocked) =>
+  // A test that made a timer by any path, read a clock, or held I/O open
+  // can do work that follows the clock: a polling or a deadline loop. Its
+  // rise judges nothing, so a bound cannot kill on it, which an idle replay
+  // would not reproduce, and the mutant is not extra-work.
+  ...[
+    [`timer`, `made a timer`],
+    [`timers/promises`, `slept through node:timers/promises`],
+    [`clock read`, `read the clock`],
+    [`io`, `held I/O open`],
+  ].map(([clocked, did]) =>
     single(
-      `a rise past the bound in a test that ${clocked === `timers` ? `made a timer` : `held I/O open`}`,
+      `a rise past the bound in a test that ${did}`,
       [`a work rise where work judges nothing`],
       {
         mutant: { operator: `if-false` },

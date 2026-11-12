@@ -182,10 +182,14 @@
  *    fails is a survivor: a `not-judged` when an owner test's observation
  *    or asserted value changed, an `extra-work` when no observation changed
  *    and an owner test that reached it, on a reproducible or random route,
- *    with no timer made and no I/O held open, did more work (a shortcut
- *    whose deletion only costs time); a test that made a timer or
- *    registered no route judges no work, so its rise leaves the class as it
- *    was (the PR #48 review's F1 and F5, 2026-11-12), a
+ *    whose count could not follow the clock (no timer made by any path,
+ *    `node:timers/promises` included, no clock read, and no I/O held
+ *    open; a wait of one turn, `setImmediate`, is no clock), did more work
+ *    (a shortcut whose deletion only costs time); a test whose count could
+ *    follow the clock, or that registered no route, judges no work, so its
+ *    rise leaves the class as it was, and a bound never kills where an idle
+ *    replay would not (the PR #48 reviews' F1 and F5; the maintainer's
+ *    decision of 2026-11-12 under P3), a
  *    `branch-never-taken` when an `if` on its line never took
  *    one of its outcomes in an owner test, a `not-infected` when a comparison's
  *    operators agreed on every operand an owner test reached, a
@@ -1702,6 +1706,26 @@ async function driver(plan, observe) {
       if (
         m.operator === `if-false` &&
         m.class === `not-observed` &&
+        m.function === `w_fastsleep`
+      )
+        states.add(
+          `a work rise in a test that slept through timers/promises judged nothing`,
+        )
+      if (
+        m.operator === `if-false` &&
+        m.class === `not-observed` &&
+        m.function === `w_fastclock`
+      )
+        states.add(`a work rise in a test that read the clock judged nothing`)
+      if (
+        m.operator === `if-false` &&
+        m.outcome === `killed` &&
+        m.function === `w_fastturn`
+      )
+        states.add(`a work rise in a test that waited a turn killed`)
+      if (
+        m.operator === `if-false` &&
+        m.class === `not-observed` &&
         m.function === `w_fastplain`
       )
         states.add(`a work rise on an unregistered route judged nothing`)
@@ -2565,6 +2589,9 @@ const required = [
   `extra work`,
   `killed by a work bound`,
   `a work rise in a test that made a timer judged nothing`,
+  `a work rise in a test that slept through timers/promises judged nothing`,
+  `a work rise in a test that read the clock judged nothing`,
+  `a work rise in a test that waited a turn killed`,
   `a work rise on an unregistered route judged nothing`,
   `branch never taken`,
   `not infected`,
