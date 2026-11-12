@@ -276,7 +276,11 @@ function bodyShape(module, fn, session) {
       // may register a test, and that is reported unless it surely does.
       const unknown = unknownRegistration(node, functions)
       if (unknown !== undefined && shape === undefined)
-        shape = { kind: `unknown`, name: unknown.name, source: unknown.source }
+        shape = {
+          kind: `unknown`,
+          name: boundName(unknown),
+          source: unknown.source,
+        }
       return
     }
     const position = passedBody(test.body, fn, functions)
@@ -325,6 +329,28 @@ function passedBody(body, fn, functions) {
   return position
 }
 
+/**
+ * The name that a file wrote for an unknown source's export: the local
+ * name of a named or default import, or a namespace's or a `require`'s
+ * member.
+ */
+function boundName({ site, name }) {
+  if (
+    site?.type === `ImportSpecifier` ||
+    site?.type === `ImportDefaultSpecifier`
+  )
+    return site.local.name
+  if (site?.type === `ImportNamespaceSpecifier`)
+    return `${site.local.name}.${name}`
+  if (
+    site?.type === `CallExpression` &&
+    site.parent.type === `VariableDeclarator` &&
+    site.parent.id.type === `Identifier`
+  )
+    return `${site.parent.id.name}.${name}`
+  return name
+}
+
 function walk(node, visit) {
   visit(node)
   for (const [key, child] of Object.entries(node)) {
@@ -368,7 +394,7 @@ export default {
       incompleteProperty: `This oracleProperty call does not pass an object literal with a check, so the rule cannot see that the property has one. Pass its options inline as \`oracleProperty({ id, law, histories, driver, model, check })\`.`,
       importedRegistration: `This oracle file calls a helper that registers tests. An oracle file registers only oracle tests, so register those tests from an ordinary test file and keep this file to its checks and model.`,
       unknownTestSource: `The rules cannot tell whether \`{{name}}\` from \`{{source}}\` is a test function, because they do not read that package. Name the package in \`settings.oracles.testPackages\` (a test framework's specifier, or a table of its exports such as \`{ authTest: 'test' }\`) or in \`settings.oracles.nonTestPackages\`.`,
-      malformedSourceSetting: `\`settings.oracles.{{name}}\` is malformed, so the rules read it as unset. \`testPackages\` maps a specifier to a framework's specifier or to a table of export roles (\`'test'\` or \`'suite'\`), \`nonTestPackages\` is an array of specifiers, and \`unknownSources\` is \`'report'\`, \`'test'\`, or \`'ignore'\`.`,
+      malformedSourceSetting: `\`{{path}}\` is malformed, so the rules read it as unset. \`testPackages\` maps a specifier to a framework's specifier or to a table of export roles (\`'test'\` or \`'suite'\`), \`nonTestPackages\` is an array of specifiers, and \`unknownSources\` is \`'report'\`, \`'test'\`, or \`'ignore'\`.`,
     },
   },
   create(context) {
@@ -385,7 +411,7 @@ export default {
       context.report({
         node: unknown.site ?? node,
         messageId: `unknownTestSource`,
-        data: { name: unknown.name, source: unknown.source },
+        data: { name: boundName(unknown), source: unknown.source },
       })
     }
     const settingProblems = {
@@ -394,7 +420,12 @@ export default {
           context.report({
             loc: { line: 1, column: 0 },
             messageId: `malformedSourceSetting`,
-            data: { name },
+            data: {
+              path:
+                name === `oracles`
+                  ? `settings.oracles`
+                  : `settings.oracles.${name}`,
+            },
           })
       },
     }

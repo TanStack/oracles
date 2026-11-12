@@ -289,8 +289,13 @@ The limits that these decisions accept, which the oracles
 (`lint.test-source-recognition`, `lint.test-function-agreement`) state:
 
 - An unknown source's call that passes no title before its function is
-  silent, whatever it does (`fixture(fn)`). Name the package in
-  `settings.oracles.testPackages` to have it judged.
+  silent, whatever it does (`fixture(fn)`). So is one whose title is a
+  binding or a call (`it(name, fn)`, `it(String(n), fn)`, and a helper's
+  `t(name, fn)` with a parameter `name`), because such a call cannot be told
+  apart from `pMap(items, fn)`; only a string or template title makes it
+  title-shaped. Name the package in `settings.oracles.testPackages` to have
+  it judged. A known framework's registration counts whatever its title
+  expression is.
 - An unknown source's title-shaped call is reported even when it is no
   test, such as a library's `step('install', fn)`, `module('m', fn)`, or
   Pinia's `defineStore('main', () => ...)`. Name the package in

@@ -42,13 +42,20 @@
  *   number, or an array; a `testPackages` array or an entry naming
  *   `constructor` or `toString`; a `nonTestPackages` string; an unknown
  *   `unknownSources` mode) gets one `malformedSourceSetting` report at line
- *   1, is read as unset, all of it, and never makes a rule throw.
+ *   1, naming the setting's path (`settings.oracles` itself, or
+ *   `settings.oracles.testPackages`), is read as unset, all of it, and never
+ *   makes a rule throw.
  * - **An unknown source is reported, not guessed.** Every import from any
  *   other package, named, default, or namespace, under any local name, is a
  *   source the rules cannot classify. With `unknownSources: 'report'`, the
  *   default, a title-shaped call through it (a string or template title,
  *   then a function) gets one `unknownTestSource` report, at its import,
- *   once per import, and no other report. A call with no title before its
+ *   once per import, and no other report. The report names the binding
+ *   that the file wrote (a local name, or a namespace's or `require`'s
+ *   member) and the source. A binding or a call as the title is not
+ *   title-shaped (an accepted limit: `it(name, fn)` cannot be told apart
+ *   from `pMap(items, fn)`); a known framework's registration counts
+ *   whatever its title is. A call with no title before its
  *   function (`pMap(xs, fn)`, `debounce(fn, 10)`, `effect(fn)`) gets none:
  *   that is the precision law. A call to a relative helper that makes a
  *   title-shaped call gets the report at the call. `unknownSources: 'test'`
@@ -153,6 +160,17 @@ const RULES = [
 // no tests.
 const SHAPES = {
   title: (b, table) => (table ? `'n %s', ${b.row}` : `'n', ${b.body}`),
+  // Titles that are not string literals: a template, a binding of the
+  // header, and a call. A framework's registration counts whatever its
+  // title is; through an unknown source only a literal or template title is
+  // title-shaped, since a binding or a call first cannot be told apart from
+  // `pMap(items, fn)`.
+  'template-title': (b, table) =>
+    table ? `\`n %s\`, ${b.row}` : `\`n\`, ${b.body}`,
+  'binding-title': (b, table) =>
+    table ? `title, ${b.row}` : `title, ${b.body}`,
+  'call-title': (b, table) =>
+    table ? `String('n %s'), ${b.row}` : `String('n'), ${b.body}`,
   'fn-first': (b, table) => (table ? `${b.row}, 'n %s'` : `${b.body}, 'n'`),
   'data-first': (b) => `[1], ${b.body}`,
   'fn-only': (b) => b.body,
@@ -1262,7 +1280,11 @@ const BODIES = {
 const HEADER = [
   `import { oracleProperty } from '@tanstack/oracles'`,
   `import { checkHistory, compute } from './plain.js'`,
+  `const title = 'n'`,
 ]
+
+// The shapes that an unknown source's call needs to be title-shaped.
+const TITLED = new Set([`title`, `template-title`])
 const PLAIN = `export function compute() {\n  return 1\n}\nexport function checkHistory() {\n  return 1\n}\n`
 
 /** The import that a statement needs: its key, line, and binding. */
@@ -1382,6 +1404,7 @@ function layout(history) {
     lines.push(text)
     return {
       ...statement,
+      binding: imported.binding,
       importKey: imported.key,
       importLine: importLines.get(imported.key),
       callLine: lines.length,
@@ -1430,8 +1453,7 @@ function callReports(kind, carries, effects, registers = true) {
  * the title optional and the function comes first (node:test's `test(fn)`).
  * Elsewhere a function first is no body.
  */
-const registers = (role, shape) =>
-  shape === `title` || shape === `data-first` || role.untitled
+const registers = (role, shape) => !shape.startsWith(`fn-`) || role.untitled
 
 /** The reports of a Playwright annotation, at its scope. */
 function annotationReports(role, annotation) {
@@ -1445,10 +1467,27 @@ function annotationReports(role, annotation) {
   return reports
 }
 
+/**
+ * What the reports of a history owe: the sorted `line:rule:messageId` keys,
+ * and the sorted names that the configuration reports name: the setting's
+ * path for `malformedSourceSetting`, and for `unknownTestSource` the binding
+ * that the file wrote (its local name, or a namespace's or `require`'s
+ * member) and the source.
+ */
 function reportKeys(history) {
+  return expectedReports(history).keys
+}
+
+function expectedReports(history) {
   const { settings, spoiled } = effectiveSettings(history.settings)
   const keys =
     spoiled === undefined ? [] : [`1:no-unit-test:malformedSourceSetting`]
+  const names =
+    spoiled === undefined
+      ? []
+      : [
+          `1:malformedSourceSetting:${spoiled === `oracles` ? `settings.oracles` : `settings.oracles.${spoiled}`}`,
+        ]
   const diagnosed = new Set()
   for (const placed of layout(history).placed) {
     const role = roleOf(placed.source, placed.e, settings)
@@ -1457,9 +1496,12 @@ function reportKeys(history) {
       // The helper registers a test of its own, or makes a call that the
       // rules cannot classify. A machinery file's helpers are not judged.
       if (history.machinery) continue
-      if (role.kind === `unknown`)
+      if (role.kind === `unknown`) {
         keys.push(`${placed.callLine}:no-unit-test:unknownTestSource`)
-      else if (role.kind === `test`)
+        names.push(
+          `${placed.callLine}:unknownTestSource:x_${placed.i} from ${placed.source.spec}`,
+        )
+      } else if (role.kind === `test`)
         keys.push(`${placed.callLine}:no-unit-test:importedRegistration`)
       continue
     }
@@ -1472,12 +1514,15 @@ function reportKeys(history) {
       // around it.
       const titled =
         annotation === undefined
-          ? placed.shape === `title`
+          ? TITLED.has(placed.shape)
           : annotation.scope !== `file`
       if (!titled) continue
       if (!diagnosed.has(placed.importKey)) {
         diagnosed.add(placed.importKey)
         keys.push(`${placed.importLine}:no-unit-test:unknownTestSource`)
+        names.push(
+          `${placed.importLine}:unknownTestSource:${placed.binding} from ${placed.source.spec}`,
+        )
       }
       continue
     }
@@ -1497,11 +1542,12 @@ function reportKeys(history) {
       keys.push(`${placed.callLine}:${report}`)
     }
   }
-  return keys.sort()
+  return { keys: keys.sort(), names: names.sort() }
 }
 
 function model(history) {
-  return { keys: reportKeys(history), budget: `within ${BUDGET_MS} ms` }
+  const { keys, names } = expectedReports(history)
+  return { keys, names, budget: `within ${BUDGET_MS} ms` }
 }
 
 // -- Production paths ---------------------------------------------------------
@@ -1692,11 +1738,38 @@ async function driver(history, observe) {
   observe(`eslint`, keys(instance))
   observe(`linter`, keys(single))
   observe(
+    `names`,
+    single.threw === undefined ? namesOf(single.messages) : [`threw`],
+  )
+  observe(
     `budget`,
     slowest <= BUDGET_MS
       ? `within ${BUDGET_MS} ms`
       : `over ${BUDGET_MS} ms: ${Math.round(slowest)} ms`,
   )
+}
+
+/**
+ * The names that the configuration reports print: the backticked setting
+ * path of `malformedSourceSetting`, and the binding and source of
+ * `unknownTestSource`.
+ */
+function namesOf(messages) {
+  return messages
+    .flatMap((message) => {
+      if (message.messageId === `malformedSourceSetting`)
+        return [
+          `${message.line}:malformedSourceSetting:${/^`([^`]+)`/.exec(message.message)?.[1]}`,
+        ]
+      if (message.messageId === `unknownTestSource`) {
+        const named = /`([^`]+)` from `([^`]+)`/.exec(message.message)
+        return [
+          `${message.line}:unknownTestSource:${named?.[1]} from ${named?.[2]}`,
+        ]
+      }
+      return []
+    })
+    .sort()
 }
 
 // -- Check ----------------------------------------------------------------------
@@ -1708,7 +1781,11 @@ function check(_history, observations, expected) {
       observation.checkpoint,
       LAW,
       observation.value,
-      observation.checkpoint === `budget` ? expected.budget : expected.keys,
+      observation.checkpoint === `budget`
+        ? expected.budget
+        : observation.checkpoint === `names`
+          ? expected.names
+          : expected.keys,
     )
     if (verdict !== undefined) return verdict
   }
@@ -1787,7 +1864,7 @@ function reached(history) {
     .placed.filter(
       (placed) =>
         placed.form !== `helper` &&
-        placed.shape === `title` &&
+        TITLED.has(placed.shape) &&
         !CHAINS[placed.chainId].effects.includes(`nothing`) &&
         roleOf(placed.source, placed.e, settings).kind === `unknown`,
     )
@@ -1797,11 +1874,11 @@ function reached(history) {
   if (
     placed.some(
       (statement) =>
-        statement.source.class === `unknown` && statement.shape !== `title`,
+        statement.source.class === `unknown` && !TITLED.has(statement.shape),
     ) &&
     placed.every(
       (statement) =>
-        statement.source.class !== `unknown` || statement.shape !== `title`,
+        statement.source.class !== `unknown` || !TITLED.has(statement.shape),
     )
   )
     states.add(UNTITLED)
@@ -1885,7 +1962,7 @@ function malformedConstruction(value) {
 // owes no report (the precision law).
 const untitledStatements = STATEMENTS.filter((key) => {
   const { source, shape } = parse(key)
-  return source.class === `unknown` && shape !== `title`
+  return source.class === `unknown` && !TITLED.has(shape)
 })
 
 /** A history with one setting and statements of the source it governs. */
@@ -2033,6 +2110,25 @@ oracleProperty({
       law: LAW,
       corrupt: (trace) =>
         corruptFirst(trace, (keys) => [...keys, `0:no-unit-test:unitTest`]),
+    },
+    {
+      name: `a configuration report that names another binding`,
+      law: LAW,
+      corrupt: (trace) => {
+        const index = trace.findIndex(
+          (observation) =>
+            observation.checkpoint === `names` && observation.value.length > 0,
+        )
+        if (index < 0) return undefined
+        return trace.map((observation, at) =>
+          at === index
+            ? {
+                ...observation,
+                value: observation.value.map((name) => `${name}?`),
+              }
+            : observation,
+        )
+      },
     },
     {
       name: `a lint over the budget`,

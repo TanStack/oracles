@@ -146,7 +146,7 @@ settingsTester.run(`oracle/no-unit-test settings`, noUnitTest, {
         {
           messageId: `malformedSourceSetting`,
           line: 1,
-          data: { name: `testPackages` },
+          data: { path: `settings.oracles.testPackages` },
         },
         { messageId: `unknownTestSource`, line: 1 },
       ],
@@ -161,7 +161,7 @@ settingsTester.run(`oracle/no-unit-test settings`, noUnitTest, {
         {
           messageId: `malformedSourceSetting`,
           line: 1,
-          data: { name: `testPackages` },
+          data: { path: `settings.oracles.testPackages` },
         },
         { messageId: `unknownTestSource`, line: 1 },
       ],
@@ -174,7 +174,7 @@ settingsTester.run(`oracle/no-unit-test settings`, noUnitTest, {
         {
           messageId: `malformedSourceSetting`,
           line: 1,
-          data: { name: `nonTestPackages` },
+          data: { path: `settings.oracles.nonTestPackages` },
         },
         { messageId: `unknownTestSource`, line: 1 },
       ],
@@ -188,7 +188,7 @@ settingsTester.run(`oracle/no-unit-test settings`, noUnitTest, {
         {
           messageId: `malformedSourceSetting`,
           line: 1,
-          data: { name: `unknownSources` },
+          data: { path: `settings.oracles.unknownSources` },
         },
         { messageId: `unknownTestSource`, line: 1 },
       ],
@@ -202,7 +202,7 @@ settingsTester.run(`oracle/no-unit-test settings`, noUnitTest, {
         {
           messageId: `malformedSourceSetting`,
           line: 1,
-          data: { name: `unknownSources` },
+          data: { path: `settings.oracles.unknownSources` },
         },
         { messageId: `unknownTestSource`, line: 1 },
       ],
