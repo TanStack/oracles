@@ -206,6 +206,18 @@ export default [
   it is TypeScript. Otherwise a typed production file fails to parse before
   the probe rule runs. For JavaScript production source, set the parser for
   the oracle files only.
+- The plugin decides whether a call registers a test by the package it is
+  imported from. It knows the common test runners (Vitest, Jest, Mocha,
+  `node:test`, AVA, uvu, and others) and the common libraries that never
+  register tests. A test-shaped call (a title and a function) from a package
+  it does not know gets one `unknownTestSource` report per import. For an
+  in-house test helper or a fixture package, map it in
+  `settings.oracles.testPackages` to the framework it wraps
+  (`{ '@acme/test-utils': 'vitest' }`) or to a table of its exports and
+  their roles (`{ authTest: 'test', group: 'suite' }`). List a library that
+  only looks like one in `settings.oracles.nonTestPackages`. The root
+  README of TanStack/oracles, "Where a test function comes from", has the
+  details.
 - Do not add an exemption. There is none.
 
 **An older ESLint (7 or 8, `.eslintrc`).** Do not upgrade the repository's
