@@ -268,6 +268,8 @@ needs (after the checks in `oracles-design` step 8), and restructure freely whil
 - Lint each oracle file and each changed production file after you edit it.
   Fix every report. Do not disable a rule.
 - Oracle files: `<oracle file glob>`. Gap check: `<gap check command>`.
+  Run the oracles through the gap check, not Vitest alone: it reports
+  each oracle file's result first, then the gaps once all of them pass.
 
 <!-- END @tanstack/oracles -->
 ```
@@ -386,6 +388,12 @@ production errors as observations: a mutant that crashes production is not a
 kill until the check rejects the recorded error.
 
 ## 7. Run the gap check
+
+The gap check is also how you run the oracles. It runs the oracle files
+first and prints each one's result. While one fails, it stops with the
+failing law's replay and refuses to judge the code. Once all pass, it goes
+on to the gaps. Use it instead of running Vitest on its own, so that every
+run gives you the test results and the gaps together.
 
 Run the gap check on the owned source:
 

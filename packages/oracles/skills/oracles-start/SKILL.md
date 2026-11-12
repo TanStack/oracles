@@ -460,7 +460,12 @@ them and stop.
    model computes the expected answer the simple way, the histories are the
    generated inputs and sequences, the driver calls their real code, and the
    check compares the two at each step.
-3. **Run it on the unchanged code.** A failure under an adopted law is a
+3. **Run it on the unchanged code, through the gap check.** Run the oracles
+   only with `oracle-gaps` (the command is in `oracles-setup` step 7), never
+   with Vitest on its own. It runs the oracle files first and prints each
+   one's result. While one fails, it stops there with the failing law's
+   replay; once all pass, it goes on to the gaps. One command gives you the
+   test results and the gaps together. A failure under an adopted law is a
    possible bug. Present it like a probe finding, as a class of bugs, with
    the oracle's smallest failing case as the example and the share of its
    histories that failed.

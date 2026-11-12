@@ -476,8 +476,8 @@ refactor: treat the law change first (step 1).
 
 1. Run the extended oracle file on **unchanged** production. It must fail on
    the defect. This is RED. A setup failure is not RED: fix the oracle first.
-   (Until the gap check reports a failing baseline, run the oracle file with
-   Vitest for this step.)
+   Run it through the gap check: it prints each oracle file's result and the
+   failing law's replay, and stops there while one fails.
 2. Change production, and rerun the oracle after each attempt. It also shows
    when an attempt breaks a neighboring law.
 3. Run the oracle again. It passes. This is GREEN.
