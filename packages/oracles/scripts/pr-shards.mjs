@@ -28,9 +28,6 @@ const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
 const anyOf = (names) => `(?:${names.map(escape).join(`|`)})`
 const rest = Symbol(`rest`)
 
-// The self-oracle's slowest determinism unit, which joins the other shard.
-const slowestDeterminism = `determinism: fixed history: a campaign whose shrinking would outlast its timeout reports its law in time`
-
 /**
  * The partitions, with their shards balanced by the costs measured in one
  * local run on an 18-core Mac under other agents' load, at 908b1f9
@@ -38,17 +35,21 @@ const slowestDeterminism = `determinism: fixed history: a campaign whose shrinki
  * self-oracle and 1.7 to 2.5 times for the end-to-end oracle.
  */
 export const partitions = {
-  // The oracleProperty self-oracle: 299 tests, 588 s in all. Its
-  // determinism units take 383 s, so one shard takes them, less the slowest
-  // (61 s), which joins the rest: 322 s and 266 s.
+  // The oracleProperty self-oracle: 299 tests, 545 s in all, measured at
+  // 81a5451 under other agents' load. One file whose tests run in sequence,
+  // so a shard's time is the sum of its tests. In CI its old first shard
+  // (the determinism units, about 300 s here) took 6 to 9 min. The
+  // determinism units named for a history that starts with "a " take
+  // 192 s, the slowest (61 s) among them; the other determinism units
+  // 165 s; and the rest 188 s.
   'oracle-framework': {
     args: [`--config`, `vitest.oracle-framework.config.mjs`],
     suite: `self-oracle.framework`,
     select: ``,
-    exceptions: [slowestDeterminism],
     shards: {
-      1: `(?!${anyOf([slowestDeterminism])}$)determinism: .*`,
-      2: rest,
+      1: `determinism: fixed history: a .*`,
+      2: `(?!determinism: fixed history: a )determinism: .*`,
+      3: rest,
     },
   },
   // The gap report's static oracle, the slowest of the fast gap suites and
