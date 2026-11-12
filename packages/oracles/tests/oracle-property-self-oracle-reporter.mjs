@@ -20,9 +20,13 @@ const serialize = (error) => {
 export default class SelfOracleReporter {
   /** @type {Map<string, string>} console output by task id */
   console = new Map()
+  /** @type {string[]} registration-time warnings */
+  warnings = []
 
   /** @param {{ taskId?: string, content: unknown }} log */
   onUserConsoleLog(log) {
+    if (String(log.content).includes(`transitional candidate search`))
+      this.warnings.push(String(log.content))
     if (log.taskId === undefined) return
     this.console.set(
       log.taskId,
@@ -56,6 +60,7 @@ export default class SelfOracleReporter {
       process.env.SELF_ORACLE_REPORT ?? `self-oracle-report.json`,
       JSON.stringify({
         files,
+        warnings: this.warnings,
         unhandled: (unhandledErrors ?? []).map(serialize),
       }),
     )

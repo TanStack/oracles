@@ -17,7 +17,9 @@
  * A constructed history builds its history as its prefix followed by a generated history,
  * cut to three items. The driver appends every history it runs, with the running test's name, to
  * the file named by SELF_ORACLE_LOG, so the self-oracle knows which
- * histories each campaign ran. A `nondeterministic` spec also records, last, a
+ * histories each campaign ran. The logical owning name comes from the runner's
+ * public aroundEach boundary, retained across late continuations; a slow raw log
+ * separately retains the global runner name for timeout diagnostics. A `nondeterministic` spec also records, last, a
  * counter that changes on every run. A spec reports reach through the
  * property's `reached` part or, as the framework's default, through the
  * driver's `observe("reach", state)`. A `slow` spec's driver takes about
@@ -123,17 +125,48 @@
  * `/^item \d is 4$/` as a pattern, `item 2 is 3` as text or `/^item 2 /` as a
  * pattern (which only a three-item candidate's `driver-last` difference
  * holds), or the empty text or the empty pattern. Only containment matches
- * the text `is 3`.
+ * the text `is 3`. A `throws` driver records that wrong observation before
+ * throwing, so ordinary verdict ranking still decides its calibration. A
+ * `clock` driver leaves its item observations unchanged and spins a controlled
+ * clock; only the mutant execution spins. A `driver-spin` mutant first records
+ * its wrong item and then spins, and `driver-spin-throws` also throws after the
+ * spin. Those ordered events distinguish an earlier violation from a later
+ * clock failure without making the selected clean history fail.
+ * `corrupt-throws`, `judge-throws`,
+ * and `judge-driver-throws` exercise exceptions from corruption and from the
+ * two mutant judgment routes without supplying any expected result.
+ *
+ * Histories and execution plans carry an input-side origin association (fixed
+ * name, construction name, or enumerated index), reported with each driver
+ * input. A separate build log records the builder's generated input and output,
+ * so the model can judge selection and the whole construction without sharing
+ * production's selector or seed hash. `extraReach` reports synthetic-extra
+ * outside every declaration, either globally or only in authored calibrations.
+ * The phase driver registers the same property under distinct suites to
+ * exercise repeated registration and collect-only reporting in one process.
+ * Each authored calibration can select its own history, or explicitly remain
+ * unbound beside bound peers. A fixed declaration can carry unrelated own or
+ * inherited `build` metadata. That method is never the declaration's source
+ * kind; if called, its copied result and build log expose the wrong dispatch.
  *
  * The synthetic ids come from a fixed pool, which this fixture registers with
  * `configureOracles`. The framework's own id, `self-oracle.framework`, is
  * registered beside them, so the self-oracle's registration law can reject an
  * id outside the registry.
  */
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { appendFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
 import fc from 'fast-check'
-import { afterAll, beforeEach, describe, expect, vi } from 'vitest'
+import {
+  afterAll,
+  aroundEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  vi,
+} from 'vitest'
 import {
   configureOracles,
   differs,
@@ -151,17 +184,17 @@ export const syntheticIds = [
   `self-oracle.synthetic-3`,
 ] as const
 
-// A child run that draws its seed draws it through Math.random, which is a
-// fixed-seed generator here (mulberry32), so it draws the same seeds in
-// every run of a file and the self-oracle's own determinism test can compare
-// the traces. Each draw is still the framework's own: the replay environment
-// declares no seed.
-let randomState = 20251111
-Math.random = () => {
-  randomState = (randomState + 0x6d2b79f5) | 0
-  let mixed = Math.imul(randomState ^ (randomState >>> 15), 1 | randomState)
-  mixed = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed
-  return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296
+// Only a real receiving child controls its host RNG. Importing this fixture
+// in the outer owner preserves that process's Math.random and fresh campaign seed.
+// Marked children use mulberry32 so their ordinary-route traces repeat.
+if (process.env.SELF_ORACLE_LOG !== undefined) {
+  let randomState = 20251111
+  Math.random = () => {
+    randomState = (randomState + 0x6d2b79f5) | 0
+    let mixed = Math.imul(randomState ^ (randomState >>> 15), 1 | randomState)
+    mixed = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed
+    return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296
+  }
 }
 
 // Every fixture and self-test property must be registered; `self-oracle.unregistered`
@@ -237,6 +270,8 @@ export type SyntheticSpec = {
     name: string
     history: SyntheticHistory
     enters?: ReadonlyArray<string>
+    /** Unrelated declaration metadata, not a construction. */
+    buildMetadata?: `own` | `inherited`
   }>
   /**
    * A `.map` the arbitrary applies, with or without an unmapper, to the whole
@@ -255,10 +290,50 @@ export type SyntheticSpec = {
   nondeterministic: boolean
   calibrations: ReadonlyArray<{
     name: string
-    kind: `right` | `wrong-law` | `no-op` | `driver` | `driver-last`
+    kind:
+      | `right`
+      | `wrong-law`
+      | `no-op`
+      | `driver`
+      | `driver-last`
+      | `driver-spin`
+      | `driver-spin-throws`
+      | `inapplicable`
+      | `throws`
+      | `clock`
+      | `corrupt-throws`
+      | `judge-throws`
+      | `judge-driver-throws`
     /** The difference the calibration requires, as text or a pattern, matching or not; absent, none. */
     difference?: CalibrationDifference
+    /** Absent inherits the property default; null explicitly stays unbound. */
+    history?: SyntheticSpec[`calibrationHistory`] | null
   }>
+  /** The proposed binding, passed structurally so the unchanged framework can be judged. */
+  calibrationHistory?:
+    | { constructed: string }
+    | { fixed: string }
+    | { enumerated: number | string }
+  /** Harmless inherited selector keys do not change the one authored own key. */
+  selectorPrototype?: `plain` | `fixed` | `constructed` | `enumerated`
+  /** Preserve generated variation while testing builder identity and consumed plans. */
+  isolatedPlans?: boolean
+  identityHistories?: boolean
+  /** Public alpha-renaming of logical saw-0; the production probe id stays fixed. */
+  probeName?: string
+  probeBinding?:
+    | `empty`
+    | `inferred`
+    | `explicit`
+    | `no-absence`
+    | `null-entered`
+    | `null-binding`
+    | `false-binding`
+    | `zero-binding`
+  /** Independent public selectors for the two clean opposite premises. */
+  probeEntered?: { fixed: string } | { constructed: string }
+  probeNotEntered?: { fixed: string } | { constructed: string }
+  duplicateHistoryNames?: boolean
   /** `observe`: the driver reports reach itself, the framework's default. */
   reachVia: `reached` | `observe`
   /** Each history takes about 300 ms; with `timeout`, tests outlive it. */
@@ -274,6 +349,11 @@ export type SyntheticSpec = {
   probe?: `agree` | `always` | `never` | `unreached` | `late`
   /** Reports `saw-0` as reached in every history. */
   overReport?: boolean
+  /** Reports a state outside the declaration, without changing the item language. */
+  extraReach?: boolean | `calibration`
+  /** Registers the same property repeatedly in named enclosing suites. */
+  warningProbe?: boolean
+  calibrationNames?: `indexed` | `varied` | `astral`
   /** Calls an unbound probe on every run, entering it on every other one, so only determinism sees it. */
   noisyProbe?: boolean
   /** `missing` omits `predict` for a bound probe; `extra` passes it unbound. */
@@ -378,6 +458,11 @@ class SyntheticFault extends Error {
 }
 /** A class instance that holds a history's items and an Error. */
 class SyntheticBox {
+  #valid = true
+  readItems(): SyntheticHistory {
+    if (!this.#valid) throw new Error(`invalid synthetic box`)
+    return this.items
+  }
   constructor(
     readonly items: SyntheticHistory,
     readonly failure: Error,
@@ -399,10 +484,29 @@ const itemOf = (failure: unknown): number => {
   return code ?? 0
 }
 let noise = 0
+// The public aroundEach boundary supplies an immutable owning test context.
+// Continuations retain it after their timeout, although Vitest's global
+// currentTestName may then name the next test. This is input provenance only:
+// the fixture does not change cancellation, deadlines, or execution order.
+const owningTest = new AsyncLocalStorage<{ name: string; route?: string }>()
+aroundEach((runTest, { task }) => {
+  const names = [task.name]
+  for (
+    let parent = task.suite;
+    parent && parent !== task.file;
+    parent = parent.suite
+  )
+    names.unshift(parent.name)
+  return owningTest.run({ name: names.join(` > `) }, runTest)
+})
+const owningTestName = () =>
+  owningTest.getStore()?.name ?? expect.getState().currentTestName
 // The route registered for the running test, as the gap report reads it.
 let route: string | undefined
 globalThis.__oracleRoute = (registered) => {
-  route = registered
+  const owner = owningTest.getStore()
+  if (owner) owner.route = registered
+  else route = registered
 }
 // The work bound registered for the running test, as the gap report reads it.
 let work: number | undefined
@@ -487,7 +591,7 @@ const itemsOf =
       return (history as ReadonlyArray<unknown>).map(itemOf)
     }
     if (spec.form === `boxed`) {
-      if (history instanceof SyntheticBox) return history.items
+      if (history instanceof SyntheticBox) return history.readItems()
       throw new Error(`not a boxed history`)
     }
     if (spec.form === `trap`) {
@@ -508,10 +612,18 @@ const itemsOf =
 
 const enteredStates = (history: SyntheticHistory) =>
   allStates.filter((state) => history.includes(Number(state.slice(4))))
-const reachedStates = (spec: SyntheticSpec) => (history: SyntheticHistory) =>
-  spec.overReport
+const reachedStates = (spec: SyntheticSpec) => (history: SyntheticHistory) => [
+  ...(spec.overReport
     ? [...new Set([...enteredStates(history), `saw-0`])]
-    : enteredStates(history)
+    : enteredStates(history)),
+  ...(spec.extraReach === true ||
+  (spec.extraReach === `calibration` &&
+    spec.calibrations.some(({ name }) =>
+      owningTestName()?.endsWith(` > calibration: ${name}`),
+    ))
+    ? [`synthetic-extra`]
+    : []),
+]
 
 /**
  * The condition the synthetic driver passes to the probe for this history, or
@@ -699,17 +811,30 @@ function lateProbe() {
  * The synthetic driver. `mutant` records a 3 in place of the first item, the
  * wrong answer a driver calibration supplies.
  */
-function syntheticDriver(spec: SyntheticSpec, mutant?: `first` | `last`) {
+function syntheticDriver(
+  spec: SyntheticSpec,
+  mutant?: `first` | `last` | `clock` | `first-spin` | `first-spin-throws`,
+  consumed = new WeakSet<object>(),
+  origins = new WeakMap<object, string>(),
+) {
   return async (
     formed: Formed,
     observe: (checkpoint: string, value: unknown) => void,
   ) => {
     const history = itemsOf(spec)(formed)
+    if (
+      (spec.isolatedPlans || spec.identityHistories) &&
+      owningTestName()?.includes(`calibration:`)
+    ) {
+      if (consumed.has(formed as object))
+        throw new Error(`driver received a consumed plan`)
+      consumed.add(formed as object)
+    }
     const log = process.env.SELF_ORACLE_LOG
     if (log)
       appendFileSync(
         log,
-        `${JSON.stringify({ id: spec.id, test: expect.getState().currentTestName ?? ``, history, route: route ?? null, work: work ?? null })}\n`,
+        `${JSON.stringify({ id: spec.id, test: owningTestName() ?? ``, ...(spec.slow ? { runnerTest: expect.getState().currentTestName ?? `` } : {}), history, origin: origins.get(formed as object), route: owningTest.getStore()?.route ?? route ?? null, work: work ?? null })}\n`,
       )
     if (spec.odd) observe(`odd`, { reason: oddValue(spec.odd) })
     if (spec.slow) await new Promise((resolve) => setTimeout(resolve, 300))
@@ -717,7 +842,7 @@ function syntheticDriver(spec: SyntheticSpec, mutant?: `first` | `last`) {
       spec.slowShrink &&
       history.includes(4) &&
       / > (?:fixed seed -?\d+|random seed)(?:: .*)?$/.test(
-        expect.getState().currentTestName ?? ``,
+        owningTestName() ?? ``,
       )
     )
       await new Promise((resolve) => setTimeout(resolve, 2000))
@@ -736,12 +861,19 @@ function syntheticDriver(spec: SyntheticSpec, mutant?: `first` | `last`) {
       for (const state of reachedStates(spec)(history)) observe(`reach`, state)
     // A real timer first: a clock that an earlier history released must have
     // given the real timers back, or this history never goes on.
-    if (spec.clock) await new Promise((resolve) => setTimeout(resolve, 1))
-    const clock = spec.clock ? controlledClock() : undefined
+    const mutantSpins =
+      mutant === `clock` ||
+      mutant === `first-spin` ||
+      mutant === `first-spin-throws`
+    if (spec.clock || mutantSpins)
+      await new Promise((resolve) => setTimeout(resolve, 1))
+    const clock = spec.clock || mutantSpins ? controlledClock() : undefined
     try {
       for (const [index, item] of history.entries()) {
         const mutated =
-          mutant === `first`
+          mutant === `first` ||
+          mutant === `first-spin` ||
+          mutant === `first-spin-throws`
             ? index === 0
             : mutant === `last` && index === history.length - 1
         observe(`item ${index}`, mutated ? 3 : item)
@@ -766,6 +898,15 @@ function syntheticDriver(spec: SyntheticSpec, mutant?: `first` | `last`) {
               `synthetic driver failed after the spin at item ${index}`,
             )
         }
+      }
+      if (mutantSpins) {
+        const spin = () => {
+          setTimeout(spin, 0)
+        }
+        spin()
+        await vi.advanceTimersByTimeAsync(1000)
+        if (mutant === `first-spin-throws`)
+          throw new Error(`mutant setup failed after the spin`)
       }
     } finally {
       clock?.release()
@@ -815,6 +956,9 @@ function syntheticCheck(
   history: SyntheticHistory,
   trace: ReadonlyArray<{ checkpoint: string; value: unknown }>,
 ) {
+  // The marker is a mutant input to the check, never an expected verdict.
+  if (trace.some(({ checkpoint }) => checkpoint === `synthetic-judgment-fault`))
+    throw new Error(`synthetic judgment failed`)
   // `history` is the items of a history in any form.
   for (const { checkpoint, value } of trace) {
     // Only items carry the law; a nonce is not an item.
@@ -862,38 +1006,127 @@ const differences: Record<CalibrationDifference, string | RegExp> = {
   'empty pattern': /(?:)/,
 }
 
+/** The authored selector passed to production, including explicit migration opt-out. */
+const calibrationHistory = (
+  spec: SyntheticSpec,
+  calibration: SyntheticSpec[`calibrations`][number],
+) =>
+  calibration.history === undefined
+    ? spec.calibrationHistory
+    : (calibration.history ?? undefined)
+
+// Materialize selector representation only at the public input boundary. The
+// spec and independent model keep the author's own selector as plain data.
+const representedSelector = <
+  T extends NonNullable<SyntheticSpec[`calibrationHistory`]>,
+>(
+  spec: SyntheticSpec,
+  selector: T,
+): T => {
+  const key = spec.selectorPrototype ?? `plain`
+  if (key === `plain`) return selector
+  const inherited =
+    key === `fixed`
+      ? { fixed: `fixed-0` }
+      : key === `constructed`
+        ? { constructed: spec.constructed[0]?.name ?? `missing` }
+        : { enumerated: 0 }
+  return Object.assign(Object.create(inherited) as T, selector)
+}
+
 function syntheticCalibrations(
   spec: SyntheticSpec,
+  consumed: WeakSet<object>,
+  origins: WeakMap<object, string>,
 ): Array<Calibration<Formed, Formed>> {
-  return spec.calibrations.map(
-    ({ name, kind, difference }): Calibration<Formed, Formed> => {
-      const required =
-        difference === undefined ? {} : { difference: differences[difference] }
-      // A mutant driver records a 3 in place of the first or the last item.
-      if (kind === `driver` || kind === `driver-last`)
-        return {
-          name,
-          law: `three`,
-          ...required,
-          driver: syntheticDriver(spec, kind === `driver` ? `first` : `last`),
-        }
+  return spec.calibrations.map((calibration): Calibration<Formed, Formed> => {
+    const { name, kind, difference } = calibration
+    const authored = calibrationHistory(spec, calibration)
+    const history = authored && representedSelector(spec, authored)
+    const required =
+      difference === undefined ? {} : { difference: differences[difference] }
+    if (kind === `clock`)
       return {
         name,
-        law: kind === `wrong-law` ? `four` : `three`,
+        history,
+        law: `bounded clock`,
         ...required,
-        corrupt: (trace) => {
-          const at = trace.findIndex(({ checkpoint }) =>
-            checkpoint.startsWith(`item`),
-          )
-          if (at < 0) return undefined
-          if (kind === `no-op`) return [...trace]
-          return trace.map((entry, index) =>
-            index === at ? { ...entry, value: 3 } : entry,
-          )
+        driver: syntheticDriver(spec, `clock`, consumed, origins),
+      }
+    if (kind === `driver-spin` || kind === `driver-spin-throws`)
+      return {
+        name,
+        history,
+        law: `three`,
+        ...required,
+        driver: syntheticDriver(
+          spec,
+          kind === `driver-spin` ? `first-spin` : `first-spin-throws`,
+          consumed,
+          origins,
+        ),
+      }
+    if (kind === `judge-driver-throws`)
+      return {
+        name,
+        history,
+        law: `three`,
+        ...required,
+        driver: async (plan, observe) => {
+          await syntheticDriver(spec, `first`, consumed, origins)(plan, observe)
+          observe(`synthetic-judgment-fault`, true)
         },
       }
-    },
-  )
+    // A mutant driver records a 3 in place of the first or the last item.
+    if (kind === `driver` || kind === `driver-last` || kind === `throws`)
+      return {
+        name,
+        history,
+        law: `three`,
+        ...required,
+        driver:
+          kind === `throws`
+            ? async (plan, observe) => {
+                await syntheticDriver(
+                  spec,
+                  `first`,
+                  consumed,
+                  origins,
+                )(plan, observe)
+                throw new Error(`mutant setup failed`)
+              }
+            : syntheticDriver(
+                spec,
+                kind === `driver-last` ? `last` : `first`,
+                consumed,
+                origins,
+              ),
+      }
+    return {
+      name,
+      history,
+      law: kind === `wrong-law` ? `four` : `three`,
+      ...required,
+      corrupt: (trace) => {
+        if (kind === `corrupt-throws`)
+          throw new Error(`synthetic corruption failed`)
+        if (kind === `judge-throws`)
+          return [
+            ...trace,
+            { checkpoint: `synthetic-judgment-fault`, value: true },
+          ]
+        if (kind === `inapplicable`) return undefined
+        const at = trace.findIndex(({ checkpoint }) =>
+          checkpoint.startsWith(`item`),
+        )
+        if (at < 0) return undefined
+        if (kind === `no-op`) return [...trace]
+        return trace.map((entry, index) =>
+          index === at ? { ...entry, value: 3 } : entry,
+        )
+      },
+    }
+  })
 }
 
 // `work`, a work bound, in the shape the spec names.
@@ -957,10 +1190,125 @@ function declaredEnumerated(
 }
 
 export function syntheticProperty(spec: SyntheticSpec): void {
+  // An ordinary child still selects its seed without ORACLE_SEED. Control
+  // the host draw so observing its inputs/status does not make the outer
+  // determinism check compare two different random environments.
+  if (
+    process.env.SELF_ORACLE_LOG !== undefined &&
+    process.env.SELF_ORACLE_RANDOM_DRAW !== undefined
+  ) {
+    const random = Math.random
+    const draw = Number(process.env.SELF_ORACLE_RANDOM_DRAW)
+    beforeAll(() => {
+      Math.random = () => draw
+    })
+    afterAll(() => {
+      Math.random = random
+    })
+  }
   const id = spec.unregistered ? `self-oracle.unregistered` : spec.id
-  const form = formOf(spec)
+  const makeForm = formOf(spec)
   const items = itemsOf(spec)
+  const identities = new WeakMap<object, Formed>()
+  const origins = new WeakMap<object, string>()
+  const markOrigin = (history: Formed, origin: string): Formed => {
+    origins.set(history as object, origin)
+    return history
+  }
+  const remember = (history: Formed): Formed => {
+    if (!spec.identityHistories) return history
+    identities.set(history as object, history)
+    return history
+  }
+  const form = (history: SyntheticHistory): Formed =>
+    remember(makeForm(history))
+  // Only the public state name changes: the synthetic model still reasons
+  // about item zero and the production probe id remains synthetic#saw-0.
+  const publicState = (state: string) =>
+    spec.source.kind === `generated` && state === `saw-0`
+      ? (spec.probeName ?? state)
+      : state
+  // A builder may attach metadata by object identity. A plan may own consumed
+  // resources. Neither cloning a built history nor resolving it twice preserves
+  // that contract. These sets record those premises, not expected observations.
+  const built = new WeakSet<object>()
+  const resolved = new WeakSet<object>()
+  const resolve =
+    spec.isolatedPlans || spec.identityHistories
+      ? (history: Formed) => {
+          // Count invocations separately from driver calls: even a discarded
+          // resolved plan can have acquired resources. This records input-side
+          // work only; the independent checker derives the allowed budget.
+          const log = process.env.SELF_ORACLE_LOG
+          if (log)
+            appendFileSync(
+              `${log}.resolutions`,
+              `${JSON.stringify({
+                id: spec.id,
+                test: owningTestName() ?? ``,
+              })}\n`,
+            )
+          if (spec.identityHistories && !identities.has(history as object))
+            throw new Error(`selected history lost identity metadata`)
+          if (
+            spec.isolatedPlans &&
+            (spec.calibrations.some((calibration) => {
+              const binding = calibrationHistory(spec, calibration)
+              return (
+                binding !== undefined &&
+                `constructed` in binding &&
+                owningTestName()?.endsWith(
+                  ` > calibration: ${calibration.name}`,
+                )
+              )
+            }) ||
+              (spec.probeBinding &&
+                spec.probeBinding !== `empty` &&
+                ((owningTestName()?.includes(`forced not entered`) &&
+                  (spec.probeBinding !== `explicit` ||
+                    `constructed` in
+                      (spec.probeEntered ?? {
+                        constructed: `constructed-0`,
+                      }))) ||
+                  (owningTestName()?.includes(`forced entered`) &&
+                    `constructed` in
+                      (spec.probeNotEntered ?? { fixed: `fixed-0` })))))
+          ) {
+            if (
+              !built.has(history as object) ||
+              resolved.has(history as object)
+            )
+              throw new Error(
+                `calibration lost builder metadata or reused a built history`,
+              )
+            resolved.add(history as object)
+          }
+          const plan = makeForm([
+            ...(spec.identityHistories
+              ? items(identities.get(history as object))
+              : items(history)),
+          ])
+          const origin = origins.get(history as object)
+          return origin === undefined ? plan : markOrigin(plan, origin)
+        }
+      : undefined
+  // Clean and mutant driver instances share the consumption boundary. A
+  // resolved plan belongs to one execution even when different drivers use it.
+  const consumed = new WeakSet<object>()
+  const runDriver = spec.slow
+    ? trackedSlow(syntheticDriver(spec, undefined, consumed, origins))
+    : syntheticDriver(spec, undefined, consumed, origins)
+  const driver: typeof runDriver = (history, observe) =>
+    runDriver(history, (checkpoint, value) =>
+      observe(
+        checkpoint,
+        checkpoint === `reach` && typeof value === `string`
+          ? publicState(value)
+          : value,
+      ),
+    )
   const parts = {
+    ...(resolve ? { resolve } : {}),
     model: spec.strictModel
       ? (history: Formed, trace: ReadonlyArray<{ checkpoint: string }>) => {
           const recorded = trace.filter(({ checkpoint }) =>
@@ -989,20 +1337,57 @@ export function syntheticProperty(spec: SyntheticSpec): void {
         : () => undefined,
     // Without `reached`, the framework counts the driver's `reach` records.
     ...(spec.reachVia === `reached`
-      ? { reached: (history: Formed) => reachedStates(spec)(items(history)) }
+      ? {
+          reached: (history: Formed) =>
+            reachedStates(spec)(items(history)).map(publicState),
+        }
       : {}),
     ...((spec.probe && spec.predictMode !== `missing`) ||
     spec.predictMode === `extra`
       ? {
           predict: (history: Formed) => ({
-            'saw-0': items(history).includes(0),
+            [publicState(`saw-0`)]: items(history).includes(0),
           }),
         }
       : {}),
-    driver: spec.slow
-      ? trackedSlow(syntheticDriver(spec))
-      : syntheticDriver(spec),
-    calibrations: syntheticCalibrations(spec),
+    ...(spec.probeBinding
+      ? {
+          probeHistories:
+            spec.probeBinding === `empty`
+              ? {}
+              : {
+                  [publicState(`saw-0`)]:
+                    spec.probeBinding === `null-binding`
+                      ? (null as never)
+                      : spec.probeBinding === `false-binding`
+                        ? (false as never)
+                        : spec.probeBinding === `zero-binding`
+                          ? (0 as never)
+                          : spec.probeBinding === `no-absence`
+                            ? ({} as never)
+                            : {
+                                notEntered: representedSelector(
+                                  spec,
+                                  spec.probeNotEntered ?? { fixed: `fixed-0` },
+                                ),
+                                ...(spec.probeBinding === `explicit`
+                                  ? {
+                                      entered: representedSelector(
+                                        spec,
+                                        spec.probeEntered ?? {
+                                          constructed: `constructed-0`,
+                                        },
+                                      ),
+                                    }
+                                  : spec.probeBinding === `null-entered`
+                                    ? { entered: null as never }
+                                    : {}),
+                              },
+                },
+        }
+      : {}),
+    driver,
+    calibrations: syntheticCalibrations(spec, consumed, origins),
     check: (
       history: Formed,
       trace: ReadonlyArray<{ checkpoint: string; value: unknown }>,
@@ -1038,10 +1423,12 @@ export function syntheticProperty(spec: SyntheticSpec): void {
   // The last history's late probe call comes after its test; the file waits
   // for it, so the run still reports it.
   if (spec.probe === `late`)
-    afterAll(() => new Promise((resolve) => setTimeout(resolve, 50)))
+    afterAll(() => new Promise((settle) => setTimeout(settle, 50)))
   const register = () => {
     if (spec.source.kind === `enumerated`) {
-      const enumerated = spec.source.histories.map(form)
+      const enumerated = spec.source.histories.map((history, index) =>
+        markOrigin(form(history), `enumerated:${index}`),
+      )
       const first = JSON.stringify(spec.source.histories[0])
       oracleProperty({
         id,
@@ -1054,10 +1441,20 @@ export function syntheticProperty(spec: SyntheticSpec): void {
           ? {}
           : {
               label: (history: Formed) =>
-                spec.labelStyle?.startsWith(`reserved-`) &&
-                JSON.stringify(items(history)) === first
-                  ? spec.labelStyle.slice(`reserved-`.length)
-                  : `items ${items(history).join(` | `)}${spec.labelStyle === `shell` ? ` ${shellText}` : ``}`,
+                spec.duplicateHistoryNames &&
+                spec.calibrations.some((calibration) => {
+                  const selected = calibrationHistory(spec, calibration)
+                  return (
+                    selected !== undefined &&
+                    `enumerated` in selected &&
+                    typeof selected.enumerated === `string`
+                  )
+                })
+                  ? `items ${spec.source.kind === `enumerated` ? spec.source.histories[0]!.join(` | `) : ``}`
+                  : spec.labelStyle?.startsWith(`reserved-`) &&
+                      JSON.stringify(items(history)) === first
+                    ? spec.labelStyle.slice(`reserved-`.length)
+                    : `items ${items(history).join(` | `)}${spec.labelStyle === `shell` ? ` ${shellText}` : ``}`,
             }),
         ...parts,
       })
@@ -1066,9 +1463,12 @@ export function syntheticProperty(spec: SyntheticSpec): void {
     // With a probe, `saw-0` is a probe-bound state wherever it is declared.
     const declare = (state: string) =>
       spec.probe && state === `saw-0`
-        ? { name: state, probe: syntheticProbe }
-        : state
-    const arbitrary = arbitraryOf(spec)
+        ? { name: publicState(state), probe: syntheticProbe }
+        : publicState(state)
+    const baseArbitrary = arbitraryOf(spec)
+    const arbitrary = spec.identityHistories
+      ? baseArbitrary.map(remember, (value) => value)
+      : baseArbitrary
     oracleProperty({
       id,
       law,
@@ -1085,19 +1485,64 @@ export function syntheticProperty(spec: SyntheticSpec): void {
         ],
         constructed: spec.constructed.map(({ name, prefix, enters }, at) => ({
           name,
-          enters,
+          enters: enters.map(publicState),
           // A constructed history extends a generated history, so its histories
           // depend on the campaign's seed, as real constructed histories do.
           build: (generated: Formed) => {
             if (at === 0 && spec.throwingBuild)
               throw new Error(`synthetic build failed`)
-            return form([...prefix, ...items(generated)].slice(0, 3))
+            const tail = spec.isolatedPlans
+              ? items(generated).map((item) => item % 3)
+              : items(generated)
+            const history = markOrigin(
+              form([...prefix, ...tail].slice(0, 3)),
+              `constructed:${name}`,
+            )
+            const log = process.env.SELF_ORACLE_LOG
+            if (log)
+              appendFileSync(
+                `${log}.builds`,
+                `${JSON.stringify({
+                  id: spec.id,
+                  test: owningTestName() ?? ``,
+                  name,
+                  generated: items(generated),
+                  history: items(history),
+                })}\n`,
+              )
+            built.add(history as object)
+            return history
           },
         })),
-        fixed: spec.fixed.map((fixed) => ({
-          ...fixed,
-          history: form(fixed.history),
-        })),
+        fixed: spec.fixed.map((fixed) => {
+          const declaration = {
+            ...fixed,
+            ...(fixed.enters ? { enters: fixed.enters.map(publicState) } : {}),
+            history: markOrigin(form(fixed.history), `fixed:${fixed.name}`),
+          }
+          // Fixed declarations are structurally open metadata wrappers. An
+          // incidental build method must never run or replace their original.
+          const build = (generated: Formed) => {
+            const history = makeForm([...fixed.history])
+            const log = process.env.SELF_ORACLE_LOG
+            if (log)
+              appendFileSync(
+                `${log}.builds`,
+                `${JSON.stringify({
+                  id: spec.id,
+                  test: owningTestName() ?? ``,
+                  name: `fixed-metadata:${fixed.name}`,
+                  generated: items(generated),
+                  history: items(history),
+                })}\n`,
+              )
+            return history
+          }
+          if (fixed.buildMetadata === `own`) return { ...declaration, build }
+          if (fixed.buildMetadata === `inherited`)
+            Object.setPrototypeOf(declaration, { build })
+          return declaration
+        }),
       },
       ...parts,
     })
