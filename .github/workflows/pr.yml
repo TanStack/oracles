@@ -16,8 +16,9 @@ permissions:
 
 jobs:
   # The test suites run as parallel jobs. The workflow's wall time is then
-  # its slowest job, about 8 minutes (the framework self-oracle), not the
-  # sum of every suite, about 21 minutes when they ran as one job.
+  # its slowest job, about 6 to 7 minutes, not the sum of every suite, about
+  # 21 minutes when they ran as one job. Each job should stay well under the
+  # 10-minute limit; pr-shards.mjs records how each suite is split.
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -59,12 +60,12 @@ jobs:
       - run: pnpm run build
       - run: pnpm --filter @tanstack/eslint-plugin-oracles run test
   test-oracle-framework:
-    name: Framework self-oracle (${{ matrix.shard }}/2)
+    name: Framework self-oracle (${{ matrix.shard }}/8)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -73,7 +74,7 @@ jobs:
       - name: Setup Tools
         uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
       # The oracleProperty self-oracle spawns real Vitest runs, so the
-      # default test run leaves it out; it runs here on its own, in two
+      # default test run leaves it out; it runs here on its own, in eight
       # shards.
       - run: pnpm exec vitest --run --config vitest.oracle-framework.config.mjs -t "$(node scripts/pr-shards.mjs pattern oracle-framework "$SHARD")"
         working-directory: packages/oracles
@@ -132,7 +133,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [test, oracle-framework 1, oracle-framework 2]
+        suite:
+          - test
+          - oracle-framework 1
+          - oracle-framework 2
+          - oracle-framework 3
+          - oracle-framework 4
+          - oracle-framework 5
+          - oracle-framework 6
+          - oracle-framework 7
+          - oracle-framework 8
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

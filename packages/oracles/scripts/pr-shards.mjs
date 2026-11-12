@@ -28,8 +28,209 @@ const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
 const anyOf = (names) => `(?:${names.map(escape).join(`|`)})`
 const rest = Symbol(`rest`)
 
-// The self-oracle's slowest determinism unit, which joins the other shard.
-const slowestDeterminism = `determinism: fixed history: a campaign whose shrinking would outlast its timeout reports its law in time`
+// The self-oracle's test names, split by the start of the name after its
+// kind (`determinism: fixed history: `, `fixed history: `, `calibration: `):
+// each list holds the starts of one shard's names, measured in CI.
+const detFixedA = [
+  'P',
+  'U',
+  'a U',
+  'a b',
+  'a cal',
+  'a campaign r',
+  'a campaign wh',
+  'a campaign wi',
+  'a cl',
+  'a co',
+  'a d',
+  'a f',
+  'a g',
+  'a l',
+  'a m',
+  'a p',
+  'a r',
+  'a s',
+  'a u',
+  'a v',
+  'an E',
+  'an a',
+  'an e',
+  'an observed a',
+]
+const detFixedB = [
+  'an observed c',
+  'an observed d',
+  'an observed e',
+  'an observed f',
+  'an observed m',
+  'an observed o',
+  'an observed p',
+  'an observed s',
+  'an observed t',
+  'an or',
+  'an ow',
+  'an u',
+  'b',
+  'c',
+  'd',
+  'e',
+  'f',
+  'h',
+  'i',
+  'o',
+  'p',
+  'rea',
+  'reg',
+  'review a',
+  'review c',
+  'review d',
+  'review e',
+  'review f',
+  'review o',
+  'review s',
+  'round10 opaque c',
+]
+const detFixedC = [
+  'round10 opaque r',
+  'round11',
+  'round2 a',
+  'round2 b',
+  'round2 c',
+  'round2 d',
+  'round2 f',
+  'round2 g',
+  'round2 i',
+  'round2 r',
+  'round2 s',
+  'round2 u',
+  'round2 v',
+  'round2 w',
+  'round3 d',
+  'round3 e',
+  'round3 f',
+  'round3 i',
+  'round3 n',
+  'round3 o',
+  'round3 p',
+  'round3 r',
+  'round4',
+  'round5',
+  'round7',
+  'round8',
+  'round9',
+  's',
+  'th',
+  'ti',
+  'tw',
+  'u',
+]
+const fixedA = [
+  'P',
+  'U',
+  'a U',
+  'a b',
+  'a cal',
+  'a campaign r',
+  'a campaign wh',
+  'a campaign wi',
+  'a cl',
+  'a co',
+  'a d',
+  'a f',
+  'a g',
+  'a l',
+  'a m',
+  'a p',
+  'a r',
+  'a s',
+  'a u',
+  'a v',
+  'an E',
+  'an a',
+  'an e',
+  'an observed a',
+  'an observed c',
+  'an observed d',
+  'an observed e',
+  'an observed f',
+  'an observed m',
+  'an observed o',
+  'an observed p',
+  'an observed s',
+  'an observed t',
+  'an or',
+  'an ow',
+  'an u',
+  'b',
+]
+const fixedB = [
+  'c',
+  'd',
+  'e',
+  'f',
+  'h',
+  'i',
+  'o',
+  'p',
+  're',
+  'round1',
+  'round2',
+  'round3',
+  'round4',
+  'round5',
+  'round7',
+  'round8',
+  'round9',
+  's',
+  't',
+  'u',
+]
+const calibration1 = [
+  'reject a',
+  'reject callback b',
+  'reject callback e',
+  'reject callback r',
+  'reject callback s',
+  'reject ch',
+  'reject duplicate a',
+  'reject duplicate b',
+  'reject duplicate e',
+  'reject duplicate re',
+]
+const calibration2 = [
+  'reject duplicate ru',
+  'reject duplicate s',
+  'reject duplicate u',
+  'reject e',
+  'reject l',
+  'reject m',
+  'reject omit a',
+  'reject omit b',
+  'reject omit e',
+  'reject omit re',
+  'reject omit ru',
+  'reject omit s',
+]
+const calibration3 = [
+  'reject omit u',
+  'reject r',
+  'reject s',
+  'reject timeout b',
+  'reject timeout c',
+  'reject timeout e',
+  'reject timeout i',
+  'reject timeout r',
+]
+const calibration4 = [
+  'reject timeout s',
+  'reject too f',
+  'reject too m',
+  'reject u',
+  'reject w',
+]
+/** Names of a kind whose rest starts with one of `starts`. */
+const startsWith = (kind, starts) =>
+  `${escape(kind)}(?:${starts.map(escape).join(`|`)}).*`
 
 /**
  * The partitions, with their shards balanced by the costs measured in one
@@ -38,17 +239,26 @@ const slowestDeterminism = `determinism: fixed history: a campaign whose shrinki
  * self-oracle and 1.7 to 2.5 times for the end-to-end oracle.
  */
 export const partitions = {
-  // The oracleProperty self-oracle: 299 tests, 588 s in all. Its
-  // determinism units take 383 s, so one shard takes them, less the slowest
-  // (61 s), which joins the rest: 322 s and 266 s.
+  // The oracleProperty self-oracle: 843 tests, 2,258 s in all, measured in
+  // CI on main at e2af13a (run 43266105332), where its three shards took
+  // 4:12, 16:12, and 18:09. One file whose tests run in sequence, so a
+  // shard's time is the sum of its tests. Eight shards of 195 to 330 s:
+  // the fixed histories' determinism units in three, the constructed
+  // histories' determinism units, the fixed histories and the calibrations
+  // in three, and the rest (the seeded units, 312 s, and any new kind).
   'oracle-framework': {
     args: [`--config`, `vitest.oracle-framework.config.mjs`],
     suite: `self-oracle.framework`,
     select: ``,
-    exceptions: [slowestDeterminism],
     shards: {
-      1: `(?!${anyOf([slowestDeterminism])}$)determinism: .*`,
-      2: rest,
+      1: startsWith(`determinism: fixed history: `, detFixedA),
+      2: startsWith(`determinism: fixed history: `, detFixedB),
+      3: startsWith(`determinism: fixed history: `, detFixedC),
+      4: `determinism: constructed history: .*`,
+      5: `(?:${startsWith(`fixed history: `, fixedA)}|${startsWith(`calibration: `, calibration1)})`,
+      6: `(?:${startsWith(`fixed history: `, fixedB)}|${startsWith(`calibration: `, calibration2)})`,
+      7: startsWith(`calibration: `, [...calibration3, ...calibration4]),
+      8: rest,
     },
   },
   // The gap report's static oracle, the slowest of the fast gap suites and
