@@ -477,7 +477,7 @@ const daemonEvents = new Set([
   `cleanState`,
   `recheck`,
 ])
-const histories = fc.record({
+const drawn = fc.record({
   functions: fc.array(fc.array(statement, { minLength: 1, maxLength: 5 }), {
     minLength: 1,
     maxLength: 3,
@@ -601,7 +601,6 @@ const histories = fc.record({
     `insertGuard`,
     `reformat`,
   ),
-  // Most histories have no steps, which keeps the campaign's cost down.
   // Whether the run asks for the ordinary tests' outcome (`--ordinary`).
   ordinary: fc.boolean(),
   // File b's verdicts also wait on a module that the test imports only
@@ -717,6 +716,8 @@ const histories = fc.record({
     { weight: 1, arbitrary: fc.constant(11) },
     { weight: 1, arbitrary: fc.constant(1) },
   ),
+  // Most histories have no steps, which keeps the campaign's cost down. A
+  // history with the witness module has none (see `histories`).
   steps: fc.oneof(
     { weight: 5, arbitrary: fc.constant(null) },
     {
@@ -741,6 +742,51 @@ const histories = fc.record({
   // Who names the importer's function in an owns entry, if any.
   importer: fc.constantFrom(`none`, `a`, `b`),
 })
+
+// The edit sequence over the witness module, the one list of steps that a
+// history with the witness module takes. A test edit makes the daemon
+// recompute file a's runs, the hangs among them; the helper edit changes
+// only file b, so the daemon reuses file a's timed-out runs; the revert
+// returns to a state that the daemon has seen. The budget witness alone
+// (`budget`) takes its own one step instead: a second daemon check with
+// nothing changed, which reuses the confirmations that the first check ran.
+const witnessSteps = [`test`, `helper`, `revert`]
+const budgetSteps = [`recheck`]
+const keepsSteps = (history) => {
+  if (history.witness === false || history.steps === null) return true
+  const kept = history.witness === `budget` ? budgetSteps : witnessSteps
+  return (
+    history.steps.length === kept.length &&
+    history.steps.every((step, i) => step === kept[i])
+  )
+}
+
+// The histories. The witness module makes each cold run about 20 s (its
+// hangs, slow kills, and stability rerun), and each step adds a cold run and
+// a daemon check, so a generated history with both could run past the
+// test's time limit: about one campaign in six drew a witness history with
+// eight or more steps. A generated history with the witness module
+// therefore has no steps. The constructed history "an edit sequence over the
+// witness module" takes `witnessSteps`, so every campaign still judges law
+// 9 over the witness module's outcome classes, along one short sequence
+// (maintainer decision, 2026-11-11, option M of the CI plan; a stated
+// limit of the property). The budget witness's confirmations cost about
+// 15 s a mutant, so its histories follow the same rule, and its constructed
+// history "a second daemon check of the budget witness" takes
+// `budgetSteps` (the review of the gap CLI's runtime fixes, 2026-11-12,
+// P1-a: the budget witness only in its own histories). The map is its own
+// inverse on the histories it keeps, so fast-check takes every one of them
+// back and shrinks it.
+const histories = drawn.map(
+  (history) => (keepsSteps(history) ? history : { ...history, steps: null }),
+  (value) => {
+    const history =
+      /** @type {{ witness: unknown, steps: unknown[] | null }} */ (value)
+    if (!keepsSteps(history))
+      throw new Error(`a history with the witness module takes no steps`)
+    return value
+  },
+)
 
 // The witness module: functions whose outcome classes generated histories
 // reach rarely, each with its own owners and tests.
@@ -5120,6 +5166,8 @@ export {
   edits,
   daemonEvents,
   histories,
+  witnessSteps,
+  budgetSteps,
   kill,
   push,
   judging,

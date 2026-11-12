@@ -33,10 +33,11 @@ const suite = `oracle-gaps.report`
 // (units), so a shard can hold any of them; the slowest unit, the
 // determinism of the edit sequence, is 236 s here. The shards are a
 // longest-first packing of those costs, listed by kind. A random unit's
-// cost follows its seed, so a shard's time varies from run to run. CI keeps
-// its one fixed-seed job until the random units' tail is bounded (option M
-// of the e2e speed plan): a random unit that draws a long edit sequence over
-// the witness module can pass 10 minutes in CI.
+// cost follows its seed, so a shard's time varies from run to run. Option M
+// of the e2e speed plan bounds the random units' tail: a generated history
+// with the witness module takes no steps, and the one edit sequence over it
+// is a constructed history. CI keeps its one fixed-seed job until the
+// maintainer decides which units run on a pull request.
 export const shards = {
   // 522 s in the measured run, about 221 s idle.
   'e2e-1': [
@@ -59,6 +60,9 @@ export const shards = {
     `determinism: constructed history: a declaration fault: projects`,
     `determinism: constructed history: a package with no config`,
     `determinism: constructed history: an edit sequence through the daemon`,
+    // The witness module's edit sequence (option M): 189 s here, measured
+    // with the daemon fix of fix/daemon-current-inputs.
+    `determinism: constructed history: an edit sequence over the witness module`,
     // The daemon's law 9 histories cost 3 to 13 s each here (their replays).
     `fixed seed 20261105: an edit that changed the cold result after a hang replaced the only context`,
     `random seed: an edit that changed the cold result after a hang replaced the only context`,
@@ -154,6 +158,9 @@ export const shards = {
     `calibration: a stopped run leaves a process it started running`,
     `calibration: a busy mutant is named in no heartbeat`,
     `determinism: constructed history: a second daemon check of the budget witness`,
+    // The witness module's edit sequence (option M): 97 s here, measured
+    // with the daemon fix of fix/daemon-current-inputs.
+    `fixed seed 20261105: an edit sequence over the witness module`,
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-5': [
@@ -181,6 +188,9 @@ export const shards = {
     `random seed: a second daemon check of the budget witness`,
     `calibration: a stopped run had written a copy beside the tests`,
     `calibration: a heartbeat names a file that does not run its mutant`,
+    // The witness module's edit sequence (option M): about 97 s here, measured
+    // with the daemon fix of fix/daemon-current-inputs.
+    `random seed: an edit sequence over the witness module`,
   ],
 }
 
