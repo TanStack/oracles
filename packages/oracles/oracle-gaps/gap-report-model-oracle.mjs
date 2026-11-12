@@ -132,10 +132,9 @@ const caseless = existsSync(fileURLToPath(import.meta.url).toUpperCase())
 // (`--hang-limit`).
 const SLOW_MS = 3000
 // How long each slow test of `w_slowpair` waits: past its file's first
-// budget (the 1 s `--first-limit` plus three times the file's unmutated
-// time) even when a loaded machine stretches that time past half a second,
-// so its copy is always cut and confirmed; and past half the mutant's
-// budget, so two such confirmations never fit it.
+// budget (the 1 s `--first-limit` plus three times its one-test file's
+// unmutated time), so its copy is always cut and confirmed; and past half
+// the mutant's budget, so two such confirmations never fit it.
 const PAIR_SLOW_MS = 4500
 // A mutant's budget for the runs that confirm its cut-off copies, which the
 // driver passes (`--mutant-limit`): the full limit of one copy, so one slow
@@ -149,6 +148,15 @@ const MUTANT_LIMIT_MS = 6000
 // test's wait of SLOW_MS spans it at least twice.
 const HEARTBEAT_MS = 1000
 const ORACLE_FILES = [`a`, `b`]
+// The owners of the budget witness (`w_slowpair`): two oracle files of one
+// test each, so that their unmutated time stays short on a loaded machine,
+// and ten times it stays under the mutant's budget floor.
+const PAIR_FILES = [`p`, `q`]
+/** The oracle files a plan's fixture has. */
+const oracleFilesOf = (plan) => [
+  ...ORACLE_FILES,
+  ...(plan.functions.some((fn) => fn.id === `w_slowpair`) ? PAIR_FILES : []),
+]
 const METHOD_NAMES = [`run`, `step`, `tick`]
 
 // ## History grammar
@@ -1377,15 +1385,15 @@ const witness = [
   // mutant's budget, so the mutant is a timeout, not a survivor.
   {
     id: `w_slowpair`,
-    owners: [`a`, `b`],
+    owners: PAIR_FILES,
     body: [kill],
     tests: [
-      judging(`a`, `fixed seed`, 7, {
+      judging(`p`, `fixed seed`, 7, {
         judges: false,
         slow: true,
         slowMs: PAIR_SLOW_MS,
       }),
-      judging(`b`, `fixed seed`, 7, {
+      judging(`q`, `fixed seed`, 7, {
         judges: false,
         slow: true,
         slowMs: PAIR_SLOW_MS,
@@ -3667,7 +3675,7 @@ function model(plan) {
   const owners = ownersOf(plan)
   const ownerTests = (id) =>
     plan.tests.filter(
-      (t) => ORACLE_FILES.includes(t.file) && owners(id).has(t.file),
+      (t) => oracleFilesOf(plan).includes(t.file) && owners(id).has(t.file),
     )
   // Code that ran when the module loaded: the calls at the end of the
   // source, and the sites that each call reached (with 0).
@@ -4477,7 +4485,7 @@ function fixtureFiles(plan, state = initialState(plan)) {
       ``,
     ].join(`\n`),
   }
-  for (const file of ORACLE_FILES)
+  for (const file of oracleFilesOf(plan))
     files[`tests/${file}.test.ts`] = oracleTestFile(plan, file)
   // The new oracle file d owns the first generated function and judges it.
   if (state.newOracle) {
@@ -4816,6 +4824,7 @@ export {
   removePath,
   sourceArgument,
   ORACLE_FILES,
+  oracleFilesOf,
   METHOD_NAMES,
   comparison,
   quote,
