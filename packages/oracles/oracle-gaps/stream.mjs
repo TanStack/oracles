@@ -78,32 +78,96 @@ export const escapeControls = (text) =>
 const replayPattern = (names) =>
   `^${names.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)).join(`(?: | > )`)}$`
 
+// A count of things.
+const counted = (n, thing) => `${n} ${thing}${n === 1 ? `` : `s`}`
+// A text cut to `most` code points, with `...` after a cut.
+const cut = (text, most) => {
+  const points = [...text]
+  return points.length > most
+    ? `${points.slice(0, most - 3).join(``)}...`
+    : text
+}
+
+// The law, difference, and counterexample of a test that failed by a law
+// violation, read from the framework's message (oracle-property.ts
+// `failure`): its first line names the checkpoint and the law, and its
+// `Difference:` and `History:` lines the difference and the history that
+// failed. Any other failure gives none.
+function violationLines(message) {
+  const head = message
+    .split(`\n`)[0]
+    .match(/violated at checkpoint "([^"]*)"(?: \(law: (.*)\))?\.$/)
+  if (!head) return []
+  const line = (label) =>
+    escapeControls(
+      cut(message.match(new RegExp(`^${label}: (.*)$`, `m`))?.[1] ?? ``, 400),
+    )
+  return [
+    `  law: ${codeSpan(escapeControls(head[2] ?? `(unnamed)`))} at ${codeSpan(escapeControls(head[1]))}: ${codeSpan(line(`Difference`))}`,
+    `  counterexample: ${codeSpan(line(`History`))}`,
+  ]
+}
+
 /**
- * The baseline before any mutant: each oracle file's result, and for a
- * failing file its first failure with the command that replays it, which
- * pastes into a POSIX shell. `files` names each oracle file, relative to
- * the package, with its first failure (undefined when it passed) and its
- * tests, each with its state and names (`testNamesOf`). A file with no
- * failing test (one that did not load) replays whole. A control character
- * in a name or a failure prints as its escape, so each line stays one line.
- * `config` is the config `--config` named, relative to the package: Vitest
- * would discover another config or none, so the replay names it too.
+ * The baseline before any mutant: each test file's result with its test
+ * counts, an ordinary file marked as such, and for a failing file its first
+ * failing test and that test's error, the law, difference, and
+ * counterexample of a law violation, and the command that replays the
+ * test, which pastes into a POSIX shell. `files` names each test file,
+ * relative to the package, with whether it is ordinary, its first failure
+ * (undefined when it passed), and its tests, each with its state, its
+ * error, and its names (`testNamesOf`). A file with no failing test (one
+ * that did not load) replays whole. A control character in a name or a
+ * failure prints as its escape, so each line stays one line. `config` is
+ * the config `--config` named, relative to the package: Vitest would
+ * discover another config or none, so the replay names it too.
  */
 export function baselineLines(files, config) {
   const vitest =
     config === undefined
       ? `vitest run`
       : `vitest run --config ${shellWord(config)}`
-  return files.flatMap(({ file, failure, tests }) => {
-    if (failure === undefined) return [`pass ${file}`]
-    const names = tests.find((t) => t.state === `failed`)?.names
-    const only =
-      names === undefined
-        ? ``
-        : ` -t ${shellWord(escapeControls(replayPattern(names)))}`
+  return files.flatMap(({ file, ordinary, failure, tests }) => {
+    const name = `${file}${ordinary ? ` (ordinary)` : ``}`
+    const ran = tests.filter(
+      (t) => t.state === `passed` || t.state === `failed`,
+    )
+    const skipped = tests.length - ran.length
+    if (failure === undefined)
+      return [
+        `pass ${name}: ${counted(ran.length, `test`)}${skipped > 0 ? `, ${skipped} skipped` : ``}`,
+      ]
+    const failed = tests.filter((t) => t.state === `failed`)
+    const first = failed[0]
+    if (first === undefined)
+      return [
+        `fail ${name}: ${tests.length === 0 ? `did not load` : `failed outside its tests`}: ${codeSpan(escapeControls(failure.split(`\n`)[0]))}`,
+        `  replay: ${vitest} ${shellWord(file)}`,
+      ]
+    const message = first.message ?? ``
     return [
-      `fail ${file}: ${escapeControls(failure)}`,
-      `  replay: ${vitest} ${shellWord(file)}${only}`,
+      `fail ${name}: ${failed.length} of ${counted(ran.length, `test`)} failed`,
+      `  failing: ${codeSpan(escapeControls((first.names ?? [first.fullName]).join(` > `)))}: ${codeSpan(escapeControls(message.split(`\n`)[0]))}`,
+      ...violationLines(message),
+      `  replay: ${vitest} ${shellWord(file)}${first.names === undefined ? `` : ` -t ${shellWord(escapeControls(replayPattern(first.names)))}`}`,
+    ]
+  })
+}
+
+/**
+ * One line per oracle file that failed with no mutant active (G13): the
+ * file, its failing test, and the step that unblocks the mutants it owns.
+ */
+export function blockedLines(files) {
+  return files.flatMap(({ file, ordinary, failure, tests }) => {
+    if (ordinary || failure === undefined) return []
+    const first = tests.find((t) => t.state === `failed`)
+    const at =
+      first === undefined
+        ? ``
+        : ` at ${codeSpan(escapeControls((first.names ?? [first.fullName]).join(` > `)))}`
+    return [
+      `blocked: ${codeSpan(file)} fails with no mutant active${at}, so the mutants it owns wait for it: make it pass (its replay is above), then check again.`,
     ]
   })
 }

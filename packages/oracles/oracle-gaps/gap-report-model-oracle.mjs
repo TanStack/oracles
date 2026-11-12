@@ -657,6 +657,9 @@ const drawn = fc.record({
       ),
     },
   ),
+  // A second run with `--only`, of one owned function's mutants: its
+  // baseline runs only their owners (law 14). It costs a run of its own.
+  onlyRun: fc.constantFrom(false, false, false, false, false, true),
   // Oracle file a names its own Vitest environment in a pragma
   // (`// @vitest-environment`), another than the config's, and fails to load
   // outside it: every copy of it must run in that environment too.
@@ -2632,6 +2635,7 @@ function resolveHistory(history) {
     unbuiltDep: history.unbuiltDep === true,
     budget: history.budget ?? `two`,
     stopRuns: history.stopRuns ?? [],
+    onlyRun: history.onlyRun === true,
     pragma: history.pragma === true,
     cliPath: history.cliPath ?? `plain`,
     concurrentStart: history.concurrentStart === true,
@@ -3792,21 +3796,62 @@ function refusal(plan) {
   // (maintainer decision, 2026-11-10).
   if (plan.declaration === `neither`) return { cause: `no oracle file` }
   if (ownsNothing(plan)) return { cause: `owns any selected source` }
-  // A setup file that throws fails every oracle file before any test runs,
-  // so the run refuses as for a failing owner, naming the setup's error.
-  if (plan.fault === `setupThrows`)
-    return { cause: `the fixture setup broke`, runtime: true }
-  // A failing owner is named with its test's error, so the author can fix it,
-  // and its baseline's replay runs that test alone, under the config the run
-  // loaded: a config that only `--config` names, too (F12 with law 3).
-  if (plan.fault === `brokenOwner`)
-    return {
-      cause: `b.test.ts`,
-      detail: `this owner fails with no mutant active`,
-      replayed: [`${BROKEN_SUITE} fixed seed 999`],
-      runtime: true,
-    }
+  // A failing owner, and a setup file that throws (which fails every test
+  // file before any test runs), refuse nothing: they block the mutants the
+  // failing files own (`blockingOf`).
   return undefined
+}
+
+/**
+ * The test files that fail with no mutant active, each with its failing
+ * test (none for a file that does not load). An oracle file among them
+ * judges nothing: each mutant it owns that no passing owner kills is
+ * `blocked`, and the report is provisional (maintainer disposition G5,
+ * 2026-11-11; the v20 freeze's decision 2). Its baseline's replay runs its
+ * failing test alone, under the config the run loaded: a config that only
+ * `--config` names, too (F12 with law 3).
+ */
+function blockingOf(plan) {
+  if (plan.fault === `setupThrows`)
+    return [
+      ...oracleFilesOf(plan).map((file) => ({ file })),
+      { file: `c`, ordinary: true },
+    ]
+  if (plan.fault === `brokenOwner`)
+    return [
+      {
+        file: `b`,
+        test: `${BROKEN_SUITE} > fixed seed 999`,
+        error: `Error: this owner fails with no mutant active`,
+        replayed: [`${BROKEN_SUITE} fixed seed 999`],
+      },
+    ]
+  return []
+}
+
+/**
+ * Each test file's baseline (law 14): its tests that ran and those skipped
+ * (a file with no tests of the plan holds one skipped placeholder), how
+ * many failed, and its failing test, or that it did not load.
+ */
+function baselineOf(plan) {
+  const failing = blockingOf(plan)
+  return [...oracleFilesOf(plan), `c`].map((file) => {
+    const own = plan.tests.filter((t) => t.file === file).length
+    const broken = failing.find((f) => f.file === file)
+    // The failing owner's suite holds two tests and a third of its name.
+    const extra = broken?.test === undefined ? 0 : 3
+    return {
+      file: `tests/${file}.test.ts`,
+      ordinary: file === `c`,
+      ran: own + extra,
+      skipped: own + extra === 0 ? 1 : 0,
+      failed: broken?.test === undefined ? 0 : 1,
+      loads: broken === undefined || broken.test !== undefined,
+      test: broken?.test,
+      error: broken?.error,
+    }
+  })
 }
 
 // The faults the analysis refuses before it reads ownership: their plans may
@@ -3847,10 +3892,25 @@ function model(plan) {
   if (refused) return { refused, configLines }
   const sites = sitesOf(plan)
   const owners = ownersOf(plan)
+  // The oracle files that fail with no mutant active judge nothing.
+  const blocking = new Set(
+    blockingOf(plan)
+      .filter((f) => !f.ordinary)
+      .map((f) => f.file),
+  )
   const ownerTests = (id) =>
     plan.tests.filter(
-      (t) => oracleFilesOf(plan).includes(t.file) && owners(id).has(t.file),
+      (t) =>
+        oracleFilesOf(plan).includes(t.file) &&
+        owners(id).has(t.file) &&
+        !blocking.has(t.file),
     )
+  // A mutant that a failing oracle file owns, and no passing owner kills,
+  // is blocked: it waits for that file.
+  const blockedOr = (id, kind) =>
+    kind !== `killed` && [...owners(id)].some((file) => blocking.has(file))
+      ? `blocked`
+      : kind
   // Code that ran when the module loaded: the calls at the end of the
   // source, and the sites that each call reached (with 0).
   const loadRuns = plan.loadCalls.map((call) =>
@@ -3955,7 +4015,11 @@ function model(plan) {
     `unreached`,
   ])
   const mutants = sites.map((site) => {
-    const kind = site.probe ? undefined : kindOf(site)
+    const kind = site.probe
+      ? undefined
+      : owners(site.fnId).size === 0
+        ? `unowned`
+        : blockedOr(site.fnId, kindOf(site))
     return {
       key: site.key,
       source: site.file,
@@ -3990,7 +4054,8 @@ function model(plan) {
       ? `does-not-apply`
       : owners(a.fn).size === 0
         ? `unowned`
-        : ((kind) => (kind === `survived` ? `not-observed` : kind))(
+        : ((kind) =>
+            blockedOr(a.fn, kind === `survived` ? `not-observed` : kind))(
             judge(
               plan,
               ownerTests(a.fn),
@@ -4017,6 +4082,9 @@ function model(plan) {
   const gaps = entries.map((e) => e.key)
   return {
     configLines,
+    baseline: baselineOf(plan),
+    blocking: blockingOf(plan).filter((f) => !f.ordinary),
+    replayed: blockingOf(plan).find((f) => f.replayed)?.replayed,
     // A native addon can crash the whole process from a worker thread, so a
     // package that depends on one runs its tests in child processes.
     pool:
@@ -4488,6 +4556,18 @@ function configText(plan, test) {
 }
 
 /** The fixture package's files in one state. */
+/**
+ * Whether the scratch package lies outside this repository: one that must
+ * resolve no TypeScript, and one with no Vitest config. Vitest looks for a
+ * config in the package's parent directories too (its cli-api's find-up over
+ * `configFiles`), so a package with no config inside the CLI's directory
+ * would run under the CLI's own config there; outside, "no config" is what
+ * Vitest sees. That the CLI itself looks only in the package is an open
+ * defect (see the end-to-end oracle's limits).
+ */
+const outsideRepository = (plan) =>
+  plan.fault === `noTypescript` || plan.configPlace === `none`
+
 function fixtureFiles(plan, state = initialState(plan)) {
   const manifest = (fields) =>
     `${JSON.stringify({ private: true, type: `module`, ...fields })}\n`
@@ -4628,9 +4708,12 @@ function fixtureFiles(plan, state = initialState(plan)) {
     'deps/state-dep/build/Release/.keep': ``,
     ...(plan.release ? { 'deps/state-dep/build/Release/state.node': `` } : {}),
     // The runner's own dependencies, linked into the package. A package with
-    // no TypeScript sits outside this repository, so it links them, and Vite
-    // too: the CLI bundles a workspace dependency with the package's Vite.
-    ...(state.linked || plan.fault === `noTypescript`
+    // no TypeScript, or with no config, sits outside this repository
+    // (`outsideRepository`), so it links them, and Vite too: the CLI bundles
+    // a workspace dependency with the package's Vite. A Vitest that does not
+    // load stays the package's own until `fixSession` links this one.
+    ...(state.linked ||
+    (outsideRepository(plan) && plan.fault !== `brokenVitest`)
       ? Object.fromEntries(
           [`vitest`, `fast-check`, `@fast-check`].map((name) => [
             `node_modules/${name}`,
@@ -4638,7 +4721,7 @@ function fixtureFiles(plan, state = initialState(plan)) {
           ]),
         )
       : {}),
-    ...(plan.fault === `noTypescript`
+    ...(outsideRepository(plan)
       ? { 'node_modules/vite': link(ROOT_VITE) }
       : {}),
     ...(plan.native === `gyp`
@@ -5029,6 +5112,7 @@ function readSummary(summary) {
 
 export {
   captureWitness,
+  outsideRepository,
   endingOf,
   refusalBreach,
   readSummary,

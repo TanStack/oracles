@@ -69,11 +69,11 @@ export const partitions = {
     },
   },
   // The end-to-end gap oracle's fixed-seed units, which a pull request runs
-  // (`-t "fixed seed"`): 33 units, 424 s in all, measured on this
+  // (`-t "fixed seed"`): 33 units, 475 s in all, measured on this
   // branch in one local run under other agents' load (load average about 3).
   // A unit's cost follows the generated history its constructed history is
   // built from, so a grammar change can move cost between units. The units
-  // are packed longest first into three shards: 141 s, 141 s, and 141 s.
+  // are packed longest first into three shards: 158 s, 158 s, and 158 s.
   'oracle-gaps-fixed-seed': {
     args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-oracle`],
     suite: `oracle-gaps.report`,
@@ -83,27 +83,29 @@ export const partitions = {
     previously: `fixed seed`,
     shards: {
       1: anyOf([
+        'a second daemon check of the budget witness',
+        'generated',
+        'an edit that changed the cold result after a hang replaced the only context',
+        'a declaration fault: badEntry',
+        'a failing owner under a config that --config names',
+        'two authored mutants',
+        'a declaration fault: setupThrows',
+        'a .ts config in a package with no module type that calls require',
+        'ordinary tests left out by default',
+        'a declaration fault: configThrows',
+      ]),
+      2: anyOf([
         'an edit sequence through the daemon',
         'every outcome class',
         'a declaration fault: apiLessTypescript',
-        'a package with no config',
-        'a .cjs config that calls require',
-        'a declaration fault: badEntry',
-        'a declaration fault: missingSource',
-        'a declaration fault: configNoDefault',
-      ]),
-      2: anyOf([
-        'a second daemon check of the budget witness',
-        'generated',
         'a declaration fault: brokenVitest',
         'an edit to a module that only mutated runs load',
-        'a declaration fault: brokenOwner',
-        'two authored mutants',
-        'a .ts config in a package with no module type that calls require',
+        'a load failure beside a hang',
+        'a declaration fault: missingSource',
+        'a run with eleven contexts',
         'a config that --config names',
-        'a declaration fault: setupThrows',
         'a config fault in a run that owns nothing',
-        'a declaration fault: configThrows',
+        'a declaration fault: outsideSource',
       ]),
       3: rest,
     },
