@@ -63,10 +63,15 @@ every commit with [pkg.pr.new](https://pkg.pr.new).
   route that `oracleProperty` registers for production (a fixed seed, a
   fixed history, a case, or the random campaign) judges work, since only
   such a test can carry a bound. A test whose work varied between the two
-  unmutated runs, or that made a real timer or interval or held I/O open
-  (its count can follow the clock, as a polling or a deadline loop's
-  does), does not judge work. A count that varies with the clock but
-  agreed in both unmutated runs, without a timer or I/O, is not caught. The gap's directive names the first such
+  unmutated runs, or whose count could follow the clock, as a polling or a
+  deadline loop's does, does not judge work, so a work-bound kill
+  replays on an idle machine. A count can follow the clock when the test,
+  its driver, or production makes a real timer or interval (through the
+  globals, `node:timers`, or `node:timers/promises`), reads a clock
+  (`Date.now()`, `new Date()`, `performance.now()`, `process.hrtime`), or
+  holds I/O open. A wait of one turn (`setImmediate`) reads no clock. Reads
+  that the test runner, fast-check, or the oracle framework makes do not
+  count, and neither do reads under a fake clock. The gap's directive names the first such
   test, its work before and after, and the bound that rejects the mutant.
   Declare it on the owning property, for example
   `oracleProperty({ ..., work: { ratio: 1.1 } })`: a mutant whose work in

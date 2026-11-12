@@ -25,6 +25,7 @@
 // of shrinking it: a kill needs one failing history, not the smallest one.
 import { createHash } from 'node:crypto'
 import { appendFileSync, readFileSync } from 'node:fs'
+import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { afterAll, beforeEach, chai, expect, inject, vi } from 'vitest'
 
 const run =
@@ -89,7 +90,7 @@ const pending = (globalThis.__oracleGapsPendingTimers ??= (() => {
       // made one can do work that follows the clock, as a polling or a
       // deadline loop does (classify.mjs). An immediate waits a turn, not a
       // time, as the framework's `withinTurns` does.
-      if (timed) globalThis.__oracleGapsTimer?.()
+      if (timed) globalThis.__oracleGapsClock?.()
       return handle
     }
     globalThis[clear.name] = function (handle) {
@@ -102,6 +103,48 @@ const pending = (globalThis.__oracleGapsPendingTimers ??= (() => {
   wrap(globalThis.setImmediate, globalThis.clearImmediate, true, false)
   return handles
 })())
+// The other paths to the clock, wrapped once per worker as the timers are,
+// each telling the copy now running (`__oracleGapsClock`): a read of
+// `Date.now`, `new Date()` or `Date()` with no argument, `performance.now`,
+// and `process.hrtime`, and a timer of `node:timers` or
+// `node:timers/promises` (which do not go through the global functions). A
+// fake clock replaces these, and its reads do not follow the real clock.
+if (!globalThis.__oracleGapsClocks) {
+  globalThis.__oracleGapsClocks = true
+  const told = (read) =>
+    function (...args) {
+      globalThis.__oracleGapsClock?.()
+      return read.apply(this, args)
+    }
+  const RealDate = Date
+  RealDate.now = told(RealDate.now)
+  const TrackedDate = new Proxy(RealDate, {
+    construct(target, args, newTarget) {
+      if (args.length === 0) globalThis.__oracleGapsClock?.()
+      return Reflect.construct(target, args, newTarget)
+    },
+    apply(target, self, args) {
+      globalThis.__oracleGapsClock?.()
+      return Reflect.apply(target, self, args)
+    },
+  })
+  // A date's constructor stays the global `Date`.
+  RealDate.prototype.constructor = TrackedDate
+  globalThis.Date = TrackedDate
+  performance.now = told(performance.now)
+  const hrtime = process.hrtime
+  process.hrtime = Object.assign(told(hrtime), {
+    bigint: told(hrtime.bigint),
+  })
+  const require = createRequire(import.meta.url)
+  const timers = require(`node:timers`)
+  const promises = require(`node:timers/promises`)
+  for (const module of [timers, promises])
+    for (const name of [`setTimeout`, `setInterval`])
+      module[name] = told(module[name])
+  promises.scheduler.wait = told(promises.scheduler.wait)
+  syncBuiltinESMExports()
+}
 const unit = run.units?.[globalThis.__vitest_worker__?.filepath]
 // The mutants that a copy earlier in this batch killed. A later copy of the
 // same mutant runs nothing: the mutant is decided (stop at first kill).
@@ -673,12 +716,29 @@ let workBound
 globalThis.__oracleWorkBound = (ratio) => {
   if (inTest) workBound = ratio
 }
-// Whether the current test made a real timer or interval (the wrappers
-// above; a fake clock replaces them, and its work does not follow the real
-// clock).
-let madeTimer = false
-globalThis.__oracleGapsTimer = () => {
-  if (inTest) madeTimer = true
+// Whether the current test's count could follow the clock (maintainer
+// decision, 2026-11-12, under P3: a kill must replay on an idle machine):
+// it made a real timer or interval by any path, or read the clock (the
+// wrappers above), or held I/O open (`sawIo`). A read that the test runner,
+// fast-check, the oracle framework (its shrink budget), Node, or this file
+// makes does not count: the caller is the first frame outside this file
+// and Node's own.
+let clocked = false
+const machinery =
+  /[\\/]node_modules[\\/](?:vitest|@vitest|fast-check|@fast-check|tinypool|tinyspy|chai|@tanstack[\\/]oracles)[\\/]|[\\/]packages[\\/]oracles[\\/]src[\\/]/
+function fromTest() {
+  for (const frame of String(new Error().stack).split(`\n`).slice(1)) {
+    const file =
+      frame.match(/\((.*):\d+:\d+\)$/)?.[1] ??
+      frame.match(/at (.*):\d+:\d+$/)?.[1]
+    if (file === undefined || file.startsWith(`node:`)) continue
+    if (file.endsWith(`capture-setup.mjs`)) continue
+    return !machinery.test(file)
+  }
+  return false
+}
+globalThis.__oracleGapsClock = () => {
+  if (inTest && !clocked && fromTest()) clocked = true
 }
 
 globalThis.__oracleObserve = (checkpoint, value) => {
@@ -720,7 +780,7 @@ beforeEach((context) => {
   siteHistories = new Map()
   route = undefined
   workBound = undefined
-  madeTimer = false
+  clocked = false
   inTest = true
 })
 
@@ -757,7 +817,7 @@ function finishTest(context) {
       infected: [...infected],
       operands: [...operands],
       ...(sawIo ? { io: true } : {}),
-      ...(madeTimer ? { timers: true } : {}),
+      ...(clocked || sawIo ? { clocked: true } : {}),
       outcomes: [...outcomes],
       verdicts: [...verdicts.values()],
       route,

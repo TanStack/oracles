@@ -252,16 +252,15 @@ export function baselineOf(firstRows, secondRows) {
   const rank = new Map([...firstRows.keys()].map((key, i) => [key, i]))
   // Each deterministic test's work, the site evaluations its production
   // code made (capture-setup.mjs `calls`), where the two runs agree and
-  // neither made a timer or held I/O open, after which a count can follow a
-  // clock: only such a test's work judges a mutant.
-  const clocked = (row) => row?.timers || row?.io
+  // neither run's count could follow the clock (`clocked`): only such a
+  // test's work judges a mutant, so a kill replays on an idle machine.
   const work = new Map()
   for (const [key, row] of firstRows)
     if (
       !row.background &&
       !nondeterministic.has(key) &&
-      !clocked(row) &&
-      !clocked(secondRows.get(key)) &&
+      !row.clocked &&
+      !secondRows.get(key)?.clocked &&
       secondRows.get(key)?.calls === row.calls
     )
       work.set(key, row.calls)
@@ -402,24 +401,23 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
       !baseline.nondeterministic.has(k),
   )
   // A compared test's work judges the mutant when the two unmutated runs
-  // agree on it, no run of it made a timer or held I/O open, and its route
-  // is one that oracleProperty registers for production, which can carry a
+  // agree on it, no run's count could follow the clock, and its route is
+  // one that oracleProperty registers for production, which can carry a
   // work bound; it rose when the mutant's run did more.
-  const rose = (k) =>
-    baseline.work.has(k) &&
-    [`reproducible`, `random`].includes(routeOf(rows.get(k).route)) &&
-    !rows.get(k).timers &&
-    !rows.get(k).io &&
-    rows.get(k).calls > baseline.work.get(k)
   const compares = new Set(compared)
+  const rose = (k, row = rows.get(k)) =>
+    compares.has(k) &&
+    baseline.work.has(k) &&
+    [`reproducible`, `random`].includes(routeOf(row.route)) &&
+    !row.clocked &&
+    row.calls > baseline.work.get(k)
   const result = {
     ...outcomeOf(
       units,
       baseline.nondeterministic,
       false,
       (k, row) =>
-        compares.has(k) &&
-        rose(k) &&
+        rose(k, row) &&
         row.work !== undefined &&
         // In hundredths, exactly: 29 is not past 1.16 times 25.
         100 * row.calls > Math.round(100 * row.work) * baseline.work.get(k),
@@ -428,7 +426,10 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
   }
   if (result.outcome !== `survived`) return result
   result.changedTests = changedIn(rows, compared, baseline)
-  const roseIn = inReportOrder(compared.filter(rose), baseline)[0]
+  const roseIn = inReportOrder(
+    compared.filter((k) => rose(k)),
+    baseline,
+  )[0]
   if (result.changedTests.length > 0) result.class = `not-judged`
   else if (compared.length === 0) {
     result.class = `indeterminate`
