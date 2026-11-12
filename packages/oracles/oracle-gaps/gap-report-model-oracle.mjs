@@ -3639,7 +3639,10 @@ function refusal(plan) {
  */
 function blockingOf(plan) {
   if (plan.fault === `setupThrows`)
-    return [{ file: `a` }, { file: `b` }, { file: `c`, ordinary: true }]
+    return [
+      ...oracleFilesOf(plan).map((file) => ({ file })),
+      { file: `c`, ordinary: true },
+    ]
   if (plan.fault === `brokenOwner`)
     return [
       {
@@ -3659,7 +3662,7 @@ function blockingOf(plan) {
  */
 function baselineOf(plan) {
   const failing = blockingOf(plan)
-  return [...ORACLE_FILES, `c`].map((file) => {
+  return [...oracleFilesOf(plan), `c`].map((file) => {
     const own = plan.tests.filter((t) => t.file === file).length
     const broken = failing.find((f) => f.file === file)
     // The failing owner's suite holds two tests and a third of its name.
@@ -3723,16 +3726,10 @@ function model(plan) {
   )
   const ownerTests = (id) =>
     plan.tests.filter(
-<<<<<<< HEAD
       (t) =>
-        ORACLE_FILES.includes(t.file) &&
+        oracleFilesOf(plan).includes(t.file) &&
         owners(id).has(t.file) &&
         !blocking.has(t.file),
-||||||| b31e074
-      (t) => ORACLE_FILES.includes(t.file) && owners(id).has(t.file),
-=======
-      (t) => oracleFilesOf(plan).includes(t.file) && owners(id).has(t.file),
->>>>>>> fix/gap-cli-runtime
     )
   // A mutant that a failing oracle file owns, and no passing owner kills,
   // is blocked: it waits for that file.
