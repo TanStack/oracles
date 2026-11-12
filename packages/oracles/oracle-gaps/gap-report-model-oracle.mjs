@@ -429,6 +429,10 @@ const edits = [
   `cli`,
   // The module that only file b's mutated runs import (`lazyGate`).
   `lazy`,
+  // File b's helper edited while a check through the daemon runs (law 9's
+  // mid-run edit): a test of file a, which has loaded the helper, rewrites
+  // it the first time it runs, before file b's runs read it.
+  `midrun`,
   `restart`,
   `revert`,
   // Events that end a daemon, not edits: a crash (killed, its socket and
@@ -2630,6 +2634,9 @@ function resolveHistory(history) {
     stability: history.stability,
     steps: history.steps ?? [],
     lazyGate: history.lazyGate === true,
+    // Whether a step edits file b's helper during a check (`midrun`): then
+    // file a loads the helper and holds the test that edits it.
+    midrun: (history.steps ?? []).includes(`midrun`),
     ordinary: history.ordinary === true,
     // An `owns` key in an assertion's arguments, in the ordinary file: its
     // assertion form and whether its list is a literal, or none.
@@ -3849,7 +3856,10 @@ function blockingOf(plan) {
 function baselineOf(plan) {
   const failing = blockingOf(plan)
   return [...oracleFilesOf(plan), `c`].map((file) => {
-    const own = plan.tests.filter((t) => t.file === file).length
+    // File a's mid-run edit test (`midrun`) runs in every baseline too.
+    const own =
+      plan.tests.filter((t) => t.file === file).length +
+      (plan.midrun && file === `a` ? 1 : 0)
     const broken = failing.find((f) => f.file === file)
     // The failing owner's suite holds two tests and a third of its name.
     const extra = broken?.test === undefined ? 0 : 3
@@ -4211,6 +4221,14 @@ function oracleTestFile(plan, file) {
           `import { join as pidPath } from 'node:path'`,
         ]
       : []),
+    // The mid-run edit (`midrun`): file a loads file b's helper, so its
+    // context holds the helper's old text when the edit lands.
+    ...(plan.midrun && file === `a`
+      ? [
+          `import { readFileSync as readMarker, writeFileSync as writeEdit } from 'node:fs'`,
+          `import { strict as strictAtLoad } from './strict'`,
+        ]
+      : []),
     // A module's text through a query import, which Vite loads (see rawImport).
     ...(plan.tests.some((t) => t.file === file && t.rawImport)
       ? [
@@ -4392,8 +4410,27 @@ function oracleTestFile(plan, file) {
       `})`,
       `test('fixed seed 999', () => {})`,
     )
+  // The mid-run edit: the first run of this test after the driver marks an
+  // edit pending (`tests/midrun.txt`, `pending:<value>`) rewrites file b's
+  // helper with that value and marks the edit done, so every later run of
+  // it, in this check or another, changes nothing. It calls nothing of the
+  // source under test, so no mutant reaches it.
+  if (plan.midrun && file === `a`)
+    out.push(
+      `test('edits the helper during the check', () => {`,
+      `  void strictAtLoad`,
+      `  const marker = new URL('./midrun.txt', import.meta.url)`,
+      `  const text = readMarker(marker, 'utf8')`,
+      `  if (!text.startsWith('pending:')) return`,
+      `  writeEdit(new URL('./strict.ts', import.meta.url), \`export const strict = \${text.slice('pending:'.length).trim()}\\n\`)`,
+      `  writeEdit(marker, 'done\\n')`,
+      `})`,
+    )
   // A file with no tests still loads, so the CLI can read what it owns.
-  if (!plan.tests.some((t) => t.file === file))
+  if (
+    !plan.tests.some((t) => t.file === file) &&
+    !(plan.midrun && file === `a`)
+  )
     out.push(`test.skip('no tests', () => {})`)
   return `${out.join(`\n`)}\n`
 }
@@ -4694,6 +4731,10 @@ function fixtureFiles(plan, state = initialState(plan)) {
     ...(plan.dotGenSource ? { [DOTGEN]: plan.dotGenSource } : {}),
     ...plan.exportSources,
     'tests/strict.ts': `export const strict = ${state.strict}\n`,
+    // The mid-run edit's marker: done in every state, and pending only in
+    // the check through the daemon during which the edit lands (the
+    // driver's `midrun` step).
+    ...(plan.midrun ? { 'tests/midrun.txt': `done\n` } : {}),
     ...(plan.lazyGate
       ? { 'tests/lazy.ts': `export const open = ${state.lazyOpen}\n` }
       : {}),
@@ -4960,7 +5001,9 @@ function applyEdit(state, edit) {
             : { stmt: (h.authored?.stmt ?? -1) + 1, kind: `apply` },
       },
     }
-  if (edit === `helper`) return { ...state, strict: !state.strict }
+  // A mid-run edit leaves file b's helper as the helper edit does.
+  if (edit === `helper` || edit === `midrun`)
+    return { ...state, strict: !state.strict }
   if (edit === `lazy`) return { ...state, lazyOpen: !state.lazyOpen }
   if (edit === `seed`) return { ...state, seed: state.seed === 1 ? 2 : 1 }
   if (edit === `config`) return { ...state, altConfig: !state.altConfig }

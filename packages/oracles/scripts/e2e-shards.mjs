@@ -67,6 +67,10 @@ export const shards = {
     `fixed seed 20261105: an edit that changed the cold result after a hang replaced the only context`,
     `random seed: an edit that changed the cold result after a hang replaced the only context`,
     `determinism: constructed history: an edit that changed the cold result after a hang replaced the only context`,
+    // The mid-run edit's history (law 9), not yet measured.
+    `fixed seed 20261105: an edit during a check through the daemon`,
+    `random seed: an edit during a check through the daemon`,
+    `determinism: constructed history: an edit during a check through the daemon`,
     // Added with the CLI's parent-config discovery (not yet measured).
     `fixed seed 20261105: a package whose parent directory has its config`,
     `random seed: test.projects in a parent's config`,
