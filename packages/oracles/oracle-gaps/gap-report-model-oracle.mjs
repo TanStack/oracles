@@ -3445,9 +3445,16 @@ function interpret(plan, fnId, x, sites, active) {
           if (isActive(value)) trace.push(undefined)
           else {
             const [inner] = plan.functions.find((f) => f.id === `$derived`).body
+            // Its `return String(x)` is a `value-undefined` site (the call)
+            // and a `return-undefined` site (the returned value), both
+            // reached when `$derived` runs, and either gives `undefined`.
             const string = siteOf(inner, `string`)
+            const returned = siteOf(inner, `returned`)
             reached.add(string.id)
-            trace.push(isActive(string) ? undefined : String(x))
+            reached.add(returned.id)
+            trace.push(
+              isActive(string) || isActive(returned) ? undefined : String(x),
+            )
           }
         }
       }
