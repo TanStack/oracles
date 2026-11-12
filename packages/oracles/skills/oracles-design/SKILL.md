@@ -421,9 +421,10 @@ Techniques: [guide § Histories](../../docs/guide.md#histories).
     where `#queue: QueueType`) reaches no function body, so it is not followed.
     If the law depends on that method, own the implementation too
     (`source/priority-queue.ts#PriorityQueue.filter`).
-  - A default export is named `default`, in any form (`export default
-function`, `export default () => ...`, `module.exports = fn`):
-    `index.js#default`. `exports.name = fn` is named `name`.
+  - An unnamed default export is named `default` (`export default function
+() {}`, `export default () => ...`, `module.exports = fn`):
+    `index.js#default`. A named one keeps its name: `export default function
+pLimit` is `index.js#pLimit`. `exports.name = fn` is named `name`.
   - Module-level data (`const UNIT_MS = {...}`) is its own unit, named by its
     variable. An owned function that reads it owns it, and what its
     initializer refers to. An entry can also name it: `src/index.ts#UNIT_MS`.

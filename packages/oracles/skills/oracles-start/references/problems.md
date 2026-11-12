@@ -34,6 +34,17 @@ finished. If the
 repository's own lint already covers the oracle file's folder, run it on
 the file, as `oracles-design` says.
 
+**The repository's other test runner picks up the oracle file.** ava, Jest,
+or mocha may match `*.oracle.test.*` by default. Exclude only the oracle
+folder from that runner (for ava, `files: ['!oracles/**']` in an
+`ava.config.js`), and keep its other defaults, so their suite runs as
+before. Tell the developer in one line.
+
+**Lint autofix changes what an oracle observes.** An autofix can rewrite code
+in ways that change behavior (for example `promise.then(ok, fail)` into
+`promise.catch(fail).then(ok)`). Review each autofix in an oracle file before
+you run it, and undo any that changes what the driver observes.
+
 **The repository's lint picks up the oracle file.** If its lint (xo, ESLint
 over every file) now fails on the oracle file or the Vitest config, tell the
 developer in one line. Leaving them out of that lint is part of finishing
