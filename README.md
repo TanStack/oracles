@@ -71,8 +71,11 @@ every commit with [pkg.pr.new](https://pkg.pr.new).
   no unmodified run to compare with, so there the bound judges nothing. The
   count does not see work without a site, such as a plain assignment, a
   `for...of` pass, or a builtin's own work, so a call to a builtin counts
-  once, whatever it costs. An authored mutant's copy is not instrumented, so
-  a work bound does not judge it.
+  once, whatever it costs. Work is counted per test, not per history: a
+  test that runs many histories, such as a `generated` unit, is judged by
+  their sum, so a slowdown in a few of its histories is diluted, and a
+  constructed or fixed history isolates it. An authored mutant's copy is
+  not instrumented, so a work bound does not judge it.
 
   Exit codes: 0 the check completed, whatever its gaps (the last stdout line
   is `completed: <n> gaps`); 2 the run was refused, with `refused:` and
