@@ -41,8 +41,9 @@
  * - A literal run count above 1 that has no fixed history. It does not scale with
  *   the runs-multiplier variable (`${envPrefix}_RUNS_MULTIPLIER`), so `oracleRuns` must wrap it.
  * - A private replay variable: a `process.env` read whose name ends in
- *   `_SEED`, `_PATH`, `_PROPERTY`, or `_RUNS`, other than the framework's
- *   shared `${envPrefix}_SEED`, `${envPrefix}_PATH`, and `${envPrefix}_PROPERTY`. The replay manifest, the guarded replay
+ *   `_SEED`, `_PATH`, `_PROPERTY`, `_UNIT`, or `_RUNS`, other than the framework's
+ *   shared `${envPrefix}_SEED`, `${envPrefix}_PATH`, `${envPrefix}_PROPERTY`, and
+ *   `${envPrefix}_UNIT`, the random unit a path replay runs. The replay manifest, the guarded replay
  *   runner, and the retired-variable check see only the shared variables.
  *
  * The rule has no inline exception. A known counterexample is kept failing with
@@ -65,18 +66,18 @@ import {
   isFunction,
   isModuleFile,
   isSharedHelperCall,
-  isTestRoot,
   oracleSettings,
-  registrationMembers,
+  outermostCast,
   selectionHelpers,
-  testRoots,
+  testFunctionMembers,
+  testFunctions,
 } from '../registration.js'
 
 const replayConditions = new Set([`oracleReplayRequested`, `oracleReplaySkips`])
 // A replay-selection module (`implementationModules`) may read the replay
 // variables and select a replay from configuration.
 // Any variable whose name ends in one of these suffixes is a replay variable.
-const replayVariableName = /_(PATH|PROPERTY|RUNS|SEED)$/
+const replayVariableName = /_(PATH|PROPERTY|RUNS|SEED|UNIT)$/
 const runHelpers = new Set([
   `oraclePropertyOptions`,
   `oracleRandomParameters`,
@@ -110,6 +111,16 @@ function registrationCondition(callee) {
     node = node.type === `CallExpression` ? node.callee : node.object
   }
   return undefined
+}
+
+/**
+ * The condition that a test function of another module carries, as
+ * `export const maybe = it.skipIf(flag)` does. Its arguments are out of
+ * sight, so it can never be a replay selection.
+ */
+function foreignCondition(foreign) {
+  const name = foreign.find((member) => conditionalModifiers.has(member))
+  return name === undefined ? undefined : { name, args: [] }
 }
 
 /** Exactly `.skipIf(<shared replay condition>)`, not negated. */
@@ -405,7 +416,12 @@ function environmentKey(node) {
 }
 
 function isPrivateReplayVariable(name, envNames) {
-  const shared = [envNames.seed, envNames.path, envNames.property]
+  const shared = [
+    envNames.seed,
+    envNames.path,
+    envNames.property,
+    envNames.unit,
+  ]
   return replayVariableName.test(name) && !shared.includes(name)
 }
 
@@ -641,7 +657,7 @@ function isOnlySerialized(variable, id, sourceCode) {
  * Whether a call skips the test that it runs in through the test context,
  * as in `it('law', (ctx) => { ctx.skip() })`.
  */
-function isContextSkip(node, sourceCode) {
+function isContextSkip(node, sourceCode, functions) {
   const { callee } = node
   if (
     callee.type !== `MemberExpression` ||
@@ -662,7 +678,7 @@ function isContextSkip(node, sourceCode) {
   return (
     registration.type === `CallExpression` &&
     registration.arguments.includes(fn) &&
-    isTestRoot(calleeChain(registration.callee).rootNode, sourceCode)
+    functions.callee(registration.callee) !== undefined
   )
 }
 
@@ -719,12 +735,13 @@ export default {
       aliasTest: `\`{{name}}\` is passed around as a value, so the rule cannot see what it registers or switches off. Call it directly, or select a replay with \`oracleReplayTest({{name}}, property)\` from \`@tanstack/oracles\`.`,
       guarded: `This test registers only under a condition, so it can stop running in ordinary runs. Register it unconditionally. A replay selection uses \`oracleReplayRequested()\` or \`oracleReplaySkips(property)\` from \`@tanstack/oracles\`, or \`oracleReplayTest(test, property)\`.`,
       singleRun: `A generated property with one run that has no fixed history checks one random history. Pass a base run count to oracleRuns or oraclePropertyOptions, which also selects a replay. A witness passes a recorded \`path\` or a seed that is a number literal or a constant.`,
-      replayVariable: `\`{{name}}\` selects a replay or a run count outside the shared variables, so the replay manifest, the guarded replay runner, and the retired-variable check cannot see it. Take the options from \`oraclePropertyOptions\` or \`oracleRandomParameters\` in \`@tanstack/oracles\`, which read {{seed}}, {{path}}, and {{property}}, and scale run counts with \`oracleRuns\`.`,
+      replayVariable: `\`{{name}}\` selects a replay or a run count outside the shared variables, so the replay manifest, the guarded replay runner, and the retired-variable check cannot see it. Take the options from \`oraclePropertyOptions\` or \`oracleRandomParameters\` in \`@tanstack/oracles\`, which read {{seed}}, {{path}}, {{property}}, and {{unit}}, and scale run counts with \`oracleRuns\`.`,
       literalRuns: `A literal run count does not scale with {{runsMultiplier}}. Wrap it in oracleRuns, or pass it to oraclePropertyOptions.`,
     },
   },
   create(context) {
     const { sourceCode } = context
+    const functions = testFunctions(context)
     const settings = oracleSettings(context)
     const replaySelection = isModuleFile(
       context.filename,
@@ -748,6 +765,24 @@ export default {
       )
     }
 
+    // The values already reported as passed test functions. The branches of
+    // one conditional or logical expression pass one value, so it is
+    // reported once.
+    const passedValues = new Set()
+    /** Whether `node` is the first test function of the value it passes. */
+    function firstValue(node) {
+      let value = outermostCast(node)
+      while (
+        (value.parent.type === `ConditionalExpression` &&
+          value.parent.test !== value) ||
+        value.parent.type === `LogicalExpression`
+      )
+        value = outermostCast(value.parent)
+      if (passedValues.has(value)) return false
+      passedValues.add(value)
+      return true
+    }
+
     return {
       CallExpression(node) {
         // A curried call such as `fcTest.prop(arbs)(name, fn)` is reported
@@ -758,12 +793,12 @@ export default {
         ) {
           return
         }
-        if (isContextSkip(node, sourceCode)) {
+        if (isContextSkip(node, sourceCode, functions)) {
           context.report({ node, messageId: `skip`, data: { name: `skip` } })
           return
         }
-        const { root, rootNode, names } = calleeChain(node.callee)
-        if (runHelpers.has(root) && names.length === 0) {
+        const { root, names: chain } = calleeChain(node.callee)
+        if (runHelpers.has(root) && chain.length === 0) {
           if (
             isSingleRunLiteral(constantNumber(node.arguments[0], sourceCode)) &&
             !isFixedRunCount(node)
@@ -772,12 +807,32 @@ export default {
           }
           return
         }
+        const test = functions.callee(node.callee)
         if (
-          !isTestRoot(rootNode, sourceCode) ||
-          !names.every((member) => registrationMembers.has(member))
+          test === undefined ||
+          !test.members.every((member) => testFunctionMembers.has(member))
         ) {
           return
         }
+        // A condition call passed as a value, as in
+        // `const maybe = describe.skipIf(flag)`, can switch off whatever the
+        // value later registers. Its own call registers nothing.
+        const switchOff = test.own.at(-1)
+        if (
+          conditionalModifiers.has(switchOff) &&
+          isPassedAsValue(outermostCast(node))
+        ) {
+          context.report({
+            node,
+            messageId: `alias`,
+            data: { name: switchOff },
+          })
+          return
+        }
+        // The modifiers that this file writes, and those that a test
+        // function of another module carries, which no report of this file
+        // sees where that module writes them.
+        const names = [...test.foreign, ...test.own]
         const unguarded = [
           ...guardingConditions(node, sourceCode),
           ...iterableConditions(eachTable(node.callee), sourceCode),
@@ -790,7 +845,8 @@ export default {
           context.report({ node: node.callee, messageId: `only` })
           return
         }
-        const conditional = registrationCondition(node.callee)
+        const conditional =
+          registrationCondition(node.callee) ?? foreignCondition(test.foreign)
         if (conditional !== undefined) {
           if (!isReplaySelection(conditional, sourceCode)) {
             context.report({
@@ -807,14 +863,17 @@ export default {
         }
       },
       Identifier(node) {
-        if (!testRoots.has(node.name) || !isPassedAsValue(node)) return
-        // A local variable or parameter that shares a test function's name
-        // is not that function.
+        if (!isPassedAsValue(outermostCast(node))) return
+        // A variable bound to a test function is reported where the test
+        // function is passed to it, not at each use.
         const definition = findVariable(sourceCode.getScope(node), node.name)
           ?.defs[0]
         if (definition !== undefined && definition.type !== `ImportBinding`) {
           return
         }
+        const test = functions.callee(node)
+        if (test === undefined || test.own.length > 0 || !firstValue(node))
+          return
         context.report({
           node,
           messageId: `aliasTest`,
@@ -835,7 +894,7 @@ export default {
           })
         }
         // Report a chain such as `fcTest.skip` or `it.skip.prop` once, at its
-        // outermost member, when nothing calls it.
+        // outermost member, when nothing calls it or tags a template with it.
         if (
           node.parent.type === `MemberExpression` &&
           node.parent.object === node
@@ -843,16 +902,31 @@ export default {
           return
         }
         if (
-          node.parent.type === `CallExpression` &&
-          node.parent.callee === node
+          (node.parent.type === `CallExpression` &&
+            node.parent.callee === node) ||
+          (node.parent.type === `TaggedTemplateExpression` &&
+            node.parent.tag === node)
         ) {
           return
         }
-        const { rootNode, names } = calleeChain(node)
-        const name = names.find((member) => aliasModifiers.has(member))
-        if (isTestRoot(rootNode, sourceCode) && name !== undefined) {
+        const test = functions.callee(node)
+        if (test === undefined) return
+        const name = test.own.find((member) => aliasModifiers.has(member))
+        if (name !== undefined) {
           context.report({ node, messageId: `alias`, data: { name } })
+          return
         }
+        // A namespace member such as `vitest.it`, passed as a value.
+        if (
+          test.own.length === 0 &&
+          isPassedAsValue(outermostCast(node)) &&
+          firstValue(node)
+        )
+          context.report({
+            node,
+            messageId: `aliasTest`,
+            data: { name: test.root },
+          })
       },
       VariableDeclarator(node) {
         if (

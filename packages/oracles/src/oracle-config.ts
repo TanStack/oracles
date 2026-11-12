@@ -30,7 +30,7 @@ export type { OracleRoute } from './oracle-route.js'
 export interface OracleConfigurationOptions {
   /**
    * The prefix of every oracle environment variable: `${envPrefix}_SEED`,
-   * `${envPrefix}_PATH`, `${envPrefix}_PROPERTY`,
+   * `${envPrefix}_PATH`, `${envPrefix}_PROPERTY`, `${envPrefix}_UNIT`,
    * `${envPrefix}_RUNS_MULTIPLIER`, `${envPrefix}_CALIBRATION`,
    * `${envPrefix}_REPLAY_WITNESS`, and `${envPrefix}_REPLAY_WITNESS_MODE`. A project with its own prefix keeps its
    * variable names by passing it here.
@@ -132,7 +132,7 @@ export function assertRegisteredOracleProperty(property: string): void {
 export function readOracleRunConfig(
   environment?: OracleEnvironment,
 ): Readonly<OracleReplayConfig & { multiplier: number }> {
-  const { multiplier, campaignSeed, replayPath, replayProperty } =
+  const { multiplier, campaignSeed, replayPath, replayProperty, replayUnit } =
     environment === undefined
       ? replayConfig()
       : readRunConfig(environment, oracleSettings())
@@ -141,6 +141,7 @@ export function readOracleRunConfig(
     campaignSeed,
     replayPath,
     replayProperty,
+    replayUnit,
     // A seed the process's replay environment selected is declared fixed,
     // so options built from this configuration name it `fixed seed`.
     ...(environment === undefined && campaignSeed !== undefined

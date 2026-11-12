@@ -356,3 +356,119 @@ independent reviewer is challenging this frozen repair before main integration.
 The superseded full68ed541 run completed both campaigns, including required
 warning/budget reach, then was explicitly interrupted before the incoming
 source/fixture integration. It is incomplete, not a full-suite GREEN.
+
+An independent frozen-repair review found no new supported warning defect. Six
+actual source variants were rejected: seedless omission, duplicate name,
+malformed list, unknown property, extra unknown name and duplicate warning
+event. Three legal presentation inputs passed the actual outer determinism
+receiver using this same model, driver and check, including sixteen varied and
+astral names across two properties, all receiving contexts and forced state
+labels with inner quotes. Thirty real child reports were retained. Vitest
+coalesced the duplicate console calls; that variant still failed name identity,
+so the result does not claim two separately observed warning records. These
+scoped results validate the warning repair; main integration remains separate.
+
+## Main UNIT integration and host observation repair
+
+Integration starts from published `f3f39a02d804cc3c74a3b1a9ba9333aad693a34d`
+and normally merges main `d38af3812dc07f447a23259673cdecf96a99fb3b`.
+Main removes `declareOracle`, splits generated campaigns and determinism into
+named units, and supplies `UNIT` replay. The accepted main contract changes the
+registration and budget model: each constructed unit owes one history; each
+passing generated unit owes its authored runs. Existing binding identity,
+fresh plans, stable calibration seeds, forced premises and verdict ranking
+remain. Fresh calibration seeds remain follow-up work.
+
+Before replacing production, the combined primary oracle ran against unchanged
+main. Seventeen UNIT neighbors passed, seven binding/control/origin/clean-reach
+checks failed their intended comparisons, and six own/inherited fixed-wrapper
+metadata receivers failed separately across authored and both forced premises.
+Two mixed inputs failed first on missing migration warnings, supplying warning
+feature evidence rather than selector proof. Two recorded-violation-before-spin
+neighbors passed. After the merged source, the same thirty binding, metadata
+and UNIT cuts passed; the four mixed/spin checks and nine receiving, warning and
+budget closures passed. Setup failures and initially empty filters are retained
+in the integration audit and do not count as behavioral evidence.
+
+The combined grammar retains every branch required state. Main's global name
+uniqueness now rejects old duplicate-name inputs before selector resolution;
+those inputs explicitly earn name-gate reach. Zero and two distinctly named
+entering constructions retain separate inference coverage. Four generated UNIT
+constructions require eleven states, with actual receiving observations.
+Per-unit budgets have sixteen omission/extra controls and four redistributions
+that preserve aggregate counts. Two clean shared-law enumerated receivers pass;
+source mutants duplicating constructed examples, reducing generated runs to one,
+and reusing the first bound selector fail the intended campaign-budget or
+calibration assertion. The enumeration avoids letting a global mutant fail the
+outer generated reach before the inner comparison.
+
+Integration exposed four owner/fixture siblings before final validation:
+
+- The synthetic fixture replaced the outer host RNG as well as marked children.
+  Both supplied host inputs failed the primary HOST comparison on unchanged main.
+  Scoping fixture control to marked children made both pass before source repair.
+- The inference model counted the first name rather than independently authored
+  entering declarations. It now retains genuine two-construction ambiguity.
+- The custom-prefix driver renamed the literal tooling key `ORACLE_MANIFEST`.
+  It now translates only configured replay variables; the receiving witness passes.
+- A new host receiving state was initially undeclared. Its declaration and
+  required construction now agree, preserving the branch's declared-state guard.
+
+A subsequent HOST review found an observation overconstraint: function identity
+is not promised by the host seed contract. An allowed forwarding wrapper failed
+the old primary comparison despite preserving the supplied draw and its use.
+The owner now checks the actual post-import draw and a semantic use fact measured
+immediately around actual seed selection. Exact counters remain raw diagnostics.
+The legal grammar includes one-call, two-call and alternating forwarding forms;
+actual outer determinism passes. Four permanent corruptions reject wrong or
+malformed draws, lost host use and unequal marked-child seeds. The original
+unscoped fixture and a separate seed-source bypass still fail the HOST comparison.
+This changes owner observations, not production or the scoped fixture.
+
+The merged production SHA256 is
+`a1c132e8e096228e34aad07ba39c20df88facfe998e8c8e4e155ff75b213e01b`;
+fixture SHA256 is
+`e2d2034ad7a57067e45c79a85a48970452b61dc9eb02e6e62c9e524da4bf9198`.
+An independent source review passed ten focused receivers and rejected wrong
+original identity, ignored difference, reversed forced premises and wrong UNIT
+seed offsets. An initially insensitive full-prefix seed witness passed the
+mutant; three existing short-prefix histories then passed correct source and
+rejected it. That filtered survivor is not a full-owner false green. A legal
+alternative stable name mixer passed. A cached-builder variant failed on the
+synthetic runtime path and is not credited as an inner assertion rejection.
+
+Local package/root types, package build and scoped lint pass. Core tests pass
+113 of 114; the fresh consumer-install check reaches registry HTTP403 responses
+for Vitest and fast-check and remains an environment failure. No dependency or
+lockfile workaround is committed. Plugin assertions pass 6,438 checks plus two
+package-citation checks retried with a writable uppercase npm cache. The actual
+96-test e2e inventory partitions across five shards with no partition errors;
+this is partition evidence, not a full gap-driver run. Complete merged framework
+validation and final owner reviews are still pending at this entry.
+
+This appendix retains the finite synthetic grammar, real Node/Vitest boundary,
+prior raw findings and historical CHRON-1. Current experiments cannot repair the
+missed historical pre-edit gate. The optional mutant-only undeclared-reach
+question remains a possible stronger policy, not an established contract defect.
+
+The final HOST challenge exposed one reach gap (I-11): omitting wrapper
+installation while retaining the requested plan passed the ordinary, reach and
+outer determinism checks, falsely reporting forwarding reach. The owner now
+records a semantic `forwarded` fact from actual wrapper invocations immediately
+around seed selection. Both its assertion and its reach require that fact;
+configured call counts cannot establish it. Exact invocation counts remain raw,
+so allowed one/two-call representation changes preserve deterministic traces.
+The clean ordinary/reach/determinism neighbor passes all three checks. Final
+focused HOST controls and the omitted-wrapper challenge are recorded after they
+complete; the pre-repair survivor is preserved rather than counted as a kill.
+
+The frozen owner SHA256 is
+`336ab5a735116bcbaff52caaeb0356422be27e56258e0fdb7d3468728474d9d9`.
+The final HOST focused gate passes **15/15**, including actual per-history
+outer determinism and five corruption controls. The clean required-forwarding
+ordinary/reach/determinism receiver passes **3/3**. Omitting wrapper installation
+now fails the HOST comparison and required forwarding reach (zero); its outer
+determinism still passes, isolating enforcement from nondeterminism. Package
+types, scoped lint and diff checks pass. Production and fixture retain the
+hashes above. Full frozen-head validation and three fresh owner reviewers start
+next; no whole-PR readiness claim is made by these focused results.
