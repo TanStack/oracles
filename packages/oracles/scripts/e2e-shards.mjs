@@ -33,10 +33,11 @@ const suite = `oracle-gaps.report`
 // (units), so a shard can hold any of them; the slowest unit, the
 // determinism of the edit sequence, is 236 s here. The shards are a
 // longest-first packing of those costs, listed by kind. A random unit's
-// cost follows its seed, so a shard's time varies from run to run. CI keeps
-// its one fixed-seed job until the random units' tail is bounded (option M
-// of the e2e speed plan): a random unit that draws a long edit sequence over
-// the witness module can pass 10 minutes in CI.
+// cost follows its seed, so a shard's time varies from run to run. Option M
+// of the e2e speed plan bounds the random units' tail: a generated history
+// with the witness module takes no steps, and the one edit sequence over it
+// is a constructed history. CI keeps its one fixed-seed job until the
+// maintainer decides which units run on a pull request.
 export const shards = {
   // 522 s in the measured run, about 221 s idle.
   'e2e-1': [
