@@ -51,6 +51,8 @@ import {
   blockedLines,
   gapLine,
   progressLine,
+  streamLine,
+  verdictLine,
   testNamesOf,
 } from './stream.mjs'
 import { analyze, isRunnerCopy } from './analysis.mjs'
@@ -693,7 +695,10 @@ export default async (env) => {
       if (Math.floor(elapsed / pulse.every) <= sent) return
       sent = Math.floor(elapsed / pulse.every)
       pulse.log(
-        `busy: ${label} in ${relativePath(pkg, file)} for ${Math.floor(elapsed / 1000)}s`,
+        streamLine(
+          `busy`,
+          `${label} in ${relativePath(pkg, file)} for ${Math.floor(elapsed / 1000)}s`,
+        ),
       )
     }
   }
@@ -1165,7 +1170,7 @@ export default async (env) => {
     seedVariable = `${options.envPrefix}_SEED`
     if (options.hangLimit > options.mutantLimit)
       log(
-        `note: --hang-limit ${options.hangLimit} ms is above --mutant-limit ${options.mutantLimit} ms; a mutant's confirmations together get at most the larger of --mutant-limit and ten times its owner files' unmutated time`,
+        `oracle-gaps: note --hang-limit ${options.hangLimit} ms is above --mutant-limit ${options.mutantLimit} ms; a mutant's confirmations together get at most the larger of --mutant-limit and ten times its owner files' unmutated time`,
       )
     pulse = {
       log,
@@ -1221,9 +1226,10 @@ export default async (env) => {
     // The run names the config its contexts loaded, before any refusal that
     // the analysis or the baseline makes.
     log(
-      settings.config === undefined
-        ? `no config file: Vitest's default discovery`
-        : `config: ${settings.config}`,
+      streamLine(
+        `config`,
+        settings.config ?? `none, Vitest's default discovery`,
+      ),
     )
     for (const context of contexts) await globSpecs(context)
     endPhase(`find test files`)
@@ -1682,6 +1688,7 @@ export default async (env) => {
     }))
     for (const line of [
       ...baselineLines(baselineFiles, options.config),
+      verdictLine(baselineFiles),
       ...blockedLines(baselineFiles),
     ])
       log(line)
@@ -1698,7 +1705,12 @@ export default async (env) => {
       (file) => !oracleFiles.has(file),
     )
     if (excluded.length > 0)
-      log(`left out, failing with no mutant active: ${excluded.join(`, `)}`)
+      log(
+        streamLine(
+          `note`,
+          `left out, failing with no mutant active: ${excluded.join(`, `)}`,
+        ),
+      )
     for (const file of firstFiles)
       if (
         first.failed.has(file) ||
@@ -1844,7 +1856,7 @@ export default async (env) => {
           !valueChanges.get(file)?.has(mutant.number),
       ) && targets.oracleKeys.every((key) => !nondeterministic.has(key))
     log(
-      `unmutated: ${[...first.rows.values()].filter((r) => !r.background).length} tests in ${first.seconds.toFixed(1)}s and ${second.seconds.toFixed(1)}s; nondeterministic: ${nondeterministic.size}`,
+      `oracle-gaps: progress unmutated: ${[...first.rows.values()].filter((r) => !r.background).length} tests in ${first.seconds.toFixed(1)}s and ${second.seconds.toFixed(1)}s; nondeterministic: ${nondeterministic.size}`,
     )
 
     // 3–5. Mutants.
@@ -2174,7 +2186,10 @@ export default async (env) => {
       if (result.authored && gapsOf([result]).length > 0) log(gapLine(result))
     const mutantSeconds = (Date.now() - started) / 1000
     log(
-      `mutant phase: ${results.length} mutants in ${mutantSeconds.toFixed(1)}s`,
+      streamLine(
+        `progress`,
+        `mutant phase: ${results.length} mutants in ${mutantSeconds.toFixed(1)}s`,
+      ),
     )
     await store.flush?.()
     writeFileSync(

@@ -27,6 +27,8 @@ import {
   escapeControls,
   gapLine,
   kindOf,
+  streamLine,
+  verdictLine,
 } from './stream.mjs'
 
 /** Outcomes that are gaps. Only a law verdict on a reproducible route kills. */
@@ -212,7 +214,11 @@ function baselineSection(results, baseline, config) {
   const blocking = blockedLines(baseline)
   const blocked = gapsOf(results).filter((r) => r.outcome === `blocked`).length
   return {
-    lines: [...baselineLines(baseline, config), ...blocking],
+    lines: [
+      ...baselineLines(baseline, config),
+      verdictLine(baseline),
+      ...blocking,
+    ],
     provisional:
       blocking.length === 0
         ? undefined
@@ -421,7 +427,7 @@ export function renderStdout({
     lines.push(
       `${group}${owners.length > 0 ? ` (owners: ${owners.join(`, `)})` : ``}`,
     )
-    for (const gap of rows) lines.push(`  ${gapLine(gap)}`)
+    for (const gap of rows) lines.push(gapLine(gap))
   }
   if (unowned.length > 0) {
     lines.push(``, `Unowned warnings, by function:`)
@@ -435,10 +441,15 @@ export function renderStdout({
       ``,
       `Left out, failing with no mutant active: ${excluded.join(`, `)}.`,
     )
-  lines.push(``, `Full report: ${paths.report}`, `Results: ${paths.results}`)
-  if (paths.out !== undefined) lines.push(`output: ${paths.out}`)
-  // The last line says the check ran to its end, and how many gaps it
-  // found (G6): exit 0 means the run completed, not that it found none.
-  lines.push(`completed: ${counted(gaps.length, `gap`)}`)
+  lines.push(``, `Results: ${paths.results}`)
+  // The last line says the check ran to its end, how many gaps it found,
+  // and where its full report is (G6, and the stream's done line): exit 0
+  // means the run completed, not that it found none.
+  lines.push(
+    streamLine(
+      `done`,
+      `completed, ${counted(gaps.length, `gap`)}${section.provisional ? ` (provisional)` : ``}, report ${paths.report}`,
+    ),
+  )
   return lines.join(`\n`)
 }

@@ -105,9 +105,12 @@
 //                              the config it loaded, or says it found none)
 //   oracle-gaps --stop-daemon --package <dir>
 //   oracle-gaps --help      (prints the usage text, args.mjs)
+// Every line the CLI writes for a check starts with `oracle-gaps: ` and its
+// kind (stream.mjs), and the last is `oracle-gaps: done <status>`.
 // Exit codes: 0 the check completed, whatever its gaps (the last stdout
-// line is `completed: <n> gaps`), 2 refused, 3 an internal error, and 130
-// or 143 when SIGINT or SIGTERM stopped it.
+// line is `oracle-gaps: done completed, <n> gaps, report <path>`), 2
+// refused, 3 an internal error, and 130 or 143 when SIGINT or SIGTERM
+// stopped it.
 //
 // No process outlives the CLI (maintainer disposition G2, 2026-11-11). The
 // CLI starts a check as a child in a process group of its own, which every
@@ -170,7 +173,12 @@ function superviseRun() {
       if (signalGroup(child.pid, 0) && Date.now() < deadline) return
       clearInterval(poll)
       signalGroup(child.pid, `SIGKILL`)
-      process.exit(128 + constants.signals[signal])
+      // The stream's done line, last: the run stopped, and by which signal.
+      // A write to a pipe is asynchronous on macOS, so the process exits
+      // once it is written.
+      process.stderr.write(`oracle-gaps: done stopped (${signal})\n`, () =>
+        process.exit(128 + constants.signals[signal]),
+      )
     }, 50)
   }
   process.on(`SIGINT`, stop)

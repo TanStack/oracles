@@ -46,7 +46,7 @@ every commit with [pkg.pr.new](https://pkg.pr.new).
   failing file its failing test, its error, the law and counterexample of a
   law violation, and a `replay:` command. An oracle file that fails with no
   mutant active blocks only the mutants it owns: each that no passing owner
-  kills is a `blocked` gap, a `blocked:` line names the file and its failing
+  kills is a `blocked` gap, a `blocked` line names the file and its failing
   test, the rest are judged, and the report says it is provisional. With
   `--only <id,...>`, the baseline runs only the owners of the selected
   mutants. A `crashed` gap is not a kill: production threw where no law
@@ -54,10 +54,31 @@ every commit with [pkg.pr.new](https://pkg.pr.new).
   in its `detail` in `results.json`. Record the error in the driver, and
   state the law that decides that input's outcome.
 
-  Exit codes: 0 the check completed, whatever its gaps (the last stdout line
-  is `completed: <n> gaps`); 2 the run was refused, with `refused:` and
-  `fix:` on stderr; 3 an internal error of the CLI; 130 or 143 stopped by
-  SIGINT or SIGTERM.
+  Every line the CLI writes for a check, on stdout and stderr alike, starts
+  with `oracle-gaps: ` and its kind, so an agent can act on the results as
+  they stream with `grep '^oracle-gaps: '`, and filter one kind:
+
+  | Kind                                     | Line                                                                                                                                                                                                                                                        |
+  | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `config`                                 | `oracle-gaps: config vitest.config.ts`, or `oracle-gaps: config none, Vitest's default discovery`                                                                                                                                                           |
+  | `baseline`                               | `oracle-gaps: baseline pass tests/a.test.ts: 3 tests`, `oracle-gaps: baseline fail tests/b.test.ts: 1 of 2 tests failed`                                                                                                                                    |
+  | `baseline` (decisive, before any mutant) | `oracle-gaps: baseline all 4 oracle files pass`, or `oracle-gaps: baseline 1 of 4 oracle files failed (provisional)`                                                                                                                                        |
+  | `blocked`                                | `oracle-gaps: blocked <file> fails with no mutant active at <test>, so the mutants it owns wait for it: …`                                                                                                                                                  |
+  | `gap`                                    | `oracle-gaps: gap <kind> L<line> <id> <change>`                                                                                                                                                                                                             |
+  | `progress`                               | `oracle-gaps: progress judged 25 of 120 mutants: 7 gaps so far, 18 not gaps`                                                                                                                                                                                |
+  | `busy`                                   | `oracle-gaps: busy <mutant id or baseline> in <test file> for <n>s`                                                                                                                                                                                         |
+  | `note`                                   | `oracle-gaps: note …`                                                                                                                                                                                                                                       |
+  | `done` (last)                            | `oracle-gaps: done completed, 12 gaps, report <path>/summary.md` (`(provisional)` after the count when an oracle file failed), `oracle-gaps: done refused[, report <path>]`, `oracle-gaps: done error, log <path>`, or `oracle-gaps: done stopped (SIGINT)` |
+
+  The lines indented under a failing baseline file (`failing:`, `law:`,
+  `counterexample:`, `replay:`) and a refusal's `refused:` and `fix:` block
+  have no prefix. A run through the daemon prints the same lines, at the end
+  of its check.
+
+  Exit codes: 0 the check completed, whatever its gaps (its last line is
+  `oracle-gaps: done completed, …`); 2 the run was refused, with `refused:`
+  and `fix:` on stderr; 3 an internal error of the CLI; 130 or 143 stopped
+  by SIGINT or SIGTERM.
 
   The check runs in a process group of its own, with every Vitest worker and
   every process that a test starts, except one started detached in a session

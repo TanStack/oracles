@@ -5,7 +5,8 @@
 // A refusal is a problem the author can fix. It exits 2 and prints one block,
 // `refused: <cause>` and `fix: <one directive>`, and, when the run knows its
 // output directory, writes the refusal there as results.json and summary.md
-// and names the directory. Any other error is a bug in the CLI. It exits 3,
+// and names its report there in its last line, `oracle-gaps: done refused`.
+// Any other error is a bug in the CLI. It exits 3,
 // says so, and keeps its stack in error.log, in the output directory when
 // the run knows one. Each ending replaces the files of another ending that
 // an earlier run left in the directory (check.mjs removes error.log when a
@@ -33,8 +34,13 @@ export function endRun(error, out = error?.out) {
   if (error instanceof Refusal) {
     const block = [`refused: ${message}`, `fix: ${error.fix}`]
     const results = { status: `refused`, cause: message, directive: error.fix }
-    if (write(out, results, `Refused: ${message}\n\nFix: ${error.fix}\n`))
-      block.push(`output: ${out}`)
+    // The last line says the run refused, and where its report is once the
+    // run knows its output directory (the stream's done line, stream.mjs).
+    block.push(
+      write(out, results, `Refused: ${message}\n\nFix: ${error.fix}\n`)
+        ? `oracle-gaps: done refused, report ${join(out, `summary.md`)}`
+        : `oracle-gaps: done refused`,
+    )
     return { exitCode: 2, stderr: `${block.join(`\n`)}\n` }
   }
   const results = { status: `internal-error`, message }
@@ -46,7 +52,7 @@ export function endRun(error, out = error?.out) {
   }
   return {
     exitCode: 3,
-    stderr: `oracle-gaps internal error: ${message}\nThis is a bug in oracle-gaps, not in your oracle. Its stack is in ${log}.\n`,
+    stderr: `oracle-gaps internal error: ${message}\nThis is a bug in oracle-gaps, not in your oracle. Its stack is in ${log}.\noracle-gaps: done error, log ${log}\n`,
   }
 }
 
