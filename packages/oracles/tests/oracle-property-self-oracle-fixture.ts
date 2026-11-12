@@ -17,7 +17,9 @@
  * A constructed history builds its history as its prefix followed by a generated history,
  * cut to three items. The driver appends every history it runs, with the running test's name, to
  * the file named by SELF_ORACLE_LOG, so the self-oracle knows which
- * histories each campaign ran. A `nondeterministic` spec also records, last, a
+ * histories each campaign ran. The logical owning name comes from the runner's
+ * public aroundEach boundary, retained across late continuations; a slow raw log
+ * separately retains the global runner name for timeout diagnostics. A `nondeterministic` spec also records, last, a
  * counter that changes on every run. A spec reports reach through the
  * property's `reached` part or, as the framework's default, through the
  * driver's `observe("reach", state)`. A `slow` spec's driver takes about
@@ -152,10 +154,19 @@
  * registered beside them, so the self-oracle's registration law can reject an
  * id outside the registry.
  */
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { appendFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
 import fc from 'fast-check'
-import { afterAll, beforeAll, beforeEach, describe, expect, vi } from 'vitest'
+import {
+  afterAll,
+  aroundEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  vi,
+} from 'vitest'
 import {
   configureOracles,
   differs,
@@ -467,10 +478,29 @@ const itemOf = (failure: unknown): number => {
   return code ?? 0
 }
 let noise = 0
+// The public aroundEach boundary supplies an immutable owning test context.
+// Continuations retain it after their timeout, although Vitest's global
+// currentTestName may then name the next test. This is input provenance only:
+// the fixture does not change cancellation, deadlines, or execution order.
+const owningTest = new AsyncLocalStorage<{ name: string; route?: string }>()
+aroundEach((runTest, { task }) => {
+  const names = [task.name]
+  for (
+    let parent = task.suite;
+    parent && parent !== task.file;
+    parent = parent.suite
+  )
+    names.unshift(parent.name)
+  return owningTest.run({ name: names.join(` > `) }, runTest)
+})
+const owningTestName = () =>
+  owningTest.getStore()?.name ?? expect.getState().currentTestName
 // The route registered for the running test, as the gap report reads it.
 let route: string | undefined
 globalThis.__oracleRoute = (registered) => {
-  route = registered
+  const owner = owningTest.getStore()
+  if (owner) owner.route = registered
+  else route = registered
 }
 beforeEach(() => {
   route = undefined
@@ -577,7 +607,7 @@ const reachedStates = (spec: SyntheticSpec) => (history: SyntheticHistory) => [
   ...(spec.extraReach === true ||
   (spec.extraReach === `calibration` &&
     spec.calibrations.some(({ name }) =>
-      expect.getState().currentTestName?.endsWith(` > calibration: ${name}`),
+      owningTestName()?.endsWith(` > calibration: ${name}`),
     ))
     ? [`synthetic-extra`]
     : []),
@@ -782,7 +812,7 @@ function syntheticDriver(
     const history = itemsOf(spec)(formed)
     if (
       (spec.isolatedPlans || spec.identityHistories) &&
-      expect.getState().currentTestName?.includes(`calibration:`)
+      owningTestName()?.includes(`calibration:`)
     ) {
       if (consumed.has(formed as object))
         throw new Error(`driver received a consumed plan`)
@@ -792,7 +822,7 @@ function syntheticDriver(
     if (log)
       appendFileSync(
         log,
-        `${JSON.stringify({ id: spec.id, test: expect.getState().currentTestName ?? ``, history, origin: origins.get(formed as object), route: route ?? null })}\n`,
+        `${JSON.stringify({ id: spec.id, test: owningTestName() ?? ``, ...(spec.slow ? { runnerTest: expect.getState().currentTestName ?? `` } : {}), history, origin: origins.get(formed as object), route: owningTest.getStore()?.route ?? route ?? null })}\n`,
       )
     if (spec.odd) observe(`odd`, { reason: oddValue(spec.odd) })
     if (spec.slow) await new Promise((resolve) => setTimeout(resolve, 300))
@@ -800,7 +830,7 @@ function syntheticDriver(
       spec.slowShrink &&
       history.includes(4) &&
       / > (?:fixed seed -?\d+|random seed)(?:: .*)?$/.test(
-        expect.getState().currentTestName ?? ``,
+        owningTestName() ?? ``,
       )
     )
       await new Promise((resolve) => setTimeout(resolve, 2000))
@@ -1168,7 +1198,7 @@ export function syntheticProperty(spec: SyntheticSpec): void {
               `${log}.resolutions`,
               `${JSON.stringify({
                 id: spec.id,
-                test: expect.getState().currentTestName ?? ``,
+                test: owningTestName() ?? ``,
               })}\n`,
             )
           if (spec.identityHistories && !identities.has(history as object))
@@ -1180,26 +1210,20 @@ export function syntheticProperty(spec: SyntheticSpec): void {
               return (
                 binding !== undefined &&
                 `constructed` in binding &&
-                expect
-                  .getState()
-                  .currentTestName?.endsWith(
-                    ` > calibration: ${calibration.name}`,
-                  )
+                owningTestName()?.endsWith(
+                  ` > calibration: ${calibration.name}`,
+                )
               )
             }) ||
               (spec.probeBinding &&
                 spec.probeBinding !== `empty` &&
-                ((expect
-                  .getState()
-                  .currentTestName?.includes(`forced not entered`) &&
+                ((owningTestName()?.includes(`forced not entered`) &&
                   (spec.probeBinding !== `explicit` ||
                     `constructed` in
                       (spec.probeEntered ?? {
                         constructed: `constructed-0`,
                       }))) ||
-                  (expect
-                    .getState()
-                    .currentTestName?.includes(`forced entered`) &&
+                  (owningTestName()?.includes(`forced entered`) &&
                     `constructed` in
                       (spec.probeNotEntered ?? { fixed: `fixed-0` })))))
           ) {
@@ -1428,7 +1452,7 @@ export function syntheticProperty(spec: SyntheticSpec): void {
                 `${log}.builds`,
                 `${JSON.stringify({
                   id: spec.id,
-                  test: expect.getState().currentTestName ?? ``,
+                  test: owningTestName() ?? ``,
                   name,
                   generated: items(generated),
                   history: items(history),
@@ -1454,7 +1478,7 @@ export function syntheticProperty(spec: SyntheticSpec): void {
                 `${log}.builds`,
                 `${JSON.stringify({
                   id: spec.id,
-                  test: expect.getState().currentTestName ?? ``,
+                  test: owningTestName() ?? ``,
                   name: `fixed-metadata:${fixed.name}`,
                   generated: items(generated),
                   history: items(history),

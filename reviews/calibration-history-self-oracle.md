@@ -557,3 +557,131 @@ Historical CHRON-1 remains irreversible; optional mutant-only undeclared-state
 policy remains a separate unapproved proposal. The finite synthetic grammar,
 Node/Vitest receiving boundary and absence of downstream DB/browser/performance
 claims remain unchanged.
+
+## Diagnostic representation and timeout observation follow-up
+
+This follow-up starts from `c18a30f`. Production retains SHA256
+`a1c132e8e096228e34aad07ba39c20df88facfe998e8c8e4e155ff75b213e01b`.
+These repairs change the self-oracle and its synthetic fixture. They change no
+framework behavior or accepted diagnostic promise. Latest main, including #36,
+was integrated by normal merge `3a58b96`; its gap CLI files are disjoint.
+
+The diagnostic law requires truthful authored calibration and selected-history
+identity plus the finite original callback cause. It permits representation
+changes to punctuation, structural whitespace, optional seed annotations, the
+outer wrapper's name and opaque reason prose. Literal characters within names
+remain significant. An unknown or ambiguous complete identity cannot authorize
+its own expected selection. Original cause object identity, class and metadata
+remain outside the established law.
+
+| ID                | Executed defect before repair                                                                              | General repair                                                                                                                      |
+| ----------------- | ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| R8-REPRESENTATION | Lawful bracketed calibration labels and alternative seed annotations falsely fail the callback comparison. | Decode complete actual frames against available literal identities; derive expected selection independently from authored bindings. |
+| R9-REP-SEAM       | Already-bracketed source output passes semantic checks but reports zero presentation reach.                | Count an actual rendering operation even when its output bytes equal its input.                                                     |
+| R9-REP-RANGE      | Mixed spacing, two spaces and tabs preserve identity/cause but fail decoding.                              | Generate and accept positive structural whitespace while retaining literal name characters.                                         |
+| R10-REP-REASON    | Replacing the reason's first word loses identity; category-marker prose can change the verdict.            | Locate the complete frame separator without inspecting reason words; the actual finite callback cause determines exception kind.    |
+| R11-DIAG-1        | Custom outer wrapper name plus opaque category-marker reason fails, although both marginals pass.          | Remove the arbitrary outer-name guard; generate wrapper names independently of reason and frame presentation.                       |
+
+Every group extended the primary Suite grammar/real receiving driver before
+changing its observation judgment. No production edit was needed. R10's
+unchanged-observation gate rejected four legal fixed histories while their four
+outer determinism checks passed. R11's unchanged guard rejected the combined
+history while both marginals and all three determinism checks passed: one
+intended false RED and five passes. The repaired R11 gate passes six of six.
+Required constructions vary callback and selection kinds, siblings, prefixes,
+incoming presentation and bounded arbitrary reason/wrapper text. All four
+active receivers require actual callback failure and presentation reach:
+ordinary, reordered, seedless and environment. Registration-only receivers
+retain their registration obligations without claiming callback execution.
+
+The R10 frozen matrix accepted 15,642 lawful observations and rejected 1,089
+hostile controls at 99 actual cuts. It includes literal prefixes, numeric and
+opaque labels, ambiguity, seed-like literal suffixes, arbitrary bounded reasons
+and same-byte rendering. Thirty-five focused tests passed. Six lawful actual
+source renderers passed two tests each; actual wrong sibling and missing cause
+were rejected at child/calibration, with determinism passing. R11 carried those
+matrix results only in their original `Error`-wrapper domain: removing a guard
+that was true for every original input preserves that predicate. It separately
+passed the actual custom-wrapper/opaque-reason source combination and rejected
+wrong-sibling and replacement-cause source mutants at the intended comparison.
+It did not claim to rerun the complete matrix for arbitrary wrapper names.
+
+R11's suspected absent reason dimension was refuted: the generic Suite grammar
+already supplies arbitrary reasons. A 2,000-Suite sample contained 1,381 defined
+reasons and 1,180 distinct constructed reasons. The redundant weighted-branch
+draw is now forwarded too; that cleanup is not evidence of a former absent
+whole-campaign axis. All setup failures and zero-test selectors remain excluded
+from assertion-rejection counts.
+
+The timeout law limits every registered test independently. A timed-out test
+owes no fixed completed-call count. Actual started work must retain its selected
+input and corresponding build/resolve obligations. The fixture now captures its
+logical owning test/route at Vitest's public `aroundEach` boundary through Node
+AsyncLocalStorage. The global runner name remains raw diagnostic evidence;
+advancing to another test cannot reassign an older continuation's work.
+
+| ID  | Executed defect before repair                                                                                                             | General repair                                                                                                                                 |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| T1  | Exact-head Vitest 5 CI and local Vitest 4 reject timeout-history determinism; seven differing fields concern slow call attribution/order. | Record semantic relations of actual started work and keep raw runner observations outside the deterministic trace.                             |
+| T2  | Slow isolated constructions also show resolution attribution drift.                                                                       | Group build/resolve work by logical owner. A determinism test resolves once and may drive twice; other actual executions resolve individually. |
+| T3  | A timed-out bound calibration with one actual execution is rejected for failing to complete two builds.                                   | Check selected inputs and work for actual starts; retain input consistency and upper bounds without requiring optional late work to finish.    |
+
+The extended primary grammar reproduced T1–T3 before the fixture repair. A
+global resolve-count-equals-driver-count rule was disproved by a lawful trace
+with 20 driver calls and 17 resolves. The repaired observation keeps first
+logical inputs plus missing/extra work and changed-input relations. A legal
+reporting-cut transformation removes only an optional second continuation with
+its paired work; raw-versus-cut equivalence must still hold. It cannot repair an
+invalid raw report silently.
+
+Slow late-probe counts retain a deficit/excess relation computed from complete
+raw started histories and actual known late errors. Both values must be zero.
+Fast-only late counts stay exact. Unknown and secondary errors, test statuses,
+registration, loads, exit/signal and report completeness retain their checks.
+Raw reports, global runner names and cuts remain available in diagnostic
+sidecars. A blanket slow-log filter would not satisfy these obligations.
+
+The frozen timeout gate passed 48 tests, including 20 hostile controls. Fixed
+and random required constructions each measured one hit for ordinary,
+reordered, seedless and environment input cuts, one optional-continuation cut
+and one presentation-equivalence hit. Three separate actual perturbations were
+assertion-rejected: lost logical ownership (two failures), duplicate raw resolve
+work (one calibration failure, delta two), and missing raw build work (one
+timeout-presentation failure). Types, lint and formatting passed.
+
+Chronology remains explicit: ordinary/reordered REDs preceded the fixture
+repair; seedless/environment witnesses were added afterward and establish
+current enforcement only. A registration-phase missing-build experiment reached
+no drivers. Its initial survivor classification was corrected to unreached;
+it supplies neither a defect nor a kill. This qualification does not alter
+production-repair chronology, because no production code changed here.
+
+The combined executable identities are owner SHA256
+`5b85ea79e738ea399ddd8c85ce5f55a95fa3e6dd213949e71c5f3e1f42621e5e`,
+fixture `bad74feb45d92bdd390d48b804dc671c660ab4aa40462a45983c9a75d0c175e9`,
+and unchanged production/reporter `a1c132e8`/`1918e8dc`. Three pure-addition
+merge conflicts retained both repair groups. Combined TypeScript, lint,
+formatting and diff checks pass. Combined focused checks and two independent
+final reviews are running at this entry; complete final-head validation remains
+pending. Earlier interrupted local runs are not full-suite GREEN results.
+
+These are finite synthetic and actual Node/Vitest boundary results. They make
+no DB, browser, provider, release-time or memory-performance claim. Historical
+CHRON-1, the retrospective successful-calibration stdout gate, optional stronger
+mutant-only undeclared reach and fresh calibration seeds retain their prior
+qualifications. No confirmed defect is deferred by relabeling it a limit.
+
+The exact combined owner gate passes **49/49** in 223.83 seconds, with 831
+tests registered. From `packages/oracles`, the command is:
+
+```sh
+node ../../node_modules/vitest/vitest.mjs run \
+  --config vitest.oracle-framework.config.mjs --maxWorkers=2 \
+  -t 'round11 outer wrapper|timeout every receiving cut|reject timeout|round8 callback presentation freedom|reject equal-data origin|reject.*callback'
+```
+
+This gate exercises both repair groups together, actual outer determinism,
+callback and timeout controls, and the canonical origin calibration. It is a
+focused GREEN, not a complete framework run. The final workflow runs the whole
+framework on both supported Vitest major versions. No campaign budget was
+lowered and no dependency or lockfile workaround is included.
