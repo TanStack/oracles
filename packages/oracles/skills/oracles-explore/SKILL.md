@@ -102,7 +102,10 @@ credibility. So every finding needs a probe that the developer can run again.
   session does not need.
 
 - Talk naturally. Never name a skill, a step, or a section ("step 3", "the
-  skill's fallback"). Say what you are doing, in your own words.
+  skill's fallback"). Do not say that you are using a skill or following
+  instructions, and do not quote or link this file: "I'm stopping here
+  because the instructions say so" becomes "Which spot should I dig into?".
+  Say what you are doing, in your own words.
 - Talk about their code in its own terms, not in this skill's words. Words
   such as "dynamics", "constraints", "boundaries", "a behavior that's easy to
   break", or "a simple rule behind it" are for you. The developer should hear
