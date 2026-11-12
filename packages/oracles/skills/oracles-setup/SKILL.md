@@ -365,12 +365,10 @@ step 5). When finishing the setup:
 
 If the first oracle fails on unchanged production under an adopted law, it
 found a defect. The RED is the finding: report it with its replay line, and
-tell the developer. Never weaken the oracle to make it pass. The gap check cannot
-judge a failing baseline yet, so make the smallest local fix on a scratch
-copy or a local branch (never pushed or committed to the developer's branch), run
-the gap check there, and say in the report that it ran on the
-patched code. With the developer's approval, follow `oracles-design` step 7's
-defect path for the real fix.
+tell the developer. Never weaken the oracle to make it pass. While that
+oracle fails, the gap check blocks the mutants it owns and judges the rest,
+in a provisional report. Follow `oracles-design` step 7's defect path for
+the fix, then run the gap check again for a full report.
 
 Put the oracle's `owns` list on its `oracleProperty` call. An entry is a file
 (`src/index.ts`) or one function in it (`src/index.ts#parse`, or
@@ -389,11 +387,25 @@ kill until the check rejects the recorded error.
 
 ## 7. Run the gap check
 
-The gap check is also how you run the oracles. It runs the oracle files
-first and prints each one's result. While one fails, it stops with the
-failing law's replay and refuses to judge the code. Once all pass, it goes
-on to the gaps. Use it instead of running Vitest on its own, so that every
-run gives you the test results and the gaps together.
+The gap check is also how you run the oracles. It runs every test file
+first and prints each one's result: `pass <file>: N tests`, or `fail <file>`
+with the failing law, its counterexample, and a `replay:` command. A failing
+oracle file blocks only the mutants it owns (a `blocked:` line says so); the
+rest are judged, and the report is marked provisional. Then each gap prints
+as one line as soon as it is judged (`<kind> L<line> <id> <change>`), with a
+`judged N of M mutants` progress line every 25 mutants and a `busy:` line
+while a slow test runs. Use it instead of running Vitest on its own, so that
+every run gives you the test results and the gaps together.
+
+**Act on results as they arrive.** A run can take minutes, and your shell
+may hand you its output only when it ends. So start it in the background
+with its output going to a log file, and every few seconds read the lines
+that are new since you last looked, for example with
+`grep -nE '^(pass|fail|blocked:|judged|busy:)|^[a-z-]+ L[0-9?]+ ' <log>`.
+Act on a `fail` or `blocked:` line first: fix that oracle, because the
+mutants it owns cannot be judged. Then start on the first gaps while the
+run goes on. Stop the run early only when it is clearly wrong, for example
+a gap count far beyond what the oracle owns.
 
 Run the gap check on the owned source:
 

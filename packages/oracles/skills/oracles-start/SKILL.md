@@ -462,10 +462,12 @@ them and stop.
    check compares the two at each step.
 3. **Run it on the unchanged code, through the gap check.** Run the oracles
    only with `oracle-gaps` (the command is in `oracles-setup` step 7), never
-   with Vitest on its own. It runs the oracle files first and prints each
-   one's result. While one fails, it stops there with the failing law's
-   replay; once all pass, it goes on to the gaps. One command gives you the
-   test results and the gaps together. A failure under an adopted law is a
+   with Vitest on its own. It prints each test file's result first, with a
+   failing law's replay, then each gap as it is judged: one command gives
+   you the test results and the gaps together. Start it in the background
+   and read its new lines every few seconds, as `oracles-setup` step 7
+   says, so you act on the first results while it runs. A failure under an
+   adopted law is a
    possible bug. Present it like a probe finding, as a class of bugs, with
    the oracle's smallest failing case as the example and the share of its
    histories that failed.
@@ -491,8 +493,9 @@ code, and shows each one that the oracle does not notice: a gap. Explain
 that in a line or two the first time, then show the count shrinking as you
 work ("74 of 216 changes went unnoticed; now 38"). Take the command and
 its flags from `oracles-setup` step 7, with `--out` in a temporary directory
-outside the repository. Do not run it while the oracle fails: it cannot
-judge a failing run.
+outside the repository. While an oracle file fails, the mutants it owns
+are blocked, and the rest of the report is provisional: fix the failure
+first.
 
 Closing gaps is how the oracle reverse-engineers the production code into
 design: each gap is behavior the code has that the oracle does not yet
