@@ -63,6 +63,10 @@ export const shards = {
     // The witness module's edit sequence (option M): 189 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
     `determinism: constructed history: an edit sequence over the witness module`,
+    // The daemon's law 9 histories cost 3 to 13 s each here (their replays).
+    `fixed seed 20261105: an edit that changed the cold result after a hang replaced the only context`,
+    `random seed: an edit that changed the cold result after a hang replaced the only context`,
+    `determinism: constructed history: an edit that changed the cold result after a hang replaced the only context`,
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-2': [
@@ -85,6 +89,10 @@ export const shards = {
     `determinism: constructed history: ordinary tests left out by default`,
     `determinism: generated 0`,
     `determinism: generated 1`,
+    // The daemon's law 9 histories cost 3 to 13 s each here (their replays).
+    `fixed seed 20261105: an edit to a module that only mutated runs load`,
+    `random seed: an edit to a module that only mutated runs load`,
+    `determinism: constructed history: an edit to a module that only mutated runs load`,
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-3': [
@@ -107,6 +115,10 @@ export const shards = {
     `determinism: constructed history: a declaration fault: brokenOwner`,
     `determinism: constructed history: a declaration fault: configThrows`,
     `determinism: constructed history: a declaration fault: nonLiteral`,
+    // The daemon's law 9 histories cost 3 to 13 s each here (their replays).
+    `fixed seed 20261105: a lazy module loaded before a hang in the same batch`,
+    `random seed: a lazy module loaded before a hang in the same batch`,
+    `determinism: constructed history: a lazy module loaded before a hang in the same batch`,
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-4': [
