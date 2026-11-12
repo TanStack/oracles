@@ -2808,9 +2808,10 @@ oracleProperty({
             // A second install's check, then the first install's again.
             `otherInstall`,
             `test`,
-            // The OS cleans the daemon's state while the daemon runs.
-            `cleanState`,
             `restart`,
+            // The OS cleans the daemon's state while the daemon runs, after
+            // the restart's check reused evidence from disk.
+            `cleanState`,
             // The daemon this check's CLI starts dies during the check.
             `dieMidCheck`,
             `crash`,
