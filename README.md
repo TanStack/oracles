@@ -18,13 +18,15 @@ every commit with [pkg.pr.new](https://pkg.pr.new).
   Vitest config; without it, the run loads the config that Vitest discovers,
   in the package's directory or else the nearest parent directory that has
   one, and the baseline output names the config it loaded. Each run writes its report to
-  `<dir>/.oracle-gaps/out/<run>/` (or to `--out`), and keeps its state in
-  `<dir>/.oracle-gaps/`, and keeps the last five run directories there. Add
-  `.oracle-gaps/` to the project's `.gitignore`. The runner writes nothing
-  beside the tests: its copies of the test files exist only in memory, and
-  its capture setup and Vitest configs are in `<dir>/.oracle-gaps/session-<pid>/`,
-  so a Vitest run started during a check finds none of them. A run that is
-  killed before it cleans up leaves that directory.
+  a directory of its own in the OS temp directory (or to `--out`), and
+  prints its path. The daemon's state and the one-file bundles of workspace
+  dependencies are in the OS temp directory too, keyed by the package, which
+  the OS cleans: a state that is gone is a cold start. A run leaves nothing
+  in the repository. While it runs, its capture setup and Vitest configs
+  are in `<dir>/.oracle-gaps-<pid>/`, which it removes when it ends, and its
+  copies of the test files exist only in memory, so a Vitest run started
+  during a check finds none of them. A run that is killed before it cleans
+  up leaves that directory, and the next run removes it.
 
   While one copy of a test file runs for 30 s or more, the CLI prints
   `busy: <mutant id> in <test file> for <n>s` every 30 s. A run of many fast

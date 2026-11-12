@@ -34,7 +34,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { createRequire, syncBuiltinESMExports } from 'node:module'
+import { createRequire, isBuiltin, syncBuiltinESMExports } from 'node:module'
 import { hostname } from 'node:os'
 import { basename, dirname, join, relative as relativePath } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -55,6 +55,7 @@ import {
 } from './stream.mjs'
 import { analyze, isRunnerCopy } from './analysis.mjs'
 import { Refusal } from './ending.mjs'
+import { stateDirOf } from './evidence.mjs'
 import {
   baselineOf,
   blockedOr,
@@ -208,9 +209,12 @@ function lockfileOf(pkg) {
  * reaches by name through a node_modules link to a directory outside any
  * node_modules, and theirs in turn. Vitest otherwise fetches a dependency's
  * built files one at a time, about 150 for a large workspace dependency, in every context.
- * A bundle sits in its package's own directory, so its bare imports resolve
- * as the package's do; each bundle leaves them external, so a dependency of
- * a dependency loads from its own bundle. It is outside node_modules, so
+ * A bundle sits in the package's state in the OS temp directory
+ * (`stateDirOf`), never in the repository. Each bare import in it is left
+ * external: a workspace package's by its name, so that a dependency of a
+ * dependency loads from its own bundle, and any other's by the file it
+ * resolves to from the bundled package, so it loads as the package's own
+ * import would, wherever the bundle is. It is outside node_modules, so
  * Vitest inlines it, and every copy evaluates it afresh after its module
  * reset (fresh module state, law 3). Its file name carries the hash of its
  * text, so evidence that read it is keyed by what it contains. The package
@@ -271,6 +275,31 @@ export async function workspaceBundles(pkg) {
       entry = entry.import ?? entry.node ?? entry.default
     return typeof entry === `string` ? join(dir, entry) : undefined
   }
+  // A bare import's package name: its first segment, or two for a scope.
+  const packageOf = (path) =>
+    path
+      .split(`/`)
+      .slice(0, path.startsWith(`@`) ? 2 : 1)
+      .join(`/`)
+  const externals = {
+    name: `oracle-gaps-externals`,
+    setup(build) {
+      build.onResolve({ filter: /^[^./]/ }, async (args) => {
+        if (args.pluginData === externals) return undefined
+        if (isBuiltin(args.path) || linked.has(args.path))
+          return { path: args.path, external: true }
+        const found = await build.resolve(args.path, {
+          kind: args.kind,
+          resolveDir: args.resolveDir,
+          pluginData: externals,
+        })
+        return {
+          path: found.errors.length > 0 ? args.path : found.path,
+          external: true,
+        }
+      })
+    },
+  }
   const bundles = new Map()
   for (const [name, { dir }] of linked) {
     const entry = entryOf(dir)
@@ -283,7 +312,7 @@ export async function workspaceBundles(pkg) {
         write: false,
         format: `esm`,
         platform: `node`,
-        packages: `external`,
+        plugins: [externals],
         // A package's tsconfig `paths` can point a dependency at its sources;
         // the bundle keeps every package import as the built code has it.
         tsconfigRaw: `{}`,
@@ -293,9 +322,9 @@ export async function workspaceBundles(pkg) {
     if (!built) continue
     const text = built.outputFiles[0].text
     const out = join(
-      dir,
-      `.oracle-gaps`,
-      `bundle-${sha1(text).slice(0, 16)}.mjs`,
+      stateDirOf(pkg),
+      `bundles`,
+      `${packageOf(name).replace(`/`, `+`)}-${sha1(text).slice(0, 16)}.mjs`,
     )
     if (!existsSync(out)) {
       mkdirSync(dirname(out), { recursive: true })
@@ -381,25 +410,25 @@ export async function openSession(pkg) {
   process.env.TEST = `true`
   process.env.VITEST = `true`
   process.env.NODE_ENV ??= `test`
-  // This process's own files, in the package's state directory and never
-  // beside the tests, where a Vitest run started meanwhile would find them
-  // (maintainer disposition G4, 2026-11-11; the freeze's namespacing
-  // decision): the capture setup and one wrapper config per context. A
-  // killed run leaves its directory there, where no include finds it.
-  const home = join(pkg, `.oracle-gaps`, `session-${process.pid}`)
+  // This process's own files, in a session directory of the package, so
+  // that they resolve the package's modules, and never beside the tests,
+  // where a Vitest run started meanwhile would find them (maintainer
+  // disposition G4, 2026-11-11; the freeze's namespacing decision): the
+  // capture setup and one wrapper config per context. The session removes
+  // its directory when it closes; a killed run's is removed by the next.
+  const home = join(pkg, `.oracle-gaps-${process.pid}`)
   // A session directory that a stopped or killed run left behind, whose
-  // process is gone, is removed now. Only one of this host's (its `host`
-  // file): a process id names a process only in its own pid namespace, so
-  // a container and its host sharing the package keep each other's.
-  for (const name of existsSync(dirname(home))
-    ? readdirSync(dirname(home))
-    : [])
+  // process is gone, is removed now (maintainer decision, 2026-11-11). Only
+  // one of this host's (its `host` file): a process id names a process only
+  // in its own pid namespace, so a container and its host sharing the
+  // package keep each other's.
+  for (const name of readdirSync(pkg))
     if (
-      /^session-\d+$/.test(name) &&
-      !alive(Number(name.slice(8))) &&
-      sessionHostOf(join(dirname(home), name)) === hostname()
+      /^\.oracle-gaps-\d+$/.test(name) &&
+      !alive(Number(name.slice(13))) &&
+      sessionHostOf(join(pkg, name)) === hostname()
     )
-      rmSync(join(dirname(home), name), { recursive: true, force: true })
+      rmSync(join(pkg, name), { recursive: true, force: true })
   mkdirSync(home, { recursive: true })
   writeFileSync(join(home, `host`), hostname())
   const harness = join(home, `capture-setup.mjs`)
