@@ -141,6 +141,11 @@ export const shards = {
     `determinism: constructed history: an ambiguous authored mutant`,
     `determinism: constructed history: every outcome class`,
     `determinism: constructed history: two authored mutants`,
+    // Added with the gap CLI's runtime fixes (not yet measured).
+    `fixed seed 20261105: a second daemon check of the budget witness`,
+    `calibration: a stopped run leaves a process it started running`,
+    `calibration: a busy mutant is named in no heartbeat`,
+    `determinism: constructed history: a second daemon check of the budget witness`,
     // The witness module's edit sequence (option M): 97 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
     `fixed seed 20261105: an edit sequence over the witness module`,
@@ -167,6 +172,10 @@ export const shards = {
     `determinism: constructed history: a declaration fault: noTypescript`,
     `determinism: constructed history: a failing owner under a config that --config names`,
     `determinism: generated 2`,
+    // Added with the gap CLI's runtime fixes (not yet measured).
+    `random seed: a second daemon check of the budget witness`,
+    `calibration: a stopped run had written a copy beside the tests`,
+    `calibration: a heartbeat names a file that does not run its mutant`,
     // The witness module's edit sequence (option M): about 97 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
     `random seed: an edit sequence over the witness module`,

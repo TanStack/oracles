@@ -51,12 +51,29 @@ export const partitions = {
       2: rest,
     },
   },
+  // The gap report's static oracle, the slowest of the fast gap suites and
+  // a file whose units run one after another: 171 units, 136 s on the gap
+  // CLI's runtime branch, against 98 s on main at 09f5b9d, in one local run
+  // under other agents' load. CI took 4.5 to 5 times its local time in
+  // #39's run, since each history runs the CLI. The first shard takes the
+  // two generated units and the calibrations, 66 s; the second the rest,
+  // 70 s. The classify, probe-form, and mutant-validity oracles run whole
+  // in a third job (`.github/workflows/pr.yml`).
+  'oracle-gaps-static': {
+    args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-static`],
+    suite: `oracle-gaps.report-static`,
+    select: ``,
+    shards: {
+      1: `(?:fixed seed 20261105: generated|random seed: generated|calibration: .*)`,
+      2: rest,
+    },
+  },
   // The end-to-end gap oracle's fixed-seed units, which a pull request runs
-  // (`-t "fixed seed"`): 32 units, 245 s in all, measured on the witness
-  // edit-sequence branch (option M) at load average 4. A unit's cost follows
-  // the generated history its constructed history is built from, so a
-  // grammar change can move cost between units. The first shard takes the
-  // two edit sequences, 85 s and 45 s; the second the rest, 115 s.
+  // (`-t "fixed seed"`): 33 units, 424 s in all, measured on this
+  // branch in one local run under other agents' load (load average about 3).
+  // A unit's cost follows the generated history its constructed history is
+  // built from, so a grammar change can move cost between units. The units
+  // are packed longest first into three shards: 141 s, 141 s, and 141 s.
   'oracle-gaps-fixed-seed': {
     args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-oracle`],
     suite: `oracle-gaps.report`,
@@ -66,10 +83,29 @@ export const partitions = {
     previously: `fixed seed`,
     shards: {
       1: anyOf([
-        `an edit sequence over the witness module`,
-        `an edit sequence through the daemon`,
+        'an edit sequence through the daemon',
+        'every outcome class',
+        'a declaration fault: apiLessTypescript',
+        'a package with no config',
+        'a .cjs config that calls require',
+        'a declaration fault: badEntry',
+        'a declaration fault: missingSource',
+        'a declaration fault: configNoDefault',
       ]),
-      2: rest,
+      2: anyOf([
+        'a second daemon check of the budget witness',
+        'generated',
+        'a declaration fault: brokenVitest',
+        'an edit to a module that only mutated runs load',
+        'a declaration fault: brokenOwner',
+        'two authored mutants',
+        'a .ts config in a package with no module type that calls require',
+        'a config that --config names',
+        'a declaration fault: setupThrows',
+        'a config fault in a run that owns nothing',
+        'a declaration fault: configThrows',
+      ]),
+      3: rest,
     },
   },
 }

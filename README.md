@@ -19,11 +19,33 @@ every commit with [pkg.pr.new](https://pkg.pr.new).
   and the baseline output names the config it loaded. Each run writes its report to
   `<dir>/.oracle-gaps/out/<run>/` (or to `--out`), and keeps its state in
   `<dir>/.oracle-gaps/`, and keeps the last five run directories there. Add
-  `.oracle-gaps/` and `.oracle-gaps-*` to the project's `.gitignore`. The
-  `.oracle-gaps-*` files are the runner's copies of the test files and its
-  Vitest configs. They sit beside the package's config, because Vitest resolves
-  each copy's imports from the directory the copy is in; a run that is killed
-  before it cleans up leaves them there.
+  `.oracle-gaps/` to the project's `.gitignore`. The runner writes nothing
+  beside the tests: its copies of the test files exist only in memory, and
+  its capture setup and Vitest configs are in `<dir>/.oracle-gaps/session-<pid>/`,
+  so a Vitest run started during a check finds none of them. A run that is
+  killed before it cleans up leaves that directory.
+
+  While one copy of a test file runs for 30 s or more, the CLI prints
+  `busy: <mutant id> in <test file> for <n>s` every 30 s. A run of many fast
+  copies prints none, and a check through `--daemon` prints its heartbeats
+  only when the check ends. The runs that confirm a mutant's cut-off copies
+  share one budget: the larger of `--mutant-limit` (30 s by default) and ten
+  times the owner files' unmutated time. They run in the owner files'
+  order, each with at most what its mutant's earlier confirmations left. A
+  mutant whose confirmations pass the budget is a `timeout` gap. With the
+  default limits one owner's confirmation always fits; the budget binds
+  when several owners need long confirmations, or when `--hang-limit` is
+  above it, which the run notes. To give one copy more time with
+  `--hang-limit`, raise `--mutant-limit` too.
+
+  The check runs in a process group of its own, with every Vitest worker and
+  every process that a test starts, except one started detached in a session
+  of its own (as some browser drivers are). On SIGINT or SIGTERM the CLI
+  signals the whole group, kills what is left 2 s later, and exits 130 or 143.
+  A check through the daemon (`--daemon`) runs in the daemon's process; stop
+  it with `oracle-gaps --stop-daemon --package <dir>`. On Windows, which has
+  no process groups, the run is not supervised.
+
 - `packages/eslint-plugin-oracles` (`@tanstack/eslint-plugin-oracles`): the
   `oracle/*` lint rules. The rules recognize the framework by its package
   specifier and by a relative module with its file name. A project names its
