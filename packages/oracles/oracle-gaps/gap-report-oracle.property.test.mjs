@@ -172,7 +172,8 @@
  *    evaluations that its instrumented production code made (the capture's
  *    call count, never a time): a call statement, a call whose value is
  *    used, a comparison, an `if`, each pass of a loop's condition. A
- *    passing, deterministic owner test that registers a work bound beside
+ *    passing, deterministic owner test on a reproducible or random route,
+ *    that made no timer and held no I/O open, and that registers a work bound beside
  *    its route (`__oracleWorkBound`, which `oracleProperty`'s `work`
  *    option calls) and whose work under the mutant is more than that ratio
  *    of its unmutated work fails the mutant under law `work bound` on its
@@ -180,8 +181,11 @@
  *    shortcut for speed is owed a cost law). A mutant that no owner test
  *    fails is a survivor: a `not-judged` when an owner test's observation
  *    or asserted value changed, an `extra-work` when no observation changed
- *    and an owner test that reached it, on a route that judges production,
- *    did more work (a shortcut whose deletion only costs time), a
+ *    and an owner test that reached it, on a reproducible or random route,
+ *    with no timer made and no I/O held open, did more work (a shortcut
+ *    whose deletion only costs time); a test that made a timer or
+ *    registered no route judges no work, so its rise leaves the class as it
+ *    was (the PR #48 review's F1 and F5, 2026-11-12), a
  *    `branch-never-taken` when an `if` on its line never took
  *    one of its outcomes in an owner test, a `not-infected` when a comparison's
  *    operators agreed on every operand an owner test reached, a
@@ -1688,6 +1692,19 @@ async function driver(plan, observe) {
       if (m.class === `extra-work`) states.add(`extra work`)
       if (m.outcome === `killed` && m.laws?.includes(`work bound`))
         states.add(`killed by a work bound`)
+      // The early return whose extra work no test judges (law 4).
+      if (
+        m.operator === `if-false` &&
+        m.class === `not-observed` &&
+        m.function === `w_fasttimed`
+      )
+        states.add(`a work rise in a test that made a timer judged nothing`)
+      if (
+        m.operator === `if-false` &&
+        m.class === `not-observed` &&
+        m.function === `w_fastplain`
+      )
+        states.add(`a work rise on an unregistered route judged nothing`)
       if (m.class === `branch-never-taken`) states.add(`branch never taken`)
       if (m.class === `not-infected`) states.add(`not infected`)
       if (m.class === `not-observed`) states.add(`not observed`)
@@ -2547,6 +2564,8 @@ const required = [
   `not judged`,
   `extra work`,
   `killed by a work bound`,
+  `a work rise in a test that made a timer judged nothing`,
+  `a work rise on an unregistered route judged nothing`,
   `branch never taken`,
   `not infected`,
   `not observed`,

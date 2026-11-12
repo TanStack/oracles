@@ -360,8 +360,8 @@ export type SyntheticSpec = {
   predictMode?: `missing` | `extra`
   /** The `owns` option as the gap report reads it: a list, an empty list, a string, or a list with a non-string entry. */
   ownsMode?: `list` | `empty` | `string` | `bad entry`
-  /** The `work` option: a bound of `WORK_RATIO`, a ratio below 1, or one that is not finite. */
-  workMode?: `bound` | `below one` | `not finite`
+  /** The `work` option: a bound of `WORK_RATIO`, a ratio below 1, one that is not finite, or `null`, which plain JavaScript can pass. */
+  workMode?: `bound` | `below one` | `not finite` | `null`
   /** Runs every history on a controlled clock, where a 7 spins it. */
   clock?: boolean
   /** How the property holds a history's items; the array itself when absent. */
@@ -1133,16 +1133,18 @@ function syntheticCalibrations(
 const workOf = (spec: SyntheticSpec) =>
   spec.workMode === undefined
     ? {}
-    : {
-        work: {
-          ratio:
-            spec.workMode === `bound`
-              ? WORK_RATIO
-              : spec.workMode === `below one`
-                ? 0.5
-                : Number.POSITIVE_INFINITY,
-        },
-      }
+    : spec.workMode === `null`
+      ? { work: null as unknown as { ratio: number } }
+      : {
+          work: {
+            ratio:
+              spec.workMode === `bound`
+                ? WORK_RATIO
+                : spec.workMode === `below one`
+                  ? 0.5
+                  : Number.POSITIVE_INFINITY,
+          },
+        }
 
 // `owns`, the literal list the gap report reads, in the shape the spec names.
 const ownsOf = (spec: SyntheticSpec) =>

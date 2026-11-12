@@ -439,7 +439,7 @@ const effect = fc.record({
   // What the mutant adds to the test's work (site evaluations; a negative
   // amount takes work away), and the test's time in milliseconds, which
   // varies as a clock does and judges nothing.
-  work: fc.constantFrom(0, 0, 0, -1, 1, 7, 150),
+  work: fc.constantFrom(0, 0, 0, -1, 1, 4, 7, 150),
   ms: fc.nat({ max: 40 }),
 })
 const testRecord = fc.record({
@@ -468,11 +468,14 @@ const testRecord = fc.record({
   runOrder: fc.nat({ max: 2 }),
   // The test's work with no mutant active, in site evaluations; whether its
   // second unmutated run did one more (its observations still agreeing);
-  // the work bound its property declares (`work: { ratio }`), if any; and
-  // its time in the two unmutated runs, which judges nothing.
-  work: fc.constantFrom(0, 10, 100),
+  // the work bound its property declares (`work: { ratio }`), if any, in
+  // hundredths; whether it made a timer or held I/O open, so its work can
+  // follow a clock; and its time in the two unmutated runs, which judges
+  // nothing.
+  work: fc.constantFrom(0, 10, 25, 100),
   workFlaky: fc.constantFrom(false, false, false, true),
-  bound: fc.constantFrom(undefined, undefined, 1, 1.5, 2),
+  bound: fc.constantFrom(undefined, undefined, 100, 116, 150, 200),
+  clocked: fc.constantFrom(`none`, `none`, `none`, `timers`, `io`),
   ms: fc.nat({ max: 40 }),
 })
 const records = fc.record({
@@ -623,21 +626,24 @@ const swapFor = { '>': `>=`, '>=': `>`, '===': `!==`, '&&': `||` }
 const workUnder = (t, slot) => Math.max(0, t.work + t.under[slot].work)
 // Whether a test's work judges operator mutant `mi`: it passed under the
 // mutant, it reached the mutant or its file loaded code that did, its
-// observations and its work agreed between the unmutated runs, and its
-// route judges production, not the framework's own checks.
+// observations and its work agreed between the unmutated runs, it made no
+// timer and held no I/O open (its work could follow a clock), and its
+// route is one that `oracleProperty` registers for production, a
+// reproducible or a random one, so it can carry a declared bound.
 const passedKinds = new Set([`same`, `changed`, `observedChanged`, `unhandled`])
 const workJudges = (h, mi, x) =>
   passedKinds.has(x.t.under[mi].kind) &&
   (x.t.reaches[mi] || h.files[x.fi].background[mi]) &&
   !x.t.flaky &&
   !x.t.workFlaky &&
-  kindOf(x.t.route) !== `framework`
+  x.t.clocked === `none` &&
+  [`reproducible`, `random`].includes(kindOf(x.t.route))
 // A test past its declared bound: more work than `ratio` times its work
-// with no mutant active.
+// with no mutant active, compared exactly, in hundredths.
 const pastBound = (h, mi, x) =>
   workJudges(h, mi, x) &&
   x.t.bound !== undefined &&
-  workUnder(x.t, mi) > x.t.bound * x.t.work
+  100 * workUnder(x.t, mi) > x.t.bound * x.t.work
 
 // The work bound that rejects a rise from `before` to `after` site
 // evaluations: the largest ratio in hundredths below the measured one, and
@@ -842,7 +848,7 @@ function judgedOutcome(h, mi, owners) {
       mention: [
         `\`work: { ratio: ${boundBelow(rose.t.work, workUnder(rose.t, mi))} }\``,
         `\`${shownName(h, rose.fi, rose.ti)}\``,
-        `rose from ${rose.t.work} to ${workUnder(rose.t, mi)} site evaluation${workUnder(rose.t, mi) === 1 ? `` : `s`}${rose.t.work > 0 ? ` (${(workUnder(rose.t, mi) / rose.t.work).toFixed(2)}× the unmodified run's)` : ``}.`,
+        `rose from ${rose.t.work} to ${workUnder(rose.t, mi)} site evaluation${workUnder(rose.t, mi) === 1 ? `` : `s`}${rose.t.work > 0 ? ` (${(workUnder(rose.t, mi) / rose.t.work).toFixed(3)}× the unmodified run's)` : ``}.`,
       ],
     })
   if (m.evidence === `dead code`)
@@ -1278,7 +1284,7 @@ const directives = {
     /^Observe the value this code changes in (`[^`]+`|the owner tests), and assert on it\. Where the mutated code computes the same result as the original, add a history where it computes something different\.$/,
   'not-judged': /^Make a law in `[^`]+` reject the changed value\.$/,
   'extra-work':
-    /^Declare `work: \{ ratio: \d+\.\d\d \}` on the `oracleProperty` that registers `[^`]+`, so that its work bound rejects this mutant: there it changed no observation, and its work rose from \d+ to \d+ site evaluations?( \(\d+\.\d\d× the unmodified run's\))?\.$/,
+    /^Declare `work: \{ ratio: \d+\.\d\d \}` on the `oracleProperty` that registers `[^`]+`, so that its work bound rejects this mutant: there it changed no observation, and its work rose from \d+ to \d+ site evaluations?( \(\d+\.\d{3}× the unmodified run's\))?\.$/,
   indeterminate:
     /^(Make `[^`]+` deterministic: control its clock and its random seed, so its failures judge this code|Add an owner test that runs line \d+ and asserts on its result)\.$/,
   'dead-code': /^Remove the redundant code on line \d+\.$/,
@@ -1523,7 +1529,11 @@ function baselineUnitsOf(h, pass) {
         // The capture's work count and the property's declared bound
         // (capture-setup.mjs `calls` and `work`), and the test's time.
         calls: t.work + (t.workFlaky && pass === 2 ? 1 : 0),
-        work: t.bound,
+        // The ratio the property declares, as an author writes it.
+        work: t.bound === undefined ? undefined : t.bound / 100,
+        // A timer the test made, or I/O it held open (capture-setup.mjs).
+        ...(t.clocked === `timers` ? { timers: true } : {}),
+        ...(t.clocked === `io` ? { io: true } : {}),
         ms: t.ms + pass,
       })
     })
@@ -1597,7 +1607,9 @@ function unitOf(h, fi, slot) {
           // An authored mutant's copy is not instrumented, so it counts no
           // work.
           calls: slot < MUTANTS ? workUnder(t, slot) : 0,
-          work: t.bound,
+          work: t.bound === undefined ? undefined : t.bound / 100,
+          ...(t.clocked === `timers` ? { timers: true } : {}),
+          ...(t.clocked === `io` ? { io: true } : {}),
           ms: under(t).ms,
           verdicts:
             kind === `verdict`
@@ -1902,6 +1914,25 @@ async function driver(h, observe) {
       if (judgedRise.t.bound !== undefined)
         states.add(`extra-work under a declared bound`)
       if (judgedRise.t.work === 0) states.add(`extra-work from no work`)
+      if (
+        judgedRise.t.bound !== undefined &&
+        100 * workUnder(judgedRise.t, mi) ===
+          judgedRise.t.bound * judgedRise.t.work
+      )
+        states.add(`a rise exactly at the declared bound`)
+      // An unregistered test before it in report order also rose.
+      if (
+        workTests
+          .slice(0, workTests.indexOf(judgedRise))
+          .some(
+            (x) =>
+              kindOf(x.t.route) === `unknown` &&
+              passedKinds.has(x.t.under[mi].kind) &&
+              !x.t.flaky &&
+              workUnder(x.t, mi) > x.t.work,
+          )
+      )
+        states.add(`extra-work named past an unregistered rise`)
     }
     if (result.class !== undefined && result.class !== `extra-work`) {
       if (
@@ -2921,6 +2952,8 @@ const required = [
   `random-only-kill by a work bound`,
   `a work rise where work judges nothing`,
   `a survivor whose work fell`,
+  `extra-work named past an unregistered rise`,
+  `a rise exactly at the declared bound`,
 ]
 
 // One constructed history per outcome class: one mutant judged by one
@@ -2952,6 +2985,7 @@ const plainTest = (effect = {}, test = {}) => ({
   work: 10,
   workFlaky: false,
   bound: undefined,
+  clocked: `none`,
   ms: 0,
   ...test,
 })
@@ -3175,7 +3209,7 @@ const constructed = [
     [`extra-work`, `extra-work under a declared bound`],
     {
       mutant: { operator: `if-false` },
-      test: { work: 100, bound: 2 },
+      test: { work: 100, bound: 200 },
       effect: { work: 7 },
     },
   ),
@@ -3191,33 +3225,85 @@ const constructed = [
   }),
   single(`a rise past the declared bound`, [`killed by a work bound`], {
     mutant: { operator: `if-false` },
-    test: { bound: 1.5 },
+    test: { bound: 150 },
     effect: { work: 7 },
   }),
   single(
     `a rise past the declared bound beside a changed value`,
     [`killed by a work bound`, `a work bound kill beside a changed value`],
-    { test: { bound: 2 }, effect: { kind: `changed`, work: 150 } },
+    { test: { bound: 200 }, effect: { kind: `changed`, work: 150 } },
   ),
   single(
     `a rise past the declared bound in the random campaign`,
     [`random-only-kill by a work bound`],
-    { test: { route: `random seed`, bound: 1 }, effect: { work: 1 } },
+    { test: { route: `random seed`, bound: 100 }, effect: { work: 1 } },
   ),
   single(
     `a rise in a test whose work varied`,
     [`a work rise where work judges nothing`],
     {
       mutant: { operator: `if-false` },
-      test: { workFlaky: true, bound: 1 },
+      test: { workFlaky: true, bound: 100 },
       effect: { work: 7 },
     },
   ),
   single(`a rise in a calibration`, [`a work rise where work judges nothing`], {
     mutant: { operator: `if-false` },
-    test: { route: `calibration`, bound: 1 },
+    test: { route: `calibration`, bound: 100 },
     effect: { work: 150 },
   }),
+  // A test that no oracleProperty registered (an unknown route) can carry
+  // no bound, so its rise judges nothing, and the mutant keeps its class.
+  single(
+    `a rise on a route that carries no bound`,
+    [`a work rise where work judges nothing`],
+    {
+      mutant: { operator: `if-false` },
+      test: { route: undefined },
+      effect: { work: 7 },
+    },
+  ),
+  // The unregistered test rises first in report order; the directive names
+  // the registered test after it, whose bound can reject the mutant.
+  single(
+    `a rise on an unregistered route before a registered one`,
+    [`extra-work`, `extra-work named past an unregistered rise`],
+    {
+      mutant: { operator: `if-false` },
+      test: { route: undefined },
+      effect: { work: 7 },
+      more: [plainTest({ work: 150 })],
+    },
+  ),
+  // 29 is exactly 1.16 times 25: not past the bound, though a product in
+  // binary floating point is a little below 29.
+  single(
+    `a rise exactly at the declared bound`,
+    [
+      `extra-work`,
+      `extra-work under a declared bound`,
+      `a rise exactly at the declared bound`,
+    ],
+    {
+      mutant: { operator: `if-false` },
+      test: { work: 25, bound: 116 },
+      effect: { work: 4 },
+    },
+  ),
+  // A test that made a timer, or held I/O open, can do work that follows a
+  // clock: a polling or a deadline loop. Its rise judges nothing, so a
+  // bound cannot kill on it and the mutant is not extra-work.
+  ...[`timers`, `io`].map((clocked) =>
+    single(
+      `a rise past the bound in a test that ${clocked === `timers` ? `made a timer` : `held I/O open`}`,
+      [`a work rise where work judges nothing`],
+      {
+        mutant: { operator: `if-false` },
+        test: { clocked, bound: 100 },
+        effect: { work: 150 },
+      },
+    ),
+  ),
   single(`a forced branch that saves work`, [`a survivor whose work fell`], {
     mutant: { operator: `if-false` },
     effect: { work: -1 },
@@ -3647,9 +3733,6 @@ oracleProperty({
         `framework-error`,
         `setup-error`,
       ].map((kind) => `authored ${kind}`),
-      // A work bound comes from `oracleProperty`, which always registers a
-      // route, so this one is measured, not required.
-      `unregistered-kill by a work bound`,
     ],
     runs: 300,
     fixedSeeds: [20261105],

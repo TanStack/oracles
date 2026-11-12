@@ -459,8 +459,8 @@ type Draft = {
   predictMode: `match` | `missing` | `extra`
   /** The `owns` option: absent, a literal list, a string, or a list with a non-string entry. */
   ownsMode: `none` | `list` | `empty` | `string` | `bad entry`
-  /** The `work` option: absent, a bound, a ratio below 1, or a ratio that is not finite. */
-  workMode: `none` | `bound` | `below one` | `not finite`
+  /** The `work` option: absent, a bound, a ratio below 1, a ratio that is not finite, or `null`. */
+  workMode: `none` | `bound` | `below one` | `not finite` | `null`
   clock: boolean
   form:
     `plain` | `bigint` | `map` | `lossy` | `error` | `errors` | `boxed` | `trap`
@@ -834,7 +834,11 @@ const draft: fc.Arbitrary<Draft> = fc.record({
     { weight: 3, arbitrary: fc.constant(`bound` as const) },
     {
       weight: 1,
-      arbitrary: fc.constantFrom(`below one` as const, `not finite` as const),
+      arbitrary: fc.constantFrom(
+        `below one` as const,
+        `not finite` as const,
+        `null` as const,
+      ),
     },
   ),
   // `owns` is read statically by the gap report, so it must be a literal list of strings.
@@ -2185,7 +2189,11 @@ function predictSpec(
       loads: false,
       loadError: `${spec.id}: \`owns\` must be a non-empty literal list of strings`,
     }
-  if (spec.workMode === `below one` || spec.workMode === `not finite`)
+  if (
+    spec.workMode === `below one` ||
+    spec.workMode === `not finite` ||
+    spec.workMode === `null`
+  )
     return {
       loads: false,
       loadError: `${spec.id}: \`work.ratio\` must be a finite number of at least 1`,
@@ -10377,6 +10385,11 @@ oracleProperty({
         `a work bound that is not finite fails to load`,
         [`registration-error`],
         generatedDraft({ workMode: `not finite` }),
+      ),
+      fixedHistory(
+        `a null work bound fails to load`,
+        [`registration-error`],
+        generatedDraft({ workMode: `null` }),
       ),
       fixedHistory(
         `a work bound is registered beside each route that judges production`,

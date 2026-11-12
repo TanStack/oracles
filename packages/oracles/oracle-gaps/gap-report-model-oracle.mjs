@@ -408,6 +408,8 @@ const testCase = fc.record({
   // A test may declare a work bound, as an oracle property's `work` does:
   // a ratio of 1 rejects a mutant that does any more work there.
   work: fc.constantFrom(null, null, null, 1),
+  // Only a witness waits on a timer: its work could follow the clock.
+  timed: fc.constant(false),
 })
 // Law 9's edits. Each content edit changes what some evidence depends on:
 // a test file, a source statement, the source's line numbers, an owns list,
@@ -819,6 +821,7 @@ const judging = (file, route, input, extra = {}) => ({
   stops: false,
   then: null,
   work: null,
+  timed: false,
   ...extra,
 })
 const witness = [
@@ -948,6 +951,30 @@ const witness = [
     tests: [
       judging(`a`, `fixed seed`, 7, { work: 1 }),
       judging(`a`, `fixed seed`, 1, { work: 1 }),
+    ],
+  },
+  // The early return again, in two tests that the work law does not judge:
+  // tests that wait on a timer before they run it (as a polling or a
+  // deadline loop does, whose count can follow the clock), with a bound of
+  // 1, and tests that register no route, which can carry no bound. Its
+  // `if-false` mutant costs work there, deterministically, and stays
+  // `not-observed`.
+  {
+    id: `w_fasttimed`,
+    owners: [`a`],
+    body: [{ kind: `shortcut`, op: `>`, k: 2, not: false }],
+    tests: [
+      judging(`a`, `fixed seed`, 7, { timed: true, work: 1 }),
+      judging(`a`, `fixed seed`, 1, { timed: true, work: 1 }),
+    ],
+  },
+  {
+    id: `w_fastplain`,
+    owners: [`a`],
+    body: [{ kind: `shortcut`, op: `>`, k: 2, not: false }],
+    tests: [
+      judging(`a`, `fixed seed`, 7, { registered: false }),
+      judging(`a`, `fixed seed`, 1, { registered: false }),
     ],
   },
   {
@@ -1689,6 +1716,8 @@ const captureWitness = new Set([
   `w_fastbound`,
   `w_fastcall`,
   `w_fastcallbound`,
+  `w_fasttimed`,
+  `w_fastplain`,
   `w_noobs`,
   `w_unreached`,
   `w_ordinary`,
@@ -3828,10 +3857,14 @@ function runsOf(plan, tests, sites, active) {
       // mutant's copy is not instrumented, so it counts no work, and the
       // work law judges only operator mutants.
       const route = routeOf(t, partsOf(t).at(-1))
+      // Only a route that oracleProperty registers for production can carry
+      // a bound, and a test that made a timer can do work that follows the
+      // clock, so neither judges work.
       const judgesWork =
         found.length === 0 &&
         active?.site !== undefined &&
-        route !== `framework`
+        [`reproducible`, `random`].includes(route) &&
+        !t.timed
       return {
         t,
         route,
@@ -4448,6 +4481,8 @@ function oracleTestFile(plan, file) {
         ...(t.registered && t.work !== null
           ? [`    g.__oracleWorkBound?.(${t.work})`]
           : []),
+        // A test that waits on a timer before it runs production.
+        ...(t.timed ? [`    await new Promise((r) => setTimeout(r, 0))`] : []),
         `    const ${out}: Array<string> = []`,
         ...(t.setsShared ? [`    shared.value = 5`] : []),
         t.readsShared
@@ -4561,7 +4596,7 @@ function oracleTestFile(plan, file) {
         : []),
       t.asProp
         ? `  fcTest.prop([fcv.integer({ min: 0, max: 10 })], { numRuns: 20, seed: 1 })('${testName(t, index)}', async (n) => {`
-        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || lazyGated(plan, file, t) ? `async ` : ``}() => {`,
+        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || t.timed || lazyGated(plan, file, t) ? `async ` : ``}() => {`,
       ...partsOf(t).flatMap(campaign),
       `  })`,
       `})`,
