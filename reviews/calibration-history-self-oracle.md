@@ -1,0 +1,852 @@
+# Calibration history self-oracle review
+
+Reviewed production and starting oracle: `2dc95d4e838678a03eb345c08f141dbd20a8c4a7`.
+This follow-up changes only the primary self-oracle and its fixture. It changes
+no framework production behavior. Four independent reviewers evaluated execution
+semantics, judgment independence, grammar, and receiving observations; two then
+rechecked the repairs. This record distinguishes their evidence from the final
+repair validation below.
+
+## Laws and experiments
+
+The README's history-binding contract requires a selected name to identify one
+existing original. Both automatic clean premises accept fixed or constructed
+selectors; only omitted entered selectors infer a construction. Identity matters
+even when two originals have equal data. The registration contract owes the same
+test list on every registration: suppressing duplicate warnings does not suppress
+tests. Real Vitest must report complete results and every unexpected failure.
+The self-oracle separately chooses diagnostic precedence and explicitly promises
+to check its first registration error alone; that ordering is not a new public
+framework policy.
+
+The primary model now derives both selected premises from authored declarations,
+checks cardinality, and compares input origins, item values and exact build,
+resolve and driver budgets. Independent selector axes include non-first names,
+fixed entry, constructed absence, and inferred entry. Equal-data fixed originals
+remain distinguishable by fixture-side identity associations. Named enumeration
+selectors match authored labels, including shell suffixes and the plain JSON
+label represented in this bounded string grammar.
+
+The driver uses actual child Vitest processes for normal runs, replays, reruns,
+reach-only runs, seedless runs, reordered calibrations and registration phases.
+Each child records status, signal, file completeness, suite/load errors,
+secondary test errors, unhandled errors and the input histories that determine
+late-call obligations. The check permits expected synthetic failed tests to exit
+1 while independently rejecting unexpected errors. Relative file names preserve
+identity within a run without recording random temporary directory paths.
+Repeated ordinary and collecting registrations retain every scoped test name
+with multiplicity and compare against the same model-derived registration list.
+
+## Finding accounting
+
+| ID           | Verified finding                                                                                                                            | Disposition and durable enforcement                                                                                                                             |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| I-1          | Model falsely permitted ambiguous selected construction names for inferred/explicit automatic controls. Production correctly rejected them. | Repaired cardinality model; both generated required paths and fixed replays.                                                                                    |
+| I-2          | Authored refinement accepted the wrong equal-valued original.                                                                               | Repaired origin comparison; equal-data distinct originals and corruption calibration.                                                                           |
+| G1           | Grammar omitted fixed clean-entry and constructed clean-absence.                                                                            | Independent selectors and separately required receiving paths; actual-kind budgets.                                                                             |
+| OBS-1        | Repeated-warning phase discarded registrations.                                                                                             | Scoped complete name lists, shared expectations, authored/forced omission calibrations.                                                                         |
+| OBS-2        | Unrelated child unhandled failures were ignored.                                                                                            | Every receiving child checked; unexpected-error and process/report calibrations.                                                                                |
+| LOADERR-CAND | Expected diagnostic plus extra diagnostics was accepted.                                                                                    | Confirmed by a failing calibration before repair; exact cardinality and permanent duplicate-diagnostic calibration.                                             |
+| SIB-1        | Named enumeration model ignored custom/default labels.                                                                                      | Confirmed false failures on correct production; authored-label model and valid/missing neighboring receivers.                                                   |
+| OBS-2a       | Replay-only afterAll failure hid behind an expected failing test/exit1.                                                                     | Per-file suite/load errors independently judged; auxiliary calibration.                                                                                         |
+| OBS-2b       | Extra real late-probe error during replay escaped main-only counting.                                                                       | Input-based late-call bounds checked separately for every child; required actual replay receiver and duplicate-error calibration.                               |
+| OBS-2c       | Replay-only afterEach error hid behind the first test error.                                                                                | Secondary test errors retained and rejected for every child; auxiliary calibration.                                                                             |
+| CHRON-1      | Earlier clean declared-enumerated receiving gate was run after production repair.                                                           | Historical process violation remains recorded. Current receiver and hostile omission check exist; retrospective evidence cannot make the earlier gate pre-edit. |
+
+The raw intake has seven canonical items. Rechecks added four sibling items.
+Ten review-derived executable gaps are repaired; CHRON-1 remains a historical process finding,
+with no claim that today's tests repair the past ordering. No item was deferred,
+refuted, waived, or reclassified as a product-law decision. The temporary stdout
+announcement note is preserved as chronology, not a final net production defect.
+The cross-file warning experiment used different worker processes and did not
+reach its premise; its two warnings establish no defect.
+
+## Sensitivity
+
+Before repair, the reviewers demonstrated two false model predictions for
+ambiguous selectors and four targeted surviving wrong implementations. They
+also ran 25 clean execution-semantics controls and rejected incorrect bound
+verdict ranking, a narrow throw-only repair (the neighboring clock case failed),
+and difference-before-law. These are bounded reviewer results, not a whole-suite
+run against each variant.
+
+After repair, eleven isolated source mutants reject through the primary model
+and check at their intended comparison:
+
+- ignoring an explicit fixed entered selector;
+- canonicalizing an equal-data fixed original;
+- dropping calibrations on the second registration;
+- introducing an unrelated unhandled rejection;
+- dropping only a repeated forced control;
+- substituting fixed absence for a selected constructed absence;
+- adding replay-only afterAll or afterEach failures;
+- doubling replay-only late-probe errors;
+- accepting an ambiguous selected name;
+- ignoring an enumerated label's shell suffix.
+
+Ten permanent observation-corruption calibrations also challenge registration
+multiplicity, selected identity, extra load diagnostics, unknown child errors,
+omitted reports, abnormal status, auxiliary suite/test errors and late-call
+multiplicity. They all use the same primary law/model/driver/check.
+
+## Validation and bounds
+
+At publication, the final full framework/determinism run is still in progress;
+no final-head GREEN or merge-readiness claim is made here. The earlier focused
+receivers passed 14/14; the independent observation recheck passed 12/12,
+including all ten corruption calibrations. All eleven isolated source mutants
+are assertion-rejected. Package type checking, changed-file lint/format and the
+package build pass. The ordinary core run passed 54 checks; two npm-pack checks
+hit the sandbox's read-only default npm cache and are being retried with a
+scratch cache. CI and the final local run must validate the published head.
+Commands use the installed Node entry point, `--maxWorkers=2`, and no dependency
+install workaround or override. A first build command used a nonexistent
+package-local Vite entry; rerunning the installed workspace entry succeeded.
+These setup failures are not product RED or mutant rejection evidence.
+
+Required new states are fixed-entry, constructed-absence, inferred ambiguity,
+explicit ambiguity, equal-data original selection, enumerated named labels, and
+an actual auxiliary late-call receiver. Both normal campaigns must reach each.
+The existing registration-warning and bound-state requirements remain in place.
+Fixed inputs replay the shared judgment without separate expected answers.
+
+The independent model imports no production selector or verdict helper. Input
+origins and construction callback inputs are fixture-side facts, not answers
+learned from production. Selection kind changes build obligations; equal data
+with different input identity changes the promised selected original. These
+justify the retained distinctions. No concrete missing-source-fact hypothesis
+remains in the repaired cuts: the real reporter supplies all the compared facts.
+The bounded faults are distinguished by the legal neighbors and mutants above;
+no second implementation of production selection was introduced.
+
+The full local sweep then passed 226 of 227 checks and caught REPAIR-1, an
+observation mistake introduced by this repair: the new child recorder included
+raw seedless histories and status, so legitimate host randomness broke the
+outer determinism comparison. The seedless receiver now controls Math.random's
+draw through fixture hooks while leaving ORACLE_SEED absent. It still exercises
+ordinary random-route selection and all child error/count assertions. A focused
+real-Vitest receiver runs the same model/driver/check for ordinary, late-probe,
+and two-property inputs and then the framework's own determinism check: 4/4
+pass. Entropy or seed-distribution quality is not claimed. The complete expanded
+suite remains subject to final-head CI; the failed intermediate run is not GREEN.
+
+The owner retains its explicit finite synthetic-history, name-family, callback,
+regex and scheduler limits. It does not establish all possible JavaScript labels
+or errors, browser/provider behavior, downstream DB consumer integration, a DB
+release-time improvement, or fresh-seed UNIT support. Real Vitest is the actual
+receiving host; no controlled-provider extrapolation is claimed.
+
+ORC-001 through ORC-006, ORC-008 through ORC-010, ORC-013, ORC-015 and ORC-016
+are covered by the authority, independent model, shared generated/fixed inputs,
+receiving observations, neighbor controls and explicit mutants above. ORC-007
+uses the owner's unchanged fixed/random budgets and direct replay checks.
+ORC-011's named identity/selection faults are challenged by declaration-origin
+relations instead of another copy of production selection. ORC-014 needs no
+external-provider handoff for this Node framework claim. This versioned record
+and the executable owner provide ORC-012 evidence; CHRON-1 remains an explicit
+historical exception to a complete pre-edit receiving-gate claim.
+
+The four reviewers distinguished current production from oracle integrity and
+supplied concrete witnesses or useful positive controls. Strong hire for all
+four in their reviewed scopes; none establishes whole-PR correctness alone.
+
+## Reviewed content identity
+
+Parent commit: `2dc95d4e838678a03eb345c08f141dbd20a8c4a7`.
+
+- `packages/oracles/tests/oracle-property-self-oracle.test.ts`: SHA256 `c8df3de2569460a80ff1eab23811d21f9ac6fffe6e4d935bdcfdc5ed5f579d0f`.
+- `packages/oracles/tests/oracle-property-self-oracle-fixture.ts`: SHA256 `27195bf184b7ae58f9eaea7bab82973aae5876ce292e2b6aa7e6fa02ac20627d`.
+
+## Fresh review and oracle-first repair from fc4bad8
+
+Starting reviewed head: `fc4bad8dc2c3da3a80b5002bcc36281b75f12846`.
+The previous full-head CI passed both Vitest versions. A fresh independent
+round nevertheless demonstrated one production defect and six oracle defects.
+The repair begins with all seven findings together, before changing production.
+
+The public binding law preserves an explicitly selected original and gives each
+authored calibration its own selector. Incidental declaration metadata does not
+change a fixed history into a construction. The verdict law gives an earlier
+recorded violation precedence over a later controlled-clock spin, including a
+supplied mutant driver. The receiving law requires full registration, expected
+test outcomes, faithful diagnostic causes, and named reach counts independent
+of their print order. README and the production header state these promises.
+No product-law change is proposed.
+
+The primary oracle repair adds declaration-wrapper metadata, independent
+per-calibration binding, and ordered mutant-driver events. Required real Vitest
+receivers include authored selection and both automatic clean-premise paths,
+mixed authored bindings, and bound/legacy wrong-observation-before-spin. Full
+child records must carry every registered name and independently judged primary
+outcome through normal, seedless, replay, rerun and other auxiliary cuts. A
+rerun owes diagnostic facts from its concrete reproduced history; shrinking may
+legitimately remove an unrelated throw. Count dictionaries permit key reordering
+while retaining exact names and values.
+
+Pre-edit production identity is SHA256
+`4d4c9ac25a83ebc49e1604519176418f1618c5f70bf9b9231e555bd2b5e8ee39`
+for `packages/oracles/src/oracle-property.ts`. Required receiving RED and
+neighbor results must be recorded before its source-kind dispatch is repaired.
+Hostile variants then challenge each new distinction. This section is the
+pre-edit inventory, not a claim of completed validation. The historical CHRON-1
+entry above remains unchanged.
+
+### Pre-edit gate at fc4bad8
+
+All oracle changes preceded the production repair. The final combined command
+used installed Node Vitest from `packages/oracles`, framework config,
+`--maxWorkers=2`, and selector
+`fixed history: round3|calibration: reject (omit|duplicate|seedless first|rerun|replay|changed reach)`.
+On unchanged production it reports **six intended RED and twenty GREEN** out of
+253 registered checks (227 skipped), in 45.08 seconds. RED separately compares
+own/inherited metadata on authored, forced-entered and forced-not-entered
+receiving paths. Every failure is a calibration comparison observing lost
+original identity; no setup failure supplies this gate. The plain neighbor,
+mixed selectors, bound/legacy spin and throw, dictionary order, warning phases,
+seven actual receiving cuts, concrete replay causes and nine corruption controls
+are GREEN. Package TypeScript checking passes.
+
+The primary grammar separately declares each metadata receiving path, bound and
+legacy wrong-observation-before-spin, mixed authored selectors/search, successful
+and rejected named enumeration selectors, legal count dictionary order, silent
+fully-bound warning phases, and all seven actual child receiving contexts. Full
+fixed/random reach counts remain to be measured after production repair.
+
+Isolated source/fixture/reporter variants already reject first-selector sharing,
+supplied-driver spin ranking, seedless primary errors, missing replay and
+reach-only registrations, duplicate reach-only registrations, reordered-child
+primary errors, lost rerun/replay causes, wrong cause ordinals and unexpected
+causes. Reversing only count-key printing is accepted. These are bounded
+assertion results, not full-suite mutation claims. The warning-phase extension
+also caught an oracle mistake: fully-bound properties emit no migration warning,
+but the old phase model demanded one. Its false RED preceded the independent
+per-entry warning model repair and both bound/unbound GREEN neighbors.
+
+Concrete diagnostics are judged from the history actually reproduced. A
+campaign's initial checkpoint or cause may change while shrinking. Replay's
+input-side log supplies its one concrete history; an ordinary parseable reported
+counterexample must have appeared in that test's invocation log. Exact finite
+driver causes and item checkpoints are compared at that concrete cut. Nested
+judgment causes and arbitrary AggregateError metadata remain outside this
+synthetic diagnostic grammar; no universal error-serialization claim is made.
+
+### Source-kind repair after the gate
+
+Oracle-only commit `d5e615a` precedes the production repair. Selection now
+uses the selector kind to look up fixed or constructed declarations, preserving
+fixed originals even when the declaration has unrelated `build` metadata. The
+same gate passes **26/26** after repair (227 skipped), in 49.59 seconds. Package
+TypeScript, scoped ESLint and the Vite package/declaration build pass. Full
+fixed/random validation and a new independent review round follow this commit;
+this focused result alone does not establish PR readiness.
+
+## Fresh review and receiving repairs from b09a403
+
+Four fresh independent reviewers found two P2 primary-oracle gaps and no new
+production defect. Auxiliary children discarded registration warnings, and
+passing campaign counts were learned from the executions being checked.
+README's once-per-process warning promise and the header/config's equal
+campaign-budget promise already supply the laws. Both are enforcement repairs.
+
+The owner now records every child's warning facts and independently judges
+names and multiplicity for its effective declaration and collecting phase.
+Required warning-positive receivers cover run, seedless, replay, rerun,
+reach-alone, reordered bindings and registration phases separately. Passing
+campaigns owe the authored run budget plus constructed examples; failed,
+shrinking and timed-out campaigns retain their variable execution counts.
+Seedless host draws remain controlled inputs, with ORACLE_SEED absent. Required
+states separately cover successful fixed/random lanes in seeded and seedless
+children, construction examples, and a failing neighbor. The count model never
+uses observed reach totals as its owed budget.
+
+Same-head CI also caught two oracle regressions from the preceding expansion.
+A filtered rerun cannot learn skipped default data labels from its own invocation
+log. Auxiliary inventories now use the full ordinary input/name association,
+consistent with the owner's existing default-label distinctness limit. Each
+child's execution and build logs remain separate for outcomes and counts.
+The per-entry binding refactor also stopped constructing duplicate declaration
+names for bound probe controls with no authored calibrations. Effective probe
+bindings now restore that grammar, preserving the required ambiguity states.
+Neither issue required a source change.
+
+On unchanged b09a403 production, six combined warning/budget controls pass,
+all five CI regression receivers pass, and 26 permanent corruption calibrations
+pass. These share the primary model/driver/check. Real-child missing-warning and
+fixed-budget-one source mutants are assertion-rejected; legal warning-name
+reversal passes. The default-label repair still rejects omitted skipped
+registrations on both Error and bigint receivers. The duplicate-name grammar
+still rejects first-match selection on both inferred and explicit controls.
+Package TypeScript passes. Raw RED/GREEN, malformed reports, source patches,
+controls and setup attempts remain in the task audit.
+
+The preceding CI Vitest5 framework run reported 7 failures/246 passes: two
+campaigns, two fixed cases and one diagnostic calibration share the ambiguity
+premise; two default-label reruns share the inventory defect. These are two
+oracle defects, not seven source bugs. The old local full sweep was superseded
+and interrupted after these same-head RED results; it is not GREEN. A complete
+new full sweep and another fresh review round must validate this owner.
+
+Warning judgment permits name/property ordering. The executed allowed control
+uses a fixed reversal; it does not establish arbitrary variation between repeat
+executions, whose raw warning spelling also reaches outer determinism. This is
+a remaining representation question for the next independent review, not an
+asserted full closure of every legal warning representation. Source and fixture
+remain byte-identical to b09a403. Historical CHRON-1 remains unchanged.
+
+## Fresh warning-observation review from 68ed541
+
+Four new scoped reviews found two P2 self-oracle defects. Warning-name order is
+not promised, but its raw spelling reached outer determinism. Alternating only
+valid name order passed the shared judgment and failed outer determinism. The
+warning-name matcher also accepted `cal-0-extra` as `cal-0`: both the ordinary
+case and outer determinism stayed green under that wrong-name renderer. These
+are distinct observation/formulation and enforcement defects under the README's
+once-per-property/process, exact-unbound-names promise.
+
+The owner now decodes the actual finite quoted-name list, retaining duplicates
+and unknown names, and sorts its entries before any child, ordinary-run or
+registration-phase observation. The authored expected-name multiset remains
+independent of the warning renderer. Malformed lists stay observable and fail;
+unknown-property warnings fail at each full-list checkpoint. The finite grammar
+allows inner state-name quotes but excludes the list delimiter inside a name;
+no claim about arbitrary future warning prose or arbitrary JavaScript strings
+is made.
+
+An authored representation dimension alternates valid name presentation across
+real executions. The existing seven-context receiver carries multiple unbound
+names and measures nontrivial permutation reach. Its ordinary case and actual
+outer determinism reuse the same model, driver and check. Raw reports remain
+unchanged; sidecars preserve the presented ordering. Permanent corruptions add
+wrong suffixed/replaced names, malformed lists and unrelated-property warnings,
+while retaining missing/duplicate warnings and names, all-bound silence and
+collect-only silence. No framework production or fixture edit is part of this
+repair.
+
+The frozen pre-repair experiment passed forward2/2 and consistent reverse2/2,
+but alternating representation failed outer determinism. The wrong suffix
+renderer survived2/2 before repair. With the repaired observation it fails the
+intended `child` / `calibration` comparison; the actual ordinary/determinism
+representation control passes2/2. Four live neighboring receivers pass. Package
+TypeScript and scoped lint pass. Final warning-calibration completion is
+recorded in the next entry, without claiming a whole-suite GREEN.
+
+Reviewed owner SHA256:
+`18a5c3e091cf7b218f2d08fad99df51aa548ec2daca4ab7df27973d074b776ac`.
+Production and fixture hashes remain those of b09a403. Independent grammar,
+seed/premise/identity, and execution-semantics reviewers found no new supported
+defect in their bounded scopes. The independence review accepted an alternative
+stable hash, preserving implementation freedom. Their negative results are not
+whole-framework correctness claims. Historical CHRON-1 remains unchanged.
+
+The semantics review also preserved an optional policy question: a deliberately
+wrong driver may enter an undeclared state while its designated visible-result
+violation is accepted as a successful calibration. The current contract scopes
+declared-reach validation to the clean run and describes shared verdict rules
+for recorded violation/clock/error priority. No stronger mutant-reach obligation
+has been established or silently added. A maintainer clarification was requested
+separately; the executed trace and its authority qualification remain in the
+audit.
+
+The completed frozen warning sweep passes **27/27** in 184.04 seconds: nine
+identity/property/permutation controls and eighteen retained warning controls
+across seven receiving contexts. Together with the four positive receivers,
+two actual ordinary/outer-determinism checks and the rejected suffix renderer,
+this completes the two warning findings within the stated finite grammar. An
+independent reviewer is challenging this frozen repair before main integration.
+The superseded full68ed541 run completed both campaigns, including required
+warning/budget reach, then was explicitly interrupted before the incoming
+source/fixture integration. It is incomplete, not a full-suite GREEN.
+
+An independent frozen-repair review found no new supported warning defect. Six
+actual source variants were rejected: seedless omission, duplicate name,
+malformed list, unknown property, extra unknown name and duplicate warning
+event. Three legal presentation inputs passed the actual outer determinism
+receiver using this same model, driver and check, including sixteen varied and
+astral names across two properties, all receiving contexts and forced state
+labels with inner quotes. Thirty real child reports were retained. Vitest
+coalesced the duplicate console calls; that variant still failed name identity,
+so the result does not claim two separately observed warning records. These
+scoped results validate the warning repair; main integration remains separate.
+
+## Main UNIT integration and host observation repair
+
+Integration starts from published `f3f39a02d804cc3c74a3b1a9ba9333aad693a34d`
+and normally merges main `d38af3812dc07f447a23259673cdecf96a99fb3b`.
+Main removes `declareOracle`, splits generated campaigns and determinism into
+named units, and supplies `UNIT` replay. The accepted main contract changes the
+registration and budget model: each constructed unit owes one history; each
+passing generated unit owes its authored runs. Existing binding identity,
+fresh plans, stable calibration seeds, forced premises and verdict ranking
+remain. Fresh calibration seeds remain follow-up work.
+
+Before replacing production, the combined primary oracle ran against unchanged
+main. Seventeen UNIT neighbors passed, seven binding/control/origin/clean-reach
+checks failed their intended comparisons, and six own/inherited fixed-wrapper
+metadata receivers failed separately across authored and both forced premises.
+Two mixed inputs failed first on missing migration warnings, supplying warning
+feature evidence rather than selector proof. Two recorded-violation-before-spin
+neighbors passed. After the merged source, the same thirty binding, metadata
+and UNIT cuts passed; the four mixed/spin checks and nine receiving, warning and
+budget closures passed. Setup failures and initially empty filters are retained
+in the integration audit and do not count as behavioral evidence.
+
+The combined grammar retains every branch required state. Main's global name
+uniqueness now rejects old duplicate-name inputs before selector resolution;
+those inputs explicitly earn name-gate reach. Zero and two distinctly named
+entering constructions retain separate inference coverage. Four generated UNIT
+constructions require eleven states, with actual receiving observations.
+Per-unit budgets have sixteen omission/extra controls and four redistributions
+that preserve aggregate counts. Two clean shared-law enumerated receivers pass;
+source mutants duplicating constructed examples, reducing generated runs to one,
+and reusing the first bound selector fail the intended campaign-budget or
+calibration assertion. The enumeration avoids letting a global mutant fail the
+outer generated reach before the inner comparison.
+
+Integration exposed four owner/fixture siblings before final validation:
+
+- The synthetic fixture replaced the outer host RNG as well as marked children.
+  Both supplied host inputs failed the primary HOST comparison on unchanged main.
+  Scoping fixture control to marked children made both pass before source repair.
+- The inference model counted the first name rather than independently authored
+  entering declarations. It now retains genuine two-construction ambiguity.
+- The custom-prefix driver renamed the literal tooling key `ORACLE_MANIFEST`.
+  It now translates only configured replay variables; the receiving witness passes.
+- A new host receiving state was initially undeclared. Its declaration and
+  required construction now agree, preserving the branch's declared-state guard.
+
+A subsequent HOST review found an observation overconstraint: function identity
+is not promised by the host seed contract. An allowed forwarding wrapper failed
+the old primary comparison despite preserving the supplied draw and its use.
+The owner now checks the actual post-import draw and a semantic use fact measured
+immediately around actual seed selection. Exact counters remain raw diagnostics.
+The legal grammar includes one-call, two-call and alternating forwarding forms;
+actual outer determinism passes. Four permanent corruptions reject wrong or
+malformed draws, lost host use and unequal marked-child seeds. The original
+unscoped fixture and a separate seed-source bypass still fail the HOST comparison.
+This changes owner observations, not production or the scoped fixture.
+
+The merged production SHA256 is
+`a1c132e8e096228e34aad07ba39c20df88facfe998e8c8e4e155ff75b213e01b`;
+fixture SHA256 is
+`e2d2034ad7a57067e45c79a85a48970452b61dc9eb02e6e62c9e524da4bf9198`.
+An independent source review passed ten focused receivers and rejected wrong
+original identity, ignored difference, reversed forced premises and wrong UNIT
+seed offsets. An initially insensitive full-prefix seed witness passed the
+mutant; three existing short-prefix histories then passed correct source and
+rejected it. That filtered survivor is not a full-owner false green. A legal
+alternative stable name mixer passed. A cached-builder variant failed on the
+synthetic runtime path and is not credited as an inner assertion rejection.
+
+Local package/root types, package build and scoped lint pass. Core tests pass
+113 of 114; the fresh consumer-install check reaches registry HTTP403 responses
+for Vitest and fast-check and remains an environment failure. No dependency or
+lockfile workaround is committed. Plugin assertions pass 6,438 checks plus two
+package-citation checks retried with a writable uppercase npm cache. The actual
+96-test e2e inventory partitions across five shards with no partition errors;
+this is partition evidence, not a full gap-driver run. Complete merged framework
+validation and final owner reviews are still pending at this entry.
+
+This appendix retains the finite synthetic grammar, real Node/Vitest boundary,
+prior raw findings and historical CHRON-1. Current experiments cannot repair the
+missed historical pre-edit gate. The optional mutant-only undeclared-reach
+question remains a possible stronger policy, not an established contract defect.
+
+The final HOST challenge exposed one reach gap (I-11): omitting wrapper
+installation while retaining the requested plan passed the ordinary, reach and
+outer determinism checks, falsely reporting forwarding reach. The owner now
+records a semantic `forwarded` fact from actual wrapper invocations immediately
+around seed selection. Both its assertion and its reach require that fact;
+configured call counts cannot establish it. Exact invocation counts remain raw,
+so allowed one/two-call representation changes preserve deterministic traces.
+The clean ordinary/reach/determinism neighbor passes all three checks. Final
+focused HOST controls and the omitted-wrapper challenge are recorded after they
+complete; the pre-repair survivor is preserved rather than counted as a kill.
+
+The frozen owner SHA256 is
+`336ab5a735116bcbaff52caaeb0356422be27e56258e0fdb7d3468728474d9d9`.
+The final HOST focused gate passes **15/15**, including actual per-history
+outer determinism and five corruption controls. The clean required-forwarding
+ordinary/reach/determinism receiver passes **3/3**. Omitting wrapper installation
+now fails the HOST comparison and required forwarding reach (zero); its outer
+determinism still passes, isolating enforcement from nondeterminism. Package
+types, scoped lint and diff checks pass. Production and fixture retain the
+hashes above. Full frozen-head validation and three fresh owner reviewers start
+next; no whole-PR readiness claim is made by these focused results.
+
+## Fresh merged-head review: callback diagnostics and calibration instrument
+
+Three fresh reviewers examined immutable `8b4543aa5fd0e887ddf77ed2765fe43d76eb116c`.
+Independence and grammar/reach reviews found no new supported defect in their
+bounded scopes. They executed lawful name-mixer/forwarding variants, original
+identity/forced-premise attacks, exact UNIT stream/budget attacks and actual
+receiving reach. The observation review found two oracle defects; its context
+and cause subclaims are retained separately below. Current production preserves
+the disputed diagnostics. No production or fixture repair is indicated.
+
+The law comes from original user-authorized review item 6: failures retain the
+calibration and selected history names. The accepted owner also retains the
+original cause. The README supplies neighboring selection semantics; it does
+not prescribe this callback diagnostic template. Exact punctuation, hash/seed
+arithmetic, stack paths and an unbound-callback context promise are not added.
+
+| ID                             | Verified gap                                                                                                                                | Repair and evidence                                                                                                                                                                                  |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R7-OBS-CONTEXT                 | Reordered, seedless and environment callback errors could lose their selected calibration/history context while the shared judgment passed. | Semantic identity survives every active child/summary projection and is compared with authored selection. Actual reordered source mutant now fails child/calibration.                                |
+| R7-OBS-CAUSE                   | Those auxiliary errors could lose or replace their original cause.                                                                          | The same independent diagnostic judgment requires the finite callback cause; separate cause-loss source mutant now fails child/calibration.                                                          |
+| R7-OBS-SELECTED-NAME           | Ordinary and reordered errors could falsely name another declared history of the same kind.                                                 | Exact authored selected name is checked; a same-kind source substitution now fails.                                                                                                                  |
+| R7-CI-ORIGIN                   | Permanent origin corruption changed a stale summary log while the comparison consumed the ordinary child log.                               | The control now changes the exact semantic invocation in both representations; identity comparison is unchanged. Same calibration passes and a real wrong-origin source still fails run/calibration. |
+| R7-SIB-CALLBACK-REPRESENTATION | Initial repair falsely rejected harmless separator whitespace.                                                                              | An actual legal renderer failed before normalization and passes after it; wrong selected names still fail.                                                                                           |
+
+All findings were grouped before owner repair. The existing Suite arbitrary now
+has a weighted legal callback branch crossing three callback kinds, three
+selection kinds, two tails and both prefixes. Fixed inputs and required
+constructions use the same model, real driver and comparison. Callbacks actually
+execute in ordinary, reordered, seedless and seed-only environment paths; each
+has required measured callback-failure reach. Registration phases, path replay,
+rerun and reach-alone keep their full registration/skipped checks and do not
+claim callback execution. Across nine clean kind/selection neighbors, actual
+counts are ordinary 9, reordered 6, seedless 9 and environment 9. Enumerated
+sources have no reordered-construction receiver under this driver.
+
+Three bad-source variants survive the frozen owner and fail the repaired
+comparison; clean source passes both. Thirty-six independent wrong diagnostics
+are rejected across four child cuts plus ordinary/environment summaries.
+Opaque default enumeration names are associated with the public direct-history
+name of the authored index/origin, independently of callback text. Five opaque
+forms pass; fifteen wrong-name, missing-association and ambiguous-association
+controls fail. The codec and name hash are not copied into the expectation.
+
+The callback scratch candidate passed eighteen focused checks, followed by five
+on the final whitespace-normalized bytes, and all thirty-six controls were
+rerun. One earlier scratch run overlapped source-mutant experiments; its four
+failures are contaminated evidence, superseded by the restored-source clean
+gates. No setup/runtime failure is counted as an assertion rejection.
+
+Exact-head Vitest 5 CI on 8b4543a passed 729 of 730 checks and exposed the stale
+origin corruption. The same calibration failed on installed Vitest 4, ruling
+out a version-only flake. Captured traces show the summary changed to fixed-0
+while the canonical child retained correctly selected fixed-1; changing the
+canonical or both logs triggers the intended identity assertion. The nearby
+permanent-control audit found no other log/build/resolve corruption with this
+stale target. Ten focused origin and adjacent controls pass after the repair;
+a genuine wrong-fixed-original source mutant still fails the primary law.
+
+The superseded local 8b4543a run completed both campaigns' forty-five named
+units, retaining their full reach counts, then was explicitly interrupted with
+exit 130 after the confirmed CI/focused failure. It is not a full-suite GREEN.
+Core/package, plugin, Vitest 5 core and both gap-oracle jobs on that head passed;
+the consumer-install CI path supplies the witness blocked by local registry403.
+
+Combined live owner SHA256 is
+`b6efd19d8dd086ed73d65c36e3b471685cc96789d055dcfcb82d94c972d4b3ad`.
+The actual combined focused gate passes **19/19** in 84.90 seconds, including
+callback fixed histories/outer determinism, twelve corruptions and the origin
+control. Full package TypeScript, scoped lint, formatting and diff checks pass.
+Production/fixture/reporter retain the a1c/e2d/1918 identities above. Complete
+final-head framework validation and fresh focused re-review start next; this
+entry makes no full-framework GREEN or whole-PR readiness claim.
+
+Loss accounting: two raw observation findings retain three independently
+verified obligations, plus one CI instrument finding and one repair-discovered
+representation sibling. All have applied repairs and focused enforcement; none
+is deferred or resolved by a policy change. Other reviewer scopes retain their
+negative evidence and limits. Strong hire for each reviewer in its demonstrated
+scope, particularly the observation review's actual source survivors and the
+CI diagnosis that distinguished an inert instrument from missing law enforcement.
+Historical CHRON-1 remains irreversible; optional mutant-only undeclared-state
+policy remains a separate unapproved proposal. The finite synthetic grammar,
+Node/Vitest receiving boundary and absence of downstream DB/browser/performance
+claims remain unchanged.
+
+## Diagnostic representation and timeout observation follow-up
+
+This follow-up starts from `c18a30f`. Production retains SHA256
+`a1c132e8e096228e34aad07ba39c20df88facfe998e8c8e4e155ff75b213e01b`.
+These repairs change the self-oracle and its synthetic fixture. They change no
+framework behavior or accepted diagnostic promise. Latest main, including #36,
+was integrated by normal merge `3a58b96`; its gap CLI files are disjoint.
+
+The diagnostic law requires truthful authored calibration and selected-history
+identity plus the finite original callback cause. It permits representation
+changes to punctuation, structural whitespace, optional seed annotations, the
+outer wrapper's name and opaque reason prose. Literal characters within names
+remain significant. An unknown or ambiguous complete identity cannot authorize
+its own expected selection. Original cause object identity, class and metadata
+remain outside the established law.
+
+| ID                | Executed defect before repair                                                                              | General repair                                                                                                                      |
+| ----------------- | ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| R8-REPRESENTATION | Lawful bracketed calibration labels and alternative seed annotations falsely fail the callback comparison. | Decode complete actual frames against available literal identities; derive expected selection independently from authored bindings. |
+| R9-REP-SEAM       | Already-bracketed source output passes semantic checks but reports zero presentation reach.                | Count an actual rendering operation even when its output bytes equal its input.                                                     |
+| R9-REP-RANGE      | Mixed spacing, two spaces and tabs preserve identity/cause but fail decoding.                              | Generate and accept positive structural whitespace while retaining literal name characters.                                         |
+| R10-REP-REASON    | Replacing the reason's first word loses identity; category-marker prose can change the verdict.            | Locate the complete frame separator without inspecting reason words; the actual finite callback cause determines exception kind.    |
+| R11-DIAG-1        | Custom outer wrapper name plus opaque category-marker reason fails, although both marginals pass.          | Remove the arbitrary outer-name guard; generate wrapper names independently of reason and frame presentation.                       |
+
+Every group extended the primary Suite grammar/real receiving driver before
+changing its observation judgment. No production edit was needed. R10's
+unchanged-observation gate rejected four legal fixed histories while their four
+outer determinism checks passed. R11's unchanged guard rejected the combined
+history while both marginals and all three determinism checks passed: one
+intended false RED and five passes. The repaired R11 gate passes six of six.
+Required constructions vary callback and selection kinds, siblings, prefixes,
+incoming presentation and bounded arbitrary reason/wrapper text. All four
+active receivers require actual callback failure and presentation reach:
+ordinary, reordered, seedless and environment. Registration-only receivers
+retain their registration obligations without claiming callback execution.
+
+The R10 frozen matrix accepted 15,642 lawful observations and rejected 1,089
+hostile controls at 99 actual cuts. It includes literal prefixes, numeric and
+opaque labels, ambiguity, seed-like literal suffixes, arbitrary bounded reasons
+and same-byte rendering. Thirty-five focused tests passed. Six lawful actual
+source renderers passed two tests each; actual wrong sibling and missing cause
+were rejected at child/calibration, with determinism passing. R11 carried those
+matrix results only in their original `Error`-wrapper domain: removing a guard
+that was true for every original input preserves that predicate. It separately
+passed the actual custom-wrapper/opaque-reason source combination and rejected
+wrong-sibling and replacement-cause source mutants at the intended comparison.
+It did not claim to rerun the complete matrix for arbitrary wrapper names.
+
+R11's suspected absent reason dimension was refuted: the generic Suite grammar
+already supplies arbitrary reasons. A 2,000-Suite sample contained 1,381 defined
+reasons and 1,180 distinct constructed reasons. The redundant weighted-branch
+draw is now forwarded too; that cleanup is not evidence of a former absent
+whole-campaign axis. All setup failures and zero-test selectors remain excluded
+from assertion-rejection counts.
+
+The timeout law limits every registered test independently. A timed-out test
+owes no fixed completed-call count. Actual started work must retain its selected
+input and corresponding build/resolve obligations. The fixture now captures its
+logical owning test/route at Vitest's public `aroundEach` boundary through Node
+AsyncLocalStorage. The global runner name remains raw diagnostic evidence;
+advancing to another test cannot reassign an older continuation's work.
+
+| ID  | Executed defect before repair                                                                                                             | General repair                                                                                                                                 |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| T1  | Exact-head Vitest 5 CI and local Vitest 4 reject timeout-history determinism; seven differing fields concern slow call attribution/order. | Record semantic relations of actual started work and keep raw runner observations outside the deterministic trace.                             |
+| T2  | Slow isolated constructions also show resolution attribution drift.                                                                       | Group build/resolve work by logical owner. A determinism test resolves once and may drive twice; other actual executions resolve individually. |
+| T3  | A timed-out bound calibration with one actual execution is rejected for failing to complete two builds.                                   | Check selected inputs and work for actual starts; retain input consistency and upper bounds without requiring optional late work to finish.    |
+
+The extended primary grammar reproduced T1–T3 before the fixture repair. A
+global resolve-count-equals-driver-count rule was disproved by a lawful trace
+with 20 driver calls and 17 resolves. The repaired observation keeps first
+logical inputs plus missing/extra work and changed-input relations. A legal
+reporting-cut transformation removes only an optional second continuation with
+its paired work; raw-versus-cut equivalence must still hold. It cannot repair an
+invalid raw report silently.
+
+Slow late-probe counts retain a deficit/excess relation computed from complete
+raw started histories and actual known late errors. Both values must be zero.
+Fast-only late counts stay exact. Unknown and secondary errors, test statuses,
+registration, loads, exit/signal and report completeness retain their checks.
+Raw reports, global runner names and cuts remain available in diagnostic
+sidecars. A blanket slow-log filter would not satisfy these obligations.
+
+The frozen timeout gate passed 48 tests, including 20 hostile controls. Fixed
+and random required constructions each measured one hit for ordinary,
+reordered, seedless and environment input cuts, one optional-continuation cut
+and one presentation-equivalence hit. Three separate actual perturbations were
+assertion-rejected: lost logical ownership (two failures), duplicate raw resolve
+work (one calibration failure, delta two), and missing raw build work (one
+timeout-presentation failure). Types, lint and formatting passed.
+
+Chronology remains explicit: ordinary/reordered REDs preceded the fixture
+repair; seedless/environment witnesses were added afterward and establish
+current enforcement only. A registration-phase missing-build experiment reached
+no drivers. Its initial survivor classification was corrected to unreached;
+it supplies neither a defect nor a kill. This qualification does not alter
+production-repair chronology, because no production code changed here.
+
+The combined executable identities are owner SHA256
+`5b85ea79e738ea399ddd8c85ce5f55a95fa3e6dd213949e71c5f3e1f42621e5e`,
+fixture `bad74feb45d92bdd390d48b804dc671c660ab4aa40462a45983c9a75d0c175e9`,
+and unchanged production/reporter `a1c132e8`/`1918e8dc`. Three pure-addition
+merge conflicts retained both repair groups. Combined TypeScript, lint,
+formatting and diff checks pass. Combined focused checks and two independent
+final reviews are running at this entry; complete final-head validation remains
+pending. Earlier interrupted local runs are not full-suite GREEN results.
+
+These are finite synthetic and actual Node/Vitest boundary results. They make
+no DB, browser, provider, release-time or memory-performance claim. Historical
+CHRON-1, the retrospective successful-calibration stdout gate, optional stronger
+mutant-only undeclared reach and fresh calibration seeds retain their prior
+qualifications. No confirmed defect is deferred by relabeling it a limit.
+
+The exact combined owner gate passes **49/49** in 223.83 seconds, with 831
+tests registered. From `packages/oracles`, the command is:
+
+```sh
+node ../../node_modules/vitest/vitest.mjs run \
+  --config vitest.oracle-framework.config.mjs --maxWorkers=2 \
+  -t 'round11 outer wrapper|timeout every receiving cut|reject timeout|round8 callback presentation freedom|reject equal-data origin|reject.*callback'
+```
+
+This gate exercises both repair groups together, actual outer determinism,
+callback and timeout controls, and the canonical origin calibration. It is a
+focused GREEN, not a complete framework run. The final workflow runs the whole
+framework on both supported Vitest major versions. No campaign budget was
+lowered and no dependency or lockfile workaround is included.
+
+### Original review loss accounting at the combined executable tree
+
+The original review targeted `329dbd4`. All nine technical findings were valid
+there. Their current implementation dispositions are **nine already-fixed**;
+the diagnostic follow-up supplies the remaining R6 recorder enforcement. This
+table preserves each original cure and durable obligation separately.
+
+| Original item | Claim and proposed cure                                                                                                      | Current evidence and durable obligation                                                                                                                                                                |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1             | Bound mutant verdict ranking differs from unbound; reuse `runOne`.                                                           | Bound/unbound ranking shares `runOne`; recorded violation before later throw/spin and bounded-clock controls remain enforced.                                                                          |
+| 2             | Forced premise is learned from the selected driver log; reconstruct it independently.                                        | Authored selectors/origins determine both forced premises, including equal-data originals and explicit opposite orientations.                                                                          |
+| 3             | Reorder invariance misses the property-fixed-seed mutant; compare full named builds.                                         | Distinct ordinary/astral name families and complete construction inputs reject the fixed-seed substitution while allowing other stable mixers.                                                         |
+| 4             | Clean selected reach checks missing states but allows undeclared states; validate both directions.                           | Clean declaration checks cover both directions. Mutant-only undeclared reach remains a separate, unapproved stronger policy.                                                                           |
+| 5             | UTF-16 high-surrogate hashing collides for emoji names; use code points.                                                     | Code-point hashing and finite astral full-input controls distinguish the original defect without promising universal hash injectivity.                                                                 |
+| 6             | Corruption and judgment callback throws lose calibration/history names; contextualize them.                                  | Production catches preserve context/cause. Four actual receiving cuts now enforce exact authored identity and finite cause while accepting lawful representation changes.                              |
+| 7             | Explicit `entered: null` is silently inferred; infer only on `undefined`.                                                    | Omitted versus malformed controls remain distinct; null/false/zero and inherited/own binding cases retain registration-before-driver enforcement.                                                      |
+| 8             | An impossible `if (!kind)` branch remains; remove it.                                                                        | The branch is absent after exact-one-key validation; this is control-flow/build evidence, not an invented behavioral RED.                                                                              |
+| 9             | Transitional warnings repeat, collect-only warns and successful bound calibrations print announcements; deduplicate/silence. | Once-per-property warnings retain exact unbound names and registrations; collection and successful bound runs stay silent. The original announcement gate's retrospective chronology remains recorded. |
+
+Coordination is also complete: main/F27 was merged normally, `difference` has
+bound/unbound parity after designated-law selection, and main's named UNIT
+support is integrated. Fresh calibration seeds remain the explicitly separate
+follow-up. No published branch was rebased or force-pushed.
+
+The eight current follow-up IDs remain separate from the original nine:
+R8-REPRESENTATION, R9-REP-SEAM, R9-REP-RANGE, R10-REP-REASON, R11-DIAG-1 and
+T1–T3. Each has an applied oracle repair and targeted sensitivity evidence above.
+The original reviewer merits a strong hire recommendation: nine accurate
+findings, independent-judgment attacks, useful cures and sound prioritization.
+Later review results remain bounded to their recorded artifacts; full CI and
+the final fresh review reports are not implied by this accounting table.
+
+### Final independent reviews of the combined executable
+
+Both fresh R12 reviewers found **no new supported defect** on owner `5b85ea79`
+and fixture `bad74feb`. Neither changed the live tree. Their interventions were
+sequential in isolated copies, and all source/owner/fixture/reporter hashes were
+restored. The executable commit is `1fdf731`; this subsequent record-only append
+does not change those reviewed bytes.
+
+The timeout reviewer passed 24/24 final checks, including twenty permanent
+controls and the actual fixed/random required receiver units. A real delay
+change from 300 ms to 450 ms, with a 100 ms timeout, changed a reordered
+calibration from two actual started calls to one. Both shared comparison and
+outer determinism passed. An actual discarded extra `selected.build()` was
+rejected at child/calibration with build difference one, while determinism
+passed. Each campaign measured all four input receivers, continuation cut and
+presentation equivalence once. An initial all-skipped selector is retained as
+unreached, not a kill.
+
+The diagnostic reviewer passed 18/18 baseline checks, then 5/5 with actual
+source changes combining tabs/mixed spaces, bracketed labels/seed decoration,
+custom outer name and category-marker opaque reason. Both matching fixed and
+random units measured every callback-failure and presentation receiver once.
+Actual wrong sibling, wrong cause and environment-only cause omission each
+failed child/calibration while determinism passed. The restored-source gate
+passed 2/2. Its public observation hook recorded three complete children, three
+presentations and three matching identity/cause failures for each of ordinary,
+reordered, seedless and environment receivers. A failed pre-write script path
+and redundant clean run are explicitly excluded from source-variant evidence.
+
+The separate read-only final loss audit found no lost obligation: original nine
+already-fixed, eight follow-ups fixed-now, coordination already-fixed. It
+retained historical CHRON-1 and every chronology, corrected nonfinding and
+policy qualification above. Both R12 reviewers merit strong positive assessment
+within their scopes: they independently challenged actual permitted timing and
+diagnostic representations, then demonstrated intended comparison rejection
+for adjacent wrong implementations. No further confirmed repair remains in
+these bounded reviews. Complete final pushed-head CI remains required; this
+record does not promote focused results to full-suite success.
+
+## Final main integration and fresh selector review — 2026-11-12
+
+The starting published head `81391d3` merged current main through #42 as
+`d34955cbafaf21a8a427f6cc4a858cdb92b96270`, without rebase or conflicts.
+A fresh independent reviewer read the complete PR from an isolated clean
+checkout and ran five ranking/isolation/forced-control neighbors. It confirmed
+one additional P3 defect: selector registration validates one own key, while
+`in` dispatch can select an inherited construction or enumeration tag instead.
+The independent direct API matrix had 13 passes and three distinguishing
+failures: redirected own-fixed selection, and false source-kind rejection for
+own-fixed or own-constructed selectors inheriting an enumeration tag.
+
+### Original findings 2, 3 and 6
+
+A separate current-head executable recheck confirmed all three are already
+fixed. Nine focused witnesses passed. Seven actual source mutants produced
+eight intended assertion rejections: wrong forced-entered original, wrong
+forced-absent original, replacement of the name-derived calibration seed with
+the property's first fixed seed (two witnesses), corruption only of a built
+history's tail, and removal of each of the corruption, corrupted-judgment and
+mutant-driver-judgment context wrappers. Expected forced originals come from
+authored declarations. The full built-history comparison catches tail changes;
+finite ordinary and astral name families distinguish name-seed substitution
+without prescribing a hash algorithm. Callback identity and original cause
+remain enforced in ordinary, reordered, seedless and environment receivers.
+The same nine witnesses pass again with the selector repair below.
+
+### N1: own selector identity across inherited representations
+
+The accepted direct-selection law owes the authored original. Inherited
+selector tags cannot change the own selector that registration validates.
+The missing oracle dimension was selector representation, distinct from the
+already-covered fixed-declaration metadata prototype. The primary grammar now
+varies plain selectors and selectors inheriting fixed, constructed or enumerated
+tags. The fixture materializes prototypes only at the public API boundary;
+the independent model continues judging the authored own selector. Two new
+constructions cover generated and enumerated sources, authored selectors and
+both explicit forced premises, with generated incidental tails. They are
+appended so existing fixed-seed constructions retain their indices and seeds.
+Three fixed histories use that same model/driver/check: one plain neighbor
+and the two distinguishing prototype forms.
+
+Before production changed, the plain primary history passed while inherited
+construction selection failed at `child / reach` and inherited enumeration
+failed at `child / registration`. Both actual generated construction replays
+also failed on unchanged source with seed 1, path 0 and no shrinking. Initial
+membership/setup attempts and an interrupted extended shrinking run supplied
+no RED evidence and are not counted.
+
+Production now reads the validated own selector kind and value, and dispatches
+on that kind. No history selection, builder, model or judgment policy changes.
+After repair, twelve focused primary histories pass, including the new three
+and the original nine. Both exact generated replays also pass and report their
+respective new declared state reached once: **14/14** focused checks. Restoring
+the original `in` dispatch in an isolated copy again rejects both prototype
+histories at those intended comparison laws, while the plain neighbor passes.
+The isolated source is restored byte-for-byte. This is a confirmed repair of
+N1, not a skipped structural-object input or a new selector restriction.
+
+### Integration checks and remaining merge gate
+
+The exact `packages/oracles/scripts/pr-shards.mjs` partition logic passes against
+actual direct-Node `vitest list --json` output under both Vitest name joins:
+framework **843 = 340 + 503**; static gap **171 = 15 + 156**; and e2e fixed seed
+**36 = 11 + 12 + 13**. Every selected test has exactly one shard. No prior
+history, seed or run budget was removed. Local package types, changed-file
+lint, formatting and whitespace checks pass. The PR body reflects the current
+integration and does not require a rebase over F27 or describe this PR as draft.
+
+The user has also settled the historical mutant-only reach question: clean
+runs must obey declared states. A deliberately wrong driver that enters an
+undeclared state may still satisfy calibration when the check reports the
+exact designated rejection. This preserves the existing clean-run contract.
+
+The fresh review found no other supported defect. Its final repaired-head
+recheck and exact pushed-head CI remain the merge gate. This record does not
+substitute earlier green CI for that gate. DB adoption, its next dependency pin,
+PowerSync before/after timing and fresh calibration seeds remain subsequent
+work. The #7 skill update remains conditional on #7 landing.
+
+Scratch reports and raw commands are preserved in
+`/private/tmp/tanstack-db-release-recovery/pr31-merge-readiness-2026-11-12/`:
+`verification/report.md`, `independent-review/report.md`,
+`prototype-selector/report.md`, `partition-results.json`, and the lossless
+follow-up ledger. Their scope is finite synthetic Node/Vitest receiving paths;
+no DB speed improvement or downstream receiving result is claimed here.
+
+Executable SHA256 values at this repair checkpoint:
+
+- Source: `28af27ce822c71734d3dd9531d2c99e3f13f2f43576f1cd8f6942c29f6eb82c7`.
+- Owner: `6f5577267c11f203a349ef2b80ec1d6e19618a45e5bb499f2a76b4c01297fac0`.
+- Fixture: `cc2ebff5a49c8fd9b92e540d728d83dc737c457ae2cbc30bff5d98a43ec20533`.
+- Reporter: `1918e8dc028ac5113ed4999ea0989a4740d35a67d6190014744a461f03b76622`.
