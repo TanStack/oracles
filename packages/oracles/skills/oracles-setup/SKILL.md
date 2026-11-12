@@ -467,6 +467,13 @@ is not Vite's default name. The baseline prints which config it used.
   Do what the `fix:` line says, then run again. **3:** an internal error, "a
   bug in oracle-gaps", with the stack in `<out>/error.log`. Report it as a CLI
   bug with that file, and do not change the oracle to get around it.
+- A gap can also be a gap-check bug: the check reports a change as unnoticed,
+  but the same change applied by hand to a copy makes the oracle fail, or
+  the report shows it never ran (0 s, "unchanged"). Show the developer the
+  evidence. If they agree, record it with that evidence in
+  `oracles-feedback.md` while the package is in preview (or report it to the
+  maintainers), and go on. Do not rewrite production or the oracle to make it
+  go away.
 
 Run it after the oracle passes on production. Each gap in the report comes
 with one instruction. Follow

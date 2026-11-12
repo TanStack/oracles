@@ -512,6 +512,13 @@ approved, and run the oracle again on the unchanged code:
 - If closing the gap needs a rule that no approved law states, that is a
   design question. Bring it to the developer.
 - If the oracle passes and the gap is closed, go on to the next one.
+- If the gap looks like a bug in the gap check itself, show the developer
+  the evidence. For example, the check reports a change as unnoticed, but
+  the same change applied by hand to a copy of the code makes the oracle
+  fail; or the report shows the change never ran (0 s, "unchanged"). If they
+  agree it is a gap-check bug, write it in `oracles-feedback.md` with that
+  evidence, so the framework can fix it, and go on. Do not rewrite
+  production or weaken the oracle to make it go away.
 
 Group the gaps by function, and tell the developer what you are doing as
 you go. After each answer, keep closing gaps: stop only for the developer's
