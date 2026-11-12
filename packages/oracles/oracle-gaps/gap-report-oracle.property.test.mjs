@@ -168,9 +168,21 @@
  *    would judge such a verdict, is not built.) A copy that a batch skipped
  *    because an earlier copy killed the mutant runs again, through the batch,
  *    only while no kill is in hand, so every mutant gets an outcome and no
- *    other missing unit is rerun. A mutant that no owner test fails is a
- *    survivor: a `not-judged` when an owner test's observation or asserted
- *    value changed, a `branch-never-taken` when an `if` on its line never took
+ *    other missing unit is rerun. A test's work is the number of site
+ *    evaluations that its instrumented production code made (the capture's
+ *    call count, never a time): a call statement, a call whose value is
+ *    used, a comparison, an `if`, each pass of a loop's condition. A
+ *    passing, deterministic owner test that registers a work bound beside
+ *    its route (`__oracleWorkBound`, which `oracleProperty`'s `work`
+ *    option calls) and whose work under the mutant is more than that ratio
+ *    of its unmutated work fails the mutant under law `work bound` on its
+ *    route, as a law verdict does (maintainer decision, 2026-11-12: a
+ *    shortcut for speed is owed a cost law). A mutant that no owner test
+ *    fails is a survivor: a `not-judged` when an owner test's observation
+ *    or asserted value changed, an `extra-work` when no observation changed
+ *    and an owner test that reached it, on a route that judges production,
+ *    did more work (a shortcut whose deletion only costs time), a
+ *    `branch-never-taken` when an `if` on its line never took
  *    one of its outcomes in an owner test, a `not-infected` when a comparison's
  *    operators agreed on every operand an owner test reached, a
  *    `not-distinguished` when its operator changes a value only on some
@@ -822,7 +834,7 @@ function namedScratch(text, names) {
 // A gap line the CLI streams to stderr as its mutant is judged (stream.mjs):
 // its class, its line, and its id.
 const streamedGap =
-  /^(?:not-judged|indeterminate|dead-code|outside-annotation|branch-never-taken|not-infected|not-observed|not-distinguished|unreached|random-only-kill|agreement-only-kill|unregistered-kill|framework-error|timeout|setup-error|crashed|does-not-apply|blocked) L(?:\d+|\?) (\S+) /
+  /^(?:not-judged|extra-work|indeterminate|dead-code|outside-annotation|branch-never-taken|not-infected|not-observed|not-distinguished|unreached|random-only-kill|agreement-only-kill|unregistered-kill|framework-error|timeout|setup-error|crashed|does-not-apply|blocked) L(?:\d+|\?) (\S+) /
 
 function readRun(dir, out, status, stderr, cli, stdout) {
   // The output names the CLI directory that ran and the package, as scratch
@@ -1649,6 +1661,9 @@ async function driver(plan, observe) {
       }[m.outcome]
       if (named) states.add(named)
       if (m.class === `not-judged`) states.add(`not judged`)
+      if (m.class === `extra-work`) states.add(`extra work`)
+      if (m.outcome === `killed` && m.laws?.includes(`work bound`))
+        states.add(`killed by a work bound`)
       if (m.class === `branch-never-taken`) states.add(`branch never taken`)
       if (m.class === `not-infected`) states.add(`not infected`)
       if (m.class === `not-observed`) states.add(`not observed`)
@@ -2486,6 +2501,8 @@ const required = [
   `framework-only failure`,
   `indeterminate`,
   `not judged`,
+  `extra work`,
+  `killed by a work bound`,
   `branch never taken`,
   `not infected`,
   `not observed`,

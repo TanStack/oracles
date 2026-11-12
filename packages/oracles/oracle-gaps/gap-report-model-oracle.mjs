@@ -405,6 +405,9 @@ const testCase = fc.record({
     fc.record({ route: fc.constantFrom(...routes), input: constant }),
     { nil: null },
   ),
+  // A test may declare a work bound, as an oracle property's `work` does:
+  // a ratio of 1 rejects a mutant that does any more work there.
+  work: fc.constantFrom(null, null, null, 1),
 })
 // Law 9's edits. Each content edit changes what some evidence depends on:
 // a test file, a source statement, the source's line numbers, an owns list,
@@ -810,6 +813,7 @@ const judging = (file, route, input, extra = {}) => ({
   asProp: false,
   stops: false,
   then: null,
+  work: null,
   ...extra,
 })
 const witness = [
@@ -901,6 +905,59 @@ const witness = [
     owners: [`a`],
     body: [{ kind: `memoSet`, label: 21 }],
     tests: [judging(`a`, `fixed seed`, 4)],
+  },
+  // A cache that an earlier test of the file warmed: `w_unseen`'s test
+  // caches under 4 first, so in the whole file `w_cold`'s write is
+  // skipped. A run of the tests from `w_cold`'s on, without the one that
+  // warmed the cache, observes the same and does one call more, so the
+  // runner owes a selection only where it reproduces the whole file's work
+  // as well as its observations. Its `drop-not` mutant writes again in the
+  // whole file (`extra-work`), and writes nothing in such a selection.
+  {
+    id: `w_cold`,
+    owners: [`a`],
+    warm: true,
+    body: [{ kind: `memoSet` }],
+    tests: [judging(`a`, `fixed seed`, 4)],
+  },
+  // Shortcuts for speed (klona's early return for a primitive, and its
+  // assignment in place of `Object.defineProperty`): the general path gives
+  // the same output for every input, with more work, so forcing the
+  // shortcut's `if` false changes no observation and costs work
+  // (`extra-work`). Each has a twin whose tests declare a work bound, which
+  // kills that mutant under law `work bound`: 2 for the early return, whose
+  // loop costs several times the shortcut, and 1 for the call, which costs
+  // one site evaluation more. Their inputs are 7, which takes the shortcut,
+  // and 1, which takes the general path.
+  {
+    id: `w_fast`,
+    owners: [`a`],
+    body: [{ kind: `shortcut`, op: `>`, k: 2, not: false }],
+    tests: [judging(`a`, `fixed seed`, 7), judging(`a`, `fixed seed`, 1)],
+  },
+  {
+    id: `w_fastbound`,
+    owners: [`a`],
+    body: [{ kind: `shortcut`, op: `>`, k: 2, not: false }],
+    tests: [
+      judging(`a`, `fixed seed`, 7, { work: 2 }),
+      judging(`a`, `fixed seed`, 1, { work: 2 }),
+    ],
+  },
+  {
+    id: `w_fastcall`,
+    owners: [`a`],
+    body: [{ kind: `callShortcut`, op: `>`, k: 2, not: false }],
+    tests: [judging(`a`, `fixed seed`, 7), judging(`a`, `fixed seed`, 1)],
+  },
+  {
+    id: `w_fastcallbound`,
+    owners: [`a`],
+    body: [{ kind: `callShortcut`, op: `>`, k: 2, not: false }],
+    tests: [
+      judging(`a`, `fixed seed`, 7, { work: 1 }),
+      judging(`a`, `fixed seed`, 1, { work: 1 }),
+    ],
   },
   {
     id: `w_noobs`,
@@ -1620,6 +1677,11 @@ const captureWitness = new Set([
   `w_observe`,
   `w_expect`,
   `w_unseen`,
+  `w_cold`,
+  `w_fast`,
+  `w_fastbound`,
+  `w_fastcall`,
+  `w_fastcallbound`,
   `w_noobs`,
   `w_unreached`,
   `w_ordinary`,
@@ -1872,6 +1934,21 @@ function renderStatement(stmt, callText) {
       ]
     case `elseIf`:
       return [`if (${condText(stmt)}) report();`, `else ${pushText(stmt)}`]
+    case `shortcut`:
+      return [
+        `if (${condText(stmt)}) {`,
+        `  out.push('s' + x);`,
+        `  return;`,
+        `}`,
+        `let n${stmt.label} = 0;`,
+        `while (n${stmt.label} < x) n${stmt.label} += 1;`,
+        `out.push('s' + n${stmt.label});`,
+      ]
+    case `callShortcut`:
+      return [
+        `if (${condText(stmt)}) out.push('s' + x);`,
+        `else out.push(String('s' + x));`,
+      ]
     case `pair`:
       return [
         `const pair = { get: (k: number): string => String(k), set: (k: number): string => String(k + 1) };`,
@@ -3085,6 +3162,30 @@ function sitesOf(plan) {
         })
         guard(fn.id, stmt.line + 2, `'gap#p${stmt.label}'`, `true`)
       }
+      // The shortcut's `if` (its whole block is the statement that holds
+      // its sites), its push, then the loop's condition and comparison, and
+      // the push after the loop, each in the statement that holds it.
+      if (stmt.kind === `shortcut`) {
+        const block = stmt.lines.slice(0, 4).join(` `)
+        at(`if-true`, `true`, stmt.line, block)
+        at(`if-false`, `false`, stmt.line, block)
+        at(`binary-swap`, `swap`, stmt.line, block)
+        at(`delete-call`, `fast`, stmt.line + 1, stmt.lines[1])
+        at(`loop-false`, `loop`, stmt.line + 5, stmt.lines[5])
+        at(`binary-swap`, `loopSwap`, stmt.line + 5, stmt.lines[5])
+        at(`delete-call`, `push`, stmt.line + 6, stmt.lines[6])
+      }
+      if (stmt.kind === `callShortcut`) {
+        condition()
+        at(`delete-call`, `fast`, stmt.line, `out.push('s' + x);`)
+        at(`delete-call`, `push`, stmt.line + 1, `out.push(String('s' + x));`)
+        at(
+          `value-undefined`,
+          `string`,
+          stmt.line + 1,
+          `out.push(String('s' + x));`,
+        )
+      }
       if (stmt.kind === `elseIf`) {
         // An `if` with a production `else` is production; its probe branch
         // alone is probe-only.
@@ -3261,6 +3362,13 @@ function ownersOf(plan) {
 function interpret(plan, fnId, x, sites, active) {
   const trace = []
   const reached = new Set()
+  // The run's work: one for each site evaluation, as the capture counts a
+  // test's `calls` (capture-setup.mjs), which a work bound judges.
+  let work = 0
+  const reach = (id) => {
+    work += 1
+    reached.add(id)
+  }
   const outcomes = []
   // The comparison sites whose two operators disagree on the operands this
   // run reached: the sites an unmutated run infects (capture-setup.mjs `cmp`).
@@ -3272,7 +3380,7 @@ function interpret(plan, fnId, x, sites, active) {
     site !== undefined && active?.site !== undefined && active.site === site.id
   const condition = (stmt) => {
     for (const role of [`true`, `false`, `not`, `swap`])
-      if (siteOf(stmt, role)) reached.add(siteOf(stmt, role).id)
+      if (siteOf(stmt, role)) reach(siteOf(stmt, role).id)
     const op = stmt.kind === `throwIf` ? `>` : stmt.op
     const k = stmt.kind === `throwIf` ? 100 : stmt.k
     const swap = siteOf(stmt, `swap`)
@@ -3292,7 +3400,7 @@ function interpret(plan, fnId, x, sites, active) {
   }
   const write = (stmt) => {
     const site = siteOf(stmt, `push`)
-    reached.add(site.id)
+    reach(site.id)
     if (isActive(site)) return
     trace.push(
       active?.authored === stmt.label ? `s${stmt.label}!` : `s${stmt.label}`,
@@ -3301,8 +3409,13 @@ function interpret(plan, fnId, x, sites, active) {
   const depLog = []
   // Module state as a freshly loaded module has it: an empty cache, and
   // the labels `w_load` wrote at load, under the same mutant.
-  const memo = new Map()
+  // A function that runs after an earlier test of its file cached its
+  // input (`w_cold`) finds the entry there.
+  const memo = new Map(
+    plan.functions.find((f) => f.id === fnId)?.warm ? [[x, `warm`]] : [],
+  )
   const loaded = () => {
+    // The module loaded outside any test, so its load counts no work.
     const call = sites.find((s) => s.role === `moduleLoad`)
     if (call) reached.add(call.id)
     if (isActive(call)) return []
@@ -3319,10 +3432,10 @@ function interpret(plan, fnId, x, sites, active) {
       if (stmt.kind === `loop`)
         for (let i = 0; ; i += 1) {
           const loopSite = siteOf(stmt, `loop`)
-          reached.add(loopSite.id)
+          reach(loopSite.id)
           if (isActive(loopSite)) break
           const swapSite = siteOf(stmt, `swap`)
-          reached.add(swapSite.id)
+          reach(swapSite.id)
           if (i === 2) infected.add(swapSite.id)
           if (!(isActive(swapSite) ? i <= 2 : i < 2)) break
           write(stmt)
@@ -3333,15 +3446,15 @@ function interpret(plan, fnId, x, sites, active) {
       if (stmt.kind === `until`) {
         const loopSite = siteOf(stmt, `loop`)
         for (;;) {
-          reached.add(loopSite.id)
+          reach(loopSite.id)
           if (isActive(loopSite)) break
           const swapSite = siteOf(stmt, `swap`)
-          reached.add(swapSite.id)
+          reach(swapSite.id)
           if (trace.length === 3) infected.add(swapSite.id)
           if (!(isActive(swapSite) ? trace.length <= 3 : trace.length < 3))
             break
           if (isActive(siteOf(stmt, `push`))) {
-            reached.add(siteOf(stmt, `push`).id)
+            reach(siteOf(stmt, `push`).id)
             throw new Spin()
           }
           write(stmt)
@@ -3350,15 +3463,15 @@ function interpret(plan, fnId, x, sites, active) {
       // The workspace dependency's log, as a freshly loaded module has it.
       if (stmt.kind === `depNote`) {
         const call = siteOf(stmt, `note`)
-        reached.add(call.id)
+        reach(call.id)
         if (!isActive(call)) depLog.push(`d`)
       }
       if (stmt.kind === `depSeen`) {
         const call = siteOf(stmt, `push`)
-        reached.add(call.id)
+        reach(call.id)
         if (!isActive(call)) {
           const seenSite = siteOf(stmt, `seen`)
-          reached.add(seenSite.id)
+          reach(seenSite.id)
           // Spreading undefined throws.
           if (isActive(seenSite)) throw new TypeError(`seen() is undefined`)
           trace.push(...depLog)
@@ -3367,22 +3480,22 @@ function interpret(plan, fnId, x, sites, active) {
       if (stmt.kind === `record`) {
         // A deleted push builds nothing; a dropped field never evaluates.
         const call = siteOf(stmt, `push`)
-        reached.add(call.id)
+        reach(call.id)
         if (!isActive(call)) {
           const string = siteOf(stmt, `string`)
-          reached.add(string.id)
+          reach(string.id)
           if (isActive(string)) trace.push(undefined)
           else {
             const record = {}
             const dropN = siteOf(stmt, `dropN`)
-            reached.add(dropN.id)
+            reach(dropN.id)
             if (!isActive(dropN)) {
               const arith = siteOf(stmt, `arith`)
-              reached.add(arith.id)
+              reach(arith.id)
               record.n = isActive(arith) ? x - 1 : x + 1
             }
             const dropS = siteOf(stmt, `dropS`)
-            reached.add(dropS.id)
+            reach(dropS.id)
             if (!isActive(dropS)) record.s = `s${stmt.label}`
             trace.push(JSON.stringify(record))
           }
@@ -3391,22 +3504,22 @@ function interpret(plan, fnId, x, sites, active) {
       if (stmt.kind === `flag`) {
         // A deleted push never evaluates its literal.
         const call = siteOf(stmt, `push`)
-        reached.add(call.id)
+        reach(call.id)
         if (!isActive(call)) {
           // `String(...)` replaced by undefined never evaluates its literal.
           const string = siteOf(stmt, `string`)
-          reached.add(string.id)
+          reach(string.id)
           if (isActive(string)) trace.push(undefined)
           else {
             const flip = siteOf(stmt, `flag`)
-            reached.add(flip.id)
+            reach(flip.id)
             trace.push(String(isActive(flip) ? !stmt.value : stmt.value))
           }
         }
       }
       if (stmt.kind === `memoSet`) {
         for (const role of [`true`, `false`, `not`, `has`])
-          reached.add(siteOf(stmt, role).id)
+          reach(siteOf(stmt, role).id)
         let value = !(isActive(siteOf(stmt, `has`)) ? undefined : memo.has(x))
         if (isActive(siteOf(stmt, `not`))) value = !value
         outcomes.push([stmt.line, value])
@@ -3419,22 +3532,22 @@ function interpret(plan, fnId, x, sites, active) {
         if (isActive(siteOf(stmt, `false`))) value = false
         if (value) {
           const set = siteOf(stmt, `memoSet`)
-          reached.add(set.id)
+          reach(set.id)
           if (!isActive(set)) memo.set(x, `s${stmt.label}`)
         }
       }
       if (stmt.kind === `memoGet` || stmt.kind === `pushLoaded`) {
         const site = siteOf(stmt, stmt.kind)
-        reached.add(site.id)
+        reach(site.id)
         if (!isActive(site) && stmt.kind === `pushLoaded`)
           trace.push(...loaded())
         if (!isActive(site) && stmt.kind === `memoGet`) {
           const string = siteOf(stmt, `string`)
-          reached.add(string.id)
+          reach(string.id)
           if (isActive(string)) trace.push(undefined)
           else {
             const get = siteOf(stmt, `get`)
-            reached.add(get.id)
+            reach(get.id)
             trace.push(String(isActive(get) ? undefined : memo.get(x)))
           }
         }
@@ -3443,30 +3556,29 @@ function interpret(plan, fnId, x, sites, active) {
       // only then. A plain read in place of `?.` throws on no object.
       if (stmt.kind === `optional`) {
         const drop = siteOf(stmt, `dropV`)
-        if (x) reached.add(drop.id)
+        if (x) reach(drop.id)
         const made = x
           ? isActive(drop)
             ? {}
             : { v: `p${stmt.label}` }
           : undefined
         const site = siteOf(stmt, `push`)
-        reached.add(site.id)
+        reach(site.id)
         if (!isActive(site)) {
           const chain = siteOf(stmt, `chain`)
-          reached.add(chain.id)
+          reach(chain.id)
           if (isActive(chain) && made === undefined)
             throw new TypeError(`Cannot read properties of undefined`)
           trace.push(String(made?.v))
         }
       }
-      if (stmt.kind === `innerReturned`)
-        reached.add(siteOf(stmt, `returned`).id)
+      if (stmt.kind === `innerReturned`) reach(siteOf(stmt, `returned`).id)
       // A read of module data, as the module evaluated it at load under the
       // same mutant: a dropped field reads undefined, the swapped `+` gives
       // 1, and the flipped literal false.
       if (stmt.kind === `readData`) {
         const site = siteOf(stmt, `push`)
-        reached.add(site.id)
+        reach(site.id)
         if (!isActive(site)) {
           const at = (role) =>
             isActive(
@@ -3475,14 +3587,14 @@ function interpret(plan, fnId, x, sites, active) {
           // A method's call: undefined in its place, or its `1 + 2`.
           const called = () => {
             const value = siteOf(stmt, `value`)
-            reached.add(value.id)
+            reach(value.id)
             if (isActive(value)) return `undefined`
             // Its `return`: undefined in place of what it returns.
             const returned = sites.find((s) => s.role === `usedReturn`)
-            reached.add(returned.id)
+            reach(returned.id)
             if (isActive(returned)) return `undefined`
             const arith = sites.find((s) => s.role === `usedArith`)
-            reached.add(arith.id)
+            reach(arith.id)
             return String(isActive(arith) ? -1 : 3)
           }
           trace.push(
@@ -3498,16 +3610,16 @@ function interpret(plan, fnId, x, sites, active) {
       }
       if (stmt.kind === `pushTag`) {
         const site = siteOf(stmt, `push`)
-        reached.add(site.id)
+        reach(site.id)
         if (!isActive(site)) trace.push(object.tag)
       }
       // `out.push($derived(x))`, where `$derived` returns `String(x)`.
       if (stmt.kind === `dollar`) {
         const call = siteOf(stmt, `push`)
-        reached.add(call.id)
+        reach(call.id)
         if (!isActive(call)) {
           const value = siteOf(stmt, `value`)
-          reached.add(value.id)
+          reach(value.id)
           if (isActive(value)) trace.push(undefined)
           else {
             const [inner] = plan.functions.find((f) => f.id === `$derived`).body
@@ -3516,8 +3628,8 @@ function interpret(plan, fnId, x, sites, active) {
             // reached when `$derived` runs, and either gives `undefined`.
             const string = siteOf(inner, `string`)
             const returned = siteOf(inner, `returned`)
-            reached.add(string.id)
-            reached.add(returned.id)
+            reach(string.id)
+            reach(returned.id)
             trace.push(
               isActive(string) || isActive(returned) ? undefined : String(x),
             )
@@ -3529,14 +3641,55 @@ function interpret(plan, fnId, x, sites, active) {
       // is installed, so none of it writes output.
       if (stmt.kind === `nearProbe`)
         for (const site of sites)
-          if (site.stmt === stmt.label && !site.idle) reached.add(site.id)
+          if (site.stmt === stmt.label && !site.idle) reach(site.id)
       if (stmt.kind === `primeCall`) {
         const site = siteOf(stmt, `call`)
-        reached.add(site.id)
+        reach(site.id)
         if (!isActive(site)) run(`W7.prime`, object)
       }
       if ((stmt.kind === `if` || stmt.kind === `mixed`) && condition(stmt))
         write(stmt)
+      // A shortcut for speed: an early return that pushes what the loop
+      // below it would count up to, for every input it takes.
+      if (stmt.kind === `shortcut`) {
+        if (condition(stmt)) {
+          const fast = siteOf(stmt, `fast`)
+          reach(fast.id)
+          if (!isActive(fast)) trace.push(`s${x}`)
+          return
+        }
+        let n = 0
+        const loopSite = siteOf(stmt, `loop`)
+        const swapSite = siteOf(stmt, `loopSwap`)
+        for (;;) {
+          reach(loopSite.id)
+          if (isActive(loopSite)) break
+          reach(swapSite.id)
+          if (n === x) infected.add(swapSite.id)
+          if (!(isActive(swapSite) ? n <= x : n < x)) break
+          n += 1
+        }
+        const push = siteOf(stmt, `push`)
+        reach(push.id)
+        if (!isActive(push)) trace.push(`s${n}`)
+      }
+      // A shortcut that skips a call: the `else` pushes the same text
+      // through `String`, one call more.
+      if (stmt.kind === `callShortcut`) {
+        if (condition(stmt)) {
+          const fast = siteOf(stmt, `fast`)
+          reach(fast.id)
+          if (!isActive(fast)) trace.push(`s${x}`)
+        } else {
+          const push = siteOf(stmt, `push`)
+          reach(push.id)
+          if (!isActive(push)) {
+            const string = siteOf(stmt, `string`)
+            reach(string.id)
+            trace.push(isActive(string) ? undefined : `s${x}`)
+          }
+        }
+      }
       if (stmt.kind === `elseIf` && !condition(stmt)) write(stmt)
       if (stmt.kind === `probeIf` || stmt.kind === `probeBlock`) condition(stmt)
       if (stmt.kind === `throwIf` && condition(stmt)) throw new Error(`boom`)
@@ -3551,11 +3704,11 @@ function interpret(plan, fnId, x, sites, active) {
           `oldNe`,
           `oldCall`,
         ])
-          reached.add(siteOf(stmt, role).id)
-        reached.add(sites.find((s) => s.role === `devBuild`).id)
+          reach(siteOf(stmt, role).id)
+        reach(sites.find((s) => s.role === `devBuild`).id)
         // Its `return`, whose undefined value leaves the probe uncalled, and
         // no output changes.
-        reached.add(sites.find((s) => s.role === `devBuildReturn`).id)
+        reach(sites.find((s) => s.role === `devBuildReturn`).id)
         outcomes.push([stmt.line, true])
         // The guard is true, so its if-false site changes it; and its `!==`
         // compares 'test' with 'production', on which `!==` and `===`
@@ -3565,7 +3718,7 @@ function interpret(plan, fnId, x, sites, active) {
       }
       if (referenceKinds.has(stmt.kind) || stmt.kind === `mixedHelperCall`) {
         const site = siteOf(stmt, `call`)
-        reached.add(site.id)
+        reach(site.id)
         if (isActive(site)) continue
         if (stmt.kind === `valueCall` || stmt.kind === `factoryCall`) {
           // `apply` calls the function it was given; `make` constructs the
@@ -3574,7 +3727,7 @@ function interpret(plan, fnId, x, sites, active) {
             (s) =>
               s.role === (stmt.kind === `valueCall` ? `applyCall` : `makeCall`),
           )
-          reached.add(inner.id)
+          reach(inner.id)
           if (isActive(inner)) continue
         }
         if (stmt.kind === `newCall`) {
@@ -3585,7 +3738,7 @@ function interpret(plan, fnId, x, sites, active) {
           run(stmt.to, object)
         } else if (stmt.kind !== `mixedHelperCall`) run(stmt.to)
         else {
-          reached.add(helperPush.id)
+          reach(helperPush.id)
           if (!isActive(helperPush)) trace.push(`h`)
         }
       }
@@ -3599,7 +3752,7 @@ function interpret(plan, fnId, x, sites, active) {
     if (error instanceof Spin) spun = true
     else threw = true
   }
-  return { trace, threw, spun, reached, outcomes, infected }
+  return { trace, threw, spun, reached, outcomes, infected, work }
 }
 
 /** A loop that never ends, as the interpreter sees one. */
@@ -3622,9 +3775,18 @@ function runsOf(plan, tests, sites, active) {
       let changedAny = false
       let slowed = false
       const found = []
+      // The test's work, summed over its campaigns, with no mutant active and
+      // under the mutant. A test that only reads what an earlier test stored
+      // calls no production code, so it does none.
+      let before = 0
+      let after = 0
       for (const part of partsOf(t)) {
         const base = interpret(plan, t.fn, part.input, sites)
         const mutated = interpret(plan, t.fn, part.input, sites, active)
+        if (!t.judgesShared) {
+          before += base.work
+          after += mutated.work
+        }
         const route = routeOf(t, part)
         // A loop that never ends cuts the file's run off, as a hang does.
         if (mutated.spun)
@@ -3654,12 +3816,28 @@ function runsOf(plan, tests, sites, active) {
             return { t, route, verdicts: found, changed: true, slowed }
         }
       }
+      // A test that passed: its route is the last one it registered, and
+      // its work is judged against the bound it declared. An authored
+      // mutant's copy is not instrumented, so it counts no work, and the
+      // work law judges only operator mutants.
+      const route = routeOf(t, partsOf(t).at(-1))
+      const judgesWork =
+        found.length === 0 &&
+        active?.site !== undefined &&
+        route !== `framework`
       return {
         t,
-        route: routeOf(t, partsOf(t).at(-1)),
-        verdicts: found,
+        route,
+        verdicts:
+          judgesWork &&
+          t.work !== null &&
+          t.registered &&
+          after > t.work * before
+            ? [{ route, law: `work bound` }]
+            : found,
         changed: changedAny,
         slowed,
+        rose: judgesWork && after > before,
       }
     })
 }
@@ -3963,6 +4141,11 @@ function model(plan) {
     if (reaching.every((t) => t.flaky)) return `indeterminate`
     const kind = judge(plan, tests, sites, { site: site.id })
     if (kind !== `survived`) return kind
+    // A test that reached it did more work, though nothing it observed
+    // changed: the mutant deleted a shortcut for speed (maintainer decision,
+    // 2026-11-12), which only a work bound sees.
+    if (runsOf(plan, reaching, sites, { site: site.id }).some((r) => r.rose))
+      return `extra-work`
     // The survivor classes (classify.mjs): an `if` whose line one outcome
     // never took, a comparison no owner test infected, and otherwise an
     // infected site that no observation shows.
@@ -4014,6 +4197,7 @@ function model(plan) {
   }
   const survivorKinds = new Set([
     `not-judged`,
+    `extra-work`,
     `branch-never-taken`,
     `not-infected`,
     `not-observed`,
@@ -4223,7 +4407,7 @@ function oracleTestFile(plan, file) {
     `const shared = { value: 0 }`,
     `const stored: { value: Array<string> } = { value: [] }`,
     ...owns,
-    `const g = globalThis as { __oracleRoute?: (route: string) => void; __oracleObserve?: (c: string, v: unknown) => void; __oracleVerdict?: (v: { property: string; law: string; checkpoint: string }) => void }`,
+    `const g = globalThis as { __oracleRoute?: (route: string) => void; __oracleObserve?: (c: string, v: unknown) => void; __oracleVerdict?: (v: { property: string; law: string; checkpoint: string }) => void; __oracleWorkBound?: (ratio: number) => void }`,
     ...(plan.pragma && file === `a`
       ? [
           `if ((globalThis as { __gapEnvironment?: string }).__gapEnvironment !== 'marked') throw new Error('the file ran outside the environment its pragma names')`,
@@ -4253,6 +4437,10 @@ function oracleTestFile(plan, file) {
       const out = `out${i}`
       return [
         ...(t.registered ? [`    g.__oracleRoute?.('${part.route}')`] : []),
+        // The framework registers a work bound beside the route.
+        ...(t.registered && t.work !== null
+          ? [`    g.__oracleWorkBound?.(${t.work})`]
+          : []),
         `    const ${out}: Array<string> = []`,
         ...(t.setsShared ? [`    shared.value = 5`] : []),
         t.readsShared
