@@ -521,7 +521,13 @@ const histories = fc.record({
   tests: fc.array(testCase, { minLength: 1, maxLength: 5 }),
   // The witness module: all of it, or only the functions whose outcomes
   // need real test runs (see `captureWitness`).
-  witness: fc.constantFrom(false, true, `capture`, `budget`),
+  // The budget witness alone (`budget`) costs two 10 s confirmations per
+  // mutant in every CLI run of a history, so generated histories rarely
+  // draw it; its constructed history (the daemon recheck) always does.
+  witness: fc.oneof(
+    { weight: 30, arbitrary: fc.constantFrom(false, true, `capture`) },
+    { weight: 1, arbitrary: fc.constant(`budget`) },
+  ),
   authored: fc.option(
     fc.record({
       stmt: fc.nat({ max: 20 }),
