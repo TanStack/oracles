@@ -17,7 +17,9 @@
 //                                                          pattern
 //
 // A pattern matches a test's full name, its suite's name and its own,
-// joined as Vitest 4 joins them (a space) or as Vitest 5 does (` > `).
+// joined as Vitest 4 joins them (a space) or as Vitest 5 does (` > `). A
+// space followed by `> ` is no separator: otherwise a negative lookahead
+// after it would pass on the `> ` of a Vitest 5 name and select every test.
 import { spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -95,7 +97,7 @@ export function patternOf(name, shard) {
         )
         .join(`, `)}`,
     )
-  return `^${escape(partition.suite)}(?: | > )(?:${bodyOf(partition, shard)})$`
+  return `^${escape(partition.suite)}(?: > | (?!> ))(?:${bodyOf(partition, shard)})$`
 }
 
 /**
@@ -116,14 +118,19 @@ export function partitionErrors(name, listed) {
     // `vitest list` joins the names with ` > `; Vitest 4's `-t` reads them
     // joined with a space, so a pattern must select the test both ways.
     const joined = [full, full.replace(/ > /, ` `)]
+    // A shard that selects either join owns the test, and it must select
+    // both: in each Vitest version, exactly one shard runs the test.
     const owners = patterns.filter(({ pattern }) =>
-      joined.every((text) => pattern.test(text)),
+      joined.some((text) => pattern.test(text)),
     )
+    const whole =
+      owners.length === 1 &&
+      joined.every((text) => owners[0].pattern.test(text))
     const own = full.startsWith(prefix) ? full.slice(prefix.length) : undefined
     const selected = own !== undefined && own.startsWith(partition.select)
-    if (selected && owners.length !== 1)
+    if (selected && !whole)
       errors.push(
-        `${JSON.stringify(full)} is in ${owners.length === 0 ? `no shard` : `shards ${owners.map(({ shard }) => shard).join(`, `)}`}`,
+        `${JSON.stringify(full)} is in ${owners.length === 0 ? `no shard` : owners.length === 1 ? `shard ${owners[0].shard} under only one of Vitest's name joins` : `shards ${owners.map(({ shard }) => shard).join(`, `)}`}`,
       )
     if (!selected && owners.length > 0)
       errors.push(`${JSON.stringify(full)} is not selected, but is in a shard`)
