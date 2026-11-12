@@ -2446,7 +2446,6 @@ oracleProperty({
           stability: `none`,
           steps: [`recheck`],
           budget: `two`,
-          stopRuns: [],
         }),
       },
       {
