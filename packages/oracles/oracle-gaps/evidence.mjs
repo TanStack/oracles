@@ -12,7 +12,24 @@ import {
   renameSync,
   writeFileSync,
 } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+
+// A package's key: its real path, which names the repository checkout too.
+const keyOf = (pkg) => createHash(`sha1`).update(pkg).digest(`hex`).slice(0, 12)
+/** The socket of a package's daemon. A socket path must stay short. */
+export const socketOf = (pkg) =>
+  join(tmpdir(), `oracle-gaps-${keyOf(pkg)}.sock`)
+/**
+ * A package's state: the daemon's lock, log, and evidence, the workspace
+ * dependencies' one-file bundles, and the default output directories. It is
+ * in the OS temp directory, which the OS cleans, keyed by the package, never
+ * in the repository (maintainer decision, 2026-11-11) and never a shared
+ * directory (the v20 freeze's namespacing decision). A state the OS removed
+ * is a cold start.
+ */
+export const stateDirOf = (pkg) => join(tmpdir(), `oracle-gaps-${keyOf(pkg)}`)
 
 // A run keeps a few versions, newest first, each under the inputs it read,
 // as a build system keeps several verifying traces: an edit and its undo

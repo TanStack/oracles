@@ -11,7 +11,7 @@ import { randomBytes } from 'node:crypto'
 import { availableParallelism } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { loadAuthored } from './authored.mjs'
-import { stateDirOf } from './daemon.mjs'
+import { stateDirOf } from './evidence.mjs'
 import { Refusal } from './ending.mjs'
 
 const flags = new Set([`daemon`, `stop-daemon`, `ordinary`, `help`])

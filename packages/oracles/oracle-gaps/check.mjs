@@ -52,8 +52,8 @@ import {
   testNamesOf,
 } from './stream.mjs'
 import { analyze, isRunnerCopy } from './analysis.mjs'
-import { stateDirOf } from './daemon.mjs'
 import { Refusal } from './ending.mjs'
+import { stateDirOf } from './evidence.mjs'
 import {
   baselineOf,
   blockedOr,
