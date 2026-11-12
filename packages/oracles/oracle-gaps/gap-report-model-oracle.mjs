@@ -1569,7 +1569,6 @@ const captureWitness = new Set([
   `w_flakykill`,
   `w_crosskill`,
   `w_slowkill`,
-  `w_slowpair`,
   `w_stop`,
   `w_otherinfect`,
   `w_shrink`,
@@ -2202,7 +2201,9 @@ function resolveHistory(history) {
       ? witness
           .filter(
             (w) =>
-              history.witness === true ||
+              // The budget witness costs two 10 s confirmations per mutant,
+              // so only histories of the `budget` mode carry it.
+              (history.witness === true && w.id !== `w_slowpair`) ||
               (history.witness === `capture` && captureWitness.has(w.id)) ||
               (history.witness === `budget` && w.id === `w_slowpair`),
           )
