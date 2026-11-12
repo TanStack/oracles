@@ -827,8 +827,13 @@ export function oracleProperty<THistory, TExpected, TPlan = THistory>(
     throw new Error(
       `${id}: \`owns\` must be a non-empty literal list of strings, which the gap report reads statically.`,
     )
-  // A ratio below 1 would reject a mutant that does no more work.
-  if (work !== undefined && !(Number.isFinite(work?.ratio) && work.ratio >= 1))
+  // A ratio below 1 would reject a mutant that does no more work. Plain
+  // JavaScript can pass `null`, which has no ratio.
+  const ratio = (work as { ratio?: unknown } | null | undefined)?.ratio
+  if (
+    work !== undefined &&
+    !(typeof ratio === `number` && Number.isFinite(ratio) && ratio >= 1)
+  )
     throw new Error(
       `${id}: \`work.ratio\` must be a finite number of at least 1, the most work a mutant may do as a multiple of the unmodified code's.`,
     )
