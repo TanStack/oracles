@@ -312,6 +312,8 @@ export type SyntheticSpec = {
     | { constructed: string }
     | { fixed: string }
     | { enumerated: number | string }
+  /** Harmless inherited selector keys do not change the one authored own key. */
+  selectorPrototype?: `plain` | `fixed` | `constructed` | `enumerated`
   /** Preserve generated variation while testing builder identity and consumed plans. */
   isolatedPlans?: boolean
   identityHistories?: boolean
@@ -1003,6 +1005,25 @@ const calibrationHistory = (
     ? spec.calibrationHistory
     : (calibration.history ?? undefined)
 
+// Materialize selector representation only at the public input boundary. The
+// spec and independent model keep the author's own selector as plain data.
+const representedSelector = <
+  T extends NonNullable<SyntheticSpec[`calibrationHistory`]>,
+>(
+  spec: SyntheticSpec,
+  selector: T,
+): T => {
+  const key = spec.selectorPrototype ?? `plain`
+  if (key === `plain`) return selector
+  const inherited =
+    key === `fixed`
+      ? { fixed: `fixed-0` }
+      : key === `constructed`
+        ? { constructed: spec.constructed[0]?.name ?? `missing` }
+        : { enumerated: 0 }
+  return Object.assign(Object.create(inherited) as T, selector)
+}
+
 function syntheticCalibrations(
   spec: SyntheticSpec,
   consumed: WeakSet<object>,
@@ -1010,7 +1031,8 @@ function syntheticCalibrations(
 ): Array<Calibration<Formed, Formed>> {
   return spec.calibrations.map((calibration): Calibration<Formed, Formed> => {
     const { name, kind, difference } = calibration
-    const history = calibrationHistory(spec, calibration)
+    const authored = calibrationHistory(spec, calibration)
+    const history = authored && representedSelector(spec, authored)
     const required =
       difference === undefined ? {} : { difference: differences[difference] }
     if (kind === `clock`)
@@ -1319,14 +1341,18 @@ export function syntheticProperty(spec: SyntheticSpec): void {
                           : spec.probeBinding === `no-absence`
                             ? ({} as never)
                             : {
-                                notEntered: spec.probeNotEntered ?? {
-                                  fixed: `fixed-0`,
-                                },
+                                notEntered: representedSelector(
+                                  spec,
+                                  spec.probeNotEntered ?? { fixed: `fixed-0` },
+                                ),
                                 ...(spec.probeBinding === `explicit`
                                   ? {
-                                      entered: spec.probeEntered ?? {
-                                        constructed: `constructed-0`,
-                                      },
+                                      entered: representedSelector(
+                                        spec,
+                                        spec.probeEntered ?? {
+                                          constructed: `constructed-0`,
+                                        },
+                                      ),
                                     }
                                   : spec.probeBinding === `null-entered`
                                     ? { entered: null as never }

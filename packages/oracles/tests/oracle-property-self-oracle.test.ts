@@ -423,6 +423,7 @@ type Draft = {
   calibrationNames: `indexed` | `varied` | `astral`
   warningProbe: boolean
   calibrationHistory: NonNullable<SyntheticSpec[`calibrationHistory`]> | null
+  selectorPrototype: NonNullable<SyntheticSpec[`selectorPrototype`]>
   isolatedPlans: boolean
   /** Resolution requires the original history identity and returns a fresh plan. */
   identityHistories: boolean
@@ -765,6 +766,17 @@ const draft: fc.Arbitrary<Draft> = fc.record({
     { weight: 1, arbitrary: fc.constant(`calibration` as const) },
   ),
   calibrationNames: fc.constantFrom(`indexed`, `varied`, `astral`),
+  selectorPrototype: fc.oneof(
+    { weight: 8, arbitrary: fc.constant(`plain` as const) },
+    {
+      weight: 1,
+      arbitrary: fc.constantFrom(
+        `fixed` as const,
+        `constructed` as const,
+        `enumerated` as const,
+      ),
+    },
+  ),
   warningProbe: fc.oneof(
     { weight: 30, arbitrary: fc.constant(false) },
     { weight: 1, arbitrary: fc.constant(true) },
@@ -1267,6 +1279,7 @@ function resolveSuite({
           : {}),
         ...(d.warningProbe ? { warningProbe: true } : {}),
         calibrationNames: d.calibrationNames,
+        selectorPrototype: d.selectorPrototype,
         ...(d.calibrationHistory
           ? { calibrationHistory: d.calibrationHistory }
           : {}),
@@ -2829,6 +2842,8 @@ const frameworkStates = [
 
   `bound-ranked-mutants`,
   `bound-independent-premise`,
+  `bound-selector-prototype-constructed`,
+  `bound-selector-prototype-enumerated`,
   `bound-name-seed`,
   `bound-extra-state`,
   `bound-error-context`,
@@ -3341,6 +3356,15 @@ function frameworkReach(
       spec.fixed.length > 1
     )
       reached.add(`bound-independent-premise`)
+    if (
+      (spec.selectorPrototype === `constructed` ||
+        spec.selectorPrototype === `enumerated`) &&
+      run?.files[spec.id]?.loaded &&
+      run.log.some(
+        ({ id, test }) => id === spec.id && test.includes(` > calibration:`),
+      )
+    )
+      reached.add(`bound-selector-prototype-${spec.selectorPrototype}`)
     if (spec.calibrationNames !== `indexed` && spec.calibrations.length > 1)
       reached.add(`bound-name-seed`)
     if (bindingsOf(spec).length && spec.extraReach)
@@ -7591,6 +7615,7 @@ const generatedDraft = (overrides: Partial<Draft>): Draft => ({
   timeoutMode: `default`,
   calibrations: [],
   calibrationHistory: null,
+  selectorPrototype: `plain`,
   isolatedPlans: false,
   identityHistories: false,
   probeName: `saw-0`,
@@ -8148,6 +8173,53 @@ const mainUnitRequiredConstructed: Array<{
   },
 ]
 
+// Own-key selection has the same meaning under each harmless prototype.
+// Two source kinds cover authored fixed/constructed/enumerated selection and
+// both forced premises without changing the independent selection judgment.
+const selectorPrototypeSuite = (
+  generated: Suite,
+  selectorPrototype: Draft[`selectorPrototype`],
+): Suite => {
+  const tail = generated.drafts[0]!.clock ? 1 : 2
+  return {
+    ...generated,
+    seedless: false,
+    environment: null,
+    drafts: [
+      generatedDraft({
+        selectorPrototype,
+        fixed: [at([1]), at([0, tail])],
+        constructed: [{ prefix: [0, tail], enters: [`saw-0`] }],
+        calibrations: [
+          { kind: `right`, difference: `none`, history: { fixed: `fixed-1` } },
+          {
+            kind: `driver`,
+            difference: `none`,
+            history: { constructed: `constructed-0` },
+          },
+        ],
+        isolatedPlans: true,
+        identityHistories: true,
+        probe: `agree`,
+        probeBinding: `explicit`,
+      }),
+      generatedDraft({
+        selectorPrototype,
+        source: { kind: `enumerated`, histories: [[0, 1], [tail]] },
+        calibrations: [
+          { kind: `right`, difference: `none`, history: { enumerated: 0 } },
+          {
+            kind: `driver`,
+            difference: `none`,
+            history: { enumerated: `items 0 | 1` },
+          },
+        ],
+        identityHistories: true,
+      }),
+    ],
+  }
+}
+
 oracleProperty({
   id: `self-oracle.framework`,
   law: {
@@ -8176,6 +8248,8 @@ oracleProperty({
       `bound-equal-fixed-origin`,
       `bound-ranked-mutants`,
       `bound-independent-premise`,
+      `bound-selector-prototype-constructed`,
+      `bound-selector-prototype-enumerated`,
       `bound-name-seed`,
       `bound-extra-state`,
       `bound-error-context`,
@@ -8943,6 +9017,11 @@ oracleProperty({
           ],
         }),
       },
+      ...([`constructed`, `enumerated`] as const).map((kind) => ({
+        name: `selector own keys with inherited ${kind}`,
+        enters: [`bound-selector-prototype-${kind}` as const],
+        build: (generated: Suite) => selectorPrototypeSuite(generated, kind),
+      })),
     ],
     fixed: [
       {
@@ -9372,6 +9451,13 @@ oracleProperty({
           generatedDraft({ fixed: [at([0])], calibrations: [kind] }),
         ),
       ),
+      ...([`plain`, `constructed`, `enumerated`] as const).map((kind) => ({
+        name: `selector own keys ${kind === `plain` ? `plain neighbor` : `with inherited ${kind}`}`,
+        history: selectorPrototypeSuite(
+          { drafts: [generatedDraft({})], seedless: false },
+          kind,
+        ),
+      })),
       fixedHistory(
         `round2 forced premise origins`,
         [`bound-independent-premise`],

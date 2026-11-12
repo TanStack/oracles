@@ -1790,10 +1790,12 @@ function selectCalibrationHistory<THistory, TExpected, TPlan>(
     )
   )
     return invalid(`expected exactly one of constructed, fixed, or enumerated`)
+  // Dispatch on the same own key that registration validated.
+  const kind = Object.keys(selector)[0]!
+  const key = (selector as Record<string, unknown>)[kind]
   const source = options.histories as GeneratedHistories<THistory>
-  if (`enumerated` in selector) {
+  if (kind === `enumerated`) {
     if (!enumerated) return invalid(`enumerated requires an enumerated source`)
-    const key = selector.enumerated
     const matches =
       typeof key === `number`
         ? Number.isInteger(key) && key >= 0 && key < enumerated.length
@@ -1813,12 +1815,7 @@ function selectCalibrationHistory<THistory, TExpected, TPlan>(
       build: () => selected.history,
     }
   }
-  const kind = `constructed` in selector ? `constructed` : `fixed`
   if (enumerated) return invalid(`${kind} requires a generated source`)
-  const key =
-    kind === `constructed`
-      ? (selector as { constructed: string }).constructed
-      : (selector as { fixed: string }).fixed
   const select = <T extends { name: string }>(
     declarations: ReadonlyArray<T>,
   ) => {

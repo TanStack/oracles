@@ -756,3 +756,97 @@ diagnostic representations, then demonstrated intended comparison rejection
 for adjacent wrong implementations. No further confirmed repair remains in
 these bounded reviews. Complete final pushed-head CI remains required; this
 record does not promote focused results to full-suite success.
+
+## Final main integration and fresh selector review — 2026-11-12
+
+The starting published head `81391d3` merged current main through #42 as
+`d34955cbafaf21a8a427f6cc4a858cdb92b96270`, without rebase or conflicts.
+A fresh independent reviewer read the complete PR from an isolated clean
+checkout and ran five ranking/isolation/forced-control neighbors. It confirmed
+one additional P3 defect: selector registration validates one own key, while
+`in` dispatch can select an inherited construction or enumeration tag instead.
+The independent direct API matrix had 13 passes and three distinguishing
+failures: redirected own-fixed selection, and false source-kind rejection for
+own-fixed or own-constructed selectors inheriting an enumeration tag.
+
+### Original findings 2, 3 and 6
+
+A separate current-head executable recheck confirmed all three are already
+fixed. Nine focused witnesses passed. Seven actual source mutants produced
+eight intended assertion rejections: wrong forced-entered original, wrong
+forced-absent original, replacement of the name-derived calibration seed with
+the property's first fixed seed (two witnesses), corruption only of a built
+history's tail, and removal of each of the corruption, corrupted-judgment and
+mutant-driver-judgment context wrappers. Expected forced originals come from
+authored declarations. The full built-history comparison catches tail changes;
+finite ordinary and astral name families distinguish name-seed substitution
+without prescribing a hash algorithm. Callback identity and original cause
+remain enforced in ordinary, reordered, seedless and environment receivers.
+The same nine witnesses pass again with the selector repair below.
+
+### N1: own selector identity across inherited representations
+
+The accepted direct-selection law owes the authored original. Inherited
+selector tags cannot change the own selector that registration validates.
+The missing oracle dimension was selector representation, distinct from the
+already-covered fixed-declaration metadata prototype. The primary grammar now
+varies plain selectors and selectors inheriting fixed, constructed or enumerated
+tags. The fixture materializes prototypes only at the public API boundary;
+the independent model continues judging the authored own selector. Two new
+constructions cover generated and enumerated sources, authored selectors and
+both explicit forced premises, with generated incidental tails. They are
+appended so existing fixed-seed constructions retain their indices and seeds.
+Three fixed histories use that same model/driver/check: one plain neighbor
+and the two distinguishing prototype forms.
+
+Before production changed, the plain primary history passed while inherited
+construction selection failed at `child / reach` and inherited enumeration
+failed at `child / registration`. Both actual generated construction replays
+also failed on unchanged source with seed 1, path 0 and no shrinking. Initial
+membership/setup attempts and an interrupted extended shrinking run supplied
+no RED evidence and are not counted.
+
+Production now reads the validated own selector kind and value, and dispatches
+on that kind. No history selection, builder, model or judgment policy changes.
+After repair, twelve focused primary histories pass, including the new three
+and the original nine. Both exact generated replays also pass and report their
+respective new declared state reached once: **14/14** focused checks. Restoring
+the original `in` dispatch in an isolated copy again rejects both prototype
+histories at those intended comparison laws, while the plain neighbor passes.
+The isolated source is restored byte-for-byte. This is a confirmed repair of
+N1, not a skipped structural-object input or a new selector restriction.
+
+### Integration checks and remaining merge gate
+
+The exact `packages/oracles/scripts/pr-shards.mjs` partition logic passes against
+actual direct-Node `vitest list --json` output under both Vitest name joins:
+framework **843 = 340 + 503**; static gap **171 = 15 + 156**; and e2e fixed seed
+**36 = 11 + 12 + 13**. Every selected test has exactly one shard. No prior
+history, seed or run budget was removed. Local package types, changed-file
+lint, formatting and whitespace checks pass. The PR body reflects the current
+integration and does not require a rebase over F27 or describe this PR as draft.
+
+The user has also settled the historical mutant-only reach question: clean
+runs must obey declared states. A deliberately wrong driver that enters an
+undeclared state may still satisfy calibration when the check reports the
+exact designated rejection. This preserves the existing clean-run contract.
+
+The fresh review found no other supported defect. Its final repaired-head
+recheck and exact pushed-head CI remain the merge gate. This record does not
+substitute earlier green CI for that gate. DB adoption, its next dependency pin,
+PowerSync before/after timing and fresh calibration seeds remain subsequent
+work. The #7 skill update remains conditional on #7 landing.
+
+Scratch reports and raw commands are preserved in
+`/private/tmp/tanstack-db-release-recovery/pr31-merge-readiness-2026-11-12/`:
+`verification/report.md`, `independent-review/report.md`,
+`prototype-selector/report.md`, `partition-results.json`, and the lossless
+follow-up ledger. Their scope is finite synthetic Node/Vitest receiving paths;
+no DB speed improvement or downstream receiving result is claimed here.
+
+Executable SHA256 values at this repair checkpoint:
+
+- Source: `28af27ce822c71734d3dd9531d2c99e3f13f2f43576f1cd8f6942c29f6eb82c7`.
+- Owner: `6f5577267c11f203a349ef2b80ec1d6e19618a45e5bb499f2a76b4c01297fac0`.
+- Fixture: `cc2ebff5a49c8fd9b92e540d728d83dc737c457ae2cbc30bff5d98a43ec20533`.
+- Reporter: `1918e8dc028ac5113ed4999ea0989a4740d35a67d6190014744a461f03b76622`.
