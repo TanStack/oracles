@@ -97,6 +97,7 @@ credibility. So every finding needs a probe that the developer can run again.
   | gap                 | a mutant that no law notices: behavior the oracle does not check yet                                  |
   | authority           | where a promise is written: the docs, a test, a comment, or your decision                             |
   | limit               | what the oracle does not check, and why                                                               |
+  | design grammar      | a check, run when the laws are many or share a lot, that finds the few parts they share               |
 
   Use the same word for the same thing every time. Leave out a word the
   session does not need.
@@ -503,10 +504,14 @@ trigger list in `oracles-design` step 1. When a trigger for the
 [design grammar](../../docs/instruments/design-grammar.md) card fires (for
 example, more than five laws, or a
 law with no new case that it predicts), work through the card. Then show
-the developer the design it produced, in a few plain lines: what the model
-keeps, how the laws share it, and any choice between two designs, with your
-recommendation. Leave out the card's own terms (preservation relation,
-primitives, ablation). Ask them to approve it with the laws. When the
+the developer the design it produced, in a few plain lines. Name the step,
+and say in a line what it is and why it ran, in terms of their design, not
+the trigger: "These seven laws share a lot of state, so I ran a design
+grammar: a check that finds the few building blocks the laws share, so the
+model stays small and each law reads off the same parts." Then say what
+the model keeps, how the laws share it, and any choice between two designs,
+with your recommendation. Leave out the card's own terms (preservation
+relation, primitives, ablation). Ask them to approve it with the laws. When the
 developer adds or splits a law, check the triggers again before you write
 the oracle: a sixth law fires one.
 
