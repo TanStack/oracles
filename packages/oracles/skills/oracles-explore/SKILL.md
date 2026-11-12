@@ -610,7 +610,12 @@ approved, and run the oracle again on the unchanged code:
 
 Group the gaps by function, and tell the developer what you are doing as
 you go. After each answer, keep closing gaps: stop only for the developer's
-decisions. When the gaps under the approved laws are closed, present.
+decisions. A gap is never "outside the oracle's scope": the oracle owns
+that code, and the gap is behavior in it that no law holds yet. For each
+group that no approved law covers, propose the law that would hold it,
+with its authority, as a design question, or say that it belongs to
+another spot, and name the spot. When the gaps under the approved laws are
+closed, present.
 
 ## 6. Present
 
