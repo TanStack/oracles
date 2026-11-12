@@ -15,6 +15,7 @@ const dbEnvNames = {
   seed: 'TANSTACK_DB_ORACLE_SEED',
   path: 'TANSTACK_DB_ORACLE_PATH',
   property: 'TANSTACK_DB_ORACLE_PROPERTY',
+  unit: 'TANSTACK_DB_ORACLE_UNIT',
   runsMultiplier: 'TANSTACK_DB_ORACLE_RUNS_MULTIPLIER',
 }
 // The fixtures name the TanStack DB project's files and variables, so the
