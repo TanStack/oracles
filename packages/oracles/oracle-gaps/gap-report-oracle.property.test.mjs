@@ -1903,7 +1903,7 @@ function check(plan, observations, expected) {
     )
   // A heartbeat names what its busy copy runs: a mutant, and a test file
   // that runs it (an owner file whose tests reached it, an ordinary file for
-  // the ordinary tier, an oracle file for an authored mutant), or the
+  // the ordinary tier, any oracle file for an authored mutant), or the
   // baseline and a test file. Each mutant whose run reaches a slow owner
   // test keeps a copy busy past the interval, so a heartbeat names it.
   const byId = new Map(cli.mutants.map((m) => [m.id, m]))
@@ -1913,7 +1913,8 @@ function check(plan, observations, expected) {
       beat.label === `baseline`
         ? /^tests\/[abc]\.test\.ts$/.test(beat.file)
         : m?.authored
-          ? /^tests\/[ab]\.test\.ts$/.test(beat.file)
+          ? /^tests\/\w+\.test\.ts$/.test(beat.file) &&
+            beat.file !== `tests/c.test.ts`
           : [...(m?.oracleFiles ?? []), ...(m?.ordinaryFiles ?? [])].includes(
               beat.file,
             )
