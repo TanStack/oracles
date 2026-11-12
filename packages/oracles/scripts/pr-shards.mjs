@@ -52,11 +52,11 @@ export const partitions = {
     },
   },
   // The end-to-end gap oracle's fixed-seed units, which a pull request runs
-  // (`-t "fixed seed"`): 35 units, 500 s in all, measured on this
+  // (`-t "fixed seed"`): 36 units, 440 s in all, measured on this
   // branch in one local run under other agents' load (load average about 3).
   // A unit's cost follows the generated history its constructed history is
   // built from, so a grammar change can move cost between units. The units
-  // are packed longest first into three shards: 167 s, 167 s, and 166 s.
+  // are packed longest first into three shards: 147 s, 147 s, and 147 s.
   'oracle-gaps-fixed-seed': {
     args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-oracle`],
     suite: `oracle-gaps.report`,
@@ -66,31 +66,31 @@ export const partitions = {
     previously: `fixed seed`,
     shards: {
       1: anyOf([
-        'a declaration fault: brokenOwner',
-        'a declaration fault: noTypescript',
-        'a failing owner under a config that --config names',
-        'a load failure beside a hang',
-        'a package with no config',
-        'a declaration fault: missingSource',
-        'a config that --config names',
-        "test.projects in a parent's config",
-        'a config fault in a run that owns nothing',
-      ]),
-      2: anyOf([
         'a second daemon check of the budget witness',
-        'a stale authored mutant and a reformat',
-        'generated',
-        'an edit that changed the cold result after a hang replaced the only context',
-        'a declaration fault: setupThrows',
-        'an edit to a module that only mutated runs load',
+        'a declaration fault: brokenOwner',
+        "a failing owner under its parent's config",
         'a run with eleven contexts',
         'two authored mutants',
+        'a declaration fault: setupThrows',
+        'a declaration fault: missingSource',
+        'a .ts config in a package with no module type that calls require',
+        'a config that --config names',
+        'a declaration fault: nonLiteral',
+        'a declaration fault: outsideSource',
+      ]),
+      2: anyOf([
+        'an edit sequence through the daemon',
+        'every outcome class',
+        'an edit that changed the cold result after a hang replaced the only context',
+        'a lazy module loaded before a hang in the same batch',
+        'a declaration fault: noTypescript',
+        'ordinary tests left out by default',
+        'an ambiguous authored mutant',
         'a package whose parent directory has its config',
         'an awaiting config in a package with no module type',
         'a .cjs config that calls require',
-        'a declaration fault: badEntry',
-        'a declaration fault: projects',
-        'a declaration fault: outsideSource',
+        "test.projects in a parent's config",
+        'a declaration fault: configNoDefault',
       ]),
       3: rest,
     },
