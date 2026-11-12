@@ -163,10 +163,10 @@ export const shards = {
     `fixed seed 20261105: a second daemon check of the budget witness`,
     `calibration: a stopped run leaves a process it started running`,
     `calibration: a busy mutant is named in no heartbeat`,
-    // Law 15's calibrations (the greppable stream), not yet measured.
+    // Law 15's calibrations (the greppable stream), measured at ab18c60:
+    // 79 s and 70 s; the daemon-notes one is bound to its history, after
+    // it took 433 s searching for one.
     `calibration: a streamed line has no prefix`,
-    `calibration: a raw line reaches the stdout`,
-    `calibration: a run ends with two done lines`,
     `calibration: a refusal through the daemon drops the cold run's notes`,
     `calibration: a completed run ends without its done line`,
     `determinism: constructed history: a second daemon check of the budget witness`,
@@ -200,9 +200,12 @@ export const shards = {
     `random seed: a second daemon check of the budget witness`,
     `calibration: a stopped run had written a copy beside the tests`,
     `calibration: a heartbeat names a file that does not run its mutant`,
-    // Law 15's calibrations (the greppable stream), not yet measured.
+    // Law 15's calibrations (the greppable stream), measured at ab18c60:
+    // 69 s, 58 s, 73 s, and 69 s.
     `calibration: the decisive baseline line comes after a mutant's line`,
     `calibration: a stopped run ends without its done line`,
+    `calibration: a raw line reaches the stdout`,
+    `calibration: a run ends with two done lines`,
     // The witness module's edit sequence (option M): about 97 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
     `random seed: an edit sequence over the witness module`,

@@ -2843,6 +2843,9 @@ calibrations.push(
   {
     name: `a refusal through the daemon drops the cold run's notes`,
     law: `greppable stream`,
+    // A config the session cannot load, checked cold and through the
+    // daemon: its notes are Vite's.
+    history: { constructed: `a declaration fault: configThrows` },
     corrupt: (trace) => {
       const index = trace.findIndex(
         (o) =>
