@@ -594,6 +594,10 @@ const drawn = fc.record({
     // it loads. Each is the author's to fix, so each refuses the run.
     `configThrows`,
     `configNoDefault`,
+    // A config whose default export is null, and one with a syntax error,
+    // which Vitest refuses too (review of #46, F5 and F7).
+    `configNull`,
+    `configSyntax`,
     `setupThrows`,
   ),
   stability: fc.constantFrom(
@@ -616,7 +620,8 @@ const drawn = fc.record({
   // The package's Vitest config: its file, and whether it exports an object
   // or a function (sync or async) that returns one. Vitest accepts each, so
   // the runner must too.
-  config: fc.constantFrom(`object`, `object`, `function`, `async`),
+  // A promise of a config, which Vite awaits (review of #46, F5).
+  config: fc.constantFrom(`object`, `object`, `function`, `async`, `promise`),
   // A config may read the environment Vitest's CLI sets before it loads
   // one (VITEST, TEST, and NODE_ENV), as svelte-db's picks its resolve
   // conditions by VITEST. This one finds its tests only under it.
@@ -657,8 +662,11 @@ const drawn = fc.record({
         fc.record({
           signal: fc.constantFrom(`SIGTERM`, `SIGINT`),
           pool: fc.constantFrom(`forks`, `threads`),
+          // A signal sent once the run has printed its completed line,
+          // while its process holds its exit (review of #46, F3).
+          after: fc.constantFrom(false, false, true),
         }),
-        { minLength: 1, maxLength: 2 },
+        { minLength: 1, maxLength: 3 },
       ),
     },
   ),
@@ -2067,9 +2075,14 @@ const formatOf = (file, packageType) =>
  */
 function configOf(history) {
   const needsConfig =
-    [`configThrows`, `configNoDefault`, `projects`, `setupThrows`].includes(
-      history.fault,
-    ) ||
+    [
+      `configThrows`,
+      `configNoDefault`,
+      `configNull`,
+      `configSyntax`,
+      `projects`,
+      `setupThrows`,
+    ].includes(history.fault) ||
     history.configEnv === true ||
     history.setupGlobal === true
   const place =
@@ -3801,7 +3814,11 @@ function refusal(plan) {
       detail: `the fixture config broke`,
       runtime: true,
     }
-  if (plan.fault === `configNoDefault`)
+  if (
+    plan.fault === `configNoDefault` ||
+    plan.fault === `configNull` ||
+    plan.fault === `configSyntax`
+  )
     return { cause: plan.configPath, runtime: true }
   // A run with no oracle file, or with no owns entry, owns no selected
   // source, so every mutant would read as unowned. The analysis refuses it
@@ -3849,7 +3866,10 @@ function blockingOf(plan) {
 function baselineOf(plan) {
   const failing = blockingOf(plan)
   return [...oracleFilesOf(plan), `c`].map((file) => {
-    const own = plan.tests.filter((t) => t.file === file).length
+    // File a's test that writes to the console streams runs in every
+    // baseline too.
+    const own =
+      plan.tests.filter((t) => t.file === file).length + (file === `a` ? 1 : 0)
     const broken = failing.find((f) => f.file === file)
     // The failing owner's suite holds two tests and a third of its name.
     const extra = broken?.test === undefined ? 0 : 3
@@ -3887,6 +3907,11 @@ const reachesRun = (history) =>
 // for it, and the kind's word right after the prefix filters one kind; the
 // same prefixes on stdout and stderr, in a cold run and through the
 // daemon). The kinds:
+// The stdout summary's lines have kinds of their own: its totals
+// (`summary`), one directive per gap class (`legend`), and each function's
+// heading over its gap lines (`function`) (the coordinator's decision of
+// 2026-11-12 on review F1: every line of either stream is a line of the
+// stream).
 const streamKinds = [
   `config`,
   `note`,
@@ -3895,6 +3920,9 @@ const streamKinds = [
   `progress`,
   `gap`,
   `busy`,
+  `summary`,
+  `legend`,
+  `function`,
   `done`,
 ]
 // The one decisive baseline line, before any mutant runs: every oracle
@@ -3927,6 +3955,8 @@ function model(plan) {
     `brokenVitest`,
     `configThrows`,
     `configNoDefault`,
+    `configNull`,
+    `configSyntax`,
     `projects`,
   ].includes(plan.fault)
     ? []
@@ -4426,9 +4456,20 @@ function oracleTestFile(plan, file) {
       `})`,
       `test('fixed seed 999', () => {})`,
     )
-  // A file with no tests still loads, so the CLI can read what it owns.
-  if (!plan.tests.some((t) => t.file === file))
+  // A file with no tests still loads, so the CLI can read what it owns
+  // (file a always has the test below).
+  if (!plan.tests.some((t) => t.file === file) && file !== `a`)
     out.push(`test.skip('no tests', () => {})`)
+  // A test that writes to the process's own streams, as a test's debugging
+  // output does: none of it may reach the CLI's streams (law 15; review of
+  // #46, F2). It calls nothing of the source under test.
+  if (file === `a`)
+    out.push(
+      `test('writes to the console streams', () => {`,
+      `  process.stdout.write('raw stdout from a test\\n')`,
+      `  process.stderr.write('raw stderr from a test\\n')`,
+      `})`,
+    )
   return `${out.join(`\n`)}\n`
 }
 
@@ -4571,13 +4612,24 @@ const altConfigPath = (plan) =>
  */
 function configText(plan, test) {
   const commonjs = plan.configSyntax === `cjs`
-  const body = `defineConfig(${
-    { object: ``, function: `() => (`, async: `async () => (` }[plan.config]
+  const config = `defineConfig(${
+    { object: ``, function: `() => (`, async: `async () => (`, promise: `` }[
+      plan.config
+    ]
   }{ test: ${
     plan.fault === `projects`
       ? `{ projects: [{ test: { name: 'unit', ...${test} } }] }`
       : test
-  } }${plan.config === `object` ? `` : `)`})`
+  } }${plan.config === `object` || plan.config === `promise` ? `` : `)`})`
+  // A promise of the config, a null default, or a config cut off mid-object.
+  const body =
+    plan.fault === `configNull`
+      ? `null`
+      : plan.fault === `configSyntax`
+        ? `defineConfig({ test: {`
+        : plan.config === `promise`
+          ? `Promise.resolve(${config})`
+          : config
   return [
     commonjs
       ? `const { defineConfig } = require('vitest/config')`
@@ -5053,7 +5105,7 @@ function applyEdit(state, edit) {
  * one. `name` replaces the scratch paths in a text, so two runs of one
  * history in different directories record the same ending.
  */
-function endingOf(exit, stderr, out, name = (text) => text) {
+function endingOf(exit, stderr, out, name = (text) => text, stdout = ``) {
   const text = `${stderr ?? ``}`
   const line = (label) => text.match(new RegExp(`^${label}: (.*)$`, `m`))?.[1]
   const cause = text.match(/^refused: ([\s\S]*?)\nfix: /m)?.[1]
@@ -5074,11 +5126,15 @@ function endingOf(exit, stderr, out, name = (text) => text) {
   const done = last.startsWith(`oracle-gaps: done `)
     ? name(last.slice(`oracle-gaps: done `.length))
     : undefined
+  // The stdout's lines: a run that does not complete prints only its done
+  // line there (law 15).
+  const printed = `${stdout ?? ``}`.split(`\n`).filter(Boolean)
   return {
     exit,
     cause: cause && name(cause).slice(0, 2000),
     fix: line(`fix`) && name(line(`fix`)),
     done,
+    stdout: printed.map(name),
     namesOutput:
       out !== undefined && done === name(`refused, report ${out}/summary.md`),
     // An internal error's log beside a refusal would be another run's.
@@ -5112,6 +5168,12 @@ function refusalBreach(ending, { cause, outKnown }) {
     !/^refused(?:, report .+)?$/.test(ending.done)
   )
     return `the refusal's last line is not \`oracle-gaps: done refused\``
+  // The done line ends stdout too, as its only line.
+  if (
+    ending.stdout.length !== 1 ||
+    ending.stdout[0] !== `oracle-gaps: done ${ending.done}`
+  )
+    return `the refusal's stdout is ${JSON.stringify(ending.stdout)}, not its done line`
   if (!outKnown) return undefined
   if (!ending.namesOutput)
     return `the refusal does not name its report in its output directory: done ${ending.done}`

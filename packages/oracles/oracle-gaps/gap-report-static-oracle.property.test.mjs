@@ -489,8 +489,12 @@ function argumentsRunOf(dir, plan) {
     encoding: `utf8`,
     timeout: 120_000,
   })
-  return endingOf(run.status, run.stderr, out, (text) =>
-    text.replaceAll(dir, `<package>`),
+  return endingOf(
+    run.status,
+    run.stderr,
+    out,
+    (text) => text.replaceAll(dir, `<package>`),
+    run.stdout,
   )
 }
 

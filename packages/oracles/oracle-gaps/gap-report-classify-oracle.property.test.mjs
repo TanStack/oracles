@@ -143,9 +143,16 @@
  *    points, so an astral-plane character is never split), cut to its first
  *    57 and `...`. An intent is the author's text, so it prints as a code
  *    span, which the exit law does not read. The results keep the full text.
- *    Every line of the stream's kinds carries the stream's prefix and its
- *    kind (the maintainer's request of 2026-11-12): `oracle-gaps: gap`,
- *    `oracle-gaps: baseline`, `oracle-gaps: blocked`, `oracle-gaps: done`.
+ *    Every line of the stdout is a line of the stream, with the stream's
+ *    prefix and its kind (the maintainer's request of 2026-11-12, and the
+ *    coordinator's decision on review F1): `oracle-gaps: summary` for the
+ *    totals, `oracle-gaps: legend <class>:` for each directive,
+ *    `oracle-gaps: function` for each function's heading, `oracle-gaps:
+ *    gap`, `oracle-gaps: baseline`, `oracle-gaps: blocked`, `oracle-gaps:
+ *    note` (the provisional count, the unowned counts, the files left out,
+ *    and the results' path), and `oracle-gaps: done`; only the lines
+ *    indented under a failing baseline file have none, and no line is
+ *    blank.
  *    The stdout leads with the baseline (law 9's lines), then the one
  *    decisive baseline line (all oracle files pass, or how many of them
  *    failed, provisional), then one `oracle-gaps: blocked`
@@ -2115,19 +2122,38 @@ function check(h, observations, expected) {
   const groupOf = (o) =>
     o.authored ? `authored mutants (src/x.ts)` : `fn ${o.function} (src/x.ts)`
   const functions = new Set(gapsOfModel.map(groupOf))
-  // The legend's lines: those under its heading, before the blank line
-  // after it (the baseline above it has indented lines too).
-  const legendAt = stdout
+  // Every line of the stdout is a line of the stream: its prefix and kind,
+  // or an indented line under a failing baseline file (law 15 of the
+  // end-to-end oracle; the coordinator's decision on review F1, 2026-11-12).
+  // A blank line is none.
+  const stray = stdout
+    .replace(/\n$/, ``)
     .split(`\n`)
-    .indexOf(`Legend, one directive per class:`)
+    .find(
+      (line) =>
+        !/^oracle-gaps: (?:config|note|baseline|blocked|progress|gap|busy|summary|legend|function|done) /.test(
+          line,
+        ) && !/^  \S/.test(line),
+    )
+  if (stray !== undefined)
+    return violation(
+      `classified`,
+      `the stdout has a line that is not a line of the stream: ${JSON.stringify(stray)}`,
+      `stdout`,
+      { actual: stdout },
+    )
+  // The legend's lines, one per class: `oracle-gaps: legend <class>: …`.
   const legend = stdout
     .split(`\n`)
-    .slice(legendAt + 1)
-    .filter((line, i, rest) => rest.slice(0, i + 1).every((l) => l !== ``))
-    .filter((line) => /^  [a-z-]+: /.test(line))
+    .filter((line) => /^oracle-gaps: legend [a-z-]+: /.test(line))
+  // Each function's heading over its gap lines.
   const headings = stdout
     .split(`\n`)
-    .filter((line) => line.startsWith(`fn `) || line.startsWith(`authored `))
+    .filter(
+      (line) =>
+        line.startsWith(`oracle-gaps: function fn `) ||
+        line.startsWith(`oracle-gaps: function authored `),
+    )
   const stdoutProblem = !stdout.includes(`, ${gapsOfModel.length} gaps,`)
     ? `the totals do not state ${gapsOfModel.length} gaps`
     : !stdout.includes(`out/summary.md`)
@@ -2188,9 +2214,11 @@ function check(h, observations, expected) {
       : `oracle-gaps: baseline ${failingOracle.length} of ${files(oracleFiles)} failed (provisional)`
   const done = `oracle-gaps: done completed, ${counted(gapsOfModel.length, `gap`)}${failingOracle.length > 0 ? ` (provisional)` : ``}, report out/summary.md`
   const provisional = stdoutLines.filter((line) =>
-    line.startsWith(`Provisional: `),
+    line.startsWith(`oracle-gaps: note provisional: `),
   )
-  const crashedLegend = legend.find((line) => line.startsWith(`  crashed: `))
+  const crashedLegend = legend.find((line) =>
+    line.startsWith(`oracle-gaps: legend crashed: `),
+  )
   const leadProblem =
     stdoutLines.slice(0, baselineGot.length).join(`\n`) !==
     baselineGot.join(`\n`)
@@ -2219,14 +2247,16 @@ function check(h, observations, expected) {
             : provisional.length !== (failingOracle.length > 0 ? 1 : 0) ||
                 (failingOracle.length > 0 &&
                   !provisional[0].startsWith(
-                    `Provisional: ${counted(blockedCount, `mutant`)} ${blockedCount === 1 ? `is` : `are`} blocked`,
+                    `oracle-gaps: note provisional: ${counted(blockedCount, `mutant`)} ${blockedCount === 1 ? `is` : `are`} blocked`,
                   ))
               ? `the stdout does not say that the report is provisional, with ${blockedCount} blocked mutants`
               : stdoutLines.at(-1) !== done
                 ? `the last stdout line is ${JSON.stringify(stdoutLines.at(-1))}, not ${JSON.stringify(done)}`
                 : crashedLegend !== undefined &&
                     !meanings.crashed.test(
-                      crashedLegend.slice(`  crashed: `.length),
+                      crashedLegend.slice(
+                        `oracle-gaps: legend crashed: `.length,
+                      ),
                     )
                   ? `the crashed legend line does not say a crash is a gap and where its error is`
                   : undefined
@@ -2255,9 +2285,9 @@ function check(h, observations, expected) {
       unownedFns.set(groupOf(o), (unownedFns.get(groupOf(o)) ?? 0) + 1)
   const unownedLines = stdout
     .split(`\n`)
-    .filter((line) => line.startsWith(`  unowned `))
+    .filter((line) => line.startsWith(`oracle-gaps: note unowned `))
   const unownedText = (group, n) =>
-    `  unowned ${group}: ${n} ${n === 1 ? `mutant` : `mutants`}`
+    `oracle-gaps: note unowned ${group}: ${n} ${n === 1 ? `mutant` : `mutants`}`
   if (
     unownedLines.length !== unownedFns.size ||
     [...unownedFns].some(
