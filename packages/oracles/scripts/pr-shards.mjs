@@ -52,11 +52,11 @@ export const partitions = {
     },
   },
   // The end-to-end gap oracle's fixed-seed units, which a pull request runs
-  // (`-t "fixed seed"`): 32 units, 534 s in all, measured on this
+  // (`-t "fixed seed"`): 35 units, 500 s in all, measured on this
   // branch in one local run under other agents' load (load average about 3).
   // A unit's cost follows the generated history its constructed history is
   // built from, so a grammar change can move cost between units. The units
-  // are packed longest first into three shards: 259 s, 138 s, and 138 s.
+  // are packed longest first into three shards: 167 s, 167 s, and 166 s.
   'oracle-gaps-fixed-seed': {
     args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-oracle`],
     suite: `oracle-gaps.report`,
@@ -65,24 +65,32 @@ export const partitions = {
     // select exactly these.
     previously: `fixed seed`,
     shards: {
-      1: anyOf(['a declaration fault: apiLessTypescript']),
-      2: anyOf([
-        'an edit sequence through the daemon',
-        'every outcome class',
-        'a declaration fault: configThrows',
-        'an edit that changed the cold result after a hang replaced the only context',
-        'a declaration fault: noTypescript',
-        'an edit to a module that only mutated runs load',
-        'a load failure beside a hang',
+      1: anyOf([
         'a declaration fault: brokenOwner',
-        'two authored mutants',
-        'a .ts config in a package with no module type that calls require',
-        'a run with eleven contexts',
-        'ordinary tests left out by default',
+        'a declaration fault: noTypescript',
+        'a failing owner under a config that --config names',
+        'a load failure beside a hang',
+        'a package with no config',
+        'a declaration fault: missingSource',
+        'a config that --config names',
+        "test.projects in a parent's config",
+        'a config fault in a run that owns nothing',
+      ]),
+      2: anyOf([
+        'a second daemon check of the budget witness',
+        'a stale authored mutant and a reformat',
+        'generated',
+        'an edit that changed the cold result after a hang replaced the only context',
         'a declaration fault: setupThrows',
-        'a declaration fault: nonLiteral',
+        'an edit to a module that only mutated runs load',
+        'a run with eleven contexts',
+        'two authored mutants',
+        'a package whose parent directory has its config',
+        'an awaiting config in a package with no module type',
+        'a .cjs config that calls require',
+        'a declaration fault: badEntry',
         'a declaration fault: projects',
-        'a declaration fault: configNoDefault',
+        'a declaration fault: outsideSource',
       ]),
       3: rest,
     },
