@@ -934,6 +934,7 @@ export default async (env) => {
                 })),
               unhandled: [],
               rows: own.map((row) => [row.key, row]),
+              inputs: importsOf(item.file, [], loaded.get(copies[i]) ?? []),
             }
           }),
           timedOutAt: current,
@@ -1148,17 +1149,18 @@ export default async (env) => {
     function settleIn(context, started, paths) {
       const index = indexOf.get(context)
       const served = servedBy(index)
-      const inputs = paths.map((path) => [
-        path,
-        started.get(path) ?? servedHash(path, index),
-      ])
-      for (const [path, hash] of inputs)
-        if (!served.has(path)) served.set(path, hash)
-      invalidateChanged(paths, context)
-      return paths.length > 0 &&
-        inputs.every(([path, hash]) => servedHash(path, index) === hash)
-        ? inputs
-        : undefined
+      let stable = paths.length > 0
+      const inputs = paths.map((path) => {
+        const now = servedHash(path, index)
+        const hash = started.get(path) ?? now
+        const read = served.get(path) ?? hash
+        // The context may hold other text than the path's text now.
+        if (read !== now || hash !== now) context.invalidateFile(path)
+        if (hash !== now) stable = false
+        served.set(path, now)
+        return [path, hash]
+      })
+      return stable ? inputs : undefined
     }
     const remember = (id, unit, inputs) => {
       if (inputs) store.put(id, { inputs, unit })

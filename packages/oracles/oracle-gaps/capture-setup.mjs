@@ -845,8 +845,11 @@ afterAll(() => {
   // only a mutated branch imports at run time: the daemon stores the run
   // under them (check.mjs).
   const evaluated = globalThis.__vitest_worker__?.evaluatedModules
-  const loaded = [...(evaluated?.idToModuleMap?.keys() ?? [])]
-    .map((id) => id.split(`?`)[0])
+  // The map keeps every module the worker evaluated, and the copy's module
+  // reset only marks them unevaluated, so the copy's own are those marked.
+  const loaded = [...(evaluated?.idToModuleMap ?? [])]
+    .filter(([, node]) => node.evaluated)
+    .map(([id]) => id.split(`?`)[0])
     .filter((path) => path.startsWith(`/`))
   appendFileSync(
     state.capture,
