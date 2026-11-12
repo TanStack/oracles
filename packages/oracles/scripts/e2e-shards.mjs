@@ -63,6 +63,10 @@ export const shards = {
     `fixed seed 20261105: an edit that changed the cold result after a hang replaced the only context`,
     `random seed: an edit that changed the cold result after a hang replaced the only context`,
     `determinism: constructed history: an edit that changed the cold result after a hang replaced the only context`,
+    // Added with the CLI's parent-config discovery (not yet measured).
+    `fixed seed 20261105: a package whose parent directory has its config`,
+    `random seed: test.projects in a parent's config`,
+    `determinism: constructed history: a failing owner under its parent's config`,
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-2': [
@@ -89,6 +93,10 @@ export const shards = {
     `fixed seed 20261105: an edit to a module that only mutated runs load`,
     `random seed: an edit to a module that only mutated runs load`,
     `determinism: constructed history: an edit to a module that only mutated runs load`,
+    // Added with the CLI's parent-config discovery (not yet measured).
+    `fixed seed 20261105: a failing owner under its parent's config`,
+    `random seed: a package whose parent directory has its config`,
+    `determinism: constructed history: test.projects in a parent's config`,
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-3': [
@@ -115,6 +123,10 @@ export const shards = {
     `fixed seed 20261105: a lazy module loaded before a hang in the same batch`,
     `random seed: a lazy module loaded before a hang in the same batch`,
     `determinism: constructed history: a lazy module loaded before a hang in the same batch`,
+    // Added with the CLI's parent-config discovery (not yet measured).
+    `fixed seed 20261105: test.projects in a parent's config`,
+    `random seed: a failing owner under its parent's config`,
+    `determinism: constructed history: a package whose parent directory has its config`,
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-4': [
