@@ -23,7 +23,8 @@
  * driver's `observe("reach", state)`. A `slow` spec's driver takes about
  * 300 ms per history, so a small `timeout` fails every test that runs one.
  * A `slowShrink` spec's driver takes about 2 s on a history that holds a 4,
- * but only while a campaign (`fixed seed` or `random seed`) runs it, and no
+ * but only while a campaign or one of its units (`fixed seed N: <unit>` or
+ * `random seed: <unit>`) runs it, and no
  * time elsewhere, so only shrinking is slow. Every history that holds a 4
  * fails, so a campaign runs at most one slow history before its first
  * failure. Under its 5 s timeout, the shrink of `[4,2,2]` (`[4,2]`, then
@@ -150,10 +151,28 @@ export const syntheticIds = [
   `self-oracle.synthetic-3`,
 ] as const
 
+// A child run that draws its seed draws it through Math.random, which is a
+// fixed-seed generator here (mulberry32), so it draws the same seeds in
+// every run of a file and the self-oracle's own determinism test can compare
+// the traces. Each draw is still the framework's own: the replay environment
+// declares no seed.
+let randomState = 20251111
+Math.random = () => {
+  randomState = (randomState + 0x6d2b79f5) | 0
+  let mixed = Math.imul(randomState ^ (randomState >>> 15), 1 | randomState)
+  mixed = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed
+  return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296
+}
+
 // Every fixture and self-test property must be registered; `self-oracle.unregistered`
-// is not, so a spec that names it fails to load.
+// is not, so a spec that names it fails to load. A child run names the
+// environment prefix in SELF_ORACLE_PREFIX, so a suite can run under a custom
+// `envPrefix`; `SELF_ORACLE_RETIRED` is a retired replay variable. A
+// malformed replay environment fails here, so every spec file fails to load.
 configureOracles({
+  envPrefix: process.env.SELF_ORACLE_PREFIX ?? `ORACLE`,
   registry: [...syntheticIds, `self-oracle.framework`],
+  retiredVariables: [`SELF_ORACLE_RETIRED`],
 })
 
 export type SyntheticHistory = ReadonlyArray<number>
@@ -203,6 +222,8 @@ export type SyntheticSpec = {
   source:
     | { kind: `generated`; runs: number; seed: number }
     | { kind: `enumerated`; histories: ReadonlyArray<SyntheticHistory> }
+  /** A second fixed seed, ten times the first, whose text the first's extends. */
+  secondSeed?: boolean
   /** Required states; each must be entered by a constructed history. */
   states: ReadonlyArray<string>
   constructed: ReadonlyArray<{
@@ -685,7 +706,7 @@ function syntheticDriver(spec: SyntheticSpec, mutant?: `first` | `last`) {
     if (
       spec.slowShrink &&
       history.includes(4) &&
-      / > (?:fixed seed -?\d+|random seed)$/.test(
+      / > (?:fixed seed -?\d+|random seed)(?:: .*)?$/.test(
         expect.getState().currentTestName ?? ``,
       )
     )
@@ -1032,7 +1053,10 @@ export function syntheticProperty(spec: SyntheticSpec): void {
           .filter((state) => !spec.states.includes(state))
           .map(declare),
         runs: spec.source.runs,
-        fixedSeeds: [spec.source.seed],
+        fixedSeeds: [
+          spec.source.seed,
+          ...(spec.secondSeed ? [spec.source.seed * 10] : []),
+        ],
         constructed: spec.constructed.map(({ name, prefix, enters }, at) => ({
           name,
           enters,
