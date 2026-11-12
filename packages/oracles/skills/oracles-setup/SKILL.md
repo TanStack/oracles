@@ -409,7 +409,10 @@ that are new since you last looked, for example with
 Act on a `fail` or `blocked:` line first: fix that oracle, because the
 mutants it owns cannot be judged. Then start on the first gaps while the
 run goes on. Stop the run early only when it is clearly wrong, for example
-a gap count far beyond what the oracle owns.
+a gap count far beyond what the oracle owns. Record the run's process ID
+when you start it (`$!`), and stop it by that ID. Never stop it by name
+(`pkill -f oracle-gaps`, `killall`): that kills every matching process on
+the machine, including other people's and other agents' runs.
 
 Run the gap check on the owned source:
 
