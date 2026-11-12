@@ -306,15 +306,24 @@ export async function workspaceBundles(pkg) {
   return bundles
 }
 
-/** The config file Vitest itself loads in a package: a vitest.config first. */
+/**
+ * The config file Vitest itself loads in a package, relative to it: the
+ * first of Vitest's config names (a vitest.config first, in Vitest's
+ * extension order) in the package's directory, or, failing that, in the
+ * nearest parent directory that has one, as Vitest's own find-up does
+ * (cli-api, over `configFiles`; maintainer decision, 2026-11-11).
+ */
 function discoveredConfig(pkg) {
-  return [`vitest`, `vite`]
-    .flatMap((name) =>
-      [`ts`, `mts`, `cts`, `js`, `mjs`, `cjs`].map(
-        (extension) => `${name}.config.${extension}`,
-      ),
-    )
-    .find((file) => existsSync(join(pkg, file)))
+  const names = [`vitest`, `vite`].flatMap((name) =>
+    [`ts`, `mts`, `cts`, `js`, `mjs`, `cjs`].map(
+      (extension) => `${name}.config.${extension}`,
+    ),
+  )
+  for (let dir = pkg; ; dir = dirname(dir)) {
+    const name = names.find((file) => existsSync(join(dir, file)))
+    if (name) return relativePath(pkg, join(dir, name))
+    if (dirname(dir) === dir) return undefined
+  }
 }
 
 /**

@@ -684,14 +684,17 @@ const drawn = fc.record({
   ),
   // Where the config is (maintainer finding F12, 2026-11-10): where Vitest
   // discovers it; under a name it does not discover, which `--config`
-  // names; or nowhere, so Vitest's defaults apply. The run names the config
-  // it used, or says that it found none.
+  // names; nowhere, so Vitest's defaults apply; or in the package's parent
+  // directory only, where Vitest finds it too (its cli-api's find-up over
+  // `configFiles`; maintainer decision, 2026-11-11). The run names the
+  // config it used, or says that it found none.
   configPlace: fc.constantFrom(
     `discovered`,
     `discovered`,
     `discovered`,
     `named`,
     `none`,
+    `parent`,
   ),
   // The package's module type: `module`, or none, in which Node and Vite
   // read a `.js` or `.ts` file as CommonJS (F13).
@@ -2070,7 +2073,9 @@ function configOf(history) {
       : (history.configPlace ?? `discovered`)
   const packageType = history.packageType ?? `module`
   const named = history.configFile ?? `vite.config.ts`
-  const format = formatOf(named, packageType)
+  // A config in the parent directory has no package.json beside or above
+  // it, so Node and Vite read its `.js` or `.ts` name as CommonJS.
+  const format = formatOf(named, place === `parent` ? `commonjs` : packageType)
   const discovered =
     history.fault === `configNoDefault` && format === `cjs`
       ? named.replace(/\.c?js$/, (ext) => (ext === `.cjs` ? `.cts` : `.ts`))
@@ -2080,7 +2085,9 @@ function configOf(history) {
       ? undefined
       : place === `named`
         ? `config/gap-vitest.${discovered.split(`.`).at(-1)}`
-        : discovered
+        : place === `parent`
+          ? `../${discovered}`
+          : discovered
   return {
     configFile: discovered,
     configPath,
@@ -4558,15 +4565,30 @@ function configText(plan, test) {
 /** The fixture package's files in one state. */
 /**
  * Whether the scratch package lies outside this repository: one that must
- * resolve no TypeScript, and one with no Vitest config. Vitest looks for a
- * config in the package's parent directories too (its cli-api's find-up over
- * `configFiles`), so a package with no config inside the CLI's directory
- * would run under the CLI's own config there; outside, "no config" is what
- * Vitest sees. That the CLI itself looks only in the package is an open
- * defect (see the end-to-end oracle's limits).
+ * resolve no TypeScript, one with no Vitest config, and one whose config is
+ * in its parent directory. Vitest looks for a config in the package's parent
+ * directories too (its cli-api's find-up over `configFiles`), so a package
+ * with no config inside the CLI's directory would run under the CLI's own
+ * config; outside, "no config" is what Vitest sees, and a parent's config
+ * is the only one above the package. A package whose config is in its
+ * parent lies in a directory of a temporary directory, which holds the
+ * config and the linked dependencies (`parentModules`).
  */
 const outsideRepository = (plan) =>
-  plan.fault === `noTypescript` || plan.configPlace === `none`
+  plan.fault === `noTypescript` ||
+  plan.configPlace === `none` ||
+  plan.configPlace === `parent`
+
+/**
+ * Where an outside package's linked dependencies live: in the package, or,
+ * for a package whose config is in its parent directory, in the parent, so
+ * that the config resolves them as the package does. The package's own
+ * Vitest after `fixSession` is the package's.
+ */
+const parentModules = (plan, state) =>
+  plan.configPlace === `parent` && !state.linked
+    ? `../node_modules`
+    : `node_modules`
 
 function fixtureFiles(plan, state = initialState(plan)) {
   const manifest = (fields) =>
@@ -4716,13 +4738,18 @@ function fixtureFiles(plan, state = initialState(plan)) {
     (outsideRepository(plan) && plan.fault !== `brokenVitest`)
       ? Object.fromEntries(
           [`vitest`, `fast-check`, `@fast-check`].map((name) => [
-            `node_modules/${name}`,
+            `${parentModules(plan, state)}/${name}`,
             link(join(OWN_MODULES, name)),
           ]),
         )
       : {}),
     ...(outsideRepository(plan)
-      ? { 'node_modules/vite': link(ROOT_VITE) }
+      ? { [`${parentModules(plan, state)}/vite`]: link(ROOT_VITE) }
+      : {}),
+    // A parent's config imports `vitest/config` from the parent directory,
+    // which a broken Vitest in the package does not change.
+    ...(plan.configPlace === `parent` && plan.fault === `brokenVitest`
+      ? { '../node_modules/vitest': link(join(OWN_MODULES, `vitest`)) }
       : {}),
     ...(plan.native === `gyp`
       ? { 'deps/state-dep/binding.gyp': `{ "targets": [] }\n` }
