@@ -111,7 +111,9 @@
 //
 // No process outlives the CLI (maintainer disposition G2, 2026-11-11). The
 // CLI starts the run as a child in a process group of its own, which every
-// Vitest worker and every process a test starts joins, and waits for it.
+// Vitest worker joins, and every process a test starts unless it starts it
+// detached (in a session of its own, as a browser driver can), and waits
+// for it. Windows has no process groups, so there the run is not supervised.
 // SIGINT or SIGTERM is sent on to the whole group; a process that has not
 // ended 2 s later is killed, and so is any process left in the group when
 // the run ends. The run kills its group itself if the CLI dies first.
@@ -144,9 +146,13 @@ function signalGroup(group, signal) {
  * with 128 plus the signal's number.
  */
 function superviseRun() {
+  // An inspector flag would bind the CLI's own port a second time.
   const child = spawn(
     process.execPath,
-    [...process.execArgv, ...process.argv.slice(1)],
+    [
+      ...process.execArgv.filter((flag) => !/^--inspect/.test(flag)),
+      ...process.argv.slice(1),
+    ],
     {
       detached: true,
       stdio: `inherit`,
@@ -211,9 +217,12 @@ async function checkThroughDaemon(options) {
 // compared with the URL of the path it was started as.
 const main =
   import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
-if (main && process.env.ORACLE_GAPS_GROUP === undefined) superviseRun()
+// Windows has no process groups: there the run is the CLI's own process.
+const supervised = process.platform !== `win32`
+if (main && supervised && process.env.ORACLE_GAPS_GROUP === undefined)
+  superviseRun()
 else if (main) {
-  watchSupervisor(Number(process.env.ORACLE_GAPS_GROUP))
+  if (supervised) watchSupervisor(Number(process.env.ORACLE_GAPS_GROUP))
   // A test that runs this CLI starts a run of its own, in a group of its own.
   delete process.env.ORACLE_GAPS_GROUP
   // The run's options, once its arguments parse; a refusal or an error is
