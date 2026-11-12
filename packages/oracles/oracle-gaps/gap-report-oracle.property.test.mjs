@@ -824,9 +824,15 @@ async function runClisAtOnce(dir, files, hows) {
       const child = spawn(process.execPath, args, {
         cwd: repo,
         env: { ...cleanEnv(), ...how.env },
-        stdio: [`ignore`, `ignore`, `pipe`],
+        stdio: [`ignore`, `pipe`, `pipe`],
       })
+      // Both streams, as runCli reads them: law 15 judges each run's lines,
+      // its stdout's done line included.
+      let stdout = ``
       let stderr = ``
+      child.stdout.on(`data`, (chunk) => {
+        stdout += chunk
+      })
       child.stderr.on(`data`, (chunk) => {
         stderr += chunk
       })
@@ -837,7 +843,7 @@ async function runClisAtOnce(dir, files, hows) {
           resolvePromise(code)
         })
       })
-      return readRun(dir, out, status, stderr, how.cli ?? here)
+      return readRun(dir, out, status, stderr, how.cli ?? here, stdout)
     }),
   )
 }
