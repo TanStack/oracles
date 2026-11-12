@@ -659,9 +659,12 @@ oracleProperty({
 // reports `unknownTestSource` once per import specifier, at the import, for
 // a title-shaped call (README "Decisions": the maintainer decision of
 // 2026-11-12, which replaces the fail-closed decision of 2026-11-11). A
-// call that passes its function before the title (`fn-first`) is a
-// registration of a test function wherever the function is, so every rule
-// sees it, and it is not title-shaped through an unknown source. `lint.test-source-recognition` owns the account of each
+// call that passes its function before a string (`fn-first`) is no
+// registration of a Vitest test function: the rules agree when
+// `no-disabled` reports the `.skip` of such a call (`skip-fn-first`), an
+// annotation's form, and `no-unit-test` reports nothing (README
+// "Decisions", 2026-11-12). Through an unknown source it is not
+// title-shaped. `lint.test-source-recognition` owns the account of each
 // source; this property checks that the rules agree through every binding.
 //
 // What each rule owes for a statement `<callee><modifier>('n', body)`:
@@ -957,9 +960,11 @@ const MODIFIERS = [
   `each-tagged`,
   `skip-each-tagged`,
   `prop`,
-  // A function before the title, as node:test's `test(fn, ...)` and
-  // Playwright's `test.skip(condition, description)` take it. Every rule
-  // finds the function wherever it is.
+  // A function before a string, as Playwright's annotation
+  // `test.skip(condition, description)` passes it. Vitest's test function
+  // takes its body after the title, so neither call is a registration:
+  // `no-unit-test` reports nothing, and `no-disabled` reports the `.skip`
+  // that switches a test off (README "Decisions", 2026-11-12).
   `fn-first`,
   `skip-fn-first`,
 ]
@@ -1088,7 +1093,10 @@ function agreeRender(history) {
  */
 function callReports({ root, modifier }, carried) {
   const reports = []
-  if (!SUITES.has(root)) reports.push(`no-unit-test:unitTest`)
+  // A call with its function before a string is no registration of a
+  // Vitest test function.
+  const registers = !modifier.endsWith(`fn-first`)
+  if (!SUITES.has(root) && registers) reports.push(`no-unit-test:unitTest`)
   const modifiers = [
     ...(carried === undefined ? [] : [carried]),
     ...(modifier === `skip-each-tagged` || modifier === `skip-fn-first`
@@ -1268,7 +1276,7 @@ const agreeConstructed = [
 oracleProperty({
   id: `lint.test-function-agreement`,
   law: {
-    statement: `oracle/no-unit-test, oracle/no-disabled, and oracle/oracle-property-only resolve a callee's root to the same test function: a test framework's it, test, describe, suite, or bench, or a fixture of one, through an alias, a namespace member, a variable's initializer or assignment, a destructuring, a cast, a branch of a conditional or logical expression, and a test module's constant, re-export, export * as, or default export. Any other binding, and a member that is no registration such as test.step, is no test function, whatever its name. An answer does not depend on the order of queries in a cycle of modules, and a conditional whose branches are both test functions is reported once. For a test root no-unit-test reports unitTest; no-disabled reports only, skip for .skip and a .todo with a body, and conditional for .skipIf(true), and aliasTest where a bare test function is passed as a value; oracle-property-only reports rawProperty for .prop. A call through a package that no table classifies, or an unmapped # import, reports no test, and no-unit-test reports unknownTestSource once per import specifier for a title-shaped call. A body passed before the title is found by every rule. A modifier that a module's binding carries counts at the call, and no-disabled reports alias where a modifier or a modifier call is passed as a value. Every lint ends within ${BUDGET_MS} ms.`,
+    statement: `oracle/no-unit-test, oracle/no-disabled, and oracle/oracle-property-only resolve a callee's root to the same test function: a test framework's it, test, describe, suite, or bench, or a fixture of one, through an alias, a namespace member, a variable's initializer or assignment, a destructuring, a cast, a branch of a conditional or logical expression, and a test module's constant, re-export, export * as, or default export. Any other binding, and a member that is no registration such as test.step, is no test function, whatever its name. An answer does not depend on the order of queries in a cycle of modules, and a conditional whose branches are both test functions is reported once. For a test root no-unit-test reports unitTest; no-disabled reports only, skip for .skip and a .todo with a body, and conditional for .skipIf(true), and aliasTest where a bare test function is passed as a value; oracle-property-only reports rawProperty for .prop. A call through a package that no table classifies, or an unmapped # import, reports no test, and no-unit-test reports unknownTestSource once per import specifier for a title-shaped call. A function passed before a string is no Vitest registration: no-unit-test reports nothing, and no-disabled reports the .skip of such a call, as of an annotation. A modifier that a module's binding carries counts at the call, and no-disabled reports alias where a modifier or a modifier call is passed as a value. Every lint ends within ${BUDGET_MS} ms.`,
     authority: `The D2 law of lint.registration-only; the no-disabled and oracle-property-only rules' contracts in their source headers; the review of remove/declare-oracle of 2026-11-11 (P1), which asks that the three rules share one root recognizer and that an unknown callee that may resolve to a test root is reported; the maintainer decision of 2026-11-12 ("agree with reversed decision -- false positives are annoying and we should be able to be precise"), under which an unclassified package's call is reported as an unknown source, not as a test.`,
     limits: `One oracle file per history with fixed helper modules. A test function passed as a parameter, a global test function, a modifier call relayed from another module (a relayed .skip is generated), a fixture exported by a package (lint.test-source-recognition generates globals and package fixtures), and an unparsable module are not generated.`,
   },

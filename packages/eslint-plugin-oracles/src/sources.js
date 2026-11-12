@@ -18,6 +18,17 @@
  * `exports`, its declarations, or its documentation.
  */
 
+/**
+ * A table's argument grammar, on symbol keys that no export name can be:
+ * `OPTIONAL_TITLE`, a framework whose registration takes a function first
+ * when it has no title (node:test's `test(fn)`); `ANNOTATIONS`, Playwright,
+ * whose `test.skip('reason')` switches the test that it runs in off. Any
+ * other framework takes its body after the first argument.
+ */
+export const OPTIONAL_TITLE = Symbol(`optional title`)
+export const ANNOTATIONS = Symbol(`annotations`)
+const untitled = (table) => ({ ...table, [OPTIONAL_TITLE]: true })
+
 const vitest = {
   it: `test`,
   test: `test`,
@@ -25,12 +36,18 @@ const vitest = {
   describe: `suite`,
   suite: `suite`,
 }
+// playwright 1.65.0 types/test.d.ts lines 4716-6306: `skip`, `fixme`,
+// `fail`, and `slow` with `()`, `(description)`, `(condition,
+// description?)`, or `(callback, description?)` annotate; only `(title,
+// body)` and `(title, details, body)` register.
 const playwright = {
   test: `test`,
   default: `test`,
   mergeTests: { factory: `test` },
+  [ANNOTATIONS]: true,
 }
-const nodeTest = {
+// @types/node 26.6.6 test.d.ts lines 47-50: `test(fn)`, `test(options, fn)`.
+const nodeTest = untitled({
   default: `test`,
   test: `test`,
   it: `test`,
@@ -40,7 +57,7 @@ const nodeTest = {
   todo: `test.todo`,
   only: `test.only`,
   expectFailure: `test`,
-}
+})
 const jest = {
   it: `test`,
   test: `test`,
@@ -61,13 +78,14 @@ const qunitObject = {
     todo: `test.todo`,
   },
 }
+// @tapjs/core 4.6.1 dist/esm/parse-test-args.d.ts line 10: `[cb]` alone.
 const tapObject = {
-  namespace: {
+  namespace: untitled({
     test: `test`,
     skip: `test.skip`,
     only: `test.only`,
     todo: `test.todo`,
-  },
+  }),
 }
 
 /** The test frameworks, by exact specifier. */
@@ -116,15 +134,23 @@ export const frameworks = {
   test: nodeTest,
   ava: { default: `test` },
   tap: { default: tapObject, t: tapObject, ...tapObject.namespace },
-  tape: { default: `test`, test: `test`, skip: `test.skip`, only: `test.only` },
+  // tape 5.10.3 lib/test.js lines 58-78: name, options, and callback in any
+  // order.
+  tape: untitled({
+    default: `test`,
+    test: `test`,
+    skip: `test.skip`,
+    only: `test.only`,
+  }),
   zora: { test: `test`, only: `test.only`, skip: `test.skip` },
-  brittle: {
+  // brittle 4.5.0 index.js lines 1000-1002: a function first is the callback.
+  brittle: untitled({
     default: `test`,
     test: `test`,
     solo: `test.only`,
     skip: `test.skip`,
     todo: `test.todo`,
-  },
+  }),
   uvu: { test: `test`, suite: { factory: `test` } },
   'bun:test': {
     test: `test`,
@@ -158,7 +184,7 @@ export const frameworks = {
 
 /** Specifier patterns of frameworks: a prefix, and the table it shares. */
 const frameworkPatterns = [
-  [`@playwright/experimental-ct-`, { test: `test` }],
+  [`@playwright/experimental-ct-`, { test: `test`, [ANNOTATIONS]: true }],
   [`jsr:@std/testing`, stdTesting],
 ]
 
@@ -214,7 +240,8 @@ export const globalRoles = {
   fdescribe: `suite.only`,
   xdescribe: `suite.skip`,
   xcontext: `suite.skip`,
-  Deno: { namespace: { test: `test` } },
+  // Deno.test(fn), (options, fn), (name, options, fn).
+  Deno: { namespace: untitled({ test: `test` }) },
   QUnit: qunitObject,
 }
 

@@ -224,9 +224,18 @@ a global: Vitest's `globals`, and Jest's, Mocha's, and Jasmine's (`it`,
 `module`, `run`, `step`, and `fail` are left out, because other
 environments declare them for other things.
 
-The body of a registration may come first: node:test's `test(fn)` and
-Playwright's `test.skip(condition, description)` take a function before
-any title, and every rule finds it there.
+A registration's body follows its first argument, a title. Only a
+framework whose title is optional takes a function first as the body:
+node:test (and the `test` package), tap, tape, brittle, and `Deno.test`
+(`test(fn)`, `test(options, fn)`). Elsewhere a function first is no body.
+Playwright's `test.skip`, `test.fixme`, `test.fail`, and `test.slow` with
+no arguments, a reason only, a boolean condition, or a condition callback
+(`test.skip(({ browserName }) => ..., 'reason')`) are annotations, at file,
+describe, or test scope: they register nothing, so `oracle/no-unit-test`
+reports nothing for them, and `oracle/no-disabled` reports the `skip` and
+`fixme` ones, which switch tests off. For Playwright, `test.skip('reason')`
+is such an annotation; for other frameworks, `it.skip('name')` with no body
+disables nothing.
 
 A setting that the rules cannot use is reported at line 1 as
 `malformedSourceSetting`, and it is read as unset, all of it: a
@@ -266,9 +275,15 @@ The decisions that the rules and their oracles cite:
   reported by the call's shape, not its name.** A title-shaped call through
   any import of an unknown source gets `unknownTestSource`, whatever its
   local name; a call with no title before its function stays silent.
-- **2026-11-12, coordinator: a registration's body may come first.** Every
-  rule finds a function in any argument position, so the rules agree on
-  `test(fn)` and `test.skip(condition, description)`.
+- **2026-11-12, coordinator: where a registration's body may be is each
+  framework's grammar.** A function first is a body only where the
+  framework's title is optional (node:test, tap, tape, brittle,
+  `Deno.test`). Playwright's `test.skip(condition, description)` and its
+  other annotation forms register nothing: `oracle/no-disabled` reports the
+  disabling ones and `oracle/no-unit-test` reports nothing, and that is how
+  the rules agree on them. This replaces the same day's earlier instruction
+  that every rule find a body in any argument position, which made
+  `oracle/no-unit-test` report an annotation as a unit test.
 
 The limits that these decisions accept, which the oracles
 (`lint.test-source-recognition`, `lint.test-function-agreement`) state:

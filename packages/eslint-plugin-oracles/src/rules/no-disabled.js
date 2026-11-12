@@ -369,13 +369,15 @@ function isBrowserCondition(node) {
 /**
  * Whether a `.skip`, `.todo`, or `.fixme` call switches off a body that runs
  * something. A test registration passes `(name, body)`, and a todo passes
- * only its name. Playwright's runtime form passes `(condition, reason)`,
- * `(condition)`, or nothing, and skips the test that it runs in.
+ * only its name. Playwright's annotation passes `(condition, reason)`,
+ * `(condition)`, `(callback, reason)`, `(reason)`, or nothing, and skips the
+ * test or group that it runs in, so for Playwright's test function
+ * (`annotates`) a lone string is a reason, not a todo's name.
  */
-function disablesBody(args) {
+function disablesBody(args, annotates) {
   const [first, second] = args
   if (first === undefined) return true
-  if (second === undefined && isStringLike(first)) return false
+  if (second === undefined && isStringLike(first)) return annotates
   if (second === undefined || isStringLike(second)) {
     return !isBrowserCondition(first)
   }
@@ -861,7 +863,10 @@ export default {
           return
         }
         const disabled = names.find((name) => disablingModifiers.has(name))
-        if (disabled !== undefined && disablesBody(node.arguments)) {
+        if (
+          disabled !== undefined &&
+          disablesBody(node.arguments, test.annotates)
+        ) {
           context.report({ node, messageId: `skip`, data: { name: disabled } })
         }
       },

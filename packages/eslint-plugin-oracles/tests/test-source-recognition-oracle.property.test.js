@@ -56,10 +56,17 @@
  *   none, and `'ignore'` reads every export as none. The report is owed in
  *   an `oracle-` machinery file too, where `no-unit-test` judges nothing
  *   else, because there `no-disabled` alone guards a switched-off law.
- * - **A body may come first.** A framework's test function called with its
- *   function before any title (`test(fn)`, `test(fn, 10)`,
- *   `test.skip(condition, 'description')`) or after data (`test([1], fn)`)
- *   is a registration.
+ * - **Each framework's argument grammar.** A registration's body follows
+ *   the first argument (a title, or data: `test([1], fn)`). A function
+ *   first is the body only where the row says the title is optional
+ *   (node:test, `test`, tap, tape, brittle, `Deno.test`: `test(fn)`,
+ *   `test(fn, 10)`); elsewhere `test(fn, 'n')` registers nothing, and
+ *   `no-disabled` still judges its switches (`xit(fn)` is skipped).
+ *   Playwright's annotations, `test.skip`, `test.fixme`, `test.fail`, and
+ *   `test.slow` with no arguments, a reason, a boolean condition, or a
+ *   condition callback, at file, describe, or test scope, register
+ *   nothing: `no-unit-test` reports nothing for them, and `no-disabled`
+ *   reports `skip` for the `skip` and `fixme` ones, a reason alone included.
  *
  * What each rule owes for a call is the account of `lint.registration-only`
  * and `lint.test-function-agreement`: `unitTest` for a test (not a suite),
@@ -74,7 +81,9 @@
  * package's import of a test-function name, and sets `unknownSources` to
  * `'report'` by default; and the coordinator's decisions under it, of the
  * same day, that an unknown source is judged by the call's title shape, not
- * by its name, and that a registration's body may come first. The framework rows come from
+ * by its name, and that where a registration's body may be is each
+ * framework's grammar (Playwright's annotations register nothing). The
+ * framework rows come from
  * each package's own files, as the research of 2026-11-12 read them (each
  * row cites its source: a `package.json` `exports`, a `.d.ts`, or the
  * framework's documentation). The no-disabled and registration accounts are
@@ -137,9 +146,11 @@ const RULES = [
 
 // The arguments of the call, by shape. A title-shaped call passes a string
 // title first and a function after it, as every framework's registration
-// does; the other shapes pass a function in another position, as node:test's
-// `test(fn)` and Playwright's `test.skip(condition, description)` do, or as
-// a library's `pMap(xs, fn)`, `debounce(fn, 10)`, and `effect(fn)` do.
+// does. The other shapes pass a function in another position: node:test
+// registers `test(fn)`, where its title is optional; Vitest's `test(fn,
+// 'n')` and Playwright's `test.skip(condition, 'reason')` register nothing;
+// and a library's `pMap(xs, fn)`, `debounce(fn, 10)`, and `effect(fn)` are
+// no tests.
 const SHAPES = {
   title: (b, table) => (table ? `'n %s', ${b.row}` : `'n', ${b.body}`),
   'fn-first': (b, table) => (table ? `${b.row}, 'n %s'` : `${b.body}, 'n'`),
@@ -221,7 +232,54 @@ const CHAINS = {
   },
   step: { render: plainCall(`.step`), effects: [`nothing`] },
   'step.skip': { render: plainCall(`.step.skip`), effects: [`nothing`] },
+  ...annotationChains(),
 }
+
+/**
+ * Playwright's annotations: `test.skip`, `test.fixme`, `test.fail`, and
+ * `test.slow` with no arguments, a description only, a boolean condition,
+ * or a condition callback, and a description (playwright 1.65.0
+ * types/test.d.ts lines 4716-4962, 5200-5437, 5516-6128, 6129-6306). They
+ * mark the test they run in, or at file or describe scope the group; none
+ * registers a test, and the callback is a condition, not a body. Each is
+ * generated at file scope, in a `test.describe` body, and in a test body.
+ */
+function annotationChains() {
+  const condition = `({ browserName }) => browserName === 'webkit'`
+  const forms = {
+    'skip()': [`skip`, ``],
+    'skip(d)': [`skip`, `'d'`],
+    'skip(true, d)': [`skip`, `true, 'd'`],
+    'skip(fn, d)': [`skip`, `${condition}, 'd'`],
+    'fixme()': [`fixme`, ``],
+    'fixme(d)': [`fixme`, `'d'`],
+    'fixme(true)': [`fixme`, `true`],
+    'fixme(fn, d)': [`fixme`, `${condition}, 'd'`],
+    'fail(true, d)': [`fail`, `true, 'd'`],
+    'fail(fn, d)': [`fail`, `${condition}, 'd'`],
+    'slow()': [`slow`, ``],
+    'slow(d)': [`slow`, `'d'`],
+  }
+  const scopes = {
+    file: (c, call) => call,
+    describe: (c, call) => `${c}.describe('d', () => { ${call} })`,
+    test: (c, call) => `${c}('t', async () => { ${call} })`,
+  }
+  const chains = {}
+  for (const [name, [member, args]] of Object.entries(forms))
+    for (const [scope, wrap] of Object.entries(scopes))
+      chains[`annotate ${name} in ${scope}`] = {
+        render: (c) => wrap(c, `${c}.${member}(${args})`),
+        effects: [`annotation`],
+        annotation: {
+          scope,
+          disables: member === `skip` || member === `fixme`,
+          descriptionOnly: args === `'d'`,
+        },
+      }
+  return chains
+}
+const ANNOTATIONS = Object.keys(annotationChains())
 
 // The vocabularies, from each framework's types.
 const VITEST_TEST = [
@@ -267,6 +325,7 @@ const JEST_TEST = [
 ]
 const JEST_SUITE = [`none`, `skip`, `only`, `each`]
 const PW_TEST = [
+  ...ANNOTATIONS,
   `none`,
   `only`,
   `skip`,
@@ -363,7 +422,10 @@ const vitestEntries = [
 ]
 const playwrightEntries = [
   entry(`test`, testRole(PW_TEST)),
-  entry(`default`, testRole(PW_TEST)),
+  entry(
+    `default`,
+    testRole(PW_TEST.filter((chainId) => !ANNOTATIONS.includes(chainId))),
+  ),
   entry(`mergeTests()`, testRole([`none`, `skip`, `only`]), {
     import: `mergeTests`,
     expr: (binding) => `${binding}()`,
@@ -386,6 +448,7 @@ const stdTestingEntries = [
   entry(`test`, testRole([`none`, `only`, `skip`, `ignore`])),
 ]
 const PW_FIXTURE_TEST = [
+  ...ANNOTATIONS,
   `none`,
   `only`,
   `skip`,
@@ -494,6 +557,8 @@ const SOURCES = [
   },
   {
     id: `@playwright/test`,
+    // Playwright's annotations: a description alone switches a test off.
+    annotates: true,
     spec: `@playwright/test`,
     class: `framework`,
     entries: playwrightEntries,
@@ -501,6 +566,8 @@ const SOURCES = [
   },
   {
     id: `playwright/test`,
+    // Playwright's annotations: a description alone switches a test off.
+    annotates: true,
     spec: `playwright/test`,
     class: `framework`,
     entries: playwrightEntries,
@@ -508,6 +575,8 @@ const SOURCES = [
   },
   {
     id: `@playwright/experimental-ct-react`,
+    // Playwright's annotations: a description alone switches a test off.
+    annotates: true,
     spec: `@playwright/experimental-ct-react`,
     class: `framework`,
     entries: [entry(`test`, testRole(PW_TEST))],
@@ -515,6 +584,8 @@ const SOURCES = [
   },
   {
     id: `@playwright/experimental-ct-vue`,
+    // Playwright's annotations: a description alone switches a test off.
+    annotates: true,
     spec: `@playwright/experimental-ct-vue`,
     class: `framework`,
     entries: [entry(`test`, testRole(PW_TEST))],
@@ -586,6 +657,8 @@ const SOURCES = [
   },
   {
     id: `node:test`,
+    // A title is optional: a function first is the body.
+    untitled: `@types/node 26.6.6 test.d.ts lines 47-50: test(name?, options?, fn?) and test(fn)`,
     spec: `node:test`,
     class: `framework`,
     entries: nodeTestEntries,
@@ -593,6 +666,8 @@ const SOURCES = [
   },
   {
     id: `test`,
+    // A title is optional: a function first is the body.
+    untitled: `test 3.3.0 lib/test.js line 7 (node:test's API)`,
     spec: `test`,
     class: `framework`,
     entries: nodeTestEntries,
@@ -607,6 +682,8 @@ const SOURCES = [
   },
   {
     id: `tap`,
+    // A title is optional: a function first is the body.
+    untitled: `@tapjs/core 4.6.1 dist/esm/parse-test-args.d.ts line 10 ([cb] alone)`,
     spec: `tap`,
     class: `framework`,
     entries: [
@@ -624,6 +701,8 @@ const SOURCES = [
   },
   {
     id: `tape`,
+    // A title is optional: a function first is the body.
+    untitled: `tape 5.10.3 lib/test.js lines 58-78 (getTestArgs takes the name, options, and callback in any order)`,
     spec: `tape`,
     class: `framework`,
     entries: [
@@ -647,6 +726,8 @@ const SOURCES = [
   },
   {
     id: `brittle`,
+    // A title is optional: a function first is the body.
+    untitled: `brittle 4.5.0 index.js lines 1000-1002 (a function first is the callback)`,
     spec: `brittle`,
     class: `framework`,
     entries: [
@@ -771,6 +852,8 @@ const SOURCES = [
   },
   {
     id: `Deno`,
+    // A title is optional: a function first is the body.
+    untitled: `https://docs.deno.com/api/deno/~/Deno.test ((fn), (options, fn), (name, options, fn))`,
     class: `global`,
     entries: [entry(`Deno.test`, testRole(DENO))],
     cite: `https://docs.deno.com/api/deno/~/Deno.test`,
@@ -788,6 +871,8 @@ const SOURCES = [
   // node_modules, and a `#` import of the package beside the oracle file.
   {
     id: `@acme/fixtures`,
+    // Playwright's annotations: a description alone switches a test off.
+    annotates: true,
     spec: `@acme/fixtures`,
     class: `project`,
     entries: fixtureEntries,
@@ -795,6 +880,8 @@ const SOURCES = [
   },
   {
     id: `#test/fixtures`,
+    // Playwright's annotations: a description alone switches a test off.
+    annotates: true,
     spec: `#test/fixtures`,
     class: `project`,
     entries: fixtureEntries,
@@ -940,13 +1027,22 @@ for (const source of SOURCES) {
 
 const sourceById = new Map(SOURCES.map((source) => [source.id, source]))
 
-/** The role that a framework row gives the export `name`, or none. */
+/** The role that a framework row gives the export `name`, or none, with the row's grammar. */
 function frameworkExportRole(sourceId, name) {
-  const found = sourceById
-    .get(sourceId)
-    .entries.find((e) => e.identity && e.import === name)
-  return found?.role ?? noRole
+  const source = sourceById.get(sourceId)
+  const found = source.entries.find((e) => e.identity && e.import === name)
+  return found === undefined ? noRole : withGrammar(found.role, source)
 }
+
+/**
+ * A role with its row's argument grammar: whether a title is optional
+ * (`untitled`), and whether Playwright's annotations apply (`annotates`).
+ */
+const withGrammar = (role, source) => ({
+  ...role,
+  untitled: source.untitled !== undefined,
+  annotates: source.annotates === true,
+})
 
 /**
  * The role of an entry under the history's settings: the settings first,
@@ -965,11 +1061,13 @@ function roleOf(source, e, settings) {
     // Whatever the export and its local name: only the call's shape decides
     // (reportKeys).
     if (settings.unknownSources === `ignore`) return noRole
+    // A framework's name read from an unknown source takes no framework's
+    // argument grammar: its title is required.
     if (settings.unknownSources === `test`)
       return frameworkNameRoles.get(e.import) ?? noRole
     return { kind: `unknown`, chains: e.role.chains }
   }
-  return e.role
+  return withGrammar(e.role, source)
 }
 
 // -- Grammar ------------------------------------------------------------------
@@ -1305,10 +1403,14 @@ function render(history) {
 
 // -- Model --------------------------------------------------------------------
 
-/** The reports that a call owes, as `rule:messageId` keys. */
-function callReports(kind, carries, effects) {
+/**
+ * The reports that a call of a test function owes, as `rule:messageId`
+ * keys. `no-unit-test` judges a registration; `no-disabled` judges the
+ * switches of any call, a registration or not.
+ */
+function callReports(kind, carries, effects, registers = true) {
   const reports = []
-  if (kind === `test`) reports.push(`no-unit-test:unitTest`)
+  if (kind === `test` && registers) reports.push(`no-unit-test:unitTest`)
   const switches = [...(carries === undefined ? [] : [carries]), ...effects]
   const disabled = switches.includes(`only`)
     ? `only`
@@ -1319,6 +1421,27 @@ function callReports(kind, carries, effects) {
         : undefined
   if (disabled !== undefined) reports.push(`no-disabled:${disabled}`)
   if (effects.includes(`prop`)) reports.push(`oracle-property-only:rawProperty`)
+  return reports
+}
+
+/**
+ * Whether a call of a known test function registers a test: its body
+ * follows the first argument (a title, or data), or the row's grammar makes
+ * the title optional and the function comes first (node:test's `test(fn)`).
+ * Elsewhere a function first is no body.
+ */
+const registers = (role, shape) =>
+  shape === `title` || shape === `data-first` || role.untitled
+
+/** The reports of a Playwright annotation, at its scope. */
+function annotationReports(role, annotation) {
+  const reports = []
+  // A test body around the annotation is a registration; a describe body
+  // is a suite.
+  if (annotation.scope === `test` && role.kind === `test`)
+    reports.push(`no-unit-test:unitTest`)
+  if (annotation.disables && (!annotation.descriptionOnly || role.annotates))
+    reports.push(`no-disabled:skip`)
   return reports
 }
 
@@ -1340,12 +1463,18 @@ function reportKeys(history) {
         keys.push(`${placed.callLine}:no-unit-test:importedRegistration`)
       continue
     }
-    const { effects } = CHAINS[placed.chainId]
+    const { effects, annotation } = CHAINS[placed.chainId]
     if (effects.includes(`nothing`)) continue
     if (role.kind === `unknown`) {
       // Only a title-shaped call through an unknown source can be a
-      // registration: `pMap(xs, fn)` and `effect(fn)` are not.
-      if (placed.shape !== `title`) continue
+      // registration: `pMap(xs, fn)` and `effect(fn)` are not. An
+      // annotation is title-shaped only through the describe or test body
+      // around it.
+      const titled =
+        annotation === undefined
+          ? placed.shape === `title`
+          : annotation.scope !== `file`
+      if (!titled) continue
       if (!diagnosed.has(placed.importKey)) {
         diagnosed.add(placed.importKey)
         keys.push(`${placed.importLine}:no-unit-test:unknownTestSource`)
@@ -1353,7 +1482,16 @@ function reportKeys(history) {
       continue
     }
     const kind = effects.includes(`suite`) ? `suite` : role.kind
-    for (const report of callReports(kind, role.carries, effects)) {
+    const reports =
+      annotation === undefined
+        ? callReports(
+            kind,
+            role.carries,
+            effects,
+            registers(role, placed.shape),
+          )
+        : annotationReports(role, annotation)
+    for (const report of reports) {
       // A machinery file's tests are not judged as unit tests.
       if (history.machinery && report === `no-unit-test:unitTest`) continue
       keys.push(`${placed.callLine}:${report}`)
@@ -1866,8 +2004,8 @@ function corruptFirst(trace, change) {
 oracleProperty({
   id: `lint.test-source-recognition`,
   law: {
-    statement: `A callee is a test function by the source of its binding: a framework's export (named, default, namespace, require, relay, or global, with the modifier it carries and the factories that return one) is one, a known non-test library's export of the same name is none, a project's relative, # and workspace modules are read and node_modules packages never are, testPackages and nonTestPackages decide first, and an unknown source's title-shaped call (a string title, then a function), under any import and local name, gets one unknownTestSource report per import (or per helper call) unless unknownSources is test or ignore, while its untitled calls get none; a registration's body may come first; and a malformed source setting gets malformedSourceSetting, is read as unset, and never throws.`,
-    authority: `README "Decisions": the maintainer decision of 2026-11-12 ("agree with reversed decision -- false positives are annoying and we should be able to be precise"), which replaces the fail-closed decision of 2026-11-11 and makes unknownSources default to report, and the coordinator decisions under it (title shape for unknown sources; a body in any argument position); each source row's citation (package exports, .d.ts, or the framework's documentation, read 2026-11-12); the D2 law of lint.registration-only and the no-disabled rule's header for what each rule owes a registration.`,
+    statement: `A callee is a test function by the source of its binding: a framework's export (named, default, namespace, require, relay, or global, with the modifier it carries and the factories that return one) is one, a known non-test library's export of the same name is none, a project's relative, # and workspace modules are read and node_modules packages never are, testPackages and nonTestPackages decide first, and an unknown source's title-shaped call (a string title, then a function), under any import and local name, gets one unknownTestSource report per import (or per helper call) unless unknownSources is test or ignore, while its untitled calls get none; a function first is a body only where the framework's title is optional, and Playwright's annotations register nothing while no-disabled reports their skip and fixme; and a malformed source setting gets malformedSourceSetting, is read as unset, and never throws.`,
+    authority: `README "Decisions": the maintainer decision of 2026-11-12 ("agree with reversed decision -- false positives are annoying and we should be able to be precise"), which replaces the fail-closed decision of 2026-11-11 and makes unknownSources default to report, and the coordinator decisions under it (title shape for unknown sources; each framework's argument grammar, under which Playwright's annotations register nothing); each source row's citation (package exports, .d.ts, or the framework's documentation, read 2026-11-12); the D2 law of lint.registration-only and the no-disabled rule's header for what each rule owes a registration.`,
     limits: `One oracle file per history with fixed workspace fixtures. Not generated or not recognized: a test function passed as a parameter (t.test, it.layer), QUnit's test.if(name, condition, fn), Japa's chain after the call, a disabling options object, dynamic import(), TypeScript paths aliases, a nested exports condition other than import and default, a workspace package whose exports name missing built files, and a published package's src/ (production). An unknown source's untitled call is silent by law, and its title-shaped call that is no test is reported by law (README "Decisions"). The parse cost of a fresh process is not observed. Each row holds for the version its citation names.`,
   },
   histories: {

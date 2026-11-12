@@ -9,7 +9,13 @@ import {
   resolveTestModule,
   subpathPackage,
 } from './modules.js'
-import { classifySource, frameworkNames, globalRoles } from './sources.js'
+import {
+  ANNOTATIONS,
+  OPTIONAL_TITLE,
+  classifySource,
+  frameworkNames,
+  globalRoles,
+} from './sources.js'
 
 export const disablingModifiers = new Set([`fixme`, `ignore`, `skip`, `todo`])
 // The members that switch a test off under a condition: Vitest's and AVA's
@@ -137,19 +143,24 @@ const transparent = new Set([
 ])
 
 const rootNames = new Set([`it`, `test`, `describe`, `suite`, `bench`])
-const framework = (root, carried) => ({
+// `untitled` and `annotates` are the argument grammar of the table that
+// the test function comes from (sources.js).
+const framework = (root, carried, table) => ({
   kind: `test`,
   root,
   members: carried === undefined ? [] : [carried],
   own: [],
   foreign: carried === undefined ? [] : [carried],
+  untitled: table?.[OPTIONAL_TITLE] === true,
+  annotates: table?.[ANNOTATIONS] === true,
 })
 
 /**
- * The value of a role (sources.js) of the export `name`: a test function or
- * suite, with the modifier that it carries, a factory, or a namespace.
+ * The value of a role (sources.js) of the export `name` of `table`: a test
+ * function or suite, with the modifier that it carries and the table's
+ * argument grammar, a factory, or a namespace.
  */
-function roleValue(role, name) {
+function roleValue(role, name, table) {
   if (typeof role === `string`) {
     const [kind, carried] = role.split(`.`)
     const suite = kind === `suite`
@@ -160,17 +171,19 @@ function roleValue(role, name) {
         : suite
           ? `describe`
           : `test`
-    return framework(root, carried)
+    return framework(root, carried, table)
   }
   if (role.factory !== undefined)
-    return { kind: `factory`, result: roleValue(role.factory, ``) }
+    return { kind: `factory`, result: roleValue(role.factory, ``, table) }
   return tableNamespace(role.namespace)
 }
 
 const tableNamespace = (table) => ({
   kind: `namespace`,
   member: (name) =>
-    Object.hasOwn(table, name) ? roleValue(table[name], name) : undefined,
+    Object.hasOwn(table, name)
+      ? roleValue(table[name], name, table)
+      : undefined,
 })
 
 /** The expression that casts or parentheses around `node` make. */
@@ -442,7 +455,7 @@ function importedValue(source, name, scope, site) {
   if (classified === `none`) return undefined
   if (classified !== undefined)
     return Object.hasOwn(classified.table, name)
-      ? roleValue(classified.table[name], name)
+      ? roleValue(classified.table[name], name, classified.table)
       : undefined
   const file = resolveTestModule(scope.file, source, scope.session)
   if (file === undefined)
@@ -657,12 +670,14 @@ export function registeredTest(node, functions) {
   ) {
     return undefined
   }
-  // The body follows the title, or it comes first, as in node:test's
-  // `test(fn)` and Playwright's `test.skip(condition, description)`.
+  // The body follows the first argument (a title). Where the framework's
+  // title is optional, a function first is the body, as in node:test's
+  // `test(fn)`; elsewhere it is not, as in Playwright's annotation
+  // `test.skip(condition, description)`.
   const [first, ...rest] = node.arguments
   const body =
     registrationBody(rest, functions) ??
-    (first !== undefined && isFunctionValue(first, functions)
+    (test.untitled && first !== undefined && isFunctionValue(first, functions)
       ? first
       : undefined)
   // The modifiers between the root and the call, such as `skip` or `todo`.
