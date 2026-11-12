@@ -52,11 +52,11 @@ export const partitions = {
     },
   },
   // The end-to-end gap oracle's fixed-seed units, which a pull request runs
-  // (`-t "fixed seed"`): 32 units, 534 s in all, measured on this
+  // (`-t "fixed seed"`): 32 units, 465 s in all, measured on this
   // branch in one local run under other agents' load (load average about 3).
   // A unit's cost follows the generated history its constructed history is
   // built from, so a grammar change can move cost between units. The units
-  // are packed longest first into three shards: 259 s, 138 s, and 138 s.
+  // are packed longest first into three shards: 155 s, 155 s, and 155 s.
   'oracle-gaps-fixed-seed': {
     args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-oracle`],
     suite: `oracle-gaps.report`,
@@ -65,24 +65,31 @@ export const partitions = {
     // select exactly these.
     previously: `fixed seed`,
     shards: {
-      1: anyOf(['a declaration fault: apiLessTypescript']),
-      2: anyOf([
-        'an edit sequence through the daemon',
-        'every outcome class',
-        'a declaration fault: configThrows',
-        'an edit that changed the cold result after a hang replaced the only context',
+      1: anyOf([
+        'a second daemon check of the budget witness',
+        'a declaration fault: apiLessTypescript',
         'a declaration fault: noTypescript',
         'an edit to a module that only mutated runs load',
+        'generated',
         'a load failure beside a hang',
-        'a declaration fault: brokenOwner',
-        'two authored mutants',
-        'a .ts config in a package with no module type that calls require',
-        'a run with eleven contexts',
-        'ordinary tests left out by default',
         'a declaration fault: setupThrows',
-        'a declaration fault: nonLiteral',
+        'a config that --config names',
         'a declaration fault: projects',
+        'a declaration fault: nonLiteral',
         'a declaration fault: configNoDefault',
+      ]),
+      2: anyOf([
+        'a stale authored mutant and a reformat',
+        'an edit sequence through the daemon',
+        'a declaration fault: brokenOwner',
+        'a declaration fault: badEntry',
+        'a declaration fault: outsideSource',
+        'a failing owner under a config that --config names',
+        'a package with no config',
+        'a declaration fault: missingSource',
+        'a .ts config in a package with no module type that calls require',
+        'ordinary tests left out by default',
+        'a declaration fault: configThrows',
       ]),
       3: rest,
     },
