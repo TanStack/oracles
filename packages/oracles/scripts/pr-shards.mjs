@@ -52,11 +52,11 @@ export const partitions = {
     },
   },
   // The end-to-end gap oracle's fixed-seed units, which a pull request runs
-  // (`-t "fixed seed"`): 32 units, 465 s in all, measured on this
+  // (`-t "fixed seed"`): 33 units, 475 s in all, measured on this
   // branch in one local run under other agents' load (load average about 3).
   // A unit's cost follows the generated history its constructed history is
   // built from, so a grammar change can move cost between units. The units
-  // are packed longest first into three shards: 155 s, 155 s, and 155 s.
+  // are packed longest first into three shards: 158 s, 158 s, and 158 s.
   'oracle-gaps-fixed-seed': {
     args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-oracle`],
     suite: `oracle-gaps.report`,
@@ -67,29 +67,28 @@ export const partitions = {
     shards: {
       1: anyOf([
         'a second daemon check of the budget witness',
-        'a declaration fault: apiLessTypescript',
-        'a declaration fault: noTypescript',
-        'an edit to a module that only mutated runs load',
         'generated',
-        'a load failure beside a hang',
-        'a declaration fault: setupThrows',
-        'a config that --config names',
-        'a declaration fault: projects',
-        'a declaration fault: nonLiteral',
-        'a declaration fault: configNoDefault',
-      ]),
-      2: anyOf([
-        'a stale authored mutant and a reformat',
-        'an edit sequence through the daemon',
-        'a declaration fault: brokenOwner',
+        'an edit that changed the cold result after a hang replaced the only context',
         'a declaration fault: badEntry',
-        'a declaration fault: outsideSource',
         'a failing owner under a config that --config names',
-        'a package with no config',
-        'a declaration fault: missingSource',
+        'two authored mutants',
+        'a declaration fault: setupThrows',
         'a .ts config in a package with no module type that calls require',
         'ordinary tests left out by default',
         'a declaration fault: configThrows',
+      ]),
+      2: anyOf([
+        'an edit sequence through the daemon',
+        'every outcome class',
+        'a declaration fault: apiLessTypescript',
+        'a declaration fault: brokenVitest',
+        'an edit to a module that only mutated runs load',
+        'a load failure beside a hang',
+        'a declaration fault: missingSource',
+        'a run with eleven contexts',
+        'a config that --config names',
+        'a config fault in a run that owns nothing',
+        'a declaration fault: outsideSource',
       ]),
       3: rest,
     },
