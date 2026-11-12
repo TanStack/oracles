@@ -84,8 +84,9 @@ every commit with [pkg.pr.new](https://pkg.pr.new).
   `--help` is not a check, so its usage text has no prefix.
 
   A few endings print no done line, or one more line: a SIGKILL of the CLI,
-  or a signal sent to the run's own child process rather than the CLI's,
-  ends it with no done line. An internal error's own message lines
+  a signal sent to the run's own child process rather than the CLI's, or a
+  signal that comes while Node is still starting the CLI, before its first
+  line runs (a few tens of milliseconds), ends it with no done line. An internal error's own message lines
   (`oracle-gaps internal error: …`) have no prefix. A config's syntax error
   is refused with its first error; a syntax error in a module the config
   imports still lets esbuild print its own error block, which has no

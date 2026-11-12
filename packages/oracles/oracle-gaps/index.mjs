@@ -150,32 +150,23 @@ function signalGroup(group, signal) {
  * with 128 plus the signal's number.
  */
 function superviseRun() {
-  // An inspector flag would bind the CLI's own port a second time.
-  const child = spawn(
-    process.execPath,
-    [
-      ...process.execArgv.filter((flag) => !/^--inspect/.test(flag)),
-      ...process.argv.slice(1),
-    ],
-    {
-      detached: true,
-      stdio: `inherit`,
-      env: { ...process.env, ORACLE_GAPS_GROUP: String(process.pid) },
-    },
-  )
+  let child
   let stopped
   // How the run ended: its exit code, or the signal that ended it.
   let ended
+  // Whether the run said that it writes its ending (a message it sends
+  // before it writes): then its done line is the last on each stream, and
+  // it ends with its own code, whatever stop reaches it.
+  let ending = false
   // Ends the CLI once the run has ended (or the grace has passed), with
-  // what is left of the group killed. A run that ended with its own code
-  // (0 completed, 2 refused, 3 an error) wrote its done line, the last on
-  // each stream, so the CLI ends with that code and writes none. A run that
-  // a stop ended wrote none, so the CLI writes the stopped line on both
-  // streams. A write to a pipe is asynchronous on macOS, so the process
-  // exits once it is written.
+  // what is left of the group killed. A run that writes its ending wrote
+  // its done line, so the CLI ends with its code and writes none. A run
+  // that a stop ended wrote none, so the CLI writes the stopped line on
+  // both streams (review of #46, F3; re-review N1). A write to a pipe is
+  // asynchronous on macOS, so the process exits once it is written.
   const finish = () => {
-    signalGroup(child.pid, `SIGKILL`)
-    if (stopped && ![0, 2, 3].includes(ended?.code)) {
+    if (child) signalGroup(child.pid, `SIGKILL`)
+    if (stopped && !ending) {
       const line = `oracle-gaps: done stopped (${stopped})\n`
       process.stdout.write(line, () =>
         process.stderr.write(line, () =>
@@ -184,11 +175,14 @@ function superviseRun() {
       )
       return
     }
-    process.exit(ended.code ?? 128 + constants.signals[ended.signal])
+    process.exit(
+      ended?.code ?? 128 + constants.signals[ended?.signal ?? stopped],
+    )
   }
   const stop = (signal) => {
     if (stopped) return
     stopped = signal
+    if (child === undefined) return finish()
     signalGroup(child.pid, signal)
     const deadline = Date.now() + STOP_GRACE_MS
     const poll = setInterval(() => {
@@ -201,9 +195,28 @@ function superviseRun() {
       finish()
     }, 50)
   }
+  // The stop handlers come first, so a signal that comes while the run
+  // starts is a stop too (re-review N3).
   process.on(`SIGINT`, stop)
   process.on(`SIGTERM`, stop)
-  child.on(`exit`, (code, signal) => {
+  // An inspector flag would bind the CLI's own port a second time.
+  child = spawn(
+    process.execPath,
+    [
+      ...process.execArgv.filter((flag) => !/^--inspect/.test(flag)),
+      ...process.argv.slice(1),
+    ],
+    {
+      detached: true,
+      stdio: [`inherit`, `inherit`, `inherit`, `ipc`],
+      env: { ...process.env, ORACLE_GAPS_GROUP: String(process.pid) },
+    },
+  )
+  child.on(`message`, (message) => {
+    if (message === `ending`) ending = true
+  })
+  // `close` comes after the run's messages, so its ending message is known.
+  child.on(`close`, (code, signal) => {
     ended = { code, signal }
     if (!stopped) finish()
   })
@@ -291,12 +304,20 @@ else if (main) {
       ),
     )
   }
-  // Once the run writes its ending, a stop signal no longer cuts it off:
-  // its done line is then the last line of each stream, and the
-  // supervisor adds none (review of #46, F3).
+  // A stop ends the run at once, with no line: an error that the stop
+  // causes (a config load that it cuts off) is no refusal, and the
+  // supervisor writes the stopped line (re-review N1). Once the run writes
+  // its ending, it says so to the supervisor, and a stop no longer cuts it
+  // off: its done line is then the last line of each stream.
+  let writingEnding = false
+  const onStop = (signal) => {
+    if (!writingEnding) process.exit(128 + constants.signals[signal])
+  }
+  process.on(`SIGINT`, onStop)
+  process.on(`SIGTERM`, onStop)
   const holdStops = () => {
-    process.on(`SIGINT`, () => {})
-    process.on(`SIGTERM`, () => {})
+    writingEnding = true
+    process.send?.(`ending`)
   }
   const fail = (error) => {
     if (ended) return
