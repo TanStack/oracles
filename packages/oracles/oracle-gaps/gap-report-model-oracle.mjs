@@ -620,6 +620,10 @@ const drawn = fc.record({
   // The package's Vitest config: its file, and whether it exports an object
   // or a function (sync or async) that returns one. Vitest accepts each, so
   // the runner must too.
+  // Whether file a has a test that writes to the process's own streams
+  // (review of #46, F2; re-review N2: a run whose tests wrote nothing names
+  // no log).
+  consoleOutput: fc.boolean(),
   // A promise of a config, which Vite awaits (review of #46, F5).
   config: fc.constantFrom(`object`, `object`, `function`, `async`, `promise`),
   // A config may read the environment Vitest's CLI sets before it loads
@@ -662,11 +666,13 @@ const drawn = fc.record({
         fc.record({
           signal: fc.constantFrom(`SIGTERM`, `SIGINT`),
           pool: fc.constantFrom(`forks`, `threads`),
-          // A signal sent once the run has printed its completed line,
-          // while its process holds its exit (review of #46, F3).
-          after: fc.constantFrom(false, false, true),
+          // When the signal comes: while the stop witness spins (`run`),
+          // once the run has printed its completed line, while its process
+          // holds its exit (`after`, review of #46, F3), or while the run
+          // warms its config (`warm`, re-review N1).
+          when: fc.constantFrom(`run`, `run`, `after`, `warm`),
         }),
-        { minLength: 1, maxLength: 3 },
+        { minLength: 1, maxLength: 4 },
       ),
     },
   ),
@@ -2643,6 +2649,7 @@ function resolveHistory(history) {
     stability: history.stability,
     steps: history.steps ?? [],
     lazyGate: history.lazyGate === true,
+    consoleOutput: history.consoleOutput === true,
     ordinary: history.ordinary === true,
     // An `owns` key in an assertion's arguments, in the ordinary file: its
     // assertion form and whether its list is a literal, or none.
@@ -3869,7 +3876,8 @@ function baselineOf(plan) {
     // File a's test that writes to the console streams runs in every
     // baseline too.
     const own =
-      plan.tests.filter((t) => t.file === file).length + (file === `a` ? 1 : 0)
+      plan.tests.filter((t) => t.file === file).length +
+      (file === `a` && plan.consoleOutput ? 1 : 0)
     const broken = failing.find((f) => f.file === file)
     // The failing owner's suite holds two tests and a third of its name.
     const extra = broken?.test === undefined ? 0 : 3
@@ -4456,14 +4464,16 @@ function oracleTestFile(plan, file) {
       `})`,
       `test('fixed seed 999', () => {})`,
     )
-  // A file with no tests still loads, so the CLI can read what it owns
-  // (file a always has the test below).
-  if (!plan.tests.some((t) => t.file === file) && file !== `a`)
+  // A file with no tests still loads, so the CLI can read what it owns.
+  if (
+    !plan.tests.some((t) => t.file === file) &&
+    !(file === `a` && plan.consoleOutput)
+  )
     out.push(`test.skip('no tests', () => {})`)
   // A test that writes to the process's own streams, as a test's debugging
   // output does: none of it may reach the CLI's streams (law 15; review of
   // #46, F2). It calls nothing of the source under test.
-  if (file === `a`)
+  if (file === `a` && plan.consoleOutput)
     out.push(
       `test('writes to the console streams', () => {`,
       `  process.stdout.write('raw stdout from a test\\n')`,

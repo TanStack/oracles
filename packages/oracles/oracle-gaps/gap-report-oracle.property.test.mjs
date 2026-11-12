@@ -675,13 +675,21 @@ const strays = (dir, before, running = false) =>
  * only after it closes), sends the signal to the CLI, and waits for the CLI
  * to end. A second later, each recorded process must have ended.
  *
- * With `after`, the run is not stopped while it runs: the witness does not
- * spin, the run's process holds its exit for 500 ms once it has printed its
- * done line (`ORACLE_GAPS_HOLD_EXIT_MS`, a hook for this driver), and the
- * driver sends the signal once that line is on stdout (review of #46, F3).
- * The run then ends as it completed, with exactly one done line.
+ * With `when` `after`, the run is not stopped while it runs: the witness
+ * does not spin, the run's process holds its exit for 500 ms once it has
+ * printed its done line (`ORACLE_GAPS_HOLD_EXIT_MS`, a hook for this
+ * driver), and the driver sends the signal once that line is on stdout
+ * (review of #46, F3). The run then ends as it completed, with exactly one
+ * done line. With `warm`, the driver sends the signal while the run warms
+ * its config (`ORACLE_GAPS_WARM_PROBE`, a hook that writes its marker there
+ * and then waits, as a config load does, on a service in the run's group
+ * that the signal ends, with a handler that takes 200 ms to exit, as
+ * Vitest's does; re-review N1). The run then ends stopped, with exactly
+ * one done line and no refusal.
  */
-async function stoppedRun(dir, files, how, ids, { signal, pool, after }) {
+async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
+  const after = when === `after`
+  const warm = when === `warm`
   writeFixture(dir, files)
   const before = new Set(filesUnder(dir))
   const pids = mkdtempSync(join(realpathSync(tmpdir()), `gap-stop-`))
@@ -696,7 +704,9 @@ async function stoppedRun(dir, files, how, ids, { signal, pool, after }) {
     cwd: repo,
     env: after
       ? { ...cleanEnv(), ORACLE_GAPS_HOLD_EXIT_MS: `500` }
-      : { ...cleanEnv(), GAP_STOP_DIR: pids },
+      : warm
+        ? { ...cleanEnv(), ORACLE_GAPS_WARM_PROBE: join(pids, `warming`) }
+        : { ...cleanEnv(), GAP_STOP_DIR: pids },
     stdio: [`ignore`, `pipe`, `pipe`],
   })
   let stdout = ``
@@ -722,21 +732,27 @@ async function stoppedRun(dir, files, how, ids, { signal, pool, after }) {
     !exited &&
     (after
       ? !stdout.includes(`oracle-gaps: done completed`)
-      : readdirSync(pids).length < 2) &&
+      : warm
+        ? !existsSync(join(pids, `warming`))
+        : readdirSync(pids).length < 2) &&
     waited < 120_000;
     waited += 50
   )
     await sleep(50)
-  // Spun: the witness's test spins (or, with `after`, the done line came
-  // while the run's process still held its exit).
+  // Spun: the witness's test spins (with `after`, the done line came while
+  // the run's process still held its exit; with `warm`, the run was warming
+  // its config).
   const spun = after
     ? stdout.includes(`oracle-gaps: done completed`) && !exited
-    : readdirSync(pids).length >= 2
+    : warm
+      ? existsSync(join(pids, `warming`)) && !exited
+      : readdirSync(pids).length >= 2
   const strayWhileRunning = strays(dir, before, true)
   child.kill(signal)
   const ended = await Promise.race([exit, sleep(30_000).then(() => false)])
   await sleep(1000)
   const alive = readdirSync(pids)
+    .filter((name) => /^\d+$/.test(name))
     .map(Number)
     .filter((pid) => {
       try {
@@ -763,7 +779,9 @@ async function stoppedRun(dir, files, how, ids, { signal, pool, after }) {
     ended,
     survivors: alive.length,
     strayWhileRunning,
-    after: after === true,
+    when: when ?? `run`,
+    // Whether a refusal's block reached stderr: a stop is never a refusal.
+    refused: stderr.split(`\n`).some((line) => line.startsWith(`refused: `)),
     exit: exitCode,
     // Both streams' lines (law 15), with the scratch paths named.
     stream: streamOf(stderr.split(`\n`), (text) =>
@@ -1045,6 +1063,14 @@ function readRun(dir, out, status, stderr, cli, stdout) {
     // The output directory the run was given, as the trace names it: the
     // final line names its report there.
     outDir: namedScratch(out, scratch),
+    // Whether the run captured its tests' own console output there.
+    captured: (() => {
+      try {
+        return readFileSync(join(out, `test-output.log`)).length > 0
+      } catch {
+        return false
+      }
+    })(),
     warnings: lines.filter((line) => /MaxListenersExceededWarning/.test(line)),
     // How a run that did not complete ended, read from the whole of its
     // stderr and its output directory (law 12).
@@ -1535,6 +1561,8 @@ async function driver(plan, observe) {
     // How many units were computed or reused says how the result was
     // produced, not what it is, so it is not observed.
     observe(`cli`, { ...cli, evidence: undefined })
+    if (cli.exit === 0 && !plan.consoleOutput)
+      states.add(`a completed run whose tests wrote nothing`)
     // A failing owner's replay, run as the author would run it (law 3).
     if (plan.fault === `brokenOwner`)
       observe(`replay`, { command: replay, ran: replayed(dir, replay) })
@@ -1581,8 +1609,12 @@ async function driver(plan, observe) {
           states.add(`a run after a stopped one that left its session`)
         previousSessions = stopped.sessions
         if (!stopped.spun) continue
-        if (stop.after) {
+        if (stop.when === `after`) {
           states.add(`a stop signal after the completed line`)
+          continue
+        }
+        if (stop.when === `warm`) {
+          states.add(`a stop signal while the config warms`)
           continue
         }
         states.add(`a run stopped by ${stop.signal} while a worker spun`)
@@ -2036,7 +2068,7 @@ function check(plan, observations, expected) {
       `config`,
       { actual: cli.configLines, expected: expected.configLines },
     )
-  const stream = streamBreach(`cli`, cli, expected)
+  const stream = streamBreach(`cli`, cli, expected, plan)
   if (stream) return stream
   // Through the daemon, each check streams the same kinds of line, and a
   // completed one ends with its done line (law 15). The state of each step
@@ -2320,13 +2352,20 @@ function check(plan, observations, expected) {
     if (ends)
       return violation(
         `stopped`,
-        `the run sent ${how}${value.after ? ` after its completed line` : ``}: ${ends.difference}`,
+        `the run sent ${how}${value.when === `run` ? `` : ` (${value.when})`}: ${ends.difference}`,
         `greppable stream`,
         ends.extra,
       )
-    const owedEnd = value.after
-      ? `oracle-gaps: done completed`
-      : `oracle-gaps: done stopped (${value.signal})`
+    const owedEnd =
+      value.when === `after`
+        ? `oracle-gaps: done completed`
+        : `oracle-gaps: done stopped (${value.signal})`
+    if (value.spun && value.when === `warm` && value.refused)
+      return violation(
+        `stopped`,
+        `the run stopped while its config warmed reported a refusal`,
+        `greppable stream`,
+      )
     if (value.spun && !value.stream.last.startsWith(owedEnd))
       return violation(
         `stopped`,
@@ -2375,7 +2414,7 @@ function check(plan, observations, expected) {
  * (stopped). `run` is a run as readRun records it, observed at
  * `checkpoint`.
  */
-function streamBreach(checkpoint, run, expected) {
+function streamBreach(checkpoint, run, expected, plan) {
   const breach = (difference, extra) =>
     violation(checkpoint, difference, `greppable stream`, extra)
   const ends = endsBreach(run)
@@ -2385,20 +2424,25 @@ function streamBreach(checkpoint, run, expected) {
       `a line about a mutant came before the decisive baseline line`,
     )
   if (run.exit !== 0 || expected.refused) return undefined
-  // File a's test writes to the process's streams, so a completed run whose
-  // file a loaded says once where that output went (review of #46, F2). A
-  // setup file that throws fails every file before any test runs: no test
-  // wrote, and no note is owed.
+  // A note names the log once the run captured its tests' console output
+  // (review of #46, F2; re-review N2), and only then. File a's test that
+  // writes to the process's streams runs once file a loads, so its output
+  // must be captured; a setup file that throws fails every file before any
+  // test runs, and a file a with no such test writes nothing.
+  const writes =
+    plan.consoleOutput &&
+    expected.baseline.find((b) => b.file === `tests/a.test.ts`)?.loads
+  if (writes && !run.captured)
+    return breach(
+      `file a's test wrote to the console, and the run captured none of it`,
+    )
   const outputNotes = run.stream.notes.filter((note) =>
     /^oracle-gaps: note test output in \S+test-output\.log$/.test(note),
   )
-  const owedNotes = expected.baseline.find((b) => b.file === `tests/a.test.ts`)
-    ?.loads
-    ? 1
-    : 0
+  const owedNotes = run.captured ? 1 : 0
   if (outputNotes.length !== owedNotes)
     return breach(
-      `the run names its tests' console output in ${outputNotes.length} notes, owed ${owedNotes}: ${JSON.stringify(run.stream.notes)}`,
+      `the run names its tests' console output in ${outputNotes.length} notes, owed ${owedNotes} (captured: ${run.captured}): ${JSON.stringify(run.stream.notes)}`,
     )
   const verdict = verdictLine(
     expected.baseline.filter((b) => !b.ordinary).length,
@@ -2860,6 +2904,27 @@ calibrations.push(
     },
   },
   {
+    // A note whenever file a loads, whether or not a test wrote (re-review
+    // N2).
+    name: `a run names a test-output log it never captured`,
+    law: `greppable stream`,
+    history: { constructed: `a load failure beside a hang` },
+    corrupt: corruptCli((cli) =>
+      cli.exit !== 0 || cli.captured
+        ? undefined
+        : {
+            ...cli,
+            stream: {
+              ...cli.stream,
+              notes: [
+                ...cli.stream.notes,
+                `oracle-gaps: note test output in <package>/<out>/test-output.log`,
+              ],
+            },
+          },
+    ),
+  },
+  {
     name: `a stopped run ends without its done line`,
     law: `greppable stream`,
     corrupt: corruptStopped((value) => ({
@@ -2989,7 +3054,9 @@ const required = [
   `a run stopped by SIGTERM while a worker spun`,
   `a run stopped by SIGINT while a worker spun`,
   `a stop signal after the completed line`,
+  `a stop signal while the config warms`,
   `a config refusal through the daemon`,
+  `a completed run whose tests wrote nothing`,
   `a stopped run whose workers are child processes`,
   `a stopped run whose workers are threads`,
   `a run after a stopped one that left its session`,
@@ -3089,6 +3156,7 @@ const separate = [
   `stale authored mutant`,
   `ambiguous authored mutant`,
   `a config refusal through the daemon`,
+  `a completed run whose tests wrote nothing`,
   ...faults
     .filter(
       (fault) =>
@@ -3199,10 +3267,13 @@ oracleProperty({
           // Stopped while the stop witness spins, once by each signal and
           // in each pool (law 13).
           stopRuns: [
-            { signal: `SIGTERM`, pool: `forks`, after: false },
-            { signal: `SIGINT`, pool: `threads`, after: false },
-            { signal: `SIGINT`, pool: `threads`, after: true },
+            { signal: `SIGTERM`, pool: `forks`, when: `run` },
+            { signal: `SIGINT`, pool: `threads`, when: `run` },
+            { signal: `SIGINT`, pool: `threads`, when: `after` },
+            { signal: `SIGINT`, pool: `threads`, when: `warm` },
           ],
+          // File a writes to the console, so the run captures it.
+          consoleOutput: true,
         }),
       },
       {
@@ -3245,9 +3316,12 @@ oracleProperty({
         enters: [
           `a setup error`,
           `a setup error beside a timeout under one budget`,
+          `a completed run whose tests wrote nothing`,
         ],
         build: (generated) => ({
           ...generated,
+          // No test writes to the console: no log, and no note.
+          consoleOutput: false,
           functions: [
             [
               { kind: `push`, quote: `'` },
