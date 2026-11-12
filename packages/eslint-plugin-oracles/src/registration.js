@@ -4,27 +4,41 @@
  * a test is.
  */
 import { lintSession, loadModule, resolveTestModule } from './modules.js'
+import { classifySource, frameworkNames, globalRoles } from './sources.js'
 
-export const disablingModifiers = new Set([`fixme`, `skip`, `todo`])
-export const conditionalModifiers = new Set([`runIf`, `skipIf`])
+export const disablingModifiers = new Set([`fixme`, `ignore`, `skip`, `todo`])
+// The members that switch a test off under a condition: Vitest's and AVA's
+// `skipIf` and `runIf`, and Bun's `if` and `todoIf`.
+export const conditionalModifiers = new Set([`if`, `runIf`, `skipIf`, `todoIf`])
 export const aliasModifiers = new Set([
   ...disablingModifiers,
   ...conditionalModifiers,
   `only`,
 ])
-// The members that keep a call a test registration. Playwright's `test` also
-// has calls such as `test.info()` and `test.step()` that register nothing.
+// The members that keep a call a test registration, in any framework that
+// the rules know (sources.js). Playwright's `test` also has calls such as
+// `test.info()` and `test.step()` that register nothing.
 export const registrationMembers = new Set([
   ...aliasModifiers,
   `concurrent`,
+  `concurrentIf`,
   `describe`,
   `each`,
+  `effect`,
+  `expectFailure`,
+  `fail`,
+  `failing`,
+  `failingIf`,
   `fails`,
   `for`,
+  `live`,
   `parallel`,
   `prop`,
+  `scopedLive`,
   `sequential`,
   `serial`,
+  `serialIf`,
+  `shuffle`,
 ])
 // The shared helpers that return a test registration or its `skip` form.
 export const selectionHelpers = new Set([
@@ -75,38 +89,37 @@ export function isFunction(node) {
 // Every oracle rule asks the same question of a callee: which test function,
 // if any, is its root? The answer is a test value, `{ root, members, own,
 // foreign }`: the framework function that it resolves to (`it`, `test`,
-// `describe`, `suite`, or `bench`), every member read after that root
-// (`skip`, `each`, `extend`), the members written since the last binding
-// (those that the expression itself spells), and the members that a binding
-// of another module carries. A namespace value, `{ member(name) }`, is a
-// namespace import of a package or of a relative test module.
+// `describe`, `suite`, or `bench`, or `test` and `describe` for a
+// framework's other names), every member read after that root (`skip`,
+// `each`, `extend`), the members written since the last binding (those that
+// the expression itself spells), and the members that a binding of another
+// module carries (Jest's `xit` carries `skip`). A namespace value, `{
+// member(name), call }`, is a namespace import, or a `require(...)`, whose
+// `call` is what calling it calls. A factory value, `{ result }`, returns a
+// test function when it is called (Playwright's `mergeTests`). An unknown
+// value is an export of a package that the rules cannot classify
+// (sources.js), with the import that binds it (`site`).
 //
-// A binding resolves when it is an import of a test root from a package, a
-// namespace member, a variable (its initializer, a destructuring, and each
-// plain assignment), or an export of a relative test module. Casts, the branches of a
+// A binding resolves when it is an import (named, default, or namespace) or
+// a `require` of a source that sources.js classifies, an export of a
+// project's test module (relative, `#` import, or workspace package:
+// modules.js), a namespace member, or a variable (its initializer, a
+// destructuring, and each plain assignment). Casts, the branches of a
 // conditional or logical expression, `test.extend(fixtures)`, a selection
 // helper such as `oracleReplayTest(it)`, and a tagged template such as
-// `it.each` with a table keep the value. A test root imported from any
-// package or subpath alias is a test function, and so is a fixture of one.
-// Any other binding, such as a local function of the same name, is no test
-// function. An unbound name is one of Vitest's globals.
+// `it.each` with a table keep the value. Any other binding, such as a local
+// function of the same name, is no test function. An unbound name is a
+// global of a test environment (globalRoles).
 
-// The names of the test functions. An import of one of these names from any
-// package or subpath alias is a test function: the rules cannot read a
-// package, so they fail closed there (coordinator decision, 2026-11-11): a
-// false negative switches a law off. A library function with one of these
-// names is reported in an oracle file whatever local name it takes.
-const frameworkRoots = new Set([`it`, `test`, `describe`, `suite`, `bench`])
-// Unbound names, as Vitest's `globals` declares them. `fcTest` is the name
-// that `@fast-check/vitest`'s `test` takes in an oracle file.
-const globalRoots = new Map([
-  ...[...frameworkRoots].map((name) => [name, name]),
-  [`fcTest`, `test`],
-])
 export const suiteRoots = new Set([`describe`, `suite`])
-// The members that keep a call a registration, and `extend`, which returns a
-// test function with fixtures.
-export const testFunctionMembers = new Set([...registrationMembers, `extend`])
+// The members that keep a call a registration, and those that return a test
+// function with fixtures: `extend`, and Vitest's `override` and `scoped`.
+export const testFunctionMembers = new Set([
+  ...registrationMembers,
+  `extend`,
+  `override`,
+  `scoped`,
+])
 // Expressions that keep their operand's value: casts and parentheses.
 const transparent = new Set([
   `ChainExpression`,
@@ -118,12 +131,41 @@ const transparent = new Set([
   `TSTypeAssertion`,
 ])
 
-const framework = (root) => ({
+const rootNames = new Set([`it`, `test`, `describe`, `suite`, `bench`])
+const framework = (root, carried) => ({
   kind: `test`,
   root,
-  members: [],
+  members: carried === undefined ? [] : [carried],
   own: [],
-  foreign: [],
+  foreign: carried === undefined ? [] : [carried],
+})
+
+/**
+ * The value of a role (sources.js) of the export `name`: a test function or
+ * suite, with the modifier that it carries, a factory, or a namespace.
+ */
+function roleValue(role, name) {
+  if (typeof role === `string`) {
+    const [kind, carried] = role.split(`.`)
+    const suite = kind === `suite`
+    // The export's own name when it names a root of its kind.
+    const root =
+      rootNames.has(name) && suiteRoots.has(name) === suite
+        ? name
+        : suite
+          ? `describe`
+          : `test`
+    return framework(root, carried)
+  }
+  if (role.factory !== undefined)
+    return { kind: `factory`, result: roleValue(role.factory, ``) }
+  return tableNamespace(role.namespace)
+}
+
+const tableNamespace = (table) => ({
+  kind: `namespace`,
+  member: (name) =>
+    Object.hasOwn(table, name) ? roleValue(table[name], name) : undefined,
 })
 
 /** The expression that casts or parentheses around `node` make. */
@@ -159,12 +201,32 @@ function scopedTestFunctions(scope) {
   const value = (node) => valueOf(node, scope, new Set())
   return {
     value,
-    callee: (node) => testOnly(value(node)),
+    callee: (node) => testOnly(callable(value(node))),
+    unknown: (node) => {
+      const found = value(node)
+      return found?.kind === `unknown` ? found : undefined
+    },
     getScope: scope.getScope,
   }
 }
 
 const testOnly = (value) => (value?.kind === `test` ? value : undefined)
+// A `require(...)` of a package whose export is a function is that function
+// when it is called.
+const callable = (value) =>
+  value?.kind === `namespace` && value.call !== undefined ? value.call : value
+
+/**
+ * What calling a value gives: a test function or an unknown value with its
+ * members, a factory's result, or nothing.
+ */
+function callResult(value) {
+  const called = callable(value)
+  if (called?.kind === `factory`) return called.result
+  return called?.kind === `test` || called?.kind === `unknown`
+    ? called
+    : undefined
+}
 
 /**
  * Of the values that an expression may have, the one that the rules judge:
@@ -174,7 +236,12 @@ const testOnly = (value) => (value?.kind === `test` ? value : undefined)
  */
 function pick(values) {
   const tests = values.filter((value) => value?.kind === `test`)
-  return tests.find((value) => !suiteRoots.has(value.root)) ?? tests[0]
+  return (
+    tests.find((value) => !suiteRoots.has(value.root)) ??
+    tests[0] ??
+    values.find((value) => value?.kind === `unknown`) ??
+    values.find((value) => value !== undefined)
+  )
 }
 
 /** The name that a member expression reads, or undefined when it is computed. */
@@ -191,7 +258,9 @@ function memberName(node) {
 /** The value of `name` read on `value`. */
 function memberOf(value, name) {
   if (value === undefined || name === undefined) return undefined
-  if (value.kind === `namespace`) return value.member(name)
+  if (value.kind === `namespace`)
+    return value.member(name) ?? memberOf(value.call, name)
+  if (value.kind === `factory`) return undefined
   return {
     ...value,
     members: [...value.members, name],
@@ -213,7 +282,12 @@ function valueOf(node, scope, seen) {
         valueOf(node.right, scope, seen),
       ])
     case `TaggedTemplateExpression`:
-      return testOnly(valueOf(node.tag, scope, seen))
+      return callResult(valueOf(node.tag, scope, seen))
+    case `AssignmentExpression`:
+      // Lab's `const { it } = exports.lab = Lab.script()`.
+      return node.operator === `=`
+        ? valueOf(node.right, scope, seen)
+        : undefined
     case `CallExpression`:
       // `oracleReplayTest(it)` returns `it` or `it.skip`, so a registration
       // made through it is a registration of `it`.
@@ -223,7 +297,9 @@ function valueOf(node, scope, seen) {
         node.arguments.length > 0
       )
         return valueOf(node.arguments[0], scope, seen)
-      return testOnly(valueOf(node.callee, scope, seen))
+      if (isRequire(node, scope))
+        return namespaceOf(node.arguments[0].value, scope, node, true)
+      return callResult(valueOf(node.callee, scope, seen))
     case `MemberExpression`:
       return memberOf(valueOf(node.object, scope, seen), memberName(node))
     case `Identifier`:
@@ -237,8 +313,9 @@ function bindingValue(identifier, scope, seen) {
   const variable = findVariable(scope.getScope(identifier), identifier.name)
   // An unbound name, or a global that the configuration declares.
   if (variable === undefined || variable.defs.length === 0) {
-    const root = globalRoots.get(identifier.name)
-    return root === undefined ? undefined : framework(root)
+    return Object.hasOwn(globalRoles, identifier.name)
+      ? roleValue(globalRoles[identifier.name], identifier.name)
+      : undefined
   }
   return variableValue(variable, scope, seen)
 }
@@ -252,12 +329,14 @@ function variableValue(variable, scope, seen) {
   if (definition.type === `ImportBinding`) {
     const source = definition.parent.source.value
     if (definition.node.type === `ImportNamespaceSpecifier`)
-      return namespaceOf(source, scope)
-    const { imported } = definition.node
+      return namespaceOf(source, scope, definition.node)
+    const { imported, local } = definition.node
     return importedValue(
       source,
       imported === undefined ? `default` : (imported.name ?? imported.value),
       scope,
+      definition.node,
+      local.name,
     )
   }
   if (definition.type !== `Variable`) return undefined
@@ -305,8 +384,12 @@ function destructured(pattern, name, init, scope, seen) {
   return memberOf(valueOf(init, scope, seen), key)
 }
 
-/** A namespace import of a package or of a test module, or undefined. */
-function namespaceOf(source, scope) {
+/**
+ * A namespace import (or a `require`) of a package or of a test module, or
+ * undefined for a relative module that is no test module. A `require` is
+ * also the module's default export when it is called.
+ */
+function namespaceOf(source, scope, site, required = false) {
   if (
     source.startsWith(`.`) &&
     resolveTestModule(scope.file, source, scope.session) === undefined
@@ -314,26 +397,73 @@ function namespaceOf(source, scope) {
     return undefined
   return {
     kind: `namespace`,
-    member: (name) => importedValue(source, name, scope),
+    member: (name) => importedValue(source, name, scope, site),
+    call: required ? importedValue(source, `default`, scope, site) : undefined,
   }
 }
 
+/** Whether a call is `require('<specifier>')` of the unbound `require`. */
+function isRequire(node, scope) {
+  if (
+    node.callee.type !== `Identifier` ||
+    node.callee.name !== `require` ||
+    node.arguments.length !== 1 ||
+    node.arguments[0].type !== `Literal` ||
+    typeof node.arguments[0].value !== `string`
+  )
+    return false
+  const variable = findVariable(scope.getScope(node), `require`)
+  return variable === undefined || variable.defs.length === 0
+}
+
 /**
- * The value of the export `name` of `source`. A test module's export is
- * resolved once for each lint, and a cycle of modules resolves to nothing.
- * The members that it carries are foreign to the importer.
+ * The value of the export `name` of `source`, which `site` imports in this
+ * module (with the local name `local` for a default import). A package that
+ * sources.js classifies gives its table's role, or nothing. A project's test
+ * module (modules.js) is read: each export is resolved once for each lint,
+ * a cycle of modules resolves to nothing, and the members that it carries
+ * are foreign to the importer. Any other package is an unknown source
+ * (unknownValue).
  */
-function importedValue(source, name, scope) {
-  if (!source.startsWith(`.`))
-    return frameworkRoots.has(name) ? framework(name) : undefined
+function importedValue(source, name, scope, site, local) {
+  const { sources } = scope.session
+  const classified = source.startsWith(`.`)
+    ? undefined
+    : classifySource(source, sources)
+  if (classified === `none`) return undefined
+  if (classified !== undefined)
+    return Object.hasOwn(classified.table, name)
+      ? roleValue(classified.table[name], name)
+      : undefined
   const file = resolveTestModule(scope.file, source, scope.session)
-  if (file === undefined) return undefined
+  if (file === undefined)
+    return source.startsWith(`.`)
+      ? undefined
+      : unknownValue(source, name === `default` ? local : name, site, sources)
   const value = scope.session.once(`value\0${file}\0${name}`, () =>
     exportValue(file, name, scope.session),
   )
-  return value?.kind === `test`
-    ? { ...value, own: [], foreign: value.members }
-    : value
+  if (value?.kind === `test`)
+    return { ...value, own: [], foreign: value.members }
+  // An unknown source reached through this module is reported where this
+  // module imports it.
+  return value?.kind === `unknown` ? { ...value, site } : value
+}
+
+/**
+ * An export of a package that no table or setting classifies. Only a name
+ * that some framework exports as a test function or suite (frameworkNames)
+ * can be one, and `unknownSources` decides: `report` (the default) gives an
+ * unknown value, which the rules report where a registration-shaped call
+ * uses it; `test` reads the name as the framework's; `ignore` as none.
+ */
+function unknownValue(source, name, site, sources) {
+  if (name === undefined || !Object.hasOwn(frameworkNames, name))
+    return undefined
+  if (sources.unknownSources === `ignore`) return undefined
+  if (sources.unknownSources === `test`)
+    return roleValue(frameworkNames[name], name)
+  return { kind: `unknown`, source, name, site, members: [], own: [] }
 }
 
 /** The value of a test module's export, through its re-exports and star exports. */
@@ -347,10 +477,10 @@ function exportValue(file, name, session) {
   if (entry?.node !== undefined) return valueOf(entry.node, scope, new Set())
   if (entry?.namespace !== undefined) return namespaceOf(entry.namespace, scope)
   if (entry !== undefined)
-    return importedValue(entry.source, entry.imported, scope)
+    return importedValue(entry.source, entry.imported, scope, undefined)
   if (name === `default`) return undefined
   for (const source of module.starSources) {
-    const value = importedValue(source, name, scope)
+    const value = importedValue(source, name, scope, undefined)
     if (value !== undefined) return value
   }
   return undefined
@@ -520,6 +650,26 @@ export function registeredTest(node, functions) {
   const body = registrationBody(node.arguments.slice(1), functions)
   // The modifiers between the root and the call, such as `skip` or `todo`.
   return body === undefined ? undefined : { body, modifiers: test.members }
+}
+
+/**
+ * The unknown source that a call would register through, or undefined: the
+ * callee resolves to an unknown value (an export of a package that the
+ * rules cannot classify), its members are ones that keep a registration,
+ * and the call passes a body. Such a call is a registration if the source
+ * is a test framework.
+ */
+export function unknownRegistration(node, functions) {
+  if (node.parent.type === `CallExpression` && node.parent.callee === node)
+    return undefined
+  const unknown = functions.unknown(node.callee)
+  if (
+    unknown === undefined ||
+    !unknown.members.every((member) => testFunctionMembers.has(member)) ||
+    registrationBody(node.arguments.slice(1), functions) === undefined
+  )
+    return undefined
+  return unknown
 }
 
 /**

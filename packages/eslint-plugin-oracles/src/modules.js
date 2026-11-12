@@ -4,10 +4,11 @@
  * each exports. Every oracle rule reads them through one session per lint,
  * so a module is parsed and each export is resolved once.
  */
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { Linter } from 'eslint'
 import { findVariable } from './registration.js'
+import { sourceSettings } from './sources.js'
 
 /**
  * Every module that an earlier lint parsed, by path, with the mtime and size
@@ -20,17 +21,18 @@ import { findVariable } from './registration.js'
 const parsedModules = new Map()
 
 /**
- * The state of one lint: the language options of the file it lints, the
- * modules it loaded and the paths it resolved, the production package flags
- * it read, and what it answered. `resolved` holds one answer for each
- * question about a module's export, keyed by the question, the module, and
+ * The state of one lint: the language options and the source settings
+ * (sources.js) of the file it lints, the modules it loaded and the paths it
+ * resolved, the package manifests it read, and what it answered. `resolved`
+ * holds one answer for each question about a module's export, keyed by the
+ * question, the module, and
  * the export's name, so no export is resolved twice, whatever the call
  * graph of the modules.
  */
 export class LintSession {
   modules = new Map()
   paths = new Map()
-  published = new Map()
+  manifests = new Map()
   resolved = new Map()
   // Answers that assumed a question still in progress, each with the index
   // of that question in `asking`. They hold only while it is in progress.
@@ -38,8 +40,9 @@ export class LintSession {
   // The questions in progress, innermost last, each with the lowest index
   // of a question in progress that its answer assumed.
   asking = []
-  constructor(languageOptions) {
+  constructor(languageOptions, settings) {
     this.languageOptions = languageOptions
+    this.sources = sourceSettings(settings?.oracles)
   }
 
   /**
@@ -91,18 +94,19 @@ const sessions = new WeakMap()
 export function lintSession(context) {
   let session = sessions.get(context.sourceCode)
   if (session === undefined) {
-    session = new LintSession(context.languageOptions)
+    session = new LintSession(context.languageOptions, context.settings)
     sessions.set(context.sourceCode, session)
   }
   return session
 }
 
 /**
- * The test module that a relative import names, or undefined. Each
- * directory and specifier is resolved once for each lint.
+ * The test module that an import names, or undefined: a relative module, a
+ * `#` import through the nearest package.json's `imports`, or a module of a
+ * workspace package. Each directory and specifier is resolved once for each
+ * lint.
  */
 export function resolveTestModule(fromFile, source, session) {
-  if (!source.startsWith(`.`)) return undefined
   const key = `${dirname(fromFile)}\0${source}`
   if (!session.paths.has(key))
     session.paths.set(key, findTestModule(fromFile, source, session))
@@ -110,7 +114,12 @@ export function resolveTestModule(fromFile, source, session) {
 }
 
 function findTestModule(fromFile, source, session) {
-  const base = resolve(dirname(fromFile), source)
+  const base = source.startsWith(`.`)
+    ? resolve(dirname(fromFile), source)
+    : source.startsWith(`#`)
+      ? subpathImport(dirname(fromFile), source, session)
+      : workspaceModule(dirname(fromFile), source, session)
+  if (base === undefined) return undefined
   const stem = base.replace(/\.(m?js|tsx?)$/, ``)
   // A `.js` specifier names the TypeScript source when one exists, and
   // otherwise the JavaScript module itself.
@@ -120,9 +129,129 @@ function findTestModule(fromFile, source, session) {
     ...(/\.m?js$/.test(base) ? [base] : []),
     `${base}/index.ts`,
   ].find((candidate) => existsSync(candidate))
-  // Production holds no test, so no rule parses it.
-  if (file === undefined || isProductionModule(file, session)) return undefined
+  // Production holds no test, so no rule parses it, and no rule reads a
+  // package under node_modules, whatever path leads there.
+  if (
+    file === undefined ||
+    isProductionModule(file, session) ||
+    realpathSync(file).split(sep).includes(`node_modules`)
+  )
+    return undefined
   return file
+}
+
+/** The parsed package.json in `directory`, or null when there is none. */
+function manifest(directory, session) {
+  if (!session.manifests.has(directory)) {
+    const file = join(directory, `package.json`)
+    let parsed = null
+    if (existsSync(file))
+      try {
+        parsed = JSON.parse(readFileSync(file, `utf8`))
+      } catch {
+        // A manifest that does not parse names no module.
+        parsed = {}
+      }
+    session.manifests.set(directory, parsed)
+  }
+  return session.manifests.get(directory)
+}
+
+/** The nearest directory from `directory` up that has a package.json. */
+function packageDirectory(directory, session) {
+  for (let at = directory; ; at = dirname(at)) {
+    if (manifest(at, session) !== null) return at
+    if (dirname(at) === at) return undefined
+  }
+}
+
+/**
+ * The file that an `exports` or `imports` target names for the conditions
+ * `import` and `default`, or undefined. A `types` target is a declaration,
+ * which holds no value, so it is never the module.
+ */
+function conditionalTarget(target) {
+  if (typeof target === `string`) return target
+  if (target === null || typeof target !== `object` || Array.isArray(target))
+    return undefined
+  for (const condition of [`import`, `default`])
+    if (target[condition] !== undefined) {
+      const found = conditionalTarget(target[condition])
+      if (found !== undefined) return found
+    }
+  return undefined
+}
+
+/**
+ * The target that a map of subpaths (an `exports` or `imports` field) gives
+ * `subpath`: an exact key, or a pattern with one `*`.
+ */
+function mappedTarget(map, subpath) {
+  if (Object.hasOwn(map, subpath)) return conditionalTarget(map[subpath])
+  for (const [pattern, target] of Object.entries(map)) {
+    const star = pattern.indexOf(`*`)
+    if (star < 0) continue
+    const [prefix, suffix] = [pattern.slice(0, star), pattern.slice(star + 1)]
+    if (
+      subpath.length >= prefix.length + suffix.length &&
+      subpath.startsWith(prefix) &&
+      subpath.endsWith(suffix)
+    ) {
+      const matched = subpath.slice(
+        prefix.length,
+        subpath.length - suffix.length,
+      )
+      return conditionalTarget(target)?.replaceAll(`*`, matched)
+    }
+  }
+  return undefined
+}
+
+/** The module that a `#` import names, through the nearest package.json. */
+function subpathImport(directory, source, session) {
+  const owner = packageDirectory(directory, session)
+  const imports = owner && manifest(owner, session).imports
+  if (imports === null || typeof imports !== `object`) return undefined
+  const target = mappedTarget(imports, source)
+  // A target that names a package is that package's import, not a module
+  // of this one.
+  return target?.startsWith(`./`) ? resolve(owner, target) : undefined
+}
+
+/**
+ * The module that a package specifier names when the package is a
+ * workspace package: its node_modules entry, found from `directory` up,
+ * resolves to a real path outside every node_modules directory, as a
+ * workspace link does. A package installed under node_modules is never
+ * read. The module is the package's `exports` target for the subpath, or,
+ * without `exports`, its `main` or the subpath's file.
+ */
+function workspaceModule(directory, source, session) {
+  const parts = source.split(`/`)
+  const length = source.startsWith(`@`) ? 2 : 1
+  const name = parts.slice(0, length).join(`/`)
+  const subpath = [`.`, ...parts.slice(length)].join(`/`)
+  for (let at = directory; ; at = dirname(at)) {
+    const linked = join(at, `node_modules`, name)
+    if (existsSync(linked)) {
+      const real = realpathSync(linked)
+      if (real.split(sep).includes(`node_modules`)) return undefined
+      const { exports, main } = manifest(real, session) ?? {}
+      const target =
+        exports === undefined
+          ? subpath === `.`
+            ? (main ?? `./index.js`)
+            : subpath
+          : typeof exports === `string` ||
+              Object.keys(exports ?? {}).every((key) => !key.startsWith(`.`))
+            ? subpath === `.`
+              ? conditionalTarget(exports)
+              : undefined
+            : mappedTarget(exports, subpath)
+      return target === undefined ? undefined : resolve(real, target)
+    }
+    if (dirname(at) === at) return undefined
+  }
 }
 
 /**
@@ -130,22 +259,12 @@ function findTestModule(fromFile, source, session) {
  * private package, such as an end-to-end suite, keeps its tests in `src/`.
  */
 function isProductionModule(file, session) {
-  for (let directory = dirname(file); ; directory = dirname(directory)) {
-    const manifest = join(directory, `package.json`)
-    if (existsSync(manifest)) {
-      if (!session.published.has(directory)) {
-        const { private: isPrivate } = JSON.parse(
-          readFileSync(manifest, `utf8`),
-        )
-        session.published.set(directory, isPrivate !== true)
-      }
-      return (
-        session.published.get(directory) &&
-        relative(directory, file).split(sep)[0] === `src`
-      )
-    }
-    if (dirname(directory) === directory) return false
-  }
+  const owner = packageDirectory(dirname(file), session)
+  return (
+    owner !== undefined &&
+    manifest(owner, session).private !== true &&
+    relative(owner, file).split(sep)[0] === `src`
+  )
 }
 
 /** The module that a file names, for this lint, or undefined when it cannot be read or parsed. */

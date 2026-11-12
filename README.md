@@ -102,45 +102,50 @@ A registration is a call of a test function, with members such as `.each`,
 caller's body is a registration too. `oracle/no-unit-test`,
 `oracle/no-disabled`, and `oracle/oracle-property-only` share one account of
 a test function, so they agree on every call. A callee's root is a test
-function when its binding resolves to `it`, `test`, `describe`, `suite`, or
-`bench` imported from any package or subpath alias (`vitest`,
-`@playwright/test`, `node:test`, `#test/fixtures`), or to a fixture of one
-(`test.extend(fixtures)`). The rules cannot read a package, so they fail
-closed there, because a false negative would switch an oracle off. A
-library function with one of those names (for example Ramda's `test` or
-mitata's `bench`) is therefore reported in an oracle file and its relative
-helpers. A rename does not help, because the rules resolve the imported
-name. Use another function there, for example `re.test(s)` in place of
-`R.test(re, s)`. The rules follow these bindings:
+function when its binding resolves to a test framework's test function or
+suite, or to a fixture of one (`test.extend(fixtures)`). Where the binding
+comes from decides, not its name alone: see
+[Where a test function comes from](#where-a-test-function-comes-from). The
+rules follow these bindings:
 
-- a named, aliased, or namespace import (`vitest.it`), and an unbound name
-  that Vitest's `globals` declares;
+- a named, default, or namespace import (`vitest.it`), a member of
+  `require('<specifier>')`, and an unbound name that a test environment
+  declares as a global;
 - a variable's initializer, a destructuring (`const { it: t } = vitest`),
   and each plain assignment (`let t; t = it`);
 - a cast (`as`, `!`, `satisfies`), and either branch of a conditional or
   logical expression (`flag ? it.skip : it`), so a callee that may be a
   test function is reported;
-- a fixture, a tagged-template `.each`, and `oracleReplayTest(it)`;
-- an export of a relative test module: a constant, a re-export, `export *
-as`, a default export, and a relay of an imported binding, through star
+- a fixture, a tagged-template `.each`, `oracleReplayTest(it)`, and a
+  framework's factory call (`mergeTests(a, b)`, uvu's `suite('S')`,
+  `jest-each`'s `each(table)`, Lab's `script()`);
+- an export of a project's test module (a relative module, a `#` import,
+  or a workspace package): a constant, a re-export, `export * as`, a
+  default export, and a relay of an imported binding, through star
   exports. A cycle of modules or of variables resolves to nothing, and each
   export is resolved once per lint.
 
 A binding that resolves to anything else is no test function, whatever its
-name: a local function named `bench`, or a namespace of an ordinary relative
-module (`patterns.test(...)`). A member that is no registration, such as
-Playwright's `test.step`, registers nothing, bound or not. A `describe` or
-`suite` is exempt by the function that it resolves to, not by its local
-name. In a cycle of modules, the answer does not depend on which binding
-the lint reads first.
+name: a local function named `bench`, a namespace of an ordinary relative
+module (`patterns.test(...)`), or Ramda's `test`. A member that is no
+registration, such as Playwright's `test.step`, registers nothing, bound or
+not. A `describe` or `suite` is exempt by the function that it resolves to,
+not by its local name. In a cycle of modules, the answer does not depend on
+which binding the lint reads first.
 
 The rules do not recognize these forms:
 
 - a test function passed as a parameter to a local helper
   (`function reg(t) { t('n', fn) }`). `oracle/no-disabled` reports the
   `reg(it)` call instead;
-- a fixture or test function that a package exports under another name,
-  because the rules read only relative test modules;
+- a fixture or test function that a third-party package exports under a
+  name that no framework uses, unless `settings.oracles.testPackages` names
+  it, because the rules never read a package under `node_modules`;
+- a test function that a body receives as a parameter (`t.test(...)` in
+  tap, `it.layer(L)(name, (it) => ...)` in `@effect/vitest`), QUnit's
+  `test.if(name, condition, fn)`, Japa's chain after the call
+  (`test('n').skip(true)`), and an options object that disables a test
+  (`{ skip: true }`);
 - a computed member whose name is not a string literal, and a variable that
   a destructuring assignment (not a declaration) writes;
 - a modifier call, such as `.skipIf(flag)`, that another module binds and
@@ -153,6 +158,81 @@ The rules do not recognize these forms:
 A test whose body is empty, such as `it('x', () => {})`, `test('x', async
 () => {})`, or a skipped placeholder `it.skip('x', () => {})`, checks
 nothing. The rule reports it: remove it, or use `it.todo`.
+
+## Where a test function comes from
+
+The rules cannot read a package, and they never read one under
+`node_modules`. They classify a binding by its source, in this order:
+
+1. `settings.oracles.testPackages` maps a specifier, or a prefix that ends
+   in `*`, to a framework's specifier (`'@playwright/test'`) or to a table
+   of its exports and their roles (`{ authTest: 'test', group: 'suite' }`).
+   `settings.oracles.nonTestPackages` lists specifiers, or prefixes, whose
+   exports are no test functions.
+2. The known test frameworks, with their default, named, and namespace
+   exports, the modifiers that an export carries (Jest's `xit` is skipped,
+   node:test's `only` is focused), and their factories: `vitest`,
+   `@vitest/runner`, `vite-plus/test`, `@fast-check/vitest`,
+   `@fast-check/jest`, `@fast-check/ava`, `@effect/vitest`,
+   `@playwright/test`, `playwright/test`, `@playwright/experimental-ct-*`,
+   `@jest/globals`, `jest-each`, `mocha`, `mocha-steps`, `node:test`, `test`
+   (node:test as an npm package), `ava`, `tap`, `tape`, `zora`, `brittle`,
+   `uvu`, `bun:test`, `@std/testing/bdd`, `jsr:@std/testing...`, `qunit`,
+   `@japa/runner`, and `@hapi/lab`. The members that keep a registration
+   are each framework's, such as Playwright's `.fail`, Jest's `.failing`,
+   node:test's `.expectFailure`, Deno's `.ignore`, and Bun's `.if` and
+   `.todoIf`.
+3. The known packages that export other functions under these names:
+   Ramda, Rambda, remeda, lodash, mitata, `@thi.ng/*`, benny, tinybench,
+   `@tensorflow/*`, `step`, chai, `@vitest/expect`, `vitest/*`, Vitest's
+   browser packages, `@testing-library/*`, Storybook, Cypress's module API,
+   `@wdio/globals`, and iter-tools. Their exports are never reported.
+4. A project's own modules: a relative module, a `#` import through the
+   nearest package.json's `imports`, and a workspace package, whose
+   `node_modules` entry resolves to a real path outside every
+   `node_modules` directory (a pnpm, npm, or Yarn workspace link). The rules
+   read its `exports` target for the `import` or `default` condition, never
+   its `types`, so a fixtures package that re-exports Playwright's `test`,
+   or exports `base.extend(...)` or `base.skip`, is followed. A published
+   package's `src/` is production, which no rule reads.
+5. Any other source is unknown. An import of a name that some framework
+   exports as a test function (`it`, `test`, `xit`, `skip`, `step`, and the
+   rest), or a default import bound to such a name, is a source the rules
+   cannot classify. `settings.oracles.unknownSources` decides:
+   - `'report'` (the default): a call through it that would be a
+     registration gets one `unknownTestSource` report from
+     `oracle/no-unit-test`, at its import, and no other report. So does a
+     call to a relative helper that makes such a call. The report is owed in
+     an `oracle-` machinery file too, where `oracle/no-disabled` alone
+     guards the tests.
+   - `'test'`: such a name is read as a framework's export of that name, as
+     the rules read any package's `it`, `test`, `describe`, `suite`, and
+     `bench` before 2026-11-12.
+   - `'ignore'`: such a name is no test function.
+
+An unbound name is a test function when a test environment declares it as
+a global: Vitest's `globals`, and Jest's, Mocha's, and Jasmine's (`it`,
+`test`, `specify`, `xit`, `fit`, `describe`, `suite`, `context`,
+`xdescribe`, `fdescribe`, and the rest), and `Deno.test` and `QUnit.test`.
+`module`, `run`, `step`, and `fail` are left out, because other
+environments declare them for other things.
+
+A setting that the rules cannot use is reported at line 1 as
+`malformedSourceSetting`, and it is read as unset.
+
+```js
+{
+  settings: {
+    oracles: {
+      testPackages: {
+        'pw-fixtures': '@playwright/test',
+        '@acme/legacy-fixtures': { authTest: 'test' },
+      },
+      nonTestPackages: ['@acme/regex'],
+    },
+  },
+}
+```
 
 ## The `oracle/no-oracle-disable` rule
 

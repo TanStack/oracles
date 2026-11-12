@@ -79,8 +79,9 @@
  * Limits: one oracle file per history, with a fixed set of helper modules
  * beside it. Each statement takes one line, and a nested `describe` holds
  * exactly one statement. A helper module that does not parse, a body passed
- * through a wrapper that the helper writes, a fixture from a package (the
- * rule reads only relative test modules), and a test function passed
+ * through a wrapper that the helper writes, a fixture from a package
+ * (`lint.test-source-recognition` owns the sources of test functions), and
+ * a test function passed
  * through a call other than a selection helper or `.extend` are not
  * generated. A rule throw is observed as a `threw:` key, which the model
  * never predicts. The budget is wall-clock time, so a machine far slower
@@ -590,7 +591,7 @@ oracleProperty({
   law: {
     statement: `In an oracle file, every test registration is reported except a complete oracleProperty call: a plain registration or a caller-passed body is a unit test whatever it reaches, an empty body is an empty test (or an empty todo), an incomplete oracleProperty is reported as such, an imported helper that registers its own test is an imported registration, and a helper from an oracle-named module or a call that registers nothing is not reported. A registration's root is a test function (it, test, bench, fast-check's test) by name, alias, namespace member, a variable of any kind, a fixture, or an import from a test module that exports one, re-exported, relayed, or default-exported. Helpers are followed through re-exports, star exports, cycles, and default exports. Helper modules that import each other or themselves end the walk, and every lint ends within ${BUDGET_MS} ms, whatever the call graph of the helper modules. A file named oracle-* gets no report.`,
     authority: `AGENTS.md "Keep Unit Tests Out of Oracles"; the oracle-property-only decisions of 2026-11-09 and 2026-11-10; the maintainer decision of 2026-11-11 that deletes declareOracle and makes oracleProperty the only registration in an oracle file (D2); maintainer decision F21 of 2026-11-10 for empty bodies.`,
-    limits: `One oracle file per history with fixed helper modules; one statement per line; a describe holds one statement. Unparsable helpers, helper-written wrappers around a caller's body, fixtures from a package, and a test function passed through other calls are not generated. The budget is wall-clock time.`,
+    limits: `One oracle file per history with fixed helper modules; one statement per line; a describe holds one statement. Unparsable helpers, helper-written wrappers around a caller's body, fixtures from a package (owned by lint.test-source-recognition), and a test function passed through other calls are not generated. The budget is wall-clock time.`,
   },
   histories: {
     arbitrary: historyArbitrary,
@@ -639,9 +640,8 @@ oracleProperty({
 // the three rules share one account of a test function, so a registration
 // that one rule sees, every rule sees. The account: the root of a callee is a
 // test function when its binding resolves to `it`, `test`, `describe`,
-// `suite`, or `bench` imported from any package or subpath alias, or to a
-// fixture (`.extend(...)`) of one. A rule cannot read a package, so it fails
-// closed there (coordinator decision, 2026-11-11). A binding
+// `suite`, or `bench` of a test framework (here Vitest), or to a fixture
+// (`.extend(...)`) of one. A binding
 // resolves through an alias, a namespace member, a variable of any kind
 // (its initializer and every assignment), a destructuring, a cast, either
 // branch of a conditional or logical expression, and the exports of a test
@@ -651,6 +651,15 @@ oracleProperty({
 // member that is no registration (`test.step`), is no test function,
 // whatever its name. The answer for a binding in a cycle of modules does not
 // depend on which binding the lint asks about first.
+//
+// A package that no table or setting classifies (`regex-lib` here, through a
+// namespace, a named import, a relay, or a fixture) and a `#` import that no
+// `imports` field maps (`#test/fixtures`) are sources that the rules cannot
+// read. A call through one gets no report of a test, and `no-unit-test`
+// reports `unknownTestSource` once per import specifier, at the import
+// (maintainer decision, 2026-11-12, which replaces the fail-closed decision
+// of 2026-11-11). `lint.test-source-recognition` owns the account of each
+// source; this property checks that the rules agree through every binding.
 //
 // What each rule owes for a statement `<callee><modifier>('n', body)`:
 //
@@ -669,7 +678,10 @@ oracleProperty({
 // test root is a raw campaign), and the review of 2026-11-11 (P1), which asks
 // that the three rules cannot disagree on a root. That every branch of a
 // conditional counts follows the review's rule that an unknown callee that
-// may resolve to a test root is reported, not passed.
+// may resolve to a test root is reported, not passed. The unknown-source
+// report is the maintainer decision of 2026-11-12 ("agree with reversed
+// decision -- false positives are annoying and we should be able to be
+// precise").
 //
 // The model reads only the statement's binding, root, and modifier. The
 // production path is the same ESLint instance and single `Linter` call,
@@ -679,8 +691,9 @@ oracleProperty({
 // Limits: one oracle file per history, with fixed helper modules. A test
 // function passed as a parameter to a local helper, a global test function
 // (Vitest's `globals`), a modifier call relayed from another module (only
-// `.skip` is), and a fixture exported by a package are not generated. A relative module that
-// the parser cannot read is not generated.
+// `.skip` is), and a fixture exported by a package are not generated here:
+// `lint.test-source-recognition` generates globals, packages, and their
+// fixtures. A relative module that the parser cannot read is not generated.
 // =============================================================================
 
 const AGREE_LAW = `the rules agree`
@@ -861,25 +874,28 @@ const BINDINGS = {
     test: false,
     render: (r) => ({ callee: `patterns.${r}` }),
   },
-  // Packages other than Vitest's: an import from any package or subpath
-  // alias whose name is a test root is a test function, so a rule fails
-  // closed where it cannot read the package (coordinator decision,
-  // 2026-11-11: a false positive costs a rename, and a false negative
-  // switches a law off).
+  // Sources that the rules cannot read: a package that no table or setting
+  // classifies, and a `#` import that no `imports` field maps. A call gets
+  // no report of a test; `unknown` names the import specifier that gets one
+  // `unknownTestSource` report (maintainer decision, 2026-11-12).
   'other-package': {
-    test: true,
+    test: false,
+    unknown: () => `other`,
     render: (r) => ({ callee: `other.${r}` }),
   },
   'other-package-named': {
-    test: true,
+    test: false,
+    unknown: (r) => `o${capital(r)}`,
     render: (r) => ({ callee: `o${capital(r)}` }),
   },
   'other-package-relayed': {
-    test: true,
+    test: false,
+    unknown: (r) => `p${capital(r)}`,
     render: (r) => ({ callee: `p${capital(r)}` }),
   },
   'other-package-fixture': {
-    test: true,
+    test: false,
+    unknown: (r) => (r === `describe` ? `oTest` : `o${capital(r)}`),
     roots: [`it`, `test`, `describe`],
     render: (r) => ({
       callee:
@@ -889,7 +905,8 @@ const BINDINGS = {
     }),
   },
   'subpath-alias': {
-    test: true,
+    test: false,
+    unknown: (r) => `h${capital(r)}`,
     render: (r) => ({ callee: `h${capital(r)}` }),
   },
   // Two modules whose bindings refer to each other: `cx` is a test root or
@@ -1076,8 +1093,17 @@ function callReports({ root, modifier }, carried) {
   return reports
 }
 
+/** The header line that imports the binding `key`. */
+const importLine = (key) =>
+  1 +
+  AGREE_HEADER.findIndex((text) =>
+    new RegExp(`(as|\\{|,) ${key}\\b`).test(text),
+  )
+
 function agreeModel(history) {
   const keys = []
+  // Each import specifier of an unknown source is reported once.
+  const unknownSpecifiers = new Set()
   let line = AGREE_HEADER.length
   agreeLines(history).forEach((lines, k) => {
     const item = history.statements[k]
@@ -1090,6 +1116,11 @@ function agreeModel(history) {
     if (binding.test)
       for (const report of callReports(item, binding.carries))
         keys.push(`${callLine}:${report}`)
+    const specifier = binding.unknown?.(item.root)
+    if (specifier !== undefined && !unknownSpecifiers.has(specifier)) {
+      unknownSpecifiers.add(specifier)
+      keys.push(`${importLine(specifier)}:no-unit-test:unknownTestSource`)
+    }
     line = callLine
   })
   return { keys: keys.sort(), budget: `within ${BUDGET_MS} ms` }
@@ -1219,9 +1250,9 @@ const agreeConstructed = [
 oracleProperty({
   id: `lint.test-function-agreement`,
   law: {
-    statement: `oracle/no-unit-test, oracle/no-disabled, and oracle/oracle-property-only resolve a callee's root to the same test function: it, test, describe, suite, or bench imported from any package or subpath alias, or a fixture of one, through an alias, a namespace member, a variable's initializer or assignment, a destructuring, a cast, a branch of a conditional or logical expression, and a test module's constant, re-export, export * as, or default export. Any other binding, and a member that is no registration such as test.step, is no test function, whatever its name. An answer does not depend on the order of queries in a cycle of modules, and a conditional whose branches are both test functions is reported once. For a test root no-unit-test reports unitTest; no-disabled reports only, skip for .skip and a .todo with a body, and conditional for .skipIf(true), and aliasTest where a bare test function is passed as a value; oracle-property-only reports rawProperty for .prop. A modifier that a module's binding carries counts at the call, and no-disabled reports alias where a modifier or a modifier call is passed as a value. Every lint ends within ${BUDGET_MS} ms.`,
-    authority: `The D2 law of lint.registration-only; the no-disabled and oracle-property-only rules' contracts in their source headers; the review of remove/declare-oracle of 2026-11-11 (P1), which asks that the three rules share one root recognizer and that an unknown callee that may resolve to a test root is reported.`,
-    limits: `One oracle file per history with fixed helper modules. A test function passed as a parameter, a global test function, a modifier call relayed from another module (a relayed .skip is generated), a fixture exported by a package, and an unparsable module are not generated.`,
+    statement: `oracle/no-unit-test, oracle/no-disabled, and oracle/oracle-property-only resolve a callee's root to the same test function: a test framework's it, test, describe, suite, or bench, or a fixture of one, through an alias, a namespace member, a variable's initializer or assignment, a destructuring, a cast, a branch of a conditional or logical expression, and a test module's constant, re-export, export * as, or default export. Any other binding, and a member that is no registration such as test.step, is no test function, whatever its name. An answer does not depend on the order of queries in a cycle of modules, and a conditional whose branches are both test functions is reported once. For a test root no-unit-test reports unitTest; no-disabled reports only, skip for .skip and a .todo with a body, and conditional for .skipIf(true), and aliasTest where a bare test function is passed as a value; oracle-property-only reports rawProperty for .prop. A call through a package that no table classifies, or an unmapped # import, reports no test, and no-unit-test reports unknownTestSource once per import specifier. A modifier that a module's binding carries counts at the call, and no-disabled reports alias where a modifier or a modifier call is passed as a value. Every lint ends within ${BUDGET_MS} ms.`,
+    authority: `The D2 law of lint.registration-only; the no-disabled and oracle-property-only rules' contracts in their source headers; the review of remove/declare-oracle of 2026-11-11 (P1), which asks that the three rules share one root recognizer and that an unknown callee that may resolve to a test root is reported; the maintainer decision of 2026-11-12 ("agree with reversed decision -- false positives are annoying and we should be able to be precise"), under which an unclassified package's call is reported as an unknown source, not as a test.`,
+    limits: `One oracle file per history with fixed helper modules. A test function passed as a parameter, a global test function, a modifier call relayed from another module (a relayed .skip is generated), a fixture exported by a package (lint.test-source-recognition generates globals and package fixtures), and an unparsable module are not generated.`,
   },
   histories: {
     arbitrary: agreeHistories,
