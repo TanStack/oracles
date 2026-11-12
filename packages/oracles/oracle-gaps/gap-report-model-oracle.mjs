@@ -4549,6 +4549,8 @@ const initialState = (plan) => ({
   strict: true,
   // What `tests/lazy.ts` exports: whether file b's lazy gate is open.
   lazyOpen: true,
+  // How many mid-run edits have landed (`midrun`).
+  midruns: 0,
   seed: 1,
   // Whether the check's `--config` names the second config (`altConfig`).
   altConfig: false,
@@ -4859,6 +4861,12 @@ function fixtureFiles(plan, state = initialState(plan)) {
   }
   for (const file of oracleFilesOf(plan))
     files[`tests/${file}.test.ts`] = oracleTestFile(plan, file)
+  // Each mid-run edit changes file a's own text too (a count of them), so
+  // the daemon runs file a's tests again in the check the edit lands in,
+  // instead of reusing their evidence: the marker is read through fs,
+  // which no run records as an input.
+  if (plan.midrun)
+    files[`tests/a.test.ts`] += `// mid-run edits: ${state.midruns}\n`
   // The new oracle file d owns the first generated function and judges it.
   if (state.newOracle) {
     const target = plan.functions.find((fn) => fn.generated && !fn.library)
@@ -5002,8 +5010,9 @@ function applyEdit(state, edit) {
       },
     }
   // A mid-run edit leaves file b's helper as the helper edit does.
-  if (edit === `helper` || edit === `midrun`)
-    return { ...state, strict: !state.strict }
+  if (edit === `helper`) return { ...state, strict: !state.strict }
+  if (edit === `midrun`)
+    return { ...state, strict: !state.strict, midruns: state.midruns + 1 }
   if (edit === `lazy`) return { ...state, lazyOpen: !state.lazyOpen }
   if (edit === `seed`) return { ...state, seed: state.seed === 1 ? 2 : 1 }
   if (edit === `config`) return { ...state, altConfig: !state.altConfig }
