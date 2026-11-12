@@ -149,8 +149,11 @@ const PAIR_SLOW_MS = 10000
 const MUTANT_LIMIT_MS = 15000
 // How often the CLI says which mutant a busy copy runs (its heartbeat): the
 // driver shortens it from 30 s (`ORACLE_GAPS_HEARTBEAT_MS`), so that a slow
-// test's wait of SLOW_MS spans it at least twice.
-const HEARTBEAT_MS = 1000
+// test's wait of SLOW_MS passes it. A copy beats once its own run has lasted
+// an interval, so the interval is twice the 1 s first budget: a copy cut at
+// its first budget never lasts it, and whether a run beats is a function of
+// the history, not of the machine's load, as the determinism tests require.
+const HEARTBEAT_MS = 2000
 const ORACLE_FILES = [`a`, `b`]
 // The owners of the budget witness (`w_slowpair`): two oracle files of one
 // test each, so that their unmutated time stays short on a loaded machine,
