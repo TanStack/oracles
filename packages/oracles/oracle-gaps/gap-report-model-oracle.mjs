@@ -429,6 +429,9 @@ const edits = [
   `cli`,
   // The module that only file b's mutated runs import (`lazyGate`).
   `lazy`,
+  // The data file that file b's verdict reads through fs (`fsRead`): no
+  // test or source changes, only a file a test reads at run time.
+  `fsData`,
   // File b's helper edited while a check through the daemon runs (law 9's
   // mid-run edit): a test of file a, which has loaded the helper, rewrites
   // it the first time it runs, before file b's runs read it.
@@ -614,6 +617,18 @@ const drawn = fc.record({
   // where the output differs, so only a mutated run loads it
   // (`tests/lazy.ts`, which law 9's `lazy` edit changes).
   lazyGate: fc.constantFrom(false, false, false, true),
+  // File b's verdicts also wait on `tests/data.json`, which the test reads
+  // through fs at run time, by a sync, a promise, or a callback read (law
+  // 9: a file a test reads is an input of its run, as a module it imports
+  // is). The `fsData` edit changes only that file.
+  fsRead: fc.constantFrom(
+    `none`,
+    `none`,
+    `none`,
+    `sync`,
+    `promise`,
+    `callback`,
+  ),
   // A second authored mutant, on the next statement, so that two patched
   // sources are judged in the same run and neither may see the other's.
   secondAuthored: fc.boolean(),
@@ -2634,6 +2649,7 @@ function resolveHistory(history) {
     stability: history.stability,
     steps: history.steps ?? [],
     lazyGate: history.lazyGate === true,
+    fsRead: history.fsRead ?? `none`,
     // Whether a step edits file b's helper during a check (`midrun`): then
     // file a loads the helper and holds the test that edits it.
     midrun: (history.steps ?? []).includes(`midrun`),
@@ -4158,6 +4174,24 @@ const quoteEntry = (plan, entry) =>
 // Whether a test's verdict waits on file b's lazy gate (`lazyGate`).
 const lazyGated = (plan, file, t) =>
   plan.lazyGate && file === `b` && t.judges && t.judgeBy === `verdict`
+// Whether a test's verdict waits on the data file it reads through fs.
+const fsGated = (plan, file, t) =>
+  plan.fsRead !== `none` && file === `b` && t.judges && t.judgeBy === `verdict`
+// How file b reads `tests/data.json`, by each kind of fs read.
+const dataReads = {
+  sync: [
+    `import { readFileSync as readDataSync } from 'node:fs'`,
+    `const readData = async () => JSON.parse(readDataSync(new URL('./data.json', import.meta.url), 'utf8'))`,
+  ],
+  promise: [
+    `import { readFile as readDataFile } from 'node:fs/promises'`,
+    `const readData = async () => JSON.parse(await readDataFile(new URL('./data.json', import.meta.url), 'utf8'))`,
+  ],
+  callback: [
+    `import { readFile as readDataCallback } from 'node:fs'`,
+    `const readData = () => new Promise((resolve, reject) => readDataCallback(new URL('./data.json', import.meta.url), 'utf8', (error, text) => (error ? reject(error) : resolve(JSON.parse(text)))))`,
+  ],
+}
 
 function oracleTestFile(plan, file) {
   const sites = sitesOf(plan)
@@ -4241,6 +4275,7 @@ function oracleTestFile(plan, file) {
       : []),
     `import * as sut from '../src/sut'`,
     ...(file === `b` ? [`import { strict } from './strict'`] : []),
+    ...(file === `b` && plan.fsRead !== `none` ? dataReads[plan.fsRead] : []),
     ...stubs,
     // State that tests of this file share (the `w_shared` witness).
     `const shared = { value: 0 }`,
@@ -4371,7 +4406,7 @@ function oracleTestFile(plan, file) {
                 // A lazy gate is imported only where the output differs, so
                 // the unmutated run never loads it. It is open before any
                 // edit, so the model need not read it.
-                `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}${lazyGated(plan, file, t) ? ` && (await import('./lazy')).open` : ``}) {`,
+                `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}${lazyGated(plan, file, t) ? ` && (await import('./lazy')).open` : ``}${fsGated(plan, file, t) ? ` && (await readData()).open` : ``}) {`,
                 `      g.__oracleVerdict?.({ property: 'fixture-${file}', law: '${t.law}', checkpoint: 'trace' })`,
                 `      throw new Error('violation')`,
                 `    }`,
@@ -4389,7 +4424,7 @@ function oracleTestFile(plan, file) {
         : []),
       t.asProp
         ? `  fcTest.prop([fcv.integer({ min: 0, max: 10 })], { numRuns: 20, seed: 1 })('${testName(t, index)}', async (n) => {`
-        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || lazyGated(plan, file, t) ? `async ` : ``}() => {`,
+        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || lazyGated(plan, file, t) || fsGated(plan, file, t) ? `async ` : ``}() => {`,
       ...partsOf(t).flatMap(campaign),
       `  })`,
       `})`,
@@ -4549,6 +4584,8 @@ const initialState = (plan) => ({
   strict: true,
   // What `tests/lazy.ts` exports: whether file b's lazy gate is open.
   lazyOpen: true,
+  // What `tests/data.json` holds: whether file b's data gate is open.
+  dataOpen: true,
   // How many mid-run edits have landed (`midrun`).
   midruns: 0,
   seed: 1,
@@ -4739,6 +4776,9 @@ function fixtureFiles(plan, state = initialState(plan)) {
     ...(plan.midrun ? { 'tests/midrun.txt': `done\n` } : {}),
     ...(plan.lazyGate
       ? { 'tests/lazy.ts': `export const open = ${state.lazyOpen}\n` }
+      : {}),
+    ...(plan.fsRead !== `none`
+      ? { 'tests/data.json': `${JSON.stringify({ open: state.dataOpen })}\n` }
       : {}),
     // A workspace dependency with module state, linked through node_modules.
     'deps/state-dep/package.json': manifest({
@@ -5014,6 +5054,7 @@ function applyEdit(state, edit) {
   if (edit === `midrun`)
     return { ...state, strict: !state.strict, midruns: state.midruns + 1 }
   if (edit === `lazy`) return { ...state, lazyOpen: !state.lazyOpen }
+  if (edit === `fsData`) return { ...state, dataOpen: !state.dataOpen }
   if (edit === `seed`) return { ...state, seed: state.seed === 1 ? 2 : 1 }
   if (edit === `config`) return { ...state, altConfig: !state.altConfig }
   // A seed no other step uses, so the check has fresh work to be killed in.

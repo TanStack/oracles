@@ -1195,6 +1195,11 @@ async function incremental(dir, plan, cli, copy, observe, states) {
     // An edit that changes the cold result is one a stale cache could miss.
     if (step !== `start` && result(previous) !== result(coldRun)) {
       states.add(`edit ${step} changed the cold result`)
+      // An edit of only a file a test reads through fs, by each kind of read.
+      if (step === `fsData`)
+        states.add(
+          `an edit to data read through ${plan.fsRead} changed the cold result`,
+        )
       // The daemon's previous check cut a run off, so the only context, which
       // ran every file, was replaced. Whether the replacement read the edited
       // file again is not observed; the constructed history's order makes it
@@ -2525,6 +2530,9 @@ const incrementalStates = [
   `a check from another install of the CLI`,
   `a check after the OS cleaned the daemon's state`,
   `an edit landed during a check through the daemon`,
+  `an edit to data read through sync changed the cold result`,
+  `an edit to data read through promise changed the cold result`,
+  `an edit to data read through callback changed the cold result`,
   `two checks started the daemon at once`,
   `the daemon ran from a path with a space and #`,
 ]
@@ -3406,6 +3414,135 @@ oracleProperty({
           concurrentStart: false,
           contexts: 1,
           steps: [`midrun`],
+        }),
+      },
+      {
+        // File b's verdict also waits on a data file that the test reads
+        // through fs (sync read). The edit changes only that file, which
+        // closes the gate: the cold run then reports b's mutant as a
+        // survivor, and the daemon must not reuse a kill that read the old
+        // data (law 9: a file a test reads is an input of its run).
+        name: `an edit to data a test reads through fs (sync)`,
+        enters: [
+          `edit fsData changed the cold result`,
+          `an edit to data read through sync changed the cold result`,
+        ],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`b`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          derived: null,
+          dotGen: false,
+          dataOwners: [],
+          exportOwners: [],
+          importer: `none`,
+          wholeFile: `none`,
+          template: false,
+          tests: [{ ...judging(`b`, `fixed seed`, 1), fn: 0 }],
+          witness: false,
+          authored: null,
+          secondAuthored: false,
+          fault: `none`,
+          stability: `none`,
+          ordinary: false,
+          native: `none`,
+          boot: false,
+          cliPath: `plain`,
+          concurrentStart: false,
+          lazyGate: false,
+          fsRead: `sync`,
+          steps: [`fsData`],
+        }),
+      },
+      {
+        // File b's verdict also waits on a data file that the test reads
+        // through fs (promise read). The edit changes only that file, which
+        // closes the gate: the cold run then reports b's mutant as a
+        // survivor, and the daemon must not reuse a kill that read the old
+        // data (law 9: a file a test reads is an input of its run).
+        name: `an edit to data a test reads through fs (promise)`,
+        enters: [
+          `edit fsData changed the cold result`,
+          `an edit to data read through promise changed the cold result`,
+        ],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`b`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          derived: null,
+          dotGen: false,
+          dataOwners: [],
+          exportOwners: [],
+          importer: `none`,
+          wholeFile: `none`,
+          template: false,
+          tests: [{ ...judging(`b`, `fixed seed`, 1), fn: 0 }],
+          witness: false,
+          authored: null,
+          secondAuthored: false,
+          fault: `none`,
+          stability: `none`,
+          ordinary: false,
+          native: `none`,
+          boot: false,
+          cliPath: `plain`,
+          concurrentStart: false,
+          lazyGate: false,
+          fsRead: `promise`,
+          steps: [`fsData`],
+        }),
+      },
+      {
+        // File b's verdict also waits on a data file that the test reads
+        // through fs (callback read). The edit changes only that file, which
+        // closes the gate: the cold run then reports b's mutant as a
+        // survivor, and the daemon must not reuse a kill that read the old
+        // data (law 9: a file a test reads is an input of its run).
+        name: `an edit to data a test reads through fs (callback)`,
+        enters: [
+          `edit fsData changed the cold result`,
+          `an edit to data read through callback changed the cold result`,
+        ],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`b`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          derived: null,
+          dotGen: false,
+          dataOwners: [],
+          exportOwners: [],
+          importer: `none`,
+          wholeFile: `none`,
+          template: false,
+          tests: [{ ...judging(`b`, `fixed seed`, 1), fn: 0 }],
+          witness: false,
+          authored: null,
+          secondAuthored: false,
+          fault: `none`,
+          stability: `none`,
+          ordinary: false,
+          native: `none`,
+          boot: false,
+          cliPath: `plain`,
+          concurrentStart: false,
+          lazyGate: false,
+          fsRead: `callback`,
+          steps: [`fsData`],
         }),
       },
       {

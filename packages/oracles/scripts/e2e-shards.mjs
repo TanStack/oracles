@@ -71,6 +71,16 @@ export const shards = {
     `fixed seed 20261105: an edit during a check through the daemon`,
     `random seed: an edit during a check through the daemon`,
     `determinism: constructed history: an edit during a check through the daemon`,
+    // The fs-read data histories (law 9), not yet measured.
+    `fixed seed 20261105: an edit to data a test reads through fs (sync)`,
+    `random seed: an edit to data a test reads through fs (sync)`,
+    `determinism: constructed history: an edit to data a test reads through fs (sync)`,
+    `fixed seed 20261105: an edit to data a test reads through fs (promise)`,
+    `random seed: an edit to data a test reads through fs (promise)`,
+    `determinism: constructed history: an edit to data a test reads through fs (promise)`,
+    `fixed seed 20261105: an edit to data a test reads through fs (callback)`,
+    `random seed: an edit to data a test reads through fs (callback)`,
+    `determinism: constructed history: an edit to data a test reads through fs (callback)`,
     // Added with the CLI's parent-config discovery (not yet measured).
     `fixed seed 20261105: a package whose parent directory has its config`,
     `random seed: test.projects in a parent's config`,
