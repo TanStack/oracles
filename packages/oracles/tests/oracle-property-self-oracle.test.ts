@@ -90,6 +90,8 @@
  *   entered selectors infer a unique construction. Equal data never permits
  *   substituting another named original. Registration warns once per
  *   property/process without dropping tests, and collect-only stays silent.
+ *   Every receiving child preserves that warning and each unbound name once;
+ *   neither property order nor name order changes that promise.
  *   Every real child must finish with a complete report and no unmodeled
  *   unhandled errors, including replay and registration-only children.
  *   Each authored calibration selects independently, including bound/unbound
@@ -100,6 +102,11 @@
  *   and three generated ones, and fails for a driver whose trace changes,
  *   compared by their data encoding: `-0` is not `0`, and key order and
  *   Map and Set order count, which a check that iterates them can see.
+ * - `campaign budget`: a passing generated campaign runs its requested random
+ *   sample count plus one example per construction, independently in every
+ *   fixed and random lane. Child processes discard the parent's ORACLE_
+ *   settings, so their multiplier is one. Path replay runs exactly one
+ *   history; failures, shrinking, and timeouts owe no fixed call count.
  * - `agreement`: for a probe-bound state, a history whose `predict` says it
  *   enters the state while the history does not enter it, or does not enter
  *   it while the history does, violates law `reach agreement` at checkpoint
@@ -371,7 +378,12 @@ type Draft = {
 }
 // `seedless`: one more child run, without `ORACLE_SEED`, records the routes
 // of each random campaign as an ordinary run draws its seed.
-type Suite = { drafts: Array<Draft>; seedless: boolean }
+type Suite = {
+  drafts: Array<Draft>
+  seedless: boolean
+  /** A controlled host draw, independent of the framework's seed selection. */
+  seedlessDraw?: number
+}
 
 // Outside the synthetic language: an item 5, or four items.
 const outside = fc.oneof(
@@ -756,13 +768,21 @@ const draft: fc.Arbitrary<Draft> = fc.record({
     { weight: 1, arbitrary: fc.constant(true) },
   ),
 })
-const suite: fc.Arbitrary<Suite> = fc.record({
-  drafts: fc.array(draft, { minLength: 1, maxLength: 2 }),
-  seedless: fc.oneof(
-    { weight: 5, arbitrary: fc.constant(false) },
-    { weight: 1, arbitrary: fc.constant(true) },
-  ),
-})
+const cleanHostDraw = 0.5000000016298145
+const suite: fc.Arbitrary<Suite> = fc.record(
+  {
+    drafts: fc.array(draft, { minLength: 1, maxLength: 2 }),
+    seedless: fc.oneof(
+      { weight: 5, arbitrary: fc.constant(false) },
+      { weight: 1, arbitrary: fc.constant(true) },
+    ),
+    seedlessDraw: fc.option(fc.constantFrom(0.5, cleanHostDraw), {
+      nil: undefined,
+      freq: 8,
+    }),
+  },
+  { requiredKeys: [`drafts`, `seedless`] },
+)
 
 // ---------------------------------------------------------------------------
 // Resolution: ids, names, and declared states
@@ -774,20 +794,29 @@ const suite: fc.Arbitrary<Suite> = fc.record({
 // constructed history that names an undeclared state). An enumerated draft has no
 // constructed or fixed histories.
 
-type Plan = { specs: Array<SyntheticSpec>; seedless: boolean }
+type Plan = {
+  specs: Array<SyntheticSpec>
+  seedless: boolean
+  seedlessDraw?: number
+}
 
-function resolveSuite({ drafts, seedless }: Suite): Plan {
+function resolveSuite({ drafts, seedless, seedlessDraw }: Suite): Plan {
   return {
     seedless,
+    ...(seedlessDraw === undefined ? {} : { seedlessDraw }),
     specs: drafts.map((d, index) => {
       const generated = d.source.kind === `generated`
-      const hasBinding = d.calibrations.some((calibration) =>
-        typeof calibration === `string`
-          ? d.calibrationHistory !== null
-          : calibration.history === undefined
+      const hasBinding =
+        (d.probe !== `none` &&
+          d.probeBinding !== `unbound` &&
+          d.probeBinding !== `empty`) ||
+        d.calibrations.some((calibration) =>
+          typeof calibration === `string`
             ? d.calibrationHistory !== null
-            : calibration.history !== null,
-      )
+            : calibration.history === undefined
+              ? d.calibrationHistory !== null
+              : calibration.history !== null,
+        )
       const constructed = generated
         ? d.constructed.map((construction, at) => ({
             name: `constructed-${d.duplicateHistoryNames && hasBinding ? 0 : at}`,
@@ -1359,6 +1388,46 @@ const unboundCalibrationNames = (spec: SyntheticSpec) => [
       )
     : []),
 ]
+const registeredSpec = (spec: SyntheticSpec, context: ChildContext) =>
+  context.kind === `binding-reordered`
+    ? {
+        ...spec,
+        calibrations: [
+          { name: `unrelated calibration`, kind: `right` as const },
+          ...[...spec.calibrations].reverse(),
+        ],
+      }
+    : spec
+const propertyWarnings = (warnings: ReadonlyArray<string>, id: string) =>
+  warnings.filter((warning) => warning.startsWith(`${id}:`))
+const warningNameCount = (warning: string, name: string) => {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
+  return [
+    ...warning.matchAll(
+      new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, `gu`),
+    ),
+  ].length
+}
+const warningMismatch = (
+  spec: SyntheticSpec,
+  warnings: ReadonlyArray<string>,
+  collectOnly: boolean,
+) => {
+  const unbound = collectOnly ? [] : unboundCalibrationNames(spec)
+  const own = propertyWarnings(warnings, spec.id)
+  if (own.length !== (unbound.length ? 1 : 0)) return true
+  if (own.length === 0) return false
+  const names = [
+    ...spec.calibrations.map(({ name }) => name),
+    ...forcedCalibrationNames(spec).map((name) =>
+      name.slice(`calibration: `.length),
+    ),
+  ]
+  return names.some(
+    (name) =>
+      warningNameCount(own[0]!, name) !== (unbound.includes(name) ? 1 : 0),
+  )
+}
 const boundTest = (spec: SyntheticSpec, name: string) => {
   const calibration = spec.calibrations.find(
     (entry) => name === `calibration: ${entry.name}`,
@@ -1614,6 +1683,9 @@ function predictSpec(
   spec: SyntheticSpec,
   logged: ReadonlyArray<LogEntry>,
   builds: ReadonlyArray<BuildEntry> = [],
+  // The full ordinary run supplies only history/name association. Filtered
+  // children's own logs still determine every invocation and outcome.
+  nameLog: ReadonlyArray<LogEntry> = logged,
 ): SpecExpectation {
   const ran = (test: string) =>
     logged
@@ -1800,7 +1872,7 @@ function predictSpec(
   const names =
     spec.source.kind === `enumerated`
       ? spec.source.histories.map((history) =>
-          enumeratedName(spec, history, logged),
+          enumeratedName(spec, history, nameLog),
         )
       : [
           `fixed seed ${spec.source.seed}`,
@@ -1976,7 +2048,7 @@ function predictSpec(
     for (const history of spec.source.histories) {
       const verdict = verdictOf(history, spec)
       tests.set(
-        enumeratedName(spec, history, logged),
+        enumeratedName(spec, history, nameLog),
         declared &&
           judgedKind(verdict) &&
           reachedOf(spec, history).some((state) => !declared.includes(state))
@@ -2156,7 +2228,31 @@ function owedRoute(name: string, replay = false): string {
 // The self-oracle's own reach: states of the framework that its laws are
 // about. Each fixed history names the state it witnesses, so every one is reached on
 // every run; campaigns count them.
+const warningReceivingKinds = [
+  `run`,
+  `seedless`,
+  `replay`,
+  `rerun`,
+  `reach-alone`,
+  `binding-reordered`,
+  `registration-warnings`,
+] as const
+const passingBudgetLanes = [
+  { context: `run`, lane: `fixed` },
+  { context: `run`, lane: `random` },
+  { context: `seedless`, lane: `fixed` },
+  { context: `seedless`, lane: `random` },
+] as const
+const round4FrameworkStates = [
+  ...warningReceivingKinds.map((kind) => `warning-receiving-${kind}` as const),
+  ...passingBudgetLanes.map(
+    ({ context, lane }) => `passing-budget-${context}-${lane}` as const,
+  ),
+  `passing-budget-constructed`,
+  `campaign-budget-failure-neighbor`,
+] as const
 const round3FrameworkStates = [
+  ...round4FrameworkStates,
   `bound-fixed-own-metadata-authored`,
   `bound-fixed-own-metadata-forced-entered`,
   `bound-fixed-own-metadata-forced-not-entered`,
@@ -2298,6 +2394,47 @@ function frameworkReach(
         child.tests.some(({ state }) => state !== `skipped`))
     )
       reached.add(`receiving-${child.context.kind}`)
+    for (const original of plan.specs) {
+      if (
+        `id` in child.context &&
+        child.context.id !== original.id &&
+        child.context.kind !== `replay`
+      )
+        continue
+      const spec = registeredSpec(original, child.context)
+      if (!predictSpec(spec, child.log, child.builds).loads) continue
+      if (
+        unboundCalibrationNames(spec).length > 0 &&
+        !(
+          child.context.kind === `registration-warnings` &&
+          child.context.phases.length === 0
+        ) &&
+        !warningMismatch(spec, child.warnings, false)
+      )
+        reached.add(`warning-receiving-${child.context.kind}`)
+      if (spec.source.kind !== `generated`) continue
+      for (const test of child.tests.filter(
+        ({ id, name }) => id === spec.id && isCampaign(name),
+      )) {
+        const calls = child.log.filter(
+          ({ id, test: name }) =>
+            id === spec.id && name === `${spec.id} > ${test.name}`,
+        )
+        if (test.state === `failed` && calls.length > 0)
+          reached.add(`campaign-budget-failure-neighbor`)
+        if (
+          (child.context.kind === `run` || child.context.kind === `seedless`) &&
+          test.state === `passed` &&
+          calls.length === spec.source.runs + spec.constructed.length
+        ) {
+          reached.add(
+            `passing-budget-${child.context.kind}-${test.name === `random seed` ? `random` : `fixed`}`,
+          )
+          if (spec.constructed.length > 0)
+            reached.add(`passing-budget-constructed`)
+        }
+      }
+    }
   }
   if (
     trace
@@ -2913,6 +3050,8 @@ type ChildRun = {
   }>
   log: Array<LogEntry>
   builds: Array<BuildEntry>
+  /** Registration warnings retained for every process, including filtered runs. */
+  warnings: Array<string>
   secondaryErrors: Array<{ test: string; message: string }>
   unhandled: Array<string>
   failed: boolean
@@ -3271,6 +3410,8 @@ function driveSuite(
         context,
         log: readLog(childLog),
         builds: readBuilds(childLog),
+        // Independent property files may register in either order.
+        warnings: [...report.warnings].sort(),
         tests: report.files
           .flatMap(({ file, tests }) => {
             const id = plan.specs[files.indexOf(file)]?.id ?? `unknown`
@@ -3527,7 +3668,10 @@ function driveSuite(
         { kind: `seedless` },
         directory,
         files,
-        { SELF_ORACLE_LOG: seedlessLog, SELF_ORACLE_RANDOM_DRAW: `0.5` },
+        {
+          SELF_ORACLE_LOG: seedlessLog,
+          SELF_ORACLE_RANDOM_DRAW: String(plan.seedlessDraw ?? 0.5),
+        },
         undefined,
         false,
       )
@@ -3723,6 +3867,7 @@ function childExpectation(
   plan: Plan,
   child: ChildRun,
   expected: ReturnType<typeof suiteModel>,
+  nameLog: ReadonlyArray<LogEntry>,
 ) {
   const context = child.context
   const selectedSpecs =
@@ -3733,17 +3878,8 @@ function childExpectation(
       : plan.specs
   let failed = false
   for (const original of selectedSpecs) {
-    const spec: SyntheticSpec =
-      context.kind === `binding-reordered`
-        ? {
-            ...original,
-            calibrations: [
-              { name: `unrelated calibration`, kind: `right` },
-              ...[...original.calibrations].reverse(),
-            ],
-          }
-        : original
-    const prediction = predictSpec(spec, child.log, child.builds)
+    const spec = registeredSpec(original, context)
+    const prediction = predictSpec(spec, child.log, child.builds, nameLog)
     if (!prediction.loads) failed = true
     const names = prediction.loads ? [...prediction.tests.keys()] : []
     const owedNames =
@@ -3764,6 +3900,16 @@ function childExpectation(
         ),
       }
     if (!prediction.loads) continue
+    const collectOnly =
+      context.kind === `registration-warnings` && context.phases.length === 0
+    if (warningMismatch(spec, child.warnings, collectOnly))
+      return {
+        failure: violation(
+          `child`,
+          `${spec.id} ${context.kind} lost its once-per-process unbound calibration warning or names: ${JSON.stringify(propertyWarnings(child.warnings, spec.id))}`,
+          `calibration`,
+        ),
+      }
     for (const test of seen) {
       const selected =
         context.kind === `registration-warnings`
@@ -3822,6 +3968,29 @@ function childExpectation(
             { actual: test.errors, expected: outcome },
           ),
         }
+      if (
+        spec.source.kind === `generated` &&
+        isCampaign(test.name) &&
+        outcome.kind === `pass`
+      ) {
+        const actualCalls = child.log.filter(
+          ({ id, test: name }) =>
+            id === spec.id && name === `${spec.id} > ${test.name}`,
+        ).length
+        const owedCalls =
+          context.kind === `replay`
+            ? 1
+            : spec.source.runs + spec.constructed.length
+        if (actualCalls !== owedCalls)
+          return {
+            failure: violation(
+              `child`,
+              `${spec.id} ${context.kind} ${JSON.stringify(test.name)} passed after ${actualCalls} driver calls, owed ${owedCalls} from its declared campaign budget`,
+              `campaign budget`,
+              { actual: actualCalls, expected: owedCalls },
+            ),
+          }
+      }
       if (isCampaign(test.name) && failure) {
         const calls = child.log.filter(
           ({ id, test: name }) =>
@@ -3946,7 +4115,7 @@ function checkSuite(
           `registration`,
         )
     }
-    const modeled = childExpectation(plan, child, expected)
+    const modeled = childExpectation(plan, child, expected, run.log)
     if (modeled.failure) return modeled.failure
     const owedLate = lateCalls(plan, child.log)
     const actualLate = child.unhandled.filter(
@@ -4896,15 +5065,39 @@ const receivingCutDrafts = (tail: 1 | 2 = 1): Array<Draft> => [
       { prefix: [3, 6], enters: [] },
     ],
     calibrationHistory: { constructed: `constructed-0` },
-    calibrations: [`right`, `driver`],
+    calibrations: [
+      `right`,
+      { kind: `driver`, difference: `none`, history: null },
+    ],
     isolatedPlans: true,
     warningProbe: true,
   }),
   generatedDraft({
     source: { kind: `enumerated`, histories: [[0], [tail]] },
     enumeratedStates: [`measured`, `measured`, `measured`],
+    calibrations: [`right`, `driver`],
   }),
 ]
+const campaignBudgetSuite = (
+  runs: 2 | 3 = 2,
+  constructions: 0 | 1 | 2 = 1,
+  tail: 1 | 2 = 1,
+): Suite => ({
+  seedless: true,
+  seedlessDraw: cleanHostDraw,
+  drafts: [
+    generatedDraft({
+      source: { kind: `generated`, runs, seed: 7 },
+      constructed: [
+        { prefix: [0, tail, 1], enters: [`saw-0`] },
+        { prefix: [tail, 0, tail], enters: [`saw-0`] },
+      ].slice(0, constructions),
+    }),
+    generatedDraft({
+      constructed: [{ prefix: [3, 6], enters: [] }],
+    }),
+  ],
+})
 const cal = (
   kind: CalibrationDraft[`kind`],
   difference: CalibrationDraft[`difference`] = `none`,
@@ -5031,12 +5224,33 @@ oracleProperty({
     constructed: [
       {
         name: `round3 every actual receiving cut`,
-        enters: [...receivingCutStates],
+        enters: [
+          ...receivingCutStates,
+          ...warningReceivingKinds.map(
+            (kind) => `warning-receiving-${kind}` as const,
+          ),
+        ],
         build: (generated: Suite) => ({
           ...generated,
           seedless: true,
           drafts: receivingCutDrafts(generated.drafts[0]!.clock ? 1 : 2),
         }),
+      },
+      {
+        name: `round4 successful campaign budgets and failing neighbor`,
+        enters: [
+          ...passingBudgetLanes.map(
+            ({ context, lane }) => `passing-budget-${context}-${lane}` as const,
+          ),
+          `passing-budget-constructed`,
+          `campaign-budget-failure-neighbor`,
+        ],
+        build: (generated: Suite) =>
+          campaignBudgetSuite(
+            2,
+            generated.drafts[0]!.clock ? 1 : 2,
+            generated.drafts[0]!.isolatedPlans ? 1 : 2,
+          ),
       },
       {
         name: `round3 replayed clock failure retains driver cause`,
@@ -5564,9 +5778,41 @@ oracleProperty({
     fixed: [
       seedlessHistory(
         `round3 every actual receiving cut`,
-        [...receivingCutStates],
+        [
+          ...receivingCutStates,
+          ...warningReceivingKinds.map(
+            (kind) => `warning-receiving-${kind}` as const,
+          ),
+        ],
         ...receivingCutDrafts(),
       ),
+      {
+        name: `round4 successful campaign budgets and failing neighbor`,
+        enters: [
+          ...passingBudgetLanes.map(
+            ({ context, lane }) => `passing-budget-${context}-${lane}` as const,
+          ),
+          `passing-budget-constructed`,
+          `campaign-budget-failure-neighbor`,
+        ],
+        history: campaignBudgetSuite(),
+      },
+      {
+        name: `round4 successful campaign budget without constructions`,
+        enters: passingBudgetLanes.map(
+          ({ context, lane }) => `passing-budget-${context}-${lane}` as const,
+        ),
+        history: campaignBudgetSuite(2, 0),
+      },
+      {
+        name: `round4 larger successful fixed and seedless budgets`,
+        enters: [
+          `passing-budget-run-fixed`,
+          `passing-budget-seedless-fixed`,
+          `passing-budget-seedless-random`,
+        ],
+        history: campaignBudgetSuite(3, 2),
+      },
       fixedHistory(
         `round3 replayed clock failure retains driver cause`,
         [`receiving-replay`],
@@ -7004,6 +7250,111 @@ oracleProperty({
   driver: driveSuite,
   check: checkSuite,
   calibrations: [
+    ...warningReceivingKinds.flatMap((context) =>
+      ([`omit`, `duplicate`] as const).map((mutation) => ({
+        name: `reject ${mutation} ${context} registration warning`,
+        history: { fixed: `round3 every actual receiving cut` },
+        law: `calibration`,
+        corrupt: (
+          trace: ReadonlyArray<{ checkpoint: string; value: unknown }>,
+        ) => {
+          const altered = structuredClone([...trace])
+          const child = altered
+            .filter(({ checkpoint }) => checkpoint === `child`)
+            .map(({ value }) => value as ChildRun)
+            .find(
+              ({ context: cut, warnings }) =>
+                cut.kind === context && warnings.length > 0,
+            )!
+          if (mutation === `omit`) child.warnings.splice(0, 1)
+          else child.warnings.push(child.warnings[0]!)
+          return altered
+        },
+      })),
+    ),
+    ...([`omit`, `duplicate`] as const).map((mutation) => ({
+      name: `reject ${mutation} unbound warning name`,
+      history: { fixed: `round3 every actual receiving cut` },
+      law: `calibration`,
+      corrupt: (
+        trace: ReadonlyArray<{ checkpoint: string; value: unknown }>,
+      ) => {
+        const altered = structuredClone([...trace])
+        const child = altered
+          .filter(({ checkpoint }) => checkpoint === `child`)
+          .map(({ value }) => value as ChildRun)
+          .find(({ context }) => context.kind === `seedless`)!
+        child.warnings = child.warnings.map((warning) =>
+          warning.replace(
+            `"cal-1"`,
+            mutation === `omit` ? `"missing calibration"` : `"cal-1", "cal-1"`,
+          ),
+        )
+        return altered
+      },
+    })),
+    {
+      name: `reject warning from all-bound registration`,
+      history: { fixed: `round3 fully bound warning phases stay silent` },
+      law: `calibration`,
+      corrupt: (trace) => {
+        const altered = structuredClone([...trace])
+        const child = altered.find(({ checkpoint }) => checkpoint === `child`)!
+          .value as ChildRun
+        child.warnings.push(
+          `${syntheticIds[0]}: calibrations "cal-0" have no history binding`,
+        )
+        return altered
+      },
+    },
+    {
+      name: `reject warning from collect-only registration`,
+      history: { fixed: `round3 every actual receiving cut` },
+      law: `calibration`,
+      corrupt: (trace) => {
+        const altered = structuredClone([...trace])
+        const children = altered
+          .filter(({ checkpoint }) => checkpoint === `child`)
+          .map(({ value }) => value as ChildRun)
+        const collected = children.find(
+          ({ context }) =>
+            context.kind === `registration-warnings` &&
+            context.phases.length === 0,
+        )!
+        collected.warnings.push(
+          children.find(({ context }) => context.kind === `run`)!.warnings[0]!,
+        )
+        return altered
+      },
+    },
+    ...passingBudgetLanes.flatMap(({ context, lane }) =>
+      ([`few`, `many`] as const).map((mutation) => ({
+        name: `reject too ${mutation} successful ${context} ${lane} campaign calls`,
+        history: {
+          fixed: `round4 successful campaign budgets and failing neighbor`,
+        },
+        law: `campaign budget`,
+        corrupt: (
+          trace: ReadonlyArray<{ checkpoint: string; value: unknown }>,
+        ) => {
+          const altered = structuredClone([...trace])
+          const child = altered
+            .filter(({ checkpoint }) => checkpoint === `child`)
+            .map(({ value }) => value as ChildRun)
+            .find(({ context: cut }) => cut.kind === context)!
+          const callAt = child.log.findIndex(
+            ({ id, test }) =>
+              id === syntheticIds[0] &&
+              (lane === `random`
+                ? test === `${id} > random seed`
+                : test.startsWith(`${id} > fixed seed `)),
+          )
+          if (mutation === `few`) child.log.splice(callAt, 1)
+          else child.log.push(structuredClone(child.log[callAt]!))
+          return altered
+        },
+      })),
+    ),
     {
       name: `reject replay summary cause loss`,
       history: { fixed: `round3 replayed clock failure retains driver cause` },

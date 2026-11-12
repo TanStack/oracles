@@ -239,3 +239,56 @@ same gate passes **26/26** after repair (227 skipped), in 49.59 seconds. Package
 TypeScript, scoped ESLint and the Vite package/declaration build pass. Full
 fixed/random validation and a new independent review round follow this commit;
 this focused result alone does not establish PR readiness.
+
+## Fresh review and receiving repairs from b09a403
+
+Four fresh independent reviewers found two P2 primary-oracle gaps and no new
+production defect. Auxiliary children discarded registration warnings, and
+passing campaign counts were learned from the executions being checked.
+README's once-per-process warning promise and the header/config's equal
+campaign-budget promise already supply the laws. Both are enforcement repairs.
+
+The owner now records every child's warning facts and independently judges
+names and multiplicity for its effective declaration and collecting phase.
+Required warning-positive receivers cover run, seedless, replay, rerun,
+reach-alone, reordered bindings and registration phases separately. Passing
+campaigns owe the authored run budget plus constructed examples; failed,
+shrinking and timed-out campaigns retain their variable execution counts.
+Seedless host draws remain controlled inputs, with ORACLE_SEED absent. Required
+states separately cover successful fixed/random lanes in seeded and seedless
+children, construction examples, and a failing neighbor. The count model never
+uses observed reach totals as its owed budget.
+
+Same-head CI also caught two oracle regressions from the preceding expansion.
+A filtered rerun cannot learn skipped default data labels from its own invocation
+log. Auxiliary inventories now use the full ordinary input/name association,
+consistent with the owner's existing default-label distinctness limit. Each
+child's execution and build logs remain separate for outcomes and counts.
+The per-entry binding refactor also stopped constructing duplicate declaration
+names for bound probe controls with no authored calibrations. Effective probe
+bindings now restore that grammar, preserving the required ambiguity states.
+Neither issue required a source change.
+
+On unchanged b09a403 production, six combined warning/budget controls pass,
+all five CI regression receivers pass, and 26 permanent corruption calibrations
+pass. These share the primary model/driver/check. Real-child missing-warning and
+fixed-budget-one source mutants are assertion-rejected; legal warning-name
+reversal passes. The default-label repair still rejects omitted skipped
+registrations on both Error and bigint receivers. The duplicate-name grammar
+still rejects first-match selection on both inferred and explicit controls.
+Package TypeScript passes. Raw RED/GREEN, malformed reports, source patches,
+controls and setup attempts remain in the task audit.
+
+The preceding CI Vitest5 framework run reported 7 failures/246 passes: two
+campaigns, two fixed cases and one diagnostic calibration share the ambiguity
+premise; two default-label reruns share the inventory defect. These are two
+oracle defects, not seven source bugs. The old local full sweep was superseded
+and interrupted after these same-head RED results; it is not GREEN. A complete
+new full sweep and another fresh review round must validate this owner.
+
+Warning judgment permits name/property ordering. The executed allowed control
+uses a fixed reversal; it does not establish arbitrary variation between repeat
+executions, whose raw warning spelling also reaches outer determinism. This is
+a remaining representation question for the next independent review, not an
+asserted full closure of every legal warning representation. Source and fixture
+remain byte-identical to b09a403. Historical CHRON-1 remains unchanged.
