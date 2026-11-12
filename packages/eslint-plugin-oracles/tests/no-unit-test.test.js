@@ -146,7 +146,10 @@ settingsTester.run(`oracle/no-unit-test settings`, noUnitTest, {
         {
           messageId: `malformedSetting`,
           line: 1,
-          data: { path: `settings.oracles.testPackages` },
+          data: {
+            path: `settings.oracles.testPackages`,
+            detail: `\`testPackages\` maps a specifier to a framework's specifier or to a table of export roles (\`'test'\` or \`'suite'\`).`,
+          },
         },
         { messageId: `unknownTestSource`, line: 1 },
       ],
@@ -161,7 +164,10 @@ settingsTester.run(`oracle/no-unit-test settings`, noUnitTest, {
         {
           messageId: `malformedSetting`,
           line: 1,
-          data: { path: `settings.oracles.testPackages` },
+          data: {
+            path: `settings.oracles.testPackages`,
+            detail: `\`testPackages\` maps a specifier to a framework's specifier or to a table of export roles (\`'test'\` or \`'suite'\`).`,
+          },
         },
         { messageId: `unknownTestSource`, line: 1 },
       ],
@@ -174,7 +180,10 @@ settingsTester.run(`oracle/no-unit-test settings`, noUnitTest, {
         {
           messageId: `malformedSetting`,
           line: 1,
-          data: { path: `settings.oracles.nonTestPackages` },
+          data: {
+            path: `settings.oracles.nonTestPackages`,
+            detail: `\`nonTestPackages\` is an array of specifiers.`,
+          },
         },
         { messageId: `unknownTestSource`, line: 1 },
       ],
@@ -188,7 +197,10 @@ settingsTester.run(`oracle/no-unit-test settings`, noUnitTest, {
         {
           messageId: `malformedSetting`,
           line: 1,
-          data: { path: `settings.oracles.unknownSources` },
+          data: {
+            path: `settings.oracles.unknownSources`,
+            detail: `\`'ignore'\` is no longer a mode: to silence a package, list it in \`settings.oracles.nonTestPackages\`.`,
+          },
         },
         { messageId: `unknownTestSource`, line: 1 },
       ],
@@ -202,7 +214,10 @@ settingsTester.run(`oracle/no-unit-test settings`, noUnitTest, {
         {
           messageId: `malformedSetting`,
           line: 1,
-          data: { path: `settings.oracles.unknownSources` },
+          data: {
+            path: `settings.oracles.unknownSources`,
+            detail: `\`unknownSources\` is \`'report'\` or \`'test'\`.`,
+          },
         },
         { messageId: `unknownTestSource`, line: 1 },
       ],
@@ -216,7 +231,10 @@ settingsTester.run(`oracle/no-unit-test settings`, noUnitTest, {
         {
           messageId: `malformedSetting`,
           line: 1,
-          data: { path: `settings.oracles.unknownSources` },
+          data: {
+            path: `settings.oracles.unknownSources`,
+            detail: `\`unknownSources\` is \`'report'\` or \`'test'\`.`,
+          },
         },
         { messageId: `unknownTestSource`, line: 1 },
       ],

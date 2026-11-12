@@ -380,6 +380,22 @@ export function resolveImportedTestModule(fromFile, specifier) {
   return resolveTestModule(fromFile, specifier, selectionSession)
 }
 
+/**
+ * What a malformed setting's message says about its own path. Only `ignore`
+ * gets the replacement sentence (maintainer approval of the v21 cleanup plan,
+ * 2026-11-12); the other paths keep their own text.
+ */
+function malformedDetail(name, unknownSources) {
+  if (name === `oracles`) return `\`settings.oracles\` must be an object.`
+  if (name === `testPackages`)
+    return `\`testPackages\` maps a specifier to a framework's specifier or to a table of export roles (\`'test'\` or \`'suite'\`).`
+  if (name === `nonTestPackages`)
+    return `\`nonTestPackages\` is an array of specifiers.`
+  if (unknownSources === `ignore`)
+    return `\`'ignore'\` is no longer a mode: to silence a package, list it in \`settings.oracles.nonTestPackages\`.`
+  return `\`unknownSources\` is \`'report'\` or \`'test'\`.`
+}
+
 export default {
   meta: {
     type: `problem`,
@@ -394,7 +410,7 @@ export default {
       incompleteProperty: `This oracleProperty call does not pass an object literal with a check, so the rule cannot see that the property has one. Pass its options inline as \`oracleProperty({ id, law, histories, driver, model, check })\`.`,
       importedRegistration: `This oracle file calls a helper that registers tests. An oracle file registers only oracle tests, so register those tests from an ordinary test file and keep this file to its checks and model.`,
       unknownTestSource: `The rules cannot tell whether \`{{name}}\` from \`{{source}}\` is a test function, because they do not read that package. Name the package in \`settings.oracles.testPackages\` (a test framework's specifier, or a table of its exports such as \`{ authTest: 'test' }\`) or in \`settings.oracles.nonTestPackages\`.`,
-      malformedSetting: `\`{{path}}\` is malformed, so the rules read it as unset. \`testPackages\` maps a specifier to a framework's specifier or to a table of export roles (\`'test'\` or \`'suite'\`), \`nonTestPackages\` is an array of specifiers, and \`unknownSources\` is \`'report'\` or \`'test'\`. \`'ignore'\` is no longer a mode: to silence a package, list it in \`settings.oracles.nonTestPackages\`.`,
+      malformedSetting: `\`{{path}}\` is malformed, so the rules read it as unset. {{detail}}`,
     },
   },
   create(context) {
@@ -416,6 +432,7 @@ export default {
     }
     const settingProblems = {
       Program() {
+        const configured = context.settings?.oracles?.unknownSources
         for (const name of session.sources.malformed)
           context.report({
             loc: { line: 1, column: 0 },
@@ -425,6 +442,7 @@ export default {
                 name === `oracles`
                   ? `settings.oracles`
                   : `settings.oracles.${name}`,
+              detail: malformedDetail(name, configured),
             },
           })
       },

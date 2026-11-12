@@ -362,16 +362,16 @@ The decisions that the rules and their oracles cite:
   the rules agree on them. This replaces the same day's earlier instruction
   that every rule find a body in any argument position, which made
   `oracle/no-unit-test` report an annotation as a unit test.
-- **2026-11-12, maintainer: remove the `unknownSources: 'ignore'` mode.** The
-  frozen property that an unknown source never passes silently rules out a
-  global ignore mode. Silence for a package comes only from
+- **Maintainer approval of the v21 cleanup plan, 2026-11-12: remove the
+  `unknownSources: 'ignore'` mode.** A global ignore mode would let an unknown
+  source pass silently. Silence for a package comes only from
   `settings.oracles.nonTestPackages`, an explicit entry that a reviewer can
   read. The modes are `'report'` (the default) and `'test'`. A configuration
   that still says `'ignore'` gets `malformedSetting`, with a message that
   names `nonTestPackages`, and the rules read the setting as unset. They never
   throw.
-- **2026-11-12, maintainer: one id for a malformed setting,
-  `malformedSetting`.** `oracle/no-unit-test` and `oracle/oracle-property-only`
+- **Maintainer approval of the v21 cleanup plan, 2026-11-12: one id for a
+  malformed setting, `malformedSetting`.** `oracle/no-unit-test` and `oracle/oracle-property-only`
   report every malformed `settings.oracles` entry under this id, at line 1,
   and read it as unset (or as an empty list). It replaces the id
   `malformedSourceSetting`, and the two rules no longer use separate ids.
@@ -379,8 +379,8 @@ The decisions that the rules and their oracles cite:
 The limits that these decisions accept, which the oracles
 (`lint.test-source-recognition`, `lint.test-function-agreement`) state:
 
-- **2026-11-12, maintainer: the identifier-title limit is accepted as a
-  recorded limit.** An unknown source's call that passes no title before its
+- **Maintainer approval of the v21 cleanup plan, 2026-11-12: the
+  identifier-title limit is accepted as a recorded limit.** An unknown source's call that passes no title before its
   function is silent, whatever it does (`fixture(fn)`). So is one whose title
   is a binding or a call (`it(name, fn)`, `it(String(n), fn)`, and a helper's
   `t(name, fn)` with a parameter `name`), because such a call cannot be told

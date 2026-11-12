@@ -1249,33 +1249,68 @@ const weighted = (values) =>
       .map((value) => ({ weight: 1, arbitrary: fc.constant(value) })),
   )
 
+const TITLED = new Set([`title`, `template-title`])
 const MAX_STATEMENTS = 6
-const historyArbitrary = fc.record({
-  language: fc.constantFrom(`ts`, `js`),
-  machinery: fc.oneof(
-    { weight: 6, arbitrary: fc.constant(false) },
-    { weight: 1, arbitrary: fc.constant(true) },
-  ),
-  settings: fc.record({
-    unknownSources: weighted(SETTINGS.unknownSources),
-    regexLib: weighted(SETTINGS.regexLib),
-    pwFixtures: weighted(SETTINGS.pwFixtures),
-    malformed: fc.oneof(
-      { weight: 9, arbitrary: fc.constant(`none`) },
-      { weight: 1, arbitrary: fc.constantFrom(...SETTINGS.malformed.slice(1)) },
+
+// A history whose statements come from `statement`, with the settings that
+// `unknownSources` names. The regex-lib title-shaped statements are the ones
+// that the `ignore` state needs beside the setting (`reached`).
+const historyWith = (unknownSources, statement, minStatements = 0) =>
+  fc.record({
+    language: fc.constantFrom(`ts`, `js`),
+    machinery: fc.oneof(
+      { weight: 6, arbitrary: fc.constant(false) },
+      { weight: 1, arbitrary: fc.constant(true) },
     ),
-  }),
-  // The project's real path: a plain directory, or one under a node_modules
-  // directory, as a project checked out inside another package's
-  // node_modules is.
-  root: fc.oneof(
-    { weight: 4, arbitrary: fc.constant(`plain`) },
-    { weight: 1, arbitrary: fc.constant(`under node_modules`) },
-  ),
-  statements: fc.array(fc.constantFrom(...STATEMENTS), {
-    maxLength: MAX_STATEMENTS,
-  }),
+    settings: fc.record({
+      unknownSources,
+      regexLib: weighted(SETTINGS.regexLib),
+      pwFixtures: weighted(SETTINGS.pwFixtures),
+      malformed: fc.oneof(
+        { weight: 9, arbitrary: fc.constant(`none`) },
+        {
+          weight: 1,
+          arbitrary: fc.constantFrom(...SETTINGS.malformed.slice(1)),
+        },
+      ),
+    }),
+    // The project's real path: a plain directory, or one under a node_modules
+    // directory, as a project checked out inside another package's
+    // node_modules is.
+    root: fc.oneof(
+      { weight: 4, arbitrary: fc.constant(`plain`) },
+      { weight: 1, arbitrary: fc.constant(`under node_modules`) },
+    ),
+    statements: fc.array(statement, {
+      minLength: minStatements,
+      maxLength: MAX_STATEMENTS,
+    }),
+  })
+
+const IGNORE_TITLED = STATEMENTS.filter((key) => {
+  const { source, shape } = parse(key)
+  return source.id === `regex-lib` && TITLED.has(shape)
 })
+// Generated `ignore` histories have at least two statements, and each one is a
+// regex-lib title-shaped statement three times in four, so most of them enter
+// the state.
+const IGNORE_STATEMENT = fc.oneof(
+  { weight: 3, arbitrary: fc.constantFrom(...IGNORE_TITLED) },
+  { weight: 1, arbitrary: fc.constantFrom(...STATEMENTS) },
+)
+const historyArbitrary = fc.oneof(
+  {
+    weight: 5,
+    arbitrary: historyWith(
+      weighted(SETTINGS.unknownSources),
+      fc.constantFrom(...STATEMENTS),
+    ),
+  },
+  {
+    weight: 1,
+    arbitrary: historyWith(fc.constant(`ignore`), IGNORE_STATEMENT, 2),
+  },
+)
 
 const safe = (name) => name.replace(/\W/g, `_`)
 const BODIES = {
@@ -1292,7 +1327,6 @@ const HEADER = [
 ]
 
 // The shapes that an unknown source's call needs to be title-shaped.
-const TITLED = new Set([`title`, `template-title`])
 const PLAIN = `export function compute() {\n  return 1\n}\nexport function checkHistory() {\n  return 1\n}\n`
 
 /** The import that a statement needs: its key, line, and binding. */
@@ -1461,7 +1495,8 @@ function callReports(kind, carries, effects, registers = true) {
  * the title optional and the function comes first (node:test's `test(fn)`).
  * Elsewhere a function first is no body.
  */
-const registers = (role, shape) => !shape.startsWith(`fn-`) || role.untitled
+const registers = (role, shape) =>
+  !shape.startsWith(`fn-`) || role.untitled === true
 
 /** The reports of a Playwright annotation, at its scope. */
 function annotationReports(role, annotation) {
@@ -1486,12 +1521,25 @@ function reportKeys(history) {
   return expectedReports(history).keys
 }
 
+/**
+ * The `unknownSources` value that the configuration names: a malformed
+ * `settings.oracles` names none, and an unknown mode is written as `warn`.
+ */
+function configuredUnknownSources(history) {
+  const { malformed, unknownSources } = history.settings
+  if (malformed.startsWith(`oracles `)) return undefined
+  if (malformed === `unknownSources mode`) return `warn`
+  return unknownSources
+}
+
 function expectedReports(history) {
   const { settings, spoiled } = effectiveSettings(history.settings)
   const keys = spoiled.map(() => `1:no-unit-test:malformedSetting`)
+  // Only a malformed `ignore` gets the replacement sentence (2026-11-12): the
+  // other paths keep their own text, which never mentions `ignore`.
   const names = spoiled.map(
     (name) =>
-      `1:malformedSetting:${name === `oracles` ? `settings.oracles` : `settings.oracles.${name}`}`,
+      `1:malformedSetting:${name === `oracles` ? `settings.oracles` : `settings.oracles.${name}`}${name === `unknownSources` && configuredUnknownSources(history) === `ignore` ? ` ignore names nonTestPackages` : ``}`,
   )
   const diagnosed = new Set()
   for (const placed of layout(history).placed) {
@@ -1762,10 +1810,20 @@ async function driver(history, observe) {
 function namesOf(messages) {
   return messages
     .flatMap((message) => {
-      if (message.messageId === `malformedSetting`)
+      if (message.messageId === `malformedSetting`) {
+        // The message names its setting's path. The `'ignore'` sentence, and
+        // its replacement `nonTestPackages`, appear only for an `ignore` value.
+        const text = message.message
+        const path = /^`([^`]+)`/.exec(text)?.[1]
+        const ignore = text.includes(`\`'ignore'\``) ? ` ignore` : ``
+        const replacement =
+          ignore && text.includes(`\`settings.oracles.nonTestPackages\``)
+            ? ` names nonTestPackages`
+            : ``
         return [
-          `${message.line}:malformedSetting:${/^`([^`]+)`/.exec(message.message)?.[1]}`,
+          `${message.line}:malformedSetting:${path}${ignore}${replacement}`,
         ]
+      }
       if (message.messageId === `unknownTestSource`) {
         const named = /`([^`]+)` from `([^`]+)`/.exec(message.message)
         return [
@@ -2093,7 +2151,7 @@ oracleProperty({
   id: `lint.test-source-recognition`,
   law: {
     statement: `A callee is a test function by the source of its binding: a framework's export (named, default, namespace, require, relay, or global, with the modifier it carries and the factories that return one) is one, a known non-test library's export of the same name is none, a project's relative, # and workspace modules are read and node_modules packages never are, testPackages and nonTestPackages decide first, and an unknown source's title-shaped call (a string title, then a function), under any import and local name, gets one unknownTestSource report per import (or per helper call) unless unknownSources is test, while its untitled calls get none; a function first is a body only where the framework's title is optional, and Playwright's annotations register nothing while no-disabled reports their skip and fixme; and a malformed source setting gets malformedSetting, is read as unset, and never throws.`,
-    authority: `README "Decisions": the maintainer decision of 2026-11-12 ("agree with reversed decision -- false positives are annoying and we should be able to be precise"), which replaces the fail-closed decision of 2026-11-11 and makes unknownSources default to report; the maintainer decision of 2026-11-12 that removes unknownSources 'ignore' (an unknown source never passes silently, and silence comes only from nonTestPackages), so 'ignore' is a malformed setting read as unset; and the coordinator decisions under it (title shape for unknown sources; each framework's argument grammar, under which Playwright's annotations register nothing); each source row's citation (package exports, .d.ts, or the framework's documentation, read 2026-11-12); the D2 law of lint.registration-only and the no-disabled rule's header for what each rule owes a registration.`,
+    authority: `README "Decisions": the maintainer decision of 2026-11-12 ("agree with reversed decision -- false positives are annoying and we should be able to be precise"), which replaces the fail-closed decision of 2026-11-11 and makes unknownSources default to report; the maintainer approval of the v21 cleanup plan, 2026-11-12, that removes unknownSources 'ignore' (silence comes only from nonTestPackages), so 'ignore' is a malformed setting read as unset, and its message names nonTestPackages while no other malformed setting's message mentions 'ignore'; and the coordinator decisions under it (title shape for unknown sources; each framework's argument grammar, under which Playwright's annotations register nothing); each source row's citation (package exports, .d.ts, or the framework's documentation, read 2026-11-12); the D2 law of lint.registration-only and the no-disabled rule's header for what each rule owes a registration.`,
     limits: `One oracle file per history with fixed workspace fixtures. Not generated or not recognized: a test function passed as a parameter (t.test, it.layer), QUnit's test.if(name, condition, fn), Japa's chain after the call, a disabling options object, dynamic import(), TypeScript paths aliases, a nested exports condition other than import and default, a workspace package whose exports name missing built files, and a published package's src/ (production). An unknown source's untitled call is silent by law, and its title-shaped call that is no test is reported by law (README "Decisions"). The parse cost of a fresh process is not observed. Each row holds for the version its citation names.`,
   },
   histories: {
