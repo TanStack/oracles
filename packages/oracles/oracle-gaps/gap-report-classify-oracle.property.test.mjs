@@ -2611,13 +2611,15 @@ const calibrations = [
   {
     name: `the stdout's baseline comes after its gaps`,
     law: `stdout`,
+    // The baseline's lines, everything before the totals, moved after the
+    // rest of the stdout.
     corrupt: corruptStdout((stdout) => {
       const lines = stdout.split(`\n`)
-      const blank = lines.indexOf(``)
-      if (blank <= 0) return undefined
-      return [...lines.slice(blank + 1), ``, ...lines.slice(0, blank)].join(
-        `\n`,
+      const totals = lines.findIndex((line) =>
+        line.startsWith(`oracle-gaps: summary `),
       )
+      if (totals <= 0) return undefined
+      return [...lines.slice(totals), ...lines.slice(0, totals)].join(`\n`)
     }),
   },
   {
