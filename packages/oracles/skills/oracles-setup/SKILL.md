@@ -292,8 +292,9 @@ optimization project.
   Give each law a calibration: a wrong answer the check must reject.
 - **Run the oracles only through the gap check, never Vitest alone.** It
   prints each test file's result first, then each gap as it is judged. A run
-  can take minutes: start it in the background with output to a log, and
-  read the new lines every few seconds, acting on a failure first. Stop a
+  can take minutes: start it in the background with output to a log at a
+  path of its own (never a fixed path under `/tmp`), and read the new lines
+  every few seconds, acting on a failure first. Stop a
   run only by the process ID you recorded, never by name.
 - **Green is not done.** A gap is a change to the owned code that no law
   notices. There are no equivalent mutants: never call one equivalent.
@@ -459,6 +460,22 @@ a gap count far beyond what the oracle owns. Record the run's process ID
 when you start it (`$!`), and stop it by that ID. Never stop it by name
 (`pkill -f oracle-gaps`, `killall`): that kills every matching process on
 the machine, including other people's and other agents' runs.
+
+Other agents may run the gap check on the same machine at the same time, so
+give each run's log a path of its own. Never use a fixed path under `/tmp`
+for a log, or for a file that points to one (`/tmp/oracle-gaps.log`): two
+runs would write to the same file, and each agent would read the other's
+results. Make the path unique, and keep it in a shell variable:
+
+```sh
+LOG=$(mktemp "${TMPDIR:-/tmp}/oracle-gaps-$(basename "$PWD").XXXXXX")
+npx oracle-gaps … > "$LOG" 2>&1 &
+PID=$!
+```
+
+If your shell does not keep variables between commands, write the path and
+the process ID to a file in the probe's scratch directory (its `mktemp -d`
+directory), never to a shared fixed path.
 
 Run the gap check on the owned source:
 

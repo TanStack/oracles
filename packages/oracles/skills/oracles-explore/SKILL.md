@@ -545,8 +545,9 @@ them and stop.
    only with `oracle-gaps` (the command is in `oracles-setup` step 7), never
    with Vitest on its own. It prints each test file's result first, with a
    failing law's replay, then each gap as it is judged: one command gives
-   you the test results and the gaps together. Start it in the background
-   and read its new lines every few seconds, as `oracles-setup` step 7
+   you the test results and the gaps together. Start it in the background,
+   with a log at a path of its own, and read its new lines every few
+   seconds, as `oracles-setup` step 7
    says, so you act on the first results while it runs.
 
    A first red run is often the oracle's own setup: an import, a driver
