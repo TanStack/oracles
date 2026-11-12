@@ -420,6 +420,14 @@ globalThis.__oracleGaps = {
     infect(id)
     return id === active ? !value : value
   },
+  // A plain read in place of `?.`: the object passes on, and when its
+  // mutant is active a nullish one throws, as the plain read would.
+  chain(id, value) {
+    hit(id)
+    if (id === active && (value === undefined || value === null))
+      throw new TypeError(`Cannot read properties of ${value}`)
+    return value
+  },
   // Records whether the condition was truthy or falsy, then applies a forced
   // value if one of this `if`'s two mutants is active.
   cond(idTrue, idFalse, value) {

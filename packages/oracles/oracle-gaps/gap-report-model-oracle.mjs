@@ -38,6 +38,8 @@ const RUNES = `src/state.svelte.ts`
 const DERIVED = `src/derived.ts`
 // The derived class's constructor, as the model names it: no oracle owns it.
 const DERIVED_FN = `Derived.constructor`
+// Its helper `nothing`, which no oracle owns either.
+const DERIVED_HELPER = `nothing`
 // The inputs a derived class is run with, each judged against the model.
 export const DERIVED_INPUTS = [0, 4, 9]
 // Where this package's own dependencies are installed.
@@ -240,6 +242,8 @@ const statement = fc.oneof(
     kind: fc.constant(`readData`),
     shape: fc.constantFrom(`object`, `array`, `primitive`, `methods`),
   }),
+  // An object that only a truthy `x` makes, read through `?.`.
+  fc.record({ kind: fc.constant(`optional`) }),
 )
 const libStatement = fc.oneof(
   fc.record({ kind: fc.constant(`push`), quote }),
@@ -491,14 +495,16 @@ const drawn = fc.record({
     }),
     { nil: null },
   ),
-  // Which declaration the oracle files make: `declareOracle`, `oracleProperty`
-  // with its `owns` (maintainer decision, 2026-11-10: `oracleProperty` takes
-  // `owns`), both (the entries split between the two calls, so the union is
-  // read), or none, which leaves no oracle file.
+  // Where the oracle files name their `owns`: on `oracleProperty`
+  // (maintainer decision, 2026-11-10: `oracleProperty` takes `owns`), on a
+  // wrapper's call, which forwards it to `oracleProperty` (maintainer
+  // decision, 2026-11-11: the CLI reads `owns` from an object-literal
+  // argument of any call), on both (the entries split between the two calls,
+  // so the union is read), or nowhere, which leaves no oracle file.
   declaration: fc.constantFrom(
-    `declareOracle`,
-    `declareOracle`,
-    `declareOracle`,
+    `wrapper`,
+    `wrapper`,
+    `wrapper`,
     `oracleProperty`,
     `oracleProperty`,
     `both`,
@@ -1447,6 +1453,14 @@ const witness = [
     ],
     tests: [judging(`a`, `fixed seed`, 1)],
   },
+  // An object read through `?.`, made for the test's input: the plain read
+  // in its place is not distinguished, since the object is there.
+  {
+    id: `w_optional`,
+    owners: [`a`],
+    body: [{ kind: `optional` }],
+    tests: [judging(`a`, `fixed seed`, 1)],
+  },
   // A test that waits on a child process where the output differs: an I/O
   // handle is open, so its copy is busy, never cut for idleness, and the
   // confirming run kills it.
@@ -1530,6 +1544,8 @@ const captureWitness = new Set([
   `w_fcprop`,
   `w_record`,
   `w_data`,
+  `w_optional`,
+  `w_oldprobe`,
   `w_spin`,
 ])
 
@@ -1781,6 +1797,11 @@ function renderStatement(stmt, callText) {
       return [`out.push(String(memo.get(x)));`]
     case `pushLoaded`:
       return [`out.push(...loaded);`]
+    case `optional`:
+      return [
+        `const o${stmt.label} = x ? { v: 'p${stmt.label}' } : undefined;`,
+        `out.push(\`\${o${stmt.label}?.v}\`);`,
+      ]
     case `readData`:
       return [`out.push(${dataOf(stmt.shape).read});`]
     case `call`:
@@ -1863,11 +1884,14 @@ function derivedFile(spec) {
     `function nothing(x: number): number {`,
     `  return x - x;`,
     `}`,
-    `export function derivedMake(x: number, out: Array<string>): Derived {`,
-    `  return new Derived(x, out);`,
-    `}`,
+    // A concise arrow, which has no `return` statement to mutate: what
+    // `derivedMake` returns is what the derived runs read.
+    `export const derivedMake = (x: number, out: Array<string>): Derived =>`,
+    `  new Derived(x, out);`,
   )
-  return { source: `${lines.join(`\n`)}\n`, statements }
+  // `nothing`'s `return`, a site of its own outside the constructor.
+  const returnLine = lines.indexOf(`  return x - x;`) + 1
+  return { source: `${lines.join(`\n`)}\n`, statements, returnLine }
 }
 
 // What a derived class's constructor pushes for `x`, and the fields it sets:
@@ -2470,14 +2494,17 @@ function resolveHistory(history) {
     // history with no fault can have no oracle file.
     declaration:
       history.declaration === `neither` && (history.fault ?? `none`) !== `none`
-        ? `declareOracle`
-        : (history.declaration ?? `declareOracle`),
+        ? `wrapper`
+        : (history.declaration ?? `wrapper`),
     ownerless,
     template: history.template,
     fault: history.fault,
     stability: history.stability,
     steps: history.steps ?? [],
     ordinary: history.ordinary === true,
+    // An `owns` key in an assertion's arguments, in the ordinary file: its
+    // assertion form and whether its list is a literal, or none.
+    matcherOwns: history.matcherOwns ?? `none`,
     config: history.config ?? `object`,
     ...configOf(history),
     configEnv: history.configEnv === true,
@@ -2519,6 +2546,7 @@ function resolveHistory(history) {
       spec: history.derived,
       source: file.source,
       statements: file.statements,
+      returnLine: file.returnLine,
     },
   }
 }
@@ -2685,8 +2713,14 @@ function sitesOf(plan) {
   add(`devBuild`, 4, `binary-swap`, preambleStatements.devBuild, {
     role: `devBuild`,
   })
+  add(`devBuild`, 4, `return-undefined`, preambleStatements.devBuild, {
+    role: `devBuildReturn`,
+  })
   // Its `return false` runs only when reading the environment throws.
   add(`devBuild`, 6, `bool-flip`, `return false`, { role: `devBuildFalse` })
+  add(`devBuild`, 6, `return-undefined`, `return false`, {
+    role: `devBuildFalseReturn`,
+  })
   declaration(`report`, 10, `'`)
   guard(`report`, 11, `'gap#report'`, `true`)
   add(`reportTwice`, 14, `delete-call`, preambleStatements.reportTwice, {
@@ -2736,6 +2770,15 @@ function sitesOf(plan) {
         at(`delete-call`, `push`, stmt.line, whole)
       // A call of a nested function where it is defined.
       if (stmt.kind === `inner`) at(`delete-call`, `call`, stmt.line, whole)
+      // A returned nested function, which is not `undefined`.
+      if (stmt.kind === `innerReturned`)
+        at(`return-undefined`, `returned`, stmt.line, whole)
+      // The object literal's field, then the push and its optional read.
+      if (stmt.kind === `optional`) {
+        at(`field-drop`, `dropV`, stmt.line, stmt.lines[0])
+        at(`delete-call`, `push`, stmt.line + 1, stmt.lines[1])
+        at(`optional-chain`, `chain`, stmt.line + 1, stmt.lines[1])
+      }
       // Two arrows on one line: each property's field drop, its call, and
       // the `+ 1` belong to the arrow whose text holds them; the push and
       // its argument to `w_pair`.
@@ -2751,8 +2794,10 @@ function sitesOf(plan) {
         at(`delete-call`, `push`, stmt.line + 1, call)
         at(`value-undefined`, `string`, stmt.line + 1, call)
       }
+      // A returned call is a `return-undefined` site too (the sixth review).
       if (stmt.kind === `getterReturn`) {
         at(`value-undefined`, `string`, stmt.line, whole)
+        at(`return-undefined`, `returned`, stmt.line, whole)
         at(`bool-flip`, `flag`, stmt.line, whole)
       }
       // `$derived` is an ordinary name outside a Svelte module.
@@ -2760,8 +2805,10 @@ function sitesOf(plan) {
         at(`delete-call`, `push`, stmt.line, whole)
         at(`value-undefined`, `value`, stmt.line, whole)
       }
-      if (stmt.kind === `dollarReturn`)
+      if (stmt.kind === `dollarReturn`) {
         at(`value-undefined`, `string`, stmt.line, whole)
+        at(`return-undefined`, `returned`, stmt.line, whole)
+      }
       // A rune call stays where Svelte requires it, so it is no site of its
       // own (its value is not replaced, nor its statement skipped); the code
       // in its argument is.
@@ -2922,6 +2969,17 @@ function sitesOf(plan) {
       }
     }
   }
+  // `nothing`'s returned `x - x`, a number.
+  if (plan.derived)
+    add(
+      `nothing`,
+      plan.derived.returnLine,
+      `return-undefined`,
+      `return x - x;`,
+      {
+        file: DERIVED,
+      },
+    )
   // The derived class's file (`derivedFile`), which no oracle owns. A
   // statement before `super(...)`, and the `super` statement itself, have no
   // site: no mutant, when active, may prevent or delay the constructor's
@@ -2954,7 +3012,10 @@ function sitesOf(plan) {
         [`used`, `return 1 + 2;`],
         [`spare`, `return 3 + 4;`],
       ])
-        add(name, d.line, `arithmetic-swap`, text, { role: `${name}Arith` })
+        for (const operator of [`arithmetic-swap`, `return-undefined`])
+          add(name, d.line, operator, text, {
+            role: `${name}${operator === `arithmetic-swap` ? `Arith` : `Return`}`,
+          })
   }
   // The `..gen/` file's top-level loop: its variable's `-`, its condition,
   // and its `<`, in no function, and owned by no entry (a whole-file entry
@@ -3062,7 +3123,8 @@ function ownersOf(plan) {
       ...(plan.wholeFile === `none` ||
       inLibrary.has(id) ||
       id === TOP_LOOP ||
-      id === DERIVED_FN
+      id === DERIVED_FN ||
+      id === DERIVED_HELPER
         ? []
         : [plan.wholeFile]),
     ])
@@ -3250,6 +3312,28 @@ function interpret(plan, fnId, x, sites, active) {
           }
         }
       }
+      // `x` makes the object only when truthy, so the field drop is reached
+      // only then. A plain read in place of `?.` throws on no object.
+      if (stmt.kind === `optional`) {
+        const drop = siteOf(stmt, `dropV`)
+        if (x) reached.add(drop.id)
+        const made = x
+          ? isActive(drop)
+            ? {}
+            : { v: `p${stmt.label}` }
+          : undefined
+        const site = siteOf(stmt, `push`)
+        reached.add(site.id)
+        if (!isActive(site)) {
+          const chain = siteOf(stmt, `chain`)
+          reached.add(chain.id)
+          if (isActive(chain) && made === undefined)
+            throw new TypeError(`Cannot read properties of undefined`)
+          trace.push(String(made?.v))
+        }
+      }
+      if (stmt.kind === `innerReturned`)
+        reached.add(siteOf(stmt, `returned`).id)
       // A read of module data, as the module evaluated it at load under the
       // same mutant: a dropped field reads undefined, the swapped `+` gives
       // 1, and the flipped literal false.
@@ -3266,6 +3350,10 @@ function interpret(plan, fnId, x, sites, active) {
             const value = siteOf(stmt, `value`)
             reached.add(value.id)
             if (isActive(value)) return `undefined`
+            // Its `return`: undefined in place of what it returns.
+            const returned = sites.find((s) => s.role === `usedReturn`)
+            reached.add(returned.id)
+            if (isActive(returned)) return `undefined`
             const arith = sites.find((s) => s.role === `usedArith`)
             reached.add(arith.id)
             return String(isActive(arith) ? -1 : 3)
@@ -3331,6 +3419,9 @@ function interpret(plan, fnId, x, sites, active) {
         ])
           reached.add(siteOf(stmt, role).id)
         reached.add(sites.find((s) => s.role === `devBuild`).id)
+        // Its `return`, whose undefined value leaves the probe uncalled, and
+        // no output changes.
+        reached.add(sites.find((s) => s.role === `devBuildReturn`).id)
         outcomes.push([stmt.line, true])
         // The guard is true, so its if-false site changes it; and its `!==`
         // compares 'test' with 'production', on which `!==` and `===`
@@ -3501,10 +3592,7 @@ function refusal(plan) {
   // A run with no oracle file, or with no owns entry, owns no selected
   // source, so every mutant would read as unowned. The analysis refuses it
   // (maintainer decision, 2026-11-10).
-  // Its directive names only oracleProperty: declareOracle is legacy, and an
-  // author who reads it would call it (maintainer decision, 2026-11-10: F25).
-  if (plan.declaration === `neither`)
-    return { cause: `no oracle file`, withheld: `declareOracle` }
+  if (plan.declaration === `neither`) return { cause: `no oracle file` }
   if (ownsNothing(plan)) return { cause: `owns any selected source` }
   // A setup file that throws fails every oracle file before any test runs,
   // so the run refuses as for a failing owner, naming the setup's error.
@@ -3621,9 +3709,14 @@ function model(plan) {
     // probe form and of a probe in another shape). Its directive names the
     // input that distinguishes it.
     if (
-      [`loop-false`, `value-undefined`, `field-drop`, `delete-call`].includes(
-        site.operator,
-      ) ||
+      [
+        `loop-false`,
+        `value-undefined`,
+        `field-drop`,
+        `delete-call`,
+        `return-undefined`,
+        `optional-chain`,
+      ].includes(site.operator) ||
       site.logical === true
     )
       return `not-distinguished`
@@ -3775,13 +3868,19 @@ function oracleTestFile(plan, file) {
       : []),
   ].map((entry) => quoteEntry(plan, entry))
   // The calls that declare the entries, one per declaration the file makes.
-  // With `both`, the entries split between the two calls.
+  // With `both`, the entries split between the two calls. A wrapper takes
+  // its options, `owns` among them, after a leading id, as a project's
+  // registration helpers do, so the list is read from any argument.
   const declares = {
-    declareOracle: [`declareOracle`],
+    wrapper: [`registerOwned`],
     oracleProperty: [`oracleProperty`],
-    both: [`declareOracle`, `oracleProperty`],
+    both: [`registerOwned`, `oracleProperty`],
     neither: [],
-  }[plan.declaration ?? `declareOracle`]
+  }[plan.declaration ?? `wrapper`]
+  const call = (name, owns) =>
+    name === `registerOwned`
+      ? `${name}('p', { runs: 1, owns: ${owns} })`
+      : `${name}({ owns: ${owns} })`
   const owns = declares.flatMap((name, part) => {
     const list =
       plan.declaration === `both`
@@ -3790,12 +3889,14 @@ function oracleTestFile(plan, file) {
     return file === `b` && plan.fault === `nonLiteral`
       ? [
           `const OWNS_${part} = [${list.join(`, `)}]`,
-          `${name}({ owns: OWNS_${part} })`,
+          call(name, `OWNS_${part}`),
         ]
-      : [`${name}({ owns: [${list.join(`, `)}] })`]
+      : [call(name, `[${list.join(`, `)}]`)]
   })
-  const stubs = declares.map(
-    (name) => `function ${name}(_parts: { owns: Array<string> }): void {}`,
+  const stubs = declares.map((name) =>
+    name === `registerOwned`
+      ? `function ${name}(_id: string, _options: { runs: number; owns: Array<string> }): void {}`
+      : `function ${name}(_parts: { owns: Array<string> }): void {}`,
   )
   const out = [
     `import { ${plan.tests.some((t) => t.file === file && t.cleanupThrows) ? `afterEach, ` : ``}describe, expect, test${plan.tests.some((t) => t.file === file && t.spies) ? `, vi` : ``} } from 'vitest'`,
@@ -3970,6 +4071,32 @@ function oracleTestFile(plan, file) {
   return `${out.join(`\n`)}\n`
 }
 
+/**
+ * The assertions that may hold an `owns` key in their arguments, each as the
+ * statement it writes for an object: every form of `expect` that Vitest
+ * offers (a matcher, a negated or soft one, one read by a computed member,
+ * and an aliased `expect`), Vitest's `assert` and `chai`, `expectTypeOf`,
+ * and Node's `assert` by a named, a default, and a namespace import.
+ */
+export const ASSERTION_FORMS = {
+  expect: (object) => `expect(compared).toEqual(${object})`,
+  'expect-not': (object) => `expect(compared).not.toEqual(${object})`,
+  'expect-soft': (object) => `expect.soft(compared).toEqual(${object})`,
+  'expect-computed': (object) => `expect(compared)['toEqual'](${object})`,
+  'expect-aliased': (object) => `check(compared).toEqual(${object})`,
+  'expect-argument': (object) => `expect(${object}).toBeDefined()`,
+  assert: (object) => `assert.deepEqual(compared, ${object})`,
+  chai: (object) => `chai.expect(compared).to.deep.equal(${object})`,
+  'expect-type-of': (object) =>
+    `expectTypeOf(compared).toEqualTypeOf(${object})`,
+  // Node's `assert`, by a named, a default, and a namespace import.
+  'node-assert-named': (object) => `deepStrictEqual(compared, ${object})`,
+  'node-assert-default': (object) =>
+    `nodeAssert.deepStrictEqual(compared, ${object})`,
+  'node-assert-namespace': (object) =>
+    `strictAssert.deepEqual(compared, ${object})`,
+}
+
 function ordinaryTestFile(plan) {
   const sites = sitesOf(plan)
   const out = [
@@ -3989,6 +4116,31 @@ function ordinaryTestFile(plan) {
   })
   if (!plan.tests.some((t) => t.file === `c`))
     out.push(`test.skip('no tests', () => {})`)
+  // An `owns` key in an assertion's arguments is data that the test
+  // compares, so it declares no ownership: the file stays an ordinary test
+  // file, and a list that is not a literal refuses nothing (review of
+  // remove/declare-oracle, 2026-11-11). The model's ownership and refusals
+  // never read it.
+  const assertion = ASSERTION_FORMS[plan.matcherOwns?.form]
+  if (assertion !== undefined) {
+    const list =
+      plan.matcherOwns.list === `literal`
+        ? `['${SOURCE}']`
+        : `compared.owns.slice(1)`
+    out[0] = `import { assert, chai, expect, expect as check, expectTypeOf, test } from 'vitest'`
+    out.splice(
+      1,
+      0,
+      `import nodeAssert, { deepStrictEqual } from 'node:assert'`,
+      `import * as strictAssert from 'node:assert/strict'`,
+    )
+    out.push(
+      `const compared = { owns: ['${SOURCE}'] }`,
+      `test('owns in an assertion', () => {`,
+      `  ${assertion(`{ owns: ${list} }`)}`,
+      `})`,
+    )
+  }
   return `${out.join(`\n`)}\n`
 }
 
@@ -4271,8 +4423,8 @@ function fixtureFiles(plan, state = initialState(plan)) {
     // that took it for one would refuse the run.
     'tests/.oracle-gaps-1-1-a.test.ts': [
       `import { test } from 'vitest'`,
-      `function declareOracle(_parts: { owns: Array<string> }): void {}`,
-      `declareOracle({ owns: ['${SOURCE}#w_kill'] })`,
+      `function oracleProperty(_parts: { owns: Array<string> }): void {}`,
+      `oracleProperty({ owns: ['${SOURCE}#w_kill'] })`,
       `test('fixed seed 1', () => {`,
       `  throw new Error('a copy that a check which died left behind')`,
       `})`,

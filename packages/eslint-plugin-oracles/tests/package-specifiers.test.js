@@ -16,34 +16,22 @@ const ruleTester = new RuleTester({
   languageOptions: { parser: tsParser, sourceType: `module` },
 })
 
-const packageHeader = `import { declareOracle } from '@tanstack/oracles'
+const packageHeader = `import { oracleProperty } from '@tanstack/oracles'
 function checkHistory(history) { return history }
-function modelHistory(history) { return history }
-declareOracle({ check: [checkHistory], model: [modelHistory] })
-`
-
-const shimHeader = `import { declareOracle } from './oracle-config.js'
-function checkHistory(history) { return history }
-function modelHistory(history) { return history }
-declareOracle({ check: [checkHistory], model: [modelHistory] })
 `
 
 ruleTester.run(`oracle/no-unit-test`, noUnitTest, {
   valid: [
     {
-      code: `${packageHeader}fcTest.prop([history])('checks generated histories', (h) => checkHistory(h))`,
-      filename: `/repo/tests/checks-oracle.test.ts`,
-    },
-    {
-      code: `${shimHeader}fcTest.prop([history])('checks generated histories', (h) => checkHistory(h))`,
+      code: `${packageHeader}oracleProperty({ id: 'p', check: checkHistory })`,
       filename: `/repo/tests/checks-oracle.test.ts`,
     },
   ],
   invalid: [
     {
-      code: `${packageHeader}it('checks a fixed value', () => { expect(1).toBe(1) })`,
+      code: `${packageHeader}oracleProperty({ id: 'p' })`,
       filename: `/repo/tests/checks-oracle.test.ts`,
-      errors: [{ messageId: `unitTest` }],
+      errors: [{ messageId: `incompleteProperty` }],
     },
   ],
 })
@@ -78,6 +66,7 @@ noDisabledTester.run(`oracle/no-disabled`, noDisabled, {
             seed: `ORACLE_SEED`,
             path: `ORACLE_PATH`,
             property: `ORACLE_PROPERTY`,
+            unit: `ORACLE_UNIT`,
             runsMultiplier: `ORACLE_RUNS_MULTIPLIER`,
           },
         },
@@ -112,6 +101,11 @@ projectTester.run(`oracle/no-disabled with a project's settings`, noDisabled, {
       code: `const seed = process.env.TANSTACK_DB_ORACLE_SEED`,
       filename: `/repo/tests/checks-oracle.test.ts`,
     },
+    // The unit a path replay runs is a shared replay variable.
+    {
+      code: `const unit = process.env.TANSTACK_DB_ORACLE_UNIT`,
+      filename: `/repo/tests/checks-oracle.test.ts`,
+    },
     // The configured replay module, named by its path, may read a private
     // replay variable.
     {
@@ -128,6 +122,18 @@ projectTester.run(`oracle/no-disabled with a project's settings`, noDisabled, {
     // The default prefix is not the project's, so its variables are private.
     {
       code: `const runs = process.env.ORACLE_RUNS`,
+      filename: `/repo/tests/checks-oracle.test.ts`,
+      errors: [{ messageId: `replayVariable` }],
+    },
+    // A unit under another prefix selects a replay the shared variables do
+    // not see.
+    {
+      code: `const unit = process.env.ORACLE_UNIT`,
+      filename: `/repo/tests/checks-oracle.test.ts`,
+      errors: [{ messageId: `replayVariable` }],
+    },
+    {
+      code: `const { UTILS_ORACLE_UNIT } = process.env`,
       filename: `/repo/tests/checks-oracle.test.ts`,
       errors: [{ messageId: `replayVariable` }],
     },

@@ -110,6 +110,8 @@ const directive = {
       ? `Make \`${g.nondeterministicBy.map(testName).join(`, `)}\` deterministic: control its clock and its random seed, so its failures judge this code.`
       : `Add an owner test that runs line ${g.line} and asserts on its result.`,
   'dead-code': (g) => `Remove the redundant code on line ${g.line}.`,
+  'outside-annotation': (g) =>
+    `Add an owner history that reaches line ${g.line} with ${g.input}, which the annotation excludes, so that it changes an asserted result, and assert on the result.`,
   'random-only-kill': (g) =>
     `Keep the counterexample that \`${first(g.by)}\` found in the random campaign as a fixed history.`,
   'agreement-only-kill': (g) =>
@@ -140,6 +142,10 @@ function distinguishingDirective(g) {
     return `Add an owner history that reads the property dropped on line ${line}, so that its absence changes an asserted result, and assert on the result.`
   if (g.operator === `delete-call`)
     return `Add an owner history where the call on line ${line} changes an asserted result when it does not run, and assert on the result.`
+  if (g.operator === `return-undefined`)
+    return `Add an owner history that uses the value returned on line ${line}, so that \`undefined\` in its place changes an asserted result, and assert on the result.`
+  if (g.operator === `optional-chain`)
+    return `Add an owner history where the object read with \`?.\` on line ${line} is \`undefined\`, so that a plain read throws, and assert on the result.`
   if (g.original === `??`)
     return `Add an owner history where the left operand of \`??\` on line ${line} is truthy, so \`??\` and \`&&\` give different results, and assert on the result.`
   if (g.original === `&&` || g.original === `||`)
@@ -168,6 +174,7 @@ const placeholders = {
   by: [`<test>`],
   detail: `<error>`,
   operator: `<operator>`,
+  input: `<input>`,
 }
 const legendOf = (kind) => directive[kind]({ ...placeholders, outcome: kind })
 

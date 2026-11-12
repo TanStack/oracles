@@ -14,8 +14,8 @@
  * not an oracle. Each runs in a child process whose module resolution sends
  * every `typescript` request to that environment's package, as a hoisted
  * install, or pnpm's resolution of typescript-eslint's `typescript` peer, does.
- * The parser agreement and never-throws laws over generated programs are in
- * part-reach-modules-oracle.property.test.js.
+ * The parser law over generated programs is in
+ * registration-only-oracle.property.test.js.
  */
 import { spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -40,22 +40,20 @@ writeFileSync(
 )
 
 // A JavaScript oracle file, linted with ESLint's default espree, as a
-// repository that cannot run typescript-eslint configures it. One test reaches
-// the declared check. The other uses only a module that does not parse, so it
-// reaches nothing, and the import of that module is reported beside it.
+// repository that cannot run typescript-eslint configures it. Its complete
+// property gets no report, its plain test is a unit test, and the helper of a
+// module that does not parse classifies nothing.
 const project = join(root, `project`)
 mkdirSync(project)
 writeFileSync(
   join(project, `case-oracle.test.js`),
   [
     `import { it } from 'vitest'`,
-    `import { declareOracle } from '@tanstack/oracles'`,
+    `import { oracleProperty } from '@tanstack/oracles'`,
     `import { helper } from './broken.js'`,
     `function check() {}`,
-    `declareOracle({ check: [check] })`,
-    `it('reaches the check', () => {`,
-    `  check()`,
-    `})`,
+    `oracleProperty({ id: 'p', check })`,
+    `helper()`,
     `it('uses only the helper', () => {`,
     `  helper()`,
     `})`,
@@ -113,14 +111,8 @@ it.for([
   expect(run.stderr).toBe(``)
   expect(run.status).toBe(0)
   const messages = JSON.parse(run.stdout)
-  // The first test reaches its check. The second is a unit test, and the
-  // import that it depends on is reported with the parser's error.
+  // The plain test is a unit test, whatever it calls.
   expect(messages).toEqual([
-    expect.objectContaining({
-      ruleId: `oracle/no-unit-test`,
-      messageId: `unparsedModule`,
-      message: expect.stringMatching(/'\.\/broken\.js'.*Parsing error/s),
-    }),
     expect.objectContaining({
       ruleId: `oracle/no-unit-test`,
       messageId: `unitTest`,
