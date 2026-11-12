@@ -717,7 +717,12 @@ const dataReach = [
 ]
 
 async function driver(plan, observe) {
-  const dir = realpathSync(mkdtempSync(join(here, `.scratch-`)))
+  // A package whose config is in its parent directory is a directory `pkg`
+  // of the scratch directory, which holds that config, as in the end-to-end
+  // driver.
+  const scratch = realpathSync(mkdtempSync(join(here, `.scratch-`)))
+  const dir = plan.configPlace === `parent` ? join(scratch, `pkg`) : scratch
+  mkdirSync(dir, { recursive: true })
   try {
     // A symbolic link to the package, for sources spelled through it.
     symlinkSync(dir, `${dir}.link`, `dir`)
@@ -922,7 +927,7 @@ async function driver(plan, observe) {
   } finally {
     written.delete(dir)
     removePath(`${dir}.link`)
-    rmSync(dir, { recursive: true, force: true })
+    rmSync(scratch, { recursive: true, force: true })
   }
 }
 

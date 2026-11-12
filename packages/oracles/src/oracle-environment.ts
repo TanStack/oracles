@@ -63,6 +63,11 @@ export type OracleReplayConfig = {
   campaignSeed: number | undefined
   replayPath: string | undefined
   replayProperty: string | undefined
+  /**
+   * The random unit a path replay runs, such as `random seed: generated`;
+   * every other test of the property stands aside.
+   */
+  replayUnit?: string | undefined
 }
 
 // The replay environment under the current configuration: read by
@@ -101,6 +106,7 @@ export function changesReadSelection(next: RunConfig): boolean {
     read.campaignSeed !== next.campaignSeed ||
     read.replayPath !== next.replayPath ||
     read.replayProperty !== next.replayProperty ||
+    read.replayUnit !== next.replayUnit ||
     read.calibration !== next.calibration
   )
 }
@@ -122,6 +128,7 @@ export function readRunConfig(
   const seedName = name(`SEED`)
   const pathName = name(`PATH`)
   const propertyName = name(`PROPERTY`)
+  const unitName = name(`UNIT`)
   const multiplierName = name(`RUNS_MULTIPLIER`)
   const retired = within.retired.filter(
     (variable) => environment[variable] !== undefined,
@@ -129,8 +136,8 @@ export function readRunConfig(
   if (retired.length > 0) {
     throw new Error(
       `Retired oracle replay variables are set: ${retired.join(`, `)}. ` +
-        `Use ${seedName}, ${pathName}, and ` +
-        `${propertyName} to select a replay, and ` +
+        `Use ${seedName}, ${pathName}, ${propertyName}, and ` +
+        `${unitName} to select a replay, and ` +
         `${multiplierName} to scale run counts.`,
     )
   }
@@ -150,6 +157,13 @@ export function readRunConfig(
   const seedValue = environment[seedName]
   const replayPath = environment[pathName]
   const replayProperty = environment[propertyName]
+  const replayUnit = environment[unitName]
+  // The unit is checked after every other variable, so their order stays.
+  const unitNeedsProperty = () => {
+    if (replayUnit !== undefined) {
+      throw new Error(`${unitName} requires ${propertyName}`)
+    }
+  }
   if (seedValue === undefined) {
     if (replayPath !== undefined) {
       throw new Error(`${pathName} requires ${seedName}`)
@@ -157,6 +171,7 @@ export function readRunConfig(
     if (replayProperty !== undefined) {
       throw new Error(`${propertyName} requires ${pathName}`)
     }
+    unitNeedsProperty()
     return {
       multiplier,
       calibration,
@@ -176,6 +191,7 @@ export function readRunConfig(
     if (replayProperty !== undefined) {
       throw new Error(`${propertyName} requires ${pathName}`)
     }
+    unitNeedsProperty()
     return {
       multiplier,
       calibration,
@@ -206,5 +222,6 @@ export function readRunConfig(
     campaignSeed,
     replayPath,
     replayProperty,
+    replayUnit,
   }
 }

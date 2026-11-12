@@ -28,8 +28,19 @@
 // - `loop-false`: force the condition of a `for`, `while`, or `do` loop to
 //   `false` (a `for` with no condition, `for...of`, and `for...in` have none).
 // - `delete-call`: skip a call statement (`switch || call()`).
+// - `return-undefined`: a returned expression is evaluated, and `undefined`
+//   is returned in its place. A returned call or `import()` is a site too:
+//   a test that checks only a call's effect kills `value-undefined`, never
+//   this. Not `return undefined` or `return void x`, which already return
+//   `undefined` after the same evaluation. A type never removes a site.
+// - `optional-chain`: `a?.b` → `a.b` and `a?.[k]` → `a[k]`, which throw where
+//   `a` is nullish (an optional call `f?.()` is no site).
 //
 // No site lies in a derived constructor's super region (see `superGuarded`).
+// Types never skip a site or mark it dead (maintainer decision, 2026-11-11).
+// A site that no input of its parameters' annotations distinguishes carries
+// `outside`, the input class outside them that does (see `outsideOf`), and
+// its survivor is reported as `outside-annotation`.
 //
 // In a Svelte module (`.svelte.ts` or `.svelte.js`), a rune call that Svelte
 // allows in one place only (`$state`, `$derived`, `$effect`, `$props`,
@@ -178,8 +189,8 @@ export function instrument(ts, path, text, source, offset = 0) {
   // `at` is the node whose line the mutant reports: the operator token for a
   // swap and the condition for an `if`, as the earlier runner reported them.
   // `evidence` is a hint for the report, and never changes whether a site is
-  // emitted: see `evidenceOf`.
-  const add = (at, operator, original, replacement, evidence) => {
+  // emitted: see `evidenceOf`, and neither does `outside`.
+  const add = (at, operator, original, replacement, evidence, outside) => {
     if (mentionsSuper && superGuarded(at)) return undefined
     const probeGuard = guarded
     const local = mutants.length + 1
@@ -198,6 +209,7 @@ export function instrument(ts, path, text, source, offset = 0) {
       anchor: anchorOf(ts, file, at),
       ...(probeGuard ? { probeGuard: true } : {}),
       ...(evidence ? { evidence } : {}),
+      ...(outside ? { outside } : {}),
     })
     return id
   }
@@ -359,16 +371,11 @@ export function instrument(ts, path, text, source, offset = 0) {
     )
       return false
     const guard = bare(expression.left)
-    const found = ts.isIdentifier(guard) && declarationOf(guard, true)
+    const found = ts.isIdentifier(guard) ? bindingOf(guard) : undefined
     return (
       guard.text === `probing` &&
-      found !== undefined &&
-      ts.isVariableStatement(found) &&
-      isGuardDeclarator(
-        found.declarationList.declarations.find((d) =>
-          bindsName(d.name, `probing`),
-        ),
-      ) &&
+      isGuardDeclarator(found) &&
+      functionOf(found) === functionOf(guard) &&
       isHook(expression.right)
     )
   }
@@ -383,7 +390,7 @@ export function instrument(ts, path, text, source, offset = 0) {
     return (
       target !== undefined &&
       ts.isIdentifier(target) &&
-      helpers.has(declarationOf(target))
+      helpers.has(bindingOf(target))
     )
   }
   const isProbeOnly = (node) =>
@@ -396,62 +403,50 @@ export function instrument(ts, path, text, source, offset = 0) {
     (ts.isBlock(node) &&
       node.statements.length > 0 &&
       node.statements.every(isProbeOnly))
-  // Whether a binding name (an identifier, or a destructuring pattern)
-  // binds `name`.
-  const bindsName = (binding, name) =>
-    ts.isIdentifier(binding)
-      ? binding.text === name
-      : (ts.isObjectBindingPattern(binding) ||
-          ts.isArrayBindingPattern(binding)) &&
-        binding.elements.some(
-          (element) =>
-            !ts.isOmittedExpression(element) && bindsName(element.name, name),
-        )
-  const declaresName = (statement, name) =>
-    (ts.isVariableStatement(statement) &&
-      statement.declarationList.declarations.some((d) =>
-        bindsName(d.name, name),
-      )) ||
-    // An overload signature names the function its implementation declares.
-    (((ts.isFunctionDeclaration(statement) && statement.body !== undefined) ||
-      ts.isClassDeclaration(statement)) &&
-      statement.name?.text === name)
-  // What declares `identifier`'s name, found from the innermost scope
-  // outward as JavaScript resolves it: a statement (a variable, function, or
-  // class declaration; case clauses share their switch's scope), the loop
-  // statement or catch clause that binds it, or a parameter; undefined when
-  // nothing in the file declares it. `withinFunction` stops at the nearest
-  // function, returning its parameter of that name or undefined.
-  function declarationOf(identifier, withinFunction = false) {
-    const name = identifier.text
-    for (let node = identifier.parent; node; node = node.parent) {
-      const statements = ts.isCaseBlock(node)
-        ? node.clauses.flatMap((clause) => clause.statements)
-        : ts.isBlock(node) || ts.isSourceFile(node) || ts.isModuleBlock(node)
-          ? node.statements
-          : []
-      const found = statements.find((statement) =>
-        declaresName(statement, name),
-      )
-      if (found) return found
-      // A loop's own variables, and a caught error.
-      const own =
-        (ts.isForStatement(node) ||
-          ts.isForOfStatement(node) ||
-          ts.isForInStatement(node)) &&
-        node.initializer !== undefined &&
-        ts.isVariableDeclarationList(node.initializer)
-          ? node.initializer.declarations.some((d) => bindsName(d.name, name))
-          : ts.isCatchClause(node) &&
-            node.variableDeclaration !== undefined &&
-            bindsName(node.variableDeclaration.name, name)
-      if (own) return node
-      if (ts.isFunctionLike(node)) {
-        const parameter = node.parameters?.find((p) => bindsName(p.name, name))
-        if (parameter || withinFunction) return parameter
+  // Scope questions come from TypeScript's binder: which declaration a name
+  // resolves to, through every scope boundary JavaScript has (hoisting,
+  // blocks, static blocks, catch clauses, patterns, imports). Only symbols
+  // and declarations are read, never types (maintainer decisions,
+  // 2026-11-11). The program holds this one file, so it binds it alone.
+  let checker
+  const symbolOf = (identifier) => {
+    if (checker === undefined) {
+      const named = (name) => ts.normalizePath(name) === file.fileName
+      const host = {
+        getSourceFile: (name) => (named(name) ? file : undefined),
+        fileExists: named,
+        readFile: () => undefined,
+        writeFile: () => undefined,
+        getDefaultLibFileName: () => `lib.d.ts`,
+        getCurrentDirectory: () => `/`,
+        getCanonicalFileName: (name) => name,
+        useCaseSensitiveFileNames: () => true,
+        getNewLine: () => `\n`,
       }
+      checker = ts
+        .createProgram(
+          [file.fileName],
+          { noLib: true, noResolve: true, allowJs: true, noEmit: true },
+          host,
+        )
+        .getTypeChecker()
     }
-    return undefined
+    return checker.getSymbolAtLocation(identifier)
+  }
+  // The declaration a name resolves to: a function's implementation over its
+  // overload signatures, and otherwise its value's declaration.
+  const bindingOf = (identifier) => {
+    const symbol = symbolOf(identifier)
+    return (
+      symbol?.declarations?.find((d) => ts.isFunctionLike(d) && d.body) ??
+      symbol?.valueDeclaration ??
+      symbol?.declarations?.[0]
+    )
+  }
+  const functionOf = (node) => {
+    let n = node.parent
+    while (n && !ts.isFunctionLike(n)) n = n.parent
+    return n
   }
   const declarations = []
   const collect = (node) => {
@@ -488,21 +483,42 @@ export function instrument(ts, path, text, source, offset = 0) {
       ? inner.getText(file)
       : undefined
   }
-  // The type an operand admits, read from its declaration: `number` for a number
-  // literal or a parameter annotated `number`, `bigint` likewise, and `other` for
-  // anything else (a union with a string, `any`, `unknown`, or no annotation).
-  // The annotation is the parameter's own syntax: `instrument` takes the text
-  // alone, so no checker program is available here.
+  // What a name's own annotation declares, for the `outside` label only: the
+  // annotation of the parameter that binds it, when it is a plain name, in a
+  // TypeScript file. Any unsoundness here mislabels a survivor; it never
+  // hides one (maintainer decision, 2026-11-11).
+  const typeScript = /\.[cm]?tsx?$/.test(path)
+  const annotationOf = (expression) => {
+    const inner = bare(expression)
+    if (!typeScript || !ts.isIdentifier(inner)) return undefined
+    const found = bindingOf(inner)
+    return found && ts.isParameter(found) && ts.isIdentifier(found.name)
+      ? found.type
+      : undefined
+  }
+  // The type an operand admits: `number` for a number literal or a name
+  // annotated `number`, `bigint` likewise, and `other` for anything else.
   const typeOf = (expression) => {
     const inner = bare(expression)
     if (ts.isNumericLiteral(inner)) return `number`
     if (ts.isBigIntLiteral(inner)) return `bigint`
-    if (!ts.isIdentifier(inner)) return `other`
-    const found = declarationOf(inner)
-    if (!found || !ts.isParameter(found) || !found.type) return `other`
-    if (found.type.kind === ts.SyntaxKind.NumberKeyword) return `number`
-    if (found.type.kind === ts.SyntaxKind.BigIntKeyword) return `bigint`
+    const kind = annotationOf(inner)?.kind
+    if (kind === ts.SyntaxKind.NumberKeyword) return `number`
+    if (kind === ts.SyntaxKind.BigIntKeyword) return `bigint`
     return `other`
+  }
+  // A literal's value, read as JavaScript reads it: `0x0`, `0.0`, `0b0`, and
+  // `0x0n` are zeros. Undefined for anything else, or a literal it cannot
+  // read.
+  const literalValue = (expression) => {
+    const inner = bare(expression)
+    try {
+      if (ts.isNumericLiteral(inner)) return Number(inner.text)
+      if (ts.isBigIntLiteral(inner)) return BigInt(inner.text.slice(0, -1))
+    } catch {
+      return undefined
+    }
+    return undefined
   }
   // The operand text a branch returns: the value of a `return` statement, or
   // of a block of one such statement. An empty `return` reads `void`, which no
@@ -549,28 +565,50 @@ export function instrument(ts, path, text, source, offset = 0) {
       ? holder
       : undefined
   }
-  // A local binding: a parameter, or a `let`, `const`, `var`, or loop or catch
-  // variable of an enclosing function, with no `with` statement between the
-  // name and its binding. A global, a module-level name, or a name in a `with`
-  // body can read an accessor, so reading it twice is not reading it once.
-  const enclosedByFunction = (node) => {
-    for (let n = node.parent; n; n = n.parent)
-      if (ts.isFunctionLike(n)) return true
-    return false
+  // A local binding: a name that resolves to a parameter, a variable, or a
+  // caught error of a function (a binding element of one included). The
+  // binder resolves no name inside a `with`, which reads names through an
+  // object, so a name there is no local binding. A global or a
+  // module-level name can read an accessor, so reading it twice is not
+  // reading it once. Dead zones, one rule: a parameter, a caught error, a
+  // `let`, or a `const` read before its declaration ends (inside its own
+  // initializer or pattern, or before it) is in its dead zone, where a read
+  // throws. A `let` or `const` read from another function, which may run
+  // before the declaration, or from a `switch` case past it, may be too. A
+  // `var` has no dead zone.
+  const root = (declaration) => {
+    let n = declaration
+    while (
+      ts.isBindingElement(n) ||
+      ts.isObjectBindingPattern(n) ||
+      ts.isArrayBindingPattern(n)
+    )
+      n = n.parent
+    return n
   }
   const localBinding = (identifier) => {
-    for (let n = identifier.parent; n; n = n.parent)
-      if (ts.isWithStatement(n)) return false
-    const found = declarationOf(identifier)
+    const found = bindingOf(identifier)
     if (found === undefined) return false
+    const declared = root(found)
+    const scope = functionOf(declared)
+    if (scope === undefined) return false
+    if (ts.isParameter(declared)) return identifier.getStart(file) >= found.end
+    if (!ts.isVariableDeclaration(declared)) return false
+    const lexical =
+      ts.isCatchClause(declared.parent) ||
+      (declared.parent.flags & ts.NodeFlags.BlockScoped) !== 0
+    // A `for…of` or `for…in` head's iterated value runs in its variables'
+    // dead zone too.
+    const loop = declared.parent.parent
+    const ends =
+      ts.isForOfStatement(loop) || ts.isForInStatement(loop)
+        ? loop.expression.end
+        : found.end
     return (
-      ts.isParameter(found) ||
-      (enclosedByFunction(found) &&
-        (ts.isVariableStatement(found) ||
-          ts.isForStatement(found) ||
-          ts.isForOfStatement(found) ||
-          ts.isForInStatement(found) ||
-          ts.isCatchClause(found)))
+      !lexical ||
+      (identifier.getStart(file) >= ends &&
+        functionOf(identifier) === scope &&
+        !ts.isCaseClause(declared.parent.parent?.parent))
     )
   }
   // A pure condition reads local names and numbers, and applies comparisons,
@@ -594,9 +632,70 @@ export function instrument(ts, path, text, source, offset = 0) {
       )
     return false
   }
+  // But an ordering comparison coerces an object through `valueOf`,
+  // `Symbol.toPrimitive`, or a Proxy, and that runs code. A site's change is
+  // unseen only when no ordering comparison runs or not because of it: none
+  // in the right operand of a logical operator whose left operand holds the
+  // site, nor in the site's own right operand when it is a logical operator
+  // (the fifth review, 2026-11-11).
+  const coercing = (expression) => {
+    const inner = bare(expression)
+    if (ts.isPrefixUnaryExpression(inner)) return coercing(inner.operand)
+    if (!ts.isBinaryExpression(inner)) return false
+    return (
+      ordering.has(inner.operatorToken.getText(file)) ||
+      coercing(inner.left) ||
+      coercing(inner.right)
+    )
+  }
+  // Whether every ordering comparison in a condition compares literals and
+  // names whose annotations admit primitives only, which no `valueOf` of
+  // theirs can run: the coercion label's claim, that the annotation
+  // excludes the distinguishing object.
+  const primitive = new Set([
+    ts.SyntaxKind.NumberKeyword,
+    ts.SyntaxKind.BigIntKeyword,
+    ts.SyntaxKind.StringKeyword,
+    ts.SyntaxKind.BooleanKeyword,
+  ])
+  const primitiveType = (type) =>
+    type !== undefined &&
+    (primitive.has(type.kind) ||
+      ts.isLiteralTypeNode(type) ||
+      (ts.isUnionTypeNode(type) && type.types.every(primitiveType)))
+  const primitiveComparisons = (expression) => {
+    const inner = bare(expression)
+    if (ts.isPrefixUnaryExpression(inner))
+      return primitiveComparisons(inner.operand)
+    if (!ts.isBinaryExpression(inner)) return true
+    if (!ordering.has(inner.operatorToken.getText(file)))
+      return (
+        primitiveComparisons(inner.left) && primitiveComparisons(inner.right)
+      )
+    return [inner.left, inner.right].every(
+      (operand) =>
+        literalValue(operand) !== undefined ||
+        primitiveType(annotationOf(operand)),
+    )
+  }
+  const isLogical = (node) =>
+    ts.isBinaryExpression(node) && logical.has(node.operatorToken.getText(file))
+  const unseenIn = (node, condition) => {
+    if (isLogical(node) && coercing(node.right)) return false
+    for (let child = node; child !== condition; child = child.parent)
+      if (
+        isLogical(child.parent) &&
+        child.parent.left === child &&
+        coercing(child.parent.right)
+      )
+        return false
+    return true
+  }
   // Whether `node` sits in the pure condition of a ternary or `if` whose two
   // values are identical. Both branches then yield the same value, so no change
   // to the condition can show.
+  // `dead` when no input distinguishes the change, `coerced` when only an
+  // object's coercion does (the label's case), and undefined otherwise.
   const deadUnderHolder = (node) => {
     let child = node
     for (let parent = node.parent; parent; parent = parent.parent) {
@@ -607,11 +706,16 @@ export function instrument(ts, path, text, source, offset = 0) {
           : undefined
       if (condition === child && pureCondition(condition)) {
         const [yes, no] = valuesOf(parent)
-        if (yes !== undefined && yes === no) return true
+        if (yes !== undefined && yes === no)
+          return unseenIn(node, condition)
+            ? `dead`
+            : primitiveComparisons(condition)
+              ? `coerced`
+              : undefined
       }
       child = parent
     }
-    return false
+    return undefined
   }
   // An operand that can hold a signed zero: a variable (of a type that admits
   // numbers) or the literal 0. A bigint has no signed zero. 0 and -0 are equal
@@ -621,7 +725,7 @@ export function instrument(ts, path, text, source, offset = 0) {
     const inner = bare(expression)
     return (
       ts.isIdentifier(inner) ||
-      (ts.isNumericLiteral(inner) && Number(inner.text) === 0)
+      (ts.isNumericLiteral(inner) && literalValue(inner) === 0)
     )
   }
   // Whether `node` sits inside a branch of another ternary or `if`. An outer
@@ -673,6 +777,10 @@ export function instrument(ts, path, text, source, offset = 0) {
   // and logical operators. The comparison's value then decides the branch alone
   // (the rest of the condition is not changed by the swap), so at a tie both
   // branches yield the same value: this is the skip's reach, not the hint's.
+  // A logical operator's other operand must be a pure condition: at a tie
+  // the swap changes whether that operand runs, and only a pure one runs
+  // unseen (the third review, 2026-11-11: `a < 1 && check()` calls `check`
+  // at the tie in one of the two). This is the `outside` label's reach.
   const conditionHolderOf = (node) => {
     let test = node
     while (
@@ -680,7 +788,10 @@ export function instrument(ts, path, text, source, offset = 0) {
       (ts.isPrefixUnaryExpression(test.parent) &&
         test.parent.operator === ts.SyntaxKind.ExclamationToken) ||
       (ts.isBinaryExpression(test.parent) &&
-        logical.has(test.parent.operatorToken.getText(file)))
+        logical.has(test.parent.operatorToken.getText(file)) &&
+        pureCondition(
+          test.parent.left === test ? test.parent.right : test.parent.left,
+        ))
     )
       test = test.parent
     const holder = test.parent
@@ -689,31 +800,53 @@ export function instrument(ts, path, text, source, offset = 0) {
       ? holder
       : undefined
   }
-  // An ordering swap whose two branches are its two operands is undetectable over
-  // the admitted domain, and is skipped, when no admitted input can tell the
-  // swapped tie from the original: both operands `bigint` (a tie yields equal
-  // values), or both `number` with a nonzero literal tie (no signed zero there).
-  // Operands that admit a string keep the mutant: a string distinguishes it.
-  const undetectableSwap = (node) => {
-    if (!ordering.has(node.operatorToken.getText(file))) return false
+  // An ordering swap whose two branches are its two operands, where no input
+  // of the annotations can tell the swapped tie from the original: both
+  // operands `bigint` (a tie yields equal values), or both `number` with a
+  // nonzero literal tie (no signed zero there). The label names the input
+  // outside the annotations that does: a number beside a bigint, or a
+  // string of the literal's digits. Never a skip.
+  const swapOutside = (node) => {
+    if (!ordering.has(node.operatorToken.getText(file))) return undefined
     const holder = conditionHolderOf(node)
-    if (holder === undefined || !yieldsOperands(node, holder)) return false
-    const [left, right] = [node.left, node.right]
-    if (typeOf(left) === `bigint` && typeOf(right) === `bigint`) return true
+    if (holder === undefined || !yieldsOperands(node, holder)) return undefined
+    if (!annotationOf(node.left) && !annotationOf(node.right)) return undefined
+    // Every comparison in the condition compares primitives, or an admitted
+    // object's `valueOf` would distinguish the swap (the seventh review).
+    const condition = ts.isIfStatement(holder)
+      ? holder.expression
+      : holder.condition
+    if (!primitiveComparisons(condition)) return undefined
+    const [left, right] = [typeOf(node.left), typeOf(node.right)]
+    // Without strict null checks a bigint admits `null`, which ties with a
+    // zero, and the CLI does not know the package's strictness: a bigint
+    // label needs a nonzero bigint literal at the tie (the eighth review).
+    if (left === `bigint` && right === `bigint`)
+      return [node.left, node.right].some((e) => {
+        const value = literalValue(e)
+        return typeof value === `bigint` && value !== 0n
+      })
+        ? `a number in place of a bigint`
+        : undefined
+    return left === `number` &&
+      right === `number` &&
+      !(zeroable(node.left) && zeroable(node.right))
+      ? `a string of the literal's digits`
+      : undefined
+  }
+  // A literal that `===` matches only in its own value: a bigint (it has no
+  // signed zero), or a number that is neither zero nor NaN.
+  const exactLiteral = (expression) => {
+    const value = literalValue(expression)
     return (
-      typeOf(left) === `number` &&
-      typeOf(right) === `number` &&
-      !(zeroable(left) && zeroable(right))
+      typeof value === `bigint` ||
+      (typeof value === `number` && value !== 0 && !Number.isNaN(value))
     )
   }
-  // A literal operand that is not zero: its tie can never be a signed zero, at
-  // any declared type.
+  // A literal operand that is not zero: its tie can never be a signed zero.
   const nonzeroLiteral = (expression) => {
-    const inner = bare(expression)
-    return (
-      (ts.isNumericLiteral(inner) || ts.isBigIntLiteral(inner)) &&
-      !/^0n?$/.test(inner.getText(file))
-    )
+    const value = literalValue(expression)
+    return value !== undefined && value !== 0 && value !== 0n
   }
   // The equality test whose operands must be equal for the condition to have the
   // given truth: `a === b` for a true condition, `a !== b` for a false one. It
@@ -743,15 +876,26 @@ export function instrument(ts, path, text, source, offset = 0) {
   // Forcing a guard's condition to `side` is undetectable when the condition's
   // other truth implies a tie, and the branches yield the tied operands: then the
   // forced branch is the one reached off the tie, and the tie yields the same
-  // value on both branches. The forced side is dead code when a nonzero literal
-  // makes the tie (no declared type has a signed zero there), and skipped when
-  // both operands are bigints (no signed zero at their type). Otherwise undefined.
+  // value on both branches. The forced side is dead code when a literal that
+  // `===` matches only in its own value makes the tie, and the other operand
+  // is a local name, read the same twice. It is labelled when both
+  // operands are annotated bigints: `-0` and `0` in their place tie at two
+  // values. Otherwise undefined.
   const forcedOutcome = (node, side) => {
     const eq = impliedEquality(node.expression, side === `false`)
     if (!eq || !yieldsOperands(eq, node)) return undefined
-    if (nonzeroLiteral(eq.left) || nonzeroLiteral(eq.right)) return `dead`
-    if (typeOf(eq.left) === `bigint` && typeOf(eq.right) === `bigint`)
-      return `skip`
+    const local = (e) => ts.isIdentifier(bare(e)) && localBinding(bare(e))
+    if (
+      (exactLiteral(eq.left) && local(eq.right)) ||
+      (exactLiteral(eq.right) && local(eq.left))
+    )
+      return `dead`
+    if (
+      typeOf(eq.left) === `bigint` &&
+      typeOf(eq.right) === `bigint` &&
+      primitiveComparisons(node.expression)
+    )
+      return `\`-0\` and \`0\` in place of the bigints`
     return undefined
   }
   // The evidence a mutation site carries for the report, never a reason to skip
@@ -759,6 +903,85 @@ export function instrument(ts, path, text, source, offset = 0) {
   // operator on one local name, and for a site in a pure condition whose
   // ternary or `if` has identical branches. Otherwise an ordering swap may carry
   // the boundary hint.
+  // Whether a returned expression is `undefined` by its syntax alone: `void
+  // x`, or the global `undefined`, which the binder resolves to no
+  // declaration, in a file whose scopes are static. Its mutant then returns
+  // the same `undefined` after the same evaluation. A type proves nothing
+  // here. A direct `eval` (a call of the identifier `eval`, through
+  // parentheses or a type's wrapper, whatever binding holds it: a sloppy
+  // call of a local `eval` that holds the real one is direct too) can
+  // declare a `var` at run time, and a `with` reads
+  // names through an object, so either one makes the file's scopes dynamic.
+  const unwrapped = (node) => {
+    let n = node
+    while (
+      ts.isParenthesizedExpression(n) ||
+      ts.isAsExpression(n) ||
+      ts.isNonNullExpression(n) ||
+      ts.isSatisfiesExpression(n) ||
+      ts.isTypeAssertionExpression(n)
+    )
+      n = n.expression
+    return n
+  }
+  const global = (identifier) =>
+    (symbolOf(identifier)?.declarations?.length ?? 0) === 0
+  const dynamicScope = { eval: false, with: false }
+  const scan = (node) => {
+    if (ts.isWithStatement(node)) dynamicScope.with = true
+    if (ts.isCallExpression(node)) {
+      const callee = unwrapped(node.expression)
+      if (ts.isIdentifier(callee) && callee.text === `eval`)
+        dynamicScope.eval = true
+    }
+    ts.forEachChild(node, scan)
+  }
+  scan(file)
+  const staticScopes = () => !dynamicScope.eval && !dynamicScope.with
+  const undefinedAlready = (expression) => {
+    const inner = bare(expression)
+    if (ts.isVoidExpression(inner)) return true
+    return (
+      ts.isIdentifier(inner) &&
+      inner.text === `undefined` &&
+      staticScopes() &&
+      global(inner)
+    )
+  }
+  // A receiver that is never nullish, whatever the inputs: a string or
+  // number literal, or a `const` that holds one and that nothing outside the
+  // function can change (not exported by a modifier, whose CommonJS emit
+  // reads `exports.s`; an export list keeps the local read), not in a
+  // namespace, not ambient, with no `var` of its name in between, and in a
+  // file with static scopes. Its site is dead code.
+  const constantReceiver = (expression) => {
+    const inner = bare(expression)
+    if (ts.isStringLiteral(inner) || ts.isNumericLiteral(inner)) return true
+    if (!ts.isIdentifier(inner) || !staticScopes()) return false
+    const found = bindingOf(inner)
+    const statement = found?.parent?.parent
+    if (
+      !found ||
+      !ts.isVariableDeclaration(found) ||
+      !ts.isIdentifier(found.name) ||
+      (found.parent.flags & ts.NodeFlags.Const) === 0 ||
+      !ts.isVariableStatement(statement) ||
+      statement.modifiers?.some(
+        (m) =>
+          m.kind === ts.SyntaxKind.ExportKeyword ||
+          m.kind === ts.SyntaxKind.DeclareKeyword,
+      ) ||
+      !ts.isSourceFile(statement.parent)
+    )
+      return false
+    const init = found.initializer
+    return (
+      init !== undefined &&
+      (ts.isStringLiteral(init) ||
+        ts.isNumericLiteral(init) ||
+        ts.isBigIntLiteral(init))
+    )
+  }
   const evidenceOf = (node) => {
     const op = ts.isBinaryExpression(node)
       ? node.operatorToken.getText(file)
@@ -773,10 +996,18 @@ export function instrument(ts, path, text, source, offset = 0) {
       )
         return DEAD_CODE
     }
-    if (deadUnderHolder(node)) return DEAD_CODE
+    if (deadUnderHolder(node) === `dead`) return DEAD_CODE
     if (op !== undefined && ordering.has(op)) return boundaryHint(node)
     return undefined
   }
+  // The input class outside the annotations that distinguishes a site that
+  // no annotated input does, for the `outside` label (never a skip).
+  const outsideOf = (node) =>
+    deadUnderHolder(node) === `coerced`
+      ? `an object whose \`valueOf\` has an effect`
+      : ts.isBinaryExpression(node)
+        ? swapOutside(node)
+        : undefined
 
   // Emit `node` with its children's instrumented text spliced in, then wrap
   // the node itself if it is a mutation site. Sites are numbered before their
@@ -795,13 +1026,14 @@ export function instrument(ts, path, text, source, offset = 0) {
     if (ts.isBinaryExpression(node)) {
       const op = node.operatorToken.getText(file)
       const swap = comparisons.get(op) ?? logical.get(op)
-      if (swap && !undetectableSwap(node))
+      if (swap)
         ids.binary = add(
           node.operatorToken,
           `binary-swap`,
           op,
           swap,
           evidenceOf(node),
+          evidenceOf(node) ? undefined : outsideOf(node),
         )
     }
     if (
@@ -821,7 +1053,14 @@ export function instrument(ts, path, text, source, offset = 0) {
       ts.isPrefixUnaryExpression(node) &&
       node.operator === ts.SyntaxKind.ExclamationToken
     )
-      ids.not = add(node, `drop-not`, `!`, ``, evidenceOf(node))
+      ids.not = add(
+        node,
+        `drop-not`,
+        `!`,
+        ``,
+        evidenceOf(node),
+        evidenceOf(node) ? undefined : outsideOf(node),
+      )
     if (
       (ts.isPropertyAssignment(node) ||
         ts.isShorthandPropertyAssignment(node)) &&
@@ -876,24 +1115,26 @@ export function instrument(ts, path, text, source, offset = 0) {
       const identical = yes !== undefined && yes === no
       const outcomeTrue = forcedOutcome(node, `true`)
       const outcomeFalse = forcedOutcome(node, `false`)
-      const evidenceFor = (side, outcome) =>
+      const dead = (outcome) =>
         identical || outcome === `dead` ? DEAD_CODE : undefined
-      if (outcomeTrue !== `skip`)
-        ids.ifTrue = add(
-          node.expression,
-          `if-true`,
-          condition,
-          `true`,
-          evidenceFor(`true`, outcomeTrue),
-        )
-      if (outcomeFalse !== `skip`)
-        ids.ifFalse = add(
-          node.expression,
-          `if-false`,
-          condition,
-          `false`,
-          evidenceFor(`false`, outcomeFalse),
-        )
+      const outside = (outcome) =>
+        dead(outcome) || outcome === `dead` ? undefined : outcome
+      ids.ifTrue = add(
+        node.expression,
+        `if-true`,
+        condition,
+        `true`,
+        dead(outcomeTrue),
+        outside(outcomeTrue),
+      )
+      ids.ifFalse = add(
+        node.expression,
+        `if-false`,
+        condition,
+        `false`,
+        dead(outcomeFalse),
+        outside(outcomeFalse),
+      )
     }
     if (
       ts.isExpressionStatement(node) &&
@@ -902,6 +1143,31 @@ export function instrument(ts, path, text, source, offset = 0) {
       !isRune(node.expression)
     )
       ids.call = add(node, `delete-call`, node.getText(file), `;`)
+    if (
+      ts.isReturnStatement(node) &&
+      node.expression !== undefined &&
+      !undefinedAlready(node.expression)
+    )
+      ids.returned = add(
+        node.expression,
+        `return-undefined`,
+        node.expression.getText(file),
+        `undefined`,
+      )
+    if (
+      (ts.isPropertyAccessExpression(node) ||
+        ts.isElementAccessExpression(node)) &&
+      node.questionDotToken !== undefined
+    ) {
+      const constant = constantReceiver(node.expression)
+      ids.chain = add(
+        node,
+        `optional-chain`,
+        `?.`,
+        `.`,
+        constant ? DEAD_CODE : undefined,
+      )
+    }
 
     const children = []
     ts.forEachChild(node, (child) => {
@@ -954,6 +1220,19 @@ export function instrument(ts, path, text, source, offset = 0) {
       // Replace only the condition; the rest of the `if` stays as emitted.
       const { text: condition, at } = emitted.get(node.expression)
       return `${out.slice(0, at)}${G}.cond(${ids.ifTrue ?? `undefined`}, ${ids.ifFalse ?? `undefined`}, ${condition})${out.slice(at + condition.length)}`
+    }
+    // Each replaces one child: the returned expression, or the object read
+    // through `?.`, which the switch passes on or throws on when nullish, so
+    // the rest of the chain is kept.
+    if (ids.returned !== undefined || ids.chain !== undefined) {
+      const { text: value, at } = emitted.get(node.expression)
+      const replaced =
+        ids.returned !== undefined
+          ? // The value is evaluated, and then dropped when the mutant is
+            // active: element 1 of a one-element array is `undefined`.
+            `${G}.v([(${value})][${G}.m(${ids.returned}) ? 1 : 0])`
+          : `${G}.chain(${ids.chain}, ${value})`
+      return `${out.slice(0, at)}${replaced}${out.slice(at + value.length)}`
     }
     if (ids.call !== undefined) {
       // `skip || call()` keeps the statement a single expression statement.

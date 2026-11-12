@@ -17,7 +17,12 @@
  *
  * For one mutant, with the owner files of its function:
  *
- * 1. No owner: `unowned`. No owner test reached it: `unreached`.
+ * 1. No owner: `unowned`. An oracle file that fails with no mutant active
+ *    judges nothing: a mutant that one owns, and that no passing owner
+ *    kills, is `blocked`, a gap whose message names the failing owners in
+ *    report order (maintainer disposition G5, 2026-11-11; the v20 freeze's
+ *    decision 2). Laws 2 to 5 apply over the passing owners. No passing
+ *    owner test reached it: `unreached`.
  * 2. Otherwise the records of the owner files whose tests reached it judge
  *    it, except tests whose values differed between the two unmutated runs
  *    (nondeterministic), which judge nothing.
@@ -50,6 +55,11 @@
  *    reaches every test of that file, maintainer decision of 2026-11-06);
  *    `indeterminate` when no such test judged it; `dead-code` when the
  *    mutant carries the `dead code` evidence (no input distinguishes it);
+ *    `outside-annotation` when the type analysis names an input class
+ *    outside the declared types, and none of its inputs distinguishes the
+ *    mutant (maintainer decision, 2026-11-11: types never skip a mutant or
+ *    mark it dead, they label its survivor; an argument typed \`any\` is
+ *    an input the types allow, so the class claims no more);
  *    `branch-never-taken` when it is an `if`-operator mutant and an owner
  *    test reached its `if` with one outcome only; `not-infected` when it is
  *    a comparison whose two operators agree on every operand pair the
@@ -133,8 +143,21 @@
  *    points, so an astral-plane character is never split), cut to its first
  *    57 and `...`. An intent is the author's text, so it prints as a code
  *    span, which the exit law does not read. The results keep the full text.
- * 9. Before any mutant, each oracle file's baseline is printed: `pass`, or
- *    `fail` with the command that replays its first failing test. That
+ *    The stdout leads with the baseline (law 9's lines), then one `blocked:`
+ *    line for each failing oracle file that names it, its failing test, and
+ *    the step that unblocks it (G13), then, when an oracle file failed,
+ *    `Provisional:` with the count of blocked mutants; summary.md leads with
+ *    the same lines, before its gaps (the freeze's one loop, 2026-11-10).
+ *    The legend line for `crashed` says first that a crash is a gap, not a
+ *    kill, and that its error is on the gap's Detail line (G3; the freeze,
+ *    P3 and C1). The last stdout line is `completed: <n> gaps` (G6). A replay
+ *    line is a command, which the exit law does not read.
+ * 9. Before any mutant, each test file's baseline is printed, an ordinary
+ *    file marked `(ordinary)`: `pass` with its test count, or `fail` with how
+ *    many of its tests failed, its first failing test and that test's error,
+ *    the law, difference, and counterexample of a law violation (read from
+ *    the framework's message), and the command that replays its first
+ *    failing test; a file that did not load says so. That
  *    command, read as a POSIX shell reads it, is `vitest run <file>`, with
  *    a `-t` pattern when a test failed: Vitest then runs exactly that test
  *    of the file, whether it matches the pattern against the names of the
@@ -185,11 +208,10 @@
  * compared (it is the not-judged message's). Every test the mutant runs
  * record the baseline recorded too, so a test the baseline did not record,
  * which report order puts after its file's others, is not generated. A file
- * that fails with no mutant active keeps its records here, and its
- * mutants are classified as if it passed: the runner refuses over a
- * failing oracle file and leaves a failing ordinary file out, which this
- * oracle judges only through the list of failing files. That the refusal
- * text and the summary print that list as given is not judged here. An authored
+ * that fails with no mutant active keeps its records here, which the
+ * runner drops; the driver leaves a failing owner out of each mutant's
+ * targets, as the runner does. A failing test fails by one violation
+ * message or one error text. An authored
  * mutant's intent holds no word the exit law forbids, because the stdout
  * prints it as text, and its author is not shortened.
  */
@@ -206,6 +228,7 @@ import {
   passOf,
   targetsOf,
 } from './classify.mjs'
+import * as core from './classify.mjs'
 import { readSummary } from './gap-report-model-oracle.mjs'
 import * as report from './report.mjs'
 
@@ -416,6 +439,9 @@ const records = fc.record({
       // The file with no mutant active: it passes, a test fails, or it does
       // not load.
       baseline: fc.constantFrom(`pass`, `pass`, `test`, `load`),
+      // How a failing test fails: a law violation, as the framework reports
+      // one, or any other error.
+      failure: fc.constantFrom(`violation`, `error`),
     }),
     { minLength: 1, maxLength: 3 },
   ),
@@ -433,6 +459,8 @@ const records = fc.record({
         `loop-false`,
         `value-undefined`,
         `field-drop`,
+        `return-undefined`,
+        `optional-chain`,
       ),
       original: fc.constantFrom(`>`, `>=`, `===`, `&&`, `||`, `??`),
       // The code any other operator replaces, and its replacement.
@@ -442,6 +470,16 @@ const records = fc.record({
         undefined,
         `dead code`,
         `boundary: -0`,
+      ),
+      // The input class that the type analysis names for a mutant that no
+      // input of the declared types distinguishes (maintainer decision,
+      // 2026-11-11): a label for the survivor, never a skip.
+      outside: fc.constantFrom(
+        undefined,
+        undefined,
+        undefined,
+        `a string of the literal's digits`,
+        `\`null\``,
       ),
       anchor: fc.constantFrom(
         `out . push ( 'a' ) ;`,
@@ -586,11 +624,37 @@ function failureOf(h, slot, tests) {
   return decided(undefined)
 }
 
+// An owner file that fails with no mutant active judges nothing, so a
+// mutant it owns that no other owner kills is `blocked`: it waits for the
+// file to pass, and its message names the failing owner files in report
+// order (maintainer disposition G5, 2026-11-11, and the v20 freeze's
+// decision 2: a RED baseline gives a provisional report that lists the
+// blocked mutants and judges the rest). A kill by another owner stands.
+const failingOwners = (h, owners) =>
+  [...owners].filter((fi) => h.files[fi].baseline !== `pass`).sort(byPath(h))
+const modelBlocked = (h, judged, blocking) =>
+  blocking.length === 0 || judged.outcome === `killed`
+    ? judged
+    : {
+        outcome: `blocked`,
+        mention: blocking.map((fi) => `\`${fileName(h, fi)}\``),
+        ownerFiles: judged.ownerFiles,
+      }
+
 function modelOutcome(h, mi) {
   const m = h.mutants[mi]
   const owners = new Set(
     m.owners.filter((fi) => fi < h.files.length && h.files[fi].oracle),
   )
+  if (owners.size === 0) return { outcome: `unowned` }
+  const blocking = failingOwners(h, owners)
+  const passing = new Set([...owners].filter((fi) => !blocking.includes(fi)))
+  return modelBlocked(h, judgedOutcome(h, mi, passing), blocking)
+}
+
+// A mutant's outcome by the owner files that passed with no mutant active.
+function judgedOutcome(h, mi, owners) {
+  const m = h.mutants[mi]
   const reachingIn = (fi) =>
     h.files[fi].background[mi] || h.files[fi].tests.some((t) => t.reaches[mi])
   const ordinary = h.files
@@ -600,7 +664,6 @@ function modelOutcome(h, mi) {
     ordinary.length > 0
       ? { ...result, testOutcome: ordinaryOutcome(h, mi, ordinary) }
       : result
-  if (owners.size === 0) return { outcome: `unowned` }
   // In report order (law 7): the files by path, and each file's tests in
   // their order. The gap's `Owners` line names these files in this order.
   const targets = [...owners].sort(byPath(h)).filter(reachingIn)
@@ -667,6 +730,12 @@ function modelOutcome(h, mi) {
   }
   if (m.evidence === `dead code`)
     return sized(`dead-code`, { mention: [`line ${m.line + 1}.`] })
+  // The type analysis found no input of the declared types that
+  // distinguishes it, and names the input class outside them that does.
+  if (m.outside)
+    return sized(`outside-annotation`, {
+      mention: [`line ${m.line + 1} with ${m.outside},`],
+    })
   // An `if` mutant forces its condition: an if-true mutant changes a value
   // only where the condition was false, an if-false mutant only where it was
   // true. Its branch is never taken when no deterministic owner test (or the
@@ -696,7 +765,6 @@ function modelOutcome(h, mi) {
 // deterministic owner test's observation changed, not-observed otherwise.
 function modelAuthored(h, ai) {
   const a = h.authored[ai]
-  const slot = MUTANTS + ai
   if (!a.applies) return { outcome: `does-not-apply` }
   const owners = [
     ...new Set(
@@ -704,6 +772,21 @@ function modelAuthored(h, ai) {
     ),
   ].sort(byPath(h))
   if (owners.length === 0) return { outcome: `unowned` }
+  const blocking = failingOwners(h, owners)
+  return modelBlocked(
+    h,
+    judgedAuthored(
+      h,
+      ai,
+      owners.filter((fi) => !blocking.includes(fi)),
+    ),
+    blocking,
+  )
+}
+
+// An authored mutant's outcome by its owner files that passed.
+function judgedAuthored(h, ai, owners) {
+  const slot = MUTANTS + ai
   // In report order (law 7), whatever order the owners were declared in.
   const tests = owners.flatMap((fi) =>
     h.files[fi].tests.map((t, ti) => ({ t, fi, ti })),
@@ -742,6 +825,10 @@ function distinguishingDirective(m) {
     return `Add an owner history that reads the property dropped on line ${line}, so that its absence changes an asserted result, and assert on the result.`
   if (m.operator === `delete-call`)
     return `Add an owner history where the call on line ${line} changes an asserted result when it does not run, and assert on the result.`
+  if (m.operator === `return-undefined`)
+    return `Add an owner history that uses the value returned on line ${line}, so that \`undefined\` in its place changes an asserted result, and assert on the result.`
+  if (m.operator === `optional-chain`)
+    return `Add an owner history where the object read with \`?.\` on line ${line} is \`undefined\`, so that a plain read throws, and assert on the result.`
   if (m.original === `??`)
     return `Add an owner history where the left operand of \`??\` on line ${line} is truthy, so \`??\` and \`&&\` give different results, and assert on the result.`
   return `Add an owner history where one operand of \`${m.original}\` on line ${line} is falsy and the other is truthy, so \`&&\` and \`||\` give different results, and assert on the result.`
@@ -918,14 +1005,47 @@ const sameNamed = (h, fi, ti, join) =>
 // must run alone (undefined: the whole file, as for a file that did not
 // load). A file whose baseline is `test` fails at its first failing test,
 // and at its first test when the grammar marked none.
+// Each test file's baseline, oracle and ordinary files alike: how many
+// tests it has and how many failed, its first failing test (none for a file
+// that did not load), and whether that test failed by a law violation.
 const baselineOf_ = (h) =>
-  h.files.flatMap((f, fi) => {
-    if (!f.oracle) return []
-    if (f.baseline === `pass`) return [{ fi, fails: false }]
-    if (f.baseline === `load`) return [{ fi, fails: true, test: undefined }]
+  h.files.map((f, fi) => {
+    const own = { fi, ordinary: !f.oracle, tests: f.tests.length }
+    if (f.baseline === `pass`) return { ...own, fails: false }
+    if (f.baseline === `load`) return { ...own, fails: true, test: undefined }
+    const marked = f.tests.filter((t) => t.fails).length
     const first = f.tests.findIndex((t) => t.fails)
-    return [{ fi, fails: true, test: first < 0 ? 0 : first }]
+    return {
+      ...own,
+      fails: true,
+      failed: marked > 0 ? marked : 1,
+      test: first < 0 ? 0 : first,
+      violation: f.failure === `violation`,
+    }
   })
+
+// The violation a failing test reports, as the framework words one
+// (oracle-property.ts \`failure\`): the property's checkpoint and law on its
+// first line, then the law's statement, the difference, the history that
+// failed (its counterexample), the authority, the limits, and the rerun.
+const VIOLATION = {
+  law: `L`,
+  checkpoint: `trace`,
+  difference: `the output is ["b"], owed ["a"] or none`,
+  history: `{"input":7,"name":"one \`tick\` or two"}`,
+}
+const violationText = () =>
+  [
+    `OracleViolation: fixture violated at checkpoint "${VIOLATION.checkpoint}" (law: ${VIOLATION.law}).`,
+    `Law: the outputs agree.`,
+    `Difference: ${VIOLATION.difference}`,
+    `History: ${VIOLATION.history}`,
+    `Authority: the contract.`,
+    `Known limits: none.`,
+    `Rerun: -t '^t0$'`,
+  ].join(`\n`)
+const failureText = (f) =>
+  f.failure === `violation` ? violationText() : `Error: violation`
 
 function model(h) {
   const operatorOutcomes = h.mutants.map((m, mi) => modelOutcome(h, mi))
@@ -1043,6 +1163,8 @@ const directives = {
   indeterminate:
     /^(Make `[^`]+` deterministic: control its clock and its random seed, so its failures judge this code|Add an owner test that runs line \d+ and asserts on its result)\.$/,
   'dead-code': /^Remove the redundant code on line \d+\.$/,
+  'outside-annotation':
+    /^Add an owner history that reaches line \d+ with .+, which the annotation excludes, so that it changes an asserted result, and assert on the result\.$/,
   'random-only-kill':
     /^Keep the counterexample that `[^`]+` found in the random campaign as a fixed history\.$/,
   'agreement-only-kill':
@@ -1054,14 +1176,26 @@ const directives = {
   crashed:
     /^Production threw `[^`]*` in `[^`]+`; record the error as an observation in the driver, and state the law that decides this input's outcome\.$/,
   'not-distinguished':
-    /^Add an owner history (where one operand of `[&|]{2}` on line \d+ is falsy and the other is truthy, so `&&` and `\|\|` give different results|where the left operand of `\?\?` on line \d+ is truthy, so `\?\?` and `&&` give different results|that enters the loop on line \d+, so that forcing its condition to false changes an asserted result|where the call on line \d+ returns a value that changes an asserted result when it is `undefined`|that reads the property dropped on line \d+, so that its absence changes an asserted result|where the call on line \d+ changes an asserted result when it does not run), and assert on the result\.$/,
+    /^Add an owner history (where one operand of `[&|]{2}` on line \d+ is falsy and the other is truthy, so `&&` and `\|\|` give different results|where the left operand of `\?\?` on line \d+ is truthy, so `\?\?` and `&&` give different results|that enters the loop on line \d+, so that forcing its condition to false changes an asserted result|where the call on line \d+ returns a value that changes an asserted result when it is `undefined`|that reads the property dropped on line \d+, so that its absence changes an asserted result|where the call on line \d+ changes an asserted result when it does not run|that uses the value returned on line \d+, so that `undefined` in its place changes an asserted result|where the object read with `\?\.` on line \d+ is `undefined`, so that a plain read throws), and assert on the result\.$/,
   timeout:
     /^Bound the run of the owner tests so that they end, and let a law reject a run that does not\.$/,
   'setup-error':
     /^Run an owner test that loads this module and asserts on its exports, so a failed load rejects the mutant\.$/,
   'does-not-apply':
     /^Update the `find` text of this authored mutant so that it occurs exactly once in the source\.$/,
+  blocked:
+    /^Make `[^`]+`(, `[^`]+`)* pass with no mutant active, then check again: this mutant waits for (it|them)\.$/,
 }
+// What a legend line says a class is, before its directive, where the
+// class's name alone misleads (maintainer disposition G3, 2026-11-11): a
+// crash is a gap, not a kill (the v20 freeze, P3 and C1), and its error is
+// in the gap's Detail line.
+const meanings = {
+  crashed:
+    /^Production threw where no law judged it: a gap, not a kill\. Its error is on the gap's Detail line in summary\.md, and in its `detail` in results\.json\. /,
+}
+// A count of things, as the report words it.
+const counted = (n, thing) => `${n} ${thing}${n === 1 ? `` : `s`}`
 // A text without its code spans, read as Markdown reads them (a run of
 // backticks opens a span, and the next run of exactly that length closes
 // it), so that the run data a span holds is not read as an exit.
@@ -1152,6 +1286,10 @@ function ownersLinesOf(summary) {
 }
 
 // ## Production driver
+//
+// A runner with no blocking step (`blockedOr`) judges a mutant by its
+// passing owners alone, as if no owner had failed.
+const blockedOr = core.blockedOr ?? ((judged) => judged)
 //
 // The driver turns the records into the capture rows and units the CLI's
 // runner produces, joins the unmutated passes' units as the runner does
@@ -1286,7 +1424,7 @@ function baselineUnitsOf(h, pass) {
             key: keyOf(h, fi, ti),
             fullName: nameOf(h, fi, ti),
             state: failsAlone(f, t, ti) ? `failed` : `passed`,
-            message: failsAlone(f, t, ti) ? `Error: violation` : ``,
+            message: failsAlone(f, t, ti) ? failureText(f) : ``,
           }))
         : [],
       rows: [...rows],
@@ -1357,15 +1495,18 @@ function testCaseOf(h, fi, ti) {
     parent = { type: `suite`, name, parent }
   return { type: `test`, name: names.at(-1), parent }
 }
-// Each oracle file's baseline, as the runner's first pass gives it to the
-// printer: its relative path, its first failure, and its tests, each with
-// its state and the names the runner read from its TestCase.
+// Each test file's baseline, as the runner's first pass gives it to the
+// printer: its relative path, whether it is an ordinary file, its first
+// failure, and its tests, each with its state, its error, and the names the
+// runner read from its TestCase.
 function baselineFiles(h, printer) {
   return h.files.flatMap((f, fi) => {
-    if (!f.oracle) return []
     const file = relativeName(h, fi)
+    const ordinary = !f.oracle
     if (f.baseline === `load`)
-      return [{ file, failure: `Error: cannot load the file`, tests: [] }]
+      return [
+        { file, ordinary, failure: `Error: cannot load the file`, tests: [] },
+      ]
     // A file whose baseline is `test` fails its marked tests, or its first
     // test when none is marked.
     const marked = f.tests.some((t) => t.fails)
@@ -1374,13 +1515,17 @@ function baselineFiles(h, printer) {
     const tests = f.tests.map((t, ti) => ({
       fullName: nameOf(h, fi, ti),
       state: fails(t, ti) ? `failed` : `passed`,
+      message: fails(t, ti) ? failureText(f) : ``,
       names: printer?.testNamesOf?.(testCaseOf(h, fi, ti)),
     }))
     const first = tests.find((x) => x.state === `failed`)
     return [
       {
         file,
-        failure: first ? `${first.fullName}: Error: violation` : undefined,
+        ordinary,
+        failure: first
+          ? `${first.fullName}: ${first.message.split(`\n`)[0]}`
+          : undefined,
         tests,
       },
     ]
@@ -1511,6 +1656,7 @@ async function driver(h, observe) {
       ? { original: m.original, replacement: swapFor[m.original] }
       : { original: m.code[0], replacement: m.code[1] }),
     ...(m.evidence ? { evidence: m.evidence } : {}),
+    ...(m.outside ? { outside: m.outside } : {}),
     ...(m.probe ? { probeGuard: true } : {}),
   }))
   const fileIndex = (file) => fileIndexOf(h, file)
@@ -1531,6 +1677,12 @@ async function driver(h, observe) {
     states.add(
       `baseline records list the nondeterministic tests against file order`,
     )
+  // The oracle files that fail with no mutant active, which the runner
+  // leaves out of every mutant's runs (check.mjs): each blocks the mutants
+  // it owns (`blockedOr`).
+  const blocking = new Set(
+    [...first.failed.keys()].filter((file) => oracleFiles.has(file)),
+  )
   const results = mutants.map((mutant, mi) => {
     const owners = new Set(
       h.mutants[mi].owners
@@ -1538,7 +1690,8 @@ async function driver(h, observe) {
         .map((fi) => fileName(h, fi))
         .filter((file) => oracleFiles.has(file)),
     )
-    const targets = targetsOf(mutant, baseline, owners, oracleFiles)
+    const passing = new Set([...owners].filter((file) => !blocking.has(file)))
+    const targets = targetsOf(mutant, baseline, passing, oracleFiles)
     // The runner runs the owner files in the order the targets give them,
     // and stops at the first file that kills (check.mjs `runOwners`).
     const units = []
@@ -1553,8 +1706,13 @@ async function driver(h, observe) {
     const result = {
       ...mutant,
       oracleFiles: targets.oracleTargets,
-      ...judgeMutant(mutant, { owners, targets, units, baseline, mutants }),
+      ...blockedOr(
+        judgeMutant(mutant, { owners, targets, units, baseline, mutants }),
+        [...owners].filter((file) => blocking.has(file)),
+      ),
     }
+    if (result.outcome === `killed` && owners.size > passing.size)
+      states.add(`killed by one owner beside a failing owner`)
     const targetFiles = targets.oracleTargets.map(fileIndex)
     if (result.class !== undefined || namesAFailingTest.has(result.outcome))
       if (reordered(h, targetFiles, byLocale(h)))
@@ -1650,14 +1808,20 @@ async function driver(h, observe) {
         a.owners.filter((fi) => fi < h.files.length && h.files[fi].oracle),
       ),
     ]
+    const failing = owners.filter((fi) => blocking.has(fileName(h, fi)))
     if (!a.applies) result.outcome = `does-not-apply`
     else if (owners.length === 0) result.outcome = `unowned`
     else {
       Object.assign(
         result,
-        judgeAuthored(
-          owners.map((fi) => unitOf(h, fi, MUTANTS + ai)),
-          baseline,
+        blockedOr(
+          judgeAuthored(
+            owners
+              .filter((fi) => !failing.includes(fi))
+              .map((fi) => unitOf(h, fi, MUTANTS + ai)),
+            baseline,
+          ),
+          failing.map((fi) => fileName(h, fi)),
         ),
       )
       orderStates(h, states, `changed test`, placesOfKeys(h, result), owners)
@@ -1671,14 +1835,17 @@ async function driver(h, observe) {
         )
     }
   }
+  // The streaming printer (stream.mjs) prints each gap as the mutant is
+  // judged; the completion order is the reverse here.
+  const printer = await import(`./stream.mjs`).catch(() => undefined)
+  // Both reports lead with the baseline the runner's first pass gave.
+  const baselineGiven = baselineFiles(h, printer)
   const summary = report.renderReport({
     results,
     run: { id: `r`, inputs: `records` },
     excluded: [],
+    baseline: baselineGiven,
   })
-  // The streaming printer (stream.mjs) prints each gap as the mutant is
-  // judged; the completion order is the reverse here.
-  const printer = await import(`./stream.mjs`).catch(() => undefined)
   observe(`classified`, {
     outcomes: results.map((r) => ({
       outcome: r.outcome,
@@ -1694,8 +1861,14 @@ async function driver(h, observe) {
       run: { id: `r`, inputs: `records` },
       excluded: [],
       pkg: `/pkg`,
-      paths: { report: `out/summary.md`, results: `out/results.json` },
+      baseline: baselineGiven,
+      paths: {
+        report: `out/summary.md`,
+        results: `out/results.json`,
+        out: `out`,
+      },
     }),
+    summaryText: summary,
     streamed: printer
       ? [...report.gapsOf(results)].reverse().map((r) => printer.gapLine(r))
       : undefined,
@@ -1708,7 +1881,7 @@ async function driver(h, observe) {
     ),
   })
   // The baseline the printer shows before any mutant (law 9).
-  observe(`baseline`, printer?.baselineLines(baselineFiles(h, printer)) ?? [])
+  observe(`baseline`, printer?.baselineLines(baselineGiven) ?? [])
   for (const r of results) {
     states.add(
       r.authored ? `authored ${r.class ?? r.outcome}` : (r.class ?? r.outcome),
@@ -1769,6 +1942,10 @@ async function driver(h, observe) {
   // syntax, a test whose full name another test's contains, and a file
   // that did not load.
   for (const [fi, f] of h.files.entries()) {
+    if (f.baseline === `test` && !f.oracle)
+      states.add(`an ordinary file's failing baseline test`)
+    if (f.baseline === `test` && f.failure === `violation`)
+      states.add(`a baseline law violation with its counterexample`)
     if (!f.oracle || f.baseline === `pass`) continue
     if (f.baseline === `load`) states.add(`a baseline file that did not load`)
     else {
@@ -1930,7 +2107,16 @@ function check(h, observations, expected) {
   const groupOf = (o) =>
     o.authored ? `authored mutants (src/x.ts)` : `fn ${o.function} (src/x.ts)`
   const functions = new Set(gapsOfModel.map(groupOf))
-  const legend = stdout.split(`\n`).filter((line) => /^  [a-z-]+: /.test(line))
+  // The legend's lines: those under its heading, before the blank line
+  // after it (the baseline above it has indented lines too).
+  const legendAt = stdout
+    .split(`\n`)
+    .indexOf(`Legend, one directive per class:`)
+  const legend = stdout
+    .split(`\n`)
+    .slice(legendAt + 1)
+    .filter((line, i, rest) => rest.slice(0, i + 1).every((l) => l !== ``))
+    .filter((line) => /^  [a-z-]+: /.test(line))
   const headings = stdout
     .split(`\n`)
     .filter((line) => line.startsWith(`fn `) || line.startsWith(`authored `))
@@ -1954,14 +2140,93 @@ function check(h, observations, expected) {
                 )
               ? `a gap is not printed once under its class, line, and id`
               : // A gap with no line prints `L?` (stream.mjs), a placeholder,
-                // not a question.
-                exits.test(withoutSpans(stdout).replace(/ L\? /g, ` L `))
+                // not a question; a replay line is a command, not prose.
+                exits.test(
+                    withoutSpans(
+                      stdout
+                        .split(`\n`)
+                        .filter((line) => !line.startsWith(`  replay: `))
+                        .join(`\n`),
+                    ).replace(/ L\? /g, ` L `),
+                  )
                 ? `the stdout summary has an exit`
                 : undefined
   if (stdoutProblem)
     return violation(`classified`, stdoutProblem, `stdout`, {
       actual: stdout,
     })
+  // One loop (the v20 freeze, 2026-11-10: test results and gaps together):
+  // the stdout leads with the baseline, then names each oracle file that
+  // fails with no mutant active and its failing test, with the step that
+  // unblocks its mutants (G13), and says the report is provisional, with
+  // how many mutants are blocked (the freeze's decision 2; G5). Its last
+  // line says that the check completed, and with how many gaps (G6).
+  const stdoutLines = stdout.split(`\n`)
+  const baselineGot =
+    observations.find((o) => o.checkpoint === `baseline`)?.value ?? []
+  const failingOracle = expected.baseline.filter((b) => b.fails && !b.ordinary)
+  const blockedCount = gapsOfModel.filter((o) => o.outcome === `blocked`).length
+  const blockedLines = stdoutLines.filter((line) =>
+    line.startsWith(`blocked: `),
+  )
+  const provisional = stdoutLines.filter((line) =>
+    line.startsWith(`Provisional: `),
+  )
+  const crashedLegend = legend.find((line) => line.startsWith(`  crashed: `))
+  const leadProblem =
+    stdoutLines.slice(0, baselineGot.length).join(`\n`) !==
+    baselineGot.join(`\n`)
+      ? `the stdout does not lead with the baseline`
+      : blockedLines.length !== failingOracle.length
+        ? `${blockedLines.length} blocked lines for ${failingOracle.length} failing oracle files`
+        : failingOracle.find((b) => {
+              const named = blockedLines.find(
+                (l) =>
+                  readSpan(l.slice(`blocked: `.length))?.content ===
+                  relativeName(h, b.fi),
+              )
+              return (
+                named === undefined ||
+                (b.test !== undefined &&
+                  !named.includes(
+                    ` at ${codeSpanOf(shownName(h, b.fi, b.test))}`,
+                  )) ||
+                !named.endsWith(`then check again.`)
+              )
+            })
+          ? `a failing oracle file's blocked line does not name it, its failing test, and the step that unblocks it`
+          : provisional.length !== (failingOracle.length > 0 ? 1 : 0) ||
+              (failingOracle.length > 0 &&
+                !provisional[0].startsWith(
+                  `Provisional: ${counted(blockedCount, `mutant`)} ${blockedCount === 1 ? `is` : `are`} blocked`,
+                ))
+            ? `the stdout does not say that the report is provisional, with ${blockedCount} blocked mutants`
+            : stdoutLines.at(-1) !==
+                `completed: ${counted(gapsOfModel.length, `gap`)}`
+              ? `the last stdout line is ${JSON.stringify(stdoutLines.at(-1))}, not the completion with ${gapsOfModel.length} gaps`
+              : crashedLegend !== undefined &&
+                  !meanings.crashed.test(
+                    crashedLegend.slice(`  crashed: `.length),
+                  )
+                ? `the crashed legend line does not say a crash is a gap and where its error is`
+                : undefined
+  if (leadProblem)
+    return violation(`classified`, leadProblem, `stdout`, { actual: stdout })
+  // The full report leads with the same baseline, before its gaps.
+  const text = got.summaryText ?? ``
+  const baselineAt = text.indexOf(`## Baseline`)
+  if (
+    baselineAt < 0 ||
+    baselineAt > text.indexOf(`## Gaps`) ||
+    baselineGot.some((line) => !text.slice(baselineAt).includes(line)) ||
+    text.includes(`Provisional: `) !== failingOracle.length > 0
+  )
+    return violation(
+      `classified`,
+      `summary.md does not lead with the baseline section, and its provisional status, before its gaps`,
+      `report`,
+      { actual: text },
+    )
   // Unowned warnings: one line per function, with its count, so that they
   // do not bury the gaps.
   const unownedFns = new Map()
@@ -2082,27 +2347,77 @@ function baselineBreach(h, observations, expected) {
   if (broken !== undefined)
     return breach(`a baseline line spans lines: ${JSON.stringify(broken)}`)
   for (const owed of expected.baseline) {
-    const file = relativeName(h, owed.fi)
+    const file = `${relativeName(h, owed.fi)}${owed.ordinary ? ` (ordinary)` : ``}`
     const at = lines.findIndex(
-      (line) => line === `pass ${file}` || line.startsWith(`fail ${file}: `),
+      (line) =>
+        line.startsWith(`pass ${file}: `) || line.startsWith(`fail ${file}: `),
     )
     if (at < 0) return breach(`no baseline line for ${file}`)
+    // Each file's line gives its test counts; a failing file's lines under
+    // it name its failing test and its error, and, for a law violation, the
+    // law, the difference, and the counterexample, then the replay.
+    const block = []
+    for (let i = at + 1; lines[i]?.startsWith(`  `); i += 1)
+      block.push(lines[i])
     if (!owed.fails) {
-      if (lines[at] !== `pass ${file}`)
-        return breach(`${file} passes, and its line is ${lines[at]}`)
+      if (lines[at] !== `pass ${file}: ${counted(owed.tests, `test`)}`)
+        return breach(
+          `${file} passes ${owed.tests} tests, and its line is ${lines[at]}`,
+        )
       continue
     }
-    if (!lines[at].startsWith(`fail ${file}: `))
-      return breach(`${file} fails, and its line is ${lines[at]}`)
-    const command = lines[at + 1]?.match(/^  replay: (.*)$/)?.[1]
+    const head =
+      owed.test === undefined
+        ? `fail ${file}: did not load: `
+        : `fail ${file}: ${owed.failed} of ${counted(owed.tests, `test`)} failed`
+    if (
+      owed.test === undefined ? !lines[at].startsWith(head) : lines[at] !== head
+    )
+      return breach(`${file} fails, and its line is ${lines[at]}, not ${head}`)
+    if (owed.test !== undefined) {
+      const failing = block.find((line) => line.startsWith(`  failing: `))
+      const name = failing && readSpan(failing.slice(`  failing: `.length))
+      const error =
+        name && readSpan(failing.slice(`  failing: `.length + name.length + 2))
+      const firstLine = owed.violation
+        ? violationText().split(`\n`)[0]
+        : `Error: violation`
+      if (
+        name?.content !== shownName(h, owed.fi, owed.test) ||
+        error?.content !== firstLine
+      )
+        return breach(
+          `${file}'s failing line ${JSON.stringify(failing)} does not name ${shownName(h, owed.fi, owed.test)} and its error`,
+        )
+      const law = block.find((line) => line.startsWith(`  law: `))
+      const counterexample = block.find((line) =>
+        line.startsWith(`  counterexample: `),
+      )
+      const owedLaw = `  law: ${codeSpanOf(VIOLATION.law)} at ${codeSpanOf(VIOLATION.checkpoint)}: ${codeSpanOf(VIOLATION.difference)}`
+      const owedCounterexample = `  counterexample: ${codeSpanOf(VIOLATION.history)}`
+      if (
+        owed.violation
+          ? law !== owedLaw || counterexample !== owedCounterexample
+          : law !== undefined || counterexample !== undefined
+      )
+        return breach(
+          owed.violation
+            ? `${file} fails by a law violation, and its baseline does not give its law, difference, and counterexample: ${JSON.stringify(block)}`
+            : `${file} fails by an error, and its baseline names a law: ${JSON.stringify(block)}`,
+        )
+    }
+    const command = block
+      .find((line) => line.startsWith(`  replay: `))
+      ?.slice(`  replay: `.length)
     const words = command === undefined ? undefined : shellWords(command)
     if (!words)
       return breach(
         `the replay of ${file} is ${JSON.stringify(command)}, which a POSIX shell does not read as plain words`,
       )
     const [vitest, run, target, flag, pattern, ...more] = words
-    if (vitest !== `vitest` || run !== `run` || target !== file)
-      return breach(`the replay of ${file} is not \`vitest run ${file}\``)
+    const path = relativeName(h, owed.fi)
+    if (vitest !== `vitest` || run !== `run` || target !== path)
+      return breach(`the replay of ${file} is not \`vitest run ${path}\``)
     if (owed.test === undefined) {
       if (flag !== undefined)
         return breach(
@@ -2179,6 +2494,14 @@ function shellWords(line) {
   return words
 }
 
+// A text as a code span whose fence outruns any backticks in it, as
+// Markdown reads one (CommonMark 6.1).
+function codeSpanOf(text) {
+  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((r) => r.length))
+  const fence = `\``.repeat(longest + 1)
+  return `${fence} ${text} ${fence}`
+}
+
 // A model value, as a violation names it.
 const shownValue = (value) =>
   typeof value === `bigint`
@@ -2199,7 +2522,49 @@ const corrupt = (change) => (trace) => {
   if (change(value) === false) return undefined
   return trace.map((o, i) => (i === index ? { ...o, value } : o))
 }
+// A change to the compressed stdout, for the one-loop laws (law 8).
+const corruptStdout = (change) => (trace) => {
+  const index = trace.findIndex((o) => o.checkpoint === `classified`)
+  if (index < 0 || typeof trace[index].value.stdout !== `string`)
+    return undefined
+  const value = structuredClone(trace[index].value)
+  const changed = change(value.stdout)
+  if (changed === undefined) return undefined
+  value.stdout = changed
+  return trace.map((o, i) => (i === index ? { ...o, value } : o))
+}
 const calibrations = [
+  {
+    name: `the stdout ends without its completion line`,
+    law: `stdout`,
+    corrupt: corruptStdout((stdout) =>
+      stdout.split(`\n`).slice(0, -1).join(`\n`),
+    ),
+  },
+  {
+    name: `the stdout leaves a failing oracle file's blocked line out`,
+    law: `stdout`,
+    corrupt: corruptStdout((stdout) =>
+      stdout.includes(`\nblocked: `) || stdout.startsWith(`blocked: `)
+        ? stdout
+            .split(`\n`)
+            .filter((line) => !line.startsWith(`blocked: `))
+            .join(`\n`)
+        : undefined,
+    ),
+  },
+  {
+    name: `the stdout's baseline comes after its gaps`,
+    law: `stdout`,
+    corrupt: corruptStdout((stdout) => {
+      const lines = stdout.split(`\n`)
+      const blank = lines.indexOf(``)
+      if (blank <= 0) return undefined
+      return [...lines.slice(blank + 1), ``, ...lines.slice(0, blank)].join(
+        `\n`,
+      )
+    }),
+  },
   {
     name: `a message offers an equivalence exit`,
     law: `messages`,
@@ -2324,6 +2689,7 @@ const required = [
   `not-observed`,
   `not-distinguished`,
   `dead-code`,
+  `outside-annotation`,
   `ordinary killed`,
   `a key with backticks`,
   `authored not-observed`,
@@ -2344,6 +2710,11 @@ const required = [
   `a not-infected operand cut at an astral character`,
   `a baseline test whose name holds a newline or a tab`,
   `a not-infected message with typed operands`,
+  `blocked`,
+  `authored blocked`,
+  `killed by one owner beside a failing owner`,
+  `a baseline law violation with its counterexample`,
+  `an ordinary file's failing baseline test`,
 ]
 
 // One constructed history per outcome class: one mutant judged by one
@@ -2392,6 +2763,7 @@ const single = (
         background,
         backgroundInfects,
         baseline,
+        failure: `error`,
       },
       ...(ordinary
         ? [
@@ -2401,6 +2773,7 @@ const single = (
               background: four(false),
               backgroundInfects: four(false),
               baseline: `pass`,
+              failure: `error`,
             },
           ]
         : []),
@@ -2413,6 +2786,7 @@ const single = (
         original: `>`,
         code: codes[1],
         evidence: undefined,
+        outside: undefined,
         anchor: `out . push ( 'a' ) ;`,
         probe: false,
         ...mutant,
@@ -2485,6 +2859,47 @@ const constructed = [
     effect: { kind: `verdict` },
   }),
   single(`a crash`, [`crashed`], { effect: { kind: `crash` } }),
+  // The only owner fails with no mutant active, by a law violation, and an
+  // ordinary file fails too: the operator and the authored mutant are
+  // blocked, and the baseline gives the law and its counterexample.
+  {
+    name: `a mutant whose only owner fails its baseline`,
+    enters: [
+      `blocked`,
+      `authored blocked`,
+      `a baseline law violation with its counterexample`,
+      `an ordinary file's failing baseline test`,
+    ],
+    build: () => {
+      const base = single(`x`, [], {
+        effect: { kind: `verdict` },
+        ordinary: true,
+        baseline: `test`,
+        authored: [{}],
+      }).build()
+      return {
+        ...base,
+        files: [
+          { ...base.files[0], failure: `violation` },
+          { ...base.files[1], baseline: `test`, failure: `error` },
+        ],
+      }
+    },
+  },
+  // One owner fails with no mutant active; the other kills. The kill stands.
+  {
+    name: `a kill by one owner beside a failing owner`,
+    enters: [`killed`, `killed by one owner beside a failing owner`],
+    build: () => {
+      const base = twoOwners(`x`, [], {
+        effect: { kind: `verdict` },
+      }).build()
+      return {
+        ...base,
+        files: [{ ...base.files[0], baseline: `test` }, base.files[1]],
+      }
+    },
+  },
   {
     // One owner file's run times out; the next kills. The kill decides.
     // (The runner stops at the first file that kills, so the timeout comes
@@ -2697,6 +3112,17 @@ const constructed = [
     mutant: { operator: `binary-swap`, original: `>` },
     test: { pair: four([2, 2]) },
   }),
+  single(
+    `a comparison that only an input outside its annotation distinguishes`,
+    [`outside-annotation`],
+    {
+      mutant: {
+        operator: `binary-swap`,
+        original: `>`,
+        outside: `a string of the literal's digits`,
+      },
+    },
+  ),
   single(`a logical swap that is dead code`, [`dead-code`], {
     mutant: {
       operator: `binary-swap`,
@@ -2916,7 +3342,7 @@ const constructed = [
 oracleProperty({
   id: `oracle-gaps.report-classify`,
   law: {
-    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, dead-code, branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed.`,
+    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, dead-code, outside-annotation, branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed.`,
     authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the oracle rubric's outcome kinds (ORC-006); the frozen design's oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); the maintainer's findings F22 and the leftovers of #12 (2026-11-10); for report order, the gap CLI's determinism requirement (oracle-gaps.report's determinism test and law 9, and the runner's "listed alike in every run") and the maintainer's decision of 2026-11-11 that the tests a report names depend on neither --contexts, worker timing, nor how owners are declared; Vitest's runner (@vitest/runner 4.1: -t is a regular expression matched against getTaskFullName, the suites' names and the test's joined by a space); POSIX.1-2017 Shell Command Language 2.2 and 2.6 for the replay's quoting.`,
     limits: `That real runs produce these records is oracle-gaps.report's, and so is a real replay. The driver encodes operands as capture-setup.mjs \`shown\` does, by a copy of it; long strings are told apart by a 32-bit digest; no symbol operand is generated, and two symbols of one description print alike. Only the runner's single-file path records a test's names, and only it feeds the baseline. Test names hold no backtick and no \` > \`, and names within a file are distinct; the replay's file argument is judged as text, not as Vitest's substring filter over every file. Authored intents hold no word that the exit law forbids, and an author is not shortened. Report order within a file is the baseline's record order: that a file whose tests run concurrently writes its records in one order is not judged, and a failing test is ordered within its file as the reporter lists it, which a run cut off by a hang takes from the records. The "Changed observations in" list is the changed tests' first three, and only its first is compared. A test that only a mutant run records is not generated. A file that fails with no mutant active keeps its records and its mutants are classified; the refusal text and the summary's left-out list are not judged, only the list of failing files they print.`,
   },

@@ -455,6 +455,7 @@ export function oracleSettings(context) {
       seed: `${envPrefix}_SEED`,
       path: `${envPrefix}_PATH`,
       property: `${envPrefix}_PROPERTY`,
+      unit: `${envPrefix}_UNIT`,
       runsMultiplier: `${envPrefix}_RUNS_MULTIPLIER`,
     },
     implementationModules: moduleList(configured, `implementationModules`),
