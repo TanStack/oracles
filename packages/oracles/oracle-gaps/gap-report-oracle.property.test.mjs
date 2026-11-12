@@ -2385,14 +2385,20 @@ function streamBreach(checkpoint, run, expected) {
       `a line about a mutant came before the decisive baseline line`,
     )
   if (run.exit !== 0 || expected.refused) return undefined
-  // File a's test writes to the process's streams, so a completed run says
-  // once where that output went (review of #46, F2).
+  // File a's test writes to the process's streams, so a completed run whose
+  // file a loaded says once where that output went (review of #46, F2). A
+  // setup file that throws fails every file before any test runs: no test
+  // wrote, and no note is owed.
   const outputNotes = run.stream.notes.filter((note) =>
     /^oracle-gaps: note test output in \S+test-output\.log$/.test(note),
   )
-  if (outputNotes.length !== 1)
+  const owedNotes = expected.baseline.find((b) => b.file === `tests/a.test.ts`)
+    ?.loads
+    ? 1
+    : 0
+  if (outputNotes.length !== owedNotes)
     return breach(
-      `the run names its tests' console output in ${outputNotes.length} notes: ${JSON.stringify(run.stream.notes)}`,
+      `the run names its tests' console output in ${outputNotes.length} notes, owed ${owedNotes}: ${JSON.stringify(run.stream.notes)}`,
     )
   const verdict = verdictLine(
     expected.baseline.filter((b) => !b.ordinary).length,
