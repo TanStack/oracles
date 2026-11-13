@@ -625,6 +625,9 @@ const drawn = fc.record({
   // through fs at run time, by a sync, a promise, or a callback read (law
   // 9: a file a test reads is an input of its run, as a module it imports
   // is). The `fsData` edit changes only that file.
+  // A `statDir` read stats the test's own directory first, as a test that
+  // looks for a fixtures folder does (review of #55: a directory that a
+  // test stats is no file to hash).
   fsRead: fc.constantFrom(
     `none`,
     `none`,
@@ -632,6 +635,7 @@ const drawn = fc.record({
     `sync`,
     `promise`,
     `callback`,
+    `statDir`,
   ),
   // A second authored mutant, on the next statement, so that two patched
   // sources are judged in the same run and neither may see the other's.
@@ -4255,17 +4259,32 @@ const lazyGated = (plan, file, t) =>
 const fsGated = (plan, file, t) =>
   plan.fsRead !== `none` && file === `b` && t.judges && t.judgeBy === `verdict`
 // How file b reads `tests/data.json`, by each kind of fs read.
+// Each read first checks that the fs function it uses keeps its own name
+// and length, as code that dispatches on a function's arity does: a test
+// that passes alone passes under the CLI (law 3), whatever the CLI does to
+// see the read (review of #55).
+const keptFs = (local, name, length) =>
+  `if (${local}.name !== '${name}' || ${local}.length !== ${length}) throw new Error('fs.${name} lost its own properties')`
 const dataReads = {
   sync: [
     `import { readFileSync as readDataSync } from 'node:fs'`,
+    keptFs(`readDataSync`, `readFileSync`, 2),
     `const readData = async () => JSON.parse(readDataSync(new URL('./data.json', import.meta.url), 'utf8'))`,
   ],
   promise: [
     `import { readFile as readDataFile } from 'node:fs/promises'`,
+    keptFs(`readDataFile`, `readFile`, 2),
     `const readData = async () => JSON.parse(await readDataFile(new URL('./data.json', import.meta.url), 'utf8'))`,
+  ],
+  statDir: [
+    `import { existsSync as dataDirExists, readFileSync as readDataSync, statSync as statDataDir } from 'node:fs'`,
+    keptFs(`statDataDir`, `statSync`, 1),
+    keptFs(`dataDirExists`, `existsSync`, 1),
+    `const readData = async () => (statDataDir(new URL('./', import.meta.url)).isDirectory() && dataDirExists(new URL('./', import.meta.url)) ? JSON.parse(readDataSync(new URL('./data.json', import.meta.url), 'utf8')) : { open: false })`,
   ],
   callback: [
     `import { readFile as readDataCallback } from 'node:fs'`,
+    keptFs(`readDataCallback`, `readFile`, 3),
     `const readData = () => new Promise((resolve, reject) => readDataCallback(new URL('./data.json', import.meta.url), 'utf8', (error, text) => (error ? reject(error) : resolve(JSON.parse(text)))))`,
   ],
 }

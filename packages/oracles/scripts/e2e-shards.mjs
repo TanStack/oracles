@@ -81,6 +81,9 @@ export const shards = {
     `fixed seed 20261105: an edit to data a test reads through fs (callback)`,
     `random seed: an edit to data a test reads through fs (callback)`,
     `determinism: constructed history: an edit to data a test reads through fs (callback)`,
+    `fixed seed 20261105: an edit to data a test reads through fs (statDir)`,
+    `random seed: an edit to data a test reads through fs (statDir)`,
+    `determinism: constructed history: an edit to data a test reads through fs (statDir)`,
     // Added with the CLI's parent-config discovery (not yet measured).
     `fixed seed 20261105: a package whose parent directory has its config`,
     `random seed: test.projects in a parent's config`,
