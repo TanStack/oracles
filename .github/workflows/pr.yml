@@ -204,7 +204,7 @@ jobs:
     name: Windows unit suites (non-blocking)
     runs-on: windows-latest
     continue-on-error: true
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -221,14 +221,30 @@ jobs:
       - name: eslint plugin tests
         continue-on-error: true
         run: pnpm --filter @tanstack/eslint-plugin-oracles run test
-      - name: Gap report fast oracles
+      # [diagnostic] The fast suites run one file per step, each with a step
+      # timeout, to find which one hangs on Windows (the run was cancelled at
+      # 21 minutes with no output after the static oracle started).
+      - name: '[diagnostic] Gap report static oracle'
         continue-on-error: true
-        run: pnpm --filter @tanstack/oracles run test:oracle-gaps:fast
+        timeout-minutes: 8
+        run: pnpm --filter @tanstack/oracles exec vitest --run --config oracle-gaps/vitest.config.mjs --reporter=verbose gap-report-static
+      - name: '[diagnostic] Gap report classify oracle'
+        continue-on-error: true
+        timeout-minutes: 8
+        run: pnpm --filter @tanstack/oracles exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-classify
+      - name: '[diagnostic] Gap report probe-form oracle'
+        continue-on-error: true
+        timeout-minutes: 8
+        run: pnpm --filter @tanstack/oracles exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-probe-form
+      - name: '[diagnostic] Gap report mutant-validity oracle'
+        continue-on-error: true
+        timeout-minutes: 10
+        run: pnpm --filter @tanstack/oracles exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-mutant-validity
   windows-gap-cli:
     name: Windows gap CLI end to end (non-blocking)
     runs-on: windows-latest
     continue-on-error: true
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -250,6 +266,9 @@ jobs:
           set -euo pipefail
           dir="$GITHUB_WORKSPACE/.ci-fixture"
           mkdir -p "$dir/src" "$dir/tests"
+          cat > "$dir/package.json" <<'EOT'
+          {"name": "ci-fixture", "private": true, "type": "module"}
+          EOT
           cat > "$dir/src/clamp.ts" <<'EOT'
           export function clamp(x: number): number {
             return x < 0 ? 0 : x > 10 ? 10 : x
@@ -303,6 +322,8 @@ jobs:
         continue-on-error: true
         run: node packages/oracles/oracle-gaps/index.mjs --stop-daemon --package .ci-fixture
       # One fixed-seed unit of the end-to-end oracle, as the Linux job runs it.
+      # [diagnostic] Verbose and a step timeout, to see which copy hangs.
       - name: Gap report end-to-end oracle (fixed seed)
         continue-on-error: true
-        run: pnpm --filter @tanstack/oracles exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "fixed seed"
+        timeout-minutes: 12
+        run: pnpm --filter @tanstack/oracles exec vitest --run --config oracle-gaps/vitest.config.mjs --reporter=verbose gap-report-oracle -t "fixed seed"
