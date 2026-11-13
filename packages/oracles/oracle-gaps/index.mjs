@@ -121,6 +121,10 @@
 // SIGINT or SIGTERM is sent on to the whole group; a process that has not
 // ended 2 s later is killed, and so is any process left in the group when
 // the run ends. The run kills its group itself if the CLI dies first.
+// The stop handlers and the claim on the output directory come before the
+// CLI's modules load (review of #57, P1): a signal during the loads is kept
+// and acted on once the stream log's note is written, so a stop as the CLI starts still
+// leaves the note and one done line. Only Node's own start is before them.
 import { spawn } from 'node:child_process'
 import {
   appendFileSync,
@@ -134,23 +138,32 @@ import {
 import { constants } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { parseArgs, usage } from './args.mjs'
-import { codeIdentity, openSession } from './check.mjs'
-import { received, requestDaemon, stopDaemon } from './daemon.mjs'
-import { endRun, Refusal } from './ending.mjs'
-import { memoryStore } from './evidence.mjs'
+
+// A test-only marker (ORACLE_GAPS_TEST_STARTED): the first statement that runs
+// project code writes this file, before any project module loads, so a test can
+// tell a stop that came before the CLI started from one that came during its loads.
+if (process.env.ORACLE_GAPS_TEST_STARTED)
+  writeFileSync(process.env.ORACLE_GAPS_TEST_STARTED, ``)
+
+let early
+const keepEarly = (signal) => {
+  early ??= signal
+}
+process.on(`SIGINT`, keepEarly)
+process.on(`SIGTERM`, keepEarly)
+const { parseArgs, usage } = await import(`./args.mjs`)
+const { endRun, Refusal } = await import(`./ending.mjs`)
 
 // How long the group has to end after a stop signal before it is killed.
 const STOP_GRACE_MS = 2000
 
 // The stream log (the maintainer's decision of 2026-11-12): a run that
-// starts a check writes its stderr to `<out>/stream.log` too, line for
-// line, and names that file in its first line on both streams, so an agent
-// that runs a check in the background learns from the run where to read
-// it. The supervisor opens it before the child starts (startLog), and then
-// is the only writer of the child's stderr to it (superviseRun). Undefined
-// until the log is open.
+// starts a check writes its stderr to `<out>/stream.log` too, line for line,
+// and names that file in its first line on both streams. The supervisor opens
+// it before the child starts (startLog), and is then the only writer of the
+// child's stderr to it (superviseRun). Undefined until the log is open.
 let streamLog
+let writingEnding = false
 const logPathOf = (out) => join(out, `stream.log`)
 /** Writes `text` to stderr and, once the log is open, to the stream log. */
 const writeStream = (text) => {
@@ -226,17 +239,12 @@ function claimOut(out) {
   }
 }
 /**
- * Opens the run's stream log in `out` and writes its first line, on both
- * streams, which names the log. Throws a Refusal when the output directory
- * is in use or the log cannot be written; nothing is written then.
+ * Claims the output directory and writes the run's first line, on both
+ * streams, which names the log. Throws a Refusal when the directory is in use
+ * or the log cannot be written; nothing is written then.
  */
 function startLog(out) {
   const path = logPathOf(out)
-  try {
-    mkdirSync(out, { recursive: true })
-  } catch (error) {
-    throw cannotWrite(path, error)
-  }
   claimOut(out)
   try {
     writeFileSync(path, ``)
@@ -249,20 +257,19 @@ function startLog(out) {
   writeStream(note)
 }
 
-/** Signals every process of group `group`; false when none is left. */
-function signalGroup(group, signal) {
-  try {
-    process.kill(-group, signal)
-    return true
-  } catch {
-    return false
-  }
+/** Flushes both streams, then exits with `code` (after a test's hold). */
+function exitWhenFlushed(code) {
+  const hold = Number(process.env.ORACLE_GAPS_TEST_HOLD_EXIT_MS ?? 0)
+  process.stdout.write(``, () =>
+    process.stderr.write(``, () => setTimeout(() => process.exit(code), hold)),
+  )
 }
 
 /**
- * Runs this CLI again as a child in a process group of its own, and ends
- * with it: with its exit code, or, once a stop signal has ended its group,
- * with 128 plus the signal's number.
+ * Runs this CLI again as a child in a process group of its own, and ends with
+ * it: with its exit code, or, once a stop signal has ended its group, with 128
+ * plus the signal's number. The child gets `--out` appended, the directory this
+ * process resolved (review of #57, F2).
  */
 function superviseRun(out) {
   let child
@@ -270,26 +277,22 @@ function superviseRun(out) {
   // How the run ended: its exit code, or the signal that ended it.
   let ended
   // Whether the run said that it writes its ending (a message it sends
-  // before it writes): then its done line is the last on each stream, and
-  // it ends with its own code, whatever stop reaches it.
+  // before it writes): then its done line is the last on each stream, and it
+  // ends with its own code, whatever stop reaches it.
   let ending = false
-  // Whether the run's stderr, which the CLI passes on, said that V8 ran
-  // out of memory.
+  // Whether the run's stderr, which the CLI passes on, said that V8 ran out
+  // of memory.
   let outOfMemory = false
   let stderrTail = ``
   // Whether the run's streams and channel have closed.
   let closed = false
-  // Ends the CLI once the run has ended (or the grace has passed), with
-  // what is left of the group killed, and once the run's stderr has been
-  // passed on (at most 2 s more). A run that writes its ending wrote its
-  // done line, so the CLI ends with its code and writes none. Every other
-  // end gets one done line from the CLI, on both streams: a run that a stop
-  // ended stopped (review of #46, F3; re-review N1); a run whose process
-  // ended on its own, by a signal or a code, with no ending (a V8
-  // out-of-memory abort is a SIGABRT) is an error, exit 3, with the remedy
-  // when it ran out of memory (the coordinator's decision of 2026-11-12 on
-  // P10). A write to a pipe is asynchronous on macOS, so the process exits
-  // once it is written.
+  // Ends the CLI once the run has ended (or the grace has passed), with what
+  // is left of the group killed. A run that writes its ending wrote its done
+  // line, so the CLI ends with its code and writes none. Every other end gets
+  // one done line from the CLI, on both streams: a stop ended the run
+  // (stopped); a run whose process ended on its own (a signal, a code, a V8
+  // out-of-memory abort) is an error, exit 3, with the remedy when it ran out
+  // of memory.
   let finishing = false
   const finish = () => {
     if (finishing) return
@@ -335,18 +338,18 @@ function superviseRun(out) {
       finish()
     }, 50)
   }
-  // The stop handlers come first, so a signal that comes while the run
-  // starts is a stop too (re-review N3).
+  // The stop handlers come first, so a signal that comes while the run starts
+  // is a stop too. A stop that came during the CLI's loads ends the run before
+  // it starts: its stopped line follows the note the caller already wrote.
   process.on(`SIGINT`, stop)
   process.on(`SIGTERM`, stop)
+  if (early !== undefined) return stop(early)
   // An inspector flag would bind the CLI's own port a second time.
   child = spawn(
     process.execPath,
     [
       ...process.execArgv.filter((flag) => !/^--inspect/.test(flag)),
       ...process.argv.slice(1),
-      // The out directory, resolved once by this process (asksForCheck): the
-      // run and a daemon's check write there, not to a directory of their own.
       `--out`,
       out,
     ],
@@ -359,9 +362,9 @@ function superviseRun(out) {
   child.on(`message`, (message) => {
     if (message === `ending`) ending = true
   })
-  // The run's stderr, passed on as it comes, written to the stream log as it
-  // is (V8's own lines included, which the run does not write itself), and
-  // read for V8's out-of-memory message.
+  // The run's stderr, passed on as it comes, written to the stream log as it is
+  // (V8's own lines included, which the run does not write itself), and read
+  // for V8's out-of-memory message.
   child.stderr.on(`data`, (chunk) => {
     process.stderr.write(chunk)
     appendFileSync(streamLog, chunk)
@@ -377,9 +380,19 @@ function superviseRun(out) {
   })
 }
 
+/** Signals every process of group `group`; false when none is left. */
+function signalGroup(group, signal) {
+  try {
+    process.kill(-group, signal)
+    return true
+  } catch {
+    return false
+  }
+}
+
 /**
- * The run's side of the group: once the CLI that started it is gone, the
- * run kills its group, itself included.
+ * The run's side of the group: once the CLI that started it is gone, the run
+ * kills its group, itself included.
  */
 function watchSupervisor(supervisor) {
   setInterval(() => {
@@ -388,8 +401,9 @@ function watchSupervisor(supervisor) {
 }
 
 /**
- * Whether arguments `argv` ask for a check, the only run that starts
- * processes; a refusal of them is written by the run itself.
+ * The options of arguments `argv` when they ask for a check, the only run that
+ * starts processes; undefined for help, a stop, or arguments that refuse (a
+ * refusal is written by the run itself).
  */
 function asksForCheck(argv) {
   try {
@@ -402,6 +416,8 @@ function asksForCheck(argv) {
 
 /** The summary of a check run in this process. */
 async function checkCold(options) {
+  const { openSession } = await import(`./check.mjs`)
+  const { memoryStore } = await import(`./evidence.mjs`)
   const session = await openSession(options.pkg)
   try {
     return await session.check(options, memoryStore(), (line) =>
@@ -414,6 +430,8 @@ async function checkCold(options) {
 
 /** The summary of a check run by the package's daemon. */
 async function checkThroughDaemon(options) {
+  const { codeIdentity } = await import(`./check.mjs`)
+  const { received, requestDaemon } = await import(`./daemon.mjs`)
   const reply = await requestDaemon(
     options.pkg,
     process.argv.slice(2),
@@ -424,6 +442,23 @@ async function checkThroughDaemon(options) {
   return reply.stdout
 }
 
+// The run's ending, once: its refusal or error is written to its output
+// directory and stdout and stderr, and the process exits with its code.
+let ended = false
+const holdStops = () => {
+  writingEnding = true
+  process.send?.(`ending`)
+}
+function endWith(error, out) {
+  if (ended) return
+  ended = true
+  const ending = endRun(error, out)
+  holdStops()
+  writeStream(ending.stderr)
+  process.stdout.write(`${ending.done}\n`)
+  exitWhenFlushed(ending.exitCode)
+}
+
 // A file URL escapes a space, `#`, and the like, so the script's own URL is
 // compared with the URL of the path it was started as.
 const main =
@@ -431,80 +466,50 @@ const main =
 // Windows has no process groups: there the run is the CLI's own process.
 const supervised = process.platform !== `win32`
 const supervisor = process.env.ORACLE_GAPS_GROUP
-const checking =
-  main && supervised && supervisor === undefined
-    ? asksForCheck(process.argv.slice(2))
-    : undefined
-// A check the supervisor cannot open its log for is run in this process, which
-// refuses it the same way (below).
-const supervising = (() => {
-  if (checking === undefined) return false
-  try {
-    startLog(checking.out)
-    return true
-  } catch {
-    return false
+
+async function run() {
+  // The supervisor: it claims the output directory, writes the note, and runs
+  // the child. A refusal of the claim or the log ends it through endWith (the
+  // single path for every refusal of a check).
+  if (supervised && supervisor === undefined) {
+    const checking = asksForCheck(process.argv.slice(2))
+    if (checking !== undefined) {
+      try {
+        startLog(checking.out)
+      } catch (error) {
+        return endWith(error, checking.out)
+      }
+      return superviseRun(checking.out)
+    }
   }
-})()
-if (supervising) superviseRun(checking.out)
-else if (main) {
   if (supervisor !== undefined) watchSupervisor(Number(supervisor))
   // A test that runs this CLI starts a run of its own, in a group of its own.
   delete process.env.ORACLE_GAPS_GROUP
-  // The run's options, once its arguments parse; a refusal or an error is
-  // written to their output directory.
-  let options
-  let ended = false
-  // Ends the run once. A write to a pipe is asynchronous on macOS, and
-  // exiting at once cuts it off at the pipe's buffer, so the process exits
-  // once both streams have written everything before it.
-  // A test-only hook for the CLI's own oracle, not for users:
-  // ORACLE_GAPS_TEST_HOLD_EXIT_MS holds the exit after the done line, so the
-  // CLI's oracle can send a signal in that window.
-  const end = (exitCode) => {
-    if (ended) return
-    ended = true
-    const hold = Number(process.env.ORACLE_GAPS_TEST_HOLD_EXIT_MS ?? 0)
-    process.stdout.write(``, () =>
-      process.stderr.write(``, () =>
-        setTimeout(() => process.exit(exitCode), hold),
-      ),
-    )
-  }
-  // A stop ends the run at once, with no line: an error that the stop
-  // causes (a config load that it cuts off) is no refusal, and the
-  // supervisor writes the stopped line (re-review N1). Once the run writes
-  // its ending, it says so to the supervisor, and a stop no longer cuts it
-  // off: its done line is then the last line of each stream.
-  let writingEnding = false
+  // A stop ends the run at once, with no line: an error that the stop causes
+  // is no refusal, and the supervisor writes the stopped line. Once the run
+  // writes its ending, a stop no longer cuts it off.
   const onStop = (signal) => {
     if (!writingEnding) process.exit(128 + constants.signals[signal])
   }
   process.on(`SIGINT`, onStop)
   process.on(`SIGTERM`, onStop)
-  const holdStops = () => {
-    writingEnding = true
-    process.send?.(`ending`)
-  }
-  const fail = (error) => {
-    if (ended) return
-    const ending = endRun(error, options?.out)
-    holdStops()
-    writeStream(ending.stderr)
-    process.stdout.write(`${ending.done}\n`)
-    end(ending.exitCode)
-  }
-  // An error thrown outside the awaited check, by a timer or a promise no
-  // one awaits, ends the run the same way.
-  process.on(`uncaughtException`, fail)
-  process.on(`unhandledRejection`, fail)
+  // A stop that came before this process could handle it ends it now.
+  if (early !== undefined) process.exit(128 + constants.signals[early])
+  // The run's options, once its arguments parse.
+  let options
+  // An error thrown outside the awaited check, by a timer or a promise no one
+  // awaits, ends the run the same way.
+  process.on(`uncaughtException`, (error) => endWith(error, options?.out))
+  process.on(`unhandledRejection`, (error) => endWith(error, options?.out))
   try {
     options = parseArgs(process.argv.slice(2))
     if (options.help) console.log(usage)
-    else if (options.stop) await stopDaemon(options.pkg)
-    else {
-      // The supervisor opened the log (or, on Windows, there is none and this
-      // process runs the check); its child writes stderr alone.
+    else if (options.stop) {
+      const { stopDaemon } = await import(`./daemon.mjs`)
+      await stopDaemon(options.pkg)
+    } else {
+      // Windows has no supervisor: this process opens the log and runs the
+      // check. A child of a supervisor writes its stderr alone.
       if (supervisor === undefined) startLog(options.out)
       const summary = await (options.daemon ? checkThroughDaemon : checkCold)(
         options,
@@ -515,8 +520,10 @@ else if (main) {
       console.log(summary)
       writeStream(`${summary.split(`\n`).at(-1)}\n`)
     }
-    end(0)
+    exitWhenFlushed(0)
   } catch (error) {
-    fail(error)
+    endWith(error, options?.out)
   }
 }
+
+if (main) await run()
