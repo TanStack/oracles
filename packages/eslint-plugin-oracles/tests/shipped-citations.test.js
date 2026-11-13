@@ -47,7 +47,8 @@ function shippedFiles(dir) {
   const packed = spawnSync(
     `npm`,
     [`pack`, `--dry-run`, `--json`, `--ignore-scripts`],
-    { cwd: dir, encoding: `utf8` },
+    // On Windows npm is an npm.cmd shim, which only a shell runs.
+    { cwd: dir, encoding: `utf8`, shell: process.platform === `win32` },
   )
   return JSON.parse(packed.stdout)[0].files.map((file) => file.path)
 }
