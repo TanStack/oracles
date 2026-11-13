@@ -22,7 +22,7 @@
 //     both streams, matching the exit code (130 or 143); (b) no output at all.
 //     Anything else, including a partial output, fails.
 import { spawn, spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { delimiter, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -145,38 +145,37 @@ if (command === `done`) {
       )
   }
 } else if (command === `stop`) {
+  // The stop is the CLI's test-only hook (ORACLE_GAPS_TEST_STOP): a file that
+  // appears takes the same stop as a SIGINT. Node on Windows cannot deliver a
+  // Ctrl+C from a non-console parent, and child.kill('SIGINT') there is
+  // TerminateProcess, a limit like SIGKILL, so no line is owed for it.
   const [dir, ...cliArgs] = args
+  const stopFile = join(dir, `.stop-requested`)
+  rmSync(stopFile, { force: true })
   const child = spawn(process.execPath, [cli, ...cliArgs], {
     cwd: dir,
+    env: { ...process.env, ORACLE_GAPS_TEST_STOP: stopFile },
     stdio: [`ignore`, `pipe`, `pipe`],
   })
   let stdout = ``
   let stderr = ``
-  let sent = false
+  let requested = false
   child.stdout.on(`data`, (chunk) => {
     stdout += chunk
-    if (!sent && stdout.length > 0) {
-      sent = true
-      child.kill(`SIGINT`)
+    // The run has begun once it prints its first line: the stop lands then.
+    if (!requested && stdout.length > 0) {
+      requested = true
+      writeFileSync(stopFile, ``)
     }
   })
   child.stderr.on(`data`, (chunk) => {
     stderr += chunk
   })
   child.on(`close`, (code, signal) => {
-    if (!sent) {
-      // The run ended before it printed anything: outcome (b) if it printed
-      // nothing at all, which is the only way to end before a first line.
-      if (stdout === `` && stderr === ``)
-        console.log(`stop outcome (b): no output`)
-      else
-        fail(
-          `the run ended before any stop was sent, with ${JSON.stringify(stdout.slice(0, 200))}`,
-        )
-      return
-    }
-    if (stdout === `` && stderr === ``) {
-      console.log(`stop outcome (b): no output`)
+    if (!requested) {
+      fail(
+        `the run ended before its first line (exit ${code}, signal ${signal}), so no stop was sent`,
+      )
       return
     }
     const problems = [
@@ -188,7 +187,9 @@ if (command === `done`) {
         `stop was not all-or-nothing (signal ${signal}, exit ${code}): ${problems.join('; ')}`,
       )
     else
-      console.log(`stop outcome (a): done line on both streams, exit ${code}`)
+      console.log(
+        `stop outcome (a): stopped line on both streams, exit ${code}`,
+      )
   })
 } else {
   fail(`unknown command ${command}`)

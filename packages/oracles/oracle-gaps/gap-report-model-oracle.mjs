@@ -4226,7 +4226,7 @@ const verdictLine = (files, failing) =>
  * the path of its full report in output directory `out`.
  */
 const doneLine = (gaps, provisional, out) =>
-  `oracle-gaps: done completed, ${gaps} gap${gaps === 1 ? `` : `s`}${provisional ? ` (provisional)` : ``}, report ${out}/summary.md`
+  `oracle-gaps: done completed, ${gaps} gap${gaps === 1 ? `` : `s`}${provisional ? ` (provisional)` : ``}, report ${out.replaceAll(`\\`, `/`)}/summary.md`
 
 function model(plan) {
   const refused = refusal(plan)

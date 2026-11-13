@@ -433,7 +433,14 @@ function argumentFault(bad, dir, sources) {
     // An option that takes a value, given last with none.
     noValue: [[...valid, bad.option], bad.option],
     unknown: [
-      [...valid, `--sources${bad.long ? `x`.repeat(100_000) : ``}`, sources],
+      // Windows caps a command line at 32,767 characters, and a longer one never
+      // starts (its status is null): there the long argument is 30,000 (a
+      // narrowing recorded in the PR; the POSIX runs keep 100,000).
+      [
+        ...valid,
+        `--sources${bad.long ? `x`.repeat(process.platform === `win32` ? 30_000 : 100_000) : ``}`,
+        sources,
+      ],
       `--sources`,
     ],
     missingMutants: [
