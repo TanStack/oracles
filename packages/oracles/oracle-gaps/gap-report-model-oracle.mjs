@@ -4659,6 +4659,7 @@ function oracleTestFile(plan, file) {
     ...(plan.midrun && file === plan.midrunBy
       ? [
           `import { readFileSync as readMarker, writeFileSync as writeEdit } from 'node:fs'`,
+          `import { dirname as markerDir, join as markerPath } from 'node:path'`,
           ...(file === `a`
             ? [`import { strict as strictAtLoad } from './strict'`]
             : []),
@@ -4875,7 +4876,7 @@ function oracleTestFile(plan, file) {
       `test('fixed seed 999', () => {})`,
     )
   // The mid-run edit: the first run of this test after the driver marks an
-  // edit pending (`tests/midrun.txt`, `pending:<value>`) rewrites file b's
+  // edit pending (`midrun.txt`, `pending:<value>`) rewrites file b's
   // helper, or the data file, with that value and marks the edit done, so
   // every later run of it, in this check or another, changes nothing. It
   // calls nothing of the source under test, so no mutant reaches it. In
@@ -4896,8 +4897,16 @@ function oracleTestFile(plan, file) {
           : [
               `  if (!strict) throw new Error('the helper this run read is not strict')`,
             ]),
-      `  const marker = new URL('./midrun.txt', import.meta.url)`,
-      `  const text = readMarker(marker, 'utf8')`,
+      // The marker sits in the run's own session directory, beside the
+      // runner's harness (the worker's first setup file), which is no input
+      // of a run by design (check.mjs, ownHarness). So the marker's own edit
+      // does not decide whether the run is stored: only the helper's or the
+      // data's text does. A run with no harness, or no marker, edits nothing.
+      `  const harness = (globalThis as { __vitest_worker__?: { config?: { setupFiles?: Array<string> } } }).__vitest_worker__?.config?.setupFiles?.[0]`,
+      `  if (!harness) return`,
+      `  const marker = markerPath(markerDir(harness), 'midrun.txt')`,
+      `  let text = ''`,
+      `  try { text = readMarker(marker, 'utf8') } catch { return }`,
       `  if (!text.startsWith('pending:')) return`,
       `  const value = text.slice('pending:'.length).trim()`,
       plan.midrunTarget === `data`
@@ -5253,10 +5262,6 @@ function fixtureFiles(plan, state = initialState(plan)) {
     ...(plan.dotGenSource ? { [DOTGEN]: plan.dotGenSource } : {}),
     ...plan.exportSources,
     'tests/strict.ts': `export const strict = ${state.strict}\n`,
-    // The mid-run edit's marker: done in every state, and pending only in
-    // the check through the daemon during which the edit lands (the
-    // driver's `midrun` step).
-    ...(plan.midrun ? { 'tests/midrun.txt': `done\n` } : {}),
     ...(plan.lazyGate
       ? { 'tests/lazy.ts': `export const open = ${state.lazyOpen}\n` }
       : {}),
@@ -5386,8 +5391,8 @@ function fixtureFiles(plan, state = initialState(plan)) {
     files[`tests/${file}.test.ts`] = oracleTestFile(plan, file)
   // Each mid-run edit changes file a's own text too (a count of them), so
   // the daemon runs file a's tests again in the check the edit lands in,
-  // instead of reusing their evidence: the marker is read through fs,
-  // which no run records as an input.
+  // instead of reusing their evidence: the marker sits in the daemon's
+  // session directory, which is no input of a run.
   if (plan.midrun)
     files[`tests/${plan.midrunBy}.test.ts`] +=
       `// mid-run edits: ${state.midruns}\n`
