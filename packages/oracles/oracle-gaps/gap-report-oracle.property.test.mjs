@@ -931,7 +931,12 @@ function readRun(dir, out, status, stderr, cli, stdout) {
         ? undefined
         : endingOf(status, stderr, out, (text) => namedScratch(text, scratch)),
     exit: status,
-    stderr: named === undefined ? undefined : named.slice(-1500),
+    // An internal error's stack is in the run's error.log (law 12), which
+    // the scratch directory's removal takes with it: a failure keeps it.
+    stderr:
+      named === undefined
+        ? undefined
+        : `${status === 3 && existsSync(join(out, `error.log`)) ? `error.log: ${namedScratch(readFileSync(join(out, `error.log`), `utf8`), scratch).slice(0, 2000)}\n` : ``}${named.slice(-1500)}`,
     reported: results !== undefined,
     streamed,
     // Law 9 compares everything the run reports except how it was
@@ -1696,6 +1701,17 @@ async function driver(plan, observe) {
       if (m.class === `extra-work`) states.add(`extra work`)
       if (m.outcome === `killed` && m.laws?.includes(`work bound`))
         states.add(`killed by a work bound`)
+      // The same in a generated function, whose tests' bounds the plan
+      // derives (measured: how often generated histories reach the law).
+      const inGenerated = /^(?:f\d+|C\d\.)/.test(m.function ?? ``)
+      if (inGenerated && m.class === `extra-work`)
+        states.add(`extra work in a generated function`)
+      if (
+        inGenerated &&
+        m.outcome === `killed` &&
+        m.laws?.includes(`work bound`)
+      )
+        states.add(`killed by a work bound in a generated function`)
       // The early return whose extra work no test judges (law 4).
       if (
         m.operator === `if-false` &&
@@ -2791,7 +2807,11 @@ oracleProperty({
     // of those seven histories, its law the first failure's.
     arbitrary: fc.limitShrink(histories, 6),
     states: required,
-    measured: staticStates,
+    measured: [
+      ...staticStates,
+      `extra work in a generated function`,
+      `killed by a work bound in a generated function`,
+    ],
     runs: 2,
     fixedSeeds: [20261105],
     constructed: withDeclaration([

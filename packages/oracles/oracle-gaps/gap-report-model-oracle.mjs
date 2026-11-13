@@ -405,9 +405,10 @@ const testCase = fc.record({
     fc.record({ route: fc.constantFrom(...routes), input: constant }),
     { nil: null },
   ),
-  // A test may declare a work bound, as an oracle property's `work` does:
-  // a ratio of 1 rejects a mutant that does any more work there.
-  work: fc.constantFrom(null, null, null, 1),
+  // A test's work bound is derived from its plan (see the tests below), so
+  // the grammar draws nothing for it and its generated histories stay those
+  // of the grammar without the work law.
+  work: fc.constant(null),
   // Only a witness waits on a timer, sleeps, reads the clock, or waits a
   // turn: its work could follow the clock.
   timed: fc.constant(false),
@@ -2694,6 +2695,12 @@ function resolveHistory(history) {
     ...history.tests.map((t) => ({
       ...t,
       fn: generatedIds[t.fn % generatedIds.length],
+      // A generated test declares a work bound of 1 (an oracle property's
+      // `work`, which rejects a mutant that does any more work there) when
+      // its input is a multiple of 3: derived from the plan, not drawn, so
+      // the grammar's generated histories, and their cost, stay those of
+      // the grammar without the work law.
+      work: t.work ?? (t.input % 3 === 0 ? 1 : null),
     })),
     ...functions.flatMap((fn) =>
       fn.generated ? [] : fn.tests.map((t) => ({ ...t, fn: t.fn ?? fn.id })),
