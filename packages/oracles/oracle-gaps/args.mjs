@@ -52,10 +52,19 @@ The paths in --source and --config are relative to --package. Without
 --config, the run loads the Vitest config that Vitest discovers for the
 package: in its directory, or else in the nearest parent directory that
 has one. Run the CLI from any directory.
+Every line the CLI writes for a check starts with \`oracle-gaps: \` and its
+kind (config, note, baseline, blocked, progress, gap, busy, done), on
+stdout and stderr alike, so \`grep '^oracle-gaps: '\` finds them. Before any
+mutant runs, one line says whether the baseline passed:
+\`oracle-gaps: baseline all <n> oracle files pass\`, or
+\`oracle-gaps: baseline <k> of <n> oracle files failed (provisional)\`.
+The last line is \`oracle-gaps: done <status>\`.
 Exit codes: 0 the check completed, whatever its gaps: its last line is
-\`completed: <n> gaps\`; 2 refused, with the fix on stderr;
-3 an internal error of oracle-gaps; 130 or 143 stopped by SIGINT or
-SIGTERM, once every process the run started has ended.`
+\`oracle-gaps: done completed, <n> gaps, report <path>\`; 2 refused, with
+the fix on stderr and \`oracle-gaps: done refused\` last; 3 an internal
+error of oracle-gaps (\`oracle-gaps: done error, log <path>\`); 130 or 143
+stopped by SIGINT or SIGTERM (\`oracle-gaps: done stopped (<signal>)\`),
+once every process the run started has ended.`
 const help = `as \`oracle-gaps --help\` shows`
 /**
  * The options in `argv`. Paths are resolved against `cwd`, the caller's

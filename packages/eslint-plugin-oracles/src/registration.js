@@ -478,10 +478,9 @@ function importedValue(source, name, scope, site) {
  * unknown value, which the rules report where a title-shaped call uses it
  * (unknownRegistration); `test` reads a name that some framework exports as
  * a test function or suite (frameworkNames) as the framework's, and any
- * other export as none; `ignore` reads every export as none.
+ * other export as none.
  */
 function unknownValue(source, name, site, sources) {
-  if (sources.unknownSources === `ignore`) return undefined
   if (sources.unknownSources === `test`)
     return Object.hasOwn(frameworkNames, name)
       ? roleValue(frameworkNames[name], name)
