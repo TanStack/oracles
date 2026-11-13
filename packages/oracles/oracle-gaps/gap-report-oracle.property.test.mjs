@@ -1700,23 +1700,11 @@ async function driver(plan, observe) {
       if (
         m.operator === `if-false` &&
         m.class === `not-observed` &&
-        m.function === `w_fasttimed`
-      )
-        states.add(`a work rise in a test that made a timer judged nothing`)
-      if (
-        m.operator === `if-false` &&
-        m.class === `not-observed` &&
-        m.function === `w_fastsleep`
+        m.function === `w_fastclocked`
       )
         states.add(
-          `a work rise in a test that slept through timers/promises judged nothing`,
+          `a work rise in tests that reach the clock by every path judged nothing`,
         )
-      if (
-        m.operator === `if-false` &&
-        m.class === `not-observed` &&
-        m.function === `w_fastclock`
-      )
-        states.add(`a work rise in a test that read the clock judged nothing`)
       if (
         m.operator === `if-false` &&
         m.outcome === `killed` &&
@@ -2588,9 +2576,7 @@ const required = [
   `not judged`,
   `extra work`,
   `killed by a work bound`,
-  `a work rise in a test that made a timer judged nothing`,
-  `a work rise in a test that slept through timers/promises judged nothing`,
-  `a work rise in a test that read the clock judged nothing`,
+  `a work rise in tests that reach the clock by every path judged nothing`,
   `a work rise in a test that waited a turn killed`,
   `a work rise on an unregistered route judged nothing`,
   `branch never taken`,

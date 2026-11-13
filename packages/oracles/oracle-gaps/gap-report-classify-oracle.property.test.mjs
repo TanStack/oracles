@@ -477,15 +477,23 @@ const testRecord = fc.record({
   work: fc.constantFrom(0, 10, 25, 100),
   workFlaky: fc.constantFrom(false, false, false, true),
   bound: fc.constantFrom(undefined, undefined, 100, 116, 150, 200),
-  clocked: fc.constantFrom(
-    `none`,
-    `none`,
-    `none`,
-    `none`,
-    `timer`,
-    `timers/promises`,
-    `clock read`,
-    `io`,
+  clocked: fc.oneof(
+    { weight: 4, arbitrary: fc.constant(`none`) },
+    {
+      weight: 4,
+      arbitrary: fc.constantFrom(
+        `timer`,
+        `timers/promises`,
+        `clock read`,
+        `spied clock read`,
+        `process.uptime`,
+        `os.uptime`,
+        `AbortSignal.timeout`,
+        `Atomics.waitAsync`,
+        `monitorEventLoopDelay`,
+        `io`,
+      ),
+    },
   ),
   ms: fc.nat({ max: 40 }),
 })
@@ -3321,6 +3329,12 @@ const constructed = [
     [`timer`, `made a timer`],
     [`timers/promises`, `slept through node:timers/promises`],
     [`clock read`, `read the clock`],
+    [`spied clock read`, `read the clock through a spy`],
+    [`process.uptime`, `polled process.uptime`],
+    [`os.uptime`, `polled os.uptime`],
+    [`AbortSignal.timeout`, `polled an AbortSignal.timeout`],
+    [`Atomics.waitAsync`, `waited with Atomics.waitAsync and a timeout`],
+    [`monitorEventLoopDelay`, `polled monitorEventLoopDelay`],
     [`io`, `held I/O open`],
   ].map(([clocked, did]) =>
     single(

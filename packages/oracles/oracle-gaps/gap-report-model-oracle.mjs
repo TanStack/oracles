@@ -957,27 +957,49 @@ const witness = [
   // The early return again, in tests that the work law does not judge,
   // with a bound of 1: tests whose count could follow the clock, as a
   // polling or a deadline loop's does (a kill must replay on an idle
-  // machine, the maintainer's decision of 2026-11-12 under P3), which wait
-  // on a timer, sleep through `node:timers/promises`, or read the clock
-  // before they run it; and tests that register no route, which can carry
-  // no bound. Its `if-false` mutant costs work there, deterministically, and
-  // stays `not-observed`. Tests that wait one turn (`setImmediate`, as
-  // `withinTurns` does) and read no clock still judge work, so there it is
-  // killed.
-  ...[
-    [`w_fasttimed`, `timer`],
-    [`w_fastsleep`, `sleep`],
-    [`w_fastclock`, `clock`],
-    [`w_fastturn`, `turn`],
-  ].map(([id, timed]) => ({
-    id,
+  // machine, the maintainer's decision of 2026-11-12 under P3). Each reaches
+  // the clock by one path before it runs production: a timer through
+  // `util.promisify(setTimeout)`, the global and `node:timers`'s (which
+  // also checks that the capture keeps `util.promisify.custom`, law 3: a
+  // test that passes alone passes under the CLI), a sleep through
+  // `node:timers/promises`, `Date.now()` (and through a `vi.spyOn`
+  // passthrough, whose spy frame comes first), `process.uptime()`,
+  // `os.uptime()`, `AbortSignal.timeout`, `Atomics.waitAsync` with a
+  // timeout, and `monitorEventLoopDelay`. One untimed test runs the
+  // general path. A mutant is killed if any test still judges work, so its
+  // `if-false` mutant stays `not-observed` only while every path is seen.
+  // Tests that wait one turn (`setImmediate`, as `withinTurns` does) and
+  // read no clock still judge work, so there it is killed; and tests that
+  // register no route (below) can carry no bound.
+  {
+    id: `w_fastclocked`,
     owners: [`a`],
     body: [{ kind: `shortcut`, op: `>`, k: 2, not: false }],
     tests: [
-      judging(`a`, `fixed seed`, 7, { timed, work: 1 }),
-      judging(`a`, `fixed seed`, 1, { timed, work: 1 }),
+      ...[
+        `timer`,
+        `nodetimer`,
+        `sleep`,
+        `clock`,
+        `spiedclock`,
+        `uptime`,
+        `osuptime`,
+        `abort`,
+        `waitasync`,
+        `loopdelay`,
+      ].map((timed) => judging(`a`, `fixed seed`, 7, { timed, work: 1 })),
+      judging(`a`, `fixed seed`, 1, { work: 1 }),
     ],
-  })),
+  },
+  {
+    id: `w_fastturn`,
+    owners: [`a`],
+    body: [{ kind: `shortcut`, op: `>`, k: 2, not: false }],
+    tests: [
+      judging(`a`, `fixed seed`, 7, { timed: `turn`, work: 1 }),
+      judging(`a`, `fixed seed`, 1, { timed: `turn`, work: 1 }),
+    ],
+  },
   {
     id: `w_fastplain`,
     owners: [`a`],
@@ -1726,9 +1748,7 @@ const captureWitness = new Set([
   `w_fastbound`,
   `w_fastcall`,
   `w_fastcallbound`,
-  `w_fasttimed`,
-  `w_fastsleep`,
-  `w_fastclock`,
+  `w_fastclocked`,
   `w_fastturn`,
   `w_fastplain`,
   `w_noobs`,
@@ -4430,7 +4450,7 @@ function oracleTestFile(plan, file) {
   const out = [
     // A per-file environment, which Vitest reads from the file's text.
     ...(plan.pragma && file === `a` ? [`// @vitest-environment marked`] : []),
-    `import { ${plan.tests.some((t) => t.file === file && t.cleanupThrows) ? `afterEach, ` : ``}describe, expect, test${plan.tests.some((t) => t.file === file && t.spies) ? `, vi` : ``} } from 'vitest'`,
+    `import { ${plan.tests.some((t) => t.file === file && t.cleanupThrows) ? `afterEach, ` : ``}describe, expect, test${plan.tests.some((t) => t.file === file && (t.spies || t.timed === `spiedclock`)) ? `, vi` : ``} } from 'vitest'`,
     ...(plan.tests.some((t) => t.file === file && t.shrinks)
       ? [`import fc from 'fast-check'`]
       : []),
@@ -4439,6 +4459,14 @@ function oracleTestFile(plan, file) {
       : []),
     ...(plan.tests.some((t) => t.file === file && t.timed === `sleep`)
       ? [`import { setTimeout as sleep } from 'node:timers/promises'`]
+      : []),
+    ...(plan.tests.some((t) => t.file === file && t.timed && t.timed !== `turn`)
+      ? [
+          `import { promisify } from 'node:util'`,
+          `import { setTimeout as nodeSetTimeout } from 'node:timers'`,
+          `import { uptime as osUptime } from 'node:os'`,
+          `import { monitorEventLoopDelay } from 'node:perf_hooks'`,
+        ]
       : []),
     ...(plan.tests.some((t) => t.file === file && t.stops)
       ? [
@@ -4501,9 +4529,16 @@ function oracleTestFile(plan, file) {
         ...(t.timed
           ? [
               {
-                timer: `    await new Promise((r) => setTimeout(r, 0))`,
+                timer: `    if ((await promisify(setTimeout)(0, 'v')) !== 'v') throw new Error('promisify(setTimeout) lost its value')`,
+                nodetimer: `    if ((await promisify(nodeSetTimeout)(0, 'v')) !== 'v') throw new Error('promisify of node:timers lost its value')`,
                 sleep: `    await sleep(0)`,
                 clock: `    if (Date.now() < 0) throw new Error('the clock reads before 1970')`,
+                spiedclock: `    { const spy = vi.spyOn(Date, 'now'); if (Date.now() < 0) throw new Error('the clock reads before 1970'); spy.mockRestore() }`,
+                uptime: `    if (process.uptime() < 0) throw new Error('negative uptime')`,
+                osuptime: `    if (osUptime() < 0) throw new Error('negative uptime')`,
+                abort: `    if (AbortSignal.timeout(60000).aborted) throw new Error('aborted at once')`,
+                waitasync: `    if (Atomics.waitAsync(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 0).value !== 'timed-out') throw new Error('waitAsync did not time out')`,
+                loopdelay: `    { const delay = monitorEventLoopDelay(); delay.enable(); delay.disable() }`,
                 turn: `    await new Promise((r) => setImmediate(r))`,
               }[t.timed],
             ]
