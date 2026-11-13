@@ -607,6 +607,11 @@ approved, and run the oracle again on the unchanged code:
 - If closing the gap needs a rule that no approved law states, that is a
   design question. Bring it to the developer.
 - If the oracle passes and the gap is closed, go on to the next one.
+- If no input can make the change behave differently, because another
+  condition already decides the result (`x && x > 0` becoming
+  `x && x >= 0`), the code it changes is redundant. That is not a gap-check
+  bug. Simplify the production code, as an optimizing compiler for the
+  oracle would (`x > 0`), rerun, and name the lines you removed.
 - If the gap looks like a bug in the gap check itself, show the developer
   the evidence. For example, the check reports a change as unnoticed, but
   the same change applied by hand to a copy of the code makes the oracle
