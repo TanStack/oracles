@@ -60,6 +60,11 @@ the file as failing, with the error but no law. Fix the oracle file, and
 run the gap check again. This is the oracle's own setup, not a finding: say
 so in a line.
 
+**The gap check dies with "heap out of memory"** on a very large oracle
+suite (thousands of tests). Run it again with
+`NODE_OPTIONS=--max-old-space-size=8192`, or with `--contexts 2`. Keep
+every test and history: do not shrink the oracle to make it fit.
+
 ## Probes
 
 **The tests import a build that is not built yet.** Import the source that
