@@ -483,6 +483,14 @@ const edits = [
   // A second check through the daemon of a state that nothing changed.
   `recheck`,
 ]
+// The edits that came after the steps grammar was first drawn: a fixed
+// seed's steps draw from the earlier ones, and these come from
+// `laterSteps` (the generator rule: new draws go last).
+const laterEdits = [`fsData`, `midrun`]
+const earlierEdits = edits.filter((edit) => !laterEdits.includes(edit))
+// A history's no later edits, one value, so `histories` can take it back
+// (fc.constant takes back only its own reference).
+const NO_LATER_STEPS = Object.freeze([])
 // The steps that act on the daemon and change no file.
 const daemonEvents = new Set([
   `restart`,
@@ -630,22 +638,6 @@ const drawn = fc.record({
   // where the output differs, so only a mutated run loads it
   // (`tests/lazy.ts`, which law 9's `lazy` edit changes).
   lazyGate: fc.constantFrom(false, false, false, true),
-  // File b's verdicts also wait on `tests/data.json`, which the test reads
-  // through fs at run time, by a sync, a promise, or a callback read (law
-  // 9: a file a test reads is an input of its run, as a module it imports
-  // is). The `fsData` edit changes only that file.
-  // A `statDir` read stats the test's own directory first, as a test that
-  // looks for a fixtures folder does (review of #55: a directory that a
-  // test stats is no file to hash).
-  fsRead: fc.constantFrom(
-    `none`,
-    `none`,
-    `none`,
-    `sync`,
-    `promise`,
-    `callback`,
-    `statDir`,
-  ),
   // A second authored mutant, on the next statement, so that two patched
   // sources are judged in the same run and neither may see the other's.
   secondAuthored: fc.boolean(),
@@ -769,13 +761,16 @@ const drawn = fc.record({
   ),
   // Most histories have no steps, which keeps the campaign's cost down. A
   // history with the witness module has none (see `histories`).
+  // The steps draw from the edits that came before the later ones, so a
+  // fixed seed's steps stay as they were; the later edits are drawn last
+  // (`laterSteps`) and follow these steps.
   steps: fc.oneof(
     { weight: 5, arbitrary: fc.constant(null) },
     {
       weight: 1,
-      arbitrary: fc.array(fc.constantFrom(...edits), {
+      arbitrary: fc.array(fc.constantFrom(...earlierEdits), {
         minLength: 1,
-        maxLength: edits.length * 2,
+        maxLength: earlierEdits.length * 2,
       }),
     },
   ),
@@ -805,6 +800,35 @@ const drawn = fc.record({
   // served, not under the text after another pre plugin (third review of
   // #55, F-A).
   prePlugin: fc.constantFrom(false, false, false, true),
+  // File b's verdicts also wait on `tests/data.json`, which the test reads
+  // through fs at run time, by a sync, a promise, or a callback read (law
+  // 9: a file a test reads is an input of its run, as a module it imports
+  // is). The `fsData` edit changes only that file.
+  // A `statDir` read stats the test's own directory first, as a test that
+  // looks for a fixtures folder does (review of #55: a directory that a
+  // test stats is no file to hash).
+  fsRead: fc.constantFrom(
+    `none`,
+    `none`,
+    `none`,
+    `sync`,
+    `promise`,
+    `callback`,
+    `statDir`,
+  ),
+  // The edits added after the first steps were drawn, which follow a
+  // history's steps (`histories`): the data file's edit and the mid-run
+  // edit. Most histories take none.
+  laterSteps: fc.oneof(
+    { weight: 9, arbitrary: fc.constant(NO_LATER_STEPS) },
+    {
+      weight: 1,
+      arbitrary: fc.array(fc.constantFrom(...laterEdits), {
+        minLength: 1,
+        maxLength: 2,
+      }),
+    },
+  ),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -841,14 +865,28 @@ const keepsSteps = (history) => {
 // P1-a: the budget witness only in its own histories). The map is its own
 // inverse on the histories it keeps, so fast-check takes every one of them
 // back and shrinks it.
+// A history without the witness module takes its later edits after its
+// steps; one with no steps takes none.
 const histories = drawn.map(
-  (history) => (keepsSteps(history) ? history : { ...history, steps: null }),
+  (history) =>
+    !keepsSteps(history)
+      ? { ...history, steps: null }
+      : history.witness === false && history.steps !== null
+        ? { ...history, steps: [...history.steps, ...history.laterSteps] }
+        : history,
   (value) => {
     const history =
       /** @type {{ witness: unknown, steps: unknown[] | null }} */ (value)
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
-    return value
+    if (history.steps === null) return { ...value, laterSteps: NO_LATER_STEPS }
+    const earlier = history.steps.filter((step) => !laterEdits.includes(step))
+    const later = history.steps.filter((step) => laterEdits.includes(step))
+    return {
+      ...value,
+      steps: earlier.length > 0 ? earlier : null,
+      laterSteps: later.length > 0 ? later : NO_LATER_STEPS,
+    }
   },
 )
 
@@ -5773,6 +5811,7 @@ function readSummary(summary) {
 }
 
 export {
+  drawn,
   MIDRUN_EDITORS,
   captureWitness,
   outsideRepository,
