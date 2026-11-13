@@ -279,13 +279,13 @@ export const partitions = {
     },
   },
   // The end-to-end gap oracle's fixed-seed units, which a pull request runs
-  // (`-t "fixed seed"`): 36 units, 581 s in all, measured in one local run
-  // at fix/gap-cli-cost-only (2026-11-12, after the work law's witnesses
-  // joined the witness module; at 9087746 the old packing ran its third CI
-  // job for 10.9 min). A unit's cost follows the generated history its
+  // (`-t "fixed seed"`): 36 units, about 1,280 s in all, measured in CI at
+  // 661d2fd (2026-11-13, from each unit's reach line in the three jobs'
+  // logs; the units' relative costs in CI differ from a local run's, so the
+  // packing follows CI). A unit's cost follows the generated history its
   // constructed history is built from, and the witness module's histories
   // grow with its witnesses. The units are packed longest first into three
-  // shards: about 203 s, 197 s, and 181 s.
+  // shards: about 427 s, 421 s, and 429 s.
   'oracle-gaps-fixed-seed': {
     args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-oracle`],
     suite: `oracle-gaps.report`,
@@ -294,28 +294,29 @@ export const partitions = {
     // select exactly these.
     previously: `fixed seed`,
     shards: {
+      // 225 s, 132 s, 45 s, and small units.
       1: anyOf([
         'an edit sequence over the witness module',
+        'a declaration fault: noTypescript',
         'a second daemon check of the budget witness',
         'a declaration fault: configThrows',
         'an edit that changed the cold result after a hang replaced the only context',
         'a stale authored mutant and a reformat',
-        'an edit to a module that only mutated runs load',
         'two authored mutants',
-        'a failing owner under a config that --config names',
-        'a run with eleven contexts',
       ]),
+      // 206 s, 201 s, and small units.
       2: anyOf([
         'generated',
-        'every outcome class',
         'a declaration fault: brokenOwner',
-        'a declaration fault: brokenVitest',
-        "a failing owner under its parent's config",
-        'a declaration fault: setupThrows',
-        'a package whose parent directory has its config',
+        'a run with eleven contexts',
+        'a failing owner under a config that --config names',
+        'an edit to a module that only mutated runs load',
         'a load failure beside a hang',
         'a package with no config',
       ]),
+      // The rest: every outcome class (186 s), apiLessTypescript (112 s), the
+      // edit sequence through the daemon (77 s), brokenVitest (26 s), and
+      // small units.
       3: rest,
     },
   },
