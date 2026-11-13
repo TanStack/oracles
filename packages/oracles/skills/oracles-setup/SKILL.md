@@ -291,7 +291,8 @@ optimization project.
   never the code's algorithm, even when the docs describe that algorithm.
   Give each law a calibration: a wrong answer the check must reject.
 - **Run the oracles only through the gap check, never Vitest alone.** It
-  prints each test file's result first, then each gap as it is judged. A run
+  prints each test file's result first, then each gap as it is judged, and
+  ends with one `oracle-gaps: done` line. A run
   can take minutes: start it in the background with output to a log at a
   path of its own (never a fixed path under `/tmp`), and read the new lines
   every few seconds, acting on a failure first. Stop a
@@ -438,22 +439,33 @@ kill until the check rejects the recorded error.
 
 ## 7. Run the gap check
 
-The gap check is also how you run the oracles. It runs every test file
-first and prints each one's result: `pass <file>: N tests`, or `fail <file>`
-with the failing law, its counterexample, and a `replay:` command. A failing
-oracle file blocks only the mutants it owns (a `blocked:` line says so); the
-rest are judged, and the report is marked provisional. Then each gap prints
-as one line as soon as it is judged (`<kind> L<line> <id> <change>`), with a
-`judged N of M mutants` progress line every 25 mutants and a `busy:` line
-while a slow test runs. Use it instead of running Vitest on its own, so that
-every run gives you the test results and the gaps together.
+The gap check is also how you run the oracles. Every line it prints
+starts with `oracle-gaps: <kind>`. It runs every test file first and prints
+one line for each (`oracle-gaps: baseline pass <file>: …`, or `baseline
+fail <file>`, followed by indented lines with the failing law, its
+counterexample, and a replay command), then one decisive line: `baseline all
+<n> oracle files pass`, or `baseline <k> of <n> oracle files failed
+(provisional)`. A failing oracle file blocks only the mutants it owns (a
+`blocked` line says so); the rest are judged, and the report is marked
+provisional. Then each gap prints as one line as soon as it is judged
+(`oracle-gaps: gap <class> L<line> <id> <change>`), with `progress` lines,
+and a `busy` line while a slow test runs. Exactly one line ends the run:
+`oracle-gaps: done completed, <n> gaps, report <path>/summary.md` (exit 0),
+`done refused` (exit 2), `done error, …` (exit 3; a crash or an
+out-of-memory run, with the remedy), or `done stopped`. Use it instead of
+running Vitest on its own, so that every run gives you the test results
+and the gaps together.
 
 **Act on results as they arrive.** A run can take minutes, and your shell
 may hand you its output only when it ends. So start it in the background
 with its output going to a log file, and every few seconds read the lines
-that are new since you last looked, for example with
-`grep -nE '^(pass|fail|blocked:|judged|busy:)|^[a-z-]+ L[0-9?]+ ' <log>`.
-Act on a `fail` or `blocked:` line first: fix that oracle, because the
+that are new since you last looked, for example with:
+
+```sh
+grep -n '^oracle-gaps: \(baseline\|blocked\|gap\|busy\|done\)' "$LOG"
+```
+
+The run is over when the `done` line appears. Act on a `baseline fail` or `blocked` line first: fix that oracle, because the
 mutants it owns cannot be judged. Then start on the first gaps while the
 run goes on. Stop the run early only when it is clearly wrong, for example
 a gap count far beyond what the oracle owns. Record the run's process ID
