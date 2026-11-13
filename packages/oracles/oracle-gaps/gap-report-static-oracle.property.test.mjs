@@ -214,6 +214,10 @@ function analyzeFixture(dir, files, plan) {
 // state, and which pairs of outputs are the same directory.
 function defaultOutputsOf(dir, sources) {
   const other = realpathSync(mkdtempSync(join(here, `.scratch-`)))
+  writeFileSync(
+    join(other, `package.json`),
+    `{"name":"other","private":true}\n`,
+  )
   // The other package holds the same source files, which --source must name.
   for (const source of sources) {
     mkdirSync(dirname(join(other, source)), { recursive: true })

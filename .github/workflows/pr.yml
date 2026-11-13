@@ -218,7 +218,7 @@ jobs:
       - if: always()
         run: pnpm --filter @tanstack/eslint-plugin-oracles run test
   windows-gap-oracles:
-    name: Windows gap report oracles (${{ matrix.shard }}/3)
+    name: Windows gap report static oracle (${{ matrix.shard }}/6)
     runs-on: windows-latest
     # Not blocking until every Windows job is green; remove this line then.
     continue-on-error: true
@@ -226,7 +226,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -236,18 +236,31 @@ jobs:
         uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
       - run: pnpm --filter @tanstack/oracles run build
       # The same partition of the static oracle that Linux runs, by pattern.
-      - name: Gap report oracles
+      - name: Gap report static oracle
         shell: bash
         working-directory: packages/oracles
         env:
           SHARD: ${{ matrix.shard }}
-        run: |
-          if [ "$SHARD" = 3 ]; then
-            pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-classify gap-report-probe-form gap-report-mutant-validity gap-report-path-spelling
-          fi
-          pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-static -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-static "$SHARD")"
+        run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-static -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-static-windows "$SHARD")"
+  windows-gap-classify:
+    name: Windows gap report classify, probe-form, and mutant-validity oracles
+    runs-on: windows-latest
+    timeout-minutes: 20
+    # Not blocking until every Windows job is green; remove this line then.
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Tools
+        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
+      - run: pnpm --filter @tanstack/oracles run build
+      - name: Gap report oracles
+        working-directory: packages/oracles
+        run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-classify gap-report-probe-form gap-report-mutant-validity gap-report-path-spelling
   windows-gap-end-to-end:
-    name: Windows gap report end-to-end oracle (fixed seed, ${{ matrix.shard }}/3)
+    name: Windows gap report end-to-end oracle (fixed seed, ${{ matrix.shard }}/6)
     runs-on: windows-latest
     # Not blocking until every Windows job is green; remove this line then.
     continue-on-error: true
@@ -255,7 +268,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -269,7 +282,7 @@ jobs:
         working-directory: packages/oracles
         env:
           SHARD: ${{ matrix.shard }}
-        run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-fixed-seed "$SHARD")"
+        run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-fixed-seed-windows "$SHARD")"
   windows-gap-cli:
     name: Windows gap CLI on a fixture
     runs-on: windows-latest
@@ -402,7 +415,7 @@ jobs:
           node packages/oracles/oracle-gaps/index.mjs --package .ci-no-manifest --source src/x.ts > nm-out.txt 2> nm-err.txt
           $code = $LASTEXITCODE
           if ($code -ne 2) { throw "want a refusal with exit 2, got $code" }
-          if (-not (Select-String -Path nm-out.txt -Pattern 'has no package.json' -Quiet)) { throw "the refusal does not name package.json" }
+          if (-not (Select-String -Path nm-out.txt, nm-err.txt -Pattern 'has no package.json' -Quiet)) { throw "the refusal does not name package.json" }
           node packages/oracles/scripts/windows-witness.mjs done nm-out.txt nm-err.txt $code
           if ($LASTEXITCODE -ne 0) { throw "the done line failed" }
       # One early stop: SIGINT once the CLI has printed its first line. The

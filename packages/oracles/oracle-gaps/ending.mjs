@@ -14,6 +14,7 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { posix } from './paths.mjs'
 
 /** A problem the author can fix: its cause, and the one step that fixes it. */
 export class Refusal extends Error {
@@ -42,7 +43,7 @@ export function endRun(error, out = error?.out) {
       results,
       `Refused: ${message}\n\nFix: ${error.fix}\n`,
     )
-      ? `oracle-gaps: done refused, report ${join(out, `summary.md`)}`
+      ? `oracle-gaps: done refused, report ${posix(join(out, `summary.md`))}`
       : `oracle-gaps: done refused`
     return { exitCode: 2, stderr: `${[...block, done].join(`\n`)}\n`, done }
   }

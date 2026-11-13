@@ -367,7 +367,7 @@ function discoveredConfig(pkg) {
   )
   for (let dir = pkg; ; dir = dirname(dir)) {
     const name = names.find((file) => existsSync(join(dir, file)))
-    if (name) return relativePath(pkg, join(dir, name))
+    if (name) return posix(relativePath(pkg, join(dir, name)))
     if (dirname(dir) === dir) return undefined
   }
 }
@@ -804,7 +804,7 @@ export default async (env) => {
       pulse.log(
         streamLine(
           `busy`,
-          `${label} in ${relativePath(pkg, file)} for ${Math.floor(elapsed / 1000)}s`,
+          `${label} in ${posix(relativePath(pkg, file))} for ${Math.floor(elapsed / 1000)}s`,
         ),
       )
     }
@@ -2366,7 +2366,7 @@ export default async (env) => {
       baseline: baselineFiles,
       config: options.config,
       paths: {
-        report: join(options.out, `summary.md`),
+        report: posix(join(options.out, `summary.md`)),
         results: join(options.out, `results.json`),
         out: options.out,
       },

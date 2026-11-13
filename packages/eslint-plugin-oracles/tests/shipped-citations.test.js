@@ -87,7 +87,8 @@ function strays(dir, file, text) {
     .filter((cited) => {
       const ships = [dirname(file), `.`].some((base) =>
         [cited, cited.replace(/\.js$/, `.ts`)].some((name) =>
-          shipped.includes(join(base, name)),
+          // npm names a shipped file with forward slashes, on every platform.
+          shipped.includes(join(base, name).replaceAll(`\\`, `/`)),
         ),
       )
       const names =

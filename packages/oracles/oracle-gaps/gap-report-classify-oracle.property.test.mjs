@@ -2829,10 +2829,19 @@ function cmdWords(line) {
     }
     word ??= ``
     if (c === `"`) {
-      const end = line.indexOf(`"`, i + 1)
-      if (end < 0) return undefined
-      word += line.slice(i + 1, end)
-      i = end + 1
+      // Inside double quotes, `\"` is a quote, as the program's argument parser
+      // reads it (Node's on Windows); cmd itself does not escape it.
+      let text = ``
+      let j = i + 1
+      for (; j < line.length && line[j] !== `"`; j += 1) {
+        if (line[j] === `\\` && line[j + 1] === `"`) {
+          text += `"`
+          j += 1
+        } else text += line[j]
+      }
+      if (j >= line.length) return undefined
+      word += text
+      i = j + 1
     } else if (/[%&|<>^]/.test(c)) {
       return undefined
     } else {
