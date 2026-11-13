@@ -1687,6 +1687,10 @@ async function driver(plan, observe) {
       if (m.class === `branch-never-taken`) states.add(`branch never taken`)
       if (m.class === `not-infected`) states.add(`not infected`)
       if (m.class === `not-observed`) states.add(`not observed`)
+      // A survivor whose test observes a draw from Math.random: the copy
+      // that ran the mutant drew what the original drew.
+      if (m.function === `w_draws` && m.class === `not-observed`)
+        states.add(`a draw from Math.random repeats in a mutant's copy`)
       if (m.class === `not-distinguished`) states.add(`not distinguished`)
       if (m.class === `indeterminate`) states.add(`indeterminate`)
     }
@@ -2544,6 +2548,7 @@ const required = [
   `branch never taken`,
   `not infected`,
   `not observed`,
+  `a draw from Math.random repeats in a mutant's copy`,
   `not distinguished`,
   `unreached`,
   `unowned`,
