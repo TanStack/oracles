@@ -17,9 +17,11 @@
  *   distinct histories distinct test names. A property fails to load when its id is not a registered
  *   oracle property, a required state has no constructed history, a constructed history names an
  *   undeclared state, a fixed or constructed history is one the arbitrary cannot take back (law
- *   `membership`), or `owns` is not a non-empty literal list of strings (the gap report reads it
- *   statically). When several of the named load errors apply, the declaration's shape reports
- *   first, in this order: an unregistered id, then `owns`, then `predict` on an enumerated source
+ *   `membership`), `owns` is not a non-empty literal list of strings (the gap report reads it
+ *   statically), or a work bound's `ratio` is not a finite number of at least 1 (a smaller one would
+ *   reject a mutant that does no more work than the unmodified code). When several of the named load
+ *   errors apply, the declaration's shape reports first, in this order: an unregistered id, then
+ *   `owns`, then `work`, then `predict` on an enumerated source
  *   (only a generated source declares states), then a history that is not data (`data`). A load
  *   fails with its first error alone. This precedence is analyst-chosen (2026-11-10): no contract
  *   text or maintainer decision orders these errors. The source kind decides which checks reach the
@@ -220,6 +222,11 @@
  *   history `case`; calibrations, probe calibrations, and the determinism test
  *   `calibration`, and so do the determinism units (TanStack/oracles#1 coordinator decisions, 2026-11-08: a
  *   route describes the campaign that runs, in one vocabulary).
+ *   A property that declares a work bound (`work: { ratio }`) also registers its ratio through
+ *   `__oracleWorkBound` in every test whose route judges production, and in none whose route is
+ *   `calibration`; a property without one registers none. The gap report reads it to judge the
+ *   test's work under a mutant; a plain run has no unmodified run to compare with, so there the
+ *   bound judges nothing (maintainer decision, 2026-11-12: a speed shortcut is owed a cost law).
  * - `seed-log`: a property logs exactly one `ORACLE_SEED` line, in its first
  *   random unit, and no other test logs one; every random unit runs that seed
  *   (maintainer decision, 2026-11-11, Q2: one seed per property per process). A
@@ -315,6 +322,7 @@ import { fileURLToPath } from 'node:url'
 import fc from 'fast-check'
 import { oracleProperty, pass, violation } from '../src/index.js'
 import {
+  WORK_RATIO,
   oddKinds,
   outerSuite,
   shellText,
@@ -451,6 +459,8 @@ type Draft = {
   predictMode: `match` | `missing` | `extra`
   /** The `owns` option: absent, a literal list, a string, or a list with a non-string entry. */
   ownsMode: `none` | `list` | `empty` | `string` | `bad entry`
+  /** The `work` option: absent, a bound, a ratio below 1, a ratio that is not finite, or `null`. */
+  workMode: `none` | `bound` | `below one` | `not finite` | `null`
   clock: boolean
   form:
     `plain` | `bigint` | `map` | `lossy` | `error` | `errors` | `boxed` | `trap`
@@ -816,6 +826,19 @@ const draft: fc.Arbitrary<Draft> = fc.record({
     {
       weight: 1,
       arbitrary: fc.constantFrom(`missing` as const, `extra` as const),
+    },
+  ),
+  // A work bound's ratio is a finite number of at least 1.
+  workMode: fc.oneof(
+    { weight: 6, arbitrary: fc.constant(`none` as const) },
+    { weight: 3, arbitrary: fc.constant(`bound` as const) },
+    {
+      weight: 1,
+      arbitrary: fc.constantFrom(
+        `below one` as const,
+        `not finite` as const,
+        `null` as const,
+      ),
     },
   ),
   // `owns` is read statically by the gap report, so it must be a literal list of strings.
@@ -1213,6 +1236,7 @@ function resolveSuite({
         ...(d.noisyProbe ? { noisyProbe: true } : {}),
         ...(d.predictMode !== `match` ? { predictMode: d.predictMode } : {}),
         ...(d.ownsMode !== `none` ? { ownsMode: d.ownsMode } : {}),
+        ...(d.workMode !== `none` ? { workMode: d.workMode } : {}),
         ...(d.timing === `slow` ? { slow: true, timeout: 100 } : {}),
         ...(d.timing === `slow shrink`
           ? { slowShrink: true, timeout: 5_000 }
@@ -1375,6 +1399,8 @@ type LogEntry = {
   history: SyntheticHistory
   /** The route registered for the test when the history ran. */
   route: string | null
+  /** The work bound registered for the test when the history ran. */
+  work: number | null
   origin?: string
   /** Raw diagnostic attribution; logical test ownership is `test`. */
   runnerTest?: string
@@ -2163,6 +2189,15 @@ function predictSpec(
       loads: false,
       loadError: `${spec.id}: \`owns\` must be a non-empty literal list of strings`,
     }
+  if (
+    spec.workMode === `below one` ||
+    spec.workMode === `not finite` ||
+    spec.workMode === `null`
+  )
+    return {
+      loads: false,
+      loadError: `${spec.id}: \`work.ratio\` must be a finite number of at least 1`,
+    }
   if (!generated && spec.predictMode === `extra`)
     return {
       loads: false,
@@ -2851,6 +2886,8 @@ const frameworkStates = [
   `registration-warning-policy`,
   `bound-difference`,
   `registration-error`,
+  `work-bound-registered`,
+  `work-bound-left-out-of-calibration`,
   `campaign-violation`,
   `campaign-setup-failure`,
   `slow-shrink-campaign-failure`,
@@ -3760,6 +3797,16 @@ function frameworkReach(
   for (const spec of plan.specs)
     if (spec.overReport && spec.probe && expected.get(spec.id)!.loads)
       reached.add(`over-reported-reach`)
+  // A work bound registered beside a route that judges production, and a
+  // calibration of the same property that registers none.
+  for (const spec of plan.specs)
+    if (spec.workMode === `bound` && expected.get(spec.id)!.loads) {
+      const entries = (run?.log ?? []).filter((entry) => entry.id === spec.id)
+      if (entries.some((entry) => entry.work !== null))
+        reached.add(`work-bound-registered`)
+      if (entries.some((entry) => entry.route === `calibration`))
+        reached.add(`work-bound-left-out-of-calibration`)
+    }
   if (trace.some(({ checkpoint }) => checkpoint === `reach-alone`))
     reached.add(`enumerated-reach-alone`)
   for (const { checkpoint, value } of trace)
@@ -6537,7 +6584,7 @@ function checkSuite(
       if (seen.loaded)
         return violation(
           `run`,
-          `${spec.id} loaded, but its id is unregistered, a required state has no constructed history, a constructed history names an undeclared state, two of its tests would share a name, a fixed or constructed history is one the arbitrary cannot take back, \`owns\` is not a non-empty literal list of strings, or a history is not data`,
+          `${spec.id} loaded, but its id is unregistered, a required state has no constructed history, a constructed history names an undeclared state, two of its tests would share a name, a fixed or constructed history is one the arbitrary cannot take back, \`owns\` is not a non-empty literal list of strings, a work bound's ratio is not a finite number of at least 1, or a history is not data`,
           law,
         )
       if (seen.loadErrors.length !== 1 || seen.loadCauses.length !== 1)
@@ -7314,7 +7361,8 @@ function checkSuite(
       `agreement`,
       { actual: late, expected: owedLate },
     )
-  // Every history runs under its test's route.
+  // Every history runs under its test's route, and with its property's
+  // work bound registered unless its route is the framework's own.
   for (const spec of plan.specs) {
     if (!expected.get(spec.id)!.loads || spec.slow) continue
     for (const entry of run.log.filter(({ id }) => id === spec.id)) {
@@ -7325,6 +7373,17 @@ function checkSuite(
           `${spec.id} "${name}" ran ${JSON.stringify(entry.history)} under route ${JSON.stringify(entry.route)}, owed ${JSON.stringify(owedRoute(name))}`,
           `route`,
           { actual: entry.route, expected: owedRoute(name) },
+        )
+      const owedWork =
+        spec.workMode === `bound` && owedRoute(name) !== `calibration`
+          ? WORK_RATIO
+          : null
+      if (entry.work !== owedWork)
+        return violation(
+          `run`,
+          `${spec.id} "${name}" ran ${JSON.stringify(entry.history)} with work bound ${JSON.stringify(entry.work)} registered, owed ${JSON.stringify(owedWork)}`,
+          `route`,
+          { actual: entry.work, expected: owedWork },
         )
     }
   }
@@ -7633,6 +7692,7 @@ const generatedDraft = (overrides: Partial<Draft>): Draft => ({
   noisyProbe: false,
   predictMode: `match`,
   ownsMode: `none`,
+  workMode: `none`,
   clock: false,
   form: `plain`,
   zeroNoise: false,
@@ -10315,6 +10375,26 @@ oracleProperty({
         `a literal owns list loads`,
         [],
         generatedDraft({ ownsMode: `list` }),
+      ),
+      fixedHistory(
+        `a work bound below 1 fails to load`,
+        [`registration-error`],
+        generatedDraft({ workMode: `below one` }),
+      ),
+      fixedHistory(
+        `a work bound that is not finite fails to load`,
+        [`registration-error`],
+        generatedDraft({ workMode: `not finite` }),
+      ),
+      fixedHistory(
+        `a null work bound fails to load`,
+        [`registration-error`],
+        generatedDraft({ workMode: `null` }),
+      ),
+      fixedHistory(
+        `a work bound is registered beside each route that judges production`,
+        [`work-bound-registered`, `work-bound-left-out-of-calibration`],
+        generatedDraft({ workMode: `bound`, calibrations: [cal(`right`)] }),
       ),
       fixedHistory(
         `predict needs a probe-bound state`,

@@ -58,6 +58,44 @@ agent.
   in its `detail` in `results.json`. Record the error in the driver, and
   state the law that decides that input's outcome.
 
+  A survivor that changed no observation but made a test do more work is
+  `extra-work`: the mutant deleted a shortcut that exists only for speed,
+  such as an early return or an assignment in place of a slower call. A
+  test's work is the number of site evaluations that its instrumented
+  production code makes (calls, comparisons, `if`s, and each pass of a
+  loop's condition), a deterministic count, never a time. Only a test on a
+  route that `oracleProperty` registers for production (a fixed seed, a
+  fixed history, a case, or the random campaign) judges work, since only
+  such a test can carry a bound. A test whose work varied between the two
+  unmutated runs, or whose count could follow the clock, as a polling or a
+  deadline loop's does, does not judge work, so a work-bound kill
+  replays on an idle machine. A count can follow the clock when the test,
+  its driver, or production makes a real timer or interval (through the
+  globals, `node:timers`, or `node:timers/promises`), reads a clock
+  (`Date.now()`, `new Date()`, `performance.now()`, `process.hrtime`), or
+  holds I/O open. A wait of one turn (`setImmediate`) reads no clock. Reads
+  that the test runner, fast-check, or the oracle framework makes do not
+  count, and neither do reads under a fake clock. The gap's directive names the first such
+  test, its work before and after, and the bound that rejects the mutant.
+  Declare it on the owning property, for example
+  `oracleProperty({ ..., work: { ratio: 1.1 } })`: a mutant whose work in
+  one of the property's tests is more than `ratio` times the unmodified
+  code's work there is killed under law `work bound`. `ratio` is a finite
+  number of at least 1, read to the hundredth and compared exactly, and 1
+  rejects any extra work. The bound is the property's, so it judges every
+  test the property registers, though the directive names one of them. A plain Vitest run has
+  no unmodified run to compare with, so there the bound judges nothing. The
+  count does not see work without a site, such as a plain assignment, a
+  `for...of` pass, or a builtin's own work, so a call to a builtin counts
+  once, whatever it costs. Where a shortcut's cost is in such a builtin
+  (`Object.defineProperty` and the like), make that cost an explicit
+  observation of the driver, such as a count of those calls, and let a law
+  judge it, in place of a very tight work bound. Work is counted per test, not per history: a
+  test that runs many histories, such as a `generated` unit, is judged by
+  their sum, so a slowdown in a few of its histories is diluted, and a
+  constructed or fixed history isolates it. An authored mutant's copy is
+  not instrumented, so a work bound does not judge it.
+
   Every line the CLI writes for a check, on stdout and stderr alike, starts
   with `oracle-gaps: ` and its kind, so an agent can act on the results as
   they stream with `grep '^oracle-gaps: '`, and filter one kind:
