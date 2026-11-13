@@ -2864,6 +2864,9 @@ const frameworkStates = [
   ...timeoutReceivingStates,
   `timeout-presentation-equivalence`,
   `timeout-continuation-cut`,
+  // A slow spec that fails to load, in a plan that presents timeouts: the
+  // narrowed case of the timeout obligation (#59).
+  `timeout-presentation-load-failure`,
   ...round3FrameworkStates,
   `auxiliary-late-error`,
   `bound-enumerated-label-selector`,
@@ -3888,6 +3891,11 @@ function frameworkReach(
     )
   )
     reached.add(`timeout-presentation-equivalence`)
+  if (
+    plan.timeoutPresentation &&
+    plan.specs.some((spec) => spec.slow && !expected.get(spec.id)!.loads)
+  )
+    reached.add(`timeout-presentation-load-failure`)
   if (
     trace.some(
       ({ checkpoint, value }) =>
@@ -9112,7 +9120,7 @@ oracleProperty({
         // The shrunk case of #59: a slow spec that fails to load never runs
         // its driver, so the timeout obligation must not apply to it.
         name: `timeout presentation of a slow spec that fails to load`,
-        enters: [`registration-error`],
+        enters: [`registration-error`, `timeout-presentation-load-failure`],
         history: {
           seedless: false,
           timeoutPresentation: true,
