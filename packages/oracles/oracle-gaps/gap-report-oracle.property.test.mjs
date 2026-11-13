@@ -3137,12 +3137,18 @@ oracleProperty({
           `a partial run of one function`,
           `a partial run beside a failing owner`,
         ],
+        // The failing owner, file b, owns the second function and nothing
+        // else that the generated base could leave out: so a mutant that
+        // only it owns is blocked whatever the base holds.
         build: (generated) => ({
           ...generated,
-          functions: [[{ kind: `push`, quote: `'` }]],
+          functions: [
+            [{ kind: `push`, quote: `'` }],
+            [{ kind: `push`, quote: `'` }],
+          ],
           containers: [],
           overloads: [],
-          owners: [`a`],
+          owners: [`a`, `b`],
           wholeFile: `none`,
           witness: false,
           tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
