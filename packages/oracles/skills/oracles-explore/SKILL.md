@@ -339,7 +339,10 @@ Use this shape:
    how many.
 
 Put the findings in order of their potential impact on users, the worst
-first. Show every class you found.
+first. Show every class you found. After them, say in a line that probes
+only sample the design: once the oracle runs, it generates inputs and
+sequences across the whole space, and that often turns up more bugs, or
+design questions the probes did not reach.
 
 Give each finding its kind:
 
@@ -406,7 +409,8 @@ own instead, and recommend one.
   quoted, and what the probes showed about it. Nothing else from your
   worksheet: no backing word (`stated`, `observed`, `open`), no rival, no
   witness.
-- The laws people forget, or one line on why each does not apply:
+- These two laws, when they apply, listed with the others and not as a
+  separate group; for each one that does not apply, one line on why:
   - **No throw on valid input.** When the contract says a call returns a
     value, it promises not to throw for valid input.
   - **The laws of the kind of function.** An equality check is reflexive and
@@ -542,6 +546,14 @@ them and stop.
    model computes the expected answer the simple way, the histories are the
    generated inputs and sequences, the driver calls their real code, and the
    check compares the two at each step.
+
+   Writing the oracle can take a while, so keep the developer with you:
+   send a short update at each part, or every few minutes, on what you are
+   building and what you are finding out about their code. For example:
+   "The model has to track which retries are still waiting, because a
+   cancel can arrive between two tries." Each update is a statement, with
+   no question in it.
+
 3. **Run it on the unchanged code, through the gap check.** Run the oracles
    only with `oracle-gaps` (the command is in `oracles-setup` step 7), never
    with Vitest on its own. It prints each test file's result first, with a
