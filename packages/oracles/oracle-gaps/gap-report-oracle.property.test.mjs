@@ -1157,8 +1157,13 @@ function readRun(dir, out, status, stderr, cli, stdout) {
     mutants: (results ?? []).map((r) => ({
       id: r.id,
       // The owner files whose tests reached it, relative to the package.
-      oracleFiles: (r.oracleFiles ?? []).map((file) => relative(dir, file)),
-      ordinaryFiles: (r.ordinaryFiles ?? []).map((file) => relative(dir, file)),
+      // Forward slashes, as the CLI names its files (the Windows paths rule).
+      oracleFiles: (r.oracleFiles ?? []).map((file) =>
+        relative(dir, file).replaceAll(`\\`, `/`),
+      ),
+      ordinaryFiles: (r.ordinaryFiles ?? []).map((file) =>
+        relative(dir, file).replaceAll(`\\`, `/`),
+      ),
       key: r.key,
       source: r.source,
       function: r.function,
