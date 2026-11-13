@@ -19,7 +19,7 @@
 // the harness, the Vite config and the files it loads, the package's
 // manifest and the lockfile, the Node version, and the options that change a
 // run (the seed, the test timeout, and bail).
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   appendFileSync,
@@ -35,7 +35,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { createRequire, isBuiltin, syncBuiltinESMExports } from 'node:module'
-import { hostname } from 'node:os'
+import { constants, hostname } from 'node:os'
 import { basename, dirname, join, relative as relativePath } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { applyAuthored, loadAuthored } from './authored.mjs'
@@ -51,6 +51,8 @@ import {
   blockedLines,
   gapLine,
   progressLine,
+  streamLine,
+  verdictLine,
   testNamesOf,
 } from './stream.mjs'
 import { analyze, isRunnerCopy } from './analysis.mjs'
@@ -452,10 +454,24 @@ export async function openSession(pkg) {
       wrapper,
       `import { realpathSync } from 'node:fs'
 import { mergeConfig } from 'vitest/config'
-${config ? `import base from ${JSON.stringify(relativePath(home, join(pkg, config)))}` : `const base = {}`}
-// Vitest accepts a config object or a function that returns one.
+${
+  config
+    ? `import * as config from ${JSON.stringify(relativePath(home, join(pkg, config)))}
+// The package's config, read from its namespace at run time: a config with
+// no default export then fails as it fails under Vitest, when it loads, and
+// not when Vite bundles this wrapper, which esbuild reports on stderr
+// itself (a static \`config.default\` is a warning there).
+const base = Reflect.get(config, 'default')`
+    : `const base = {}`
+}
+// Vitest accepts a config object, a promise of one, or a function that
+// returns one, as Vite reads it: a function is called and awaited, anything
+// else is awaited, and what is not an object is refused.
 export default async (env) => {
-  const merged = mergeConfig(typeof base === 'function' ? await base(env) : base, {
+  const loaded = typeof base === 'function' ? await base(env) : await base
+  if (loaded === null || typeof loaded !== 'object')
+    throw new Error(${JSON.stringify(`${config ?? `the config`}: config must export or return an object.`)})
+  const merged = mergeConfig(loaded, {
   plugins: [{
     name: 'oracle-gaps-schemata',
     enforce: 'pre',
@@ -557,7 +573,78 @@ export default async (env) => {
   }
   const closeContext = (context) =>
     context.close().finally(() => allowListeners(-1))
+  // Vite's logger, writing each message as `oracle-gaps: note vite: …`.
+  const viteNote = (message) => {
+    for (const line of String(message)
+      .replace(/\x1b\[[0-9;]*m/g, ``)
+      .split(`\n`))
+      if (line.trim() !== ``) pulse.log(streamLine(`note`, `vite: ${line}`))
+  }
+  const viteNotes = {
+    hasWarned: false,
+    info: () => {},
+    warn: viteNote,
+    warnOnce: viteNote,
+    error: viteNote,
+    clearScreen: () => {},
+    hasErrorLogged: () => false,
+  }
+  // Whether the config's own text parses, by the esbuild that Vite bundles
+  // configs with, with its messages silenced: a syntax error rejects with
+  // its first error. A Vite that does not load is the context's to report.
+  async function configParses(config) {
+    // The esbuild of the Vite that the package's Vitest loads.
+    let esbuild
+    try {
+      const requireVite = createRequire(
+        createRequire(requireTarget.resolve(`vitest/node`)).resolve(`vite`),
+      )
+      esbuild = await import(pathToFileURL(requireVite.resolve(`esbuild`)).href)
+    } catch {
+      return
+    }
+    try {
+      await esbuild.transform(readFileSync(join(pkg, config), `utf8`), {
+        loader: /\.[cm]?ts$/.test(config) ? `ts` : `js`,
+        logLevel: `silent`,
+        sourcefile: config,
+      })
+    } catch (error) {
+      const first = error?.errors?.[0]
+      throw new Error(
+        first
+          ? `${config}:${first.location?.line}:${first.location?.column}: ${first.text}`
+          : String(error?.message ?? error),
+      )
+    }
+  }
+  // A test-only hook for the CLI's own oracle, not for users
+  // (ORACLE_GAPS_TEST_WARM_PROBE, a marker's path):
+  // the first warm-up stands still as a config load can, on a service in
+  // the run's process group, which a stop signal ends (as it ends the
+  // esbuild service that bundles a config), while a handler that exits
+  // 200 ms after the signal holds the process (as Vitest's does). It marks
+  // the path when it starts, so the oracle sends its signal then.
+  let warmProbed = false
+  async function warmProbe() {
+    const marker = process.env.ORACLE_GAPS_TEST_WARM_PROBE
+    if (!marker || warmProbed) return
+    warmProbed = true
+    const exitLater = (signal) =>
+      setTimeout(() => process.exit(128 + constants.signals[signal]), 200)
+    process.once(`SIGINT`, exitLater)
+    process.once(`SIGTERM`, exitLater)
+    const service = spawn(
+      process.execPath,
+      [`-e`, `setInterval(() => {}, 1000)`],
+      { stdio: `ignore` },
+    )
+    writeFileSync(marker, ``)
+    await new Promise((resolve) => service.on(`exit`, resolve))
+    throw new Error(`The service was stopped`)
+  }
   async function warmContext(settings, index) {
+    await fromConfig(index, settings.config, warmProbe())
     writeWrapper(index, settings.config)
     // A context that fails to open gives its listener allowance back: one
     // that never opened, at once, and one that opened, when it closes.
@@ -565,38 +652,45 @@ export default async (env) => {
     const context = await fromConfig(
       index,
       settings.config,
-      createVitest(`test`, {
-        root: pkg,
-        config: wrapperFor(index, settings.config),
-        watch: false,
-        maxWorkers: 1,
-        // Every test in a file runs, so a kill is attributed to each route
-        // that produces it (see routeOf). A property still stops at its first
-        // failure.
-        bail: settings.bail,
-        testTimeout: settings.testTimeout,
-        hookTimeout: settings.testTimeout,
-        teardownTimeout: settings.testTimeout,
-        typecheck: { enabled: false },
-        coverage: { enabled: false },
-        // Vitest 5 caches transformed modules on disk by default, keyed by
-        // the file, not by what this runner's plugin serves for it, so a
-        // patched or instrumented source could come back as an earlier text.
-        // Vitest 4 caches nothing unless asked.
-        fsModuleCache: false,
-        // Every module each test file imports, which a unit records as its
-        // inputs.
-        experimental: { importDurations: { limit: 1_000_000 } },
-        // A batch runs copies of test files in one worker, sharing its
-        // environment (runBatch), in the order given, so a hang is attributed
-        // to the copy that was running.
-        isolate: false,
-        // Worker threads start much faster than child processes, and each
-        // batch starts one (`--pool`; see args.mjs).
-        pool: settings.pool,
-        sequence: { sequencer: KeepOrder },
-        reporters: [{}],
-      }).catch((error) => {
+      createVitest(
+        `test`,
+        {
+          root: pkg,
+          config: wrapperFor(index, settings.config),
+          watch: false,
+          maxWorkers: 1,
+          // Every test in a file runs, so a kill is attributed to each route
+          // that produces it (see routeOf). A property still stops at its first
+          // failure.
+          bail: settings.bail,
+          testTimeout: settings.testTimeout,
+          hookTimeout: settings.testTimeout,
+          teardownTimeout: settings.testTimeout,
+          typecheck: { enabled: false },
+          coverage: { enabled: false },
+          // Vitest 5 caches transformed modules on disk by default, keyed by
+          // the file, not by what this runner's plugin serves for it, so a
+          // patched or instrumented source could come back as an earlier text.
+          // Vitest 4 caches nothing unless asked.
+          fsModuleCache: false,
+          // Every module each test file imports, which a unit records as its
+          // inputs.
+          experimental: { importDurations: { limit: 1_000_000 } },
+          // A batch runs copies of test files in one worker, sharing its
+          // environment (runBatch), in the order given, so a hang is attributed
+          // to the copy that was running.
+          isolate: false,
+          // Worker threads start much faster than child processes, and each
+          // batch starts one (`--pool`; see args.mjs).
+          pool: settings.pool,
+          sequence: { sequencer: KeepOrder },
+          reporters: [{}],
+        },
+        // Vite's own messages, such as a config that fails to load, as notes
+        // of the stream (stream.mjs), so that every line the run writes has
+        // the stream's prefix.
+        { customLogger: viteNotes },
+      ).catch((error) => {
         allowListeners(-1)
         throw error
       }),
@@ -693,7 +787,10 @@ export default async (env) => {
       if (Math.floor(elapsed / pulse.every) <= sent) return
       sent = Math.floor(elapsed / pulse.every)
       pulse.log(
-        `busy: ${label} in ${relativePath(pkg, file)} for ${Math.floor(elapsed / 1000)}s`,
+        streamLine(
+          `busy`,
+          `${label} in ${relativePath(pkg, file)} for ${Math.floor(elapsed / 1000)}s`,
+        ),
       )
     }
   }
@@ -1165,7 +1262,7 @@ export default async (env) => {
     seedVariable = `${options.envPrefix}_SEED`
     if (options.hangLimit > options.mutantLimit)
       log(
-        `note: --hang-limit ${options.hangLimit} ms is above --mutant-limit ${options.mutantLimit} ms; a mutant's confirmations together get at most the larger of --mutant-limit and ten times its owner files' unmutated time`,
+        `oracle-gaps: note --hang-limit ${options.hangLimit} ms is above --mutant-limit ${options.mutantLimit} ms; a mutant's confirmations together get at most the larger of --mutant-limit and ten times its owner files' unmutated time`,
       )
     pulse = {
       log,
@@ -1175,6 +1272,9 @@ export default async (env) => {
     // An earlier run's internal error; a completed check writes the other
     // files of an ending over the earlier ones (ending.mjs).
     rmSync(join(options.out, `error.log`), { force: true })
+    // The tests' own output to the process's streams (capture-setup.mjs).
+    const testOutput = join(options.out, `test-output.log`)
+    rmSync(testOutput, { force: true })
     profileFile = process.env.ORACLE_GAPS_PROFILE
       ? join(options.out, `profile.jsonl`)
       : undefined
@@ -1201,6 +1301,11 @@ export default async (env) => {
       // Vitest discovers; undefined for none.
       config: options.config ?? discoveredConfig(pkg),
     }
+    // A config that does not parse is refused here, with the error, before
+    // Vite bundles it: esbuild, which bundles it, prints its own error on
+    // the CLI's streams (review of #46, F7).
+    if (settings.config !== undefined)
+      await fromConfig(0, settings.config, configParses(settings.config))
     // Contexts are warmed again when their settings or the Vite config they
     // loaded changed.
     const configHash = () =>
@@ -1221,9 +1326,10 @@ export default async (env) => {
     // The run names the config its contexts loaded, before any refusal that
     // the analysis or the baseline makes.
     log(
-      settings.config === undefined
-        ? `no config file: Vitest's default discovery`
-        : `config: ${settings.config}`,
+      streamLine(
+        `config`,
+        settings.config ?? `none, Vitest's default discovery`,
+      ),
     )
     for (const context of contexts) await globSpecs(context)
     endPhase(`find test files`)
@@ -1682,6 +1788,7 @@ export default async (env) => {
     }))
     for (const line of [
       ...baselineLines(baselineFiles, options.config),
+      verdictLine(baselineFiles),
       ...blockedLines(baselineFiles),
     ])
       log(line)
@@ -1698,7 +1805,12 @@ export default async (env) => {
       (file) => !oracleFiles.has(file),
     )
     if (excluded.length > 0)
-      log(`left out, failing with no mutant active: ${excluded.join(`, `)}`)
+      log(
+        streamLine(
+          `note`,
+          `left out, failing with no mutant active: ${excluded.join(`, `)}`,
+        ),
+      )
     for (const file of firstFiles)
       if (
         first.failed.has(file) ||
@@ -1844,7 +1956,7 @@ export default async (env) => {
           !valueChanges.get(file)?.has(mutant.number),
       ) && targets.oracleKeys.every((key) => !nondeterministic.has(key))
     log(
-      `unmutated: ${[...first.rows.values()].filter((r) => !r.background).length} tests in ${first.seconds.toFixed(1)}s and ${second.seconds.toFixed(1)}s; nondeterministic: ${nondeterministic.size}`,
+      `oracle-gaps: progress unmutated: ${[...first.rows.values()].filter((r) => !r.background).length} tests in ${first.seconds.toFixed(1)}s and ${second.seconds.toFixed(1)}s; nondeterministic: ${nondeterministic.size}`,
     )
 
     // 3–5. Mutants.
@@ -2174,7 +2286,10 @@ export default async (env) => {
       if (result.authored && gapsOf([result]).length > 0) log(gapLine(result))
     const mutantSeconds = (Date.now() - started) / 1000
     log(
-      `mutant phase: ${results.length} mutants in ${mutantSeconds.toFixed(1)}s`,
+      streamLine(
+        `progress`,
+        `mutant phase: ${results.length} mutants in ${mutantSeconds.toFixed(1)}s`,
+      ),
     )
     await store.flush?.()
     writeFileSync(
@@ -2217,6 +2332,8 @@ export default async (env) => {
         config: options.config,
       }),
     )
+    if (existsSync(testOutput) && statSync(testOutput).size > 0)
+      log(streamLine(`note`, `test output in ${testOutput}`))
     return renderStdout({
       results,
       run: runIdentity,

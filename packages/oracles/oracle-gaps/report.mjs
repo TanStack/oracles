@@ -27,6 +27,8 @@ import {
   escapeControls,
   gapLine,
   kindOf,
+  streamLine,
+  verdictLine,
 } from './stream.mjs'
 
 /** Outcomes that are gaps. Only a law verdict on a reproducible route kills. */
@@ -212,7 +214,11 @@ function baselineSection(results, baseline, config) {
   const blocking = blockedLines(baseline)
   const blocked = gapsOf(results).filter((r) => r.outcome === `blocked`).length
   return {
-    lines: [...baselineLines(baseline, config), ...blocking],
+    lines: [
+      ...baselineLines(baseline, config),
+      verdictLine(baseline),
+      ...blocking,
+    ],
     provisional:
       blocking.length === 0
         ? undefined
@@ -402,43 +408,61 @@ export function renderStdout({
   const relative = (file) =>
     file.startsWith(`${pkg}/`) ? file.slice(pkg.length + 1) : file
   const section = baselineSection(results, baseline, config)
+  // Every line is a line of the stream (stream.mjs): the totals, one
+  // directive per gap class, each function's heading over its gap lines,
+  // and notes; summary.md holds the report for reading.
   const lines = [
     ...section.lines,
-    ...(section.provisional ? [section.provisional] : []),
-    ``,
-    `Oracle gap check ${run.id}: ${results.length} mutants, ${killed.length} killed, ${gaps.length} gaps, ${unowned.length} unowned (warnings). ${run.inputs}.`,
-    ``,
-    `Legend, one directive per class:`,
+    ...(section.provisional
+      ? [
+          streamLine(
+            `note`,
+            `provisional: ${section.provisional.replace(/^Provisional: /, ``)}`,
+          ),
+        ]
+      : []),
+    streamLine(
+      `summary`,
+      `${run.id}: ${results.length} mutants, ${killed.length} killed, ${gaps.length} gaps, ${unowned.length} unowned (warnings). ${run.inputs}.`,
+    ),
   ]
   for (const kind of new Set(gaps.map(kindOf)))
-    lines.push(`  ${kind}: ${legendOf(kind)}`)
-  lines.push(``, `Gaps, by function:`)
-  if (gaps.length === 0) lines.push(`  none`)
+    lines.push(streamLine(`legend`, `${kind}: ${legendOf(kind)}`))
   for (const [group, rows] of groupBy(gaps, groupOf)) {
     const owners = [
       ...new Set(rows.flatMap((g) => g.oracleFiles ?? []).map(relative)),
     ].sort()
     lines.push(
-      `${group}${owners.length > 0 ? ` (owners: ${owners.join(`, `)})` : ``}`,
+      streamLine(
+        `function`,
+        `${group}${owners.length > 0 ? ` (owners: ${owners.join(`, `)})` : ``}`,
+      ),
     )
-    for (const gap of rows) lines.push(`  ${gapLine(gap)}`)
+    for (const gap of rows) lines.push(gapLine(gap))
   }
-  if (unowned.length > 0) {
-    lines.push(``, `Unowned warnings, by function:`)
-    for (const [group, rows] of groupBy(unowned, groupOf))
-      lines.push(
-        `  unowned ${group}: ${rows.length} ${rows.length === 1 ? `mutant` : `mutants`}`,
-      )
-  }
+  for (const [group, rows] of groupBy(unowned, groupOf))
+    lines.push(
+      streamLine(
+        `note`,
+        `unowned ${group}: ${rows.length} ${rows.length === 1 ? `mutant` : `mutants`}`,
+      ),
+    )
   if (excluded.length > 0)
     lines.push(
-      ``,
-      `Left out, failing with no mutant active: ${excluded.join(`, `)}.`,
+      streamLine(
+        `note`,
+        `left out, failing with no mutant active: ${excluded.join(`, `)}`,
+      ),
     )
-  lines.push(``, `Full report: ${paths.report}`, `Results: ${paths.results}`)
-  if (paths.out !== undefined) lines.push(`output: ${paths.out}`)
-  // The last line says the check ran to its end, and how many gaps it
-  // found (G6): exit 0 means the run completed, not that it found none.
-  lines.push(`completed: ${counted(gaps.length, `gap`)}`)
+  lines.push(streamLine(`note`, `results ${paths.results}`))
+  // The last line says the check ran to its end, how many gaps it found,
+  // and where its full report is (G6, and the stream's done line): exit 0
+  // means the run completed, not that it found none.
+  lines.push(
+    streamLine(
+      `done`,
+      `completed, ${counted(gaps.length, `gap`)}${section.provisional ? ` (provisional)` : ``}, report ${paths.report}`,
+    ),
+  )
   return lines.join(`\n`)
 }

@@ -105,9 +105,12 @@
 //                              the config it loaded, or says it found none)
 //   oracle-gaps --stop-daemon --package <dir>
 //   oracle-gaps --help      (prints the usage text, args.mjs)
+// Every line the CLI writes for a check starts with `oracle-gaps: ` and its
+// kind (stream.mjs), and the last is `oracle-gaps: done <status>`.
 // Exit codes: 0 the check completed, whatever its gaps (the last stdout
-// line is `completed: <n> gaps`), 2 refused, 3 an internal error, and 130
-// or 143 when SIGINT or SIGTERM stopped it.
+// line is `oracle-gaps: done completed, <n> gaps, report <path>`), 2
+// refused, 3 an internal error, and 130 or 143 when SIGINT or SIGTERM
+// stopped it.
 //
 // No process outlives the CLI (maintainer disposition G2, 2026-11-11). The
 // CLI starts a check as a child in a process group of its own, which every
@@ -147,8 +150,80 @@ function signalGroup(group, signal) {
  * with 128 plus the signal's number.
  */
 function superviseRun() {
+  let child
+  let stopped
+  // How the run ended: its exit code, or the signal that ended it.
+  let ended
+  // Whether the run said that it writes its ending (a message it sends
+  // before it writes): then its done line is the last on each stream, and
+  // it ends with its own code, whatever stop reaches it.
+  let ending = false
+  // Whether the run's stderr, which the CLI passes on, said that V8 ran
+  // out of memory.
+  let outOfMemory = false
+  let stderrTail = ``
+  // Whether the run's streams and channel have closed.
+  let closed = false
+  // Ends the CLI once the run has ended (or the grace has passed), with
+  // what is left of the group killed, and once the run's stderr has been
+  // passed on (at most 2 s more). A run that writes its ending wrote its
+  // done line, so the CLI ends with its code and writes none. Every other
+  // end gets one done line from the CLI, on both streams: a run that a stop
+  // ended stopped (review of #46, F3; re-review N1); a run whose process
+  // ended on its own, by a signal or a code, with no ending (a V8
+  // out-of-memory abort is a SIGABRT) is an error, exit 3, with the remedy
+  // when it ran out of memory (the coordinator's decision of 2026-11-12 on
+  // P10). A write to a pipe is asynchronous on macOS, so the process exits
+  // once it is written.
+  let finishing = false
+  const finish = () => {
+    if (finishing) return
+    finishing = true
+    if (child) signalGroup(child.pid, `SIGKILL`)
+    let decided = false
+    const decide = () => {
+      if (decided) return
+      decided = true
+      if (ending)
+        return process.exit(
+          ended?.code ?? 128 + constants.signals[ended?.signal ?? stopped],
+        )
+      const how = ended?.signal ?? (ended ? `code ${ended.code}` : `no exit`)
+      const line = stopped
+        ? `oracle-gaps: done stopped (${stopped})\n`
+        : `oracle-gaps: done error, the run's process exited with ${how}${outOfMemory ? `: it ran out of memory; give Node more (NODE_OPTIONS=--max-old-space-size=<MB>) or run fewer --contexts` : ``}\n`
+      process.stdout.write(line, () =>
+        process.stderr.write(line, () =>
+          process.exit(stopped ? 128 + constants.signals[stopped] : 3),
+        ),
+      )
+    }
+    if (child === undefined || closed) return decide()
+    child.once(`close`, decide)
+    setTimeout(decide, 2000).unref()
+  }
+  const stop = (signal) => {
+    if (stopped) return
+    stopped = signal
+    if (child === undefined) return finish()
+    signalGroup(child.pid, signal)
+    const deadline = Date.now() + STOP_GRACE_MS
+    const poll = setInterval(() => {
+      if (
+        (ended === undefined || signalGroup(child.pid, 0)) &&
+        Date.now() < deadline
+      )
+        return
+      clearInterval(poll)
+      finish()
+    }, 50)
+  }
+  // The stop handlers come first, so a signal that comes while the run
+  // starts is a stop too (re-review N3).
+  process.on(`SIGINT`, stop)
+  process.on(`SIGTERM`, stop)
   // An inspector flag would bind the CLI's own port a second time.
-  const child = spawn(
+  child = spawn(
     process.execPath,
     [
       ...process.execArgv.filter((flag) => !/^--inspect/.test(flag)),
@@ -156,29 +231,26 @@ function superviseRun() {
     ],
     {
       detached: true,
-      stdio: `inherit`,
+      stdio: [`inherit`, `inherit`, `pipe`, `ipc`],
       env: { ...process.env, ORACLE_GAPS_GROUP: String(process.pid) },
     },
   )
-  let stopped
-  const stop = (signal) => {
-    if (stopped) return
-    stopped = signal
-    signalGroup(child.pid, signal)
-    const deadline = Date.now() + STOP_GRACE_MS
-    const poll = setInterval(() => {
-      if (signalGroup(child.pid, 0) && Date.now() < deadline) return
-      clearInterval(poll)
-      signalGroup(child.pid, `SIGKILL`)
-      process.exit(128 + constants.signals[signal])
-    }, 50)
-  }
-  process.on(`SIGINT`, stop)
-  process.on(`SIGTERM`, stop)
+  child.on(`message`, (message) => {
+    if (message === `ending`) ending = true
+  })
+  // The run's stderr, passed on as it comes, and read for V8's
+  // out-of-memory message.
+  child.stderr.on(`data`, (chunk) => {
+    process.stderr.write(chunk)
+    stderrTail = (stderrTail + chunk).slice(-200)
+    if (/heap out of memory/i.test(stderrTail)) outOfMemory = true
+  })
+  child.on(`close`, () => {
+    closed = true
+  })
   child.on(`exit`, (code, signal) => {
-    if (stopped) return
-    signalGroup(child.pid, `SIGKILL`)
-    process.exit(code ?? 128 + constants.signals[signal])
+    ended = { code, signal }
+    if (!stopped) finish()
   })
 }
 
@@ -252,17 +324,40 @@ else if (main) {
   // Ends the run once. A write to a pipe is asynchronous on macOS, and
   // exiting at once cuts it off at the pipe's buffer, so the process exits
   // once both streams have written everything before it.
+  // A test-only hook for the CLI's own oracle, not for users:
+  // ORACLE_GAPS_TEST_HOLD_EXIT_MS holds the exit after the done line, so the
+  // CLI's oracle can send a signal in that window.
   const end = (exitCode) => {
     if (ended) return
     ended = true
+    const hold = Number(process.env.ORACLE_GAPS_TEST_HOLD_EXIT_MS ?? 0)
     process.stdout.write(``, () =>
-      process.stderr.write(``, () => process.exit(exitCode)),
+      process.stderr.write(``, () =>
+        setTimeout(() => process.exit(exitCode), hold),
+      ),
     )
+  }
+  // A stop ends the run at once, with no line: an error that the stop
+  // causes (a config load that it cuts off) is no refusal, and the
+  // supervisor writes the stopped line (re-review N1). Once the run writes
+  // its ending, it says so to the supervisor, and a stop no longer cuts it
+  // off: its done line is then the last line of each stream.
+  let writingEnding = false
+  const onStop = (signal) => {
+    if (!writingEnding) process.exit(128 + constants.signals[signal])
+  }
+  process.on(`SIGINT`, onStop)
+  process.on(`SIGTERM`, onStop)
+  const holdStops = () => {
+    writingEnding = true
+    process.send?.(`ending`)
   }
   const fail = (error) => {
     if (ended) return
     const ending = endRun(error, options?.out)
+    holdStops()
     process.stderr.write(ending.stderr)
+    process.stdout.write(`${ending.done}\n`)
     end(ending.exitCode)
   }
   // An error thrown outside the awaited check, by a timer or a promise no
@@ -274,11 +369,14 @@ else if (main) {
     if (options.help) console.log(usage)
     else if (options.stop) await stopDaemon(options.pkg)
     else {
-      // The summary ends with the output directory and the completion
-      // line (report.mjs).
-      console.log(
-        await (options.daemon ? checkThroughDaemon : checkCold)(options),
+      const summary = await (options.daemon ? checkThroughDaemon : checkCold)(
+        options,
       )
+      holdStops()
+      // The summary ends with the done line (report.mjs), which ends stderr
+      // too.
+      console.log(summary)
+      process.stderr.write(`${summary.split(`\n`).at(-1)}\n`)
     }
     end(0)
   } catch (error) {
