@@ -1256,7 +1256,10 @@ export default async (env) => {
       }
     } finally {
       for (const copy of copies) globalThis.__oracleGapsCopies.delete(copy)
-      retireCopies(context, copies)
+      // A run cut off by a hang is still running: its worker may still send
+      // updates, so its state is not touched here. Its context is replaced
+      // by the caller (replace), which closes it and drops its state.
+      if (result !== undefined) retireCopies(context, copies)
       rmSync(capture, { force: true })
     }
   }
@@ -1333,7 +1336,9 @@ export default async (env) => {
             importer.importedModules.delete(mod)
           idToModuleMap.delete(mod.id)
           urlToModuleMap.delete(mod.url)
-          if (mod.etag !== undefined) etagToModuleMap.delete(mod.etag)
+          // Vite keys the etag map by the etag, whose value is the node.
+          for (const [etag, node] of etagToModuleMap)
+            if (node === mod) etagToModuleMap.delete(etag)
         }
         fileToModulesMap.delete(copy)
       }
@@ -1829,6 +1834,10 @@ export default async (env) => {
         closeContext(slot.context).catch(() => undefined),
         sleep(10_000),
       ])
+      // The replaced context leaves every map keyed by it, so it is no longer
+      // reachable (its Vitest and Vite state with it).
+      indexOf.delete(slot.context)
+      contextSpecs.delete(slot.context)
       slot.context = await warmContext(settings, slot.index)
       await globSpecs(slot.context)
       contexts[slot.index] = slot.context

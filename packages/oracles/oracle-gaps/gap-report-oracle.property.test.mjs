@@ -1621,7 +1621,15 @@ async function driver(plan, observe) {
     // How many units were computed or reused says how the result was
     // produced, not what it is, so it is not observed.
     observe(`cli`, { ...cli, evidence: undefined })
-    observe(`retention`, retention)
+    // Deterministic: how many batches left a retired copy's state behind (0),
+    // not the per-batch lines, whose batch splits vary with hang cuts.
+    observe(
+      `retention`,
+      retention.filter(
+        (line) =>
+          line.filesMap + line.pathsSet + line.idMap + line.moduleNodes > 0,
+      ).length,
+    )
     // A failing owner's replay, run as the author would run it (law 3).
     if (plan.fault === `brokenOwner`)
       observe(`replay`, { command: replay, ran: replayed(dir, replay) })
@@ -2191,21 +2199,14 @@ function check(plan, observations, expected) {
   // Bounded retention (the register's C entry): once a batch's copies are
   // retired, Vitest's filesMap, pathsSet, and idMap and Vite's module graph
   // name none of them, so each count the hook reports is 0.
-  const retention = observations.find(
-    (o) => o.checkpoint === `retention`,
-  )?.value
-  const held = (retention ?? []).find(
-    (line) => line.filesMap + line.pathsSet + line.idMap + line.moduleNodes > 0,
-  )
-  if (held)
+  const held =
+    observations.find((o) => o.checkpoint === `retention`)?.value ?? 0
+  if (held > 0)
     return violation(
       `retention`,
-      `a batch left its retired copies in Vitest or Vite state: ${JSON.stringify(held)}`,
+      `${held} batch(es) left a retired copy's Vitest or Vite state behind`,
       `bounded retention`,
-      {
-        actual: held,
-        expected: { filesMap: 0, pathsSet: 0, idMap: 0, moduleNodes: 0 },
-      },
+      { actual: held, expected: 0 },
     )
   // Through the daemon, each check streams the same kinds of line, and a
   // completed one ends with its done line (law 15). The state of each step
