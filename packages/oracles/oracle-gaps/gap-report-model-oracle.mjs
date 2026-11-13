@@ -4470,12 +4470,14 @@ function oracleTestFile(plan, file) {
       `})`,
       `test('fixed seed 999', () => {})`,
     )
-  // A test that aborts the process when the driver asks (`GAP_ABORT`), as
-  // a V8 out-of-memory abort does; it runs and passes in every other run.
+  // A test that ends the run's process by SIGABRT when the driver asks
+  // (`GAP_ABORT`), as a V8 out-of-memory abort does: in worker threads its
+  // process is the run's, and `process.abort()` is unavailable there. It
+  // runs and passes in every other run.
   if (file === `a` && plan.aborts)
     out.push(
       `test('aborts the process when asked', () => {`,
-      `  if (process.env.GAP_ABORT === '1') process.abort()`,
+      `  if (process.env.GAP_ABORT === '1') process.kill(process.pid, 'SIGABRT')`,
       `})`,
     )
   // A file with no tests still loads, so the CLI can read what it owns.
