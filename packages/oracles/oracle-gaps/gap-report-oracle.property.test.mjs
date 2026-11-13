@@ -943,10 +943,13 @@ function namedScratch(text, names) {
   const longestFirst = names
     .filter(([path]) => path !== undefined)
     .sort(([a], [b]) => b.length - a.length)
+  // The CLI names its paths in forward slashes (the Windows paths rule), so a
+  // scratch path is named in both spellings.
   for (const [path, name] of longestFirst)
     named = named
       .replaceAll(pathToFileURL(path).href, name)
       .replaceAll(path, name)
+      .replaceAll(path.replaceAll(`\\`, `/`), name)
   return named
     .replaceAll(/\.oracle-gaps-\d+/g, `.oracle-gaps-<pid>`)
     .replaceAll(/session-\d+/g, `session-<pid>`)
