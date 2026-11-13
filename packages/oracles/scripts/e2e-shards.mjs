@@ -167,6 +167,9 @@ export const shards = {
     // 79 s and 70 s; the daemon-notes one, bound to its history, 2 s (it
     // took 433 s searching for one).
     `calibration: a streamed line has no prefix`,
+    // The stream log's calibrations, not yet measured.
+    `calibration: the stream log misses a line`,
+    `calibration: the line that names the stream log comes after another line`,
     `calibration: a refusal through the daemon drops the cold run's notes`,
     // Bound to its history (re-review N2), not yet measured.
     `calibration: a run names a test-output log it never captured`,
