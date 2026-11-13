@@ -373,6 +373,8 @@ const testCase = fc.record({
   slow: fc.constant(false),
   // Only a witness checks that fast-check shrinks an injected failure.
   shrinks: fc.constant(false),
+  // Only a witness draws from Math.random and observes the draw.
+  draws: fc.constant(false),
   // Only a witness waits on a child process: seconds of real time.
   ioWait: fc.constant(false),
   // Only a witness spins when the driver stops a run.
@@ -838,6 +840,7 @@ const judging = (file, route, input, extra = {}) => ({
   asProp: false,
   stops: false,
   then: null,
+  draws: false,
   work: null,
   timed: false,
   ...extra,
@@ -931,6 +934,19 @@ const witness = [
     owners: [`a`],
     body: [{ kind: `memoSet`, label: 21 }],
     tests: [judging(`a`, `fixed seed`, 4)],
+  },
+  // A cache write that nothing observes, in a test that also observes a
+  // draw from Math.random. The capture seeds the ambient random source by
+  // the test, so the draw is the same with no mutant active and under every
+  // mutant, in the original file and in the copies that mutant runs use,
+  // whatever their names and the batch around them. The write's `if-false`
+  // and `drop-not` mutants change only the cache, so they are not-observed,
+  // not not-judged. It caches under 6, apart from `w_unseen` and `w_memo`.
+  {
+    id: `w_draws`,
+    owners: [`a`],
+    body: [{ kind: `memoSet` }],
+    tests: [judging(`a`, `fixed seed`, 6, { draws: true })],
   },
   // Shortcuts for speed (klona's early return for a primitive, and its
   // assignment in place of `Object.defineProperty`): the general path gives
@@ -1761,6 +1777,7 @@ const captureWitness = new Set([
   `w_observe`,
   `w_expect`,
   `w_unseen`,
+  `w_draws`,
   `w_cold`,
   `w_fast`,
   `w_fastbound`,
@@ -4650,6 +4667,11 @@ function oracleTestFile(plan, file) {
               `      throw new Error('caught')`,
               `    } catch {}`,
             ]
+          : []),
+        // A draw from the ambient random source, which the capture seeds by
+        // the test: the same in every run of the test, its copies included.
+        ...(t.draws
+          ? [`    g.__oracleObserve?.('draw', Math.floor(Math.random() * 1e6))`]
           : []),
         t.channel === `expect`
           ? `    expect(${out}).toBeDefined()`

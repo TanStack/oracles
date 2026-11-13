@@ -832,7 +832,16 @@ beforeEach((context) => {
   observations = 0
   if (stopped || (selected && !selected.has(testKey(context.task))))
     context.skip()
-  installRandom(testKey(context.task))
+  // A copy is named for its batch, so a test's ambient randomness is
+  // seeded by its key in the original file, which the unmutated runs use:
+  // a mutant's copy draws what the original drew.
+  const key = testKey(context.task)
+  const copy = context.task.file?.filepath
+  installRandom(
+    unit?.file !== undefined && key.startsWith(`${copy} > `)
+      ? `${unit.file}${key.slice(copy.length)}`
+      : key,
+  )
   digest = createHash(`sha1`)
   count = 0
   calls = 0

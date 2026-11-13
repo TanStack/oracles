@@ -1062,13 +1062,18 @@ function readRun(dir, out, status, stderr, cli, stdout) {
     .sort()
     .map((beat) => JSON.parse(beat))
   // The stdout summary's lead, up to its first blank line (law 14), its
-  // last line, and the files the baseline lines on stderr name.
+  // last line, and the files the baseline lines on stderr name. Since the
+  // stream has no blank line (law 15), the lead is the whole stdout, whose
+  // notes name the run's scratch directory: each line names it as the
+  // trace names paths, so two runs of one history record one lead.
   const printed = `${stdout ?? ``}`
     .split(`\n`)
     .filter((line, i, all) => all.slice(i).some(Boolean))
   const blank = printed.indexOf(``)
   return {
-    lead: blank < 0 ? printed : printed.slice(0, blank),
+    lead: (blank < 0 ? printed : printed.slice(0, blank)).map((line) =>
+      namedScratch(line, scratch),
+    ),
     lastLine: printed.at(-1) && namedScratch(printed.at(-1), scratch),
     // The stdout's own lines of the stream's kinds: the gap lines under
     // their functions, as the stream prints them (law 15).
@@ -1639,13 +1644,27 @@ async function driver(plan, observe) {
       .filter((m) => m.function === `w_stop`)
       .map((m) => m.id)
     let previousSessions = []
+    // A session directory is named by the process that made it, which
+    // differs on every run, and two names sort by their pids. The law reads
+    // only whether a later run kept an earlier run's directory, so the
+    // observation holds counts, which no name or order changes: how many
+    // session directories the package has once the run ended, and how many
+    // of them the previous stopped run had left.
     if (cli.exit === 0 && stopIds.length > 0)
       for (const stop of plan.stopRuns) {
-        const stopped = await stoppedRun(dir, files, how, stopIds, stop)
+        const run = await stoppedRun(dir, files, how, stopIds, stop)
+        const stopped = {
+          ...run,
+          sessions: {
+            present: run.sessions.length,
+            kept: run.sessions.filter((name) => previousSessions.includes(name))
+              .length,
+          },
+        }
         observe(`stopped`, stopped)
         if (previousSessions.length > 0)
           states.add(`a run after a stopped one that left its session`)
-        previousSessions = stopped.sessions
+        previousSessions = run.sessions
         if (!stopped.spun) continue
         if (stop.when === `after`) {
           states.add(`a stop signal after the completed line`)
@@ -1947,6 +1966,10 @@ async function driver(plan, observe) {
       if (m.class === `branch-never-taken`) states.add(`branch never taken`)
       if (m.class === `not-infected`) states.add(`not infected`)
       if (m.class === `not-observed`) states.add(`not observed`)
+      // A survivor whose test observes a draw from Math.random: the copy
+      // that ran the mutant drew what the original drew.
+      if (m.function === `w_draws` && m.class === `not-observed`)
+        states.add(`a draw from Math.random repeats in a mutant's copy`)
       if (m.class === `not-distinguished`) states.add(`not distinguished`)
       if (m.class === `indeterminate`) states.add(`indeterminate`)
     }
@@ -2383,19 +2406,17 @@ function check(plan, observations, expected) {
   // A stopped run may leave its session directory, and only that; the next
   // run removes it (maintainer decision, 2026-11-11).
   const stops = observations.filter((o) => o.checkpoint === `stopped`)
-  for (const [i, { value }] of stops.entries()) {
-    const earlier = stops[i - 1]?.value.sessions ?? []
+  for (const { value } of stops) {
     if (value.left?.length > 0)
       return violation(
         `stopped`,
         `the stopped run left ${value.left.join(`, `)} in the package`,
         `output namespace`,
       )
-    const kept = earlier.filter((name) => value.sessions?.includes(name))
-    if (kept.length > 0)
+    if (value.sessions?.kept > 0)
       return violation(
         `stopped`,
-        `the run after a stopped one left its session directory ${kept.join(`, `)} in the package`,
+        `the run after a stopped one left ${value.sessions.kept} of its session directories in the package`,
         `output namespace`,
       )
   }
@@ -3095,6 +3116,7 @@ const required = [
   `branch never taken`,
   `not infected`,
   `not observed`,
+  `a draw from Math.random repeats in a mutant's copy`,
   `not distinguished`,
   `unreached`,
   `unowned`,
@@ -3720,12 +3742,18 @@ oracleProperty({
           `a partial run of one function`,
           `a partial run beside a failing owner`,
         ],
+        // The failing owner, file b, owns the second function and nothing
+        // else that the generated base could leave out: so a mutant that
+        // only it owns is blocked whatever the base holds.
         build: (generated) => ({
           ...generated,
-          functions: [[{ kind: `push`, quote: `'` }]],
+          functions: [
+            [{ kind: `push`, quote: `'` }],
+            [{ kind: `push`, quote: `'` }],
+          ],
           containers: [],
           overloads: [],
-          owners: [`a`],
+          owners: [`a`, `b`],
           wholeFile: `none`,
           witness: false,
           tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
