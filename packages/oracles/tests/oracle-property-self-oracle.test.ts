@@ -6354,7 +6354,9 @@ function checkSuite(
       )
   if (
     plan.timeoutPresentation &&
-    plan.specs.some((spec) => spec.slow) &&
+    // A slow spec that fails to load never runs its driver, so it owes no
+    // timed-out call to present; the model's load expectation decides.
+    plan.specs.some((spec) => spec.slow && expected.get(spec.id)!.loads) &&
     !trace.some(
       ({ checkpoint, value }) =>
         checkpoint === `timeout-presentation` &&
