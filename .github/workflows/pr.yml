@@ -228,6 +228,16 @@ jobs:
         continue-on-error: true
         timeout-minutes: 8
         run: pnpm --filter @tanstack/oracles exec vitest --run --config oracle-gaps/vitest.config.mjs --reporter=verbose gap-report-static
+      # [diagnostic] Replays the first failing static unit alone, with bash, to
+      # print its verdict (the run's own output names the law only through a
+      # counterexample).
+      - name: '[diagnostic] Replay the first failing static unit'
+        continue-on-error: true
+        timeout-minutes: 6
+        shell: bash
+        run: |
+          export ORACLE_SEED=20261105 ORACLE_PATH=0:0:0:0:0:0:0:0:0:0:0:0:0:0:0 ORACLE_PROPERTY='oracle-gaps.report-static' ORACLE_UNIT='random seed: every static state'
+          pnpm --filter @tanstack/oracles exec vitest run --config oracle-gaps/vitest.config.mjs -t '^oracle-gaps\.report-static(?: | > )random seed: every static state$' gap-report-static
       - name: '[diagnostic] Gap report classify oracle'
         continue-on-error: true
         timeout-minutes: 8
@@ -321,6 +331,22 @@ jobs:
         if: always()
         continue-on-error: true
         run: node packages/oracles/oracle-gaps/index.mjs --stop-daemon --package .ci-fixture
+      # [diagnostic] The fixture without --config, to see whether the discovered
+      # config hits the same path bug as --config.
+      - name: '[diagnostic] Gap CLI on the fixture, discovered config'
+        continue-on-error: true
+        run: node packages/oracles/oracle-gaps/index.mjs --package .ci-fixture --source src/clamp.ts
+      # [diagnostic] The daemon's error logs live in the OS temp directory,
+      # which the job does not print: print them here.
+      - name: '[diagnostic] Print gap CLI error logs'
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path $env:TEMP -Recurse -Filter error.log -ErrorAction SilentlyContinue | ForEach-Object {
+            "== $($_.FullName)"
+            Get-Content $_.FullName -TotalCount 120
+          }
       # One fixed-seed unit of the end-to-end oracle, as the Linux job runs it.
       # [diagnostic] Verbose and a step timeout, to see which copy hangs.
       - name: Gap report end-to-end oracle (fixed seed)
