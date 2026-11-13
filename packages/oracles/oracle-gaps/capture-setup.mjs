@@ -243,11 +243,25 @@ const state = unit ? { ...run, ...unit } : run
 // it is. The daemon stores the run under them as it does the modules the
 // copy evaluated (the closing row's `loaded`), so an edit of only such a
 // file runs it again, as a cold run sees the edit (law 9). Reads under
-// node_modules and of the runner's own files are left out.
-globalThis.__oracleGapsReads = new Set()
+// node_modules and of the runner's own files are left out. Each path keeps
+// its hash from the copy's first read of it, taken as the runner hashes an
+// input (check.mjs, fileHashes), so the run is stored under the text it
+// read and not under an edit that lands later in the run (review of #55,
+// F1).
+globalThis.__oracleGapsReads = new Map()
 if (!globalThis.__oracleGapsReading) {
   globalThis.__oracleGapsReading = true
   const root = `${process.cwd()}/`
+  const { readFileSync: readNow, statSync: statNow } = fs
+  const hashNow = (path) => {
+    try {
+      return statNow(path).isFile()
+        ? createHash(`sha1`).update(readNow(path)).digest(`hex`)
+        : `not a file`
+    } catch {
+      return `missing`
+    }
+  }
   const record = (target) => {
     let path
     try {
@@ -257,26 +271,29 @@ if (!globalThis.__oracleGapsReading) {
     } catch {
       return
     }
+    const reads = globalThis.__oracleGapsReads
     if (
       path?.startsWith(root) &&
       !path.includes(`/node_modules/`) &&
-      !path.includes(`/.oracle-gaps`)
+      !path.includes(`/.oracle-gaps`) &&
+      !reads.has(path)
     )
-      globalThis.__oracleGapsReads.add(path)
+      reads.set(path, hashNow(path))
   }
   // A wrapper keeps the function's own properties (its name and length,
   // which code that dispatches on arity reads), so a test that passes alone
   // passes under the capture (law 3; review of #55).
-  const recorded = (owner, name) => {
-    const original = owner[name]
-    owner[name] = keepProperties(original, function (target, ...rest) {
-      record(target)
-      return original.call(this, target, ...rest)
-    })
-  }
-  for (const name of [`readFileSync`, `readFile`, `existsSync`, `statSync`])
-    recorded(fs, name)
-  for (const name of [`readFile`, `stat`]) recorded(fs.promises, name)
+  for (const [owner, names] of [
+    [fs, [`readFileSync`, `readFile`, `existsSync`, `statSync`]],
+    [fs.promises, [`readFile`, `stat`]],
+  ])
+    for (const name of names) {
+      const original = owner[name]
+      owner[name] = keepProperties(original, function (target, ...rest) {
+        record(target)
+        return original.call(this, target, ...rest)
+      })
+    }
   // An ES module's `import { readFileSync } from 'node:fs'` (and from
   // 'node:fs/promises') reads these from now on.
   syncBuiltinESMExports()
@@ -1069,10 +1086,12 @@ afterAll(() => {
       .filter(([, node]) => node.evaluated)
       .map(([id]) => id.split(`?`)[0])
       .filter((path) => path.startsWith(`/`)),
-    ...globalThis.__oracleGapsReads,
+    ...globalThis.__oracleGapsReads.keys(),
   ]
+  // The hash of each file the copy read, from its first read.
+  const readAt = Object.fromEntries(globalThis.__oracleGapsReads)
   appendFileSync(
     state.capture,
-    `${JSON.stringify({ file: thisFile, closed: true, loaded, ...(skippedCopy ? { skipped: true } : {}) })}\n`,
+    `${JSON.stringify({ file: thisFile, closed: true, loaded, readAt, ...(skippedCopy ? { skipped: true } : {}) })}\n`,
   )
 })

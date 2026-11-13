@@ -67,7 +67,7 @@ export const shards = {
     `fixed seed 20261105: an edit that changed the cold result after a hang replaced the only context`,
     `random seed: an edit that changed the cold result after a hang replaced the only context`,
     `determinism: constructed history: an edit that changed the cold result after a hang replaced the only context`,
-    // The mid-run edit's history (law 9), not yet measured.
+    // The mid-run edit's histories (law 9): 3.5 to 5 s each here, fixed seed.
     `fixed seed 20261105: an edit during a check through the daemon`,
     `random seed: an edit during a check through the daemon`,
     `determinism: constructed history: an edit during a check through the daemon`,
@@ -77,7 +77,7 @@ export const shards = {
     `fixed seed 20261105: a test edits the data it read, during a check through the daemon`,
     `random seed: a test edits the data it read, during a check through the daemon`,
     `determinism: constructed history: a test edits the data it read, during a check through the daemon`,
-    // The fs-read data histories (law 9), not yet measured.
+    // The fs-read data histories (law 9): 2.7 to 5.4 s each here, fixed seed.
     `fixed seed 20261105: an edit to data a test reads through fs (sync)`,
     `random seed: an edit to data a test reads through fs (sync)`,
     `determinism: constructed history: an edit to data a test reads through fs (sync)`,

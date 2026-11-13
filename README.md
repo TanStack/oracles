@@ -157,15 +157,19 @@ exited with <signal or code>` and exits 3; after an out-of-memory crash
   A check through the daemon reuses a run while its inputs are unchanged:
   the modules the run loaded, and the files in the package that its tests
   read through `fs` (`readFileSync`, `readFile`, `existsSync`, `statSync`,
-  and `fs/promises` `readFile` and `stat`), each by its content. A
-  directory that a test stats or tests for is an input as a directory, not
-  by its content. A file that a test reads outside the package or under
-  `node_modules`, through another API (`readdir`, `open`, a stream, or a
-  watcher), or from a worker thread or child process that the test starts,
-  is no input, so an edit to it alone does not rerun the tests that read it;
-  run the check cold (without `--daemon`) after such an edit. A file that
-  changes while the test that reads it runs is stored under its content
-  after the change.
+  and `fs/promises` `readFile` and `stat`), each by the content that the
+  run read. A run that an edit overlapped, because a file changed after the
+  run read it, is not reused. A directory that a test stats or tests for is
+  an input as a directory, not by its content.
+
+  These reads are no input, so an edit to the file alone does not rerun the
+  tests that read it: a read outside the package or under `node_modules`; a
+  read from a worker thread or child process that the test starts; and a
+  read through any other `fs` API, which includes `readdir`, `opendir`,
+  `createReadStream`, `realpath`, `lstat`, `access`, `open`, `watch`,
+  `readlink`, the callback `stat`, `exists`, and the `fs/promises`
+  `access` and `open`. Run the check cold (without `--daemon`) after such
+  an edit.
 
 - `packages/eslint-plugin-oracles` (`@tanstack/eslint-plugin-oracles`): the
   `oracle/*` lint rules. The rules recognize the framework by its package
