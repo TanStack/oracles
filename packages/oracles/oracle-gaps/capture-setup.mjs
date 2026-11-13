@@ -120,10 +120,11 @@ const pending = (globalThis.__oracleGapsPendingTimers ??= (() => {
 // `performance.eventLoopUtilization`, `process.hrtime`, `process.uptime`,
 // `os.uptime`, and `Temporal.Now`; a timer of `node:timers` or
 // `node:timers/promises` (which do not go through the global functions),
-// of `AbortSignal.timeout`, and of `Atomics.waitAsync` with a timeout; and
-// `monitorEventLoopDelay`. A fake clock replaces these, and its reads do
-// not follow the real clock. A reference taken before this file ran (a
-// module that loads before the harness and keeps `Date.now`) is not seen.
+// of `AbortSignal.timeout`, and of `Atomics.wait` or `Atomics.waitAsync`
+// with a timeout; and `monitorEventLoopDelay`. A fake clock replaces
+// these, and its reads do not follow the real clock. A reference taken
+// before this file ran (a module that loads before the harness and keeps
+// `Date.now`) is not seen.
 if (!globalThis.__oracleGapsClocks) {
   globalThis.__oracleGapsClocks = true
   const told = (read) =>
@@ -152,13 +153,17 @@ if (!globalThis.__oracleGapsClocks) {
   process.hrtime.bigint = told(process.hrtime.bigint)
   process.uptime = told(process.uptime)
   AbortSignal.timeout = told(AbortSignal.timeout)
-  const waitAsync = Atomics.waitAsync
-  if (waitAsync)
-    Atomics.waitAsync = keepProperties(waitAsync, function (...args) {
-      if (args[3] !== undefined && args[3] !== Infinity)
-        globalThis.__oracleGapsClock?.()
-      return waitAsync.apply(this, args)
-    })
+  // A wait with a timeout returns by the clock, or by another thread's
+  // timing.
+  for (const name of [`wait`, `waitAsync`]) {
+    const wait = Atomics[name]
+    if (wait)
+      Atomics[name] = keepProperties(wait, function (...args) {
+        if (args[3] !== undefined && args[3] !== Infinity)
+          globalThis.__oracleGapsClock?.()
+        return wait.apply(this, args)
+      })
+  }
   const now = globalThis.Temporal?.Now
   for (const name of now ? Object.getOwnPropertyNames(now) : [])
     if (typeof now[name] === `function`) now[name] = told(now[name])
