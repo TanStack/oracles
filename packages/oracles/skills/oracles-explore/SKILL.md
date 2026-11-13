@@ -609,9 +609,14 @@ approved, and run the oracle again on the unchanged code:
 - If the oracle passes and the gap is closed, go on to the next one.
 - If no input can make the change behave differently, because another
   condition already decides the result (`x && x > 0` becoming
-  `x && x >= 0`), and the code saves no work either (it is not a fast
-  path), the code it changes is redundant. That is not a gap-check bug. Simplify the production code, as an optimizing compiler for the
-  oracle would (`x > 0`), rerun, and name the lines you removed.
+  `x && x >= 0`), and the code saves no work either, the code it changes
+  is redundant. That is not a gap-check bug. Simplify the production code,
+  as an optimizing compiler for the oracle would (`x > 0`), rerun, and
+  name the lines you removed.
+- An `extra-work` gap is a change that gives the same results but does
+  more work: the code it changes is a fast path. Keep the fast path, and
+  add the bound the gap's directive names to the property
+  (`work: { ratio }`), so the oracle rejects losing it.
 - If the gap looks like a bug in the gap check itself, show the developer
   the evidence. For example, the check reports a change as unnoticed, but
   the same change applied by hand to a copy of the code makes the oracle
