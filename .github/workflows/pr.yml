@@ -427,6 +427,7 @@ jobs:
       # lines each reproduce its failure in their own shell (RED: the POSIX
       # line does not, in PowerShell).
       - name: Replay lines reproduce the failure in PowerShell and cmd
+        if: always()
         run: |
           node "$env:GITHUB_WORKSPACE\packages\oracles\node_modules\vitest\vitest.mjs" run --root .ci-replay > replay-out.txt 2>&1
           node packages/oracles/scripts/windows-witness.mjs replay replay-out.txt "$env:GITHUB_WORKSPACE\.ci-replay"
