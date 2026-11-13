@@ -323,7 +323,11 @@ The rules cannot read a package, and they never read one under
      (`it`, `test`, `xit`, `skip`, `step`, and the rest) is read as that
      framework's, as the rules read any package's `it`, `test`, `describe`,
      `suite`, and `bench` before 2026-11-12. Any other export is none.
-   - `'ignore'`: no export is a test function.
+
+   There is no `'ignore'` mode (maintainer decision, 2026-11-12). A
+   configuration that still says `'ignore'` is malformed, and the rules read
+   it as `'report'`. To silence a package, list it in
+   `settings.oracles.nonTestPackages`.
 
    A `#` import whose `imports` target is a package (`"#vitest":
 "vitest"`) is classified as that package.
@@ -349,13 +353,14 @@ is such an annotation; for other frameworks, `it.skip('name')` with no body
 disables nothing.
 
 A setting that the rules cannot use is reported at line 1 as
-`malformedSourceSetting`, and it is read as unset, all of it: a
+`malformedSetting`, and it is read as unset, all of it: a
 `settings.oracles` that is not an object (`null`, a string, a number, an
 array), a `testPackages` that is not an object or that maps a specifier to
 anything but a known framework's specifier or a table of `'test'` and
 `'suite'` roles (`'constructor'` is no framework), a `nonTestPackages` that
-is not an array of strings, and an `unknownSources` that is not one of the
-three modes.
+is not an array of strings, and an `unknownSources` that is not `'report'` or
+`'test'`. That includes `'ignore'`, which is no mode: its message names
+`settings.oracles.nonTestPackages` as the replacement.
 
 ```js
 {
@@ -395,13 +400,27 @@ The decisions that the rules and their oracles cite:
   the rules agree on them. This replaces the same day's earlier instruction
   that every rule find a body in any argument position, which made
   `oracle/no-unit-test` report an annotation as a unit test.
+- **Maintainer approval of the v21 cleanup plan, 2026-11-12: remove the
+  `unknownSources: 'ignore'` mode.** A global ignore mode would let an unknown
+  source pass silently. Silence for a package comes only from
+  `settings.oracles.nonTestPackages`, an explicit entry that a reviewer can
+  read. The modes are `'report'` (the default) and `'test'`. A configuration
+  that still says `'ignore'` gets `malformedSetting`, with a message that
+  names `nonTestPackages`, and the rules read the setting as unset. They never
+  throw.
+- **Maintainer approval of the v21 cleanup plan, 2026-11-12: one id for a
+  malformed setting, `malformedSetting`.** `oracle/no-unit-test` and `oracle/oracle-property-only`
+  report every malformed `settings.oracles` entry under this id, at line 1,
+  and read it as unset (or as an empty list). It replaces the id
+  `malformedSourceSetting`, and the two rules no longer use separate ids.
 
 The limits that these decisions accept, which the oracles
 (`lint.test-source-recognition`, `lint.test-function-agreement`) state:
 
-- An unknown source's call that passes no title before its function is
-  silent, whatever it does (`fixture(fn)`). So is one whose title is a
-  binding or a call (`it(name, fn)`, `it(String(n), fn)`, and a helper's
+- **Maintainer approval of the v21 cleanup plan, 2026-11-12: the
+  identifier-title limit is accepted as a recorded limit.** An unknown source's call that passes no title before its
+  function is silent, whatever it does (`fixture(fn)`). So is one whose title
+  is a binding or a call (`it(name, fn)`, `it(String(n), fn)`, and a helper's
   `t(name, fn)` with a parameter `name`), because such a call cannot be told
   apart from `pMap(items, fn)`; only a string or template title makes it
   title-shaped. Name the package in `settings.oracles.testPackages` to have
