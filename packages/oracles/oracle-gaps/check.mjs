@@ -929,6 +929,9 @@ export default async (env) => {
       copies.map((copy, i) => [
         copy,
         {
+          // The original file, by which the copy's tests seed their
+          // ambient randomness, as the unmutated runs of the file do.
+          file: items[i].file,
           mutant: items[i].mutant ?? null,
           select: items[i].select
             ? inCopy(copy, items[i].file, items[i].select)
