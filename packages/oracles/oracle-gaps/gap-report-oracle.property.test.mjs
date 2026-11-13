@@ -1868,6 +1868,8 @@ async function driver(plan, observe) {
         states.add(`a plain read of an absent object crashed`)
       if (m.function === `w_absentNull` && m.outcome === `crashed`)
         states.add(`a plain read of a null object crashed`)
+      if (m.function === `w_swallow` && m.class === `swallowed-throw`)
+        states.add(`a plain read whose throw the owner swallowed`)
       if (m.operator === `arithmetic-swap` && m.outcome === `killed`)
         states.add(`an arithmetic swap killed`)
       if (m.function === `w_leaf` && m.outcome !== `unowned`)
@@ -3151,6 +3153,7 @@ const required = [
   `a plain read in place of ?. not distinguished`,
   `a plain read of an absent object crashed`,
   `a plain read of a null object crashed`,
+  `a plain read whose throw the owner swallowed`,
   `a module-level cache judged afresh`,
   `ordinary tests run when asked`,
   `ordinary tests left out by default`,
