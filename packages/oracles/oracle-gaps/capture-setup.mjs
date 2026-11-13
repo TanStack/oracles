@@ -24,7 +24,10 @@
 // In a mutant run, fast-check stops a property at its first failure instead
 // of shrinking it: a kill needs one failing history, not the smallest one.
 import { createHash } from 'node:crypto'
-import { appendFileSync, readFileSync } from 'node:fs'
+import fs, { appendFileSync, readFileSync } from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
+import { resolve as resolvePath } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterAll, beforeEach, chai, expect, inject, vi } from 'vitest'
 
 const run =
@@ -151,6 +154,46 @@ if (run.units && !skippedCopy) {
   vi.resetModules()
 }
 const state = unit ? { ...run, ...unit } : run
+// The files this copy reads through fs inside the package: by a sync, a
+// promise, or a callback read, or a check of whether a file exists or what
+// it is. The daemon stores the run under them as it does the modules the
+// copy evaluated (the closing row's `loaded`), so an edit of only such a
+// file runs it again, as a cold run sees the edit (law 9). Reads under
+// node_modules and of the runner's own files are left out.
+globalThis.__oracleGapsReads = new Set()
+if (!globalThis.__oracleGapsReading) {
+  globalThis.__oracleGapsReading = true
+  const root = `${process.cwd()}/`
+  const record = (target) => {
+    let path
+    try {
+      if (target instanceof URL) path = fileURLToPath(target)
+      else if (typeof target === `string`) path = resolvePath(target)
+      else if (Buffer.isBuffer(target)) path = resolvePath(target.toString())
+    } catch {
+      return
+    }
+    if (
+      path?.startsWith(root) &&
+      !path.includes(`/node_modules/`) &&
+      !path.includes(`/.oracle-gaps`)
+    )
+      globalThis.__oracleGapsReads.add(path)
+  }
+  const recorded = (owner, name) => {
+    const original = owner[name]
+    owner[name] = function (target, ...rest) {
+      record(target)
+      return original.call(this, target, ...rest)
+    }
+  }
+  for (const name of [`readFileSync`, `readFile`, `existsSync`, `statSync`])
+    recorded(fs, name)
+  for (const name of [`readFile`, `stat`]) recorded(fs.promises, name)
+  // An ES module's `import { readFileSync } from 'node:fs'` (and from
+  // 'node:fs/promises') reads these from now on.
+  syncBuiltinESMExports()
+}
 // A batch's watchdog reads this row to know which copy is running. A copy
 // whose test file fails to load runs no `afterAll` and so writes no closing
 // row; the next copy's start ends its turn.
@@ -855,10 +898,13 @@ afterAll(() => {
   const evaluated = globalThis.__vitest_worker__?.evaluatedModules
   // The map keeps every module the worker evaluated, and the copy's module
   // reset only marks them unevaluated, so the copy's own are those marked.
-  const loaded = [...(evaluated?.idToModuleMap ?? [])]
-    .filter(([, node]) => node.evaluated)
-    .map(([id]) => id.split(`?`)[0])
-    .filter((path) => path.startsWith(`/`))
+  const loaded = [
+    ...[...(evaluated?.idToModuleMap ?? [])]
+      .filter(([, node]) => node.evaluated)
+      .map(([id]) => id.split(`?`)[0])
+      .filter((path) => path.startsWith(`/`)),
+    ...globalThis.__oracleGapsReads,
+  ]
   appendFileSync(
     state.capture,
     `${JSON.stringify({ file: thisFile, closed: true, loaded, ...(skippedCopy ? { skipped: true } : {}) })}\n`,
