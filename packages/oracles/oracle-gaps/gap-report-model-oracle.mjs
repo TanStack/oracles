@@ -799,6 +799,12 @@ const drawn = fc.record({
   // `midrun` step.
   midrunBy: fc.constantFrom(`a`, `b`),
   midrunTarget: fc.constantFrom(`helper`, `data`),
+  // The package's config also has a plugin of its own, `enforce: 'pre'`,
+  // whose transform appends a comment to every module in the package, as a
+  // code-rewriting plugin does: the runner must store a run under what it
+  // served, not under the text after another pre plugin (third review of
+  // #55, F-A).
+  prePlugin: fc.constantFrom(false, false, false, true),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -2868,6 +2874,7 @@ function resolveHistory(history) {
     // assertion form and whether its list is a literal, or none.
     matcherOwns: history.matcherOwns ?? `none`,
     config: history.config ?? `object`,
+    prePlugin: history.prePlugin === true,
     ...configOf(history),
     configEnv: history.configEnv === true,
     native: history.native ?? `none`,
@@ -4887,16 +4894,12 @@ function oracleTestFile(plan, file) {
   // the baseline (review of #55, F1).
   if (plan.midrun && file === plan.midrunBy)
     out.push(
-      `test('edits ${plan.midrunTarget === `data` ? `the data` : `the helper`} during the check', async () => {`,
+      `test('${MIDRUN_EDITORS[plan.midrunTarget].test}', async () => {`,
       ...(file === `a`
         ? [`  void strictAtLoad`]
-        : plan.midrunTarget === `data`
-          ? [
-              `  if (!(await readData()).open) throw new Error('the data this run read is closed')`,
-            ]
-          : [
-              `  if (!strict) throw new Error('the helper this run read is not strict')`,
-            ]),
+        : [
+            `  if (!(${plan.midrunTarget === `data` ? `(await readData()).open` : `strict`})) throw new Error('${MIDRUN_EDITORS[plan.midrunTarget].message}')`,
+          ]),
       // The marker sits in the run's own session directory, beside the
       // runner's harness (the worker's first setup file), which is no input
       // of a run by design (check.mjs, ownHarness). So the marker's own edit
@@ -5052,6 +5055,21 @@ function edited(plan) {
 
 const AUTHORED = `mutants/authored-mutant.json`
 
+/**
+ * The test that lands a mid-run edit, by what it edits: its name, and the
+ * error it throws in file b when it reads the edited text.
+ */
+const MIDRUN_EDITORS = {
+  helper: {
+    test: `edits the helper during the check`,
+    message: `the helper this run read is not strict`,
+  },
+  data: {
+    test: `edits the data during the check`,
+    message: `the data this run read is closed`,
+  },
+}
+
 /** What a mid-run edit changes: the data file only when file b reads one. */
 const midrunTargetOf = (history) =>
   history.midrunTarget === `data` && (history.fsRead ?? `none`) !== `none`
@@ -5092,6 +5110,10 @@ const altConfigPath = (plan) =>
  * fault, the top-level await, or the `require` calls the plan holds. `test`
  * is the config's `test` object.
  */
+// The config's own pre plugin (`prePlugin`): it rewrites each module of the
+// package that it transforms, keeping what the module does.
+const PRE_PLUGIN = `{ name: 'gap-pre-rewrite', enforce: 'pre', transform(code, id) { const path = id.split('?')[0]; return /\\.(ts|js|mjs)$/.test(path) && !path.includes('/node_modules/') ? code + '\\n// rewritten by a pre plugin\\n' : undefined } }`
+
 function configText(plan, test) {
   const commonjs = plan.configSyntax === `cjs`
   const config = `defineConfig(${
@@ -5102,7 +5124,7 @@ function configText(plan, test) {
     plan.fault === `projects`
       ? `{ projects: [{ test: { name: 'unit', ...${test} } }] }`
       : test
-  } }${plan.config === `object` || plan.config === `promise` ? `` : `)`})`
+  }${plan.prePlugin ? `, plugins: [${PRE_PLUGIN}]` : ``} }${plan.config === `object` || plan.config === `promise` ? `` : `)`})`
   // A promise of the config, a null default, or a config cut off mid-object.
   const body =
     plan.fault === `configNull`
@@ -5751,6 +5773,7 @@ function readSummary(summary) {
 }
 
 export {
+  MIDRUN_EDITORS,
   captureWitness,
   outsideRepository,
   endingOf,

@@ -538,6 +538,7 @@ import {
   MUTANT_LIMIT_MS,
   HEARTBEAT_MS,
   FULL_LIMIT_MS,
+  MIDRUN_EDITORS,
 } from './gap-report-model-oracle.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -1274,6 +1275,12 @@ async function incremental(dir, plan, cli, copy, observe, states) {
   let cutBefore = false
   // Whether the daemon stored a run under the mid-run marker.
   let markerStored = false
+  // How many runs the daemon computed in a check of a state that nothing
+  // changed, where it owes none (undefined elsewhere).
+  let unchangedComputed
+  // The check through the daemon during which a mid-run edit landed, and a
+  // cold run of the state before the edit (the `midrun` step).
+  let midrunChecks
   // A second install of the CLI, at another path, whose summary reads
   // otherwise, so its code differs from the first install's (`otherInstall`).
   let other
@@ -1330,10 +1337,45 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       : await daemonChecks(step, files, how)
     if (!cold.has(key)) cold.set(key, runCli(dir, files, how))
     const coldRun = cold.get(key)
+    // A check through the daemon of a state that nothing changed reuses
+    // every run that the store keeps (the README's reuse contract: a run is
+    // reused while its inputs are unchanged), so where the cold run cut
+    // nothing off and no test reads the clock, it computes nothing (third
+    // review of #55, F-A). The incremental check judges the count.
+    unchangedComputed =
+      step === `recheck` &&
+      (coldRun.evidence?.cut ?? 0) === 0 &&
+      plan.tests.every((t) => !t.flaky)
+        ? (daemon.evidence?.computed ?? 0)
+        : undefined
     for (const [i, run] of [daemon, ...others].entries())
       observe(`incremental`, {
         step: i === 0 ? step : `${step} (a second check at once)`,
         markerStored,
+        unchangedComputed: i === 0 ? unchangedComputed : undefined,
+        midrun:
+          i === 0 && step === `midrun` && midrunChecks
+            ? {
+                during: {
+                  exit: midrunChecks.during.exit,
+                  report: midrunChecks.during.report,
+                  stream: midrunChecks.during.stream,
+                  stdoutStream: midrunChecks.during.stdoutStream,
+                },
+                before: {
+                  exit: midrunChecks.before.exit,
+                  report: midrunChecks.before.report,
+                },
+                // File b's own test, when it lands the edit (see below).
+                editing:
+                  plan.midrunBy === `b`
+                    ? {
+                        file: `tests/b.test.ts`,
+                        ...MIDRUN_EDITORS[plan.midrunTarget],
+                      }
+                    : undefined,
+              }
+            : undefined,
         cold: {
           exit: coldRun.exit,
           refusal: coldRun.refusal,
@@ -1402,6 +1444,13 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       states.add(`incremental check reused some evidence and recomputed some`)
     if (step === `restart` && reused > 0)
       states.add(`evidence reused after a daemon restart`)
+    if (unchangedComputed === 0 && reused > 0) {
+      states.add(`an unchanged check through the daemon computed nothing`)
+      if (plan.prePlugin)
+        states.add(
+          `an unchanged check through the daemon computed nothing under a config's pre plugin`,
+        )
+    }
     // The witness module's hangs are cut off in every cold run. A daemon
     // check after an edit that cut off fewer runs than the cold run of the
     // same state reused a timed-out run, so law 9 judged a timeout that came
@@ -1481,10 +1530,11 @@ async function incremental(dir, plan, cli, copy, observe, states) {
     // it and before file b's runs read it; file b's own test edits its
     // helper, or the data file that it reads through fs, after b's judged
     // tests read them, so the run that lands the edit judged the old text.
-    // That check may report either state for a run the edit overlapped, so
-    // it is not compared; the runner must store no run under a text it did
-    // not read (settleIn), so the next check, with nothing changed, equals
-    // a cold run of the state after the edit.
+    // That check may report, for each mutant, what a cold run of either
+    // state reports (third review of #55, F-C: one extra cold run, of the
+    // state before the edit); the runner must store no run under a text it
+    // did not read (settleIn), so the next check, with nothing changed,
+    // equals a cold run of the state after the edit.
     if (step === `midrun`) {
       const target =
         plan.midrunTarget === `data` ? `tests/data.json` : `tests/strict.ts`
@@ -1498,11 +1548,11 @@ async function incremental(dir, plan, cli, copy, observe, states) {
         daemonPid && join(dir, `.oracle-gaps-${daemonPid}`, `midrun.txt`)
       if (marker && existsSync(dirname(marker)))
         writeFileSync(marker, `pending:${value}\n`)
-      runCli(
-        dir,
-        { ...files, [target]: after.replace(String(value), String(!value)) },
-        { ...how, daemon: true },
-      )
+      const before = {
+        ...files,
+        [target]: after.replace(String(value), String(!value)),
+      }
+      const during = runCli(dir, before, { ...how, daemon: true })
       const landed =
         marker &&
         existsSync(marker) &&
@@ -1523,6 +1573,7 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       markerStored ||= storedInputs(dir).some((path) =>
         path.endsWith(`/midrun.txt`),
       )
+      midrunChecks = { during, before: runCli(dir, before, how) }
       return [next]
     }
     if (step !== `dieMidCheck` && step !== `resetBeforeRead`)
@@ -2159,14 +2210,82 @@ function incrementalCheck(observations) {
     (o) => o.checkpoint === `incremental`,
   )) {
     const { step, cold, daemon } = value
-    // The mid-run marker sits in the daemon's own session directory, which
-    // is no input of a run by design (ownHarness); a run stored under it
-    // would let the marker hide whether the run read an edited input.
+    // The check that a mid-run edit overlapped reports, for each mutant,
+    // what a cold run of the state before the edit or of the state after
+    // it reports, and exits as one of them does (F-C).
+    if (value.midrun) {
+      const { during, before } = value.midrun
+      if (during.exit !== before.exit && during.exit !== cold.exit)
+        return violation(
+          `incremental`,
+          `the check during the mid-run edit exited ${during.exit}, and the cold runs before and after the edit exited ${before.exit} and ${cold.exit}`,
+          `incremental equals cold`,
+        )
+      const resultOf = (run, key) =>
+        JSON.stringify(run.report?.results.find((r) => r.key === key))
+      const keys = (run) =>
+        JSON.stringify((run.report?.results ?? []).map((r) => r.key))
+      if (keys(during) !== keys(before) && keys(during) !== keys(cold))
+        return violation(
+          `incremental`,
+          `the check during the mid-run edit reported other mutants than the cold runs before and after the edit`,
+          `incremental equals cold`,
+        )
+      // When file b's own test lands the edit, b's baseline reads the old
+      // text and b's mutant runs read the new one, so b's mutants can come
+      // out as neither cold run reports them (coordinator decision,
+      // 2026-11-13). Each must still come out as a run of the edited text
+      // can: killed, survived, or blocked, or crashed by the editing test's
+      // own assertion on the edited text, never by another test or with
+      // another gap outcome. Every other mutant, and every mutant when file
+      // a lands the edit, keeps the full comparison.
+      const { editing } = value.midrun
+      const ownedByEditor = (result) =>
+        editing !== undefined &&
+        (result.oracleFiles ?? []).some((file) => file.endsWith(editing.file))
+      const ranEdited = (result) =>
+        [`killed`, `survived`, `blocked`].includes(result.outcome) ||
+        (result.outcome === `crashed` &&
+          `${result.detail}`.includes(editing.message) &&
+          (result.by ?? []).length > 0 &&
+          result.by.every((test) => `${test}`.includes(editing.test)))
+      for (const result of during.report?.results ?? [])
+        if (
+          JSON.stringify(result) !== resultOf(before, result.key) &&
+          JSON.stringify(result) !== resultOf(cold, result.key) &&
+          !(ownedByEditor(result) && ranEdited(result))
+        )
+          return violation(
+            `incremental`,
+            `the check during the mid-run edit reported ${result.key} as neither cold run did, before or after the edit`,
+            `incremental equals cold`,
+            {
+              actual: result,
+              expected: [
+                resultOf(before, result.key),
+                resultOf(cold, result.key),
+              ],
+            },
+          )
+    }
+    if (value.unchangedComputed > 0)
+      return violation(
+        `incremental`,
+        `the check through the daemon of a state that nothing changed computed ${value.unchangedComputed} runs, owed none`,
+        `unchanged reuse`,
+      )
+    // A witness guard, not a law-9 requirement: the mid-run marker sits in
+    // the daemon's own session directory, which is no input of a run by
+    // design (ownHarness). The helper history is sensitive only while that
+    // holds: the run that lands the edit also rewrites the marker, so a run
+    // stored under the marker would not be stored at all, and the marker
+    // would hide whether the runner stores the run under the helper's text
+    // that it read.
     if (value.markerStored)
       return violation(
         `incremental`,
         `after ${step}, the daemon stored a run under the mid-run marker, a file in its own session directory`,
-        `incremental equals cold`,
+        `witness guard`,
       )
     if (
       daemon.exit !== cold.exit ||
@@ -2269,6 +2388,15 @@ function check(plan, observations, expected) {
         `through the daemon at ${value.step}: ${ends.difference}`,
         `greppable stream`,
         ends.extra,
+      )
+    // The check that a mid-run edit overlapped streams as any check does.
+    const duringEnds = value.midrun && endsBreach(value.midrun.during)
+    if (duringEnds)
+      return violation(
+        `incremental`,
+        `through the daemon during the mid-run edit: ${duringEnds.difference}`,
+        `greppable stream`,
+        duringEnds.extra,
       )
     // A refusal through the daemon prints the cold run's notes (review of
     // #46, F4): the notes of the session that failed reach the CLI.
@@ -3166,6 +3294,8 @@ const ownedIncrementalStates = [
   `edit midrun changed the cold result`,
   `an edit landed during a check through the daemon`,
   `a run edited the helper it had read, during a check through the daemon`,
+  `an unchanged check through the daemon computed nothing`,
+  `an unchanged check through the daemon computed nothing under a config's pre plugin`,
   `a run edited the data it had read, during a check through the daemon`,
   `edit fsData changed the cold result`,
   `an edit to data read through sync changed the cold result`,
@@ -3437,7 +3567,7 @@ oracleProperty({
   law: {
     statement: `The gap report enumerates the promised operator mutants, leaves out exactly the probe-only code, discovers every oracle that owns a function's call tree and refuses broken ownership, judges each mutant only by its owners' tests on their registered routes and counts only law verdicts on reproducible routes as kills, which outrank a run that never ends, anchors each mutant by its function and normalized statement, lists every gap and unowned mutant once with consistent counts, keeps keys stable under unrelated edits, reports through one daemon per package what a cold run reports at every state of a sequence of edits, and bounds the runs that confirm a mutant's cut-off copies by one budget per mutant and names each busy mutant in a heartbeat while it runs, leaves nothing in the package and writes nothing where Vitest's include could find it while it runs, leaves no process running once it is stopped, runs the package as Vitest does from any install path and any --source spelling: one instance of each workspace dependency, no refusal over an unbuildable devDependency, child processes for a native addon anywhere in the tree, a capture that a test's builtin spies cannot see, and a refusal of test.projects; leads its report with every test file's baseline, blocks only the mutants a failing oracle file owns and judges the rest, prints every line of its stream with the prefix oracle-gaps: and its kind, one decisive baseline line before any mutant, and a done line last, and every run that does not complete ends, cold or through the daemon, with a refusal that exits 2, prints a refused: block and one fix: directive with no stack trace, and writes the refusal to the run's output directory.`,
     authority: `The maintainer's decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), not in this package's records, including that a kill by reach agreement alone is a gap and that an incremental run through the daemon equals a cold one (v19.3); the project's oracle guide on quiet exclusions; the oracle rubric's outcome kinds (ORC-006); the CLI's documented operator list in schemata.mjs; the maintainer's dispositions G1, G2, G4, G5, G6, and G13 of the framework papercut ledger (2026-11-11) and the v20 freeze's namespacing, one-loop, and provisional-report decisions (2026-11-10); the maintainer's request for a greppable stream (2026-11-12, relayed by the coordinator with its decisions of that day: the same prefixes on stdout and stderr, a done line for a stopped run, and no --max-gaps).`,
-    limits: `Law 12 judges refusals only: no legal history reaches an internal error, so its shape (exit 3, the stack in error.log) is not judged; argument refusals are the static oracle's; the check's rejection of a stack trace, a missing fix, and a wrong exit code is calibrated in the static oracle, through the same refusalBreach, and here only a refused run reported as complete is calibrated, because each calibration here runs real CLI histories. Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 20 s full limit, and a slow run only as two witnesses whose tests wait where the output changed, 3 s in one that then judges and 10 s in two one-test owners of one that does not; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; --only only in a stopped run and a partial run of one function's mutants, and no --sample or --diff-base; the baseline's failures only as one failing owner test that throws an error and a setup file that throws, so a baseline law violation's law and counterexample lines are the classify oracle's; a derived class's file is instrumented and its sites are judged as unowned, but no test imports or constructs the class, so its no-mutant and super-region behavior is the static oracle's (in-process), not this oracle's; package configs only as vite.config or vitest.config with one of the extensions .ts, .mts, .cts, .js, .mjs, and .cjs (not every pair), as config/gap-vitest with the same extension through --config, or none, as an object or a sync or async function, with no plugins of their own and test.projects only as a refusal, and only under the package's own package.json; a top-level await only in an ES module config and require only in a CommonJS one, as Vitest itself loads no other; a --config outside the package is refused by design, through the rule for paths outside the package (args.mjs), and no history generates one; contexts only one, four, or eleven, and process warnings judged only as MaxListenersExceededWarning on the CLI's own stderr (a daemon's process warnings go to its log); a context that fails to open gives back its listener allowance, which no observation shows (a kept allowance only raises the limit, so no warning follows), so that accounting is fixed by inspection; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9 judges the witness module's outcome classes along one constructed edit sequence only (a test edit, a helper edit, and a revert), and the budget witness's along one constructed second check with nothing changed, because a generated history with the witness module or the budget witness takes no steps (maintainer decision, 2026-11-11, and the runtime review's P1-a, 2026-11-12; this oracle owns the gap); law 9's edits come between checks, except one, midrun, which lands during a check through the daemon: a test of file a, whose context has loaded file b's helper, rewrites the helper in the baseline's first run of file a, before file b's runs read it, in one context or several; or a test of file b rewrites its own helper, or the data file that its verdict read through a sync fs read, after file b's judged tests read them, in the run that judges with the old text (review of #55, F1); that check is not compared, because a run that the edit overlapped may report either text (the runner's rule: a run whose input changed after the run read it is invalidated and not stored, settleIn), and the next check, with nothing changed, must equal a cold run of the state after the edit; an edit during a mutant run is not generated, and a file is edited mid-run only by the run's own tests, not by another process at an arbitrary time; a file that a test reads through fs is edited only as one JSON file that file b's verdict reads by a sync, a promise, or a callback read, or by a sync read after it stats its own directory and tests that it exists (statDir: the directory is an input as a directory, not by its content, and is not itself edited), each read first checking that its fs function keeps its own name and length (the runner stores a run under the files in the package that its copy reads with readFileSync, readFile, existsSync, or statSync, or the fs/promises readFile or stat, each with its hash at the copy's first read; a read outside the package or under node_modules, from a worker thread or a child process that a test starts, or through any other fs API, which includes readdir, opendir, createReadStream, realpath, lstat, access, open, watch, readlink, the callback stat, exists, and the fs/promises access and open, is no input, and none is generated: the maintainer decided on 2026-11-13 that every fs read except watch is an input, which a follow-up of #55 implements, and until then this oracle owns the gap); the runner's hash memo knows a file by its size and modification time, so an edit that keeps both is not seen, and no history makes one (D10, planned in phase 2, A5); law 9's edits leave out other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; cut-off charging judged only under one budget; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages; daemon races (two CLIs reading one error file, a CLI hearing closing from the failing daemon it started, a reset connection on macOS) fixed by inspection; the runner's copies of the test files exist only in memory, and its harness and Vitest configs sit in the package's .oracle-gaps-<pid>, which the next run removes once a killed run has left it (judged after two stopped runs, not after a SIGKILL); a default --out is judged by the static oracle, and these runs name --out in the package; the namespace is checked after each run and, in a stopped run, while the run runs; a slow kill in a later owner, after earlier owners' confirmations spent the budget, becomes a timeout (owner order; not generated); the Vitest 5 path of the copies' pragma read and of the runner is verified from Vitest 5's source only, since the Vitest 5 CI job runs no gap oracle; a batch whose run reports an error outside any test reruns each copy alone (unitsBatch, runAlone) with its first budget, and a copy cut there is kept as a timeout with no confirmation, a defect older than this oracle's budget work that no history reaches (no history has an error outside any test beside a slow copy), recorded here with that trace for the maintainer; stale-session removal is scoped to this host's session directories (a host file), and is not judged across pid namespaces; the stop law covers SIGTERM and SIGINT sent to the CLI, not a SIGKILL of the CLI (its group then ends at the next check of its parent, by inspection) or a signal sent to the daemon, and its witness is one test that spins synchronously and starts one child process; the mutant budget is witnessed as two slow owners whose confirmations pass the --mutant-limit floor, not through its multiple of the owners' unmutated time, and authored mutants have no confirmations to budget; the witness w_slowpair is a wall-clock window, since the CLI's budget has no controlled clock and a fixture cannot see the time the CLI measures for its file: with one-test owner files p and q of measured unmutated time t each (a file first in its context pays the instrumented transform too), a wait W of 10 s, a 20 s --hang-limit and a 15 s --mutant-limit, it tells a budget from none only while (a) its first attempt is cut, W > 1 s + 3t, (b) its two confirmations do not fit the budget, 2W > max(15 s, 10 x 2t), and (c) each would fit its own full limit, W < 20 s + 3t; (b) is the binding one, so it holds while the two files' time stays under about 2 s together (about 1 s each, some 20 times the authoring machine's idle and 5 to 10 times its loaded measurements), and under one budget a run's overhead must stay under 10 s + 3t; CI runners measure 1.5 to 2.3 times the idle machine; beyond that w_slowpair would read not-judged; a heartbeat is owed only where a slow test waits 3 s against a 2 s interval, twice the first budget, so that no copy cut at its first budget beats, and each beat is observed as its mutant and file, not how long or how often it beat; a config only in the package's parent directory is generated one level up, in a temporary directory with no package.json (so its .js or .ts name is CommonJS), as a plain config, one that throws, one with no default export, or one that defines test.projects; a config two or more levels up, or a parent config beside a package config, is not generated, and the order in one directory follows Vitest's configFiles list by inspection; a package with no config lives in a temporary directory, where no parent has a config; a counterexample shrinks through at most six histories, so it can be larger than the smallest that fails; module-level data only as four \`const\` declarations of the main source (an object literal, an array that holds a function, a boolean, and an object of two methods), read in place, with no data imported from another file, destructured, reassigned, or declared as an enum or a default export; the work law only through shortcut witnesses (an early return before a counting loop with a bound twin of ratio 2, and a push beside one that calls String with a bound twin of ratio 1), the early return in tests that reach the clock by each watched path and in tests that wait a turn, a generated test's bound of 1 derived from its plan (which no generated function's mutant reached in the 36 fixed-seed units), and one warm-cache witness whose selection reproduces observations but not work; work is the capture's count of site evaluations per test, so code with no site (a plain assignment, a for...of pass, a builtin's own work) counts nothing and a test's histories are summed, and a test whose work varies between the unmutated runs while its observations agree is not generated.`,
+    limits: `Law 12 judges refusals only: no legal history reaches an internal error, so its shape (exit 3, the stack in error.log) is not judged; argument refusals are the static oracle's; the check's rejection of a stack trace, a missing fix, and a wrong exit code is calibrated in the static oracle, through the same refusalBreach, and here only a refused run reported as complete is calibrated, because each calibration here runs real CLI histories. Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 20 s full limit, and a slow run only as two witnesses whose tests wait where the output changed, 3 s in one that then judges and 10 s in two one-test owners of one that does not; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; --only only in a stopped run and a partial run of one function's mutants, and no --sample or --diff-base; the baseline's failures only as one failing owner test that throws an error and a setup file that throws, so a baseline law violation's law and counterexample lines are the classify oracle's; a derived class's file is instrumented and its sites are judged as unowned, but no test imports or constructs the class, so its no-mutant and super-region behavior is the static oracle's (in-process), not this oracle's; package configs only as vite.config or vitest.config with one of the extensions .ts, .mts, .cts, .js, .mjs, and .cjs (not every pair), as config/gap-vitest with the same extension through --config, or none, as an object or a sync or async function, with no plugins of their own except one enforce: 'pre' transform that appends a comment to each module of the package (prePlugin), and test.projects only as a refusal, and only under the package's own package.json; a top-level await only in an ES module config and require only in a CommonJS one, as Vitest itself loads no other; a --config outside the package is refused by design, through the rule for paths outside the package (args.mjs), and no history generates one; contexts only one, four, or eleven, and process warnings judged only as MaxListenersExceededWarning on the CLI's own stderr (a daemon's process warnings go to its log); a context that fails to open gives back its listener allowance, which no observation shows (a kept allowance only raises the limit, so no warning follows), so that accounting is fixed by inspection; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9 judges the witness module's outcome classes along one constructed edit sequence only (a test edit, a helper edit, and a revert), and the budget witness's along one constructed second check with nothing changed, because a generated history with the witness module or the budget witness takes no steps (maintainer decision, 2026-11-11, and the runtime review's P1-a, 2026-11-12; this oracle owns the gap); law 9's edits come between checks, except one, midrun, which lands during a check through the daemon: a test of file a, whose context has loaded file b's helper, rewrites the helper in the baseline's first run of file a, before file b's runs read it, in one context or several; or a test of file b rewrites its own helper, or the data file that its verdict read through a sync fs read, after file b's judged tests read them, in the run that judges with the old text (review of #55, F1); that check must report, for each mutant, what a cold run of the state before the edit or of the state after it reports, and exit as one of them does (third review of #55, F-C), compared per mutant result rather than per file; when file b's own test lands the edit, b's baseline reads the old text and b's mutant runs read the new one, so the check mixes states for b's mutants, and those need only come out as a run of the edited text can (killed, survived, blocked, or crashed by the editing test's own assertion on the edited text, never another crash or gap outcome; coordinator decision, 2026-11-13); the stronger follow-up compares each run's raw outcome with the cold outcome of the state that run read, and makes the editing test take a law path instead of crashing; and the next check, with nothing changed, must equal a cold run of the state after the edit (the runner's rule: a run whose input changed after the run read it is invalidated and not stored, settleIn); a check through the daemon of a state that nothing changed must compute nothing, judged only where the cold run cut nothing off and no test reads the clock (F-A); an edit during a mutant run is not generated, and a file is edited mid-run only by the run's own tests, not by another process at an arbitrary time; a file that a test reads through fs is edited only as one JSON file that file b's verdict reads by a sync, a promise, or a callback read, or by a sync read after it stats its own directory and tests that it exists (statDir: the directory is an input as a directory, not by its content, and is not itself edited), each read first checking that its fs function keeps its own name and length (the runner stores a run under the files in the package that its copy reads with readFileSync, readFile, existsSync, or statSync, or the fs/promises readFile or stat, each with its hash at the copy's first read; a read outside the package or under node_modules, from a worker thread or a child process that a test starts, or through any other fs API, which includes readdir, opendir, createReadStream, realpath, lstat, access, open, a read through a file descriptor (read, readSync, readv), copyFile and copyFileSync, cp and cpSync, openAsBlob, statfs, readlink, the callback stat, exists, watch, watchFile, and the fs/promises access and open, is no input, and none is generated: the maintainer decided on 2026-11-13 that every fs read except watch is an input, which a follow-up of #55 implements, and until then this oracle owns the gap); a run cut off by its clock writes no closing row, so it is stored under its file's known inputs only, while a run that spun ends and keeps the inputs it named (F-D); no history makes a cut run read a file that its file's unmutated run does not read, so this is fixed by inspection; the runner's hash memo knows a file by its size and modification time, so an edit that keeps both is not seen, and no history makes one (D10, planned in phase 2, A5); law 9's edits leave out other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; cut-off charging judged only under one budget; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages; daemon races (two CLIs reading one error file, a CLI hearing closing from the failing daemon it started, a reset connection on macOS) fixed by inspection; the runner's copies of the test files exist only in memory, and its harness and Vitest configs sit in the package's .oracle-gaps-<pid>, which the next run removes once a killed run has left it (judged after two stopped runs, not after a SIGKILL); a default --out is judged by the static oracle, and these runs name --out in the package; the namespace is checked after each run and, in a stopped run, while the run runs; a slow kill in a later owner, after earlier owners' confirmations spent the budget, becomes a timeout (owner order; not generated); the Vitest 5 path of the copies' pragma read and of the runner is verified from Vitest 5's source only, since the Vitest 5 CI job runs no gap oracle; a batch whose run reports an error outside any test reruns each copy alone (unitsBatch, runAlone) with its first budget, and a copy cut there is kept as a timeout with no confirmation, a defect older than this oracle's budget work that no history reaches (no history has an error outside any test beside a slow copy), recorded here with that trace for the maintainer; stale-session removal is scoped to this host's session directories (a host file), and is not judged across pid namespaces; the stop law covers SIGTERM and SIGINT sent to the CLI, not a SIGKILL of the CLI (its group then ends at the next check of its parent, by inspection) or a signal sent to the daemon, and its witness is one test that spins synchronously and starts one child process; the mutant budget is witnessed as two slow owners whose confirmations pass the --mutant-limit floor, not through its multiple of the owners' unmutated time, and authored mutants have no confirmations to budget; the witness w_slowpair is a wall-clock window, since the CLI's budget has no controlled clock and a fixture cannot see the time the CLI measures for its file: with one-test owner files p and q of measured unmutated time t each (a file first in its context pays the instrumented transform too), a wait W of 10 s, a 20 s --hang-limit and a 15 s --mutant-limit, it tells a budget from none only while (a) its first attempt is cut, W > 1 s + 3t, (b) its two confirmations do not fit the budget, 2W > max(15 s, 10 x 2t), and (c) each would fit its own full limit, W < 20 s + 3t; (b) is the binding one, so it holds while the two files' time stays under about 2 s together (about 1 s each, some 20 times the authoring machine's idle and 5 to 10 times its loaded measurements), and under one budget a run's overhead must stay under 10 s + 3t; CI runners measure 1.5 to 2.3 times the idle machine; beyond that w_slowpair would read not-judged; a heartbeat is owed only where a slow test waits 3 s against a 2 s interval, twice the first budget, so that no copy cut at its first budget beats, and each beat is observed as its mutant and file, not how long or how often it beat; a config only in the package's parent directory is generated one level up, in a temporary directory with no package.json (so its .js or .ts name is CommonJS), as a plain config, one that throws, one with no default export, or one that defines test.projects; a config two or more levels up, or a parent config beside a package config, is not generated, and the order in one directory follows Vitest's configFiles list by inspection; a package with no config lives in a temporary directory, where no parent has a config; a counterexample shrinks through at most six histories, so it can be larger than the smallest that fails; module-level data only as four \`const\` declarations of the main source (an object literal, an array that holds a function, a boolean, and an object of two methods), read in place, with no data imported from another file, destructured, reassigned, or declared as an enum or a default export; the work law only through shortcut witnesses (an early return before a counting loop with a bound twin of ratio 2, and a push beside one that calls String with a bound twin of ratio 1), the early return in tests that reach the clock by each watched path and in tests that wait a turn, a generated test's bound of 1 derived from its plan (which no generated function's mutant reached in the 36 fixed-seed units), and one warm-cache witness whose selection reproduces observations but not work; work is the capture's count of site evaluations per test, so code with no site (a plain assignment, a for...of pass, a builtin's own work) counts nothing and a test's histories are summed, and a test whose work varies between the unmutated runs while its observations agree is not generated.`,
   },
   histories: {
     // A failing history shrinks through at most six smaller ones. Each runs
@@ -4105,6 +4235,59 @@ oracleProperty({
           concurrentStart: false,
           contexts: 1,
           steps: [`midrun`],
+        }),
+      },
+      {
+        // A check through the daemon of a state that nothing changed, under
+        // a config whose own pre plugin rewrites every module: the runner
+        // must store each run under the text it served, which that plugin
+        // has not rewritten yet, so the second check reuses every run (third
+        // review of #55, F-A).
+        name: `an unchanged check through the daemon under a config's pre plugin`,
+        enters: [
+          `an unchanged check through the daemon computed nothing`,
+          `an unchanged check through the daemon computed nothing under a config's pre plugin`,
+        ],
+        build: (generated) => ({
+          ...generated,
+          functions: [
+            [{ kind: `push`, quote: `'` }],
+            [{ kind: `push`, quote: `'` }],
+          ],
+          containers: [],
+          overloads: [],
+          owners: [`a`, `b`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          derived: null,
+          dotGen: false,
+          dataOwners: [],
+          exportOwners: [],
+          importer: `none`,
+          wholeFile: `none`,
+          template: false,
+          tests: [
+            { ...judging(`a`, `fixed seed`, 1), fn: 0 },
+            { ...judging(`b`, `fixed seed`, 1), fn: 1 },
+          ],
+          witness: false,
+          authored: null,
+          secondAuthored: false,
+          fault: `none`,
+          stability: `none`,
+          ordinary: false,
+          native: `none`,
+          boot: false,
+          budget: `two`,
+          cliPath: `plain`,
+          concurrentStart: false,
+          contexts: 1,
+          steps: [`recheck`],
+          prePlugin: true,
+          configPlace: `discovered`,
+          configFile: `vite.config.mjs`,
+          config: `object`,
         }),
       },
       {
