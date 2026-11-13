@@ -36,12 +36,16 @@ function routeOf(registered) {
 /**
  * A mutant's outcome from its units. A test whose observations varied
  * between the two unmutated runs is nondeterministic: its failures judge
- * nothing, so a mutant that only such tests fail is not killed.
+ * nothing, so a mutant that only such tests fail is not killed. A passing
+ * test for which `pastBound(key, row)` holds did more work than its
+ * property's work bound allows, a verdict under law `work bound` on its
+ * route (`judgeMutant` decides it; the runner's stop at a kill reads none).
  */
 export function outcomeOf(
   units,
   nondeterministic = new Set(),
   assertions = false,
+  pastBound = () => false,
 ) {
   // A run that timed out recorded nothing. A kill in another run still
   // decides; failing that, the mutant is `timeout`.
@@ -57,9 +61,19 @@ export function outcomeOf(
     for (const message of unit.setupErrors)
       failures.push({ setup: true, message })
     for (const test of unit.tests) {
-      if (test.state !== `failed`) continue
-      if (nondeterministic.has(test.key)) continue
       const row = rows.get(test.key)
+      if (test.state !== `failed`) {
+        if (test.state === `passed` && pastBound(test.key, row)) {
+          const route = routeOf(row.route)
+          failures.push({
+            test: test.fullName,
+            route,
+            verdicts: [{ law: `work bound`, route }],
+          })
+        }
+        continue
+      }
+      if (nondeterministic.has(test.key)) continue
       // Each verdict keeps the route active when it fired.
       const verdicts = (row?.verdicts ?? []).map((v) => ({
         ...v,
@@ -236,7 +250,21 @@ export function baselineOf(firstRows, secondRows) {
     for (const id of row.hits)
       reachedBy.set(id, [...(reachedBy.get(id) ?? []), key])
   const rank = new Map([...firstRows.keys()].map((key, i) => [key, i]))
-  return { firstRows, nondeterministic, reachedBy, rank }
+  // Each deterministic test's work, the site evaluations its production
+  // code made (capture-setup.mjs `calls`), where the two runs agree and
+  // neither run's count could follow the clock (`clocked`): only such a
+  // test's work judges a mutant, so a kill replays on an idle machine.
+  const work = new Map()
+  for (const [key, row] of firstRows)
+    if (
+      !row.background &&
+      !nondeterministic.has(key) &&
+      !row.clocked &&
+      !secondRows.get(key)?.clocked &&
+      secondRows.get(key)?.calls === row.calls
+    )
+      work.set(key, row.calls)
+  return { firstRows, nondeterministic, reachedBy, rank, work }
 }
 
 /**
@@ -343,7 +371,10 @@ const changedIn = (rows, keys, baseline) =>
  * `unreached`. A survivor gets one class from what the run measured (the
  * classes are in the design's decision 11): `not-judged` (a changed value
  * no law rejected), `indeterminate` (only nondeterministic tests reached
- * it), `dead-code` (no input distinguishes it), `outside-annotation` (no
+ * it), `extra-work` (no observation changed, and a test did more work;
+ * `work` names the first such test, its work before and after, and the
+ * work bound that rejects the mutant), `dead-code` (no input distinguishes
+ * it), `outside-annotation` (no
  * input of the annotations distinguishes it; `input` names the input class
  * outside them that does), `branch-never-taken` (an
  * `if` one of whose outcomes never occurred; `wanted` names the missing
@@ -355,11 +386,6 @@ const changedIn = (rows, keys, baseline) =>
 export function judgeMutant(mutant, { owners, targets, units, baseline }) {
   if (owners.size === 0) return { outcome: `unowned` }
   if (targets.oracleKeys.length === 0) return { outcome: `unreached` }
-  const result = {
-    ...outcomeOf(units, baseline.nondeterministic),
-    seconds: units.reduce((sum, u) => sum + u.seconds, 0),
-  }
-  if (result.outcome !== `survived`) return result
   const rows = new Map(units.flatMap((u) => u.rows ?? []))
   // Only owner tests that reach the site can judge it. Code that ran when a
   // file loaded the module reaches every test of that file (maintainer
@@ -374,13 +400,59 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
       !rows.get(k).background &&
       !baseline.nondeterministic.has(k),
   )
+  // A compared test's work judges the mutant when the two unmutated runs
+  // agree on it, no run's count could follow the clock, and its route is
+  // one that oracleProperty registers for production, which can carry a
+  // work bound; it rose when the mutant's run did more.
+  const compares = new Set(compared)
+  const rose = (k, row = rows.get(k)) =>
+    compares.has(k) &&
+    baseline.work.has(k) &&
+    [`reproducible`, `random`].includes(routeOf(row.route)) &&
+    !row.clocked &&
+    row.calls > baseline.work.get(k)
+  const result = {
+    ...outcomeOf(
+      units,
+      baseline.nondeterministic,
+      false,
+      (k, row) =>
+        rose(k, row) &&
+        row.work !== undefined &&
+        // In hundredths, exactly: 29 is not past 1.16 times 25.
+        100 * row.calls > Math.round(100 * row.work) * baseline.work.get(k),
+    ),
+    seconds: units.reduce((sum, u) => sum + u.seconds, 0),
+  }
+  if (result.outcome !== `survived`) return result
   result.changedTests = changedIn(rows, compared, baseline)
+  const roseIn = inReportOrder(
+    compared.filter((k) => rose(k)),
+    baseline,
+  )[0]
   if (result.changedTests.length > 0) result.class = `not-judged`
   else if (compared.length === 0) {
     result.class = `indeterminate`
     result.nondeterministicBy = targets.oracleKeys.filter((k) =>
       baseline.nondeterministic.has(k),
     )
+  } else if (roseIn !== undefined) {
+    // No observation changed, and the mutant's run did more work: it
+    // deleted a shortcut that only a work bound sees (maintainer decision,
+    // 2026-11-12). The bound to declare is the largest ratio in hundredths
+    // below the measured one, and 1 when the test did no work before.
+    const before = baseline.work.get(roseIn)
+    const after = rows.get(roseIn).calls
+    result.class = `extra-work`
+    result.work = {
+      test: roseIn,
+      before,
+      after,
+      ratio: before > 0 ? (after / before).toFixed(3) : undefined,
+      bound: (
+        (before > 0 ? Math.floor((100 * after - 1) / before) : 100) / 100
+      ).toFixed(2),
+    }
   } else if (mutant.evidence === `dead code`) result.class = `dead-code`
   else if (mutant.outside) {
     // No input of the annotations distinguishes it: the type analysis names

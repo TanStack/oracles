@@ -42,6 +42,26 @@
  *    them all. Failing that, a verdict on the random campaign
  *    makes it a `random-only-kill`, and one on an unknown or unregistered
  *    route an `unregistered-kill`.
+ *    A test's work is the number of site evaluations that its production
+ *    code made (capture-setup.mjs `calls`), a count, never a time. A test
+ *    whose property declares a work bound (`work: { ratio }`) and whose
+ *    work under the mutant is more than `ratio` times its work with no
+ *    mutant active reports a verdict under law `work bound` on its route,
+ *    as a law violation does, so it kills on a reproducible route and is a
+ *    `random-only-kill` or an `unregistered-kill` elsewhere. Only a test
+ *    whose work judges the mutant reports it: it passed under the mutant,
+ *    it reached the mutant (or its file loaded code that did), its
+ *    observations and its work agreed between the two unmutated runs, and
+ *    its route judges production (not the framework's own checks). The
+ *    runner's stop at the first file that kills reads law verdicts only, so
+ *    a kill names the laws of the files that ran up to that one, `work
+ *    bound` among them when one of their tests exceeded its bound.
+ *    Authority: the maintainer's decision of 2026-11-12 that a production
+ *    branch that exists only for speed, reported as `not-observed`, is a
+ *    gap CLI bug ("this is a bug then in the gap cli and should be fixed"),
+ *    and the design decided with it that day: a speed shortcut is owed a
+ *    cost law, not an exit, so a regression that deletes it must be
+ *    catchable, by a deterministic count and never by wall-clock time.
  * 4. Failing that, if every failing test timed out, it is `timeout`; a
  *    failing test outside the framework's own checks makes it `crashed`; a
  *    failing framework check alone (the `calibration` route, which covers
@@ -53,7 +73,16 @@
  *    `not-judged` when a reaching, deterministic owner test's asserted or
  *    observed value changed (code that ran when a file loaded the module
  *    reaches every test of that file, maintainer decision of 2026-11-06);
- *    `indeterminate` when no such test judged it; `dead-code` when the
+ *    `indeterminate` when no such test judged it; `extra-work` when a test
+ *    whose work judges the mutant (law 3) did more work under it than with
+ *    no mutant active, though no observation changed: the mutant deletes a
+ *    shortcut that exists for speed, which only a cost law sees, so its
+ *    directive names the first such test in report order, its two work
+ *    counts and their ratio, and the work bound to declare on its property,
+ *    the largest ratio in hundredths below the measured one (1 when the
+ *    test did no work before), which rejects the mutant; a mutant whose
+ *    work fell, or rose only in a test whose work does not judge it, is
+ *    not `extra-work`; `dead-code` when the
  *    mutant carries the `dead code` evidence (no input distinguishes it);
  *    `outside-annotation` when the type analysis names an input class
  *    outside the declared types, and none of its inputs distinguishes the
@@ -204,7 +233,11 @@
  * names and the test's joined by a space (@vitest/runner 4.1).
  *
  * Limits: the records' shapes are those capture-setup.mjs writes; that a
- * real run writes them correctly is the end-to-end oracle's. The driver
+ * real run writes them correctly is the end-to-end oracle's, and so is
+ * which work the capture counts. A test that reaches a site and did no
+ * work is generated, though no real run records one. An authored mutant's
+ * copy is not instrumented and counts no work, so the work law does not
+ * judge it. The driver
  * encodes operands as the capture does (`shown`); that the capture's
  * encoding is lossless is not judged here, and two long strings are told
  * apart by a 32-bit digest. No symbol operand is generated: two symbols of
@@ -269,6 +302,15 @@ const SLOTS = MUTANTS + AUTHORED
 // of it fails with no mutant active, or it does not load. A law verdict
 // names one of two behavioral laws, `L` and `M`, or reach agreement, so
 // the laws of a kill can show which owner file decided it.
+//
+// Each test also has a work count with no mutant active (none, some, or
+// much), may have done one more in its second unmutated run, may declare a
+// work bound of 1, 1.5, or 2, and has, under each mutant, an amount that
+// the mutant adds to its work or takes from it. The amounts straddle the
+// bounds: 1 more on 10 or 100 is under every bound but 1, 7 more on 10 is
+// past 1.5 and under 2, and 150 more is past every bound. Its time in
+// milliseconds varies on its own, as a clock's does, so a classification
+// that read time where it owes work would disagree with the model.
 //
 // The order of the records is also generated, because a real run's order
 // depends on how it ran (law 7). The runner deals the files round-robin over
@@ -407,6 +449,11 @@ const effect = fc.record({
   law: fc.constantFrom(`L`, `M`, `reach agreement`),
   // The route active when a verdict fired, when it differs from the test's.
   firedAt: fc.option(fc.constantFrom(...routes.slice(1)), { nil: undefined }),
+  // What the mutant adds to the test's work (site evaluations; a negative
+  // amount takes work away), and the test's time in milliseconds, which
+  // varies as a clock does and judges nothing.
+  work: fc.constantFrom(0, 0, 0, -1, 1, 4, 7, 150),
+  ms: fc.nat({ max: 40 }),
 })
 const testRecord = fc.record({
   route: fc.constantFrom(...routes),
@@ -432,6 +479,37 @@ const testRecord = fc.record({
   // The test's place among its file's records in a mutant run (ties keep the
   // file's order).
   runOrder: fc.nat({ max: 2 }),
+  // The test's work with no mutant active, in site evaluations; whether its
+  // second unmutated run did one more (its observations still agreeing);
+  // the work bound its property declares (`work: { ratio }`), if any, in
+  // hundredths; whether its count could follow the clock, and by which
+  // path (a timer or interval, a timer of `node:timers/promises`, a read of
+  // a clock such as `Date.now()`, or I/O held open), all of which the
+  // capture records as one flag, `clocked`, beside `io`; and its time in the
+  // two unmutated runs, which judges nothing.
+  work: fc.constantFrom(0, 10, 25, 100),
+  workFlaky: fc.constantFrom(false, false, false, true),
+  bound: fc.constantFrom(undefined, undefined, 100, 116, 150, 200),
+  clocked: fc.oneof(
+    { weight: 4, arbitrary: fc.constant(`none`) },
+    {
+      weight: 4,
+      arbitrary: fc.constantFrom(
+        `timer`,
+        `timers/promises`,
+        `clock read`,
+        `spied clock read`,
+        `process.uptime`,
+        `os.uptime`,
+        `AbortSignal.timeout`,
+        `Atomics.wait`,
+        `Atomics.waitAsync`,
+        `monitorEventLoopDelay`,
+        `io`,
+      ),
+    },
+  ),
+  ms: fc.nat({ max: 40 }),
 })
 const records = fc.record({
   files: fc.array(
@@ -574,11 +652,51 @@ const swapFor = { '>': `>=`, '>=': `>`, '===': `!==`, '&&': `||` }
 // The model states the law above over the records, without the CLI's
 // functions: it reads each test's effect under the mutant directly.
 
+// The work law (law 3). A test's work with no mutant active is `t.work`
+// site evaluations (its second unmutated run did one more when
+// `t.workFlaky`), and under the mutant in slot `slot` it is that plus what
+// the effect adds, never below none.
+const workUnder = (t, slot) => Math.max(0, t.work + t.under[slot].work)
+// Whether a test's work judges operator mutant `mi`: it passed under the
+// mutant, it reached the mutant or its file loaded code that did, its
+// observations and its work agreed between the unmutated runs, its count
+// could not follow the clock (it made no timer by any path, read no clock,
+// and held no I/O open: a kill must replay on an idle machine, the
+// maintainer's decision of 2026-11-12 under P3), and its
+// route is one that `oracleProperty` registers for production, a
+// reproducible or a random one, so it can carry a declared bound.
+const passedKinds = new Set([`same`, `changed`, `observedChanged`, `unhandled`])
+const workJudges = (h, mi, x) =>
+  passedKinds.has(x.t.under[mi].kind) &&
+  (x.t.reaches[mi] || h.files[x.fi].background[mi]) &&
+  !x.t.flaky &&
+  !x.t.workFlaky &&
+  x.t.clocked === `none` &&
+  [`reproducible`, `random`].includes(kindOf(x.t.route))
+// A test past its declared bound: more work than `ratio` times its work
+// with no mutant active, compared exactly, in hundredths.
+const pastBound = (h, mi, x) =>
+  workJudges(h, mi, x) &&
+  x.t.bound !== undefined &&
+  100 * workUnder(x.t, mi) > x.t.bound * x.t.work
+
+// The work bound that rejects a rise from `before` to `after` site
+// evaluations: the largest ratio in hundredths below the measured one, and
+// 1 when the test did no work before (any ratio rejects a rise from none).
+function boundBelow(before, after) {
+  if (before === 0) return `1.00`
+  let hundredths = 100
+  while ((hundredths + 1) * before < 100 * after) hundredths += 1
+  return (hundredths / 100).toFixed(2)
+}
+
 // Laws 2 to 4 over the tests that judge a mutant, read from each test's
 // effect in the mutant's slot: the failure's outcome, if a failure decides,
 // and the tests that ran (a file that failed to load, or whose run timed
-// out, ran none).
-function failureOf(h, slot, tests) {
+// out, ran none). `work` says whether the work law judges the slot: it
+// judges operator mutants, whose copies count work, and the runner's stop
+// at a kill reads no work.
+function failureOf(h, slot, tests, work = false) {
   const under = ({ t }) => t.under[slot].kind
   const timedOut = tests.some((x) => under(x) === `runTimeout`)
   const setup = tests.some((x) => under(x) === `setupError`)
@@ -593,13 +711,19 @@ function failureOf(h, slot, tests) {
       !x.t.flaky &&
       [`verdict`, `assertion`, `crash`, `timeoutMessage`].includes(under(x)),
   )
+  // A test past its work bound reports a verdict under `work bound` on its
+  // own route; the tests stay in report order.
+  const overBound = (x) => work && pastBound(h, slot, x)
+  const lawOf = (x) => (overBound(x) ? `work bound` : x.t.under[slot].law)
   const verdictsIn = (kind) =>
-    failing.filter(
+    ran.filter(
       (x) =>
-        under(x) === `verdict` &&
-        kindOf(x.t.under[slot].firedAt ?? x.t.route) === kind,
+        (failing.includes(x) &&
+          under(x) === `verdict` &&
+          kindOf(x.t.under[slot].firedAt ?? x.t.route) === kind) ||
+        (overBound(x) && kindOf(x.t.route) === kind),
     )
-  const kills = verdictsIn(`reproducible`).map((x) => x.t.under[slot].law)
+  const kills = verdictsIn(`reproducible`).map(lawOf)
   const behavioral = kills.filter((law) => law !== `reach agreement`)
   const decided = (failure) => ({ failure, ran })
   // A gap that names a failing test names the first one its class counts,
@@ -689,21 +813,28 @@ function judgedOutcome(h, mi, owners) {
   const tests = targets.flatMap((fi) =>
     h.files[fi].tests.map((t, ti) => ({ t, fi, ti })),
   )
-  const { failure, ran } = failureOf(h, mi, tests)
-  // The runner runs the owner files in report order and stops at the first
-  // that kills, so a kill names laws of that file only (law 7).
+  const { failure, ran } = failureOf(h, mi, tests, true)
+  // The runner runs the owner files in report order and stops after the
+  // first whose law verdicts kill (its stop reads no work), so a kill names
+  // the laws of the files it ran: law verdicts of that file only, and `work
+  // bound` when a test of those files exceeded its bound (law 7).
   if (failure?.outcome === `killed`) {
-    const first = targets
-      .map(
-        (fi) =>
-          failureOf(
-            h,
-            mi,
-            tests.filter((x) => x.fi === fi),
-          ).failure,
-      )
-      .find((f) => f?.outcome === `killed`)
-    return { ...failure, laws: first.laws, ownerFiles }
+    const stop = targets.findIndex(
+      (fi) =>
+        failureOf(
+          h,
+          mi,
+          tests.filter((x) => x.fi === fi),
+        ).failure?.outcome === `killed`,
+    )
+    const ranFiles = stop < 0 ? targets : targets.slice(0, stop + 1)
+    const inRun = failureOf(
+      h,
+      mi,
+      tests.filter((x) => ranFiles.includes(x.fi)),
+      true,
+    ).failure
+    return { ...failure, laws: inRun.laws, ownerFiles }
   }
   if (failure) return { ...failure, ownerFiles }
   // A survivor. Only reaching, deterministic owner tests judge it; code that
@@ -741,6 +872,20 @@ function judgedOutcome(h, mi, owners) {
       ],
     })
   }
+  // A test whose work judges the mutant did more work, and nothing it
+  // observed changed: the mutant deleted a shortcut (law 5). The message
+  // names the first such test in report order.
+  const rose = compared.find(
+    (x) => workJudges(h, mi, x) && workUnder(x.t, mi) > x.t.work,
+  )
+  if (rose)
+    return sized(`extra-work`, {
+      mention: [
+        `\`work: { ratio: ${boundBelow(rose.t.work, workUnder(rose.t, mi))} }\``,
+        `\`${shownName(h, rose.fi, rose.ti)}\``,
+        `rose from ${rose.t.work} to ${workUnder(rose.t, mi)} site evaluation${workUnder(rose.t, mi) === 1 ? `` : `s`}${rose.t.work > 0 ? ` (${(workUnder(rose.t, mi) / rose.t.work).toFixed(3)}× the unmodified run's)` : ``}.`,
+      ],
+    })
   if (m.evidence === `dead code`)
     return sized(`dead-code`, { mention: [`line ${m.line + 1}.`] })
   // The type analysis found no input of the declared types that
@@ -1173,6 +1318,8 @@ const directives = {
   'not-observed':
     /^Observe the value this code changes in (`[^`]+`|the owner tests), and assert on it\. Where the mutated code computes the same result as the original, add a history where it computes something different\.$/,
   'not-judged': /^Make a law in `[^`]+` reject the changed value\.$/,
+  'extra-work':
+    /^Declare `work: \{ ratio: \d+\.\d\d \}` on the `oracleProperty` that registers `[^`]+`, so that its work bound rejects this mutant: there it changed no observation, and its work rose from \d+ to \d+ site evaluations?( \(\d+\.\d{3}× the unmodified run's\))?\.$/,
   indeterminate:
     /^(Make `[^`]+` deterministic: control its clock and its random seed, so its failures judge this code|Add an owner test that runs line \d+ and asserts on its result)\.$/,
   'dead-code': /^Remove the redundant code on line \d+\.$/,
@@ -1202,10 +1349,14 @@ const directives = {
 // What a legend line says a class is, before its directive, where the
 // class's name alone misleads (maintainer disposition G3, 2026-11-11): a
 // crash is a gap, not a kill (the v20 freeze, P3 and C1), and its error is
-// in the gap's Detail line.
+// in the gap's Detail line. The extra-work line says first that a builtin
+// counts as one site, so a shortcut whose cost is in one is owed an
+// observation of that cost, not a very tight bound (maintainer, 2026-11-12).
 const meanings = {
   crashed:
     /^Production threw where no law judged it: a gap, not a kill\. Its error is on the gap's Detail line in summary\.md, and in its `detail` in results\.json\. /,
+  'extra-work':
+    /^A call to a builtin counts as one site evaluation, whatever it costs \(`Object\.defineProperty`\): where a shortcut's cost is in one, make that cost an observation of the driver, such as a count of those calls, and let a law judge it, in place of a very tight bound\. /,
 }
 // A count of things, as the report words it.
 const counted = (n, thing) => `${n} ${thing}${n === 1 ? `` : `s`}`
@@ -1414,6 +1565,15 @@ function baselineUnitsOf(h, pass) {
         ...capturedRows(h, t),
         route: t.route,
         verdicts: [],
+        // The capture's work count and the property's declared bound
+        // (capture-setup.mjs `calls` and `work`), and the test's time.
+        calls: t.work + (t.workFlaky && pass === 2 ? 1 : 0),
+        // The ratio the property declares, as an author writes it.
+        work: t.bound === undefined ? undefined : t.bound / 100,
+        // A timer the test made, or I/O it held open (capture-setup.mjs).
+        ...(t.clocked === `none` ? {} : { clocked: true }),
+        ...(t.clocked === `io` ? { io: true } : {}),
+        ms: t.ms + pass,
       })
     })
     rows.set(`${fileName(h, fi)} > (background)`, {
@@ -1483,6 +1643,13 @@ function unitOf(h, fi, slot) {
           hits: [],
           outcomes: [],
           route: t.route,
+          // An authored mutant's copy is not instrumented, so it counts no
+          // work.
+          calls: slot < MUTANTS ? workUnder(t, slot) : 0,
+          work: t.bound === undefined ? undefined : t.bound / 100,
+          ...(t.clocked === `none` ? {} : { clocked: true }),
+          ...(t.clocked === `io` ? { io: true } : {}),
+          ms: under(t).ms,
           verdicts:
             kind === `verdict`
               ? [
@@ -1758,6 +1925,72 @@ async function driver(h, observe) {
     }
     if (result.outcome === `killed` && units.some((u) => u.timedOut))
       states.add(`killed beside a timeout`)
+    // The work law's states (laws 3 and 5): a kill by a work bound, alone
+    // or beside a changed value that would otherwise be not-judged, a work
+    // bound on the random campaign, and survivors whose work rose under a
+    // declared bound, rose from none, rose only where work judges nothing,
+    // or fell.
+    const workTests = targets.oracleTargets
+      .map(fileIndex)
+      .flatMap((fi) => h.files[fi].tests.map((t, ti) => ({ t, fi, ti })))
+      .filter((x) => x.t.reaches[mi] || h.files[x.fi].background[mi])
+    const judgedRise = workTests.find(
+      (x) => workJudges(h, mi, x) && workUnder(x.t, mi) > x.t.work,
+    )
+    if (result.laws?.includes(`work bound`)) {
+      states.add(`${result.outcome} by a work bound`)
+      if (
+        result.outcome === `killed` &&
+        workTests.some(
+          (x) =>
+            !x.t.flaky &&
+            [`changed`, `observedChanged`].includes(x.t.under[mi].kind),
+        )
+      )
+        states.add(`a work bound kill beside a changed value`)
+    }
+    if (result.class === `extra-work` && judgedRise) {
+      if (judgedRise.t.bound !== undefined)
+        states.add(`extra-work under a declared bound`)
+      if (judgedRise.t.work === 0) states.add(`extra-work from no work`)
+      if (
+        judgedRise.t.bound !== undefined &&
+        100 * workUnder(judgedRise.t, mi) ===
+          judgedRise.t.bound * judgedRise.t.work
+      )
+        states.add(`a rise exactly at the declared bound`)
+      // An unregistered test before it in report order also rose.
+      if (
+        workTests
+          .slice(0, workTests.indexOf(judgedRise))
+          .some(
+            (x) =>
+              kindOf(x.t.route) === `unknown` &&
+              passedKinds.has(x.t.under[mi].kind) &&
+              !x.t.flaky &&
+              workUnder(x.t, mi) > x.t.work,
+          )
+      )
+        states.add(`extra-work named past an unregistered rise`)
+    }
+    if (result.class !== undefined && result.class !== `extra-work`) {
+      if (
+        workTests.some(
+          (x) =>
+            passedKinds.has(x.t.under[mi].kind) &&
+            !x.t.flaky &&
+            workUnder(x.t, mi) > x.t.work &&
+            !workJudges(h, mi, x),
+        )
+      )
+        states.add(`a work rise where work judges nothing`)
+      if (
+        workTests.some(
+          (x) => workJudges(h, mi, x) && workUnder(x.t, mi) < x.t.work,
+        )
+      )
+        states.add(`a survivor whose work fell`)
+    }
     const declared = [...new Set(h.mutants[mi].owners)]
     orderStates(h, states, `changed test`, placesOfKeys(h, result), declared)
     if (namesAFailingTest.has(result.outcome))
@@ -2219,6 +2452,9 @@ function check(h, observations, expected) {
   const crashedLegend = legend.find((line) =>
     line.startsWith(`oracle-gaps: legend crashed: `),
   )
+  const workLegend = legend.find((line) =>
+    line.startsWith(`oracle-gaps: legend extra-work: `),
+  )
   const leadProblem =
     stdoutLines.slice(0, baselineGot.length).join(`\n`) !==
     baselineGot.join(`\n`)
@@ -2259,7 +2495,14 @@ function check(h, observations, expected) {
                       ),
                     )
                   ? `the crashed legend line does not say a crash is a gap and where its error is`
-                  : undefined
+                  : workLegend !== undefined &&
+                      !meanings[`extra-work`].test(
+                        workLegend.slice(
+                          `oracle-gaps: legend extra-work: `.length,
+                        ),
+                      )
+                    ? `the extra-work legend line does not say that a builtin counts as one site, and what is owed for its cost`
+                    : undefined
   if (leadProblem)
     return violation(`classified`, leadProblem, `stdout`, { actual: stdout })
   // The full report leads with the same baseline, before its gaps.
@@ -2686,6 +2929,28 @@ const calibrations = [
     },
   },
   {
+    name: `a survivor that only did more work is reported as not observed`,
+    law: `classification`,
+    corrupt: corrupt((v) => {
+      const o = v.outcomes.find((x) => x.class === `extra-work`)
+      if (!o) return false
+      o.class = `not-observed`
+    }),
+  },
+  {
+    name: `a kill by a work bound is reported as a survivor`,
+    law: `classification`,
+    corrupt: corrupt((v) => {
+      const o = v.outcomes.find(
+        (x) => x.outcome === `killed` && x.laws?.includes(`work bound`),
+      )
+      if (!o) return false
+      o.outcome = `survived`
+      o.class = `extra-work`
+      o.laws = undefined
+    }),
+  },
+  {
     name: `a crash is reported as a kill`,
     law: `classification`,
     corrupt: corrupt((v) => {
@@ -2772,6 +3037,16 @@ const required = [
   `killed by one owner beside a failing owner`,
   `a baseline law violation with its counterexample`,
   `an ordinary file's failing baseline test`,
+  `extra-work`,
+  `extra-work under a declared bound`,
+  `extra-work from no work`,
+  `killed by a work bound`,
+  `a work bound kill beside a changed value`,
+  `random-only-kill by a work bound`,
+  `a work rise where work judges nothing`,
+  `a survivor whose work fell`,
+  `extra-work named past an unregistered rise`,
+  `a rise exactly at the declared bound`,
 ]
 
 // One constructed history per outcome class: one mutant judged by one
@@ -2786,13 +3061,25 @@ const plainTest = (effect = {}, test = {}) => ({
   flaky: false,
   reaches: four(true),
   seen: four(`both`),
-  under: slots({ kind: `same`, law: `L`, firedAt: undefined, ...effect }),
+  under: slots({
+    kind: `same`,
+    law: `L`,
+    firedAt: undefined,
+    work: 0,
+    ms: 0,
+    ...effect,
+  }),
   pair: four([0, 1]),
   suites: [],
   label: ``,
   tail: ``,
   fails: false,
   runOrder: 0,
+  work: 10,
+  workFlaky: false,
+  bound: undefined,
+  clocked: `none`,
+  ms: 0,
   ...test,
 })
 const single = (
@@ -2977,6 +3264,8 @@ const constructed = [
                   kind: `runTimeout`,
                   law: `L`,
                   firedAt: undefined,
+                  work: 0,
+                  ms: 0,
                 }),
               },
             ],
@@ -2996,6 +3285,134 @@ const constructed = [
   }),
   single(`a changed value`, [`not-judged`], {
     effect: { kind: `changed` },
+  }),
+  // The work law (laws 3 and 5): klona's shapes. A forced `if` that
+  // deletes an early return, and a skipped call whose absence costs work
+  // elsewhere, change no observation and cost more work.
+  single(`a forced branch that only costs work`, [`extra-work`], {
+    mutant: { operator: `if-false` },
+    test: { work: 100 },
+    effect: { work: 150 },
+  }),
+  single(`a skipped call that only costs work`, [`extra-work`], {
+    effect: { work: 7 },
+  }),
+  single(
+    `a rise under the declared bound`,
+    [`extra-work`, `extra-work under a declared bound`],
+    {
+      mutant: { operator: `if-false` },
+      test: { work: 100, bound: 200 },
+      effect: { work: 7 },
+    },
+  ),
+  // A test that reaches a site does work, so a rise from none comes from
+  // code that ran when the file loaded the module: the mutant changed what
+  // the loaded module does in a test that reaches none of its sites.
+  single(`a rise from no work`, [`extra-work`, `extra-work from no work`], {
+    mutant: { operator: `if-true` },
+    test: { work: 0, reaches: four(false) },
+    background: four(true),
+    backgroundInfects: four(true),
+    effect: { work: 1 },
+  }),
+  single(`a rise past the declared bound`, [`killed by a work bound`], {
+    mutant: { operator: `if-false` },
+    test: { bound: 150 },
+    effect: { work: 7 },
+  }),
+  single(
+    `a rise past the declared bound beside a changed value`,
+    [`killed by a work bound`, `a work bound kill beside a changed value`],
+    { test: { bound: 200 }, effect: { kind: `changed`, work: 150 } },
+  ),
+  single(
+    `a rise past the declared bound in the random campaign`,
+    [`random-only-kill by a work bound`],
+    { test: { route: `random seed`, bound: 100 }, effect: { work: 1 } },
+  ),
+  single(
+    `a rise in a test whose work varied`,
+    [`a work rise where work judges nothing`],
+    {
+      mutant: { operator: `if-false` },
+      test: { workFlaky: true, bound: 100 },
+      effect: { work: 7 },
+    },
+  ),
+  single(`a rise in a calibration`, [`a work rise where work judges nothing`], {
+    mutant: { operator: `if-false` },
+    test: { route: `calibration`, bound: 100 },
+    effect: { work: 150 },
+  }),
+  // A test that no oracleProperty registered (an unknown route) can carry
+  // no bound, so its rise judges nothing, and the mutant keeps its class.
+  single(
+    `a rise on a route that carries no bound`,
+    [`a work rise where work judges nothing`],
+    {
+      mutant: { operator: `if-false` },
+      test: { route: undefined },
+      effect: { work: 7 },
+    },
+  ),
+  // The unregistered test rises first in report order; the directive names
+  // the registered test after it, whose bound can reject the mutant.
+  single(
+    `a rise on an unregistered route before a registered one`,
+    [`extra-work`, `extra-work named past an unregistered rise`],
+    {
+      mutant: { operator: `if-false` },
+      test: { route: undefined },
+      effect: { work: 7 },
+      more: [plainTest({ work: 150 })],
+    },
+  ),
+  // 29 is exactly 1.16 times 25: not past the bound, though a product in
+  // binary floating point is a little below 29.
+  single(
+    `a rise exactly at the declared bound`,
+    [
+      `extra-work`,
+      `extra-work under a declared bound`,
+      `a rise exactly at the declared bound`,
+    ],
+    {
+      mutant: { operator: `if-false` },
+      test: { work: 25, bound: 116 },
+      effect: { work: 4 },
+    },
+  ),
+  // A test that made a timer by any path, read a clock, or held I/O open
+  // can do work that follows the clock: a polling or a deadline loop. Its
+  // rise judges nothing, so a bound cannot kill on it, which an idle replay
+  // would not reproduce, and the mutant is not extra-work.
+  ...[
+    [`timer`, `made a timer`],
+    [`timers/promises`, `slept through node:timers/promises`],
+    [`clock read`, `read the clock`],
+    [`spied clock read`, `read the clock through a spy`],
+    [`process.uptime`, `polled process.uptime`],
+    [`os.uptime`, `polled os.uptime`],
+    [`AbortSignal.timeout`, `polled an AbortSignal.timeout`],
+    [`Atomics.wait`, `waited with Atomics.wait and a timeout`],
+    [`Atomics.waitAsync`, `waited with Atomics.waitAsync and a timeout`],
+    [`monitorEventLoopDelay`, `polled monitorEventLoopDelay`],
+    [`io`, `held I/O open`],
+  ].map(([clocked, did]) =>
+    single(
+      `a rise past the bound in a test that ${did}`,
+      [`a work rise where work judges nothing`],
+      {
+        mutant: { operator: `if-false` },
+        test: { clocked, bound: 100 },
+        effect: { work: 150 },
+      },
+    ),
+  ),
+  single(`a forced branch that saves work`, [`a survivor whose work fell`], {
+    mutant: { operator: `if-false` },
+    effect: { work: -1 },
   }),
   twoOwners(
     `a value changed in two owner files declared against file order`,
@@ -3109,7 +3526,13 @@ const constructed = [
     {
       effect: { kind: `verdict` },
       second: {
-        under: slots({ kind: `verdict`, law: `M`, firedAt: undefined }),
+        under: slots({
+          kind: `verdict`,
+          law: `M`,
+          firedAt: undefined,
+          work: 0,
+          ms: 0,
+        }),
       },
     },
   ),
@@ -3399,22 +3822,24 @@ const constructed = [
 oracleProperty({
   id: `oracle-gaps.report-classify`,
   law: {
-    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, dead-code, outside-annotation, branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed.`,
-    authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the oracle rubric's outcome kinds (ORC-006); the frozen design's oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); the maintainer's findings F22 and the leftovers of #12 (2026-11-10); for report order, the gap CLI's determinism requirement (oracle-gaps.report's determinism test and law 9, and the runner's "listed alike in every run") and the maintainer's decision of 2026-11-11 that the tests a report names depend on neither --contexts, worker timing, nor how owners are declared; Vitest's runner (@vitest/runner 4.1: -t is a regular expression matched against getTaskFullName, the suites' names and the test's joined by a space); POSIX.1-2017 Shell Command Language 2.2 and 2.6 for the replay's quoting.`,
-    limits: `That real runs produce these records is oracle-gaps.report's, and so is a real replay. The driver encodes operands as capture-setup.mjs \`shown\` does, by a copy of it; long strings are told apart by a 32-bit digest; no symbol operand is generated, and two symbols of one description print alike. Only the runner's single-file path records a test's names, and only it feeds the baseline. Test names hold no backtick and no \` > \`, and names within a file are distinct; the replay's file argument is judged as text, not as Vitest's substring filter over every file. Authored intents hold no word that the exit law forbids, and an author is not shortened. Report order within a file is the baseline's record order: that a file whose tests run concurrently writes its records in one order is not judged, and a failing test is ordered within its file as the reporter lists it, which a run cut off by a hang takes from the records. The "Changed observations in" list is the changed tests' first three, and only its first is compared. A test that only a mutant run records is not generated. A file that fails with no mutant active keeps its records and its mutants are classified; the refusal text and the summary's left-out list are not judged, only the list of failing files they print.`,
+    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, extra-work, dead-code, outside-annotation, branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only; a test whose property declares a work bound, whose work judges the mutant, and whose work (site evaluations, never time) passes the bound's ratio of its unmutated work reports a verdict under law work bound on its route, and a survivor whose work rose in such a test, with no changed observation, is extra-work, whose directive names that test, both counts, and the bound to declare that rejects it. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed.`,
+    authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the oracle rubric's outcome kinds (ORC-006); the frozen design's oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); the maintainer's findings F22 and the leftovers of #12 (2026-11-10); for the work law, the maintainer's decision of 2026-11-12 that a speed shortcut reported as not-observed is a gap CLI bug, and the design decided with it: a cost law, never an exit, judged by a deterministic count; for report order, the gap CLI's determinism requirement (oracle-gaps.report's determinism test and law 9, and the runner's "listed alike in every run") and the maintainer's decision of 2026-11-11 that the tests a report names depend on neither --contexts, worker timing, nor how owners are declared; Vitest's runner (@vitest/runner 4.1: -t is a regular expression matched against getTaskFullName, the suites' names and the test's joined by a space); POSIX.1-2017 Shell Command Language 2.2 and 2.6 for the replay's quoting.`,
+    limits: `That real runs produce these records is oracle-gaps.report's, and so is a real replay. The driver encodes operands as capture-setup.mjs \`shown\` does, by a copy of it; long strings are told apart by a 32-bit digest; no symbol operand is generated, and two symbols of one description print alike. Only the runner's single-file path records a test's names, and only it feeds the baseline. Test names hold no backtick and no \` > \`, and names within a file are distinct; the replay's file argument is judged as text, not as Vitest's substring filter over every file. Authored intents hold no word that the exit law forbids, and an author is not shortened. Report order within a file is the baseline's record order: that a file whose tests run concurrently writes its records in one order is not judged, and a failing test is ordered within its file as the reporter lists it, which a run cut off by a hang takes from the records. The "Changed observations in" list is the changed tests' first three, and only its first is compared. A test that only a mutant run records is not generated. A file that fails with no mutant active keeps its records and its mutants are classified; the refusal text and the summary's left-out list are not judged, only the list of failing files they print. Work arrives as counts: that the capture counts site evaluations, and which work it does not count, is oracle-gaps.report's; a test that reaches a site but did no work is generated, which no real run records; an authored mutant's copy counts no work, so the work law does not judge it.`,
   },
   histories: {
     arbitrary: records,
     states: required,
     // An authored mutant's other outcomes, measured.
     measured: [
-      `timeout`,
-      `agreement-only-kill`,
-      `unregistered-kill`,
-      `crashed`,
-      `framework-error`,
-      `setup-error`,
-    ].map((kind) => `authored ${kind}`),
+      ...[
+        `timeout`,
+        `agreement-only-kill`,
+        `unregistered-kill`,
+        `crashed`,
+        `framework-error`,
+        `setup-error`,
+      ].map((kind) => `authored ${kind}`),
+    ],
     runs: 300,
     fixedSeeds: [20261105],
     constructed,
