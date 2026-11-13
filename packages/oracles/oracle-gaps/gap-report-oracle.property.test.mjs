@@ -2691,9 +2691,20 @@ const calibrations = [
   {
     name: `a refused run is reported as complete`,
     law: `ownership`,
-    corrupt: corruptCli((cli) =>
-      cli.exit === 0 ? undefined : { ...cli, exit: 0 },
-    ),
+    // A refused run that says it completed: exit 0, and the completed done
+    // line that ends both its streams (law 15's shape of a completion), so
+    // only the law that the run must refuse rejects it.
+    corrupt: corruptCli((cli) => {
+      if (cli.exit === 0) return undefined
+      const done = `oracle-gaps: done completed, 0 gaps, report ${cli.outDir}/summary.md`
+      const completed = (stream) => ({ ...stream, last: done, dones: 1 })
+      return {
+        ...cli,
+        exit: 0,
+        stream: completed(cli.stream),
+        stdoutStream: completed(cli.stdoutStream),
+      }
+    }),
   },
   {
     name: `a mutant is dropped from the enumeration`,
