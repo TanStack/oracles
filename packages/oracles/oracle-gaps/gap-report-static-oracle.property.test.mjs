@@ -751,6 +751,12 @@ async function driver(plan, observe) {
   const scratch = realpathSync(mkdtempSync(join(here, `.scratch-`)))
   const dir = plan.configPlace === `parent` ? join(scratch, `pkg`) : scratch
   mkdirSync(dir, { recursive: true })
+  // Every package has a manifest, which the CLI refuses without (args.mjs);
+  // the fixture's content is unchanged, so its histories are too.
+  writeFileSync(
+    join(dir, `package.json`),
+    `{"name":"fixture","private":true}\n`,
+  )
   try {
     // A symbolic link to the package, for sources spelled through it.
     symlinkSync(dir, `${dir}.link`, `dir`)

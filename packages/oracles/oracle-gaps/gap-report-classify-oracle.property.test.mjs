@@ -2412,7 +2412,7 @@ function check(h, observations, expected) {
                     withoutSpans(
                       stdout
                         .split(`\n`)
-                        .filter((line) => !line.startsWith(`  replay: `))
+                        .filter((line) => !/^  replay( \(\w+\))?: /.test(line))
                         .join(`\n`),
                     ).replace(/ L\? /g, ` L `),
                   )
@@ -2703,48 +2703,145 @@ function baselineBreach(h, observations, expected) {
             : `${file} fails by an error, and its baseline names a law: ${JSON.stringify(block)}`,
         )
     }
-    const command = block
-      .find((line) => line.startsWith(`  replay: `))
-      ?.slice(`  replay: `.length)
-    const words = command === undefined ? undefined : shellWords(command)
-    if (!words)
+    // The platform's replay lines: one POSIX line, or on Windows one line for
+    // PowerShell and one for cmd. Each reads as the same words.
+    const replays = replayLinesOf(block)
+    if (replays === undefined)
       return breach(
-        `the replay of ${file} is ${JSON.stringify(command)}, which a POSIX shell does not read as plain words`,
+        `${file}'s replay lines are not the platform's: ${JSON.stringify(block.filter((line) => line.startsWith(`  replay`)))}`,
       )
-    const [vitest, run, target, flag, pattern, ...more] = words
-    const path = relativeName(h, owed.fi)
-    if (vitest !== `vitest` || run !== `run` || target !== path)
-      return breach(`the replay of ${file} is not \`vitest run ${path}\``)
-    if (owed.test === undefined) {
-      if (flag !== undefined)
+    for (const { command, read } of replays) {
+      const words = read(command)
+      if (!words)
         return breach(
-          `${file} did not load, and its replay selects tests: ${command}`,
+          `the replay of ${file} is ${JSON.stringify(command)}, which the shell does not read as plain words`,
         )
-      continue
-    }
-    if (flag !== `-t` || pattern === undefined || more.length > 0)
-      return breach(
-        `the replay of ${file} has no single -t pattern: ${command}`,
-      )
-    for (const join of [` `, ` > `]) {
-      let selected
-      try {
-        selected = selectedBy(h, owed.fi, pattern, join)
-      } catch (error) {
-        return breach(
-          `the replay pattern ${pattern} is not a regular expression: ${error.message}`,
-        )
+      const [vitest, run, target, flag, pattern, ...more] = words
+      const path = relativeName(h, owed.fi)
+      if (vitest !== `vitest` || run !== `run` || target !== path)
+        return breach(`the replay of ${file} is not \`vitest run ${path}\``)
+      if (owed.test === undefined) {
+        if (flag !== undefined)
+          return breach(
+            `${file} did not load, and its replay selects tests: ${command}`,
+          )
+        continue
       }
-      // The owed test, and any test whose joined names equal its own, which
-      // no pattern can tell apart from it.
-      const owedSet = sameNamed(h, owed.fi, owed.test, join)
-      if (JSON.stringify(selected) !== JSON.stringify(owedSet))
+      if (flag !== `-t` || pattern === undefined || more.length > 0)
         return breach(
-          `the replay pattern ${JSON.stringify(pattern)} of ${file} runs tests ${JSON.stringify(selected)} when Vitest joins names with ${JSON.stringify(join)}, owed ${JSON.stringify(owedSet)}`,
+          `the replay of ${file} has no single -t pattern: ${command}`,
         )
+      for (const join of [` `, ` > `]) {
+        let selected
+        try {
+          selected = selectedBy(h, owed.fi, pattern, join)
+        } catch (error) {
+          return breach(
+            `the replay pattern ${pattern} is not a regular expression: ${error.message}`,
+          )
+        }
+        // The owed test, and any test whose joined names equal its own, which
+        // no pattern can tell apart from it.
+        const owedSet = sameNamed(h, owed.fi, owed.test, join)
+        if (JSON.stringify(selected) !== JSON.stringify(owedSet))
+          return breach(
+            `the replay pattern ${JSON.stringify(pattern)} of ${file} runs tests ${JSON.stringify(selected)} when Vitest joins names with ${JSON.stringify(join)}, owed ${JSON.stringify(owedSet)}`,
+          )
+      }
     }
   }
   return undefined
+}
+
+// The replay lines the platform prints, each with the reader of its shell:
+// one POSIX line elsewhere; on Windows a PowerShell line and a cmd line.
+// Undefined when the block holds a different set of forms.
+function replayLinesOf(block) {
+  const forms =
+    process.platform === `win32`
+      ? [
+          [`  replay (PowerShell): `, powerShellWords],
+          [`  replay (cmd): `, cmdWords],
+        ]
+      : [[`  replay: `, shellWords]]
+  const lines = block.filter((line) => /^  replay( \(\w+\))?: /.test(line))
+  if (lines.length !== forms.length) return undefined
+  const found = forms.map(([prefix, read]) => {
+    const line = lines.find((text) => text.startsWith(prefix))
+    return line === undefined
+      ? undefined
+      : { command: line.slice(prefix.length), read }
+  })
+  return found.every(Boolean) ? found : undefined
+}
+
+// The words a PowerShell command line splits into: single quotes hold text,
+// a doubled single quote is one quote, and nothing expands.
+function powerShellWords(line) {
+  const words = []
+  let word
+  for (let i = 0; i < line.length;) {
+    const c = line[i]
+    if (c === ` `) {
+      if (word !== undefined) words.push(word)
+      word = undefined
+      i += 1
+      continue
+    }
+    word ??= ``
+    if (c === `'`) {
+      let j = i + 1
+      for (;;) {
+        if (j >= line.length) return undefined
+        if (line[j] === `'` && line[j + 1] === `'`) {
+          word += `'`
+          j += 2
+        } else if (line[j] === `'`) break
+        else {
+          word += line[j]
+          j += 1
+        }
+      }
+      i = j + 1
+    } else if (/[$"()\`;&|<>]/.test(c)) {
+      return undefined
+    } else {
+      word += c
+      i += 1
+    }
+  }
+  if (word !== undefined) words.push(word)
+  return words
+}
+
+// The words a cmd command line splits into: double quotes hold text, and
+// nothing expands or chains.
+function cmdWords(line) {
+  const words = []
+  let word
+  for (let i = 0; i < line.length;) {
+    const c = line[i]
+    if (c === ` `) {
+      if (word !== undefined) words.push(word)
+      word = undefined
+      i += 1
+      continue
+    }
+    word ??= ``
+    if (c === `"`) {
+      const end = line.indexOf(`"`, i + 1)
+      if (end < 0) return undefined
+      word += line.slice(i + 1, end)
+      i = end + 1
+    } else if (/[%&|<>^]/.test(c)) {
+      return undefined
+    } else {
+      word += c
+      i += 1
+    }
+  }
+  if (word !== undefined) words.push(word)
+  return words
 }
 
 // A command line as a POSIX shell splits it into words (POSIX.1-2017, Shell
