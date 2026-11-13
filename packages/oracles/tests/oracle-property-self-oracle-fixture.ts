@@ -246,6 +246,8 @@ export type OddKind = (typeof oddKinds)[number]
 
 /** The suite a `nested` spec registers its property in. */
 export const outerSuite = `outer (nested)`
+/** The ratio of a `bound` spec's work bound. */
+export const WORK_RATIO = 1.25
 
 /** The extra text a `shell` label carries: a shell expands or ends at each. */
 export const shellText = `$HOME \`true\` 'q' "q" \\`
@@ -358,6 +360,8 @@ export type SyntheticSpec = {
   predictMode?: `missing` | `extra`
   /** The `owns` option as the gap report reads it: a list, an empty list, a string, or a list with a non-string entry. */
   ownsMode?: `list` | `empty` | `string` | `bad entry`
+  /** The `work` option: a bound of `WORK_RATIO`, a ratio below 1, one that is not finite, or `null`, which plain JavaScript can pass. */
+  workMode?: `bound` | `below one` | `not finite` | `null`
   /** Runs every history on a controlled clock, where a 7 spins it. */
   clock?: boolean
   /** How the property holds a history's items; the array itself when absent. */
@@ -504,8 +508,14 @@ globalThis.__oracleRoute = (registered) => {
   if (owner) owner.route = registered
   else route = registered
 }
+// The work bound registered for the running test, as the gap report reads it.
+let work: number | undefined
+globalThis.__oracleWorkBound = (ratio) => {
+  work = ratio
+}
 beforeEach(() => {
   route = undefined
+  work = undefined
 })
 // Every slow driver run this file started. A slow spec's histories time out
 // and their judgments arrive late; its reach test starts only after every
@@ -824,7 +834,7 @@ function syntheticDriver(
     if (log)
       appendFileSync(
         log,
-        `${JSON.stringify({ id: spec.id, test: owningTestName() ?? ``, ...(spec.slow ? { runnerTest: expect.getState().currentTestName ?? `` } : {}), history, origin: origins.get(formed as object), route: owningTest.getStore()?.route ?? route ?? null })}\n`,
+        `${JSON.stringify({ id: spec.id, test: owningTestName() ?? ``, ...(spec.slow ? { runnerTest: expect.getState().currentTestName ?? `` } : {}), history, origin: origins.get(formed as object), route: owningTest.getStore()?.route ?? route ?? null, work: work ?? null })}\n`,
       )
     if (spec.odd) observe(`odd`, { reason: oddValue(spec.odd) })
     if (spec.slow) await new Promise((resolve) => setTimeout(resolve, 300))
@@ -1119,6 +1129,23 @@ function syntheticCalibrations(
   })
 }
 
+// `work`, a work bound, in the shape the spec names.
+const workOf = (spec: SyntheticSpec) =>
+  spec.workMode === undefined
+    ? {}
+    : spec.workMode === `null`
+      ? { work: null as unknown as { ratio: number } }
+      : {
+          work: {
+            ratio:
+              spec.workMode === `bound`
+                ? WORK_RATIO
+                : spec.workMode === `below one`
+                  ? 0.5
+                  : Number.POSITIVE_INFINITY,
+          },
+        }
+
 // `owns`, the literal list the gap report reads, in the shape the spec names.
 const ownsOf = (spec: SyntheticSpec) =>
   spec.ownsMode === undefined
@@ -1388,6 +1415,7 @@ export function syntheticProperty(spec: SyntheticSpec): void {
     },
     ...(spec.timeout !== undefined ? { timeout: spec.timeout } : {}),
     ...ownsOf(spec),
+    ...workOf(spec),
   }
   const law = {
     statement: `A synthetic history holds no 3 and no 4.`,

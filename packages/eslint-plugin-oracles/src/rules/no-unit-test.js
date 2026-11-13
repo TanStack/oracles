@@ -12,7 +12,9 @@ import {
   moduleTestFunctions,
   registeredTest,
   testFunctions,
+  unknownRegistration,
 } from '../registration.js'
+import { classifySource } from '../sources.js'
 
 /**
  * An oracle file registers its tests only through `oracleProperty`
@@ -54,6 +56,18 @@ import {
  *   test of its own, through a named, default, or namespace import. The
  *   helper's tests would appear under the oracle file, so an ordinary test
  *   file registers them instead.
+ * - `unknownTestSource`: a title-shaped call (a string or template title,
+ *   then a function) through an import from a source that the rules cannot
+ *   classify (sources.js: no setting or table names it, and no project
+ *   module is found), whatever the import's name, once per import, at the
+ *   import; and a call to a helper that makes such a call, at the call. The rule cannot tell whether such a call registers a test,
+ *   so it neither reports nor passes it as one (maintainer decision,
+ *   2026-11-12). It is reported in an `oracle-` machinery file too, where
+ *   `oracle/no-disabled` alone guards the tests. `settings.oracles.
+ *   unknownSources` of `test` reads such a name as a framework's, and this
+ *   report is not made.
+ * - `malformedSetting`: a source setting that the rules cannot use, at
+ *   line 1, `ignore` included. It is read as unset.
  *
  * A complete `oracleProperty` call gets no report. Neither does a call to a
  * helper in an oracle-named module, because that module's tests are linted
@@ -62,7 +76,7 @@ import {
  * oracle-named module exports still registers here, where it is called.
  * Files whose names start with
  * `oracle-`, such as `oracle-replay.test.ts`, test the shared oracle
- * machinery, and the rule skips them.
+ * machinery, and the rule judges only their sources and settings there.
  *
  * To classify an imported helper, the rule reads the module that the import
  * names, and follows its re-exports, star exports, relays of imported
@@ -71,8 +85,9 @@ import {
  * walks another helper's body, and each export is answered once per lint: a
  * cycle of modules ends, and no call graph makes a lint slow. It reads each module relative to
  * the file, with the parser and parser options that ESLint uses for the file
- * it lints, so it needs no TypeScript of its own. It reads no package, so a
- * fixture that a package exports is not seen. It does
+ * it lints, so it needs no TypeScript of its own. It reads a project's own
+ * modules (relative, `#` imports, and workspace packages: modules.js), and
+ * never a package under node_modules. It does
  * not read production: `src/` modules of a published package. A private
  * package, such as an end-to-end suite, keeps its tests in `src/`, and the
  * rule reads those. A module that the parser cannot read classifies no
@@ -85,7 +100,8 @@ import {
 
 /** How the export `name` of the module that `source` names registers tests. */
 function importedRegisters(fromFile, source, name, session) {
-  if (!source.startsWith(`.`)) return undefined
+  // A package that sources.js classifies holds no helper of the project's.
+  if (classifySource(source, session.sources) !== undefined) return undefined
   const file = resolveTestModule(fromFile, source, session)
   if (file === undefined) return undefined
   return session.once(`shape\0${file}\0${name}`, () =>
@@ -104,7 +120,11 @@ function importedHelperShape(node, file, sourceCode, session) {
   let callee = node.callee
   while (callee.type === `CallExpression`) callee = callee.callee
   const target = importedTarget(callee, sourceCode.getScope(node))
-  if (target === undefined) return undefined
+  if (
+    target === undefined ||
+    classifySource(target.source, session.sources) !== undefined
+  )
+    return undefined
   const module = resolveTestModule(file, target.source, session)
   if (module === undefined || lintedOnItsOwn(module)) return undefined
   return importedRegisters(file, target.source, target.name, session)
@@ -251,7 +271,18 @@ function bodyShape(module, fn, session) {
   walk(fn, (node) => {
     if (node.type !== `CallExpression`) return
     const test = registeredTest(node, functions)
-    if (test === undefined) return
+    if (test === undefined) {
+      // A call through a source that the rules cannot classify: the helper
+      // may register a test, and that is reported unless it surely does.
+      const unknown = unknownRegistration(node, functions)
+      if (unknown !== undefined && shape === undefined)
+        shape = {
+          kind: `unknown`,
+          name: boundName(unknown),
+          source: unknown.source,
+        }
+      return
+    }
     const position = passedBody(test.body, fn, functions)
     if (position === undefined) shape = { kind: `own` }
     else if (shape?.kind !== `own`) {
@@ -298,6 +329,28 @@ function passedBody(body, fn, functions) {
   return position
 }
 
+/**
+ * The name that a file wrote for an unknown source's export: the local
+ * name of a named or default import, or a namespace's or a `require`'s
+ * member.
+ */
+function boundName({ site, name }) {
+  if (
+    site?.type === `ImportSpecifier` ||
+    site?.type === `ImportDefaultSpecifier`
+  )
+    return site.local.name
+  if (site?.type === `ImportNamespaceSpecifier`)
+    return `${site.local.name}.${name}`
+  if (
+    site?.type === `CallExpression` &&
+    site.parent.type === `VariableDeclarator` &&
+    site.parent.id.type === `Identifier`
+  )
+    return `${site.parent.id.name}.${name}`
+  return name
+}
+
 function walk(node, visit) {
   visit(node)
   for (const [key, child] of Object.entries(node)) {
@@ -327,6 +380,22 @@ export function resolveImportedTestModule(fromFile, specifier) {
   return resolveTestModule(fromFile, specifier, selectionSession)
 }
 
+/**
+ * What a malformed setting's message says about its own path. Only `ignore`
+ * gets the replacement sentence (maintainer approval of the v21 cleanup plan,
+ * 2026-11-12); the other paths keep their own text.
+ */
+function malformedDetail(name, unknownSources) {
+  if (name === `oracles`) return `\`settings.oracles\` must be an object.`
+  if (name === `testPackages`)
+    return `\`testPackages\` maps a specifier to a framework's specifier or to a table of export roles (\`'test'\` or \`'suite'\`).`
+  if (name === `nonTestPackages`)
+    return `\`nonTestPackages\` is an array of specifiers.`
+  if (unknownSources === `ignore`)
+    return `\`'ignore'\` is no longer a mode: to silence a package, list it in \`settings.oracles.nonTestPackages\`.`
+  return `\`unknownSources\` is \`'report'\` or \`'test'\`.`
+}
+
 export default {
   meta: {
     type: `problem`,
@@ -340,16 +409,57 @@ export default {
       unitTest: `An oracle file registers its tests only through oracleProperty. Put a fixed history in its histories (\`fixed\`, or an enumerated source), a calibration in its calibrations, and a reach check in its declared states. Move any other test to an ordinary test file.`,
       incompleteProperty: `This oracleProperty call does not pass an object literal with a check, so the rule cannot see that the property has one. Pass its options inline as \`oracleProperty({ id, law, histories, driver, model, check })\`.`,
       importedRegistration: `This oracle file calls a helper that registers tests. An oracle file registers only oracle tests, so register those tests from an ordinary test file and keep this file to its checks and model.`,
+      unknownTestSource: `The rules cannot tell whether \`{{name}}\` from \`{{source}}\` is a test function, because they do not read that package. Name the package in \`settings.oracles.testPackages\` (a test framework's specifier, or a table of its exports such as \`{ authTest: 'test' }\`) or in \`settings.oracles.nonTestPackages\`.`,
+      malformedSetting: `\`{{path}}\` is malformed, so the rules read it as unset. {{detail}}`,
     },
   },
   create(context) {
-    // `oracle-config`, `oracle-property`, and the other `oracle-` modules are
-    // the shared oracle machinery. Their tests check that machinery, not a law.
-    if (basename(context.filename).startsWith(`oracle-`)) return {}
     const { sourceCode } = context
     const session = lintSession(context)
     const functions = testFunctions(context)
+    // Each import of a source that the rules cannot classify is reported
+    // once, at the import, for the first call that would register through it.
+    const reported = new Set()
+    function reportUnknown(node) {
+      const unknown = unknownRegistration(node, functions)
+      if (unknown === undefined || reported.has(unknown.site)) return
+      reported.add(unknown.site)
+      context.report({
+        node: unknown.site ?? node,
+        messageId: `unknownTestSource`,
+        data: { name: boundName(unknown), source: unknown.source },
+      })
+    }
+    const settingProblems = {
+      Program() {
+        const configured = context.settings?.oracles?.unknownSources
+        for (const name of session.sources.malformed)
+          context.report({
+            loc: { line: 1, column: 0 },
+            messageId: `malformedSetting`,
+            data: {
+              path:
+                name === `oracles`
+                  ? `settings.oracles`
+                  : `settings.oracles.${name}`,
+              detail: malformedDetail(name, configured),
+            },
+          })
+      },
+    }
+    // `oracle-config`, `oracle-property`, and the other `oracle-` modules are
+    // the shared oracle machinery. Their tests check that machinery, not a law,
+    // so only a source that the rules cannot classify is reported there:
+    // `oracle/no-disabled` alone guards those tests, and it cannot see one.
+    if (basename(context.filename).startsWith(`oracle-`))
+      return {
+        ...settingProblems,
+        CallExpression(node) {
+          if (registeredTest(node, functions) === undefined) reportUnknown(node)
+        },
+      }
     return {
+      ...settingProblems,
       CallExpression(node) {
         // A curried callee is not a call of its own: the outermost call is the
         // registration.
@@ -385,8 +495,19 @@ export default {
           context.report({ node, messageId: `unitTest` })
           return
         }
+        if (helper?.kind === `unknown`) {
+          context.report({
+            node,
+            messageId: `unknownTestSource`,
+            data: { name: helper.name, source: helper.source },
+          })
+          return
+        }
         const test = registeredTest(node, functions)
-        if (test === undefined) return
+        if (test === undefined) {
+          reportUnknown(node)
+          return
+        }
         if (isEmpty(test.body)) {
           // `it.todo` with a body contradicts itself: a todo takes none.
           const todo = test.modifiers.includes(`todo`)

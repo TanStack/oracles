@@ -3,13 +3,16 @@
  * the edits that stop a law from running while every test still passes:
  *
  * - `.only` on a test or suite, which silences every other law in the file.
- * - `.skip`, `.todo`, or Playwright's `.fixme` on a test or suite that has a
- *   body, inline or passed by name. An empty body disables nothing, so this
+ * - `.skip`, `.todo`, Playwright's `.fixme`, or Deno's `.ignore` on a test or
+ *   suite that has a body, inline or passed by name, and an export that
+ *   carries one (Jest's `xit`, node:test's `skip`). An empty body disables
+ *   nothing, so this
  *   rule does not report it; `oracle/no-unit-test` reports it as an empty
  *   test (maintainer decision, 2026-11-10). A replay that does not select a
  *   property registers it with `it.todo` and no body.
  * - A test that skips itself through its context, as in `ctx.skip()`.
- * - `.skipIf(condition)` or `.runIf(condition)`, unless the call is
+ * - `.skipIf(condition)` or `.runIf(condition)`, and Bun's `.if(condition)`
+ *   and `.todoIf(condition)`, unless the call is
  *   `.skipIf(oracleReplayRequested())` or `.skipIf(oracleReplaySkips(...))`.
  *   A replay may stand a test aside, and nothing else may switch an oracle
  *   test off. The shared helpers in oracle-config are false in an ordinary
@@ -366,13 +369,15 @@ function isBrowserCondition(node) {
 /**
  * Whether a `.skip`, `.todo`, or `.fixme` call switches off a body that runs
  * something. A test registration passes `(name, body)`, and a todo passes
- * only its name. Playwright's runtime form passes `(condition, reason)`,
- * `(condition)`, or nothing, and skips the test that it runs in.
+ * only its name. Playwright's annotation passes `(condition, reason)`,
+ * `(condition)`, `(callback, reason)`, `(reason)`, or nothing, and skips the
+ * test or group that it runs in, so for Playwright's test function
+ * (`annotates`) a lone string is a reason, not a todo's name.
  */
-function disablesBody(args) {
+function disablesBody(args, annotates) {
   const [first, second] = args
   if (first === undefined) return true
-  if (second === undefined && isStringLike(first)) return false
+  if (second === undefined && isStringLike(first)) return annotates
   if (second === undefined || isStringLike(second)) {
     return !isBrowserCondition(first)
   }
@@ -858,7 +863,10 @@ export default {
           return
         }
         const disabled = names.find((name) => disablingModifiers.has(name))
-        if (disabled !== undefined && disablesBody(node.arguments)) {
+        if (
+          disabled !== undefined &&
+          disablesBody(node.arguments, test.annotates)
+        ) {
           context.report({ node, messageId: `skip`, data: { name: disabled } })
         }
       },
