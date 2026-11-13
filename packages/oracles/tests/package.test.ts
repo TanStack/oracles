@@ -297,9 +297,11 @@ console.log(JSON.stringify({ failed, unreached }))`,
       const tscOf = (directory: string) => {
         const bin = join(directory, `node_modules/.bin/tsc`)
         if (process.platform !== `win32`) return readlinkSync(bin)
-        const target = /\.\.\/(.+?)\/bin\/tsc/.exec(readFileSync(bin, `utf8`))
-        if (target === null) throw new Error(`no tsc target in ${bin}`)
-        return join(`..`, target[1], `bin`, `tsc`)
+        const target = /\.\.\/(.+?)\/bin\/tsc/.exec(
+          readFileSync(bin, `utf8`),
+        )?.[1]
+        if (target === undefined) throw new Error(`no tsc target in ${bin}`)
+        return join(`..`, target, `bin`, `tsc`)
       }
       const aliasTsc = join(
         `..`,

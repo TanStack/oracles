@@ -202,8 +202,6 @@ jobs:
   windows-unit:
     name: Windows unit suites
     runs-on: windows-latest
-    # Not blocking until every Windows job is green; remove this line then.
-    continue-on-error: true
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -220,7 +218,8 @@ jobs:
   windows-gap-oracles:
     name: Windows gap report static oracle (${{ matrix.shard }}/6)
     runs-on: windows-latest
-    # Not blocking until every Windows job is green; remove this line then.
+    # Not blocking yet: these suites fail on Windows (tracked in the follow-up
+    # PR's body, by class). Remove this line when they are green.
     continue-on-error: true
     timeout-minutes: 20
     strategy:
@@ -246,8 +245,6 @@ jobs:
     name: Windows gap report classify, probe-form, and mutant-validity oracles
     runs-on: windows-latest
     timeout-minutes: 20
-    # Not blocking until every Windows job is green; remove this line then.
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -262,7 +259,8 @@ jobs:
   windows-gap-end-to-end:
     name: Windows gap report end-to-end oracle (fixed seed, ${{ matrix.shard }}/6)
     runs-on: windows-latest
-    # Not blocking until every Windows job is green; remove this line then.
+    # Not blocking yet: these suites fail on Windows (tracked in the follow-up
+    # PR's body, by class). Remove this line when they are green.
     continue-on-error: true
     timeout-minutes: 20
     strategy:
@@ -286,8 +284,6 @@ jobs:
   windows-gap-cli:
     name: Windows gap CLI on a fixture
     runs-on: windows-latest
-    # Not blocking until every Windows job is green; remove this line then.
-    continue-on-error: true
     timeout-minutes: 20
     steps:
       - name: Checkout
