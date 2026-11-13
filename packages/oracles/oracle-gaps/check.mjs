@@ -1262,33 +1262,101 @@ export default async (env) => {
   }
 
   /**
-   * Drops a batch's copies from Vitest's state once their units are plain
-   * data. Each copy is a new file, and the state keeps every file and test
-   * task it ever ran: `filesMap` by path and `idMap` by task id, so a check
-   * holds every test of every copy (about 377k test cases in the four-file
-   * repro, which runs out of a 2 GB heap). `clearFiles` (Vitest 4.1 and 5.1
-   * alike) replaces each path's file entry, but it leaves the copies' test
-   * tasks in `idMap`, so those go first. The map shapes are guarded: a
-   * Vitest that changes them throws here rather than leaking quietly.
+   * Removes a batch's copies from Vitest's state and from Vite's module
+   * graphs once their units are plain data (the register's C entry: the gap
+   * CLI keeps no Vitest or Vite state for a mutant copy after the copy's
+   * results are plain data). Each copy is a new file. Vitest keeps its path
+   * in `filesMap` and `pathsSet`, and the file and test tasks it ran in
+   * `idMap`, and Vite keeps a module node, with its transform, per copy.
+   * Vitest's `clearFiles` replaces the path's file entry only, and leaves
+   * `pathsSet` and the test tasks, so it is not used: each entry is removed.
+   * Every map touched is guarded, and a Vitest or Vite whose shape changes
+   * throws here rather than leaking quietly. During a run, Vitest holds the
+   * run's copies until it ends, so the in-run peak scales with the batch's
+   * share of copies, not with the suite.
    */
   function retireCopies(context, copies) {
-    const state = context.state
-    if (!(state?.filesMap instanceof Map) || !(state?.idMap instanceof Map))
+    const { filesMap, idMap, pathsSet } = context.state ?? {}
+    if (
+      !(filesMap instanceof Map) ||
+      !(idMap instanceof Map) ||
+      !(pathsSet instanceof Set)
+    )
       throw new Error(
-        `oracle-gaps: this Vitest keeps no filesMap or idMap in its state, so a check cannot retire its copies`,
+        `oracle-gaps: this Vitest keeps no filesMap, idMap, or pathsSet in its state, so a check cannot retire its copies`,
       )
     const gone = new Set(copies)
-    for (const [id, task] of state.idMap)
-      if (gone.has(task.file?.filepath ?? task.filepath)) state.idMap.delete(id)
-    state.clearFiles(context.getRootProject(), copies)
-    retiredEntries(context, copies)
+    for (const [id, task] of idMap)
+      if (gone.has(task.file?.filepath ?? task.filepath)) idMap.delete(id)
+    for (const copy of copies) {
+      filesMap.delete(copy)
+      pathsSet.delete(copy)
+    }
+    const modulesRemoved = retireModules(context.getRootProject().vite, gone)
+    retiredEntries(context, copies, modulesRemoved)
   }
 
-  // The test hook (ORACLE_GAPS_TEST_RETENTION, a file path): after a batch's
-  // copies are retired, one line counts the state entries and module nodes
-  // that still name a retired copy. The e2e oracle's bounded-retention law
-  // reads it: each count is 0.
-  function retiredEntries(context, copies) {
+  /**
+   * Removes the copies' module nodes from every environment's Vite graph.
+   * Each node is invalidated through Vite's API (which drops its transform),
+   * then removed from the graph's id, url, etag, and file maps, and from its
+   * neighbours' import sets. The graph's map shapes are guarded.
+   */
+  function retireModules(server, gone) {
+    const environments = viteEnvironments(server)
+    let removed = 0
+    for (const environment of environments) {
+      const graph = environment.moduleGraph
+      const {
+        urlToModuleMap,
+        idToModuleMap,
+        etagToModuleMap,
+        fileToModulesMap,
+      } = graph ?? {}
+      if (
+        !(urlToModuleMap instanceof Map) ||
+        !(idToModuleMap instanceof Map) ||
+        !(etagToModuleMap instanceof Map) ||
+        !(fileToModulesMap instanceof Map) ||
+        typeof graph.invalidateModule !== `function`
+      )
+        throw new Error(
+          `oracle-gaps: this Vite's module graph has no id, url, etag, or file maps, so a check cannot retire its copies`,
+        )
+      for (const copy of gone) {
+        for (const mod of fileToModulesMap.get(copy) ?? []) {
+          removed += 1
+          graph.invalidateModule(mod)
+          for (const imported of mod.importedModules)
+            imported.importers.delete(mod)
+          for (const importer of mod.importers)
+            importer.importedModules.delete(mod)
+          idToModuleMap.delete(mod.id)
+          urlToModuleMap.delete(mod.url)
+          if (mod.etag !== undefined) etagToModuleMap.delete(mod.etag)
+        }
+        fileToModulesMap.delete(copy)
+      }
+    }
+    return removed
+  }
+
+  // Vite's environments, each with its module graph. A Vite that exposes none
+  // would make the module step a silent no-op, so it throws here.
+  function viteEnvironments(server) {
+    const environments = Object.values(server?.environments ?? {})
+    if (environments.length === 0 || environments.some((e) => !e?.moduleGraph))
+      throw new Error(
+        `oracle-gaps: this Vitest exposes no Vite environments with module graphs, so a check cannot retire its copies' module nodes`,
+      )
+    return environments
+  }
+
+  // The test hook (ORACLE_GAPS_TEST_RETENTION, a file path): after each
+  // batch's copies are retired, one line counts the state entries and module
+  // nodes that still name a retired copy. The retention law reads it: each
+  // count is 0.
+  function retiredEntries(context, copies, modulesRemoved) {
     const file = process.env.ORACLE_GAPS_TEST_RETENTION
     if (!file) return
     const gone = new Set(copies)
@@ -1298,11 +1366,9 @@ export default async (env) => {
     for (const task of idMap.values())
       if (named(task.file?.filepath ?? task.filepath)) tasks += 1
     let nodes = 0
-    for (const environment of Object.values(
-      context.getRootProject().vite?.environments ?? {},
-    ))
+    for (const environment of viteEnvironments(context.getRootProject().vite))
       for (const copy of gone)
-        nodes += environment.moduleGraph?.fileToModulesMap.get(copy)?.size ?? 0
+        nodes += environment.moduleGraph.fileToModulesMap.get(copy)?.size ?? 0
     appendFileSync(
       file,
       `${JSON.stringify({
@@ -1311,6 +1377,7 @@ export default async (env) => {
         pathsSet: [...pathsSet].filter(named).length,
         idMap: tasks,
         moduleNodes: nodes,
+        modulesRemoved,
       })}\n`,
     )
   }
