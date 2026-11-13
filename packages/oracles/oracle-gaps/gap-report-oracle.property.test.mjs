@@ -1645,23 +1645,26 @@ async function driver(plan, observe) {
       .map((m) => m.id)
     let previousSessions = []
     // A session directory is named by the process that made it, which
-    // differs on every run. The law reads only whether a later run kept an
-    // earlier run's directory, so each is recorded by its identity: the
-    // nth distinct directory of this history is `session#n`.
-    const sessionNames = new Map()
-    const sessionOf = (name) => {
-      if (!sessionNames.has(name))
-        sessionNames.set(name, `session#${sessionNames.size}`)
-      return sessionNames.get(name)
-    }
+    // differs on every run, and two names sort by their pids. The law reads
+    // only whether a later run kept an earlier run's directory, so the
+    // observation holds counts, which no name or order changes: how many
+    // session directories the package has once the run ended, and how many
+    // of them the previous stopped run had left.
     if (cli.exit === 0 && stopIds.length > 0)
       for (const stop of plan.stopRuns) {
         const run = await stoppedRun(dir, files, how, stopIds, stop)
-        const stopped = { ...run, sessions: run.sessions.map(sessionOf) }
+        const stopped = {
+          ...run,
+          sessions: {
+            present: run.sessions.length,
+            kept: run.sessions.filter((name) => previousSessions.includes(name))
+              .length,
+          },
+        }
         observe(`stopped`, stopped)
         if (previousSessions.length > 0)
           states.add(`a run after a stopped one that left its session`)
-        previousSessions = stopped.sessions
+        previousSessions = run.sessions
         if (!stopped.spun) continue
         if (stop.when === `after`) {
           states.add(`a stop signal after the completed line`)
@@ -2403,19 +2406,17 @@ function check(plan, observations, expected) {
   // A stopped run may leave its session directory, and only that; the next
   // run removes it (maintainer decision, 2026-11-11).
   const stops = observations.filter((o) => o.checkpoint === `stopped`)
-  for (const [i, { value }] of stops.entries()) {
-    const earlier = stops[i - 1]?.value.sessions ?? []
+  for (const { value } of stops) {
     if (value.left?.length > 0)
       return violation(
         `stopped`,
         `the stopped run left ${value.left.join(`, `)} in the package`,
         `output namespace`,
       )
-    const kept = earlier.filter((name) => value.sessions?.includes(name))
-    if (kept.length > 0)
+    if (value.sessions?.kept > 0)
       return violation(
         `stopped`,
-        `the run after a stopped one left its session directory ${kept.join(`, `)} in the package`,
+        `the run after a stopped one left ${value.sessions.kept} of its session directories in the package`,
         `output namespace`,
       )
   }
