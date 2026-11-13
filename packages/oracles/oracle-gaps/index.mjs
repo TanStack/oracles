@@ -122,8 +122,9 @@
 // ended 2 s later is killed, and so is any process left in the group when
 // the run ends. The run kills its group itself if the CLI dies first.
 import { spawn } from 'node:child_process'
-import { realpathSync } from 'node:fs'
+import { appendFileSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { constants } from 'node:os'
+import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseArgs, usage } from './args.mjs'
 import { codeIdentity, openSession } from './check.mjs'
@@ -133,6 +134,19 @@ import { memoryStore } from './evidence.mjs'
 
 // How long the group has to end after a stop signal before it is killed.
 const STOP_GRACE_MS = 2000
+
+// The stream log (the maintainer's decision of 2026-11-12): a run that
+// starts a check writes its stderr to `<out>/stream.log` too, line for
+// line, and names that file in its first line on both streams, so an agent
+// that runs a check in the background learns from the run where to read
+// it. Undefined until the run starts a check.
+let streamLog
+const logPathOf = (out) => join(out, `stream.log`)
+/** Writes `text` to stderr and to the stream log. */
+const writeStream = (text) => {
+  process.stderr.write(text)
+  if (streamLog) appendFileSync(streamLog, text)
+}
 
 /** Signals every process of group `group`; false when none is left. */
 function signalGroup(group, signal) {
@@ -149,7 +163,9 @@ function signalGroup(group, signal) {
  * with it: with its exit code, or, once a stop signal has ended its group,
  * with 128 plus the signal's number.
  */
-function superviseRun() {
+function superviseRun(out) {
+  // The supervisor's own done line goes to the run's stream log too.
+  streamLog = logPathOf(out)
   let child
   let stopped
   // How the run ended: its exit code, or the signal that ended it.
@@ -192,11 +208,16 @@ function superviseRun() {
       const line = stopped
         ? `oracle-gaps: done stopped (${stopped})\n`
         : `oracle-gaps: done error, the run's process exited with ${how}${outOfMemory ? `: it ran out of memory; give Node more (NODE_OPTIONS=--max-old-space-size=<MB>) or run fewer --contexts` : ``}\n`
-      process.stdout.write(line, () =>
+      process.stdout.write(line, () => {
+        try {
+          appendFileSync(streamLog, line)
+        } catch {
+          // A run stopped before it wrote its log has none to end.
+        }
         process.stderr.write(line, () =>
           process.exit(stopped ? 128 + constants.signals[stopped] : 3),
-        ),
-      )
+        )
+      })
     }
     if (child === undefined || closed) return decide()
     child.once(`close`, decide)
@@ -271,9 +292,9 @@ function watchSupervisor(supervisor) {
 function asksForCheck(argv) {
   try {
     const options = parseArgs(argv)
-    return !options.help && !options.stop
+    return options.help || options.stop ? undefined : options
   } catch {
-    return false
+    return undefined
   }
 }
 
@@ -281,7 +302,9 @@ function asksForCheck(argv) {
 async function checkCold(options) {
   const session = await openSession(options.pkg)
   try {
-    return await session.check(options, memoryStore())
+    return await session.check(options, memoryStore(), (line) =>
+      writeStream(`${line}\n`),
+    )
   } finally {
     await session.close()
   }
@@ -294,7 +317,7 @@ async function checkThroughDaemon(options) {
     process.argv.slice(2),
     codeIdentity(),
   )
-  if (reply.stderr) process.stderr.write(reply.stderr)
+  if (reply.stderr) writeStream(reply.stderr)
   if (reply.failed) throw received(reply.failed)
   return reply.stdout
 }
@@ -306,13 +329,11 @@ const main =
 // Windows has no process groups: there the run is the CLI's own process.
 const supervised = process.platform !== `win32`
 const supervisor = process.env.ORACLE_GAPS_GROUP
-if (
-  main &&
-  supervised &&
-  supervisor === undefined &&
-  asksForCheck(process.argv.slice(2))
-)
-  superviseRun()
+const checking =
+  main && supervised && supervisor === undefined
+    ? asksForCheck(process.argv.slice(2))
+    : undefined
+if (checking) superviseRun(checking.out)
 else if (main) {
   if (supervisor !== undefined) watchSupervisor(Number(supervisor))
   // A test that runs this CLI starts a run of its own, in a group of its own.
@@ -356,7 +377,7 @@ else if (main) {
     if (ended) return
     const ending = endRun(error, options?.out)
     holdStops()
-    process.stderr.write(ending.stderr)
+    writeStream(ending.stderr)
     process.stdout.write(`${ending.done}\n`)
     end(ending.exitCode)
   }
@@ -369,6 +390,13 @@ else if (main) {
     if (options.help) console.log(usage)
     else if (options.stop) await stopDaemon(options.pkg)
     else {
+      // The first line on both streams names the stream log.
+      mkdirSync(options.out, { recursive: true })
+      streamLog = logPathOf(options.out)
+      writeFileSync(streamLog, ``)
+      const note = `oracle-gaps: note log ${streamLog}\n`
+      process.stdout.write(note)
+      writeStream(note)
       const summary = await (options.daemon ? checkThroughDaemon : checkCold)(
         options,
       )
@@ -376,7 +404,7 @@ else if (main) {
       // The summary ends with the done line (report.mjs), which ends stderr
       // too.
       console.log(summary)
-      process.stderr.write(`${summary.split(`\n`).at(-1)}\n`)
+      writeStream(`${summary.split(`\n`).at(-1)}\n`)
     }
     end(0)
   } catch (error) {

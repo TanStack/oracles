@@ -81,6 +81,10 @@ every commit with [pkg.pr.new](https://pkg.pr.new).
   to the process's stdout and stderr goes to `test-output.log` in the output
   directory, which a note names; `summary.md` holds the report for reading.
   A run through the daemon prints the same lines, at the end of its check.
+  The first line of a check, on both streams, is `oracle-gaps: note log
+<out>/stream.log`: the run writes its stderr lines to that file too, in
+  order, so a check started in the background can be read there while it
+  runs and after it ends.
   `--help` is not a check, so its usage text has no prefix.
 
   For contributors: two environment variables in the `ORACLE_GAPS_TEST_`
