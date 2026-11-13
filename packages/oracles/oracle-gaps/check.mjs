@@ -542,7 +542,10 @@ export default async (env) => {
   // context last served, so a changed file is invalidated in the warm
   // contexts before it is read again.
   globalThis.__oracleGapsSchemata = new Map()
+  // A test's read of a file (`fs:<path>`) is hashed by the file's text, a
+  // module by the text that its context serves.
   const servedHash = (path, index) => {
+    if (path.startsWith(`fs:`)) return hashOf(path.slice(3))
     const text =
       globalThis.__oracleGapsServe[index]?.get(path) ??
       globalThis.__oracleGapsSchemata.get(path)
@@ -957,7 +960,7 @@ export default async (env) => {
         timedOut: true,
         spin: true,
         seconds,
-        inputs: importsOf(file, modules, closing.loaded ?? []),
+        inputs: importsOf(file, modules, closing),
         readAt: closing.readAt,
       }
     const tests = modules.flatMap((module) =>
@@ -1001,7 +1004,7 @@ export default async (env) => {
         String(error?.message ?? error),
       ),
       rows,
-      inputs: importsOf(file, modules, closing.loaded ?? []),
+      inputs: importsOf(file, modules, closing),
       readAt: closing.readAt,
     }
   }
@@ -1011,19 +1014,23 @@ export default async (env) => {
    * and those its copy evaluated (`loaded`, from the capture's closing row),
    * which include a module that only a mutated branch imports at run time.
    */
-  function importsOf(file, modules, loaded) {
+  function importsOf(file, modules, closing = {}) {
     return [
-      ...new Set([
-        file,
-        ...modules.flatMap((m) =>
-          Object.keys(m.diagnostic?.().importDurations ?? {}),
-        ),
-        ...loaded,
-      ]),
-    ].filter(
-      (path) =>
-        path.startsWith(`/`) && !ownHarness(path) && !isRunnerCopy(path),
-    )
+      ...[
+        ...new Set([
+          file,
+          ...modules.flatMap((m) =>
+            Object.keys(m.diagnostic?.().importDurations ?? {}),
+          ),
+          ...(closing.loaded ?? []),
+        ]),
+      ].filter(
+        (path) =>
+          path.startsWith(`/`) && !ownHarness(path) && !isRunnerCopy(path),
+      ),
+      // The files its tests read through fs, each its own input.
+      ...Object.keys(closing.readAt ?? {}),
+    ]
   }
 
   /**
@@ -1232,11 +1239,7 @@ export default async (env) => {
                 })),
               unhandled: [],
               rows: own.map((row) => [row.key, row]),
-              inputs: importsOf(
-                item.file,
-                [],
-                closings.get(copies[i])?.loaded ?? [],
-              ),
+              inputs: importsOf(item.file, [], closings.get(copies[i])),
               readAt: closings.get(copies[i])?.readAt,
             }
           }),
@@ -1290,11 +1293,7 @@ export default async (env) => {
             rows: rows
               .get(copy)
               .map((row) => [map(row.key), { ...row, key: map(row.key) }]),
-            inputs: importsOf(
-              item.file,
-              modules,
-              closings.get(copy)?.loaded ?? [],
-            ),
+            inputs: importsOf(item.file, modules, closings.get(copy)),
             readAt: closings.get(copy)?.readAt,
           }
         }),

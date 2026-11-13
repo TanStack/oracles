@@ -1086,10 +1086,17 @@ afterAll(() => {
       .filter(([, node]) => node.evaluated)
       .map(([id]) => id.split(`?`)[0])
       .filter((path) => path.startsWith(`/`)),
-    ...globalThis.__oracleGapsReads.keys(),
   ]
-  // The hash of each file the copy read, from its first read.
-  const readAt = Object.fromEntries(globalThis.__oracleGapsReads)
+  // The hash of each file the copy read, from its first read, under its own
+  // key (`fs:<path>`): a test's read of a file is another input than the
+  // module that its context serves from that file, which can differ from
+  // the file's text (fourth review of #55, F-A2).
+  const readAt = Object.fromEntries(
+    [...globalThis.__oracleGapsReads].map(([path, hash]) => [
+      `fs:${path}`,
+      hash,
+    ]),
+  )
   appendFileSync(
     state.capture,
     `${JSON.stringify({ file: thisFile, closed: true, loaded, readAt, ...(skippedCopy ? { skipped: true } : {}) })}\n`,

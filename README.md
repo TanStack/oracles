@@ -162,15 +162,27 @@ exited with <signal or code>` and exits 3; after an out-of-memory crash
   run read it, is not reused. A directory that a test stats or tests for is
   an input as a directory, not by its content.
 
+  Two kinds of input are not tracked yet. A Vite plugin whose output depends
+  on anything but a module's text, such as a sidecar file that it reads, can
+  make the daemon serve a run that read the plugin's old output. And the
+  daemon's environment is fixed when it starts, so an environment variable
+  that a later check sets does not reach the daemon's runs. After such a
+  change, run the check cold (without `--daemon`), or stop the daemon with
+  `oracle-gaps --stop-daemon --package <dir>`. The maintainer decided on
+  2026-11-13 that the daemon tracks both and restarts when they change; a
+  later release does that.
+
   These reads are no input, so an edit to the file alone does not rerun the
   tests that read it: a read outside the package or under `node_modules`; a
   read from a worker thread or child process that the test starts; and a
   read through any other `fs` API. These include `readdir`, `opendir`,
-  `createReadStream`, `realpath`, `lstat`, `access`, `open`, a read through
-  a file descriptor (`read`, `readSync`, `readv`), `copyFile` and
-  `copyFileSync`, `cp` and `cpSync`, `openAsBlob`, `statfs`, `readlink`, the
-  callback `stat`, `exists`, `watch`, `watchFile`, and the `fs/promises`
-  `access` and `open`. Run the check cold (without `--daemon`) after such an
+  `glob`, `globSync`, `createReadStream`, `realpath`, `lstat`, `access`,
+  `open`, a read through a file descriptor (`read`, `readSync`, `readv`,
+  `fstat`, `fstatSync`, and `readFileSync` or `readFile` given a file
+  descriptor), `copyFile` and `copyFileSync`, `cp` and `cpSync`,
+  `openAsBlob`, `statfs`, `readlink`, the callback `stat`, `exists`,
+  `watch`, `watchFile`, and the `fs/promises` `access`, `open`, and
+  `glob`. Run the check cold (without `--daemon`) after such an
   edit. A later release records all of them except `watch` and `watchFile`
   (maintainer decision, 2026-11-13).
 
