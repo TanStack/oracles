@@ -964,8 +964,8 @@ const witness = [
   // test that passes alone passes under the CLI), a sleep through
   // `node:timers/promises`, `Date.now()` (and through a `vi.spyOn`
   // passthrough, whose spy frame comes first), `process.uptime()`,
-  // `os.uptime()`, `AbortSignal.timeout`, `Atomics.waitAsync` with a
-  // timeout, and `monitorEventLoopDelay`. One untimed test runs the
+  // `os.uptime()`, `AbortSignal.timeout`, `Atomics.wait` and
+  // `Atomics.waitAsync` with a timeout, and `monitorEventLoopDelay`. One untimed test runs the
   // general path. A mutant is killed if any test still judges work, so its
   // `if-false` mutant stays `not-observed` only while every path is seen.
   // Tests that wait one turn (`setImmediate`, as `withinTurns` does) and
@@ -986,6 +986,7 @@ const witness = [
         `osuptime`,
         `abort`,
         `waitasync`,
+        `wait`,
         `loopdelay`,
       ].map((timed) => judging(`a`, `fixed seed`, 7, { timed, work: 1 })),
       judging(`a`, `fixed seed`, 1, { work: 1 }),
@@ -4538,6 +4539,7 @@ function oracleTestFile(plan, file) {
                 osuptime: `    if (osUptime() < 0) throw new Error('negative uptime')`,
                 abort: `    if (AbortSignal.timeout(60000).aborted) throw new Error('aborted at once')`,
                 waitasync: `    if (Atomics.waitAsync(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 0).value !== 'timed-out') throw new Error('waitAsync did not time out')`,
+                wait: `    if (Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 0) !== 'timed-out') throw new Error('wait did not time out')`,
                 loopdelay: `    { const delay = monitorEventLoopDelay(); delay.enable(); delay.disable() }`,
                 turn: `    await new Promise((r) => setImmediate(r))`,
               }[t.timed],
