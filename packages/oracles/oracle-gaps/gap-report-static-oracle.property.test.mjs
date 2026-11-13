@@ -227,14 +227,15 @@ function defaultOutputsOf(dir, sources) {
     const run = (pkg) =>
       parseArgs([`--package`, pkg, `--source`, sources.join(`,`)], pkg).out
     const outs = [run(dir), run(dir), run(other)]
-    const temp = realpathSync(tmpdir()) + sep
+    // The OS temporary directory by its native real path (the realpath rule):
+    // a JavaScript realpath keeps an 8.3 name such as RUNNER~1 on Windows.
+    const temp = realpathSync.native(tmpdir()) + sep
     return {
       // Under the OS temp directory, which the OS cleans, and never in the
       // package (maintainer decision, 2026-11-11).
       contained: outs.map(
         (out, i) =>
-          (out.startsWith(temp) || out.startsWith(tmpdir() + sep)) &&
-          !out.startsWith([dir, dir, other][i] + sep),
+          out.startsWith(temp) && !out.startsWith([dir, dir, other][i] + sep),
       ),
       // Each package's outputs lie in a directory of their own, which is not
       // the temp directory itself or a shared `oracle-gaps` directory.
