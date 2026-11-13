@@ -461,8 +461,7 @@ export async function openSession(pkg) {
     const wrapper = wrapperFor(index, config)
     writeFileSync(
       wrapper,
-      `import { createHash } from 'node:crypto'
-import { realpathSync } from 'node:fs'
+      `import { realpathSync } from 'node:fs'
 import { mergeConfig } from 'vitest/config'
 ${
   config
@@ -495,12 +494,12 @@ export default async (env) => {
         if (copies?.has(path)) return path
       return globalThis.__oracleGapsBundles?.get(source)
     },
-    // The hash of each module's text as this context transforms it, so a
-    // run is stored under the text its context served, not under an edit
-    // that lands later in the run (review of #55, F1).
+    // Each module this context transforms, so a run is stored under the
+    // text its context served, not under an edit that lands later in the
+    // run (review of #55, F1). The runner hashes it as it hashes every
+    // input (servedHash), not as another pre plugin has rewritten it (F-A).
     transform(code, id) {
-      const loads = (globalThis.__oracleGapsLoads[${index}] ??= new Map())
-      loads.set(id.split('?')[0], createHash('sha1').update(code).digest('hex'))
+      globalThis.__oracleGapsTransformed?.(${index}, id.split('?')[0])
     },
     load(id) {
       // Vite's own asset and worker queries ('?raw', '?url', '?worker&url', ...)
@@ -549,6 +548,13 @@ export default async (env) => {
       globalThis.__oracleGapsSchemata.get(path)
     return text === undefined ? hashOf(path) : sha1(text)
   }
+  // A context transformed a module (its wrapper's transform hook): the hash
+  // of what it then serves.
+  globalThis.__oracleGapsTransformed = (index, path) =>
+    (globalThis.__oracleGapsLoads[index] ??= new Map()).set(
+      path,
+      servedHash(path, index),
+    )
   // Per context: the hash of what it last served for each path.
   const lastServed = new Map()
   const servedBy = (index) => {
@@ -912,10 +918,6 @@ export default async (env) => {
       rmSync(capture, { force: true })
       return { file, timedOut: true, seconds, ...(spun ? { spin: true } : {}) }
     }
-    if (spun) {
-      rmSync(capture, { force: true })
-      return { file, timedOut: true, spin: true, seconds }
-    }
     // The result also lists test modules from earlier runs, with their old
     // results. Only this run's file counts.
     const modules = result.testModules.filter((m) => m.moduleId === file)
@@ -948,6 +950,16 @@ export default async (env) => {
       }
       rmSync(capture)
     }
+    // A run that spun ended, so its closing row names what it read (F-D).
+    if (spun)
+      return {
+        file,
+        timedOut: true,
+        spin: true,
+        seconds,
+        inputs: importsOf(file, modules, closing.loaded ?? []),
+        readAt: closing.readAt,
+      }
     const tests = modules.flatMap((module) =>
       [...module.children.allTests()].map((testCase) => {
         const testResult = testCase.result()
@@ -1542,7 +1554,16 @@ export default async (env) => {
       })
       evidence.computed += 1
       if (result.timedOut) evidence.cut += 1
-      const paths = result.timedOut ? fileInputs.get(file) : result.inputs
+      // A run cut off keeps its file's known inputs and any it named itself
+      // (third review of #55, F-D).
+      const paths = result.timedOut
+        ? [
+            ...new Set([
+              ...(fileInputs.get(file) ?? []),
+              ...(result.inputs ?? []),
+            ]),
+          ]
+        : result.inputs
       if (!result.timedOut && spec.startsWith(`unmutated:`))
         fileInputs.set(file, result.inputs)
       if (paths) {

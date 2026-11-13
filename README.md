@@ -165,11 +165,14 @@ exited with <signal or code>` and exits 3; after an out-of-memory crash
   These reads are no input, so an edit to the file alone does not rerun the
   tests that read it: a read outside the package or under `node_modules`; a
   read from a worker thread or child process that the test starts; and a
-  read through any other `fs` API, which includes `readdir`, `opendir`,
-  `createReadStream`, `realpath`, `lstat`, `access`, `open`, `watch`,
-  `readlink`, the callback `stat`, `exists`, and the `fs/promises`
-  `access` and `open`. Run the check cold (without `--daemon`) after such
-  an edit.
+  read through any other `fs` API. These include `readdir`, `opendir`,
+  `createReadStream`, `realpath`, `lstat`, `access`, `open`, a read through
+  a file descriptor (`read`, `readSync`, `readv`), `copyFile` and
+  `copyFileSync`, `cp` and `cpSync`, `openAsBlob`, `statfs`, `readlink`, the
+  callback `stat`, `exists`, `watch`, `watchFile`, and the `fs/promises`
+  `access` and `open`. Run the check cold (without `--daemon`) after such an
+  edit. A later release records all of them except `watch` and `watchFile`
+  (maintainer decision, 2026-11-13).
 
 - `packages/eslint-plugin-oracles` (`@tanstack/eslint-plugin-oracles`): the
   `oracle/*` lint rules. The rules recognize the framework by its package
