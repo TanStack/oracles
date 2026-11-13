@@ -196,3 +196,113 @@ jobs:
         with:
           advanced-security: false
           annotations: true
+  # Diagnostic, not a gate: nothing needs these jobs, and they are not
+  # required checks. They show what breaks on Windows, where the oracle
+  # framework and the gap CLI have never run. Each step continues on error,
+  # so a later step still runs when an earlier one fails.
+  windows-unit:
+    name: Windows unit suites (non-blocking)
+    runs-on: windows-latest
+    continue-on-error: true
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Tools
+        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
+      - name: Build framework
+        continue-on-error: true
+        run: pnpm --filter @tanstack/oracles run build
+      - name: Framework unit tests
+        continue-on-error: true
+        run: pnpm --filter @tanstack/oracles run test
+      - name: eslint plugin tests
+        continue-on-error: true
+        run: pnpm --filter @tanstack/eslint-plugin-oracles run test
+      - name: Gap report fast oracles
+        continue-on-error: true
+        run: pnpm --filter @tanstack/oracles run test:oracle-gaps:fast
+  windows-gap-cli:
+    name: Windows gap CLI end to end (non-blocking)
+    runs-on: windows-latest
+    continue-on-error: true
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Tools
+        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
+      - name: Build framework
+        continue-on-error: true
+        run: pnpm --filter @tanstack/oracles run build
+      # A tiny package written at run time, not committed: one function with
+      # two operators and one oracle file that owns it. It is written in bash,
+      # which the runner provides on Windows too; the CLI steps below use the
+      # default shell, as a user's PowerShell or cmd would.
+      - name: Write gap CLI fixture
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          dir="$GITHUB_WORKSPACE/.ci-fixture"
+          mkdir -p "$dir/src" "$dir/tests"
+          cat > "$dir/src/clamp.ts" <<'EOT'
+          export function clamp(x: number): number {
+            return x < 0 ? 0 : x > 10 ? 10 : x
+          }
+          EOT
+          cat > "$dir/tests/clamp.property.test.ts" <<'EOT'
+          import fc from 'fast-check'
+          import { differs, oracleProperty, pass } from '../../packages/oracles/dist/esm/index.js'
+          import { clamp } from '../src/clamp'
+
+          oracleProperty({
+            id: `fixture.clamp`,
+            law: {
+              statement: `clamp returns its argument within 0 and 10.`,
+              authority: `the CI fixture for the Windows gap-CLI run`,
+              limits: `integers from -20 to 20`,
+            },
+            histories: {
+              arbitrary: fc.integer({ min: -20, max: 20 }),
+              runs: 50,
+              fixedSeeds: [1],
+              states: [],
+              measured: [],
+            },
+            timeout: 5_000,
+            model: (x: number) => (x < 0 ? 0 : x > 10 ? 10 : x),
+            driver: (x: number, observe: (checkpoint: string, value: unknown) => void) => {
+              observe(`result`, clamp(x))
+            },
+            check: (_x: number, trace: ReadonlyArray<{ checkpoint: string; value: unknown }>, expected: number) => {
+              const seen = trace.find(({ checkpoint }) => checkpoint === `result`)?.value
+              return differs(`result`, `clamp`, seen, expected) ?? pass
+            },
+          })
+          EOT
+          cat > "$dir/vitest.config.mjs" <<'EOT'
+          export default {
+            test: { include: ['tests/**/*.test.ts'], environment: 'node', coverage: { enabled: false } },
+          }
+          EOT
+      # The user-facing path: the default shell, no supervisor on Windows.
+      - name: Gap CLI on the fixture
+        continue-on-error: true
+        run: node packages/oracles/oracle-gaps/index.mjs --package .ci-fixture --source src/clamp.ts --config vitest.config.mjs
+      # The daemon path: start it, check through it, then stop it.
+      - name: Gap CLI through the daemon
+        continue-on-error: true
+        run: node packages/oracles/oracle-gaps/index.mjs --package .ci-fixture --source src/clamp.ts --config vitest.config.mjs --daemon
+      - name: Stop the gap CLI daemon
+        if: always()
+        continue-on-error: true
+        run: node packages/oracles/oracle-gaps/index.mjs --stop-daemon --package .ci-fixture
+      # One fixed-seed unit of the end-to-end oracle, as the Linux job runs it.
+      - name: Gap report end-to-end oracle (fixed seed)
+        continue-on-error: true
+        run: pnpm --filter @tanstack/oracles exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "fixed seed"
