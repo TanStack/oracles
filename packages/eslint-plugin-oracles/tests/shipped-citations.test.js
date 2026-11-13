@@ -103,7 +103,8 @@ function strays(dir, file, text) {
     .map((match) => match[1])
     .filter((name) => repoOnlyNames.has(name))
   return [...paths, ...names].map(
-    (cited) => `${relative(repo, join(dir, file))}: ${cited}`,
+    (cited) =>
+      `${relative(repo, join(dir, file)).replaceAll(`\\`, `/`)}: ${cited}`,
   )
 }
 

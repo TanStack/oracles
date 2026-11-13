@@ -1667,7 +1667,7 @@ export default async (env) => {
 
     const vitest = contexts[0]
     const fileSpecs = new Map(contextSpecs.get(vitest))
-    const relative = (file) => file.slice(pkg.length + 1)
+    const relative = (file) => relativeWithin(pkg, file) ?? posix(file)
     const oracleFiles = new Set(declarations.keys())
     const runIdentity = identityOf(
       options,

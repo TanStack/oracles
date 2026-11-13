@@ -5478,7 +5478,10 @@ function endingOf(exit, stderr, out, name = (text) => text, stdout = ``) {
     done,
     stdout: printed.map(name),
     namesOutput:
-      out !== undefined && done === name(`refused, report ${out}/summary.md`),
+      // The done line names the report in forward slashes on every platform
+      // (the register's Windows paths rule).
+      out !== undefined &&
+      done === name(`refused, report ${out.replaceAll(`\\`, `/`)}/summary.md`),
     // An internal error's log beside a refusal would be another run's.
     errorLog: out !== undefined && existsSync(join(out, `error.log`)),
     stackFrames: /^\s+at /m.test(text),
