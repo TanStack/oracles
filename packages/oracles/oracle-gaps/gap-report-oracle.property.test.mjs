@@ -690,6 +690,12 @@ const strays = (dir, before, running = false) =>
 async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
   const after = when === `after`
   const warm = when === `warm`
+  // With `abort`, no signal comes: a test of file a aborts the run's
+  // process (`GAP_ABORT`), in worker threads, so the abort ends the process
+  // that runs the check, as a V8 out-of-memory abort does. The run then
+  // ends with one error line per stream that names how its process ended,
+  // and exits 3 (the coordinator's decision of 2026-11-12 on P10).
+  const abort = when === `abort`
   writeFixture(dir, files)
   const before = new Set(filesUnder(dir))
   const pids = mkdtempSync(join(realpathSync(tmpdir()), `gap-stop-`))
@@ -698,7 +704,7 @@ async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
     outName: `out-stop`,
     contexts: 1,
     only: ids,
-    pool,
+    pool: abort ? `threads` : pool,
   })
   const child = spawn(process.execPath, args, {
     cwd: repo,
@@ -706,7 +712,9 @@ async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
       ? { ...cleanEnv(), ORACLE_GAPS_TEST_HOLD_EXIT_MS: `500` }
       : warm
         ? { ...cleanEnv(), ORACLE_GAPS_TEST_WARM_PROBE: join(pids, `warming`) }
-        : { ...cleanEnv(), GAP_STOP_DIR: pids },
+        : abort
+          ? { ...cleanEnv(), GAP_ABORT: `1` }
+          : { ...cleanEnv(), GAP_STOP_DIR: pids },
     stdio: [`ignore`, `pipe`, `pipe`],
   })
   let stdout = ``
@@ -730,6 +738,7 @@ async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
   for (
     let waited = 0;
     !exited &&
+    !abort &&
     (after
       ? !stdout.includes(`oracle-gaps: done completed`)
       : warm
@@ -742,13 +751,17 @@ async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
   // Spun: the witness's test spins (with `after`, the done line came while
   // the run's process still held its exit; with `warm`, the run was warming
   // its config).
-  const spun = after
-    ? stdout.includes(`oracle-gaps: done completed`) && !exited
-    : warm
-      ? existsSync(join(pids, `warming`)) && !exited
-      : readdirSync(pids).length >= 2
+  // With `abort`, the run's own end is the event: it ended unstopped.
+  if (abort) await Promise.race([exit, sleep(120_000)])
+  const spun = abort
+    ? exited
+    : after
+      ? stdout.includes(`oracle-gaps: done completed`) && !exited
+      : warm
+        ? existsSync(join(pids, `warming`)) && !exited
+        : readdirSync(pids).length >= 2
   const strayWhileRunning = strays(dir, before, true)
-  child.kill(signal)
+  if (!abort) child.kill(signal)
   const ended = await Promise.race([exit, sleep(30_000).then(() => false)])
   await sleep(1000)
   const alive = readdirSync(pids)
@@ -1617,6 +1630,10 @@ async function driver(plan, observe) {
           states.add(`a stop signal while the config warms`)
           continue
         }
+        if (stop.when === `abort`) {
+          states.add(`a run whose process aborted`)
+          continue
+        }
         states.add(`a run stopped by ${stop.signal} while a worker spun`)
         states.add(
           `a stopped run whose workers are ${stop.pool === `forks` ? `child processes` : `threads`}`,
@@ -2359,7 +2376,9 @@ function check(plan, observations, expected) {
     const owedEnd =
       value.when === `after`
         ? `oracle-gaps: done completed`
-        : `oracle-gaps: done stopped (${value.signal})`
+        : value.when === `abort`
+          ? `oracle-gaps: done error, the run's process exited with SIGABRT`
+          : `oracle-gaps: done stopped (${value.signal})`
     if (value.spun && value.when === `warm` && value.refused)
       return violation(
         `stopped`,
@@ -3055,6 +3074,7 @@ const required = [
   `a run stopped by SIGINT while a worker spun`,
   `a stop signal after the completed line`,
   `a stop signal while the config warms`,
+  `a run whose process aborted`,
   `a config refusal through the daemon`,
   `a completed run whose tests wrote nothing`,
   `a stopped run whose workers are child processes`,
@@ -3271,6 +3291,7 @@ oracleProperty({
             { signal: `SIGINT`, pool: `threads`, when: `run` },
             { signal: `SIGINT`, pool: `threads`, when: `after` },
             { signal: `SIGINT`, pool: `threads`, when: `warm` },
+            { signal: `SIGINT`, pool: `threads`, when: `abort` },
           ],
           // File a writes to the console, so the run captures it.
           consoleOutput: true,

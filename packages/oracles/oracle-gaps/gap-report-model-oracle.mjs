@@ -669,10 +669,12 @@ const drawn = fc.record({
           // When the signal comes: while the stop witness spins (`run`),
           // once the run has printed its completed line, while its process
           // holds its exit (`after`, review of #46, F3), or while the run
-          // warms its config (`warm`, re-review N1).
-          when: fc.constantFrom(`run`, `run`, `after`, `warm`),
+          // warms its config (`warm`, re-review N1). Or no signal: a test
+          // aborts the run's process (`abort`, as a V8 out-of-memory abort
+          // does; the coordinator's decision of 2026-11-12 on P10).
+          when: fc.constantFrom(`run`, `run`, `after`, `warm`, `abort`),
         }),
-        { minLength: 1, maxLength: 4 },
+        { minLength: 1, maxLength: 5 },
       ),
     },
   ),
@@ -2650,6 +2652,9 @@ function resolveHistory(history) {
     steps: history.steps ?? [],
     lazyGate: history.lazyGate === true,
     consoleOutput: history.consoleOutput === true,
+    // Whether a run aborts its process (a stop run `abort`): then file a has
+    // the test that aborts when the driver asks.
+    aborts: (history.stopRuns ?? []).some((stop) => stop.when === `abort`),
     ordinary: history.ordinary === true,
     // An `owns` key in an assertion's arguments, in the ordinary file: its
     // assertion form and whether its list is a literal, or none.
@@ -3877,7 +3882,8 @@ function baselineOf(plan) {
     // baseline too.
     const own =
       plan.tests.filter((t) => t.file === file).length +
-      (file === `a` && plan.consoleOutput ? 1 : 0)
+      (file === `a` && plan.consoleOutput ? 1 : 0) +
+      (file === `a` && plan.aborts ? 1 : 0)
     const broken = failing.find((f) => f.file === file)
     // The failing owner's suite holds two tests and a third of its name.
     const extra = broken?.test === undefined ? 0 : 3
@@ -4464,10 +4470,18 @@ function oracleTestFile(plan, file) {
       `})`,
       `test('fixed seed 999', () => {})`,
     )
+  // A test that aborts the process when the driver asks (`GAP_ABORT`), as
+  // a V8 out-of-memory abort does; it runs and passes in every other run.
+  if (file === `a` && plan.aborts)
+    out.push(
+      `test('aborts the process when asked', () => {`,
+      `  if (process.env.GAP_ABORT === '1') process.abort()`,
+      `})`,
+    )
   // A file with no tests still loads, so the CLI can read what it owns.
   if (
     !plan.tests.some((t) => t.file === file) &&
-    !(file === `a` && plan.consoleOutput)
+    !(file === `a` && (plan.consoleOutput || plan.aborts))
   )
     out.push(`test.skip('no tests', () => {})`)
   // A test that writes to the process's own streams, as a test's debugging
