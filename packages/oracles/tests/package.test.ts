@@ -292,9 +292,15 @@ console.log(JSON.stringify({ failed, unreached }))`,
         npm(directory, `install`, ...specs)
         return directory
       }
-      // Where the project's `tsc` command links.
-      const tscOf = (directory: string) =>
-        readlinkSync(join(directory, `node_modules/.bin/tsc`))
+      // Where the project's `tsc` command links. npm makes a symlink on POSIX
+      // and, on Windows, a shell shim that names the same target.
+      const tscOf = (directory: string) => {
+        const bin = join(directory, `node_modules/.bin/tsc`)
+        if (process.platform !== `win32`) return readlinkSync(bin)
+        const target = /\.\.\/(.+?)\/bin\/tsc/.exec(readFileSync(bin, `utf8`))
+        if (target === null) throw new Error(`no tsc target in ${bin}`)
+        return join(`..`, target[1], `bin`, `tsc`)
+      }
       const aliasTsc = join(
         `..`,
         `typescript-for-tanstack-oracles`,
