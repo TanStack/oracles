@@ -430,5 +430,7 @@ jobs:
         if: always()
         run: |
           node "$env:GITHUB_WORKSPACE\packages\oracles\node_modules\vitest\vitest.mjs" run --root .ci-replay > replay-out.txt 2>&1
+          # Diagnostic: the output the witness reads, so a missing line is visible.
+          Get-Content replay-out.txt -TotalCount 120
           node packages/oracles/scripts/windows-witness.mjs replay replay-out.txt "$env:GITHUB_WORKSPACE\.ci-replay"
           if ($LASTEXITCODE -ne 0) { throw "the replay witness failed" }
