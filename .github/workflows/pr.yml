@@ -369,6 +369,7 @@ jobs:
             histories: {
               arbitrary: fc.integer({ min: -20, max: 20 }),
               runs: 20,
+              fixedSeeds: [1],
               states: [],
               measured: [],
             },
