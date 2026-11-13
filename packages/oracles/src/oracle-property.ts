@@ -707,6 +707,23 @@ export interface OraclePropertyOptions<THistory, TExpected, TPlan = THistory> {
    * `owns`).
    */
   owns?: ReadonlyArray<string>
+  /**
+   * A work bound (maintainer decision, 2026-11-12: a branch that exists only
+   * for speed is owed a cost law). A test's work is the number of site
+   * evaluations that its instrumented production code makes, a count, never
+   * a time. Under the gap report, a mutant whose work in one of this
+   * property's tests is more than `ratio` times the unmodified code's work
+   * in that test fails it under law `work bound`, so a mutant that deletes a
+   * shortcut, and changes no observation, is killed. A plain Vitest run has
+   * no unmodified run to compare with, so there the bound judges nothing.
+   * `ratio` is a finite number of at least 1, read to the hundredth; 1
+   * rejects any extra work. The bound is the property's, so it judges every
+   * test the property registers (each fixed seed's units and the random
+   * campaign's), though the gap report's directive names one of them. A
+   * test that made a timer or held I/O open, whose work can follow a clock,
+   * is not judged.
+   */
+  work?: { ratio: number }
 }
 
 declare global {
@@ -721,6 +738,9 @@ declare global {
   var __oracleVerdict:
     | ((verdict: { property: string; law: string; checkpoint: string }) => void)
     | undefined
+  // Installed by the gap report's test setup, absent otherwise. Each test
+  // whose route judges production reports its property's work bound.
+  var __oracleWorkBound: ((ratio: number) => void) | undefined
 }
 
 /** The probe calls one history made: which probes it reached and which it entered. */
@@ -795,7 +815,7 @@ export function oracleProperty<THistory, TExpected, TPlan = THistory>(
   // Every source names a registered property, so its replay and manifest
   // entries exist; an enumerated source has no random campaign to check it.
   assertRegisteredOracleProperty(options.id)
-  const { id, histories, owns } = options
+  const { id, histories, owns, work } = options
   if (
     owns !== undefined &&
     !(
@@ -806,6 +826,16 @@ export function oracleProperty<THistory, TExpected, TPlan = THistory>(
   )
     throw new Error(
       `${id}: \`owns\` must be a non-empty literal list of strings, which the gap report reads statically.`,
+    )
+  // A ratio below 1 would reject a mutant that does no more work. Plain
+  // JavaScript can pass `null`, which has no ratio.
+  const ratio = (work as { ratio?: unknown } | null | undefined)?.ratio
+  if (
+    work !== undefined &&
+    !(typeof ratio === `number` && Number.isFinite(ratio) && ratio >= 1)
+  )
+    throw new Error(
+      `${id}: \`work.ratio\` must be a finite number of at least 1, the most work a mutant may do as a multiple of the unmodified code's.`,
     )
   const enumerated: EnumeratedHistories<THistory> | undefined = Array.isArray(
     histories,
@@ -847,6 +877,9 @@ export function oracleProperty<THistory, TExpected, TPlan = THistory>(
         test.name,
         ({ task, signal }) => {
           oracleRoute(test.route)
+          // The framework's own checks judge the oracle, not production.
+          if (work && test.route !== `calibration`)
+            globalThis.__oracleWorkBound?.(work.ratio)
           return test.run(task, signal)
         },
         timeoutOf(options),
