@@ -1256,8 +1256,31 @@ export default async (env) => {
       }
     } finally {
       for (const copy of copies) globalThis.__oracleGapsCopies.delete(copy)
+      retireCopies(context, copies)
       rmSync(capture, { force: true })
     }
+  }
+
+  /**
+   * Drops a batch's copies from Vitest's state once their units are plain
+   * data. Each copy is a new file, and the state keeps every file and test
+   * task it ever ran: `filesMap` by path and `idMap` by task id, so a check
+   * holds every test of every copy (about 377k test cases in the four-file
+   * repro, which runs out of a 2 GB heap). `clearFiles` (Vitest 4.1 and 5.1
+   * alike) replaces each path's file entry, but it leaves the copies' test
+   * tasks in `idMap`, so those go first. The map shapes are guarded: a
+   * Vitest that changes them throws here rather than leaking quietly.
+   */
+  function retireCopies(context, copies) {
+    const state = context.state
+    if (!(state?.filesMap instanceof Map) || !(state?.idMap instanceof Map))
+      throw new Error(
+        `oracle-gaps: this Vitest keeps no filesMap or idMap in its state, so a check cannot retire its copies`,
+      )
+    const gone = new Set(copies)
+    for (const [id, task] of state.idMap)
+      if (gone.has(task.file?.filepath ?? task.filepath)) state.idMap.delete(id)
+    state.clearFiles(context.getRootProject(), copies)
   }
 
   async function check(options, store, log = console.error) {
