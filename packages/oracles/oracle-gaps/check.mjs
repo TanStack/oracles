@@ -1281,6 +1281,38 @@ export default async (env) => {
     for (const [id, task] of state.idMap)
       if (gone.has(task.file?.filepath ?? task.filepath)) state.idMap.delete(id)
     state.clearFiles(context.getRootProject(), copies)
+    retiredEntries(context, copies)
+  }
+
+  // The test hook (ORACLE_GAPS_TEST_RETENTION, a file path): after a batch's
+  // copies are retired, one line counts the state entries and module nodes
+  // that still name a retired copy. The e2e oracle's bounded-retention law
+  // reads it: each count is 0.
+  function retiredEntries(context, copies) {
+    const file = process.env.ORACLE_GAPS_TEST_RETENTION
+    if (!file) return
+    const gone = new Set(copies)
+    const named = (path) => gone.has(path)
+    const { filesMap, idMap, pathsSet } = context.state
+    let tasks = 0
+    for (const task of idMap.values())
+      if (named(task.file?.filepath ?? task.filepath)) tasks += 1
+    let nodes = 0
+    for (const environment of Object.values(
+      context.getRootProject().vite?.environments ?? {},
+    ))
+      for (const copy of gone)
+        nodes += environment.moduleGraph?.fileToModulesMap.get(copy)?.size ?? 0
+    appendFileSync(
+      file,
+      `${JSON.stringify({
+        copies: copies.length,
+        filesMap: [...filesMap.keys()].filter(named).length,
+        pathsSet: [...pathsSet].filter(named).length,
+        idMap: tasks,
+        moduleNodes: nodes,
+      })}\n`,
+    )
   }
 
   async function check(options, store, log = console.error) {

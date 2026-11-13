@@ -647,13 +647,25 @@ function runCli(dir, files, how = {}) {
   writeFixture(dir, files)
   const before = new Set(filesUnder(dir))
   const { args, out } = cliArgs(dir, files, how)
+  // The retention hook (ORACLE_GAPS_TEST_RETENTION): one line per batch,
+  // written beside the run's own temporary files, not in the package.
+  const hook = join(
+    mkdtempSync(join(tmpdir(), `gap-retention-`)),
+    `retention.jsonl`,
+  )
   const child = spawnSync(process.execPath, args, {
     cwd: repo,
     encoding: `utf8`,
     timeout: 300_000,
     maxBuffer: 64 * 1024 * 1024,
-    env: cleanEnv(),
+    env: { ...cleanEnv(), ORACLE_GAPS_TEST_RETENTION: hook },
   })
+  const retention = existsSync(hook)
+    ? readFileSync(hook, `utf8`)
+        .split(`\n`)
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+    : []
   const run = readRun(
     dir,
     out,
@@ -667,7 +679,7 @@ function runCli(dir, files, how = {}) {
     .split(`\n`)
     .find((line) => line.startsWith(`  replay: `))
     ?.slice(`  replay: `.length)
-  return { ...run, strayWrites: strays(dir, before), replay }
+  return { ...run, strayWrites: strays(dir, before), replay, retention }
 }
 
 /**
@@ -1600,10 +1612,11 @@ async function driver(plan, observe) {
       cli: plan.cliPath === `spaced` ? copy : here,
       ...configArgs(plan),
     }
-    const { replay, ...cli } = runCli(dir, files, how)
+    const { replay, retention, ...cli } = runCli(dir, files, how)
     // How many units were computed or reused says how the result was
     // produced, not what it is, so it is not observed.
     observe(`cli`, { ...cli, evidence: undefined })
+    observe(`retention`, retention)
     // A failing owner's replay, run as the author would run it (law 3).
     if (plan.fault === `brokenOwner`)
       observe(`replay`, { command: replay, ran: replayed(dir, replay) })
@@ -2170,6 +2183,25 @@ function check(plan, observations, expected) {
     )
   const stream = streamBreach(`cli`, cli, expected, plan)
   if (stream) return stream
+  // Bounded retention (the register's C entry): once a batch's copies are
+  // retired, Vitest's filesMap, pathsSet, and idMap and Vite's module graph
+  // name none of them, so each count the hook reports is 0.
+  const retention = observations.find(
+    (o) => o.checkpoint === `retention`,
+  )?.value
+  const held = (retention ?? []).find(
+    (line) => line.filesMap + line.pathsSet + line.idMap + line.moduleNodes > 0,
+  )
+  if (held)
+    return violation(
+      `retention`,
+      `a batch left its retired copies in Vitest or Vite state: ${JSON.stringify(held)}`,
+      `bounded retention`,
+      {
+        actual: held,
+        expected: { filesMap: 0, pathsSet: 0, idMap: 0, moduleNodes: 0 },
+      },
+    )
   // Through the daemon, each check streams the same kinds of line, and a
   // completed one ends with its done line (law 15). The state of each step
   // differs, so its verdict and counts are judged by law 9's comparison.
