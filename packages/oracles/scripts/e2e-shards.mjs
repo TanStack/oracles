@@ -80,6 +80,9 @@ export const shards = {
     `fixed seed 20261105: an unchanged check through the daemon under a config's pre plugin`,
     `random seed: an unchanged check through the daemon under a config's pre plugin`,
     `determinism: constructed history: an unchanged check through the daemon under a config's pre plugin`,
+    `fixed seed 20261105: an unchanged check through the daemon while a test reads a source through fs`,
+    `random seed: an unchanged check through the daemon while a test reads a source through fs`,
+    `determinism: constructed history: an unchanged check through the daemon while a test reads a source through fs`,
     // The fs-read data histories (law 9): 2.7 to 5.4 s each here, fixed seed.
     `fixed seed 20261105: an edit to data a test reads through fs (sync)`,
     `random seed: an edit to data a test reads through fs (sync)`,

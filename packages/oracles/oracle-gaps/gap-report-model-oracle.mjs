@@ -5105,15 +5105,15 @@ const initialState = (plan) => ({
 const altConfigPath = (plan) =>
   `config/gap-vitest-alt.${plan.configFile.split(`.`).at(-1)}`
 
+// The config's own pre plugin (`prePlugin`): it rewrites each module of the
+// package that it transforms, keeping what the module does.
+const PRE_PLUGIN = `{ name: 'gap-pre-rewrite', enforce: 'pre', transform(code, id) { const path = id.split('?')[0]; return /\\.(ts|js|mjs)$/.test(path) && !path.includes('/node_modules/') ? code + '\\n// rewritten by a pre plugin\\n' : undefined } }`
+
 /**
  * The text of the package's config, in its syntax (`configOf`), with the
  * fault, the top-level await, or the `require` calls the plan holds. `test`
  * is the config's `test` object.
  */
-// The config's own pre plugin (`prePlugin`): it rewrites each module of the
-// package that it transforms, keeping what the module does.
-const PRE_PLUGIN = `{ name: 'gap-pre-rewrite', enforce: 'pre', transform(code, id) { const path = id.split('?')[0]; return /\\.(ts|js|mjs)$/.test(path) && !path.includes('/node_modules/') ? code + '\\n// rewritten by a pre plugin\\n' : undefined } }`
-
 function configText(plan, test) {
   const commonjs = plan.configSyntax === `cjs`
   const config = `defineConfig(${
