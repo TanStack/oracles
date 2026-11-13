@@ -1081,12 +1081,10 @@ afterAll(() => {
   const evaluated = globalThis.__vitest_worker__?.evaluatedModules
   // The map keeps every module the worker evaluated, and the copy's module
   // reset only marks them unevaluated, so the copy's own are those marked.
-  const loaded = [
-    ...[...(evaluated?.idToModuleMap ?? [])]
-      .filter(([, node]) => node.evaluated)
-      .map(([id]) => id.split(`?`)[0])
-      .filter((path) => path.startsWith(`/`)),
-  ]
+  const loaded = [...(evaluated?.idToModuleMap ?? [])]
+    .filter(([, node]) => node.evaluated)
+    .map(([id]) => id.split(`?`)[0])
+    .filter((path) => path.startsWith(`/`))
   // The hash of each file the copy read, from its first read, under its own
   // key (`fs:<path>`): a test's read of a file is another input than the
   // module that its context serves from that file, which can differ from

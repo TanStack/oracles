@@ -179,16 +179,19 @@ exited with <signal or code>` and exits 3; after an out-of-memory crash
   These reads are no input, so an edit to the file alone does not rerun the
   tests that read it: a read outside the package or under `node_modules`; a
   read from a worker thread or child process that the test starts; and a
-  read through any other `fs` API. These include `readdir`, `opendir`,
-  `glob`, `globSync`, `createReadStream`, `realpath`, `lstat`, `access`,
-  `open`, a read through a file descriptor (`read`, `readSync`, `readv`,
-  `fstat`, `fstatSync`, and `readFileSync` or `readFile` given a file
-  descriptor), `copyFile` and `copyFileSync`, `cp` and `cpSync`,
-  `openAsBlob`, `statfs`, `readlink`, the callback `stat`, `exists`,
-  `watch`, `watchFile`, and the `fs/promises` `access`, `open`, and
-  `glob`. Run the check cold (without `--daemon`) after such an
-  edit. A later release records all of them except `watch` and `watchFile`
-  (maintainer decision, 2026-11-13).
+  read through any `fs` or `fs/promises` function other than the six above,
+  or through one of those six given a file descriptor. That catch-all
+  includes, for example, `readdir`, `opendir`, `glob`, `globSync`,
+  `createReadStream`, `realpath`, `lstat`, `access`, `open`, `read`,
+  `readSync`, `readv`, `fstat`, `fstatSync`, `copyFile`, `copyFileSync`, `cp`,
+  `cpSync`, `openAsBlob`, `statfs`, `readlink`, the callback `stat`,
+  `exists`, `watch`, and `watchFile`, and the `fs/promises` `readdir`,
+  `opendir`, `glob`, `lstat`, `realpath`, `readlink`, `access`, `open`,
+  `copyFile`, `cp`, `statfs`, and `watch`. Run the check cold (without
+  `--daemon`) after an edit to a file read that way. A later release records
+  all of them except `watch` and `watchFile`, which wait for future changes
+  and stay no input (maintainer decision, 2026-11-13, with `watchFile` in the
+  family of `watch`).
 
 - `packages/eslint-plugin-oracles` (`@tanstack/eslint-plugin-oracles`): the
   `oracle/*` lint rules. The rules recognize the framework by its package
