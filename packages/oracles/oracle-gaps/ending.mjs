@@ -14,7 +14,7 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { posix } from './paths.mjs'
+import { posix, realPathOf } from './paths.mjs'
 
 /** A problem the author can fix: its cause, and the one step that fixes it. */
 export class Refusal extends Error {
@@ -51,7 +51,7 @@ export function endRun(error, out = error?.out) {
   const stack = `${error?.stack ?? message}\n`
   let log = join(out ?? ``, `error.log`)
   if (!write(out, results, `Internal error: ${message}\n`, stack)) {
-    log = join(tmpdir(), `oracle-gaps-error-${process.pid}.log`)
+    log = join(realPathOf(tmpdir()), `oracle-gaps-error-${process.pid}.log`)
     writeFileSync(log, stack)
   }
   const done = `oracle-gaps: done error, log ${log}`
