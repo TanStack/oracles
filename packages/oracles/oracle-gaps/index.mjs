@@ -124,6 +124,7 @@
 import { spawn } from 'node:child_process'
 import {
   appendFileSync,
+  linkSync,
   mkdirSync,
   readFileSync,
   realpathSync,
@@ -170,37 +171,58 @@ const alive = (pid) => {
     return error.code === `EPERM`
   }
 }
+// The pid this process claimed each output directory with, released when the
+// process exits (on every exit but SIGKILL).
+const claims = new Set()
+process.on(`exit`, () => {
+  for (const claim of claims) {
+    try {
+      if (Number(readFileSync(claim, `utf8`)) === process.pid)
+        rmSync(claim, { force: true })
+    } catch {
+      // Already gone.
+    }
+  }
+})
 /**
- * Claims output directory `out` for this process: a run keeps it while it
- * lives, and a second run on it refuses, reportless so that the live run's
- * files stay its own (the maintainer's decision of 2026-11-13). A claim by a
- * run that has ended is taken over.
+ * Claims output directory `out` for this process (review of #57, P2 and P3):
+ * a run keeps it while it lives, and a second run on it refuses without
+ * writing into it (the maintainer's decision of 2026-11-13). The claim is a
+ * temp file that already holds the pid, linked to `run.pid`, which fails when
+ * `run.pid` exists, so the claim is atomic. A claim whose pid no longer runs
+ * is taken over.
  */
 function claimOut(out) {
   const claim = join(out, `run.pid`)
-  for (;;) {
-    try {
-      writeFileSync(claim, `${process.pid}\n`, { flag: `wx` })
-      return
-    } catch (error) {
-      if (error.code !== `EEXIST`) throw cannotWrite(claim, error)
+  const temp = `${claim}.${process.pid}.tmp`
+  try {
+    mkdirSync(out, { recursive: true })
+    writeFileSync(temp, `${process.pid}\n`)
+  } catch (error) {
+    throw cannotWrite(claim, error)
+  }
+  try {
+    for (;;) {
+      try {
+        linkSync(temp, claim)
+        claims.add(claim)
+        return
+      } catch (error) {
+        if (error.code !== `EEXIST`) throw cannotWrite(claim, error)
+      }
+      const holder = Number(readFileSync(claim, `utf8`))
+      if (holder !== process.pid && holder > 0 && alive(holder)) {
+        const refusal = new Refusal(
+          `another run (pid ${holder}) is using ${out}`,
+          `If no run is using it, delete ${claim}; otherwise pass --out a directory no run is using.`,
+        )
+        refusal.reportless = true
+        throw refusal
+      }
+      rmSync(claim, { force: true })
     }
-    let holder
-    try {
-      holder = Number(readFileSync(claim, `utf8`))
-    } catch (error) {
-      if (error.code !== `ENOENT`) throw cannotWrite(claim, error)
-      continue
-    }
-    if (holder !== process.pid && holder > 0 && alive(holder)) {
-      const refusal = new Refusal(
-        `another run is using ${out}`,
-        `Pass --out a directory no run is using, or wait for the run that uses it to end.`,
-      )
-      refusal.reportless = true
-      throw refusal
-    }
-    rmSync(claim, { force: true })
+  } finally {
+    rmSync(temp, { force: true })
   }
 }
 /**

@@ -718,7 +718,13 @@ const strays = (dir, before, running = false) =>
  * Vitest's does; re-review N1). The run then ends stopped, with exactly
  * one done line and no refusal.
  */
-async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
+async function stoppedRun(
+  dir,
+  files,
+  how,
+  ids,
+  { signal, pool, when, delay = 0 },
+) {
   // `spawn`: the signal comes as the CLI starts, once its own code runs (a
   // signal during Node's own start has no handler yet; Limits of #57).
   const atSpawn = when === `spawn`
@@ -740,15 +746,23 @@ async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
     only: ids,
     pool: abort ? `threads` : pool,
   })
+  // The started marker: the CLI writes it as its first statement (index.mjs).
+  const startedPath = join(pids, `started`)
   const child = spawn(process.execPath, args, {
     cwd: repo,
-    env: after
-      ? { ...cleanEnv(), ORACLE_GAPS_TEST_HOLD_EXIT_MS: `500` }
-      : warm
-        ? { ...cleanEnv(), ORACLE_GAPS_TEST_WARM_PROBE: join(pids, `warming`) }
-        : abort
-          ? { ...cleanEnv(), GAP_ABORT: `1` }
-          : { ...cleanEnv(), GAP_STOP_DIR: pids },
+    env: {
+      ...(atSpawn ? { ORACLE_GAPS_TEST_STARTED: startedPath } : {}),
+      ...(after
+        ? { ...cleanEnv(), ORACLE_GAPS_TEST_HOLD_EXIT_MS: `500` }
+        : warm
+          ? {
+              ...cleanEnv(),
+              ORACLE_GAPS_TEST_WARM_PROBE: join(pids, `warming`),
+            }
+          : abort
+            ? { ...cleanEnv(), GAP_ABORT: `1` }
+            : { ...cleanEnv(), GAP_STOP_DIR: pids }),
+    },
     stdio: [`ignore`, `pipe`, `pipe`],
   })
   let stdout = ``
@@ -773,6 +787,7 @@ async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
     let waited = 0;
     !exited &&
     !abort &&
+    !atSpawn &&
     (after
       ? !stdout.includes(`oracle-gaps: done completed`)
       : warm
@@ -797,6 +812,7 @@ async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
           ? existsSync(join(pids, `warming`)) && !exited
           : readdirSync(pids).length >= 2
   const strayWhileRunning = strays(dir, before, true)
+  if (atSpawn) await sleep(delay)
   if (!abort) child.kill(signal)
   const ended = await Promise.race([exit, sleep(30_000).then(() => false)])
   await sleep(1000)
@@ -834,6 +850,9 @@ async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
   ]
   const result = {
     signal,
+    // Whether the CLI wrote its started marker before the signal (outcomes a and b).
+    started: atSpawn ? existsSync(startedPath) : undefined,
+    stdoutLength: stdout.length,
     pool,
     spun,
     ended,
@@ -928,10 +947,18 @@ async function overlappingRuns(dir, files, how) {
   writeFixture(dir, files)
   const before = new Set(filesUnder(dir))
   const { args, out } = cliArgs(dir, files, how)
-  const start = () => {
+  const start = (holdMs) => {
     const child = spawn(process.execPath, args, {
       cwd: repo,
-      env: cleanEnv(),
+      // A test-only hold (ORACLE_GAPS_TEST_HOLD_EXIT_MS, index.mjs): the first
+      // run keeps its output claim until the second has been refused, so the
+      // overlap does not depend on how fast the first run ends.
+      env: {
+        ...cleanEnv(),
+        ...(holdMs === undefined
+          ? {}
+          : { ORACLE_GAPS_TEST_HOLD_EXIT_MS: String(holdMs) }),
+      },
       stdio: [`ignore`, `pipe`, `pipe`],
     })
     const got = { stdout: ``, stderr: `` }
@@ -950,7 +977,7 @@ async function overlappingRuns(dir, files, how) {
     })
     return { got, status }
   }
-  const first = start()
+  const first = start(5000)
   let firstEnded = false
   first.status.then(() => {
     firstEnded = true
@@ -1852,7 +1879,14 @@ async function driver(plan, observe) {
       for (const stop of [
         ...plan.stopRuns,
         ...(plan.spawnStop
-          ? [{ signal: `SIGINT`, pool: `threads`, when: `spawn` }]
+          ? [
+              {
+                signal: plan.spawnSignal,
+                pool: `threads`,
+                when: `spawn`,
+                delay: plan.spawnDelay,
+              },
+            ]
           : []),
       ]) {
         const run = await stoppedRun(dir, files, how, stopIds, stop)
@@ -2756,6 +2790,13 @@ function check(plan, observations, expected) {
 function streamBreach(checkpoint, run, expected, plan) {
   const breach = (difference, extra) =>
     violation(checkpoint, difference, `greppable stream`, extra)
+  // The spawn-delay law (review of #57): a stop before the CLI started (no
+  // started marker) is outcome (a): no output, no log, the exit by signal.
+  // Once the marker exists, the outcome is (b) in full.
+  if (run.started === false)
+    return run.stdoutLength === 0 && !run.log.exists && run.exit !== 0
+      ? undefined
+      : breach(`a stop before the CLI started left output or a log`)
   const ends = endsBreach(run, { checked: !expected.refused?.arguments })
   if (ends) return breach(ends.difference, ends.extra)
   if (run.stream.mutantBeforeVerdict)
@@ -3807,6 +3848,9 @@ oracleProperty({
           logBlocked: false,
           overlap: false,
           spawnStop: true,
+          // Pinned inside the CLI's module-load window (about 20–50 ms after
+          // spawn, measured): the handlers must already be installed there.
+          spawnDelay: 30,
           budget: `two`,
         }),
       },
