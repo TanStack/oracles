@@ -1062,13 +1062,18 @@ function readRun(dir, out, status, stderr, cli, stdout) {
     .sort()
     .map((beat) => JSON.parse(beat))
   // The stdout summary's lead, up to its first blank line (law 14), its
-  // last line, and the files the baseline lines on stderr name.
+  // last line, and the files the baseline lines on stderr name. Since the
+  // stream has no blank line (law 15), the lead is the whole stdout, whose
+  // notes name the run's scratch directory: each line names it as the
+  // trace names paths, so two runs of one history record one lead.
   const printed = `${stdout ?? ``}`
     .split(`\n`)
     .filter((line, i, all) => all.slice(i).some(Boolean))
   const blank = printed.indexOf(``)
   return {
-    lead: blank < 0 ? printed : printed.slice(0, blank),
+    lead: (blank < 0 ? printed : printed.slice(0, blank)).map((line) =>
+      namedScratch(line, scratch),
+    ),
     lastLine: printed.at(-1) && namedScratch(printed.at(-1), scratch),
     // The stdout's own lines of the stream's kinds: the gap lines under
     // their functions, as the stream prints them (law 15).
