@@ -588,14 +588,17 @@ function cliArgs(
     sources = `${SOURCE},${LIB}`,
     budget = `two`,
     outName = daemon ? `out-daemon` : `out`,
+    // `default` leaves `--out` out, so the CLI picks its own output
+    // directory (args.mjs): the run's first stdout line names it.
+    outMode = `explicit`,
     config,
     contexts = 4,
     only,
     pool,
   } = {},
 ) {
-  const out = join(dir, outName)
-  rmSync(out, { recursive: true, force: true })
+  const out = outMode === `default` ? undefined : join(dir, outName)
+  if (out !== undefined) rmSync(out, { recursive: true, force: true })
   // The CLI runs from the package directory. A daemon check names its paths
   // relative to there, as an author types them, and the daemon must read
   // them as the CLI's caller meant them.
@@ -628,9 +631,8 @@ function cliArgs(
     // one copy: one slow owner's confirmation fits it, two do not (law 4).
     `--mutant-limit`,
     String(MUTANT_LIMIT_MS),
-    `--out`,
-    path(out),
   ]
+  if (out !== undefined) args.push(`--out`, path(out))
   if (only !== undefined) args.push(`--only`, only.join(`,`))
   if (pool !== undefined) args.push(`--pool`, pool)
   if (ordinary) args.push(`--ordinary`)
@@ -655,6 +657,7 @@ function runCli(dir, files, how = {}) {
   writeFixture(dir, files)
   const before = new Set(filesUnder(dir))
   const { args, out } = cliArgs(dir, files, how)
+  if (how.logBlocked) mkdirSync(join(out, `stream.log`), { recursive: true })
   const child = spawnSync(process.execPath, args, {
     cwd: repo,
     encoding: `utf8`,
@@ -727,7 +730,7 @@ async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
   writeFixture(dir, files)
   const before = new Set(filesUnder(dir))
   const pids = mkdtempSync(join(realpathSync(tmpdir()), `gap-stop-`))
-  const { args, out } = cliArgs(dir, files, {
+  const { args, out: given } = cliArgs(dir, files, {
     ...how,
     outName: `out-stop`,
     contexts: 1,
@@ -813,7 +816,18 @@ async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
     }
   if (!ended) child.kill(`SIGKILL`)
   rmSync(pids, { recursive: true, force: true })
-  return {
+  const out =
+    given ??
+    `${stdout}`
+      .split(`\n`)[0]
+      .match(/^oracle-gaps: note log (.*)\/stream\.log$/)?.[1] ??
+    join(dir, `no-output`)
+  const scratchNames = [
+    [how.cli ?? here, `<cli>`],
+    [dir, `<package>`],
+    ...(given === undefined ? [[out, `<out>`]] : []),
+  ]
+  const result = {
     signal,
     pool,
     spun,
@@ -826,26 +840,14 @@ async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
     exit: exitCode,
     // Both streams' lines (law 15), with the scratch paths named.
     stream: streamOf(stderr.split(`\n`), (text) =>
-      namedScratch(text, [
-        [how.cli ?? here, `<cli>`],
-        [dir, `<package>`],
-      ]),
+      namedScratch(text, scratchNames),
     ),
     stdoutStream: streamOf(stdout.split(`\n`), (text) =>
-      namedScratch(text, [
-        [how.cli ?? here, `<cli>`],
-        [dir, `<package>`],
-      ]),
+      namedScratch(text, scratchNames),
     ),
-    outDir: namedScratch(out, [
-      [how.cli ?? here, `<cli>`],
-      [dir, `<package>`],
-    ]),
+    outDir: namedScratch(out, scratchNames),
     log: streamLogOf(out, stderr, stdout, (text) =>
-      namedScratch(text, [
-        [how.cli ?? here, `<cli>`],
-        [dir, `<package>`],
-      ]),
+      namedScratch(text, scratchNames),
     ),
     // The session directories in the package once it has ended: a stopped
     // run leaves its own, and the next run removes it.
@@ -857,6 +859,9 @@ async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
       (file) => !/^\.oracle-gaps-\d+\//.test(file),
     ),
   }
+  // A default output directory is the run's own scratch.
+  if (given === undefined) rmSync(out, { recursive: true, force: true })
+  return result
 }
 
 /**
@@ -903,6 +908,83 @@ function filesUnder(root, within = ``) {
       return entry.isDirectory() ? filesUnder(root, path) : [path]
     },
   )
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * Runs the CLI twice on one output directory, the second while the first is
+ * live (the first has printed its note, so it has its stream log). The first
+ * run is the history's `cli`, and the second's ending is the `overlap`
+ * observation (the coordinator's decision of 2026-11-13 on F4: a second run
+ * refuses, and the first's stream log stays its own).
+ */
+async function overlappingRuns(dir, files, how) {
+  writeFixture(dir, files)
+  const before = new Set(filesUnder(dir))
+  const { args, out } = cliArgs(dir, files, how)
+  const start = () => {
+    const child = spawn(process.execPath, args, {
+      cwd: repo,
+      env: cleanEnv(),
+      stdio: [`ignore`, `pipe`, `pipe`],
+    })
+    const got = { stdout: ``, stderr: `` }
+    child.stdout.on(`data`, (chunk) => {
+      got.stdout += chunk
+    })
+    child.stderr.on(`data`, (chunk) => {
+      got.stderr += chunk
+    })
+    const status = new Promise((resolvePromise) => {
+      const timer = setTimeout(() => child.kill(), 300_000)
+      child.on(`close`, (code) => {
+        clearTimeout(timer)
+        resolvePromise(code)
+      })
+    })
+    return { got, status }
+  }
+  const first = start()
+  // The first run's note is its first stdout line: its stream log exists.
+  for (
+    let waited = 0;
+    !first.got.stdout.includes(`oracle-gaps: note log`) && waited < 120_000;
+    waited += 20
+  )
+    await sleep(20)
+  const second = start()
+  const secondStatus = await second.status
+  const firstStatus = await first.status
+  const ended = readRun(
+    dir,
+    out,
+    firstStatus,
+    first.got.stderr,
+    how.cli ?? here,
+    first.got.stdout,
+  )
+  const refused = readRun(
+    dir,
+    out,
+    secondStatus,
+    second.got.stderr,
+    how.cli ?? here,
+    second.got.stdout,
+  )
+  const replay = first.got.stderr
+    .split(`\n`)
+    .find((line) => line.startsWith(`  replay: `))
+    ?.slice(`  replay: `.length)
+  return {
+    cli: { ...ended, replay, strayWrites: strays(dir, before) },
+    overlap: {
+      exit: refused.exit,
+      ending: refused.ending,
+      stream: refused.stream,
+      stdoutStream: refused.stdoutStream,
+    },
+  }
 }
 
 // Where a run may write in the package: only the output directories the
@@ -996,7 +1078,9 @@ const streamedGap =
  * lines are the stderr's lines, in order.
  */
 function streamLogOf(out, stderr, stdout, name) {
-  const lines = (text) => `${text ?? ``}`.split(`\n`).filter(Boolean)
+  // The lines of a text, its final newline ending the last line. A blank line
+  // is a line: the log must equal the stderr's lines exactly (F10).
+  const lines = (text) => `${text ?? ``}`.replace(/\n$/, ``).split(`\n`)
   let log
   try {
     log = readFileSync(join(out, `stream.log`), `utf8`)
@@ -1060,11 +1144,40 @@ function streamOf(lines, name) {
 }
 
 function readRun(dir, out, status, stderr, cli, stdout) {
+  // A run without `--out` writes to the directory its stream log is in, which
+  // its first stdout line names (law 15); that directory is removed after the
+  // run is read, as the run's own scratch.
+  const chosen =
+    out ??
+    `${stdout ?? ``}`
+      .split(`\n`)[0]
+      .match(/^oracle-gaps: note log (.*)\/stream\.log$/)?.[1]
+  try {
+    return readRunIn(
+      dir,
+      chosen ?? join(dir, `no-output`),
+      status,
+      stderr,
+      cli,
+      stdout,
+      out === undefined ? chosen : undefined,
+    )
+  } finally {
+    if (out === undefined && chosen !== undefined)
+      rmSync(chosen, { recursive: true, force: true })
+  }
+}
+
+// `derived` is the output directory the CLI chose (no `--out`), which is named
+// `<out>` so that two runs of one history, each with its own directory, record
+// the same trace (law 9's determinism).
+function readRunIn(dir, out, status, stderr, cli, stdout, derived) {
   // The output names the CLI directory that ran and the package, as scratch
   // directories do, before it is cut to its last characters.
   const scratch = [
     [cli, `<cli>`],
     [dir, `<package>`],
+    ...(derived === undefined ? [] : [[derived, `<out>`]]),
   ]
   const named = status === 0 ? undefined : namedScratch(`${stderr}`, scratch)
   let results
@@ -1332,6 +1445,7 @@ async function incremental(dir, plan, cli, copy, observe, states) {
     const key = fingerprint(files, state, step === `otherInstall`)
     const how = {
       seed: state.seed,
+      outMode: plan.outMode,
       cli: step === `otherInstall` ? otherCli() : copy,
       ordinary: plan.ordinary,
       sources: sourceArgument(plan, `${dir}.link`),
@@ -1357,6 +1471,8 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       : await daemonChecks(step, files, how)
     if (!cold.has(key)) cold.set(key, runCli(dir, files, how))
     const coldRun = cold.get(key)
+    if (plan.outMode === `default`)
+      states.add(`a daemon check with the default output directory`)
     for (const [i, run] of [daemon, ...others].entries())
       observe(`incremental`, {
         step: i === 0 ? step : `${step} (a second check at once)`,
@@ -1377,6 +1493,7 @@ async function incremental(dir, plan, cli, copy, observe, states) {
           // Its stream log, and the output directory it names.
           log: run.log,
           outDir: run.outDir,
+          reported: run.reported,
           // The first line of a failure, for the message; readRun has named
           // the scratch package and CLI copy in it.
           stderr: run.stderr?.split(`\n`)[0],
@@ -1647,10 +1764,18 @@ async function driver(plan, observe) {
       ordinary: plan.ordinary,
       sources: sourceArgument(plan, `${dir}.link`),
       budget: plan.budget,
+      outMode: plan.outMode,
+      logBlocked: plan.logBlocked,
       cli: plan.cliPath === `spaced` ? copy : here,
       ...configArgs(plan),
     }
-    const { replay, ...cli } = runCli(dir, files, how)
+    // Two runs on one output directory: the second's refusal is its own
+    // observation (overlappingRuns).
+    const overlapping = plan.overlap
+      ? await overlappingRuns(dir, files, how)
+      : undefined
+    const { replay, ...cli } = overlapping?.cli ?? runCli(dir, files, how)
+    if (overlapping) observe(`overlap`, overlapping.overlap)
     // How many units were computed or reused says how the result was
     // produced, not what it is, so it is not observed.
     observe(`cli`, { ...cli, evidence: undefined })
@@ -1659,6 +1784,12 @@ async function driver(plan, observe) {
       observe(`replay`, { command: replay, ran: replayed(dir, replay) })
     // Reach comes from what the CLI reported, mapped onto the plan.
     const states = new Set()
+    if (plan.outMode === `default`)
+      states.add(`a run with the default output directory`)
+    if (plan.logBlocked && cli.exit === 2)
+      states.add(`a stream log that cannot be written`)
+    if (overlapping && overlapping.overlap.exit === 2)
+      states.add(`two runs on one output directory`)
     if (cli.exit === 0 && !plan.consoleOutput)
       states.add(`a completed run whose tests wrote nothing`)
     // Law 14: a partial run of one owned function's mutants, whose baseline
@@ -1712,6 +1843,8 @@ async function driver(plan, observe) {
           },
         }
         observe(`stopped`, stopped)
+        if (plan.outMode === `default`)
+          states.add(`a stop with the default output directory`)
         if (previousSessions.length > 0)
           states.add(`a run after a stopped one that left its session`)
         previousSessions = run.sessions
@@ -2221,6 +2354,24 @@ function check(plan, observations, expected) {
       `config`,
       { actual: cli.configLines, expected: expected.configLines },
     )
+  // A second run on a live output directory refuses before it writes
+  // anything (F4, the coordinator's decision of 2026-11-13): the refusal
+  // names the directory, is one block with its fix, and its stdout is its
+  // done line alone. The first run's own laws are judged on `cli`.
+  const overlap = observations.find((o) => o.checkpoint === `overlap`)?.value
+  if (overlap !== undefined) {
+    if (overlap.exit !== 2)
+      return violation(
+        `overlap`,
+        `the second run on a live output directory exited ${overlap.exit}, not refusing it`,
+        `ownership`,
+      )
+    const breach = refusalBreach(overlap.ending, {
+      cause: `another run is using`,
+      outKnown: false,
+    })
+    if (breach) return violation(`overlap`, breach, `report-shaped ending`)
+  }
   const stream = streamBreach(`cli`, cli, expected, plan)
   if (stream) return stream
   // Through the daemon, each check streams the same kinds of line, and a
@@ -2290,6 +2441,14 @@ function check(plan, observations, expected) {
       logNote: expected.refused.arguments ? undefined : logNoteOf(cli),
     })
     if (breach) return violation(`cli`, breach, `report-shaped ending`)
+    // A refusal of the arguments, or before the check starts, writes no
+    // stream log (F8, the coordinator's review of #57).
+    if (expected.refused.arguments && cli.log.exists)
+      return violation(
+        `cli`,
+        `the refusal before the check started wrote a stream log`,
+        `greppable stream`,
+      )
     return incrementalCheck(observations) ?? daemonCheck(observations) ?? pass
   }
   if (cli.exit !== 0 || !cli.reported)
@@ -2643,6 +2802,13 @@ function endsBreach(run, { checked = true } = {}) {
   if (checked && !run.log.equal)
     return {
       difference: `the run's stream.log is not its stderr, line for line`,
+    }
+  // A completed run's results.json sits beside its stream log, in the
+  // directory the log names (law 15's stream log, the maintainer's decision
+  // of 2026-11-12).
+  if (checked && run.exit === 0 && run.reported === false)
+    return {
+      difference: `the run completed, but its results.json is not beside its stream log`,
     }
   for (const [where, stream] of streams)
     if (stream.strays.length > 0)
@@ -3109,20 +3275,31 @@ calibrations.push(
     ),
   },
   {
+    // A completed run that starts a check, so its log is judged (law 15).
     name: `the stream log misses a line`,
     law: `greppable stream`,
-    corrupt: corruptCli((cli) => ({
-      ...cli,
-      log: { ...cli.log, equal: false },
-    })),
+    history: { constructed: `two authored mutants` },
+    corrupt: corruptCli((cli) =>
+      cli.exit !== 0
+        ? undefined
+        : { ...cli, log: { ...cli.log, equal: false } },
+    ),
   },
   {
     name: `the line that names the stream log comes after another line`,
     law: `greppable stream`,
-    corrupt: corruptCli((cli) => ({
-      ...cli,
-      log: { ...cli.log, stderrFirst: `oracle-gaps: config vite.config.ts` },
-    })),
+    history: { constructed: `two authored mutants` },
+    corrupt: corruptCli((cli) =>
+      cli.exit !== 0
+        ? undefined
+        : {
+            ...cli,
+            log: {
+              ...cli.log,
+              stderrFirst: `oracle-gaps: config vite.config.ts`,
+            },
+          },
+    ),
   },
   {
     name: `a stopped run ends without its done line`,
@@ -3188,6 +3365,11 @@ const staticStates = [
   `owned through bind`,
 ]
 const required = [
+  `a stream log that cannot be written`,
+  `two runs on one output directory`,
+  `a run with the default output directory`,
+  `a stop with the default output directory`,
+  `a daemon check with the default output directory`,
   `killed by a second owner`,
   `killed`,
   `random-only kill`,
@@ -3486,6 +3668,130 @@ oracleProperty({
           ],
           // File a writes to the console, so the run captures it.
           consoleOutput: true,
+        }),
+      },
+      {
+        // Without `--out`, the CLI picks the run's output directory
+        // (args.mjs). A run stopped while its config warms must still leave
+        // its stream log beside its results, with the done line last on both
+        // streams (law 15). The stop witness runs alone (witness `stop`), and a history
+        // with the witness module takes no steps.
+        name: `a stop with the default output directory`,
+        enters: [
+          `a run with the default output directory`,
+          `a stop with the default output directory`,
+        ],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          wholeFile: `none`,
+          witness: `stop`,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+          ordinary: false,
+          outMode: `default`,
+          budget: `two`,
+          stopRuns: [{ signal: `SIGINT`, pool: `threads`, when: `warm` }],
+        }),
+      },
+      {
+        // Through the daemon, a check that the CLI parses without `--out`
+        // would write its results to a directory of its own, apart from the
+        // stream log the CLI names (law 15).
+        name: `a daemon check with the default output directory`,
+        enters: [
+          `a run with the default output directory`,
+          `a daemon check with the default output directory`,
+        ],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          wholeFile: `none`,
+          witness: false,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: [`test`],
+          ordinary: false,
+          outMode: `default`,
+          budget: `two`,
+        }),
+      },
+      {
+        // A stream log that is a directory cannot be written: the CLI refuses
+        // before its first line (index.mjs opens the log first), with its
+        // block, its fix, and its report in the output directory, and its
+        // stdout is its done line alone (law 12, law 15, and F3 of the
+        // coordinator's review of #57). No stack trace, and exit 2 or 3.
+        name: `a stream log that cannot be written`,
+        enters: [`a stream log that cannot be written`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          wholeFile: `none`,
+          witness: false,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+          ordinary: false,
+          budget: `two`,
+          outMode: `explicit`,
+          logBlocked: true,
+          overlap: false,
+        }),
+      },
+      {
+        // A second run on the first's output directory while the first is
+        // live refuses (F4, the coordinator's decision of 2026-11-13): the
+        // first run's stream log still equals its own stderr, line for line,
+        // and the refusal reports no directory it does not own.
+        name: `two runs on one output directory`,
+        enters: [`two runs on one output directory`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          wholeFile: `none`,
+          witness: false,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+          ordinary: false,
+          budget: `two`,
+          outMode: `explicit`,
+          logBlocked: false,
+          overlap: true,
         }),
       },
       {

@@ -122,14 +122,21 @@
 // ended 2 s later is killed, and so is any process left in the group when
 // the run ends. The run kills its group itself if the CLI dies first.
 import { spawn } from 'node:child_process'
-import { appendFileSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { constants } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseArgs, usage } from './args.mjs'
 import { codeIdentity, openSession } from './check.mjs'
 import { received, requestDaemon, stopDaemon } from './daemon.mjs'
-import { endRun } from './ending.mjs'
+import { endRun, Refusal } from './ending.mjs'
 import { memoryStore } from './evidence.mjs'
 
 // How long the group has to end after a stop signal before it is killed.
@@ -139,13 +146,85 @@ const STOP_GRACE_MS = 2000
 // starts a check writes its stderr to `<out>/stream.log` too, line for
 // line, and names that file in its first line on both streams, so an agent
 // that runs a check in the background learns from the run where to read
-// it. Undefined until the run starts a check.
+// it. The supervisor opens it before the child starts (startLog), and then
+// is the only writer of the child's stderr to it (superviseRun). Undefined
+// until the log is open.
 let streamLog
 const logPathOf = (out) => join(out, `stream.log`)
-/** Writes `text` to stderr and to the stream log. */
+/** Writes `text` to stderr and, once the log is open, to the stream log. */
 const writeStream = (text) => {
   process.stderr.write(text)
   if (streamLog) appendFileSync(streamLog, text)
+}
+const cannotWrite = (path, error) =>
+  new Refusal(
+    `the stream log ${path} cannot be written (${error.code ?? error.message})`,
+    `Remove ${path}, or pass --out a directory whose stream.log can be written.`,
+  )
+/** Whether process `pid` runs. */
+const alive = (pid) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error.code === `EPERM`
+  }
+}
+/**
+ * Claims output directory `out` for this process: a run keeps it while it
+ * lives, and a second run on it refuses, reportless so that the live run's
+ * files stay its own (the maintainer's decision of 2026-11-13). A claim by a
+ * run that has ended is taken over.
+ */
+function claimOut(out) {
+  const claim = join(out, `run.pid`)
+  for (;;) {
+    try {
+      writeFileSync(claim, `${process.pid}\n`, { flag: `wx` })
+      return
+    } catch (error) {
+      if (error.code !== `EEXIST`) throw cannotWrite(claim, error)
+    }
+    let holder
+    try {
+      holder = Number(readFileSync(claim, `utf8`))
+    } catch (error) {
+      if (error.code !== `ENOENT`) throw cannotWrite(claim, error)
+      continue
+    }
+    if (holder !== process.pid && holder > 0 && alive(holder)) {
+      const refusal = new Refusal(
+        `another run is using ${out}`,
+        `Pass --out a directory no run is using, or wait for the run that uses it to end.`,
+      )
+      refusal.reportless = true
+      throw refusal
+    }
+    rmSync(claim, { force: true })
+  }
+}
+/**
+ * Opens the run's stream log in `out` and writes its first line, on both
+ * streams, which names the log. Throws a Refusal when the output directory
+ * is in use or the log cannot be written; nothing is written then.
+ */
+function startLog(out) {
+  const path = logPathOf(out)
+  try {
+    mkdirSync(out, { recursive: true })
+  } catch (error) {
+    throw cannotWrite(path, error)
+  }
+  claimOut(out)
+  try {
+    writeFileSync(path, ``)
+  } catch (error) {
+    throw cannotWrite(path, error)
+  }
+  streamLog = path
+  const note = `oracle-gaps: note log ${path}\n`
+  process.stdout.write(note)
+  writeStream(note)
 }
 
 /** Signals every process of group `group`; false when none is left. */
@@ -164,8 +243,6 @@ function signalGroup(group, signal) {
  * with 128 plus the signal's number.
  */
 function superviseRun(out) {
-  // The supervisor's own done line goes to the run's stream log too.
-  streamLog = logPathOf(out)
   let child
   let stopped
   // How the run ended: its exit code, or the signal that ended it.
@@ -209,11 +286,8 @@ function superviseRun(out) {
         ? `oracle-gaps: done stopped (${stopped})\n`
         : `oracle-gaps: done error, the run's process exited with ${how}${outOfMemory ? `: it ran out of memory; give Node more (NODE_OPTIONS=--max-old-space-size=<MB>) or run fewer --contexts` : ``}\n`
       process.stdout.write(line, () => {
-        try {
-          appendFileSync(streamLog, line)
-        } catch {
-          // A run stopped before it wrote its log has none to end.
-        }
+        // The log was opened before the run started (startLog).
+        appendFileSync(streamLog, line)
         process.stderr.write(line, () =>
           process.exit(stopped ? 128 + constants.signals[stopped] : 3),
         )
@@ -249,6 +323,10 @@ function superviseRun(out) {
     [
       ...process.execArgv.filter((flag) => !/^--inspect/.test(flag)),
       ...process.argv.slice(1),
+      // The out directory, resolved once by this process (asksForCheck): the
+      // run and a daemon's check write there, not to a directory of their own.
+      `--out`,
+      out,
     ],
     {
       detached: true,
@@ -259,10 +337,12 @@ function superviseRun(out) {
   child.on(`message`, (message) => {
     if (message === `ending`) ending = true
   })
-  // The run's stderr, passed on as it comes, and read for V8's
-  // out-of-memory message.
+  // The run's stderr, passed on as it comes, written to the stream log as it
+  // is (V8's own lines included, which the run does not write itself), and
+  // read for V8's out-of-memory message.
   child.stderr.on(`data`, (chunk) => {
     process.stderr.write(chunk)
+    appendFileSync(streamLog, chunk)
     stderrTail = (stderrTail + chunk).slice(-200)
     if (/heap out of memory/i.test(stderrTail)) outOfMemory = true
   })
@@ -333,7 +413,18 @@ const checking =
   main && supervised && supervisor === undefined
     ? asksForCheck(process.argv.slice(2))
     : undefined
-if (checking) superviseRun(checking.out)
+// A check the supervisor cannot open its log for is run in this process, which
+// refuses it the same way (below).
+const supervising = (() => {
+  if (checking === undefined) return false
+  try {
+    startLog(checking.out)
+    return true
+  } catch {
+    return false
+  }
+})()
+if (supervising) superviseRun(checking.out)
 else if (main) {
   if (supervisor !== undefined) watchSupervisor(Number(supervisor))
   // A test that runs this CLI starts a run of its own, in a group of its own.
@@ -390,13 +481,9 @@ else if (main) {
     if (options.help) console.log(usage)
     else if (options.stop) await stopDaemon(options.pkg)
     else {
-      // The first line on both streams names the stream log.
-      mkdirSync(options.out, { recursive: true })
-      streamLog = logPathOf(options.out)
-      writeFileSync(streamLog, ``)
-      const note = `oracle-gaps: note log ${streamLog}\n`
-      process.stdout.write(note)
-      writeStream(note)
+      // The supervisor opened the log (or, on Windows, there is none and this
+      // process runs the check); its child writes stderr alone.
+      if (supervisor === undefined) startLog(options.out)
       const summary = await (options.daemon ? checkThroughDaemon : checkCold)(
         options,
       )

@@ -541,9 +541,12 @@ const drawn = fc.record({
   // The budget witness alone (`budget`) costs two 10 s confirmations per
   // mutant in every CLI run of a history, so generated histories rarely
   // draw it; its constructed history (the daemon recheck) always does.
+  // `stop` is the stop witness alone (`w_stop`), which a run that the driver
+  // stops needs: the capture witness's other outcome classes are not run.
   witness: fc.oneof(
     { weight: 30, arbitrary: fc.constantFrom(false, true, `capture`) },
     { weight: 1, arbitrary: fc.constant(`budget`) },
+    { weight: 1, arbitrary: fc.constant(`stop`) },
   ),
   authored: fc.option(
     fc.record({
@@ -690,6 +693,39 @@ const drawn = fc.record({
   // A second run with `--only`, of one owned function's mutants: its
   // baseline runs only their owners (law 14). It costs a run of its own.
   onlyRun: fc.constantFrom(false, false, false, false, false, true),
+  // Where the run writes: the output directory `--out` names (`explicit`), or
+  // the one the CLI picks when `--out` is left out (`default`, args.mjs), whose
+  // stream log, results, and done line must still agree (law 15).
+  outMode: fc.constantFrom(`explicit`, `explicit`, `explicit`, `default`),
+  // The run's `<out>/stream.log` is a directory, so the log cannot be written
+  // (a problem the author can fix: the run refuses before it checks).
+  logBlocked: fc.constantFrom(
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+  ),
+  // A second run starts on the first run's output directory while the first
+  // is live (the coordinator's decision of 2026-11-13 on F4): the second
+  // refuses, and the first's stream log stays its own.
+  overlap: fc.constantFrom(
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+  ),
   // Oracle file a names its own Vitest environment in a pragma
   // (`// @vitest-environment`), another than the config's, and fails to load
   // outside it: every copy of it must run in that environment too.
@@ -2477,6 +2513,7 @@ function resolveHistory(history) {
               // so only histories of the `budget` mode carry it.
               (history.witness === true && w.id !== `w_slowpair`) ||
               (history.witness === `capture` && captureWitness.has(w.id)) ||
+              (history.witness === `stop` && w.id === `w_stop`) ||
               (history.witness === `budget` && w.id === `w_slowpair`),
           )
           .map((w) => ({
@@ -2837,6 +2874,12 @@ function resolveHistory(history) {
     depSubpath: history.depSubpath === true,
     unbuiltDep: history.unbuiltDep === true,
     budget: history.budget ?? `two`,
+    outMode: history.outMode ?? `explicit`,
+    // Both name the run's `--out` directory before it starts, so they need
+    // an explicit one (a default directory is chosen by the CLI).
+    logBlocked:
+      history.logBlocked === true && outModeOf(history) === `explicit`,
+    overlap: history.overlap === true && outModeOf(history) === `explicit`,
     stopRuns: history.stopRuns ?? [],
     onlyRun: history.onlyRun === true,
     pragma: history.pragma === true,
@@ -4083,7 +4126,16 @@ function refusal(plan) {
   if (plan.fault === `brokenVitest`) return { cause: `vitest`, runtime: true }
   if (plan.fault === `projects`)
     return { cause: `test.projects`, runtime: true }
+  // A stream log that cannot be written is refused before the check starts
+  // (the CLI opens the log before its first line, index.mjs), so its stdout
+  // owes its done line alone.
+  if (plan.logBlocked === true)
+    return { cause: `the stream log`, arguments: true }
   if (plan.fault === `badEntry`) return { cause: `${SOURCE}#nope` }
+  // An owns entry that names a missing file (a test file's declaration) is
+  // found by the analysis, after the check has started, so this refusal
+  // owes the stream log's note. The argument-stage case, a `--source` that
+  // is not a file of the package, is the static oracle's `absentSource`.
   if (plan.fault === `missingSource`) return { cause: `src/missing.ts` }
   if (plan.fault === `nonLiteral`) return { cause: `b.test.ts` }
   // A `--source` outside the package is an argument the CLI refuses before
@@ -4187,6 +4239,7 @@ const declarationFaults = [
   `nonLiteral`,
   `outsideSource`,
 ]
+const outModeOf = (history) => history.outMode ?? `explicit`
 const reachesRun = (history) =>
   !declarationFaults.includes(history.fault ?? `none`)
 
@@ -4239,21 +4292,22 @@ function model(plan) {
   // fault, a Vitest that does not load, a config that does not load, and a
   // config that defines test.projects, which a loaded context shows. Every
   // other run names it once, refused or not.
-  const configLines = [
-    `outsideSource`,
-    `brokenVitest`,
-    `configThrows`,
-    `configNoDefault`,
-    `configNull`,
-    `configSyntax`,
-    `projects`,
-  ].includes(plan.fault)
-    ? []
-    : [
-        plan.configPath === undefined
-          ? `oracle-gaps: config none, Vitest's default discovery`
-          : `oracle-gaps: config ${plan.configPath}`,
-      ]
+  const configLines =
+    [
+      `outsideSource`,
+      `brokenVitest`,
+      `configThrows`,
+      `configNoDefault`,
+      `configNull`,
+      `configSyntax`,
+      `projects`,
+    ].includes(plan.fault) || plan.logBlocked === true
+      ? []
+      : [
+          plan.configPath === undefined
+            ? `oracle-gaps: config none, Vitest's default discovery`
+            : `oracle-gaps: config ${plan.configPath}`,
+        ]
   if (refused) return { refused, configLines }
   const sites = sitesOf(plan)
   const owners = ownersOf(plan)

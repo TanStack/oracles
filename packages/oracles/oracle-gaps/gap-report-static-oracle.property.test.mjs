@@ -89,6 +89,7 @@
  * target. An authored mutant's `source` field is used as written.
  */
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -371,6 +372,14 @@ const matcherOwns = fc.oneof(
 )
 // Each history of the shared grammar, with its argument fault and its
 // matcher's `owns`.
+// The end-to-end dimensions the static oracle does not draw: `logBlocked`
+// (a stream log the run cannot write) and `overlap` (a second run on a live
+// output directory). The static run creates no stream log and starts no
+// second CLI process, so these are off for it by deliberate scope; the
+// end-to-end oracle (gap-report-oracle) owns both (F3 and F4 of the review of
+// #57).
+const staticResolve = (history) =>
+  resolveHistory({ ...history, logBlocked: false, overlap: false })
 const argumentHistories = fc.tuple(histories, badArguments, matcherOwns).map(
   ([history, bad, matcher]) => ({
     ...history,
@@ -489,13 +498,19 @@ function argumentsRunOf(dir, plan) {
     encoding: `utf8`,
     timeout: 120_000,
   })
-  return endingOf(
-    run.status,
-    run.stderr,
-    out,
-    (text) => text.replaceAll(dir, `<package>`),
-    run.stdout,
-  )
+  return {
+    ...endingOf(
+      run.status,
+      run.stderr,
+      out,
+      (text) => text.replaceAll(dir, `<package>`),
+      run.stdout,
+    ),
+    // A refusal of the arguments, or before a check starts, writes no stream
+    // log (F8, the coordinator's review of #57). Judged where the run names
+    // its output directory; a default one lives in the OS temp directory.
+    streamLog: out !== undefined && existsSync(join(out, `stream.log`)),
+  }
 }
 
 // ## The derived class, run
@@ -1081,6 +1096,12 @@ function check(plan, observations, expected) {
       `arguments`,
       `with ${bad.kind} arguments${bad.daemon ? ` and --daemon` : ``}, ${breach}`,
       `report-shaped ending`,
+    )
+  if (argumentsRun.streamLog)
+    return violation(
+      `arguments`,
+      `with ${bad.kind} arguments${bad.daemon ? ` and --daemon` : ``}, the refusal wrote a stream log`,
+      `greppable stream`,
     )
   // An owner that fails, and a config the runner cannot load or honor, are
   // found only when the runner starts, so the analysis must not refuse for
@@ -1785,7 +1806,7 @@ oracleProperty({
       },
     ]),
   },
-  resolve: resolveHistory,
+  resolve: staticResolve,
   model,
   driver,
   check,
