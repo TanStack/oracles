@@ -792,6 +792,13 @@ const drawn = fc.record({
   }),
   // Who names the importer's function in an owns entry, if any.
   importer: fc.constantFrom(`none`, `a`, `b`),
+  // Last, so the fields above draw as before.
+  // Which file's test lands a mid-run edit (`midrun`), and what it edits:
+  // file b's helper, or the data file when file b reads one (`midrunTarget`
+  // is the helper otherwise). Only a check through the daemon takes the
+  // `midrun` step.
+  midrunBy: fc.constantFrom(`a`, `b`),
+  midrunTarget: fc.constantFrom(`helper`, `data`),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -2844,6 +2851,14 @@ function resolveHistory(history) {
     // Whether a step edits file b's helper during a check (`midrun`): then
     // file a loads the helper and holds the test that edits it.
     midrun: (history.steps ?? []).includes(`midrun`),
+    // Which file's test lands the mid-run edit (`midrunBy`), and what it
+    // edits (`midrunTarget`): file a edits file b's helper after its
+    // context loaded it, or file b edits its own helper or the data file
+    // that its verdict reads through fs, after its judged tests read them.
+    // Then the run that lands the edit read the old text, and its verdict
+    // follows it (review of #55, F1).
+    midrunBy: history.midrunBy ?? `a`,
+    midrunTarget: midrunTargetOf(history),
     consoleOutput: history.consoleOutput === true,
     // Whether a run aborts its process (a stop run `abort`): then file a has
     // the test that aborts when the driver asks.
@@ -4181,7 +4196,7 @@ function baselineOf(plan) {
     // that aborts when the driver asks.
     const own =
       plan.tests.filter((t) => t.file === file).length +
-      (plan.midrun && file === `a` ? 1 : 0) +
+      (plan.midrun && file === plan.midrunBy ? 1 : 0) +
       (file === `a` && plan.consoleOutput ? 1 : 0) +
       (file === `a` && plan.aborts ? 1 : 0)
     const broken = failing.find((f) => f.file === file)
@@ -4641,10 +4656,12 @@ function oracleTestFile(plan, file) {
       : []),
     // The mid-run edit (`midrun`): file a loads file b's helper, so its
     // context holds the helper's old text when the edit lands.
-    ...(plan.midrun && file === `a`
+    ...(plan.midrun && file === plan.midrunBy
       ? [
           `import { readFileSync as readMarker, writeFileSync as writeEdit } from 'node:fs'`,
-          `import { strict as strictAtLoad } from './strict'`,
+          ...(file === `a`
+            ? [`import { strict as strictAtLoad } from './strict'`]
+            : []),
         ]
       : []),
     // A module's text through a query import, which Vite loads (see rawImport).
@@ -4859,17 +4876,33 @@ function oracleTestFile(plan, file) {
     )
   // The mid-run edit: the first run of this test after the driver marks an
   // edit pending (`tests/midrun.txt`, `pending:<value>`) rewrites file b's
-  // helper with that value and marks the edit done, so every later run of
-  // it, in this check or another, changes nothing. It calls nothing of the
-  // source under test, so no mutant reaches it.
-  if (plan.midrun && file === `a`)
+  // helper, or the data file, with that value and marks the edit done, so
+  // every later run of it, in this check or another, changes nothing. It
+  // calls nothing of the source under test, so no mutant reaches it. In
+  // file b it first reads what it edits and fails unless the helper is
+  // strict or the data open, as in the history's first state: the run that
+  // lands the edit passes, and every run that reads the edited text fails,
+  // so a run stored under the edited text with the old verdict shows in
+  // the baseline (review of #55, F1).
+  if (plan.midrun && file === plan.midrunBy)
     out.push(
-      `test('edits the helper during the check', () => {`,
-      `  void strictAtLoad`,
+      `test('edits ${plan.midrunTarget === `data` ? `the data` : `the helper`} during the check', async () => {`,
+      ...(file === `a`
+        ? [`  void strictAtLoad`]
+        : plan.midrunTarget === `data`
+          ? [
+              `  if (!(await readData()).open) throw new Error('the data this run read is closed')`,
+            ]
+          : [
+              `  if (!strict) throw new Error('the helper this run read is not strict')`,
+            ]),
       `  const marker = new URL('./midrun.txt', import.meta.url)`,
       `  const text = readMarker(marker, 'utf8')`,
       `  if (!text.startsWith('pending:')) return`,
-      `  writeEdit(new URL('./strict.ts', import.meta.url), \`export const strict = \${text.slice('pending:'.length).trim()}\\n\`)`,
+      `  const value = text.slice('pending:'.length).trim()`,
+      plan.midrunTarget === `data`
+        ? `  writeEdit(new URL('./data.json', import.meta.url), \`{"open":\${value}}\\n\`)`
+        : `  writeEdit(new URL('./strict.ts', import.meta.url), \`export const strict = \${value}\\n\`)`,
       `  writeEdit(marker, 'done\\n')`,
       `})`,
     )
@@ -4886,7 +4919,8 @@ function oracleTestFile(plan, file) {
   // A file with no tests still loads, so the CLI can read what it owns.
   if (
     !plan.tests.some((t) => t.file === file) &&
-    !(file === `a` && (plan.midrun || plan.consoleOutput || plan.aborts))
+    !(plan.midrun && file === plan.midrunBy) &&
+    !(file === `a` && (plan.consoleOutput || plan.aborts))
   )
     out.push(`test.skip('no tests', () => {})`)
   // A test that writes to the process's own streams, as a test's debugging
@@ -5008,6 +5042,12 @@ function edited(plan) {
 }
 
 const AUTHORED = `mutants/authored-mutant.json`
+
+/** What a mid-run edit changes: the data file only when file b reads one. */
+const midrunTargetOf = (history) =>
+  history.midrunTarget === `data` && (history.fsRead ?? `none`) !== `none`
+    ? `data`
+    : `helper`
 
 // Law 9's fixture state: the history, and what the edits outside it set.
 const initialState = (plan) => ({
@@ -5349,7 +5389,8 @@ function fixtureFiles(plan, state = initialState(plan)) {
   // instead of reusing their evidence: the marker is read through fs,
   // which no run records as an input.
   if (plan.midrun)
-    files[`tests/a.test.ts`] += `// mid-run edits: ${state.midruns}\n`
+    files[`tests/${plan.midrunBy}.test.ts`] +=
+      `// mid-run edits: ${state.midruns}\n`
   // The new oracle file d owns the first generated function and judges it.
   if (state.newOracle) {
     const target = plan.functions.find((fn) => fn.generated && !fn.library)
@@ -5495,7 +5536,9 @@ function applyEdit(state, edit) {
   // A mid-run edit leaves file b's helper as the helper edit does.
   if (edit === `helper`) return { ...state, strict: !state.strict }
   if (edit === `midrun`)
-    return { ...state, strict: !state.strict, midruns: state.midruns + 1 }
+    return midrunTargetOf(state.history) === `data`
+      ? { ...state, dataOpen: !state.dataOpen, midruns: state.midruns + 1 }
+      : { ...state, strict: !state.strict, midruns: state.midruns + 1 }
   if (edit === `lazy`) return { ...state, lazyOpen: !state.lazyOpen }
   if (edit === `fsData`) return { ...state, dataOpen: !state.dataOpen }
   if (edit === `seed`) return { ...state, seed: state.seed === 1 ? 2 : 1 }

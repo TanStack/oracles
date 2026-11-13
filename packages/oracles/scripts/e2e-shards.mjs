@@ -71,6 +71,12 @@ export const shards = {
     `fixed seed 20261105: an edit during a check through the daemon`,
     `random seed: an edit during a check through the daemon`,
     `determinism: constructed history: an edit during a check through the daemon`,
+    `fixed seed 20261105: a test edits the helper it read, during a check through the daemon`,
+    `random seed: a test edits the helper it read, during a check through the daemon`,
+    `determinism: constructed history: a test edits the helper it read, during a check through the daemon`,
+    `fixed seed 20261105: a test edits the data it read, during a check through the daemon`,
+    `random seed: a test edits the data it read, during a check through the daemon`,
+    `determinism: constructed history: a test edits the data it read, during a check through the daemon`,
     // The fs-read data histories (law 9), not yet measured.
     `fixed seed 20261105: an edit to data a test reads through fs (sync)`,
     `random seed: an edit to data a test reads through fs (sync)`,
