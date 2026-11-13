@@ -1578,7 +1578,7 @@ async function driver(plan, observe) {
   const scratch = realpathSync(
     mkdtempSync(
       outsideRepository(plan)
-        ? join(realpathSync(tmpdir()), `gap-fixture-`)
+        ? join(realpathSync.native(tmpdir()), `gap-fixture-`)
         : join(here, `.scratch-`),
     ),
   )
