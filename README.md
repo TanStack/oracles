@@ -90,9 +90,14 @@ every commit with [pkg.pr.new](https://pkg.pr.new).
   wait where a stop signal can reach it.
 
   A few endings print no done line, or one more line: a SIGKILL of the CLI,
-  a signal sent to the run's own child process rather than the CLI's, or a
-  signal that comes while Node is still starting the CLI, before its first
-  line runs (a few tens of milliseconds), ends it with no done line. An internal error's own message lines
+  or a signal that comes while Node is still starting the CLI, before its
+  first line runs (a few tens of milliseconds), ends it with no done line.
+  When the run's own process ends without its ending, by a signal sent to
+  it rather than the CLI or by a crash (a V8 out-of-memory abort is a
+  SIGABRT), the CLI writes `oracle-gaps: done error, the run's process
+exited with <signal or code>` and exits 3; after an out-of-memory crash
+  the line says to give Node more memory (`NODE_OPTIONS=--max-old-space-size=<MB>`)
+  or to run fewer `--contexts`. An internal error's own message lines
   (`oracle-gaps internal error: …`) have no prefix. A config's syntax error
   is refused with its first error; a syntax error in a module the config
   imports still lets esbuild print its own error block, which has no

@@ -158,26 +158,49 @@ function superviseRun() {
   // before it writes): then its done line is the last on each stream, and
   // it ends with its own code, whatever stop reaches it.
   let ending = false
+  // Whether the run's stderr, which the CLI passes on, said that V8 ran
+  // out of memory.
+  let outOfMemory = false
+  let stderrTail = ``
+  // Whether the run's streams and channel have closed.
+  let closed = false
   // Ends the CLI once the run has ended (or the grace has passed), with
-  // what is left of the group killed. A run that writes its ending wrote
-  // its done line, so the CLI ends with its code and writes none. A run
-  // that a stop ended wrote none, so the CLI writes the stopped line on
-  // both streams (review of #46, F3; re-review N1). A write to a pipe is
-  // asynchronous on macOS, so the process exits once it is written.
+  // what is left of the group killed, and once the run's stderr has been
+  // passed on (at most 2 s more). A run that writes its ending wrote its
+  // done line, so the CLI ends with its code and writes none. Every other
+  // end gets one done line from the CLI, on both streams: a run that a stop
+  // ended stopped (review of #46, F3; re-review N1); a run whose process
+  // ended on its own, by a signal or a code, with no ending (a V8
+  // out-of-memory abort is a SIGABRT) is an error, exit 3, with the remedy
+  // when it ran out of memory (the coordinator's decision of 2026-11-12 on
+  // P10). A write to a pipe is asynchronous on macOS, so the process exits
+  // once it is written.
+  let finishing = false
   const finish = () => {
+    if (finishing) return
+    finishing = true
     if (child) signalGroup(child.pid, `SIGKILL`)
-    if (stopped && !ending) {
-      const line = `oracle-gaps: done stopped (${stopped})\n`
+    let decided = false
+    const decide = () => {
+      if (decided) return
+      decided = true
+      if (ending)
+        return process.exit(
+          ended?.code ?? 128 + constants.signals[ended?.signal ?? stopped],
+        )
+      const how = ended?.signal ?? (ended ? `code ${ended.code}` : `no exit`)
+      const line = stopped
+        ? `oracle-gaps: done stopped (${stopped})\n`
+        : `oracle-gaps: done error, the run's process exited with ${how}${outOfMemory ? `: it ran out of memory; give Node more (NODE_OPTIONS=--max-old-space-size=<MB>) or run fewer --contexts` : ``}\n`
       process.stdout.write(line, () =>
         process.stderr.write(line, () =>
-          process.exit(128 + constants.signals[stopped]),
+          process.exit(stopped ? 128 + constants.signals[stopped] : 3),
         ),
       )
-      return
     }
-    process.exit(
-      ended?.code ?? 128 + constants.signals[ended?.signal ?? stopped],
-    )
+    if (child === undefined || closed) return decide()
+    child.once(`close`, decide)
+    setTimeout(decide, 2000).unref()
   }
   const stop = (signal) => {
     if (stopped) return
@@ -208,15 +231,24 @@ function superviseRun() {
     ],
     {
       detached: true,
-      stdio: [`inherit`, `inherit`, `inherit`, `ipc`],
+      stdio: [`inherit`, `inherit`, `pipe`, `ipc`],
       env: { ...process.env, ORACLE_GAPS_GROUP: String(process.pid) },
     },
   )
   child.on(`message`, (message) => {
     if (message === `ending`) ending = true
   })
-  // `close` comes after the run's messages, so its ending message is known.
-  child.on(`close`, (code, signal) => {
+  // The run's stderr, passed on as it comes, and read for V8's
+  // out-of-memory message.
+  child.stderr.on(`data`, (chunk) => {
+    process.stderr.write(chunk)
+    stderrTail = (stderrTail + chunk).slice(-200)
+    if (/heap out of memory/i.test(stderrTail)) outOfMemory = true
+  })
+  child.on(`close`, () => {
+    closed = true
+  })
+  child.on(`exit`, (code, signal) => {
     ended = { code, signal }
     if (!stopped) finish()
   })
