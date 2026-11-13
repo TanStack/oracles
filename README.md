@@ -67,6 +67,15 @@ every commit with [pkg.pr.new](https://pkg.pr.new).
   it with `oracle-gaps --stop-daemon --package <dir>`. On Windows, which has
   no process groups, the run is not supervised.
 
+  A check through the daemon reuses a run while its inputs are unchanged:
+  the modules the run loaded, and the files in the package that its tests
+  read through `fs` (`readFileSync`, `readFile`, `existsSync`, `statSync`,
+  and `fs/promises` `readFile` and `stat`), each by its content. A file that
+  a test reads outside the package or under `node_modules`, or through
+  another API (`readdir`, `open`, a stream, or a watcher), is no input, so an
+  edit to it alone does not rerun the tests that read it; run the check
+  cold (without `--daemon`) after such an edit.
+
 - `packages/eslint-plugin-oracles` (`@tanstack/eslint-plugin-oracles`): the
   `oracle/*` lint rules. The rules recognize the framework by its package
   specifier and by a relative module with its file name. A project names its
