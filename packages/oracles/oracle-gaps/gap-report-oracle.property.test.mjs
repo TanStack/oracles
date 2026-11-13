@@ -331,11 +331,14 @@
  *    (provisional)], report <its summary.md>` on stdout, `refused[, report
  *    <its summary.md>]` after a refusal's block, or `stopped (<signal>)`
  *    after a stop. A check through the daemon streams the same lines. The
- *    run's first line on both streams names its stream log, `oracle-gaps:
- *    note log <out>/stream.log`, and that file holds the stderr's lines, in
- *    order, cold and through the daemon (the maintainer's decision of
- *    2026-11-12: an agent that runs a check in the background learns from
- *    the run itself where to read it).
+ *    first line, on both streams, of a run that starts a check names its
+ *    stream log, `oracle-gaps: note log <out>/stream.log`, and that file
+ *    holds the stderr's lines, in order, cold and through the daemon (the
+ *    maintainer's decision of 2026-11-12: an agent that runs a check in the
+ *    background learns from the run itself where to read it). A refusal
+ *    after the check started has that line and then its done line on
+ *    stdout; a refusal of the run's arguments comes before any check, and
+ *    its stdout is its done line alone.
  *
  * Authority: the maintainer's decisions in the gap-check design runs v11, v14,
  * and v19 (2026-11-04 and 2026-11-05; the design notes are kept by the project
@@ -2061,7 +2064,10 @@ function incrementalCheck(observations) {
     // A refusal through the daemon ends as a cold refusal does (law 12):
     // the CLI that asked the daemon writes it to its own output directory.
     if (cold.refusal !== undefined) {
-      const breach = refusalBreach(daemon.ending, { outKnown: true })
+      const breach = refusalBreach(daemon.ending, {
+        outKnown: true,
+        logNote: logNoteOf(daemon),
+      })
       if (breach)
         return violation(
           `incremental`,
@@ -2198,6 +2204,7 @@ function check(plan, observations, expected) {
     const breach = refusalBreach(cli.ending, {
       cause: expected.refused.cause,
       outKnown: true,
+      logNote: expected.refused.arguments ? undefined : logNoteOf(cli),
     })
     if (breach) return violation(`cli`, breach, `report-shaped ending`)
     return incrementalCheck(observations) ?? daemonCheck(observations) ?? pass
@@ -2483,7 +2490,7 @@ function check(plan, observations, expected) {
 function streamBreach(checkpoint, run, expected, plan) {
   const breach = (difference, extra) =>
     violation(checkpoint, difference, `greppable stream`, extra)
-  const ends = endsBreach(run)
+  const ends = endsBreach(run, { checked: !expected.refused?.arguments })
   if (ends) return breach(ends.difference, ends.extra)
   if (run.stream.mutantBeforeVerdict)
     return breach(
@@ -2526,27 +2533,33 @@ function streamBreach(checkpoint, run, expected, plan) {
   return undefined
 }
 
+/** The line that names a run's stream log. */
+const logNoteOf = (run) => `oracle-gaps: note log ${run.outDir}/stream.log`
+
 /**
  * What law 15 judges of every run, on both streams, whatever its outcome:
  * no stray line, and exactly one done line, which ends each stream, the
  * same on both, of the kind its exit status says (0 completed, 2 refused,
- * 3 error, and a signal's code stopped). Undefined when it holds.
+ * 3 error, and a signal's code stopped). With `checked`, the run started a
+ * check, so its first line names its stream log. Undefined when it holds.
  */
-function endsBreach(run) {
+function endsBreach(run, { checked = true } = {}) {
   const streams = [
     [`stderr`, run.stream],
     [`stdout`, run.stdoutStream],
   ]
   // The run's first line on each stream names its stream log, and the log
   // holds the stderr's lines, in order (the maintainer's decision of
-  // 2026-11-12), for every run that starts a check: each of these does.
-  const note = `oracle-gaps: note log ${run.outDir}/stream.log`
-  if (run.log.stderrFirst !== note || run.log.stdoutFirst !== note)
+  // 2026-11-12), for every run that starts a check. A refusal of the run's
+  // arguments comes before any check, and names no log.
+  const note = logNoteOf(run)
+  if (checked && (run.log.stderrFirst !== note || run.log.stdoutFirst !== note))
     return {
       difference: `the run's first lines are ${JSON.stringify([run.log.stderrFirst, run.log.stdoutFirst])}, not ${JSON.stringify(note)} on each stream`,
     }
-  if (!run.log.exists) return { difference: `the run wrote no stream.log` }
-  if (!run.log.equal)
+  if (checked && !run.log.exists)
+    return { difference: `the run wrote no stream.log` }
+  if (checked && !run.log.equal)
     return {
       difference: `the run's stream.log is not its stderr, line for line`,
     }

@@ -3815,7 +3815,11 @@ function refusal(plan) {
   if (plan.fault === `badEntry`) return { cause: `${SOURCE}#nope` }
   if (plan.fault === `missingSource`) return { cause: `src/missing.ts` }
   if (plan.fault === `nonLiteral`) return { cause: `b.test.ts` }
-  if (plan.fault === `outsideSource`) return { cause: `outside the package` }
+  // A `--source` outside the package is an argument the CLI refuses before
+  // it starts a check (the argument rules that the static oracle judges),
+  // so its stdout has no line that names a stream log.
+  if (plan.fault === `outsideSource`)
+    return { cause: `outside the package`, arguments: true }
   // The analysis reads the test files that the package's Vitest config
   // includes (index.mjs, step 2), so a config that does not load is named
   // before anything the analysis would find. The cause names the config
@@ -5174,8 +5178,13 @@ function endingOf(exit, stderr, out, name = (text) => text, stdout = ``) {
  * The first way a run's ending breaks the refusal law, or undefined. The
  * cause must name `cause`; with `outKnown`, the run knew its output
  * directory, so the block names it and the directory holds the refusal.
+ * `logNote` is the line that names the run's stream log, owed first on
+ * stdout when the run refused after it started a check, and undefined for
+ * a refusal of its arguments, before any check (the maintainer's decision
+ * of 2026-11-12 that every run that starts a check names its stream log
+ * first).
  */
-function refusalBreach(ending, { cause, outKnown }) {
+function refusalBreach(ending, { cause, outKnown, logNote }) {
   if (ending.exit !== 2) return `the refusal exited ${ending.exit}, not 2`
   if (ending.stackFrames) return `the refusal printed a stack trace`
   if (ending.cause === undefined)
@@ -5194,12 +5203,14 @@ function refusalBreach(ending, { cause, outKnown }) {
     !/^refused(?:, report .+)?$/.test(ending.done)
   )
     return `the refusal's last line is not \`oracle-gaps: done refused\``
-  // The done line ends stdout too, as its only line.
-  if (
-    ending.stdout.length !== 1 ||
-    ending.stdout[0] !== `oracle-gaps: done ${ending.done}`
-  )
-    return `the refusal's stdout is ${JSON.stringify(ending.stdout)}, not its done line`
+  // The done line ends stdout too, as its only line after the line that
+  // names the stream log, if the run started a check.
+  const owedStdout = [
+    ...(logNote === undefined ? [] : [logNote]),
+    `oracle-gaps: done ${ending.done}`,
+  ]
+  if (JSON.stringify(ending.stdout) !== JSON.stringify(owedStdout))
+    return `the refusal's stdout is ${JSON.stringify(ending.stdout)}, not ${JSON.stringify(owedStdout)}`
   if (!outKnown) return undefined
   if (!ending.namesOutput)
     return `the refusal does not name its report in its output directory: done ${ending.done}`
