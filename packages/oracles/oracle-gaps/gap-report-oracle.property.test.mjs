@@ -1330,6 +1330,11 @@ async function incremental(dir, plan, cli, copy, observe, states) {
           refusal: coldRun.refusal,
           report: coldRun.report,
           notes: coldRun.stream.notes,
+          // An internal error's stack (its error.log, which readRun reads
+          // for a run that exits 3), for the violation's message. Only
+          // then: a completed run's stderr holds timings, which differ
+          // between two runs of one history.
+          stderr: coldRun.exit === 3 ? coldRun.stderr : undefined,
         },
         daemon: {
           exit: run.exit,
