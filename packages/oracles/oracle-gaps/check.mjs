@@ -188,6 +188,9 @@ function fileHashes() {
     } catch {
       return `missing`
     }
+    // A test can stat or test for a directory (a fixtures folder): its input
+    // is that a directory is there, not its content (review of #55).
+    if (!stat.isFile()) return `not a file`
     const stamp = `${stat.size}:${stat.mtimeMs}`
     const known = memo.get(path)
     if (known?.stamp === stamp) return known.hash

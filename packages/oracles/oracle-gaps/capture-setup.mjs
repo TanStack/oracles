@@ -180,12 +180,23 @@ if (!globalThis.__oracleGapsReading) {
     )
       globalThis.__oracleGapsReads.add(path)
   }
+  // A wrapper keeps the function's own properties (its name and length,
+  // which code that dispatches on arity reads), so a test that passes alone
+  // passes under the capture (law 3; review of #55).
   const recorded = (owner, name) => {
     const original = owner[name]
-    owner[name] = function (target, ...rest) {
+    const wrapper = function (target, ...rest) {
       record(target)
       return original.call(this, target, ...rest)
     }
+    for (const key of Reflect.ownKeys(original))
+      if (key !== `prototype`)
+        Object.defineProperty(
+          wrapper,
+          key,
+          Object.getOwnPropertyDescriptor(original, key),
+        )
+    owner[name] = wrapper
   }
   for (const name of [`readFileSync`, `readFile`, `existsSync`, `statSync`])
     recorded(fs, name)
