@@ -7,6 +7,7 @@
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { packagePath } from './args.mjs'
+import { posix } from './paths.mjs'
 import { Refusal } from './ending.mjs'
 import { ownership, readOwns, splitEntry } from './owners.mjs'
 import { instrument } from './schemata.mjs'
@@ -124,7 +125,7 @@ export function analyze(ts, pkg, sources, testFiles) {
           .flat()
           .map((entry) => splitEntry(entry)[0]),
       ]),
-    ].map((source) => join(pkg, source)),
+    ].map((source) => posix(join(pkg, source))),
     compilerOptions(ts),
     hostFor(ts),
   )

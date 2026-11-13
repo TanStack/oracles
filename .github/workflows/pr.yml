@@ -99,7 +99,7 @@ jobs:
       # and the classify, probe-form, and mutant-validity oracles in a third.
       - run: |
           if [ "$SHARD" = 3 ]; then
-            exec pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-classify gap-report-probe-form gap-report-mutant-validity
+            exec pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-classify gap-report-probe-form gap-report-mutant-validity gap-report-path-spelling
           fi
           pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-static -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-static "$SHARD")"
         working-directory: packages/oracles
@@ -241,7 +241,7 @@ jobs:
           SHARD: ${{ matrix.shard }}
         run: |
           if [ "$SHARD" = 3 ]; then
-            pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-classify gap-report-probe-form gap-report-mutant-validity
+            pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-classify gap-report-probe-form gap-report-mutant-validity gap-report-path-spelling
           fi
           pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-static -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-static "$SHARD")"
   windows-gap-end-to-end:
@@ -302,6 +302,7 @@ jobs:
           import { clamp } from '../src/clamp'
 
           oracleProperty({
+            owns: ['src/clamp.ts#clamp'],
             id: `fixture.clamp`,
             law: {
               statement: `clamp returns its argument within 0 and 10.`,

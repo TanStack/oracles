@@ -9,8 +9,12 @@
 import { realpathSync } from 'node:fs'
 import { relative } from 'node:path'
 
-/** The forward-slash spelling of `path`. */
-export const posix = (path) => path.replaceAll(`\\`, `/`)
+/**
+ * The forward-slash spelling of `path`, with a drive letter in capitals: a
+ * Windows drive's letter is one letter whatever its case.
+ */
+export const posix = (path) =>
+  path.replaceAll(`\\`, `/`).replace(/^[a-z]:/, (drive) => drive.toUpperCase())
 
 /** The real path of `path`, in forward slashes. */
 export const realPathOf = (path) => posix(realpathSync.native(path))
