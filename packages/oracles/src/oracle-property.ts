@@ -2310,12 +2310,8 @@ function commandLines(
   command: Command | undefined,
 ): Array<string> {
   if (command === undefined) return []
-  return process.platform === `win32`
-    ? [
-        `${label} (PowerShell): ${command.powershell}`,
-        `${label} (cmd): ${command.cmd}`,
-      ]
-    : [`${label}: ${command.posix}`]
+  // MUTANT (throwaway branch): the POSIX line on every platform.
+  return [`${label}: ${command.posix}`]
 }
 
 /** Text in a POSIX shell's single quotes. */
