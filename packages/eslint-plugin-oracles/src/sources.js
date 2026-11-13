@@ -274,7 +274,9 @@ const matches = (pattern, specifier) =>
     ? specifier.startsWith(pattern.slice(0, -1))
     : specifier === pattern
 
-const UNKNOWN_MODES = [`report`, `test`, `ignore`]
+// `ignore` was removed (maintainer decision, 2026-11-12): it is malformed,
+// and silence for a package comes only from `nonTestPackages`.
+const UNKNOWN_MODES = [`report`, `test`]
 const ROLE_NAMES = new Set([`test`, `suite`])
 
 const isPlainObject = (value) =>
@@ -294,7 +296,7 @@ function configuredTable(value) {
  * are malformed. `testPackages` maps a specifier (or a prefix ending in
  * `*`) to a framework's specifier or to a table of export roles;
  * `nonTestPackages` lists specifiers; `unknownSources` is `report` (the
- * default), `test`, or `ignore`. A setting that is not `undefined` and
+ * default) or `test`. A setting that is not `undefined` and
  * that the rules cannot use is malformed, and it is read as unset, all of
  * it. A `settings.oracles` that is not an object is malformed as a whole.
  */

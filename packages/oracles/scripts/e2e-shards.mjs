@@ -99,6 +99,8 @@ export const shards = {
     `calibration: a refused run is reported as complete`,
     `determinism: constructed history: a .cjs config that calls require`,
     `determinism: constructed history: a declaration fault: configNoDefault`,
+    `determinism: constructed history: a declaration fault: configNull`,
+    `determinism: constructed history: a declaration fault: configSyntax`,
     `determinism: constructed history: a declaration fault: outsideSource`,
     `determinism: constructed history: a declaration fault: setupThrows`,
     `determinism: constructed history: a load failure beside a hang`,
@@ -154,11 +156,15 @@ export const shards = {
     `fixed seed 20261105: a declaration fault: badEntry`,
     `fixed seed 20261105: a declaration fault: brokenVitest`,
     `fixed seed 20261105: a declaration fault: configNoDefault`,
+    `fixed seed 20261105: a declaration fault: configNull`,
+    `fixed seed 20261105: a declaration fault: configSyntax`,
     `fixed seed 20261105: a declaration fault: nonLiteral`,
     `fixed seed 20261105: a failing owner under a config that --config names`,
     `fixed seed 20261105: a load failure beside a hang`,
     `random seed: a .cjs config that calls require`,
     `random seed: a declaration fault: configNoDefault`,
+    `random seed: a declaration fault: configNull`,
+    `random seed: a declaration fault: configSyntax`,
     `random seed: an awaiting config in a package with no module type`,
     `calibration: production code is reported as probe code`,
     `calibration: the daemon reports another outcome than the cold run`,
@@ -171,6 +177,14 @@ export const shards = {
     `fixed seed 20261105: a second daemon check of the budget witness`,
     `calibration: a stopped run leaves a process it started running`,
     `calibration: a busy mutant is named in no heartbeat`,
+    // Law 15's calibrations (the greppable stream), measured at ab18c60:
+    // 79 s and 70 s; the daemon-notes one, bound to its history, 2 s (it
+    // took 433 s searching for one).
+    `calibration: a streamed line has no prefix`,
+    `calibration: a refusal through the daemon drops the cold run's notes`,
+    // Bound to its history (re-review N2), not yet measured.
+    `calibration: a run names a test-output log it never captured`,
+    `calibration: a completed run ends without its done line`,
     `determinism: constructed history: a second daemon check of the budget witness`,
     // The witness module's edit sequence (option M): 97 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
@@ -202,6 +216,12 @@ export const shards = {
     `random seed: a second daemon check of the budget witness`,
     `calibration: a stopped run had written a copy beside the tests`,
     `calibration: a heartbeat names a file that does not run its mutant`,
+    // Law 15's calibrations (the greppable stream), measured at ab18c60:
+    // 69 s, 58 s, 73 s, and 69 s.
+    `calibration: the decisive baseline line comes after a mutant's line`,
+    `calibration: a stopped run ends without its done line`,
+    `calibration: a raw line reaches the stdout`,
+    `calibration: a run ends with two done lines`,
     // The witness module's edit sequence (option M): about 97 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
     `random seed: an edit sequence over the witness module`,

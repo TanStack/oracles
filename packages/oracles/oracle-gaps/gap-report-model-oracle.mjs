@@ -601,6 +601,10 @@ const drawn = fc.record({
     // it loads. Each is the author's to fix, so each refuses the run.
     `configThrows`,
     `configNoDefault`,
+    // A config whose default export is null, and one with a syntax error,
+    // which Vitest refuses too (review of #46, F5 and F7).
+    `configNull`,
+    `configSyntax`,
     `setupThrows`,
   ),
   stability: fc.constantFrom(
@@ -635,7 +639,12 @@ const drawn = fc.record({
   // The package's Vitest config: its file, and whether it exports an object
   // or a function (sync or async) that returns one. Vitest accepts each, so
   // the runner must too.
-  config: fc.constantFrom(`object`, `object`, `function`, `async`),
+  // Whether file a has a test that writes to the process's own streams
+  // (review of #46, F2; re-review N2: a run whose tests wrote nothing names
+  // no log).
+  consoleOutput: fc.boolean(),
+  // A promise of a config, which Vite awaits (review of #46, F5).
+  config: fc.constantFrom(`object`, `object`, `function`, `async`, `promise`),
   // A config may read the environment Vitest's CLI sets before it loads
   // one (VITEST, TEST, and NODE_ENV), as svelte-db's picks its resolve
   // conditions by VITEST. This one finds its tests only under it.
@@ -676,8 +685,15 @@ const drawn = fc.record({
         fc.record({
           signal: fc.constantFrom(`SIGTERM`, `SIGINT`),
           pool: fc.constantFrom(`forks`, `threads`),
+          // When the signal comes: while the stop witness spins (`run`),
+          // once the run has printed its completed line, while its process
+          // holds its exit (`after`, review of #46, F3), or while the run
+          // warms its config (`warm`, re-review N1). Or no signal: a test
+          // aborts the run's process (`abort`, as a V8 out-of-memory abort
+          // does; the coordinator's decision of 2026-11-12 on P10).
+          when: fc.constantFrom(`run`, `run`, `after`, `warm`, `abort`),
         }),
-        { minLength: 1, maxLength: 2 },
+        { minLength: 1, maxLength: 5 },
       ),
     },
   ),
@@ -2086,9 +2102,14 @@ const formatOf = (file, packageType) =>
  */
 function configOf(history) {
   const needsConfig =
-    [`configThrows`, `configNoDefault`, `projects`, `setupThrows`].includes(
-      history.fault,
-    ) ||
+    [
+      `configThrows`,
+      `configNoDefault`,
+      `configNull`,
+      `configSyntax`,
+      `projects`,
+      `setupThrows`,
+    ].includes(history.fault) ||
     history.configEnv === true ||
     history.setupGlobal === true
   const place =
@@ -2653,6 +2674,10 @@ function resolveHistory(history) {
     // Whether a step edits file b's helper during a check (`midrun`): then
     // file a loads the helper and holds the test that edits it.
     midrun: (history.steps ?? []).includes(`midrun`),
+    consoleOutput: history.consoleOutput === true,
+    // Whether a run aborts its process (a stop run `abort`): then file a has
+    // the test that aborts when the driver asks.
+    aborts: (history.stopRuns ?? []).some((stop) => stop.when === `abort`),
     ordinary: history.ordinary === true,
     // An `owns` key in an assertion's arguments, in the ordinary file: its
     // assertion form and whether its list is a literal, or none.
@@ -3824,7 +3849,11 @@ function refusal(plan) {
       detail: `the fixture config broke`,
       runtime: true,
     }
-  if (plan.fault === `configNoDefault`)
+  if (
+    plan.fault === `configNoDefault` ||
+    plan.fault === `configNull` ||
+    plan.fault === `configSyntax`
+  )
     return { cause: plan.configPath, runtime: true }
   // A run with no oracle file, or with no owns entry, owns no selected
   // source, so every mutant would read as unowned. The analysis refuses it
@@ -3872,10 +3901,14 @@ function blockingOf(plan) {
 function baselineOf(plan) {
   const failing = blockingOf(plan)
   return [...oracleFilesOf(plan), `c`].map((file) => {
-    // File a's mid-run edit test (`midrun`) runs in every baseline too.
+    // File a's tests beyond the plan's run in every baseline too: the mid-run
+    // edit test, the one that writes to the console streams, and the one
+    // that aborts when the driver asks.
     const own =
       plan.tests.filter((t) => t.file === file).length +
-      (plan.midrun && file === `a` ? 1 : 0)
+      (plan.midrun && file === `a` ? 1 : 0) +
+      (file === `a` && plan.consoleOutput ? 1 : 0) +
+      (file === `a` && plan.aborts ? 1 : 0)
     const broken = failing.find((f) => f.file === file)
     // The failing owner's suite holds two tests and a third of its name.
     const extra = broken?.test === undefined ? 0 : 3
@@ -3907,6 +3940,48 @@ const declarationFaults = [
 const reachesRun = (history) =>
   !declarationFaults.includes(history.fault ?? `none`)
 
+// Law 15, the stream's lines (the maintainer's request of 2026-11-12,
+// relayed by the coordinator: an agent acts on a check's results as they
+// stream, so one `grep '^oracle-gaps: '` finds every line the CLI writes
+// for it, and the kind's word right after the prefix filters one kind; the
+// same prefixes on stdout and stderr, in a cold run and through the
+// daemon). The kinds:
+// The stdout summary's lines have kinds of their own: its totals
+// (`summary`), one directive per gap class (`legend`), and each function's
+// heading over its gap lines (`function`) (the coordinator's decision of
+// 2026-11-12 on review F1: every line of either stream is a line of the
+// stream).
+const streamKinds = [
+  `config`,
+  `note`,
+  `baseline`,
+  `blocked`,
+  `progress`,
+  `gap`,
+  `busy`,
+  `summary`,
+  `legend`,
+  `function`,
+  `done`,
+]
+// The one decisive baseline line, before any mutant runs: every oracle
+// file passed, or how many of them failed, which makes the report
+// provisional.
+const baselineVerdict =
+  /^oracle-gaps: baseline (?:all \d+ oracle files? pass|\d+ of \d+ oracle files? failed \(provisional\))$/
+const countedFiles = (n) => `${n} oracle file${n === 1 ? `` : `s`}`
+/** The decisive baseline line of a run with `files` oracle files, `failing` of them failing. */
+const verdictLine = (files, failing) =>
+  failing === 0
+    ? `oracle-gaps: baseline all ${countedFiles(files)} pass`
+    : `oracle-gaps: baseline ${failing} of ${countedFiles(files)} failed (provisional)`
+/**
+ * The last line of a completed run's stdout: its status, its gap count, and
+ * the path of its full report in output directory `out`.
+ */
+const doneLine = (gaps, provisional, out) =>
+  `oracle-gaps: done completed, ${gaps} gap${gaps === 1 ? `` : `s`}${provisional ? ` (provisional)` : ``}, report ${out}/summary.md`
+
 function model(plan) {
   const refused = refusal(plan)
   // The config the run names (F12) once its contexts have loaded it: the
@@ -3919,13 +3994,15 @@ function model(plan) {
     `brokenVitest`,
     `configThrows`,
     `configNoDefault`,
+    `configNull`,
+    `configSyntax`,
     `projects`,
   ].includes(plan.fault)
     ? []
     : [
         plan.configPath === undefined
-          ? `no config file: Vitest's default discovery`
-          : `config: ${plan.configPath}`,
+          ? `oracle-gaps: config none, Vitest's default discovery`
+          : `oracle-gaps: config ${plan.configPath}`,
       ]
   if (refused) return { refused, configLines }
   const sites = sitesOf(plan)
@@ -4461,12 +4538,32 @@ function oracleTestFile(plan, file) {
       `  writeEdit(marker, 'done\\n')`,
       `})`,
     )
+  // A test that ends the run's process by SIGABRT when the driver asks
+  // (`GAP_ABORT`), as a V8 out-of-memory abort does: in worker threads its
+  // process is the run's, and `process.abort()` is unavailable there. It
+  // runs and passes in every other run.
+  if (file === `a` && plan.aborts)
+    out.push(
+      `test('aborts the process when asked', () => {`,
+      `  if (process.env.GAP_ABORT === '1') process.kill(process.pid, 'SIGABRT')`,
+      `})`,
+    )
   // A file with no tests still loads, so the CLI can read what it owns.
   if (
     !plan.tests.some((t) => t.file === file) &&
-    !(plan.midrun && file === `a`)
+    !(file === `a` && (plan.midrun || plan.consoleOutput || plan.aborts))
   )
     out.push(`test.skip('no tests', () => {})`)
+  // A test that writes to the process's own streams, as a test's debugging
+  // output does: none of it may reach the CLI's streams (law 15; review of
+  // #46, F2). It calls nothing of the source under test.
+  if (file === `a` && plan.consoleOutput)
+    out.push(
+      `test('writes to the console streams', () => {`,
+      `  process.stdout.write('raw stdout from a test\\n')`,
+      `  process.stderr.write('raw stderr from a test\\n')`,
+      `})`,
+    )
   return `${out.join(`\n`)}\n`
 }
 
@@ -4613,13 +4710,24 @@ const altConfigPath = (plan) =>
  */
 function configText(plan, test) {
   const commonjs = plan.configSyntax === `cjs`
-  const body = `defineConfig(${
-    { object: ``, function: `() => (`, async: `async () => (` }[plan.config]
+  const config = `defineConfig(${
+    { object: ``, function: `() => (`, async: `async () => (`, promise: `` }[
+      plan.config
+    ]
   }{ test: ${
     plan.fault === `projects`
       ? `{ projects: [{ test: { name: 'unit', ...${test} } }] }`
       : test
-  } }${plan.config === `object` ? `` : `)`})`
+  } }${plan.config === `object` || plan.config === `promise` ? `` : `)`})`
+  // A promise of the config, a null default, or a config cut off mid-object.
+  const body =
+    plan.fault === `configNull`
+      ? `null`
+      : plan.fault === `configSyntax`
+        ? `defineConfig({ test: {`
+        : plan.config === `promise`
+          ? `Promise.resolve(${config})`
+          : config
   return [
     commonjs
       ? `const { defineConfig } = require('vitest/config')`
@@ -5112,7 +5220,7 @@ function applyEdit(state, edit) {
  * one. `name` replaces the scratch paths in a text, so two runs of one
  * history in different directories record the same ending.
  */
-function endingOf(exit, stderr, out, name = (text) => text) {
+function endingOf(exit, stderr, out, name = (text) => text, stdout = ``) {
   const text = `${stderr ?? ``}`
   const line = (label) => text.match(new RegExp(`^${label}: (.*)$`, `m`))?.[1]
   const cause = text.match(/^refused: ([\s\S]*?)\nfix: /m)?.[1]
@@ -5128,11 +5236,22 @@ function endingOf(exit, stderr, out, name = (text) => text) {
   } catch {
     // No output directory is known, or the run wrote no results.json.
   }
+  // The run's last line: what follows `oracle-gaps: done ` there (law 15).
+  const last = text.split(`\n`).filter(Boolean).at(-1) ?? ``
+  const done = last.startsWith(`oracle-gaps: done `)
+    ? name(last.slice(`oracle-gaps: done `.length))
+    : undefined
+  // The stdout's lines: a run that does not complete prints only its done
+  // line there (law 15).
+  const printed = `${stdout ?? ``}`.split(`\n`).filter(Boolean)
   return {
     exit,
     cause: cause && name(cause).slice(0, 2000),
     fix: line(`fix`) && name(line(`fix`)),
-    namesOutput: out !== undefined && line(`output`) === out,
+    done,
+    stdout: printed.map(name),
+    namesOutput:
+      out !== undefined && done === name(`refused, report ${out}/summary.md`),
     // An internal error's log beside a refusal would be another run's.
     errorLog: out !== undefined && existsSync(join(out, `error.log`)),
     stackFrames: /^\s+at /m.test(text),
@@ -5157,9 +5276,22 @@ function refusalBreach(ending, { cause, outKnown }) {
   // problem in place.
   if (/\b(ignore|equivalent|skip)/i.test(ending.fix))
     return `the refusal's fix offers a way around it: ${ending.fix}`
+  // Its last line says that it refused (law 15), with its report once the
+  // run knows its output directory.
+  if (
+    ending.done === undefined ||
+    !/^refused(?:, report .+)?$/.test(ending.done)
+  )
+    return `the refusal's last line is not \`oracle-gaps: done refused\``
+  // The done line ends stdout too, as its only line.
+  if (
+    ending.stdout.length !== 1 ||
+    ending.stdout[0] !== `oracle-gaps: done ${ending.done}`
+  )
+    return `the refusal's stdout is ${JSON.stringify(ending.stdout)}, not its done line`
   if (!outKnown) return undefined
   if (!ending.namesOutput)
-    return `the refusal does not name its output directory`
+    return `the refusal does not name its report in its output directory: done ${ending.done}`
   const { written } = ending
   if (written?.status !== `refused`)
     return `the output's results.json has status ${written?.status ?? `(none)`}, not refused`
@@ -5264,6 +5396,10 @@ export {
   histories,
   witnessSteps,
   budgetSteps,
+  streamKinds,
+  baselineVerdict,
+  verdictLine,
+  doneLine,
   kill,
   push,
   judging,
