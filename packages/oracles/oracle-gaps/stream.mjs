@@ -77,6 +77,21 @@ export function testNamesOf(testCase) {
 // A word that a POSIX shell reads back as it is: plain, or in single quotes.
 const shellWord = (word) =>
   /^[\w./-]+$/.test(word) ? word : `'${word.replaceAll(`'`, `'\\''`)}'`
+// The same word for PowerShell (a single quote is doubled) and for cmd (a
+// double-quoted word, which cmd reads as it is).
+const powerShellWord = (word) =>
+  /^[\w./-]+$/.test(word) ? word : `'${word.replaceAll(`'`, `''`)}'`
+const cmdWord = (word) =>
+  /^[\w./-]+$/.test(word) ? word : `"${word.replaceAll(`"`, `\\"`)}"`
+// The replay line of a command. A POSIX shell reads one line; on Windows
+// there are two, one for PowerShell and one for cmd, since the words differ.
+const replayLines = (words) =>
+  process.platform === `win32`
+    ? [
+        `  replay (PowerShell): ${words.map(powerShellWord).join(` `)}`,
+        `  replay (cmd): ${words.map(cmdWord).join(` `)}`,
+      ]
+    : [`  replay: ${words.map(shellWord).join(` `)}`]
 
 // A control character, or a line or paragraph separator, as its `\uXXXX`
 // escape: the line stays one line, and the escape is regular-expression
@@ -141,8 +156,8 @@ function violationLines(message) {
 export function baselineLines(files, config) {
   const vitest =
     config === undefined
-      ? `vitest run`
-      : `vitest run --config ${shellWord(config)}`
+      ? [`vitest`, `run`]
+      : [`vitest`, `run`, `--config`, config]
   return files.flatMap(({ file, ordinary, failure, tests }) => {
     const name = `${file}${ordinary ? ` (ordinary)` : ``}`
     const ran = tests.filter(
@@ -164,7 +179,7 @@ export function baselineLines(files, config) {
           `baseline`,
           `fail ${name}: ${tests.length === 0 ? `did not load` : `failed outside its tests`}: ${codeSpan(escapeControls(failure.split(`\n`)[0]))}`,
         ),
-        `  replay: ${vitest} ${shellWord(file)}`,
+        ...replayLines([...vitest, file]),
       ]
     const message = first.message ?? ``
     return [
@@ -174,7 +189,13 @@ export function baselineLines(files, config) {
       ),
       `  failing: ${codeSpan(escapeControls((first.names ?? [first.fullName]).join(` > `)))}: ${codeSpan(escapeControls(message.split(`\n`)[0]))}`,
       ...violationLines(message),
-      `  replay: ${vitest} ${shellWord(file)}${first.names === undefined ? `` : ` -t ${shellWord(escapeControls(replayPattern(first.names)))}`}`,
+      ...replayLines([
+        ...vitest,
+        file,
+        ...(first.names === undefined
+          ? []
+          : [`-t`, escapeControls(replayPattern(first.names))]),
+      ]),
     ]
   })
 }

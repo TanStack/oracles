@@ -30,6 +30,7 @@ import {
   streamLine,
   verdictLine,
 } from './stream.mjs'
+import { relativeWithin } from './paths.mjs'
 
 /** Outcomes that are gaps. Only a law verdict on a reproducible route kills. */
 export const gapOutcomes = new Set([
@@ -419,8 +420,7 @@ export function renderStdout({
     (r) => !r.probeGuard && r.outcome === `unowned`,
   )
   const killed = results.filter((r) => r.outcome === `killed` && !r.probeGuard)
-  const relative = (file) =>
-    file.startsWith(`${pkg}/`) ? file.slice(pkg.length + 1) : file
+  const relative = (file) => relativeWithin(pkg, file) ?? file
   const section = baselineSection(results, baseline, config)
   // Every line is a line of the stream (stream.mjs): the totals, one
   // directive per gap class, each function's heading over its gap lines,

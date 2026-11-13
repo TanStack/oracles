@@ -2201,7 +2201,7 @@ function failure<THistory>(
   options: { id: string; law: OracleLaw },
   verdict: Extract<Verdict, { kind: `violation` }>,
   history: THistory,
-  rerun: string | undefined,
+  rerun: Command | undefined,
 ): OracleViolation {
   globalThis.__oracleVerdict?.({
     property: options.id,
@@ -2216,7 +2216,7 @@ function violationError<THistory>(
   options: { id: string; law: OracleLaw },
   verdict: Extract<Verdict, { kind: `violation` }>,
   history: THistory,
-  rerun: string | undefined,
+  rerun: Command | undefined,
 ): OracleViolation {
   const { id, law } = options
   const error = new OracleViolation(
@@ -2227,7 +2227,7 @@ function violationError<THistory>(
       `History: ${reportText(history)}`,
       `Authority: ${law.authority}`,
       `Known limits: ${law.limits}`,
-      ...(rerun === undefined ? [] : [`Rerun: ${rerun}`]),
+      ...commandLines(`Rerun`, rerun),
     ].join(`\n`),
     verdict.cause === undefined ? undefined : { cause: verdict.cause },
   )
@@ -2246,12 +2246,76 @@ function violationError<THistory>(
  * a space, Vitest 5 joined by ` > `, so the pattern accepts either between
  * them.
  */
-function rerunOf(task: NamedTask): string {
+function rerunPatternOf(task: NamedTask): string {
   const names: Array<string> = []
   for (let at: NamedTask | undefined = task; at; at = at.suite)
     names.unshift(at.name)
   const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
-  return `-t ${shellQuoted(`^${names.map(escape).join(`(?: | > )`)}$`)}`
+  return `^${names.map(escape).join(`(?: | > )`)}$`
+}
+
+function rerunOf(task: NamedTask): Command {
+  return commandOf([], undefined, rerunPatternOf(task))
+}
+
+/**
+ * A command that a failure prints, in the form each shell on the platform
+ * reads: POSIX words, or on Windows a PowerShell line and a cmd line. The
+ * POSIX form is the one a failure always printed.
+ */
+interface Command {
+  readonly posix: string
+  readonly powershell: string
+  readonly cmd: string
+}
+
+/**
+ * The command that sets `env` (a variable's `quote` flag says whether its
+ * POSIX value is quoted), runs `command`, and reruns the test `pattern`.
+ */
+function commandOf(
+  env: ReadonlyArray<readonly [name: string, value: string, quote: boolean]>,
+  command: string | undefined,
+  pattern: string,
+): Command {
+  const psQuoted = (text: string) => `'${text.replace(/'/g, `''`)}'`
+  const cmdQuoted = (text: string) => `"${text.replace(/"/g, `\\"`)}"`
+  const words = (parts: ReadonlyArray<string | undefined>) =>
+    parts.filter((part) => part !== undefined && part !== ``).join(` `)
+  return {
+    posix: words([
+      ...env.map(
+        ([name, value, quote]) =>
+          `${name}=${quote ? shellQuoted(value) : value}`,
+      ),
+      command,
+      `-t ${shellQuoted(pattern)}`,
+    ]),
+    powershell: words([
+      ...env.map(([name, value]) => `$env:${name}=${psQuoted(value)};`),
+      command,
+      `-t ${psQuoted(pattern)}`,
+    ]),
+    cmd: words([
+      ...env.map(([name, value]) => `set "${name}=${value}" &&`),
+      command,
+      `-t ${cmdQuoted(pattern)}`,
+    ]),
+  }
+}
+
+/** The lines that print a command under `label`: one per shell on Windows. */
+function commandLines(
+  label: string,
+  command: Command | undefined,
+): Array<string> {
+  if (command === undefined) return []
+  return process.platform === `win32`
+    ? [
+        `${label} (PowerShell): ${command.powershell}`,
+        `${label} (cmd): ${command.cmd}`,
+      ]
+    : [`${label}: ${command.posix}`]
 }
 
 /** Text in a POSIX shell's single quotes. */
@@ -2350,7 +2414,7 @@ function generatedTests<THistory, TExpected, TPlan>(
     shrinkUntil: number,
     // The rerun line a violation prints; a random unit's comes only once
     // fast-check reports its path.
-    rerun: string | undefined,
+    rerun: Command | undefined,
     // Each violation thrown, with its verdict and history.
     violations: Map<unknown, { verdict: Violation; history: THistory }>,
   ) => {
@@ -2489,7 +2553,16 @@ function generatedTests<THistory, TExpected, TPlan>(
       const replay =
         path === null
           ? undefined
-          : `${oracleEnvName(`SEED`)}=${details.seed} ${oracleEnvName(`PATH`)}=${path} ${oracleEnvName(`PROPERTY`)}=${shellQuoted(id)} ${oracleEnvName(`UNIT`)}=${shellQuoted(replayed.name)} vitest run ${rerunOf(replayed)}`
+          : commandOf(
+              [
+                [oracleEnvName(`SEED`), `${details.seed}`, false],
+                [oracleEnvName(`PATH`), `${path}`, false],
+                [oracleEnvName(`PROPERTY`), id, true],
+                [oracleEnvName(`UNIT`), replayed.name, true],
+              ],
+              `vitest run`,
+              rerunPatternOf(replayed),
+            )
       // A random unit's violation names its replay as its rerun, so it is
       // built again, once, now that the path is known; without a path it
       // prints no rerun line.
@@ -2501,8 +2574,8 @@ function generatedTests<THistory, TExpected, TPlan>(
       throw new Error(
         [
           report,
-          ...(rerun === undefined ? [] : [`Rerun: ${rerun}`]),
-          ...(replay === undefined ? [] : [`Replay: ${replay}`]),
+          ...commandLines(`Rerun`, rerun),
+          ...commandLines(`Replay`, replay),
         ].join(`\n`),
         { cause },
       )

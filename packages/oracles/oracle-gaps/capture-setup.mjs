@@ -26,7 +26,7 @@
 import { createHash } from 'node:crypto'
 import { appendFileSync, readFileSync } from 'node:fs'
 import { createRequire, syncBuiltinESMExports } from 'node:module'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { afterAll, beforeEach, chai, expect, inject, vi } from 'vitest'
 
 const run =
@@ -1023,7 +1023,7 @@ afterAll(() => {
   const loaded = [...(evaluated?.idToModuleMap ?? [])]
     .filter(([, node]) => node.evaluated)
     .map(([id]) => id.split(`?`)[0])
-    .filter((path) => path.startsWith(`/`))
+    .filter((path) => isAbsolute(path))
   appendFileSync(
     state.capture,
     `${JSON.stringify({ file: thisFile, closed: true, loaded, ...(skippedCopy ? { skipped: true } : {}) })}\n`,

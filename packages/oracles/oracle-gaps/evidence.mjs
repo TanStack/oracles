@@ -10,6 +10,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -18,9 +19,18 @@ import { join } from 'node:path'
 
 // A package's key: its real path, which names the repository checkout too.
 const keyOf = (pkg) => createHash(`sha1`).update(pkg).digest(`hex`).slice(0, 12)
-/** The socket of a package's daemon. A socket path must stay short. */
+/**
+ * The socket of a package's daemon. A Unix socket path must stay short, and
+ * on Windows a socket is a named pipe, which has no file to remove.
+ */
 export const socketOf = (pkg) =>
-  join(tmpdir(), `oracle-gaps-${keyOf(pkg)}.sock`)
+  process.platform === `win32`
+    ? `\\\\.\\pipe\\oracle-gaps-${keyOf(pkg)}`
+    : join(tmpdir(), `oracle-gaps-${keyOf(pkg)}.sock`)
+/** Removes a daemon's socket file; a named pipe has none. */
+export const removeSocket = (socket) => {
+  if (process.platform !== `win32`) rmSync(socket, { force: true })
+}
 /**
  * A package's state: the daemon's lock, log, and evidence, the workspace
  * dependencies' one-file bundles, and the default output directories. It is
