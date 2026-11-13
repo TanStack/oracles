@@ -2304,7 +2304,7 @@ function incrementalCheck(observations) {
     )
       return violation(
         `incremental`,
-        `after ${step}, the daemon's check exited ${daemon.exit} (${daemon.refusal ?? daemon.stderr ?? `no refusal`}) and the cold run exited ${cold.exit} (${cold.refusal ?? `no refusal`})`,
+        `after ${step}, the daemon's check exited ${daemon.exit} (${daemon.refusal ?? daemon.stderr ?? `no refusal`}) and the cold run exited ${cold.exit} (${cold.refusal ?? `no refusal`})${cold.exit === 3 && cold.stderr ? `; its error log: ${cold.stderr}` : ``}`,
         `incremental equals cold`,
         { actual: daemon, expected: cold },
       )
