@@ -279,13 +279,14 @@ export const partitions = {
     },
   },
   // The end-to-end gap oracle's fixed-seed units, which a pull request runs
-  // (`-t "fixed seed"`): 36 units, about 1,280 s in all, measured in CI at
-  // 661d2fd (2026-11-13, from each unit's reach line in the three jobs'
-  // logs; the units' relative costs in CI differ from a local run's, so the
-  // packing follows CI). A unit's cost follows the generated history its
-  // constructed history is built from, and the witness module's histories
-  // grow with its witnesses. The units are packed longest first into three
-  // shards: about 427 s, 421 s, and 429 s.
+  // (`-t "fixed seed"`): 38 units, measured in CI on main at ae3184d (each
+  // unit's cost read from its reach line's time in the three jobs' logs),
+  // whose generated histories this branch keeps (the work law's bound in
+  // the grammar is derived from the plan, not drawn, 2026-11-13). A unit's
+  // cost follows the generated history its constructed history is built
+  // from, and the witness module's histories grow with its witnesses. The
+  // units are packed longest first into three shards: about 290 s, 277 s,
+  // and 260 s of CI time.
   'oracle-gaps-fixed-seed': {
     args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-oracle`],
     suite: `oracle-gaps.report`,
@@ -294,29 +295,21 @@ export const partitions = {
     // select exactly these.
     previously: `fixed seed`,
     shards: {
-      // 225 s, 132 s, 45 s, and small units.
+      // 261 s, 25 s, and a small unit.
       1: anyOf([
         'an edit sequence over the witness module',
-        'a declaration fault: noTypescript',
-        'a second daemon check of the budget witness',
-        'a declaration fault: configThrows',
-        'an edit that changed the cold result after a hang replaced the only context',
         'a stale authored mutant and a reformat',
-        'two authored mutants',
-      ]),
-      // 206 s, 201 s, and small units.
-      2: anyOf([
-        'generated',
-        'a declaration fault: brokenOwner',
-        'a run with eleven contexts',
         'a failing owner under a config that --config names',
-        'an edit to a module that only mutated runs load',
-        'a load failure beside a hang',
-        'a package with no config',
       ]),
-      // The rest: every outcome class (186 s), apiLessTypescript (112 s), the
-      // edit sequence through the daemon (77 s), brokenVitest (26 s), and
-      // small units.
+      // 134 s, 101 s, 27 s, and 15 s.
+      2: anyOf([
+        'every outcome class',
+        'a second daemon check of the budget witness',
+        'a declaration fault: brokenVitest',
+        'an edit that changed the cold result after a hang replaced the only context',
+      ]),
+      // The rest: the edit sequence through the daemon (95 s), brokenOwner
+      // (83 s), generated (23 s), the lazy module (12 s), and small units.
       3: rest,
     },
   },
