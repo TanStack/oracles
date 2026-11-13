@@ -1577,6 +1577,22 @@ const witness = [
     body: [{ kind: `optional` }],
     tests: [judging(`a`, `fixed seed`, 1)],
   },
+  // The same read where the object is absent, `undefined` or `null`: the
+  // plain read throws on it, so the mutant changes the run and the test
+  // crashes (a bare throw, with no verdict). Each receiver must make the
+  // capture infect the site, or the mutant is skipped as unchanged.
+  {
+    id: `w_absent`,
+    owners: [`a`],
+    body: [{ kind: `optional`, absent: `undefined` }],
+    tests: [judging(`a`, `fixed seed`, 0)],
+  },
+  {
+    id: `w_absentNull`,
+    owners: [`a`],
+    body: [{ kind: `optional`, absent: `null` }],
+    tests: [judging(`a`, `fixed seed`, 0)],
+  },
   // A test that waits on a child process where the output differs: an I/O
   // handle is open, so its copy is busy, never cut for idleness, and the
   // confirming run kills it.
@@ -1662,6 +1678,8 @@ const captureWitness = new Set([
   `w_record`,
   `w_data`,
   `w_optional`,
+  `w_absent`,
+  `w_absentNull`,
   `w_oldprobe`,
   `w_spin`,
 ])
@@ -1916,7 +1934,7 @@ function renderStatement(stmt, callText) {
       return [`out.push(...loaded);`]
     case `optional`:
       return [
-        `const o${stmt.label} = x ? { v: 'p${stmt.label}' } : undefined;`,
+        `const o${stmt.label} = x ? { v: 'p${stmt.label}' } : ${stmt.absent === `null` ? `null` : `undefined`};`,
         `out.push(\`\${o${stmt.label}?.v}\`);`,
       ]
     case `readData`:
@@ -3453,14 +3471,16 @@ function interpret(plan, fnId, x, sites, active) {
           ? isActive(drop)
             ? {}
             : { v: `p${stmt.label}` }
-          : undefined
+          : stmt.absent === `null`
+            ? null
+            : undefined
         const site = siteOf(stmt, `push`)
         reached.add(site.id)
         if (!isActive(site)) {
           const chain = siteOf(stmt, `chain`)
           reached.add(chain.id)
-          if (isActive(chain) && made === undefined)
-            throw new TypeError(`Cannot read properties of undefined`)
+          if (isActive(chain) && (made === undefined || made === null))
+            throw new TypeError(`Cannot read properties of ${made}`)
           trace.push(String(made?.v))
         }
       }

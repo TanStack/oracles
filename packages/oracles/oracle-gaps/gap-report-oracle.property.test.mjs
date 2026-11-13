@@ -168,7 +168,12 @@
  *    would judge such a verdict, is not built.) A copy that a batch skipped
  *    because an earlier copy killed the mutant runs again, through the batch,
  *    only while no kill is in hand, so every mutant gets an outcome and no
- *    other missing unit is rerun. A mutant that no owner test fails is a
+ *    other missing unit is rerun. A mutant is judged without a run only when
+ *    every owner's unmutated run completes its site as the original does, with
+ *    the same value or the same thrown error: the capture infects every site
+ *    whose mutant would change that completion, so a `?.` whose receiver is
+ *    nullish (a plain read throws on it) runs, as a comparison whose operators
+ *    disagree does. A mutant that no owner test fails is a
  *    survivor: a `not-judged` when an owner test's observation or asserted
  *    value changed, a `branch-never-taken` when an `if` on its line never took
  *    one of its outcomes in an owner test, a `not-infected` when a comparison's
@@ -1604,6 +1609,10 @@ async function driver(plan, observe) {
         states.add(`a returned value made undefined not distinguished`)
       if (m.operator === `optional-chain` && m.class === `not-distinguished`)
         states.add(`a plain read in place of ?. not distinguished`)
+      if (m.function === `w_absent` && m.outcome === `crashed`)
+        states.add(`a plain read of an absent object crashed`)
+      if (m.function === `w_absentNull` && m.outcome === `crashed`)
+        states.add(`a plain read of a null object crashed`)
       if (m.operator === `arithmetic-swap` && m.outcome === `killed`)
         states.add(`an arithmetic swap killed`)
       if (m.function === `w_leaf` && m.outcome !== `unowned`)
@@ -2556,6 +2565,8 @@ const required = [
   `a mutant of module data killed through its reader`,
   `a returned value made undefined not distinguished`,
   `a plain read in place of ?. not distinguished`,
+  `a plain read of an absent object crashed`,
+  `a plain read of a null object crashed`,
   `a module-level cache judged afresh`,
   `ordinary tests run when asked`,
   `ordinary tests left out by default`,
