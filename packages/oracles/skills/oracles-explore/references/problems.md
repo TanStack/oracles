@@ -79,7 +79,17 @@ repository's `package.json`, the warning is harmless: run the probe with
 module). Copy it unchanged into the scratch directory, under a name that
 Node can load, such as `index.mjs`, and tell the developer that you did.
 
-**The code is TypeScript.** Run the probe with `npx tsx`.
+**The code is TypeScript.** Recent Node runs `.ts` files by stripping their
+types, but not syntax that needs a transform: enums, namespaces, and
+constructor parameter properties (`constructor(private x: X)`). Node 26 has
+no `--experimental-transform-types`. Use the first of these that works:
+
+- A TypeScript runner the repository already depends on (`tsx`,
+  `ts-node`), through its package runner.
+- The package's build, if it has one. Rebuild it first, and tell the
+  developer that the probe ran against the build.
+- `npx tsx`. It downloads `tsx` if the repository does not have it: say so
+  before you run it.
 
 **A probe needs `fast-check` or another package from the repository.** A
 probe in the scratch directory cannot import the repository's packages by
