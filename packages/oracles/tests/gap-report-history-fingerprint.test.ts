@@ -17,8 +17,12 @@ const FIXED_SEED = 20261105
 const DRAWS = 50
 
 const fingerprints = (): Array<[string, string]> => {
-  const samples = fc.sample(drawn, { seed: FIXED_SEED, numRuns: DRAWS })
-  return Object.keys(samples[0]).map((key) => [
+  // Each history is a record of its fields, read here by name.
+  const samples = fc.sample(drawn, {
+    seed: FIXED_SEED,
+    numRuns: DRAWS,
+  }) as Array<Record<string, unknown>>
+  return Object.keys(samples[0] ?? {}).map((key) => [
     key,
     createHash(`sha1`)
       .update(JSON.stringify(samples.map((history) => history[key])))
