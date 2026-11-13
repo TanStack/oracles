@@ -9,8 +9,12 @@ every commit with [pkg.pr.new](https://pkg.pr.new).
 
 ## Packages
 
-- `packages/oracles` (`@tanstack/oracles`): the oracle framework, and the
-  `oracle-gaps` CLI. The CLI lists the production behaviour that a
+To try it, paste the prompt in
+[`packages/oracles/README.md`](packages/oracles/README.md) into your coding
+agent.
+
+- `packages/oracles` (`@tanstack/oracles`): the oracle framework, its skills
+  and docs, and the `oracle-gaps` CLI. The CLI lists the production behavior that a
   project's owning oracles leave unexercised or unjudged. A project runs it as
   `oracle-gaps --package <dir> --source <src/x.ts,...>`, with
   `--env-prefix` set to the prefix that the project passes to
@@ -562,12 +566,7 @@ required. The rule reports:
 
 A framework implementation module is exempt.
 
-No other configuration exempts a file. `settings.oracles.legacyCampaigns`, the
-old list of files that kept their raw campaigns while they migrated, is removed.
-A configuration that still sets it, to any value, exempts nothing. The rule
-reports it as `removedSetting` at line 1 of each oracle file that the
-configuration reaches, since ESLint runs a rule once per file. Convert the
-listed files to `oracleProperty`, then delete the setting.
+No configuration exempts any other file.
 
 A non-array `settings.oracles.implementationModules` or `replayWitnessModules` is
 reported at line 1 as `malformedSetting`, and it is read as an empty list.

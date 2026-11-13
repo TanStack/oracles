@@ -48,6 +48,8 @@
   "files": [
     "dist",
     "src",
+    "skills",
+    "docs",
     "oracle-gaps",
     "!oracle-gaps/**/*.property.test.mjs",
     "!oracle-gaps/gap-report-model-oracle.mjs",
