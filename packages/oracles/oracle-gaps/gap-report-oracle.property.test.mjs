@@ -719,6 +719,9 @@ const strays = (dir, before, running = false) =>
  * one done line and no refusal.
  */
 async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
+  // `spawn`: the signal comes as the CLI starts, once its own code runs (a
+  // signal during Node's own start has no handler yet; Limits of #57).
+  const atSpawn = when === `spawn`
   const after = when === `after`
   const warm = when === `warm`
   // With `abort`, no signal comes: a test of file a aborts the run's
@@ -786,11 +789,13 @@ async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
   if (abort) await Promise.race([exit, sleep(120_000)])
   const spun = abort
     ? exited
-    : after
-      ? stdout.includes(`oracle-gaps: done completed`) && !exited
-      : warm
-        ? existsSync(join(pids, `warming`)) && !exited
-        : readdirSync(pids).length >= 2
+    : atSpawn
+      ? !exited
+      : after
+        ? stdout.includes(`oracle-gaps: done completed`) && !exited
+        : warm
+          ? existsSync(join(pids, `warming`)) && !exited
+          : readdirSync(pids).length >= 2
   const strayWhileRunning = strays(dir, before, true)
   if (!abort) child.kill(signal)
   const ended = await Promise.race([exit, sleep(30_000).then(() => false)])
@@ -946,13 +951,25 @@ async function overlappingRuns(dir, files, how) {
     return { got, status }
   }
   const first = start()
-  // The first run's note is its first stdout line: its stream log exists.
+  let firstEnded = false
+  first.status.then(() => {
+    firstEnded = true
+  })
+  // The first run's note is its first stdout line: its stream log exists. A
+  // first run that ends first never had a live output directory, so the
+  // overlap cannot be observed: the driver says so, rather than waiting.
   for (
     let waited = 0;
-    !first.got.stdout.includes(`oracle-gaps: note log`) && waited < 120_000;
+    !first.got.stdout.includes(`oracle-gaps: note log`) &&
+    !firstEnded &&
+    waited < 120_000;
     waited += 20
   )
     await sleep(20)
+  if (!first.got.stdout.includes(`oracle-gaps: note log`))
+    throw new Error(
+      `the first run ended before its stream log existed; an overlap needs a live first run`,
+    )
   const second = start()
   const secondStatus = await second.status
   const firstStatus = await first.status
@@ -1832,7 +1849,12 @@ async function driver(plan, observe) {
     // session directories the package has once the run ended, and how many
     // of them the previous stopped run had left.
     if (cli.exit === 0 && stopIds.length > 0)
-      for (const stop of plan.stopRuns) {
+      for (const stop of [
+        ...plan.stopRuns,
+        ...(plan.spawnStop
+          ? [{ signal: `SIGINT`, pool: `threads`, when: `spawn` }]
+          : []),
+      ]) {
         const run = await stoppedRun(dir, files, how, stopIds, stop)
         const stopped = {
           ...run,
@@ -1851,6 +1873,10 @@ async function driver(plan, observe) {
         if (!stopped.spun) continue
         if (stop.when === `after`) {
           states.add(`a stop signal after the completed line`)
+          continue
+        }
+        if (stop.when === `spawn`) {
+          states.add(`a stop as the CLI starts`)
           continue
         }
         if (stop.when === `warm`) {
@@ -2367,7 +2393,7 @@ function check(plan, observations, expected) {
         `ownership`,
       )
     const breach = refusalBreach(overlap.ending, {
-      cause: `another run is using`,
+      cause: `another run (pid `,
       outKnown: false,
     })
     if (breach) return violation(`overlap`, breach, `report-shaped ending`)
@@ -3365,6 +3391,7 @@ const staticStates = [
   `owned through bind`,
 ]
 const required = [
+  `a stop as the CLI starts`,
   `a stream log that cannot be written`,
   `two runs on one output directory`,
   `a run with the default output directory`,
@@ -3536,7 +3563,19 @@ const faults = [
   `setupThrows`,
   ...analyzedFaults,
 ]
+// The states that each named constructed history enters, and only that
+// history: they are not witnessed by "every outcome class" (a named history
+// of its own must enter them, or registration fails).
+const ownHistoryStates = [
+  `a stop as the CLI starts`,
+  `a stream log that cannot be written`,
+  `two runs on one output directory`,
+  `a run with the default output directory`,
+  `a stop with the default output directory`,
+  `a daemon check with the default output directory`,
+]
 const separate = [
+  ...ownHistoryStates,
   `ordinary tests left out by default`,
   `two authored mutants judged apart`,
   `a package with a prebuilt addon deep in its tree ran in child processes`,
@@ -3595,6 +3634,12 @@ const withDeclaration = (constructed) =>
     build: (generated) =>
       item.build({
         ...generated,
+        // The end-to-end dimensions a generated base may draw: a construction
+        // that does not name them runs without them (review of #57, apiLess).
+        logBlocked: false,
+        overlap: false,
+        spawnStop: false,
+        stopWitness: false,
         declaration: index % 2 === 0 ? `wrapper` : `oracleProperty`,
         ownerless: false,
         owners: [`a`, ...generated.owners.slice(1)],
@@ -3691,7 +3736,8 @@ oracleProperty({
           libraryOwners: [],
           runes: [],
           wholeFile: `none`,
-          witness: `stop`,
+          witness: false,
+          stopWitness: true,
           tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
           authored: null,
           fault: `none`,
@@ -3730,6 +3776,37 @@ oracleProperty({
           steps: [`test`],
           ordinary: false,
           outMode: `default`,
+          budget: `two`,
+        }),
+      },
+      {
+        // A stop sent as the CLI spawns, before its note's run has started:
+        // the note is written first, and the stopped line follows it on both
+        // streams, with one done line (P1 of the review of #57).
+        name: `a stop as the CLI starts`,
+        enters: [`a stop as the CLI starts`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          wholeFile: `none`,
+          witness: false,
+          stopWitness: true,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+          ordinary: false,
+          outMode: `explicit`,
+          logBlocked: false,
+          overlap: false,
+          spawnStop: true,
           budget: `two`,
         }),
       },

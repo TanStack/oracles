@@ -541,12 +541,9 @@ const drawn = fc.record({
   // The budget witness alone (`budget`) costs two 10 s confirmations per
   // mutant in every CLI run of a history, so generated histories rarely
   // draw it; its constructed history (the daemon recheck) always does.
-  // `stop` is the stop witness alone (`w_stop`), which a run that the driver
-  // stops needs: the capture witness's other outcome classes are not run.
   witness: fc.oneof(
     { weight: 30, arbitrary: fc.constantFrom(false, true, `capture`) },
     { weight: 1, arbitrary: fc.constant(`budget`) },
-    { weight: 1, arbitrary: fc.constant(`stop`) },
   ),
   authored: fc.option(
     fc.record({
@@ -693,39 +690,6 @@ const drawn = fc.record({
   // A second run with `--only`, of one owned function's mutants: its
   // baseline runs only their owners (law 14). It costs a run of its own.
   onlyRun: fc.constantFrom(false, false, false, false, false, true),
-  // Where the run writes: the output directory `--out` names (`explicit`), or
-  // the one the CLI picks when `--out` is left out (`default`, args.mjs), whose
-  // stream log, results, and done line must still agree (law 15).
-  outMode: fc.constantFrom(`explicit`, `explicit`, `explicit`, `default`),
-  // The run's `<out>/stream.log` is a directory, so the log cannot be written
-  // (a problem the author can fix: the run refuses before it checks).
-  logBlocked: fc.constantFrom(
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    true,
-  ),
-  // A second run starts on the first run's output directory while the first
-  // is live (the coordinator's decision of 2026-11-13 on F4): the second
-  // refuses, and the first's stream log stays its own.
-  overlap: fc.constantFrom(
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    true,
-  ),
   // Oracle file a names its own Vitest environment in a pragma
   // (`// @vitest-environment`), another than the config's, and fails to load
   // outside it: every copy of it must run in that environment too.
@@ -805,6 +769,66 @@ const drawn = fc.record({
   }),
   // Who names the importer's function in an owns entry, if any.
   importer: fc.constantFrom(`none`, `a`, `b`),
+  // Where the run writes: the output directory `--out` names (`explicit`), or
+  // the one the CLI picks when `--out` is left out (`default`, args.mjs), whose
+  // stream log, results, and done line must still agree (law 15).
+  outMode: fc.constantFrom(`explicit`, `explicit`, `explicit`, `default`),
+  // The run's `<out>/stream.log` is a directory, so the log cannot be written
+  // (a problem the author can fix: the run refuses before it checks).
+  logBlocked: fc.constantFrom(
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+  ),
+  // A second run starts on the first run's output directory while the first
+  // is live (the coordinator's decision of 2026-11-13 on F4): the second
+  // refuses, and the first's stream log stays its own.
+  overlap: fc.constantFrom(
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+  ),
+  // The stop witness alone (`w_stop`), which a run the driver stops needs. A
+  // field of its own, so the witness options above keep their weights.
+  stopWitness: fc.constantFrom(
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+  ),
+  // A stop sent as soon as the CLI spawns, before its own run has started (P1:
+  // the note is written before the child exists, so the stopped line follows
+  // it). The driver adds this stop to the run's stops.
+  spawnStop: fc.constantFrom(
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+  ),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -816,6 +840,10 @@ const drawn = fc.record({
 // nothing changed, which reuses the confirmations that the first check ran.
 const witnessSteps = [`test`, `helper`, `revert`]
 const budgetSteps = [`recheck`]
+// The stop witness alone takes no steps, so it counts only where the history
+// has none; a history with steps and the field is a legal history without it.
+const stopsOnly = (history) =>
+  history.stopWitness === true && history.steps === null
 const keepsSteps = (history) => {
   if (history.witness === false || history.steps === null) return true
   const kept = history.witness === `budget` ? budgetSteps : witnessSteps
@@ -2505,7 +2533,7 @@ function resolveHistory(history) {
     ...exported,
     ...importer,
     ...dotGen,
-    ...(history.witness
+    ...(history.witness || stopsOnly(history)
       ? witness
           .filter(
             (w) =>
@@ -2513,7 +2541,7 @@ function resolveHistory(history) {
               // so only histories of the `budget` mode carry it.
               (history.witness === true && w.id !== `w_slowpair`) ||
               (history.witness === `capture` && captureWitness.has(w.id)) ||
-              (history.witness === `stop` && w.id === `w_stop`) ||
+              (stopsOnly(history) && w.id === `w_stop`) ||
               (history.witness === `budget` && w.id === `w_slowpair`),
           )
           .map((w) => ({
@@ -2879,8 +2907,18 @@ function resolveHistory(history) {
     // an explicit one (a default directory is chosen by the CLI).
     logBlocked:
       history.logBlocked === true && outModeOf(history) === `explicit`,
-    overlap: history.overlap === true && outModeOf(history) === `explicit`,
+    // A second run needs a live first run, which has its note and stream log.
+    // A blocked log refuses the first run before it is live, and a refusing
+    // fault (an argument, declaration, or config fault) ends it before its note
+    // too, so the overlap is generated only for a run that reaches its check
+    // (decision of 2026-11-13, review of #57: O1 and O2).
+    overlap:
+      history.overlap === true &&
+      outModeOf(history) === `explicit` &&
+      history.logBlocked !== true &&
+      (history.fault ?? `none`) === `none`,
     stopRuns: history.stopRuns ?? [],
+    spawnStop: history.spawnStop === true,
     onlyRun: history.onlyRun === true,
     pragma: history.pragma === true,
     cliPath: history.cliPath ?? `plain`,

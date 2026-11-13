@@ -78,6 +78,7 @@ export const shards = {
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-2': [
+    `fixed seed 20261105: a stop at spawn`,
     `fixed seed 20261105: a declaration fault: setupThrows`,
     `fixed seed 20261105: a package with no config`,
     `fixed seed 20261105: an ambiguous authored mutant`,
@@ -110,6 +111,7 @@ export const shards = {
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-3': [
+    `determinism: constructed history: a stop at spawn`,
     `random seed: a stop with the default output directory`,
     `random seed: a daemon check with the default output directory`,
     `random seed: a stream log that cannot be written`,
@@ -144,6 +146,7 @@ export const shards = {
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-4': [
+    `random seed: a stop at spawn`,
     `fixed seed 20261105: a .ts config in a package with no module type that calls require`,
     `fixed seed 20261105: a config that --config names`,
     `fixed seed 20261105: a declaration fault: apiLessTypescript`,
