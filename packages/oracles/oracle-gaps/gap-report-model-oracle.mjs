@@ -3132,7 +3132,14 @@ function sitesOf(plan) {
         // A caught read writes nothing, so it has no push to delete.
         if (!stmt.caught)
           at(`delete-call`, `push`, stmt.line + 1, stmt.lines[1])
-        at(`optional-chain`, `chain`, stmt.line + 1, stmt.lines[1])
+        // A caught read's innermost statement is its own expression statement,
+        // which names the site (the anchor), not the `try` line that holds it.
+        at(
+          `optional-chain`,
+          `chain`,
+          stmt.line + 1,
+          stmt.caught ? `void o${stmt.label} ?. v ;` : stmt.lines[1],
+        )
       }
       // Two arrows on one line: each property's field drop, its call, and
       // the `+ 1` belong to the arrow whose text holds them; the push and
