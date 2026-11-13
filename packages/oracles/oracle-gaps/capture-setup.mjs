@@ -63,6 +63,17 @@ const realInterval = real.setInterval
 const realNow = real.now
 const realUse = real.use
 
+// A wrapper keeps every own property of the function it wraps, such as
+// `util.promisify.custom`, so `util.promisify(setTimeout)` still resolves
+// with its value under the capture (law 3: a test that passes alone passes
+// under the CLI).
+function keepProperties(from, to) {
+  for (const key of Reflect.ownKeys(from))
+    if (key !== `prototype`)
+      Object.defineProperty(to, key, Object.getOwnPropertyDescriptor(from, key))
+  return to
+}
+
 // The timers that code in this worker has pending, counted where they are
 // made, each with when it is next due: Node's resource list does not
 // reliably show one entry per timer.
@@ -73,7 +84,7 @@ const realUse = real.use
 const pending = (globalThis.__oracleGapsPendingTimers ??= (() => {
   const handles = new Map()
   const wrap = (make, clear, once, timed) => {
-    globalThis[make.name] = function (callback, ...rest) {
+    globalThis[make.name] = keepProperties(make, function (callback, ...rest) {
       if (typeof callback !== `function`) return make(callback, ...rest)
       // An immediate is due at once; a timer or interval after its delay.
       const delay = make === globalThis.setImmediate ? 0 : Number(rest[0]) || 0
@@ -92,7 +103,7 @@ const pending = (globalThis.__oracleGapsPendingTimers ??= (() => {
       // time, as the framework's `withinTurns` does.
       if (timed) globalThis.__oracleGapsClock?.()
       return handle
-    }
+    })
     globalThis[clear.name] = function (handle) {
       handles.delete(handle)
       return clear(handle)
@@ -106,16 +117,20 @@ const pending = (globalThis.__oracleGapsPendingTimers ??= (() => {
 // The other paths to the clock, wrapped once per worker as the timers are,
 // each telling the copy now running (`__oracleGapsClock`): a read of
 // `Date.now`, `new Date()` or `Date()` with no argument, `performance.now`,
-// and `process.hrtime`, and a timer of `node:timers` or
-// `node:timers/promises` (which do not go through the global functions). A
-// fake clock replaces these, and its reads do not follow the real clock.
+// `performance.eventLoopUtilization`, `process.hrtime`, `process.uptime`,
+// `os.uptime`, and `Temporal.Now`; a timer of `node:timers` or
+// `node:timers/promises` (which do not go through the global functions),
+// of `AbortSignal.timeout`, and of `Atomics.waitAsync` with a timeout; and
+// `monitorEventLoopDelay`. A fake clock replaces these, and its reads do
+// not follow the real clock. A reference taken before this file ran (a
+// module that loads before the harness and keeps `Date.now`) is not seen.
 if (!globalThis.__oracleGapsClocks) {
   globalThis.__oracleGapsClocks = true
   const told = (read) =>
-    function (...args) {
+    keepProperties(read, function (...args) {
       globalThis.__oracleGapsClock?.()
       return read.apply(this, args)
-    }
+    })
   const RealDate = Date
   RealDate.now = told(RealDate.now)
   const TrackedDate = new Proxy(RealDate, {
@@ -132,10 +147,21 @@ if (!globalThis.__oracleGapsClocks) {
   RealDate.prototype.constructor = TrackedDate
   globalThis.Date = TrackedDate
   performance.now = told(performance.now)
-  const hrtime = process.hrtime
-  process.hrtime = Object.assign(told(hrtime), {
-    bigint: told(hrtime.bigint),
-  })
+  performance.eventLoopUtilization = told(performance.eventLoopUtilization)
+  process.hrtime = told(process.hrtime)
+  process.hrtime.bigint = told(process.hrtime.bigint)
+  process.uptime = told(process.uptime)
+  AbortSignal.timeout = told(AbortSignal.timeout)
+  const waitAsync = Atomics.waitAsync
+  if (waitAsync)
+    Atomics.waitAsync = keepProperties(waitAsync, function (...args) {
+      if (args[3] !== undefined && args[3] !== Infinity)
+        globalThis.__oracleGapsClock?.()
+      return waitAsync.apply(this, args)
+    })
+  const now = globalThis.Temporal?.Now
+  for (const name of now ? Object.getOwnPropertyNames(now) : [])
+    if (typeof now[name] === `function`) now[name] = told(now[name])
   const require = createRequire(import.meta.url)
   const timers = require(`node:timers`)
   const promises = require(`node:timers/promises`)
@@ -143,6 +169,12 @@ if (!globalThis.__oracleGapsClocks) {
     for (const name of [`setTimeout`, `setInterval`])
       module[name] = told(module[name])
   promises.scheduler.wait = told(promises.scheduler.wait)
+  const os = require(`node:os`)
+  os.uptime = told(os.uptime)
+  const hooks = require(`node:perf_hooks`)
+  hooks.monitorEventLoopDelay = told(hooks.monitorEventLoopDelay)
+  // `util.promisify` of a global or `node:timers` timer resolves through
+  // `node:timers/promises`, whose functions are told above.
   syncBuiltinESMExports()
 }
 const unit = run.units?.[globalThis.__vitest_worker__?.filepath]
@@ -719,23 +751,33 @@ globalThis.__oracleWorkBound = (ratio) => {
 // Whether the current test's count could follow the clock (maintainer
 // decision, 2026-11-12, under P3: a kill must replay on an idle machine):
 // it made a real timer or interval by any path, or read the clock (the
-// wrappers above), or held I/O open (`sawIo`). A read that the test runner,
-// fast-check, the oracle framework (its shrink budget), Node, or this file
-// makes does not count: the caller is the first frame outside this file
-// and Node's own.
+// wrappers above), or held I/O open (`sawIo`). A read counts when any frame
+// of its stack is the test's or production's: a read whose every frame is
+// the test runner's, fast-check's, the oracle framework's (its shrink
+// budget), Node's, or this file's does not, while a user's read through a
+// spy (tinyspy's frame first) still does.
 let clocked = false
 const machinery =
   /[\\/]node_modules[\\/](?:vitest|@vitest|fast-check|@fast-check|tinypool|tinyspy|chai|@tanstack[\\/]oracles)[\\/]|[\\/]packages[\\/]oracles[\\/]src[\\/]/
 function fromTest() {
-  for (const frame of String(new Error().stack).split(`\n`).slice(1)) {
-    const file =
-      frame.match(/\((.*):\d+:\d+\)$/)?.[1] ??
-      frame.match(/at (.*):\d+:\d+$/)?.[1]
-    if (file === undefined || file.startsWith(`node:`)) continue
-    if (file.endsWith(`capture-setup.mjs`)) continue
-    return !machinery.test(file)
-  }
-  return false
+  const limit = Error.stackTraceLimit
+  Error.stackTraceLimit = 50
+  const stack = String(new Error().stack)
+  Error.stackTraceLimit = limit
+  return stack
+    .split(`\n`)
+    .slice(1)
+    .some((frame) => {
+      const file =
+        frame.match(/\((.*):\d+:\d+\)$/)?.[1] ??
+        frame.match(/at (.*):\d+:\d+$/)?.[1]
+      return (
+        file !== undefined &&
+        !file.startsWith(`node:`) &&
+        !file.endsWith(`capture-setup.mjs`) &&
+        !machinery.test(file)
+      )
+    })
 }
 globalThis.__oracleGapsClock = () => {
   if (inTest && !clocked && fromTest()) clocked = true
