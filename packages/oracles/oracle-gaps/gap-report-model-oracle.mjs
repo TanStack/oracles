@@ -3129,7 +3129,9 @@ function sitesOf(plan) {
       // The object literal's field, then the push and its optional read.
       if (stmt.kind === `optional`) {
         at(`field-drop`, `dropV`, stmt.line, stmt.lines[0])
-        at(`delete-call`, `push`, stmt.line + 1, stmt.lines[1])
+        // A caught read writes nothing, so it has no push to delete.
+        if (!stmt.caught)
+          at(`delete-call`, `push`, stmt.line + 1, stmt.lines[1])
         at(`optional-chain`, `chain`, stmt.line + 1, stmt.lines[1])
       }
       // Two arrows on one line: each property's field drop, its call, and
@@ -4378,11 +4380,10 @@ function model(plan) {
     if (
       site.operator === `optional-chain` &&
       tests.some((t) =>
-        partsOf(t).some(
-          (part) =>
-            interpret(plan, t.fn, part.input, sites, { site: site.id }).threwAt.has(
-              site.id,
-            ),
+        partsOf(t).some((part) =>
+          interpret(plan, t.fn, part.input, sites, {
+            site: site.id,
+          }).threwAt.has(site.id),
         ),
       )
     )
