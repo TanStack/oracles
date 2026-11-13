@@ -639,6 +639,16 @@ const configArgs = (plan) => ({
   contexts: plan.contexts,
 })
 
+// A run that computed a unit ran at least one batch (its evidence counts it), so it
+// owes a retention line; a run that computed none (a full reuse, or a refusal) may write none.
+const missingLine = (run) =>
+  run.evidence?.computed > 0 && run.retention.length === 0 ? 1 : 0
+
+// A batch line (ORACLE_GAPS_TEST_RETENTION) left state behind when a total
+// after its retirement differs from its size before the batch.
+const leftBehind = (line) =>
+  Object.keys(line.before).some((key) => line.before[key] !== line.after[key])
+
 /**
  * Writes the fixture's files and runs the CLI on it. A file of an earlier
  * state that this state lacks is removed.
@@ -1322,7 +1332,16 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       : await daemonChecks(step, files, how)
     if (!cold.has(key)) cold.set(key, runCli(dir, files, how))
     const coldRun = cold.get(key)
-    for (const [i, run] of [daemon, ...others].entries())
+    for (const [i, run] of [daemon, ...others].entries()) {
+      observe(
+        `retention:daemon`,
+        (run.retention ?? []).filter(leftBehind).length,
+      )
+      observe(`retentionLines:daemon`, missingLine(run))
+      observe(
+        `retention:cold`,
+        (coldRun.retention ?? []).filter(leftBehind).length,
+      )
       observe(`incremental`, {
         step: i === 0 ? step : `${step} (a second check at once)`,
         cold: {
@@ -1349,6 +1368,7 @@ async function incremental(dir, plan, cli, copy, observe, states) {
           stderr: run.stderr?.split(`\n`)[0],
         },
       })
+    }
     if (twice && step === `start`)
       states.add(`two checks started the daemon at once`)
     if (
@@ -1623,18 +1643,17 @@ async function driver(plan, observe) {
     observe(`cli`, { ...cli, evidence: undefined })
     // Deterministic: how many batches left a retired copy's state behind (0),
     // not the per-batch lines, whose batch splits vary with hang cuts.
+    observe(`retention`, retention.filter(leftBehind).length)
     observe(
-      `retention`,
-      retention.filter(
-        (line) =>
-          line.filesMap + line.pathsSet + line.idMap + line.moduleNodes > 0,
-      ).length,
+      `retentionLines:cold`,
+      missingLine({ evidence: cli.evidence, retention }),
     )
     // A failing owner's replay, run as the author would run it (law 3).
     if (plan.fault === `brokenOwner`)
       observe(`replay`, { command: replay, ran: replayed(dir, replay) })
     // Reach comes from what the CLI reported, mapped onto the plan.
     const states = new Set()
+    if (retention.length > 1) states.add(`a check that ran more than one batch`)
     if (cli.exit === 0 && !plan.consoleOutput)
       states.add(`a completed run whose tests wrote nothing`)
     // Law 14: a partial run of one owned function's mutants, whose baseline
@@ -1651,6 +1670,8 @@ async function driver(plan, observe) {
         only: ids,
         outName: `out-only`,
       })
+      observe(`retention:partial`, partial.retention.filter(leftBehind).length)
+      observe(`retentionLines:partial`, missingLine(partial))
       observe(`partial`, {
         function: chosen.function,
         source: chosen.source,
@@ -2075,7 +2096,13 @@ async function driver(plan, observe) {
       const moved = { ...files, [SOURCE]: edited(plan) }
       // The evidence counts are not observed, as for `cli`: they depend on
       // timing (oracles-followups.md G1). Verdicts and keys are.
-      observe(`stability`, { ...runCli(dir, moved, how), evidence: undefined })
+      const { retention: movedRetention, ...movedRun } = runCli(dir, moved, how)
+      observe(`stability`, { ...movedRun, evidence: undefined })
+      observe(`retention:stability`, movedRetention.filter(leftBehind).length)
+      observe(
+        `retentionLines:stability`,
+        missingLine({ evidence: movedRun.evidence, retention: movedRetention }),
+      )
       states.add(`stability rerun`)
     }
     if (plan.steps.length > 0)
@@ -2199,8 +2226,23 @@ function check(plan, observations, expected) {
   // Bounded retention (the register's C entry): once a batch's copies are
   // retired, Vitest's filesMap, pathsSet, and idMap and Vite's module graph
   // name none of them, so each count the hook reports is 0.
-  const held =
-    observations.find((o) => o.checkpoint === `retention`)?.value ?? 0
+  const unlogged = observations
+    .filter((o) => o.checkpoint.startsWith(`retentionLines`))
+    .reduce((sum, o) => sum + o.value, 0)
+  if (unlogged > 0)
+    return violation(
+      `retention`,
+      `${unlogged} run(s) computed a unit but wrote no batch retention line`,
+      `bounded retention`,
+      { actual: unlogged, expected: 0 },
+    )
+  const held = observations
+    .filter(
+      (o) =>
+        o.checkpoint.startsWith(`retention`) &&
+        !o.checkpoint.startsWith(`retentionLines`),
+    )
+    .reduce((sum, o) => sum + o.value, 0)
   if (held > 0)
     return violation(
       `retention`,

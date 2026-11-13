@@ -1004,6 +1004,9 @@ export default async (env) => {
   let copyCounter = 0
   async function runBatch(context, out, items, seed) {
     const capture = join(out, `run-${process.pid}-${++runCounter}.jsonl`)
+    const before = process.env.ORACLE_GAPS_TEST_RETENTION
+      ? retentionTotals(context)
+      : undefined
     // Each copy is named beside its file, so that its imports resolve as the
     // file's do, and the wrapper's plugin serves its text: nothing is
     // written there.
@@ -1259,7 +1262,10 @@ export default async (env) => {
       // A run cut off by a hang is still running: its worker may still send
       // updates, so its state is not touched here. Its context is replaced
       // by the caller (replace), which closes it and drops its state.
-      if (result !== undefined) retireCopies(context, copies)
+      if (result !== undefined) {
+        retireCopies(context, copies)
+        retiredEntries(context, before)
+      }
       rmSync(capture, { force: true })
     }
   }
@@ -1295,8 +1301,7 @@ export default async (env) => {
       filesMap.delete(copy)
       pathsSet.delete(copy)
     }
-    const modulesRemoved = retireModules(context.getRootProject().vite, gone)
-    retiredEntries(context, copies, modulesRemoved)
+    retireModules(context.getRootProject().vite, gone)
   }
 
   /**
@@ -1357,33 +1362,43 @@ export default async (env) => {
     return environments
   }
 
-  // The test hook (ORACLE_GAPS_TEST_RETENTION, a file path): after each
-  // batch's copies are retired, one line counts the state entries and module
-  // nodes that still name a retired copy. The retention law reads it: each
-  // count is 0.
-  function retiredEntries(context, copies, modulesRemoved) {
+  // Every structure a copy can leave state in, unfiltered: Vitest's state
+  // (filesMap, pathsSet, idMap, errorsSet, leakSet) and each Vite environment's
+  // module graph (its four maps, and the nodes that hold a transform).
+  function retentionTotals(context) {
+    const { filesMap, pathsSet, idMap, errorsSet, leakSet } = context.state
+    const totals = {
+      filesMap: filesMap.size,
+      pathsSet: pathsSet.size,
+      idMap: idMap.size,
+      errorsSet: errorsSet.size,
+      leakSet: leakSet.size,
+    }
+    for (const [name, environment] of Object.entries(
+      context.getRootProject().vite?.environments ?? {},
+    )) {
+      const graph = environment.moduleGraph
+      totals[`${name}.url`] = graph.urlToModuleMap.size
+      totals[`${name}.id`] = graph.idToModuleMap.size
+      totals[`${name}.etag`] = graph.etagToModuleMap.size
+      totals[`${name}.file`] = graph.fileToModulesMap.size
+      totals[`${name}.transformed`] = [...graph.idToModuleMap.values()].filter(
+        (node) => node.transformResult != null,
+      ).length
+    }
+    return totals
+  }
+
+  // The test hook (ORACLE_GAPS_TEST_RETENTION, a file path): after a run
+  // that settled and its copies are retired, one line holds each structure's
+  // total before the batch and after its retirement. The bounded-retention
+  // law reads it: every total returns to its size before the batch.
+  function retiredEntries(context, before) {
     const file = process.env.ORACLE_GAPS_TEST_RETENTION
     if (!file) return
-    const gone = new Set(copies)
-    const named = (path) => gone.has(path)
-    const { filesMap, idMap, pathsSet } = context.state
-    let tasks = 0
-    for (const task of idMap.values())
-      if (named(task.file?.filepath ?? task.filepath)) tasks += 1
-    let nodes = 0
-    for (const environment of viteEnvironments(context.getRootProject().vite))
-      for (const copy of gone)
-        nodes += environment.moduleGraph.fileToModulesMap.get(copy)?.size ?? 0
     appendFileSync(
       file,
-      `${JSON.stringify({
-        copies: copies.length,
-        filesMap: [...filesMap.keys()].filter(named).length,
-        pathsSet: [...pathsSet].filter(named).length,
-        idMap: tasks,
-        moduleNodes: nodes,
-        modulesRemoved,
-      })}\n`,
+      `${JSON.stringify({ before, after: retentionTotals(context) })}\n`,
     )
   }
 
