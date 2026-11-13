@@ -196,15 +196,15 @@ jobs:
         with:
           advanced-security: false
           annotations: true
-  # Diagnostic, not a gate: nothing needs these jobs, and they are not
-  # required checks. They show what breaks on Windows, where the oracle
-  # framework and the gap CLI have never run. Each step continues on error,
-  # so a later step still runs when an earlier one fails.
+  # Windows is a required part of CI: the framework, the eslint plugin, and
+  # the gap CLI run on windows-latest, split the way the Linux jobs split
+  # them. Each job stays under 10 minutes; each has a timeout backstop.
   windows-unit:
-    name: Windows unit suites (non-blocking)
+    name: Windows unit suites
     runs-on: windows-latest
+    # Not blocking until every Windows job is green; remove this line then.
     continue-on-error: true
-    timeout-minutes: 45
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -212,49 +212,48 @@ jobs:
           persist-credentials: false
       - name: Setup Tools
         uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
-      - name: Build framework
-        continue-on-error: true
-        run: pnpm --filter @tanstack/oracles run build
-      - name: Framework unit tests
-        continue-on-error: true
-        run: pnpm --filter @tanstack/oracles run test
-      - name: eslint plugin tests
-        continue-on-error: true
-        run: pnpm --filter @tanstack/eslint-plugin-oracles run test
-      # [diagnostic] The fast suites run one file per step, each with a step
-      # timeout, to find which one hangs on Windows (the run was cancelled at
-      # 21 minutes with no output after the static oracle started).
-      - name: '[diagnostic] Gap report static oracle'
-        continue-on-error: true
-        timeout-minutes: 8
-        run: pnpm --filter @tanstack/oracles exec vitest --run --config oracle-gaps/vitest.config.mjs --reporter=verbose gap-report-static
-      # [diagnostic] Replays the first failing static unit alone, with bash, to
-      # print its verdict (the run's own output names the law only through a
-      # counterexample).
-      - name: '[diagnostic] Replay the first failing static unit'
-        continue-on-error: true
-        timeout-minutes: 6
+      - run: pnpm --filter @tanstack/oracles run build
+      - run: pnpm --filter @tanstack/oracles run test
+      - run: pnpm --filter @tanstack/eslint-plugin-oracles run test
+  windows-gap-oracles:
+    name: Windows gap report oracles (${{ matrix.shard }}/3)
+    runs-on: windows-latest
+    # Not blocking until every Windows job is green; remove this line then.
+    continue-on-error: true
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Tools
+        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
+      - run: pnpm --filter @tanstack/oracles run build
+      # The same partition of the static oracle that Linux runs, by pattern.
+      - name: Gap report oracles
         shell: bash
+        working-directory: packages/oracles
+        env:
+          SHARD: ${{ matrix.shard }}
         run: |
-          export ORACLE_SEED=20261105 ORACLE_PATH=0:0:0:0:0:0:0:0:0:0:0:0:0:0:0 ORACLE_PROPERTY='oracle-gaps.report-static' ORACLE_UNIT='random seed: every static state'
-          pnpm --filter @tanstack/oracles exec vitest run --config oracle-gaps/vitest.config.mjs -t '^oracle-gaps\.report-static(?: | > )random seed: every static state$' gap-report-static
-      - name: '[diagnostic] Gap report classify oracle'
-        continue-on-error: true
-        timeout-minutes: 8
-        run: pnpm --filter @tanstack/oracles exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-classify
-      - name: '[diagnostic] Gap report probe-form oracle'
-        continue-on-error: true
-        timeout-minutes: 8
-        run: pnpm --filter @tanstack/oracles exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-probe-form
-      - name: '[diagnostic] Gap report mutant-validity oracle'
-        continue-on-error: true
-        timeout-minutes: 10
-        run: pnpm --filter @tanstack/oracles exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-mutant-validity
-  windows-gap-cli:
-    name: Windows gap CLI end to end (non-blocking)
+          if [ "$SHARD" = 3 ]; then
+            pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-classify gap-report-probe-form gap-report-mutant-validity
+          fi
+          pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-static -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-static "$SHARD")"
+  windows-gap-end-to-end:
+    name: Windows gap report end-to-end oracle (fixed seed, ${{ matrix.shard }}/3)
     runs-on: windows-latest
+    # Not blocking until every Windows job is green; remove this line then.
     continue-on-error: true
-    timeout-minutes: 45
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -262,16 +261,29 @@ jobs:
           persist-credentials: false
       - name: Setup Tools
         uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
-      - name: Build framework
-        continue-on-error: true
-        run: pnpm --filter @tanstack/oracles run build
-      # A tiny package written at run time, not committed: one function with
-      # two operators and one oracle file that owns it. It is written in bash,
-      # which the runner provides on Windows too; the CLI steps below use the
-      # default shell, as a user's PowerShell or cmd would.
+      - run: pnpm --filter @tanstack/oracles run build
+      - name: Gap report end-to-end oracle
+        shell: bash
+        working-directory: packages/oracles
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-fixed-seed "$SHARD")"
+  windows-gap-cli:
+    name: Windows gap CLI on a fixture
+    runs-on: windows-latest
+    # Not blocking until every Windows job is green; remove this line then.
+    continue-on-error: true
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Tools
+        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
+      - run: pnpm --filter @tanstack/oracles run build
       - name: Write gap CLI fixture
         shell: bash
-        continue-on-error: true
         run: |
           set -euo pipefail
           dir="$GITHUB_WORKSPACE/.ci-fixture"
@@ -319,37 +331,14 @@ jobs:
             test: { include: ['tests/**/*.test.ts'], environment: 'node', coverage: { enabled: false } },
           }
           EOT
-      # The user-facing path: the default shell, no supervisor on Windows.
+      # The user-facing path: PowerShell, the default shell, as a user runs it.
       - name: Gap CLI on the fixture
-        continue-on-error: true
         run: node packages/oracles/oracle-gaps/index.mjs --package .ci-fixture --source src/clamp.ts --config vitest.config.mjs
+      - name: Gap CLI on the fixture, discovered config
+        run: node packages/oracles/oracle-gaps/index.mjs --package .ci-fixture --source src/clamp.ts
       # The daemon path: start it, check through it, then stop it.
       - name: Gap CLI through the daemon
-        continue-on-error: true
         run: node packages/oracles/oracle-gaps/index.mjs --package .ci-fixture --source src/clamp.ts --config vitest.config.mjs --daemon
       - name: Stop the gap CLI daemon
         if: always()
-        continue-on-error: true
         run: node packages/oracles/oracle-gaps/index.mjs --stop-daemon --package .ci-fixture
-      # [diagnostic] The fixture without --config, to see whether the discovered
-      # config hits the same path bug as --config.
-      - name: '[diagnostic] Gap CLI on the fixture, discovered config'
-        continue-on-error: true
-        run: node packages/oracles/oracle-gaps/index.mjs --package .ci-fixture --source src/clamp.ts
-      # [diagnostic] The daemon's error logs live in the OS temp directory,
-      # which the job does not print: print them here.
-      - name: '[diagnostic] Print gap CLI error logs'
-        if: always()
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          Get-ChildItem -Path $env:TEMP -Recurse -Filter error.log -ErrorAction SilentlyContinue | ForEach-Object {
-            "== $($_.FullName)"
-            Get-Content $_.FullName -TotalCount 120
-          }
-      # One fixed-seed unit of the end-to-end oracle, as the Linux job runs it.
-      # [diagnostic] Verbose and a step timeout, to see which copy hangs.
-      - name: Gap report end-to-end oracle (fixed seed)
-        continue-on-error: true
-        timeout-minutes: 12
-        run: pnpm --filter @tanstack/oracles exec vitest --run --config oracle-gaps/vitest.config.mjs --reporter=verbose gap-report-oracle -t "fixed seed"
