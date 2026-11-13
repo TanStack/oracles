@@ -9106,6 +9106,17 @@ oracleProperty({
         enters: [`timeout-presentation-equivalence`],
         history: timeoutRepresentationSuite(),
       },
+      {
+        // The shrunk case of #59: a slow spec that fails to load never runs
+        // its driver, so the timeout obligation must not apply to it.
+        name: `timeout presentation of a slow spec that fails to load`,
+        enters: [`registration-error`],
+        history: {
+          seedless: false,
+          timeoutPresentation: true,
+          drafts: [generatedDraft({ timing: `slow`, ownsMode: `empty` })],
+        },
+      },
       ...([`wrapper`, `reason`, `combined`] as const).map((axis) => ({
         name: `round11 outer wrapper ${axis}`,
         enters: [...callbackReceivingStates, ...callbackRepresentationStates],
