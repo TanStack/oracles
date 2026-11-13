@@ -116,3 +116,128 @@ ruleTester.run(`oracle/no-unit-test`, noUnitTest, {
     },
   ],
 })
+
+// The source settings (README, "Where a test function comes from") that the
+// rule cannot use are reported at line 1 and read as unset. The generated
+// oracle (test-source-recognition-oracle.property.test.js) varies only the
+// legal values.
+const settingsTester = new RuleTester({
+  languageOptions: { parser: tsParser, sourceType: `module` },
+})
+const unknownCall = `import { test } from 'regex-lib'\ntest('n', () => { void 0 })`
+
+settingsTester.run(`oracle/no-unit-test settings`, noUnitTest, {
+  valid: [
+    // A table of export roles, and a prefix pattern.
+    {
+      code: unknownCall,
+      filename,
+      settings: { oracles: { testPackages: { 'regex-*': { other: `test` } } } },
+    },
+  ],
+  invalid: [
+    {
+      code: unknownCall,
+      filename,
+      settings: {
+        oracles: { testPackages: { 'regex-lib': `no-such-framework` } },
+      },
+      errors: [
+        {
+          messageId: `malformedSetting`,
+          line: 1,
+          data: {
+            path: `settings.oracles.testPackages`,
+            detail: `\`testPackages\` maps a specifier to a framework's specifier or to a table of export roles (\`'test'\` or \`'suite'\`).`,
+          },
+        },
+        { messageId: `unknownTestSource`, line: 1 },
+      ],
+    },
+    {
+      code: unknownCall,
+      filename,
+      settings: {
+        oracles: { testPackages: { 'regex-lib': { test: `fixture` } } },
+      },
+      errors: [
+        {
+          messageId: `malformedSetting`,
+          line: 1,
+          data: {
+            path: `settings.oracles.testPackages`,
+            detail: `\`testPackages\` maps a specifier to a framework's specifier or to a table of export roles (\`'test'\` or \`'suite'\`).`,
+          },
+        },
+        { messageId: `unknownTestSource`, line: 1 },
+      ],
+    },
+    {
+      code: unknownCall,
+      filename,
+      settings: { oracles: { nonTestPackages: `regex-lib` } },
+      errors: [
+        {
+          messageId: `malformedSetting`,
+          line: 1,
+          data: {
+            path: `settings.oracles.nonTestPackages`,
+            detail: `\`nonTestPackages\` is an array of specifiers.`,
+          },
+        },
+        { messageId: `unknownTestSource`, line: 1 },
+      ],
+    },
+    // `ignore` is no mode (2026-11-12): it is malformed and read as `report`.
+    {
+      code: unknownCall,
+      filename,
+      settings: { oracles: { unknownSources: `ignore` } },
+      errors: [
+        {
+          messageId: `malformedSetting`,
+          line: 1,
+          data: {
+            path: `settings.oracles.unknownSources`,
+            detail: `\`'ignore'\` is no longer a mode: to silence a package, list it in \`settings.oracles.nonTestPackages\`.`,
+          },
+        },
+        { messageId: `unknownTestSource`, line: 1 },
+      ],
+    },
+    // An unknown mode is read as the default, `report`.
+    {
+      code: unknownCall,
+      filename,
+      settings: { oracles: { unknownSources: `warn` } },
+      errors: [
+        {
+          messageId: `malformedSetting`,
+          line: 1,
+          data: {
+            path: `settings.oracles.unknownSources`,
+            detail: `\`unknownSources\` is \`'report'\` or \`'test'\`.`,
+          },
+        },
+        { messageId: `unknownTestSource`, line: 1 },
+      ],
+    },
+    // A machinery file still gets the setting and unknown-source reports.
+    {
+      code: unknownCall,
+      filename: join(tests, `oracle-config.test.ts`),
+      settings: { oracles: { unknownSources: 3 } },
+      errors: [
+        {
+          messageId: `malformedSetting`,
+          line: 1,
+          data: {
+            path: `settings.oracles.unknownSources`,
+            detail: `\`unknownSources\` is \`'report'\` or \`'test'\`.`,
+          },
+        },
+        { messageId: `unknownTestSource`, line: 1 },
+      ],
+    },
+  ],
+})
