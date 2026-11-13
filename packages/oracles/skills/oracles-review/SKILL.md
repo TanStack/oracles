@@ -62,11 +62,11 @@ The evidence counts only as a set, chosen by the kind of change
 (`oracles-design` step 7): law, reach, before-and-after runs, mutant, gaps,
 limits. A missing item is a finding, even when the rest is strong.
 
-## 3. Hunt what the tools cannot see
+## 3. Look for what the tools cannot see
 
 Lint, reach counts, the gap check, and calibrations miss the weaknesses
-below. Hunt for each one across the whole oracle, not only the diff. This
-hunt is your main job.
+below. Look for each one across the whole oracle, not only the diff. This
+search is your main job.
 
 - **Run but not checked.** A history executes the code, but the check
   never observes its effect. Reach passes anyway. Find a line that the oracle
@@ -123,7 +123,7 @@ every card, and do not require a finding at every level.
 - **[Design grammar](../../docs/instruments/design-grammar.md):** for a
   simplification or a growing model: what each part does, and what the change
   newly allows or rejects.
-- **[Mutant gap hunt](../../docs/instruments/mutant-gap-hunt.md):** for whether
+- **[Mutant gap search](../../docs/instruments/mutant-gap-search.md):** for whether
   a plausible wrong implementation can pass.
 
 Ask these questions of every model and grammar:

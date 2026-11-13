@@ -1,4 +1,4 @@
-# Mutant gap hunt
+# Mutant gap search
 
 **Use when:** a recent refactor, a suspicious green oracle, a survivor whose
 missing history is not obvious, or an open review question leaves doubt that

@@ -385,7 +385,7 @@ For a mutant, record what happened, not only "killed":
 - Execution failed outside the comparison after setup, such as a crash.
 - The changed code never ran.
 - The mutant survived. This is a gap (see the
-  [mutant gap hunt](instruments/mutant-gap-hunt.md), step 3).
+  [mutant gap search](instruments/mutant-gap-search.md), step 3).
 
 These outcomes call for different conclusions. If deleting one clause leaves
 the same obligation enforced elsewhere, survival does not show that the

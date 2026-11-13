@@ -276,7 +276,7 @@ allowed order survives a sound oracle. The law already answers the question,
 so report it as an allowed alternative: its key, the clause, and the history.
 Do not strengthen the law to kill it. Until the gap check recognizes allowed
 sets, it stays open in the report (see the
-[mutant gap hunt](instruments/mutant-gap-hunt.md) card).
+[mutant gap search](instruments/mutant-gap-search.md) card).
 
 ## Mixing styles
 

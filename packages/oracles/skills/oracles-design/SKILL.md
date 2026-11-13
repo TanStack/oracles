@@ -504,7 +504,7 @@ it to simplify:
   old one that does almost the same thing.
 - Remove states, flags, branches, and recovery paths that no law needs. A
   surviving mutant shows only that the current histories did not expose the
-  code. Before you remove it, use the mutant gap hunt to rule out a missing
+  code. Before you remove it, use the mutant gap search to rule out a missing
   history, observation, or law, and give the contract's reason that no legal
   history can observe it. A green rerun of the same oracle is not that
   reason.
@@ -603,13 +603,13 @@ comes with one instruction. Do what it says, within the rules below.
   for an owned function, or none on a law's decisions (such as a return
   expression), write authored mutants for the laws it misses. Put them in a
   directory and pass it with `--mutants <dir>`. The form is in the
-  [mutant gap hunt](../../docs/instruments/mutant-gap-hunt.md) card.
+  [mutant gap search](../../docs/instruments/mutant-gap-search.md) card.
 - **Three or more gaps in one function** fire the design grammar trigger
   (step 1). Stop, read the card, and write its parts list for that function
   before you add a history. Adding histories first is the shortcut "Skipped
   design grammar".
 
-Use the [mutant gap hunt](../../docs/instruments/mutant-gap-hunt.md) card for
+Use the [mutant gap search](../../docs/instruments/mutant-gap-search.md) card for
 a survivor whose missing history is not obvious.
 
 ## 9. Report the evidence
@@ -649,4 +649,4 @@ sequence.
 | Two obligations collide under some condition                                                 | [Tension scan](../../docs/instruments/tension-scan.md)           |
 | Laws overlap, or their concepts seem wrong                                                   | [Law restructuring](../../docs/instruments/law-restructuring.md) |
 | The model keeps growing, a simplification is proposed, or the law has many interacting rules | [Design grammar](../../docs/instruments/design-grammar.md)       |
-| The oracle is green but may accept a wrong implementation                                    | [Mutant gap hunt](../../docs/instruments/mutant-gap-hunt.md)     |
+| The oracle is green but may accept a wrong implementation                                    | [Mutant gap search](../../docs/instruments/mutant-gap-search.md) |
