@@ -407,6 +407,13 @@ const testCase = fc.record({
     fc.record({ route: fc.constantFrom(...routes), input: constant }),
     { nil: null },
   ),
+  // A test's work bound is derived from its plan (see the tests below), so
+  // the grammar draws nothing for it and its generated histories stay those
+  // of the grammar without the work law.
+  work: fc.constant(null),
+  // Only a witness waits on a timer, sleeps, reads the clock, or waits a
+  // turn: its work could follow the clock.
+  timed: fc.constant(false),
 })
 // Law 9's edits. Each content edit changes what some evidence depends on:
 // a test file, a source statement, the source's line numbers, an owns list,
@@ -596,6 +603,10 @@ const drawn = fc.record({
     // it loads. Each is the author's to fix, so each refuses the run.
     `configThrows`,
     `configNoDefault`,
+    // A config whose default export is null, and one with a syntax error,
+    // which Vitest refuses too (review of #46, F5 and F7).
+    `configNull`,
+    `configSyntax`,
     `setupThrows`,
   ),
   stability: fc.constantFrom(
@@ -618,7 +629,12 @@ const drawn = fc.record({
   // The package's Vitest config: its file, and whether it exports an object
   // or a function (sync or async) that returns one. Vitest accepts each, so
   // the runner must too.
-  config: fc.constantFrom(`object`, `object`, `function`, `async`),
+  // Whether file a has a test that writes to the process's own streams
+  // (review of #46, F2; re-review N2: a run whose tests wrote nothing names
+  // no log).
+  consoleOutput: fc.boolean(),
+  // A promise of a config, which Vite awaits (review of #46, F5).
+  config: fc.constantFrom(`object`, `object`, `function`, `async`, `promise`),
   // A config may read the environment Vitest's CLI sets before it loads
   // one (VITEST, TEST, and NODE_ENV), as svelte-db's picks its resolve
   // conditions by VITEST. This one finds its tests only under it.
@@ -659,8 +675,15 @@ const drawn = fc.record({
         fc.record({
           signal: fc.constantFrom(`SIGTERM`, `SIGINT`),
           pool: fc.constantFrom(`forks`, `threads`),
+          // When the signal comes: while the stop witness spins (`run`),
+          // once the run has printed its completed line, while its process
+          // holds its exit (`after`, review of #46, F3), or while the run
+          // warms its config (`warm`, re-review N1). Or no signal: a test
+          // aborts the run's process (`abort`, as a V8 out-of-memory abort
+          // does; the coordinator's decision of 2026-11-12 on P10).
+          when: fc.constantFrom(`run`, `run`, `after`, `warm`, `abort`),
         }),
-        { minLength: 1, maxLength: 2 },
+        { minLength: 1, maxLength: 5 },
       ),
     },
   ),
@@ -818,6 +841,8 @@ const judging = (file, route, input, extra = {}) => ({
   stops: false,
   then: null,
   draws: false,
+  work: null,
+  timed: false,
   ...extra,
 })
 const witness = [
@@ -922,6 +947,101 @@ const witness = [
     owners: [`a`],
     body: [{ kind: `memoSet` }],
     tests: [judging(`a`, `fixed seed`, 6, { draws: true })],
+  },
+  // Shortcuts for speed (klona's early return for a primitive, and its
+  // assignment in place of `Object.defineProperty`): the general path gives
+  // the same output for every input, with more work, so forcing the
+  // shortcut's `if` false changes no observation and costs work
+  // (`extra-work`). Each has a twin whose tests declare a work bound, which
+  // kills that mutant under law `work bound`: 2 for the early return, whose
+  // loop costs several times the shortcut, and 1 for the call, which costs
+  // one site evaluation more. Their inputs are 7, which takes the shortcut,
+  // and 1, which takes the general path.
+  {
+    id: `w_fast`,
+    owners: [`a`],
+    body: [{ kind: `shortcut`, op: `>`, k: 2, not: false }],
+    tests: [judging(`a`, `fixed seed`, 7), judging(`a`, `fixed seed`, 1)],
+  },
+  {
+    id: `w_fastbound`,
+    owners: [`a`],
+    body: [{ kind: `shortcut`, op: `>`, k: 2, not: false }],
+    tests: [
+      judging(`a`, `fixed seed`, 7, { work: 2 }),
+      judging(`a`, `fixed seed`, 1, { work: 2 }),
+    ],
+  },
+  {
+    id: `w_fastcall`,
+    owners: [`a`],
+    body: [{ kind: `callShortcut`, op: `>`, k: 2, not: false }],
+    tests: [judging(`a`, `fixed seed`, 7), judging(`a`, `fixed seed`, 1)],
+  },
+  {
+    id: `w_fastcallbound`,
+    owners: [`a`],
+    body: [{ kind: `callShortcut`, op: `>`, k: 2, not: false }],
+    tests: [
+      judging(`a`, `fixed seed`, 7, { work: 1 }),
+      judging(`a`, `fixed seed`, 1, { work: 1 }),
+    ],
+  },
+  // The early return again, in tests that the work law does not judge,
+  // with a bound of 1: tests whose count could follow the clock, as a
+  // polling or a deadline loop's does (a kill must replay on an idle
+  // machine, the maintainer's decision of 2026-11-12 under P3). Each reaches
+  // the clock by one path before it runs production: a timer through
+  // `util.promisify(setTimeout)`, the global and `node:timers`'s (which
+  // also checks that the capture keeps `util.promisify.custom`, law 3: a
+  // test that passes alone passes under the CLI), a sleep through
+  // `node:timers/promises`, `Date.now()` (and through a `vi.spyOn`
+  // passthrough, whose spy frame comes first), `process.uptime()`,
+  // `os.uptime()`, `AbortSignal.timeout`, `Atomics.wait` and
+  // `Atomics.waitAsync` with a timeout, and `monitorEventLoopDelay`. One untimed test runs the
+  // general path. A mutant is killed if any test still judges work, so its
+  // `if-false` mutant stays `not-observed` only while every path is seen.
+  // Tests that wait one turn (`setImmediate`, as `withinTurns` does) and
+  // read no clock still judge work, so there it is killed; and tests that
+  // register no route (below) can carry no bound.
+  {
+    id: `w_fastclocked`,
+    owners: [`a`],
+    body: [{ kind: `shortcut`, op: `>`, k: 2, not: false }],
+    tests: [
+      ...[
+        `timer`,
+        `nodetimer`,
+        `sleep`,
+        `clock`,
+        `spiedclock`,
+        `uptime`,
+        `osuptime`,
+        `abort`,
+        `waitasync`,
+        `wait`,
+        `loopdelay`,
+      ].map((timed) => judging(`a`, `fixed seed`, 7, { timed, work: 1 })),
+      judging(`a`, `fixed seed`, 1, { work: 1 }),
+    ],
+  },
+  {
+    id: `w_fastturn`,
+    owners: [`a`],
+    body: [{ kind: `shortcut`, op: `>`, k: 2, not: false }],
+    tests: [
+      judging(`a`, `fixed seed`, 7, { timed: `turn`, work: 1 }),
+      judging(`a`, `fixed seed`, 1, { timed: `turn`, work: 1 }),
+    ],
+  },
+  {
+    id: `w_fastplain`,
+    owners: [`a`],
+    body: [{ kind: `shortcut`, op: `>`, k: 2, not: false }],
+    tests: [
+      judging(`a`, `fixed seed`, 7, { registered: false }),
+      judging(`a`, `fixed seed`, 1, { registered: false }),
+    ],
   },
   {
     id: `w_noobs`,
@@ -1616,6 +1736,22 @@ const witness = [
     body: [kill],
     tests: [judging(`a`, `fixed seed`, 7, { asProp: true })],
   },
+  // A cache that an earlier test of the file warmed: `w_unseen`'s test
+  // caches under 4 first, so in the whole file `w_cold`'s write is
+  // skipped. A run of the tests from `w_cold`'s on, without the one that
+  // warmed the cache, observes the same and does one call more, so the
+  // runner owes a selection only where it reproduces the whole file's work
+  // as well as its observations. Its `drop-not` mutant writes again in the
+  // whole file (`extra-work`), and writes nothing in such a selection.
+  // It is the last test of its file, so its selection holds no
+  // nondeterministic test, which would fail any selection to reproduce.
+  {
+    id: `w_cold`,
+    owners: [`a`],
+    warm: true,
+    body: [{ kind: `memoSet` }],
+    tests: [judging(`a`, `fixed seed`, 4)],
+  },
   { id: `wg0`, file: LIB, owners: [], body: [push], tests: [] },
   { id: `wg1`, file: LIB, owners: [], body: [push], tests: [] },
   { id: `wg2`, file: LIB, owners: [], body: [push], tests: [] },
@@ -1642,6 +1778,14 @@ const captureWitness = new Set([
   `w_expect`,
   `w_unseen`,
   `w_draws`,
+  `w_cold`,
+  `w_fast`,
+  `w_fastbound`,
+  `w_fastcall`,
+  `w_fastcallbound`,
+  `w_fastclocked`,
+  `w_fastturn`,
+  `w_fastplain`,
   `w_noobs`,
   `w_unreached`,
   `w_ordinary`,
@@ -1894,6 +2038,21 @@ function renderStatement(stmt, callText) {
       ]
     case `elseIf`:
       return [`if (${condText(stmt)}) report();`, `else ${pushText(stmt)}`]
+    case `shortcut`:
+      return [
+        `if (${condText(stmt)}) {`,
+        `  out.push('s' + x);`,
+        `  return;`,
+        `}`,
+        `let n${stmt.label} = 0;`,
+        `while (n${stmt.label} < x) n${stmt.label} += 1;`,
+        `out.push('s' + n${stmt.label});`,
+      ]
+    case `callShortcut`:
+      return [
+        `if (${condText(stmt)}) out.push('s' + x);`,
+        `else out.push(String('s' + x));`,
+      ]
     case `pair`:
       return [
         `const pair = { get: (k: number): string => String(k), set: (k: number): string => String(k + 1) };`,
@@ -2084,9 +2243,14 @@ const formatOf = (file, packageType) =>
  */
 function configOf(history) {
   const needsConfig =
-    [`configThrows`, `configNoDefault`, `projects`, `setupThrows`].includes(
-      history.fault,
-    ) ||
+    [
+      `configThrows`,
+      `configNoDefault`,
+      `configNull`,
+      `configSyntax`,
+      `projects`,
+      `setupThrows`,
+    ].includes(history.fault) ||
     history.configEnv === true ||
     history.setupGlobal === true
   const place =
@@ -2569,6 +2733,12 @@ function resolveHistory(history) {
     ...history.tests.map((t) => ({
       ...t,
       fn: generatedIds[t.fn % generatedIds.length],
+      // A generated test declares a work bound of 1 (an oracle property's
+      // `work`, which rejects a mutant that does any more work there) when
+      // its input is a multiple of 3: derived from the plan, not drawn, so
+      // the grammar's generated histories, and their cost, stay those of
+      // the grammar without the work law.
+      work: t.work ?? (t.input % 3 === 0 ? 1 : null),
     })),
     ...functions.flatMap((fn) =>
       fn.generated ? [] : fn.tests.map((t) => ({ ...t, fn: t.fn ?? fn.id })),
@@ -2647,6 +2817,10 @@ function resolveHistory(history) {
     stability: history.stability,
     steps: history.steps ?? [],
     lazyGate: history.lazyGate === true,
+    consoleOutput: history.consoleOutput === true,
+    // Whether a run aborts its process (a stop run `abort`): then file a has
+    // the test that aborts when the driver asks.
+    aborts: (history.stopRuns ?? []).some((stop) => stop.when === `abort`),
     ordinary: history.ordinary === true,
     // An `owns` key in an assertion's arguments, in the ordinary file: its
     // assertion form and whether its list is a literal, or none.
@@ -3107,6 +3281,30 @@ function sitesOf(plan) {
         })
         guard(fn.id, stmt.line + 2, `'gap#p${stmt.label}'`, `true`)
       }
+      // The shortcut's `if` (its whole block is the statement that holds
+      // its sites), its push, then the loop's condition and comparison, and
+      // the push after the loop, each in the statement that holds it.
+      if (stmt.kind === `shortcut`) {
+        const block = stmt.lines.slice(0, 4).join(` `)
+        at(`if-true`, `true`, stmt.line, block)
+        at(`if-false`, `false`, stmt.line, block)
+        at(`binary-swap`, `swap`, stmt.line, block)
+        at(`delete-call`, `fast`, stmt.line + 1, stmt.lines[1])
+        at(`loop-false`, `loop`, stmt.line + 5, stmt.lines[5])
+        at(`binary-swap`, `loopSwap`, stmt.line + 5, stmt.lines[5])
+        at(`delete-call`, `push`, stmt.line + 6, stmt.lines[6])
+      }
+      if (stmt.kind === `callShortcut`) {
+        condition()
+        at(`delete-call`, `fast`, stmt.line, `out.push('s' + x);`)
+        at(`delete-call`, `push`, stmt.line + 1, `out.push(String('s' + x));`)
+        at(
+          `value-undefined`,
+          `string`,
+          stmt.line + 1,
+          `out.push(String('s' + x));`,
+        )
+      }
       if (stmt.kind === `elseIf`) {
         // An `if` with a production `else` is production; its probe branch
         // alone is probe-only.
@@ -3283,6 +3481,13 @@ function ownersOf(plan) {
 function interpret(plan, fnId, x, sites, active) {
   const trace = []
   const reached = new Set()
+  // The run's work: one for each site evaluation, as the capture counts a
+  // test's `calls` (capture-setup.mjs), which a work bound judges.
+  let work = 0
+  const reach = (id) => {
+    work += 1
+    reached.add(id)
+  }
   const outcomes = []
   // The comparison sites whose two operators disagree on the operands this
   // run reached: the sites an unmutated run infects (capture-setup.mjs `cmp`).
@@ -3294,7 +3499,7 @@ function interpret(plan, fnId, x, sites, active) {
     site !== undefined && active?.site !== undefined && active.site === site.id
   const condition = (stmt) => {
     for (const role of [`true`, `false`, `not`, `swap`])
-      if (siteOf(stmt, role)) reached.add(siteOf(stmt, role).id)
+      if (siteOf(stmt, role)) reach(siteOf(stmt, role).id)
     const op = stmt.kind === `throwIf` ? `>` : stmt.op
     const k = stmt.kind === `throwIf` ? 100 : stmt.k
     const swap = siteOf(stmt, `swap`)
@@ -3314,7 +3519,7 @@ function interpret(plan, fnId, x, sites, active) {
   }
   const write = (stmt) => {
     const site = siteOf(stmt, `push`)
-    reached.add(site.id)
+    reach(site.id)
     if (isActive(site)) return
     trace.push(
       active?.authored === stmt.label ? `s${stmt.label}!` : `s${stmt.label}`,
@@ -3323,8 +3528,13 @@ function interpret(plan, fnId, x, sites, active) {
   const depLog = []
   // Module state as a freshly loaded module has it: an empty cache, and
   // the labels `w_load` wrote at load, under the same mutant.
-  const memo = new Map()
+  // A function that runs after an earlier test of its file cached its
+  // input (`w_cold`) finds the entry there.
+  const memo = new Map(
+    plan.functions.find((f) => f.id === fnId)?.warm ? [[x, `warm`]] : [],
+  )
   const loaded = () => {
+    // The module loaded outside any test, so its load counts no work.
     const call = sites.find((s) => s.role === `moduleLoad`)
     if (call) reached.add(call.id)
     if (isActive(call)) return []
@@ -3341,10 +3551,10 @@ function interpret(plan, fnId, x, sites, active) {
       if (stmt.kind === `loop`)
         for (let i = 0; ; i += 1) {
           const loopSite = siteOf(stmt, `loop`)
-          reached.add(loopSite.id)
+          reach(loopSite.id)
           if (isActive(loopSite)) break
           const swapSite = siteOf(stmt, `swap`)
-          reached.add(swapSite.id)
+          reach(swapSite.id)
           if (i === 2) infected.add(swapSite.id)
           if (!(isActive(swapSite) ? i <= 2 : i < 2)) break
           write(stmt)
@@ -3355,15 +3565,15 @@ function interpret(plan, fnId, x, sites, active) {
       if (stmt.kind === `until`) {
         const loopSite = siteOf(stmt, `loop`)
         for (;;) {
-          reached.add(loopSite.id)
+          reach(loopSite.id)
           if (isActive(loopSite)) break
           const swapSite = siteOf(stmt, `swap`)
-          reached.add(swapSite.id)
+          reach(swapSite.id)
           if (trace.length === 3) infected.add(swapSite.id)
           if (!(isActive(swapSite) ? trace.length <= 3 : trace.length < 3))
             break
           if (isActive(siteOf(stmt, `push`))) {
-            reached.add(siteOf(stmt, `push`).id)
+            reach(siteOf(stmt, `push`).id)
             throw new Spin()
           }
           write(stmt)
@@ -3372,15 +3582,15 @@ function interpret(plan, fnId, x, sites, active) {
       // The workspace dependency's log, as a freshly loaded module has it.
       if (stmt.kind === `depNote`) {
         const call = siteOf(stmt, `note`)
-        reached.add(call.id)
+        reach(call.id)
         if (!isActive(call)) depLog.push(`d`)
       }
       if (stmt.kind === `depSeen`) {
         const call = siteOf(stmt, `push`)
-        reached.add(call.id)
+        reach(call.id)
         if (!isActive(call)) {
           const seenSite = siteOf(stmt, `seen`)
-          reached.add(seenSite.id)
+          reach(seenSite.id)
           // Spreading undefined throws.
           if (isActive(seenSite)) throw new TypeError(`seen() is undefined`)
           trace.push(...depLog)
@@ -3389,22 +3599,22 @@ function interpret(plan, fnId, x, sites, active) {
       if (stmt.kind === `record`) {
         // A deleted push builds nothing; a dropped field never evaluates.
         const call = siteOf(stmt, `push`)
-        reached.add(call.id)
+        reach(call.id)
         if (!isActive(call)) {
           const string = siteOf(stmt, `string`)
-          reached.add(string.id)
+          reach(string.id)
           if (isActive(string)) trace.push(undefined)
           else {
             const record = {}
             const dropN = siteOf(stmt, `dropN`)
-            reached.add(dropN.id)
+            reach(dropN.id)
             if (!isActive(dropN)) {
               const arith = siteOf(stmt, `arith`)
-              reached.add(arith.id)
+              reach(arith.id)
               record.n = isActive(arith) ? x - 1 : x + 1
             }
             const dropS = siteOf(stmt, `dropS`)
-            reached.add(dropS.id)
+            reach(dropS.id)
             if (!isActive(dropS)) record.s = `s${stmt.label}`
             trace.push(JSON.stringify(record))
           }
@@ -3413,22 +3623,22 @@ function interpret(plan, fnId, x, sites, active) {
       if (stmt.kind === `flag`) {
         // A deleted push never evaluates its literal.
         const call = siteOf(stmt, `push`)
-        reached.add(call.id)
+        reach(call.id)
         if (!isActive(call)) {
           // `String(...)` replaced by undefined never evaluates its literal.
           const string = siteOf(stmt, `string`)
-          reached.add(string.id)
+          reach(string.id)
           if (isActive(string)) trace.push(undefined)
           else {
             const flip = siteOf(stmt, `flag`)
-            reached.add(flip.id)
+            reach(flip.id)
             trace.push(String(isActive(flip) ? !stmt.value : stmt.value))
           }
         }
       }
       if (stmt.kind === `memoSet`) {
         for (const role of [`true`, `false`, `not`, `has`])
-          reached.add(siteOf(stmt, role).id)
+          reach(siteOf(stmt, role).id)
         let value = !(isActive(siteOf(stmt, `has`)) ? undefined : memo.has(x))
         if (isActive(siteOf(stmt, `not`))) value = !value
         outcomes.push([stmt.line, value])
@@ -3441,22 +3651,22 @@ function interpret(plan, fnId, x, sites, active) {
         if (isActive(siteOf(stmt, `false`))) value = false
         if (value) {
           const set = siteOf(stmt, `memoSet`)
-          reached.add(set.id)
+          reach(set.id)
           if (!isActive(set)) memo.set(x, `s${stmt.label}`)
         }
       }
       if (stmt.kind === `memoGet` || stmt.kind === `pushLoaded`) {
         const site = siteOf(stmt, stmt.kind)
-        reached.add(site.id)
+        reach(site.id)
         if (!isActive(site) && stmt.kind === `pushLoaded`)
           trace.push(...loaded())
         if (!isActive(site) && stmt.kind === `memoGet`) {
           const string = siteOf(stmt, `string`)
-          reached.add(string.id)
+          reach(string.id)
           if (isActive(string)) trace.push(undefined)
           else {
             const get = siteOf(stmt, `get`)
-            reached.add(get.id)
+            reach(get.id)
             trace.push(String(isActive(get) ? undefined : memo.get(x)))
           }
         }
@@ -3465,30 +3675,29 @@ function interpret(plan, fnId, x, sites, active) {
       // only then. A plain read in place of `?.` throws on no object.
       if (stmt.kind === `optional`) {
         const drop = siteOf(stmt, `dropV`)
-        if (x) reached.add(drop.id)
+        if (x) reach(drop.id)
         const made = x
           ? isActive(drop)
             ? {}
             : { v: `p${stmt.label}` }
           : undefined
         const site = siteOf(stmt, `push`)
-        reached.add(site.id)
+        reach(site.id)
         if (!isActive(site)) {
           const chain = siteOf(stmt, `chain`)
-          reached.add(chain.id)
+          reach(chain.id)
           if (isActive(chain) && made === undefined)
             throw new TypeError(`Cannot read properties of undefined`)
           trace.push(String(made?.v))
         }
       }
-      if (stmt.kind === `innerReturned`)
-        reached.add(siteOf(stmt, `returned`).id)
+      if (stmt.kind === `innerReturned`) reach(siteOf(stmt, `returned`).id)
       // A read of module data, as the module evaluated it at load under the
       // same mutant: a dropped field reads undefined, the swapped `+` gives
       // 1, and the flipped literal false.
       if (stmt.kind === `readData`) {
         const site = siteOf(stmt, `push`)
-        reached.add(site.id)
+        reach(site.id)
         if (!isActive(site)) {
           const at = (role) =>
             isActive(
@@ -3497,14 +3706,14 @@ function interpret(plan, fnId, x, sites, active) {
           // A method's call: undefined in its place, or its `1 + 2`.
           const called = () => {
             const value = siteOf(stmt, `value`)
-            reached.add(value.id)
+            reach(value.id)
             if (isActive(value)) return `undefined`
             // Its `return`: undefined in place of what it returns.
             const returned = sites.find((s) => s.role === `usedReturn`)
-            reached.add(returned.id)
+            reach(returned.id)
             if (isActive(returned)) return `undefined`
             const arith = sites.find((s) => s.role === `usedArith`)
-            reached.add(arith.id)
+            reach(arith.id)
             return String(isActive(arith) ? -1 : 3)
           }
           trace.push(
@@ -3520,16 +3729,16 @@ function interpret(plan, fnId, x, sites, active) {
       }
       if (stmt.kind === `pushTag`) {
         const site = siteOf(stmt, `push`)
-        reached.add(site.id)
+        reach(site.id)
         if (!isActive(site)) trace.push(object.tag)
       }
       // `out.push($derived(x))`, where `$derived` returns `String(x)`.
       if (stmt.kind === `dollar`) {
         const call = siteOf(stmt, `push`)
-        reached.add(call.id)
+        reach(call.id)
         if (!isActive(call)) {
           const value = siteOf(stmt, `value`)
-          reached.add(value.id)
+          reach(value.id)
           if (isActive(value)) trace.push(undefined)
           else {
             const [inner] = plan.functions.find((f) => f.id === `$derived`).body
@@ -3538,8 +3747,8 @@ function interpret(plan, fnId, x, sites, active) {
             // reached when `$derived` runs, and either gives `undefined`.
             const string = siteOf(inner, `string`)
             const returned = siteOf(inner, `returned`)
-            reached.add(string.id)
-            reached.add(returned.id)
+            reach(string.id)
+            reach(returned.id)
             trace.push(
               isActive(string) || isActive(returned) ? undefined : String(x),
             )
@@ -3551,14 +3760,55 @@ function interpret(plan, fnId, x, sites, active) {
       // is installed, so none of it writes output.
       if (stmt.kind === `nearProbe`)
         for (const site of sites)
-          if (site.stmt === stmt.label && !site.idle) reached.add(site.id)
+          if (site.stmt === stmt.label && !site.idle) reach(site.id)
       if (stmt.kind === `primeCall`) {
         const site = siteOf(stmt, `call`)
-        reached.add(site.id)
+        reach(site.id)
         if (!isActive(site)) run(`W7.prime`, object)
       }
       if ((stmt.kind === `if` || stmt.kind === `mixed`) && condition(stmt))
         write(stmt)
+      // A shortcut for speed: an early return that pushes what the loop
+      // below it would count up to, for every input it takes.
+      if (stmt.kind === `shortcut`) {
+        if (condition(stmt)) {
+          const fast = siteOf(stmt, `fast`)
+          reach(fast.id)
+          if (!isActive(fast)) trace.push(`s${x}`)
+          return
+        }
+        let n = 0
+        const loopSite = siteOf(stmt, `loop`)
+        const swapSite = siteOf(stmt, `loopSwap`)
+        for (;;) {
+          reach(loopSite.id)
+          if (isActive(loopSite)) break
+          reach(swapSite.id)
+          if (n === x) infected.add(swapSite.id)
+          if (!(isActive(swapSite) ? n <= x : n < x)) break
+          n += 1
+        }
+        const push = siteOf(stmt, `push`)
+        reach(push.id)
+        if (!isActive(push)) trace.push(`s${n}`)
+      }
+      // A shortcut that skips a call: the `else` pushes the same text
+      // through `String`, one call more.
+      if (stmt.kind === `callShortcut`) {
+        if (condition(stmt)) {
+          const fast = siteOf(stmt, `fast`)
+          reach(fast.id)
+          if (!isActive(fast)) trace.push(`s${x}`)
+        } else {
+          const push = siteOf(stmt, `push`)
+          reach(push.id)
+          if (!isActive(push)) {
+            const string = siteOf(stmt, `string`)
+            reach(string.id)
+            trace.push(isActive(string) ? undefined : `s${x}`)
+          }
+        }
+      }
       if (stmt.kind === `elseIf` && !condition(stmt)) write(stmt)
       if (stmt.kind === `probeIf` || stmt.kind === `probeBlock`) condition(stmt)
       if (stmt.kind === `throwIf` && condition(stmt)) throw new Error(`boom`)
@@ -3573,11 +3823,11 @@ function interpret(plan, fnId, x, sites, active) {
           `oldNe`,
           `oldCall`,
         ])
-          reached.add(siteOf(stmt, role).id)
-        reached.add(sites.find((s) => s.role === `devBuild`).id)
+          reach(siteOf(stmt, role).id)
+        reach(sites.find((s) => s.role === `devBuild`).id)
         // Its `return`, whose undefined value leaves the probe uncalled, and
         // no output changes.
-        reached.add(sites.find((s) => s.role === `devBuildReturn`).id)
+        reach(sites.find((s) => s.role === `devBuildReturn`).id)
         outcomes.push([stmt.line, true])
         // The guard is true, so its if-false site changes it; and its `!==`
         // compares 'test' with 'production', on which `!==` and `===`
@@ -3587,7 +3837,7 @@ function interpret(plan, fnId, x, sites, active) {
       }
       if (referenceKinds.has(stmt.kind) || stmt.kind === `mixedHelperCall`) {
         const site = siteOf(stmt, `call`)
-        reached.add(site.id)
+        reach(site.id)
         if (isActive(site)) continue
         if (stmt.kind === `valueCall` || stmt.kind === `factoryCall`) {
           // `apply` calls the function it was given; `make` constructs the
@@ -3596,7 +3846,7 @@ function interpret(plan, fnId, x, sites, active) {
             (s) =>
               s.role === (stmt.kind === `valueCall` ? `applyCall` : `makeCall`),
           )
-          reached.add(inner.id)
+          reach(inner.id)
           if (isActive(inner)) continue
         }
         if (stmt.kind === `newCall`) {
@@ -3607,7 +3857,7 @@ function interpret(plan, fnId, x, sites, active) {
           run(stmt.to, object)
         } else if (stmt.kind !== `mixedHelperCall`) run(stmt.to)
         else {
-          reached.add(helperPush.id)
+          reach(helperPush.id)
           if (!isActive(helperPush)) trace.push(`h`)
         }
       }
@@ -3621,7 +3871,7 @@ function interpret(plan, fnId, x, sites, active) {
     if (error instanceof Spin) spun = true
     else threw = true
   }
-  return { trace, threw, spun, reached, outcomes, infected }
+  return { trace, threw, spun, reached, outcomes, infected, work }
 }
 
 /** A loop that never ends, as the interpreter sees one. */
@@ -3644,9 +3894,18 @@ function runsOf(plan, tests, sites, active) {
       let changedAny = false
       let slowed = false
       const found = []
+      // The test's work, summed over its campaigns, with no mutant active and
+      // under the mutant. A test that only reads what an earlier test stored
+      // calls no production code, so it does none.
+      let before = 0
+      let after = 0
       for (const part of partsOf(t)) {
         const base = interpret(plan, t.fn, part.input, sites)
         const mutated = interpret(plan, t.fn, part.input, sites, active)
+        if (!t.judgesShared) {
+          before += base.work
+          after += mutated.work
+        }
         const route = routeOf(t, part)
         // A loop that never ends cuts the file's run off, as a hang does.
         if (mutated.spun)
@@ -3676,12 +3935,32 @@ function runsOf(plan, tests, sites, active) {
             return { t, route, verdicts: found, changed: true, slowed }
         }
       }
+      // A test that passed: its route is the last one it registered, and
+      // its work is judged against the bound it declared. An authored
+      // mutant's copy is not instrumented, so it counts no work, and the
+      // work law judges only operator mutants.
+      const route = routeOf(t, partsOf(t).at(-1))
+      // Only a route that oracleProperty registers for production can carry
+      // a bound, and a test that made a timer can do work that follows the
+      // clock, so neither judges work.
+      const judgesWork =
+        found.length === 0 &&
+        active?.site !== undefined &&
+        [`reproducible`, `random`].includes(route) &&
+        (!t.timed || t.timed === `turn`)
       return {
         t,
-        route: routeOf(t, partsOf(t).at(-1)),
-        verdicts: found,
+        route,
+        verdicts:
+          judgesWork &&
+          t.work !== null &&
+          t.registered &&
+          after > t.work * before
+            ? [{ route, law: `work bound` }]
+            : found,
         changed: changedAny,
         slowed,
+        rose: judgesWork && after > before,
       }
     })
 }
@@ -3818,7 +4097,11 @@ function refusal(plan) {
       detail: `the fixture config broke`,
       runtime: true,
     }
-  if (plan.fault === `configNoDefault`)
+  if (
+    plan.fault === `configNoDefault` ||
+    plan.fault === `configNull` ||
+    plan.fault === `configSyntax`
+  )
     return { cause: plan.configPath, runtime: true }
   // A run with no oracle file, or with no owns entry, owns no selected
   // source, so every mutant would read as unowned. The analysis refuses it
@@ -3866,7 +4149,12 @@ function blockingOf(plan) {
 function baselineOf(plan) {
   const failing = blockingOf(plan)
   return [...oracleFilesOf(plan), `c`].map((file) => {
-    const own = plan.tests.filter((t) => t.file === file).length
+    // File a's test that writes to the console streams runs in every
+    // baseline too.
+    const own =
+      plan.tests.filter((t) => t.file === file).length +
+      (file === `a` && plan.consoleOutput ? 1 : 0) +
+      (file === `a` && plan.aborts ? 1 : 0)
     const broken = failing.find((f) => f.file === file)
     // The failing owner's suite holds two tests and a third of its name.
     const extra = broken?.test === undefined ? 0 : 3
@@ -3898,6 +4186,48 @@ const declarationFaults = [
 const reachesRun = (history) =>
   !declarationFaults.includes(history.fault ?? `none`)
 
+// Law 15, the stream's lines (the maintainer's request of 2026-11-12,
+// relayed by the coordinator: an agent acts on a check's results as they
+// stream, so one `grep '^oracle-gaps: '` finds every line the CLI writes
+// for it, and the kind's word right after the prefix filters one kind; the
+// same prefixes on stdout and stderr, in a cold run and through the
+// daemon). The kinds:
+// The stdout summary's lines have kinds of their own: its totals
+// (`summary`), one directive per gap class (`legend`), and each function's
+// heading over its gap lines (`function`) (the coordinator's decision of
+// 2026-11-12 on review F1: every line of either stream is a line of the
+// stream).
+const streamKinds = [
+  `config`,
+  `note`,
+  `baseline`,
+  `blocked`,
+  `progress`,
+  `gap`,
+  `busy`,
+  `summary`,
+  `legend`,
+  `function`,
+  `done`,
+]
+// The one decisive baseline line, before any mutant runs: every oracle
+// file passed, or how many of them failed, which makes the report
+// provisional.
+const baselineVerdict =
+  /^oracle-gaps: baseline (?:all \d+ oracle files? pass|\d+ of \d+ oracle files? failed \(provisional\))$/
+const countedFiles = (n) => `${n} oracle file${n === 1 ? `` : `s`}`
+/** The decisive baseline line of a run with `files` oracle files, `failing` of them failing. */
+const verdictLine = (files, failing) =>
+  failing === 0
+    ? `oracle-gaps: baseline all ${countedFiles(files)} pass`
+    : `oracle-gaps: baseline ${failing} of ${countedFiles(files)} failed (provisional)`
+/**
+ * The last line of a completed run's stdout: its status, its gap count, and
+ * the path of its full report in output directory `out`.
+ */
+const doneLine = (gaps, provisional, out) =>
+  `oracle-gaps: done completed, ${gaps} gap${gaps === 1 ? `` : `s`}${provisional ? ` (provisional)` : ``}, report ${out}/summary.md`
+
 function model(plan) {
   const refused = refusal(plan)
   // The config the run names (F12) once its contexts have loaded it: the
@@ -3910,13 +4240,15 @@ function model(plan) {
     `brokenVitest`,
     `configThrows`,
     `configNoDefault`,
+    `configNull`,
+    `configSyntax`,
     `projects`,
   ].includes(plan.fault)
     ? []
     : [
         plan.configPath === undefined
-          ? `no config file: Vitest's default discovery`
-          : `config: ${plan.configPath}`,
+          ? `oracle-gaps: config none, Vitest's default discovery`
+          : `oracle-gaps: config ${plan.configPath}`,
       ]
   if (refused) return { refused, configLines }
   const sites = sitesOf(plan)
@@ -3985,6 +4317,11 @@ function model(plan) {
     if (reaching.every((t) => t.flaky)) return `indeterminate`
     const kind = judge(plan, tests, sites, { site: site.id })
     if (kind !== `survived`) return kind
+    // A test that reached it did more work, though nothing it observed
+    // changed: the mutant deleted a shortcut for speed (maintainer decision,
+    // 2026-11-12), which only a work bound sees.
+    if (runsOf(plan, reaching, sites, { site: site.id }).some((r) => r.rose))
+      return `extra-work`
     // The survivor classes (classify.mjs): an `if` whose line one outcome
     // never took, a comparison no owner test infected, and otherwise an
     // infected site that no observation shows.
@@ -4036,6 +4373,7 @@ function model(plan) {
   }
   const survivorKinds = new Set([
     `not-judged`,
+    `extra-work`,
     `branch-never-taken`,
     `not-infected`,
     `not-observed`,
@@ -4215,12 +4553,23 @@ function oracleTestFile(plan, file) {
   const out = [
     // A per-file environment, which Vitest reads from the file's text.
     ...(plan.pragma && file === `a` ? [`// @vitest-environment marked`] : []),
-    `import { ${plan.tests.some((t) => t.file === file && t.cleanupThrows) ? `afterEach, ` : ``}describe, expect, test${plan.tests.some((t) => t.file === file && t.spies) ? `, vi` : ``} } from 'vitest'`,
+    `import { ${plan.tests.some((t) => t.file === file && t.cleanupThrows) ? `afterEach, ` : ``}describe, expect, test${plan.tests.some((t) => t.file === file && (t.spies || t.timed === `spiedclock`)) ? `, vi` : ``} } from 'vitest'`,
     ...(plan.tests.some((t) => t.file === file && t.shrinks)
       ? [`import fc from 'fast-check'`]
       : []),
     ...(plan.tests.some((t) => t.file === file && (t.ioWait || t.stops))
       ? [`import { spawn } from 'node:child_process'`]
+      : []),
+    ...(plan.tests.some((t) => t.file === file && t.timed === `sleep`)
+      ? [`import { setTimeout as sleep } from 'node:timers/promises'`]
+      : []),
+    ...(plan.tests.some((t) => t.file === file && t.timed && t.timed !== `turn`)
+      ? [
+          `import { promisify } from 'node:util'`,
+          `import { setTimeout as nodeSetTimeout } from 'node:timers'`,
+          `import { uptime as osUptime } from 'node:os'`,
+          `import { monitorEventLoopDelay } from 'node:perf_hooks'`,
+        ]
       : []),
     ...(plan.tests.some((t) => t.file === file && t.stops)
       ? [
@@ -4245,7 +4594,7 @@ function oracleTestFile(plan, file) {
     `const shared = { value: 0 }`,
     `const stored: { value: Array<string> } = { value: [] }`,
     ...owns,
-    `const g = globalThis as { __oracleRoute?: (route: string) => void; __oracleObserve?: (c: string, v: unknown) => void; __oracleVerdict?: (v: { property: string; law: string; checkpoint: string }) => void }`,
+    `const g = globalThis as { __oracleRoute?: (route: string) => void; __oracleObserve?: (c: string, v: unknown) => void; __oracleVerdict?: (v: { property: string; law: string; checkpoint: string }) => void; __oracleWorkBound?: (ratio: number) => void }`,
     ...(plan.pragma && file === `a`
       ? [
           `if ((globalThis as { __gapEnvironment?: string }).__gapEnvironment !== 'marked') throw new Error('the file ran outside the environment its pragma names')`,
@@ -4275,6 +4624,29 @@ function oracleTestFile(plan, file) {
       const out = `out${i}`
       return [
         ...(t.registered ? [`    g.__oracleRoute?.('${part.route}')`] : []),
+        // The framework registers a work bound beside the route.
+        ...(t.registered && t.work !== null
+          ? [`    g.__oracleWorkBound?.(${t.work})`]
+          : []),
+        // A test that waits on a timer before it runs production.
+        ...(t.timed
+          ? [
+              {
+                timer: `    if ((await promisify(setTimeout)(0, 'v')) !== 'v') throw new Error('promisify(setTimeout) lost its value')`,
+                nodetimer: `    if ((await promisify(nodeSetTimeout)(0, 'v')) !== 'v') throw new Error('promisify of node:timers lost its value')`,
+                sleep: `    await sleep(0)`,
+                clock: `    if (Date.now() < 0) throw new Error('the clock reads before 1970')`,
+                spiedclock: `    { const spy = vi.spyOn(Date, 'now'); if (Date.now() < 0) throw new Error('the clock reads before 1970'); spy.mockRestore() }`,
+                uptime: `    if (process.uptime() < 0) throw new Error('negative uptime')`,
+                osuptime: `    if (osUptime() < 0) throw new Error('negative uptime')`,
+                abort: `    if (AbortSignal.timeout(60000).aborted) throw new Error('aborted at once')`,
+                waitasync: `    if (Atomics.waitAsync(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 0).value !== 'timed-out') throw new Error('waitAsync did not time out')`,
+                wait: `    if (Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 0) !== 'timed-out') throw new Error('wait did not time out')`,
+                loopdelay: `    { const delay = monitorEventLoopDelay(); delay.enable(); delay.disable() }`,
+                turn: `    await new Promise((r) => setImmediate(r))`,
+              }[t.timed],
+            ]
+          : []),
         `    const ${out}: Array<string> = []`,
         ...(t.setsShared ? [`    shared.value = 5`] : []),
         t.readsShared
@@ -4393,7 +4765,7 @@ function oracleTestFile(plan, file) {
         : []),
       t.asProp
         ? `  fcTest.prop([fcv.integer({ min: 0, max: 10 })], { numRuns: 20, seed: 1 })('${testName(t, index)}', async (n) => {`
-        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || lazyGated(plan, file, t) ? `async ` : ``}() => {`,
+        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || t.timed || lazyGated(plan, file, t) ? `async ` : ``}() => {`,
       ...partsOf(t).flatMap(campaign),
       `  })`,
       `})`,
@@ -4414,9 +4786,32 @@ function oracleTestFile(plan, file) {
       `})`,
       `test('fixed seed 999', () => {})`,
     )
+  // A test that ends the run's process by SIGABRT when the driver asks
+  // (`GAP_ABORT`), as a V8 out-of-memory abort does: in worker threads its
+  // process is the run's, and `process.abort()` is unavailable there. It
+  // runs and passes in every other run.
+  if (file === `a` && plan.aborts)
+    out.push(
+      `test('aborts the process when asked', () => {`,
+      `  if (process.env.GAP_ABORT === '1') process.kill(process.pid, 'SIGABRT')`,
+      `})`,
+    )
   // A file with no tests still loads, so the CLI can read what it owns.
-  if (!plan.tests.some((t) => t.file === file))
+  if (
+    !plan.tests.some((t) => t.file === file) &&
+    !(file === `a` && (plan.consoleOutput || plan.aborts))
+  )
     out.push(`test.skip('no tests', () => {})`)
+  // A test that writes to the process's own streams, as a test's debugging
+  // output does: none of it may reach the CLI's streams (law 15; review of
+  // #46, F2). It calls nothing of the source under test.
+  if (file === `a` && plan.consoleOutput)
+    out.push(
+      `test('writes to the console streams', () => {`,
+      `  process.stdout.write('raw stdout from a test\\n')`,
+      `  process.stderr.write('raw stderr from a test\\n')`,
+      `})`,
+    )
   return `${out.join(`\n`)}\n`
 }
 
@@ -4559,13 +4954,24 @@ const altConfigPath = (plan) =>
  */
 function configText(plan, test) {
   const commonjs = plan.configSyntax === `cjs`
-  const body = `defineConfig(${
-    { object: ``, function: `() => (`, async: `async () => (` }[plan.config]
+  const config = `defineConfig(${
+    { object: ``, function: `() => (`, async: `async () => (`, promise: `` }[
+      plan.config
+    ]
   }{ test: ${
     plan.fault === `projects`
       ? `{ projects: [{ test: { name: 'unit', ...${test} } }] }`
       : test
-  } }${plan.config === `object` ? `` : `)`})`
+  } }${plan.config === `object` || plan.config === `promise` ? `` : `)`})`
+  // A promise of the config, a null default, or a config cut off mid-object.
+  const body =
+    plan.fault === `configNull`
+      ? `null`
+      : plan.fault === `configSyntax`
+        ? `defineConfig({ test: {`
+        : plan.config === `promise`
+          ? `Promise.resolve(${config})`
+          : config
   return [
     commonjs
       ? `const { defineConfig } = require('vitest/config')`
@@ -5041,7 +5447,7 @@ function applyEdit(state, edit) {
  * one. `name` replaces the scratch paths in a text, so two runs of one
  * history in different directories record the same ending.
  */
-function endingOf(exit, stderr, out, name = (text) => text) {
+function endingOf(exit, stderr, out, name = (text) => text, stdout = ``) {
   const text = `${stderr ?? ``}`
   const line = (label) => text.match(new RegExp(`^${label}: (.*)$`, `m`))?.[1]
   const cause = text.match(/^refused: ([\s\S]*?)\nfix: /m)?.[1]
@@ -5057,11 +5463,22 @@ function endingOf(exit, stderr, out, name = (text) => text) {
   } catch {
     // No output directory is known, or the run wrote no results.json.
   }
+  // The run's last line: what follows `oracle-gaps: done ` there (law 15).
+  const last = text.split(`\n`).filter(Boolean).at(-1) ?? ``
+  const done = last.startsWith(`oracle-gaps: done `)
+    ? name(last.slice(`oracle-gaps: done `.length))
+    : undefined
+  // The stdout's lines: a run that does not complete prints only its done
+  // line there (law 15).
+  const printed = `${stdout ?? ``}`.split(`\n`).filter(Boolean)
   return {
     exit,
     cause: cause && name(cause).slice(0, 2000),
     fix: line(`fix`) && name(line(`fix`)),
-    namesOutput: out !== undefined && line(`output`) === out,
+    done,
+    stdout: printed.map(name),
+    namesOutput:
+      out !== undefined && done === name(`refused, report ${out}/summary.md`),
     // An internal error's log beside a refusal would be another run's.
     errorLog: out !== undefined && existsSync(join(out, `error.log`)),
     stackFrames: /^\s+at /m.test(text),
@@ -5086,9 +5503,22 @@ function refusalBreach(ending, { cause, outKnown }) {
   // problem in place.
   if (/\b(ignore|equivalent|skip)/i.test(ending.fix))
     return `the refusal's fix offers a way around it: ${ending.fix}`
+  // Its last line says that it refused (law 15), with its report once the
+  // run knows its output directory.
+  if (
+    ending.done === undefined ||
+    !/^refused(?:, report .+)?$/.test(ending.done)
+  )
+    return `the refusal's last line is not \`oracle-gaps: done refused\``
+  // The done line ends stdout too, as its only line.
+  if (
+    ending.stdout.length !== 1 ||
+    ending.stdout[0] !== `oracle-gaps: done ${ending.done}`
+  )
+    return `the refusal's stdout is ${JSON.stringify(ending.stdout)}, not its done line`
   if (!outKnown) return undefined
   if (!ending.namesOutput)
-    return `the refusal does not name its output directory`
+    return `the refusal does not name its report in its output directory: done ${ending.done}`
   const { written } = ending
   if (written?.status !== `refused`)
     return `the output's results.json has status ${written?.status ?? `(none)`}, not refused`
@@ -5193,6 +5623,10 @@ export {
   histories,
   witnessSteps,
   budgetSteps,
+  streamKinds,
+  baselineVerdict,
+  verdictLine,
+  doneLine,
   kill,
   push,
   judging,

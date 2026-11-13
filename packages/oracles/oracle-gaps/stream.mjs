@@ -5,6 +5,16 @@
 //
 // The change a mutant makes is shown as its code, fenced so that a backtick
 // in the code cannot close the fence.
+//
+// Every line the CLI writes for a check starts with `oracle-gaps: ` and
+// then its kind: `config`, `note`, `baseline`, `blocked`, `progress`, `gap`,
+// `busy`, or `done` (the maintainer's request of 2026-11-12: an agent acts
+// on the results as they stream, and one `grep '^oracle-gaps: '` finds
+// them, on stdout and stderr alike). Only the indented lines under a
+// baseline failure, and a refusal's `refused:` and `fix:` block, are not.
+
+/** A line of the stream: its kind after the prefix, then its text. */
+export const streamLine = (kind, text) => `oracle-gaps: ${kind} ${text}`
 
 /** The gap's kind: its survivor class, or its outcome. */
 export const kindOf = (result) => result.class ?? result.outcome
@@ -42,12 +52,18 @@ export function change(result) {
  * and again in the summary.
  */
 export function gapLine(result) {
-  return `${kindOf(result)} L${result.line ?? `?`} ${result.id} ${change(result)}`
+  return streamLine(
+    `gap`,
+    `${kindOf(result)} L${result.line ?? `?`} ${result.id} ${change(result)}`,
+  )
 }
 
 /** The periodic count while mutants are judged. */
 export function progressLine({ judged, total, gaps }) {
-  return `judged ${judged} of ${total} mutants: ${gaps} gaps so far, ${judged - gaps} not gaps`
+  return streamLine(
+    `progress`,
+    `judged ${judged} of ${total} mutants: ${gaps} gaps so far, ${judged - gaps} not gaps`,
+  )
 }
 
 /** A test's names, from Vitest's TestCase: its suites', then its own. */
@@ -135,23 +151,48 @@ export function baselineLines(files, config) {
     const skipped = tests.length - ran.length
     if (failure === undefined)
       return [
-        `pass ${name}: ${counted(ran.length, `test`)}${skipped > 0 ? `, ${skipped} skipped` : ``}`,
+        streamLine(
+          `baseline`,
+          `pass ${name}: ${counted(ran.length, `test`)}${skipped > 0 ? `, ${skipped} skipped` : ``}`,
+        ),
       ]
     const failed = tests.filter((t) => t.state === `failed`)
     const first = failed[0]
     if (first === undefined)
       return [
-        `fail ${name}: ${tests.length === 0 ? `did not load` : `failed outside its tests`}: ${codeSpan(escapeControls(failure.split(`\n`)[0]))}`,
+        streamLine(
+          `baseline`,
+          `fail ${name}: ${tests.length === 0 ? `did not load` : `failed outside its tests`}: ${codeSpan(escapeControls(failure.split(`\n`)[0]))}`,
+        ),
         `  replay: ${vitest} ${shellWord(file)}`,
       ]
     const message = first.message ?? ``
     return [
-      `fail ${name}: ${failed.length} of ${counted(ran.length, `test`)} failed`,
+      streamLine(
+        `baseline`,
+        `fail ${name}: ${failed.length} of ${counted(ran.length, `test`)} failed`,
+      ),
       `  failing: ${codeSpan(escapeControls((first.names ?? [first.fullName]).join(` > `)))}: ${codeSpan(escapeControls(message.split(`\n`)[0]))}`,
       ...violationLines(message),
       `  replay: ${vitest} ${shellWord(file)}${first.names === undefined ? `` : ` -t ${shellWord(escapeControls(replayPattern(first.names)))}`}`,
     ]
   })
+}
+
+/**
+ * The one decisive baseline line, before any mutant runs: every oracle file
+ * passed, or how many of them failed, so the report is provisional.
+ */
+export function verdictLine(files) {
+  const oracle = files.filter((f) => !f.ordinary)
+  const failed = oracle.filter((f) => f.failure !== undefined).length
+  const all = counted(oracle.length, `oracle file`)
+  return streamLine(
+    `baseline`,
+    failed === 0
+      ? `all ${all} pass`
+      : `${failed} of ${all} failed (provisional)`,
+  )
 }
 
 /**
@@ -167,7 +208,10 @@ export function blockedLines(files) {
         ? ``
         : ` at ${codeSpan(escapeControls((first.names ?? [first.fullName]).join(` > `)))}`
     return [
-      `blocked: ${codeSpan(file)} fails with no mutant active${at}, so the mutants it owns wait for it: make it pass (its replay is above), then check again.`,
+      streamLine(
+        `blocked`,
+        `${codeSpan(file)} fails with no mutant active${at}, so the mutants it owns wait for it: make it pass (its replay is above), then check again.`,
+      ),
     ]
   })
 }
