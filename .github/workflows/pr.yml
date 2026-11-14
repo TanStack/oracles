@@ -288,6 +288,44 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
         run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-fixed-seed-windows "$SHARD")"
+  daemon-history-runs:
+    # Temporary diagnostic (the per-run log of the daemon history); remove before merge.
+    name: Daemon history run log (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Tools
+        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
+      - run: pnpm --filter @tanstack/oracles run build
+      - name: Daemon history, with its run log
+        shell: bash
+        working-directory: packages/oracles
+        env:
+          GAP_RUN_LOG: ${{ runner.temp }}/runs.jsonl
+        run: |
+          start=$(date +%s)
+          pnpm exec vitest --run --testTimeout=2700000 --reporter=verbose --config oracle-gaps/vitest.config.mjs gap-report-oracle -t 'fixed seed 20261105: an edit sequence through the daemon$' || true
+          echo "wall $(( $(date +%s) - start )) s"
+          node -e '
+            const fs = require("fs")
+            const rows = fs.readFileSync(process.argv[1], "utf8").trim().split("\n").map((l) => JSON.parse(l))
+            const total = rows.reduce((s, r) => s + r.ms, 0)
+            console.log("runs logged: " + rows.length + ", total ms " + total)
+            console.log("killed by the driver timeout: " + rows.filter((r) => r.killedByTimeout).length)
+            for (const r of rows.filter((r) => r.ms > 20000)) console.log("long run: " + JSON.stringify(r))
+            const by = {}
+            for (const r of rows) { const k = r.via + " status " + r.status + " signal " + r.signal; by[k] = (by[k] ?? 0) + 1 }
+            console.log(JSON.stringify(by, null, 1))
+          ' "$GAP_RUN_LOG"
   windows-gap-cli:
     name: Windows gap CLI on a fixture
     runs-on: windows-latest
