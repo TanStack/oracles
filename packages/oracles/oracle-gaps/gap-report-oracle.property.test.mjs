@@ -651,6 +651,26 @@ const unlogged = (run) =>
 
 // A batch line (ORACLE_GAPS_TEST_RETENTION) left state behind when a total
 // after its retirement differs from its size before the batch.
+// The keys a settled batch left behind, sorted, for a violation's message.
+const leftKeys = (lines) =>
+  [
+    ...new Set(
+      lines.flatMap((line) => [
+        ...((line.copyNodes ?? 0) !== 0 ? [`copyNodes`] : []),
+        ...((line.nonCopyDup ?? 0) !== 0 ? [`nonCopyDup`] : []),
+        ...Object.keys(line.before ?? {}).filter(
+          (key) =>
+            !key.startsWith(`vite.`) &&
+            ((key.startsWith(`stale`) && line.before[key] !== 0) ||
+              (line.after !== undefined &&
+                line.before[key] !== line.after[key])),
+        ),
+      ]),
+    ),
+  ]
+    .sort()
+    .join(`, `)
+
 const leftBehind = (line) =>
   (line.copyNodes ?? 0) !== 0 ||
   (line.nonCopyDup ?? 0) !== 0 ||
@@ -964,10 +984,13 @@ async function runClisAtOnce(dir, files, hows) {
   writeFixture(dir, files)
   return Promise.all(
     hows.map(async (how) => {
-      const { args, out } = cliArgs(dir, files, how)
+      const { args, out: outBase } = cliArgs(dir, files, how)
+      const out = `${outBase}-${++runSeq}`
+      args[args.indexOf(`--out`) + 1] = out
+      const hook = hookOf(dir)
       const child = spawn(process.execPath, args, {
         cwd: repo,
-        env: { ...cleanEnv(), ...how.env },
+        env: { ...cleanEnv(), ...how.env, ORACLE_GAPS_TEST_RETENTION: hook },
         stdio: [`ignore`, `pipe`, `pipe`],
       })
       // Both streams, as runCli reads them: law 15 judges each run's lines,
@@ -987,7 +1010,11 @@ async function runClisAtOnce(dir, files, hows) {
           resolvePromise(code)
         })
       })
-      return readRun(dir, out, status, stderr, how.cli ?? here, stdout)
+      const run = readRun(dir, out, status, stderr, how.cli ?? here, stdout)
+      return {
+        ...run,
+        retention: retentionLinesOf(hook).filter((line) => line.run === out),
+      }
     }),
   )
 }
@@ -1687,6 +1714,7 @@ async function driver(plan, observe) {
     // Deterministic: how many batches left a retired copy's state behind (0),
     // not the per-batch lines, whose batch splits vary with hang cuts.
     observe(`retention`, retention.filter(leftBehind).length)
+    observe(`retentionKeys`, leftKeys(retention))
     observe(
       `retentionLines:cold`,
       unlogged({ retention, evidence: cli.evidence }),
@@ -2282,13 +2310,22 @@ function check(plan, observations, expected) {
       `bounded retention`,
       { actual: unlogged_, expected: 0 },
     )
+  const fields = observations
+    .filter((o) => o.checkpoint.startsWith(`retentionKeys`))
+    .map((o) => o.value)
+    .filter(Boolean)
+    .join(`, `)
   const held = observations
-    .filter((o) => o.checkpoint.startsWith(`retention`))
+    .filter(
+      (o) =>
+        o.checkpoint.startsWith(`retention`) &&
+        !o.checkpoint.startsWith(`retentionKeys`),
+    )
     .reduce((sum, o) => sum + o.value, 0)
   if (held > 0)
     return violation(
       `retention`,
-      `${held} batch(es) left a retired copy's Vitest or Vite state behind`,
+      `${held} batch(es) left a retired copy's Vitest or Vite state behind (fields: ${fields || `none named`})`,
       `bounded retention`,
       { actual: held, expected: 0 },
     )
