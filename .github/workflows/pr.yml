@@ -310,11 +310,11 @@ jobs:
         env:
           GAP_PROFILE_ALL: ${{ runner.temp }}/profile.jsonl
         run: |
-          probe() { local name=$1; shift; local t0=$(date +%s%N); "$@" >/dev/null 2>&1; echo "probe $name: $(( ($(date +%s%N) - t0) / 1000000 )) ms"; }
+          probe() { local name=$1; shift; local t0=$(date +%s%N); "$@" >/dev/null 2>&1 || true; echo "probe $name: $(( ($(date +%s%N) - t0) / 1000000 )) ms"; }
           probe node-startup node -e 0
           probe cli-help node oracle-gaps/index.mjs --help
-          for k in 1 2 3; do probe ps-list-$k timeout 150 ps -A -o pid=,command=; done
-          timeout 150 ps -A -o pid=,command= | wc -l
+          for k in 1 2 3; do probe ps-list-$k ps -A -o pid=,command=; done
+          ps -A -o pid=,command= | wc -l
           probe stop-daemon node oracle-gaps/index.mjs --stop-daemon --package "$PWD/oracle-gaps/fixtures-none"
           start=$(date +%s)
           pnpm exec vitest --run --testTimeout=2700000 --reporter=verbose --config oracle-gaps/vitest.config.mjs gap-report-oracle -t 'fixed seed 20261105: an edit sequence through the daemon$' || true
