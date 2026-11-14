@@ -979,13 +979,18 @@ function filesUnder(root, within = ``) {
 // of the repository), so a package, and a workspace dependency in it, keeps
 // nothing of a run.
 
-/** Runs the CLI several times at once on one state of the fixture. */
-async function runClisAtOnce(dir, files, hows) {
+/**
+ * Runs the CLI several times at once on one state of the fixture. `outs`
+ * receives each call's output directory synchronously, before any call
+ * starts, so a driver can watch the directory its own call writes.
+ */
+async function runClisAtOnce(dir, files, hows, outs = []) {
   writeFixture(dir, files)
   return Promise.all(
     hows.map(async (how) => {
       const { args, out: outBase } = cliArgs(dir, files, how)
       const out = `${outBase}-${++runSeq}`
+      outs.push(out)
       args[args.indexOf(`--out`) + 1] = out
       const hook = hookOf(dir)
       const child = spawn(process.execPath, args, {
@@ -1564,13 +1569,19 @@ async function incremental(dir, plan, cli, copy, observe, states) {
     // The time a daemon holds a request is the check's, not time spent
     // waiting for a daemon, so a CLI that waits 3 s for one still outlasts
     // a daemon that holds its check for 4 s.
-    const running = runClisAtOnce(dir, files, [
-      {
-        ...how,
-        daemon: true,
-        env: step === `dieMidCheck` ? { ORACLE_GAPS_WAIT_MS: `3000` } : {},
-      },
-    ])
+    const outs = []
+    const running = runClisAtOnce(
+      dir,
+      files,
+      [
+        {
+          ...how,
+          daemon: true,
+          env: step === `dieMidCheck` ? { ORACLE_GAPS_WAIT_MS: `3000` } : {},
+        },
+      ],
+      outs,
+    )
     let paused = false
     if (step === `resetBeforeRead`) {
       await new Promise((r) => setTimeout(r, 500))
@@ -1578,7 +1589,9 @@ async function incremental(dir, plan, cli, copy, observe, states) {
     } else {
       // Mid-check: the daemon has written this check's state file. A check
       // that ends first (a refusal runs nothing) leaves its daemon alone.
-      const started = join(dir, `out-daemon`, `state.json`)
+      // The call's output directory is numbered (runClisAtOnce), so the
+      // file is in the directory the call was given, not `out-daemon`.
+      const started = join(outs[0], `state.json`)
       let finished = false
       running.then(() => {
         finished = true
