@@ -769,6 +769,90 @@ const drawn = fc.record({
   }),
   // Who names the importer's function in an owns entry, if any.
   importer: fc.constantFrom(`none`, `a`, `b`),
+  // Where the run writes: the output directory `--out` names (`explicit`), or
+  // the one the CLI picks when `--out` is left out (`default`, args.mjs), whose
+  // stream log, results, and done line must still agree (law 15).
+  outMode: fc.constantFrom(`explicit`, `explicit`, `explicit`, `default`),
+  // The run's `<out>/stream.log` is a directory, so the log cannot be written
+  // (a problem the author can fix: the run refuses before it checks).
+  logBlocked: fc.constantFrom(
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+  ),
+  // A second run starts on the first run's output directory while the first
+  // is live (the coordinator's decision of 2026-11-13 on F4): the second
+  // refuses, and the first's stream log stays its own.
+  overlap: fc.constantFrom(
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+  ),
+  // The stop witness alone (`w_stop`), which a run the driver stops needs. A
+  // field of its own, so the witness options above keep their weights.
+  stopWitness: fc.constantFrom(
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+  ),
+  // A stop sent as soon as the CLI spawns, before its own run has started (P1:
+  // the note is written before the child exists, so the stopped line follows
+  // it). The driver adds this stop to the run's stops.
+  spawnStop: fc.constantFrom(
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+  ),
+  // The signal of a spawn stop and when it lands, 0 to 150 ms after the CLI
+  // spawns (the spawn-delay law, review of #57).
+  spawnSignal: fc.constantFrom(`SIGINT`, `SIGINT`, `SIGTERM`),
+  spawnDelay: fc.integer({ min: 0, max: 150 }),
+  spawnOnStart: fc.constantFrom(false, false, false, true),
+  // A claim left by a dead pid, then the starts that meet it: two racing starts
+  // (`race`) or one start that must take over a stale claim and its mutex
+  // (`recovery`). Constructed histories set it (review of #57, the claim rules).
+  claimScenario: fc.constantFrom(
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    `race`,
+    `recovery`,
+  ),
+  // The spawn stop waits for the CLI's started marker, then signals at once (the
+  // deterministic witness, event-driven rather than timed).
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -780,6 +864,10 @@ const drawn = fc.record({
 // nothing changed, which reuses the confirmations that the first check ran.
 const witnessSteps = [`test`, `helper`, `revert`]
 const budgetSteps = [`recheck`]
+// The stop witness alone takes no steps, so it counts only where the history
+// has none; a history with steps and the field is a legal history without it.
+const stopsOnly = (history) =>
+  history.stopWitness === true && history.steps === null
 const keepsSteps = (history) => {
   if (history.witness === false || history.steps === null) return true
   const kept = history.witness === `budget` ? budgetSteps : witnessSteps
@@ -2469,7 +2557,7 @@ function resolveHistory(history) {
     ...exported,
     ...importer,
     ...dotGen,
-    ...(history.witness
+    ...(history.witness || stopsOnly(history)
       ? witness
           .filter(
             (w) =>
@@ -2477,6 +2565,7 @@ function resolveHistory(history) {
               // so only histories of the `budget` mode carry it.
               (history.witness === true && w.id !== `w_slowpair`) ||
               (history.witness === `capture` && captureWitness.has(w.id)) ||
+              (stopsOnly(history) && w.id === `w_stop`) ||
               (history.witness === `budget` && w.id === `w_slowpair`),
           )
           .map((w) => ({
@@ -2837,7 +2926,27 @@ function resolveHistory(history) {
     depSubpath: history.depSubpath === true,
     unbuiltDep: history.unbuiltDep === true,
     budget: history.budget ?? `two`,
+    outMode: history.outMode ?? `explicit`,
+    // Both name the run's `--out` directory before it starts, so they need
+    // an explicit one (a default directory is chosen by the CLI).
+    logBlocked:
+      history.logBlocked === true && outModeOf(history) === `explicit`,
+    // A second run needs a live first run, which has its note and stream log.
+    // A blocked log refuses the first run before it is live, and a refusing
+    // fault (an argument, declaration, or config fault) ends it before its note
+    // too, so the overlap is generated only for a run that reaches its check
+    // (decision of 2026-11-13, review of #57: O1 and O2).
+    overlap:
+      history.overlap === true &&
+      outModeOf(history) === `explicit` &&
+      history.logBlocked !== true &&
+      (history.fault ?? `none`) === `none`,
     stopRuns: history.stopRuns ?? [],
+    spawnStop: history.spawnStop === true,
+    spawnSignal: history.spawnSignal ?? `SIGINT`,
+    spawnDelay: history.spawnDelay ?? 0,
+    claimScenario: history.claimScenario ?? false,
+    spawnOnStart: history.spawnOnStart === true,
     onlyRun: history.onlyRun === true,
     pragma: history.pragma === true,
     cliPath: history.cliPath ?? `plain`,
@@ -4083,10 +4192,23 @@ function refusal(plan) {
   if (plan.fault === `brokenVitest`) return { cause: `vitest`, runtime: true }
   if (plan.fault === `projects`)
     return { cause: `test.projects`, runtime: true }
+  // A stream log that cannot be written is refused before the check starts
+  // (the CLI opens the log before its first line, index.mjs), so its stdout
+  // owes its done line alone.
+  if (plan.logBlocked === true)
+    return { cause: `the stream log`, arguments: true }
   if (plan.fault === `badEntry`) return { cause: `${SOURCE}#nope` }
+  // An owns entry that names a missing file (a test file's declaration) is
+  // found by the analysis, after the check has started, so this refusal
+  // owes the stream log's note. The argument-stage case, a `--source` that
+  // is not a file of the package, is the static oracle's `absentSource`.
   if (plan.fault === `missingSource`) return { cause: `src/missing.ts` }
   if (plan.fault === `nonLiteral`) return { cause: `b.test.ts` }
-  if (plan.fault === `outsideSource`) return { cause: `outside the package` }
+  // A `--source` outside the package is an argument the CLI refuses before
+  // it starts a check (the argument rules that the static oracle judges),
+  // so its stdout has no line that names a stream log.
+  if (plan.fault === `outsideSource`)
+    return { cause: `outside the package`, arguments: true }
   // The analysis reads the test files that the package's Vitest config
   // includes (index.mjs, step 2), so a config that does not load is named
   // before anything the analysis would find. The cause names the config
@@ -4183,6 +4305,7 @@ const declarationFaults = [
   `nonLiteral`,
   `outsideSource`,
 ]
+const outModeOf = (history) => history.outMode ?? `explicit`
 const reachesRun = (history) =>
   !declarationFaults.includes(history.fault ?? `none`)
 
@@ -4235,21 +4358,22 @@ function model(plan) {
   // fault, a Vitest that does not load, a config that does not load, and a
   // config that defines test.projects, which a loaded context shows. Every
   // other run names it once, refused or not.
-  const configLines = [
-    `outsideSource`,
-    `brokenVitest`,
-    `configThrows`,
-    `configNoDefault`,
-    `configNull`,
-    `configSyntax`,
-    `projects`,
-  ].includes(plan.fault)
-    ? []
-    : [
-        plan.configPath === undefined
-          ? `oracle-gaps: config none, Vitest's default discovery`
-          : `oracle-gaps: config ${plan.configPath}`,
-      ]
+  const configLines =
+    [
+      `outsideSource`,
+      `brokenVitest`,
+      `configThrows`,
+      `configNoDefault`,
+      `configNull`,
+      `configSyntax`,
+      `projects`,
+    ].includes(plan.fault) || plan.logBlocked === true
+      ? []
+      : [
+          plan.configPath === undefined
+            ? `oracle-gaps: config none, Vitest's default discovery`
+            : `oracle-gaps: config ${plan.configPath}`,
+        ]
   if (refused) return { refused, configLines }
   const sites = sitesOf(plan)
   const owners = ownersOf(plan)
@@ -5493,8 +5617,13 @@ function endingOf(exit, stderr, out, name = (text) => text, stdout = ``) {
  * The first way a run's ending breaks the refusal law, or undefined. The
  * cause must name `cause`; with `outKnown`, the run knew its output
  * directory, so the block names it and the directory holds the refusal.
+ * `logNote` is the line that names the run's stream log, owed first on
+ * stdout when the run refused after it started a check, and undefined for
+ * a refusal of its arguments, before any check (the maintainer's decision
+ * of 2026-11-12 that every run that starts a check names its stream log
+ * first).
  */
-function refusalBreach(ending, { cause, outKnown }) {
+function refusalBreach(ending, { cause, outKnown, logNote }) {
   if (ending.exit !== 2) return `the refusal exited ${ending.exit}, not 2`
   if (ending.stackFrames) return `the refusal printed a stack trace`
   if (ending.cause === undefined)
@@ -5513,12 +5642,14 @@ function refusalBreach(ending, { cause, outKnown }) {
     !/^refused(?:, report .+)?$/.test(ending.done)
   )
     return `the refusal's last line is not \`oracle-gaps: done refused\``
-  // The done line ends stdout too, as its only line.
-  if (
-    ending.stdout.length !== 1 ||
-    ending.stdout[0] !== `oracle-gaps: done ${ending.done}`
-  )
-    return `the refusal's stdout is ${JSON.stringify(ending.stdout)}, not its done line`
+  // The done line ends stdout too, as its only line after the line that
+  // names the stream log, if the run started a check.
+  const owedStdout = [
+    ...(logNote === undefined ? [] : [logNote]),
+    `oracle-gaps: done ${ending.done}`,
+  ]
+  if (JSON.stringify(ending.stdout) !== JSON.stringify(owedStdout))
+    return `the refusal's stdout is ${JSON.stringify(ending.stdout)}, not ${JSON.stringify(owedStdout)}`
   if (!outKnown) return undefined
   if (!ending.namesOutput)
     return `the refusal does not name its report in its output directory: done ${ending.done}`

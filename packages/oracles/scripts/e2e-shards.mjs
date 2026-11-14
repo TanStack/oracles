@@ -41,6 +41,10 @@ const suite = `oracle-gaps.report`
 export const shards = {
   // 522 s in the measured run, about 221 s idle.
   'e2e-1': [
+    `fixed seed 20261105: a stop with the default output directory`,
+    `fixed seed 20261105: a daemon check with the default output directory`,
+    `fixed seed 20261105: a stream log that cannot be written`,
+    `fixed seed 20261105: two runs on one output directory`,
     `fixed seed 20261105: a .cjs config that calls require`,
     `fixed seed 20261105: a declaration fault: missingSource`,
     `fixed seed 20261105: a declaration fault: noTypescript`,
@@ -74,6 +78,9 @@ export const shards = {
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-2': [
+    `fixed seed 20261105: two starts race for a stale claim`,
+    `fixed seed 20261105: a stale claim and mutex from a dead pid are taken over`,
+    `fixed seed 20261105: a stop as the CLI starts`,
     `fixed seed 20261105: a declaration fault: setupThrows`,
     `fixed seed 20261105: a package with no config`,
     `fixed seed 20261105: an ambiguous authored mutant`,
@@ -106,6 +113,13 @@ export const shards = {
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-3': [
+    `determinism: constructed history: two starts race for a stale claim`,
+    `determinism: constructed history: a stale claim and mutex from a dead pid are taken over`,
+    `determinism: constructed history: a stop as the CLI starts`,
+    `random seed: a stop with the default output directory`,
+    `random seed: a daemon check with the default output directory`,
+    `random seed: a stream log that cannot be written`,
+    `random seed: two runs on one output directory`,
     `fixed seed 20261105: a config fault in a run that owns nothing`,
     `fixed seed 20261105: a declaration fault: brokenOwner`,
     `fixed seed 20261105: a declaration fault: configThrows`,
@@ -136,6 +150,9 @@ export const shards = {
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-4': [
+    `random seed: two starts race for a stale claim`,
+    `random seed: a stale claim and mutex from a dead pid are taken over`,
+    `random seed: a stop as the CLI starts`,
     `fixed seed 20261105: a .ts config in a package with no module type that calls require`,
     `fixed seed 20261105: a config that --config names`,
     `fixed seed 20261105: a declaration fault: apiLessTypescript`,
@@ -167,6 +184,9 @@ export const shards = {
     // 79 s and 70 s; the daemon-notes one, bound to its history, 2 s (it
     // took 433 s searching for one).
     `calibration: a streamed line has no prefix`,
+    // The stream log's calibrations, not yet measured.
+    `calibration: the stream log misses a line`,
+    `calibration: the line that names the stream log comes after another line`,
     `calibration: a refusal through the daemon drops the cold run's notes`,
     // Bound to its history (re-review N2), not yet measured.
     `calibration: a run names a test-output log it never captured`,
@@ -178,6 +198,10 @@ export const shards = {
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-5': [
+    `determinism: constructed history: a stop with the default output directory`,
+    `determinism: constructed history: a daemon check with the default output directory`,
+    `determinism: constructed history: a stream log that cannot be written`,
+    `determinism: constructed history: two runs on one output directory`,
     `fixed seed 20261105: an edit sequence through the daemon`,
     `fixed seed 20261105: ordinary tests left out by default`,
     `fixed seed 20261105: two authored mutants`,
@@ -264,6 +288,8 @@ function listed() {
   const run = spawnSync(
     `pnpm`,
     [
+      // --silent keeps pnpm's workspace banner off stdout, which is JSON.
+      `--silent`,
       `exec`,
       `vitest`,
       `list`,

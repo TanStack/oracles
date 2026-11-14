@@ -38,8 +38,10 @@ export function endRun(error, out = error?.out) {
     // The last line says the run refused, and where its report is once the
     // run knows its output directory (the stream's done line, stream.mjs);
     // it ends stdout too (index.mjs).
+    // A reportless refusal (another run uses the directory) writes nothing
+    // there: the directory's files are the other run's.
     const done = write(
-      out,
+      error.reportless ? undefined : out,
       results,
       `Refused: ${message}\n\nFix: ${error.fix}\n`,
     )
