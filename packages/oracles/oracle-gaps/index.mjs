@@ -128,6 +128,7 @@
 import { spawn } from 'node:child_process'
 import {
   appendFileSync,
+  existsSync,
   linkSync,
   mkdirSync,
   readFileSync,
@@ -412,6 +413,14 @@ function superviseRun(out) {
   // it starts: its stopped line follows the note the caller already wrote.
   process.on(`SIGINT`, stop)
   process.on(`SIGTERM`, stop)
+  // A test-only stop (ORACLE_GAPS_TEST_STOP, #58): once the named file exists, the
+  // stop is taken as a SIGINT would be. Inert unless set.
+  if (process.env.ORACLE_GAPS_TEST_STOP !== undefined) {
+    const file = process.env.ORACLE_GAPS_TEST_STOP
+    setInterval(() => {
+      if (existsSync(file)) stop(`SIGINT`)
+    }, 50).unref()
+  }
   if (early !== undefined) return stop(early)
   // An inspector flag would bind the CLI's own port a second time.
   child = spawn(
@@ -533,8 +542,22 @@ function endWith(error, out) {
 const main =
   import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
 // Windows has no process groups: there the run is the CLI's own process.
-const supervised = process.platform !== `win32`
+// The test seam ORACLE_GAPS_TEST_UNSUPERVISED forces the unsupervised path on
+// POSIX (in-process, as win32 runs it), so its stop law is tested without Windows.
+const supervised =
+  process.platform !== `win32` &&
+  process.env.ORACLE_GAPS_TEST_UNSUPERVISED === undefined
 const supervisor = process.env.ORACLE_GAPS_GROUP
+
+// Set once the note is written (the unsupervised run has started).
+let runStarted = false
+/** Ends an unsupervised run with its stopped line on both streams (#58). */
+function stopNow(signal) {
+  const line = `oracle-gaps: done stopped (${signal})\n`
+  process.stdout.write(line)
+  writeStream(line)
+  exitWhenFlushed(128 + constants.signals[signal])
+}
 
 async function run() {
   // The supervisor: it claims the output directory, writes the note, and runs
@@ -557,13 +580,28 @@ async function run() {
   // A stop ends the run at once, with no line: an error that the stop causes
   // is no refusal, and the supervisor writes the stopped line. Once the run
   // writes its ending, a stop no longer cuts it off.
+  // The all-or-nothing stop law (#57 and #58): a stop after the note writes one
+  // done stopped line on each stream; a supervised child's stop is the
+  // supervisor's line; a stop before the note waits for it (the early stop).
   const onStop = (signal) => {
-    if (!writingEnding) process.exit(128 + constants.signals[signal])
+    if (writingEnding) return
+    if (!supervised) return runStarted && stopNow(signal)
+    process.exit(128 + constants.signals[signal])
   }
   process.on(`SIGINT`, onStop)
   process.on(`SIGTERM`, onStop)
-  // A stop that came before this process could handle it ends it now.
-  if (early !== undefined) process.exit(128 + constants.signals[early])
+  // A test-only stop for unsupervised runs (ORACLE_GAPS_TEST_STOP, #58).
+  if (process.env.ORACLE_GAPS_TEST_STOP !== undefined && !supervised) {
+    const file = process.env.ORACLE_GAPS_TEST_STOP
+    setInterval(() => {
+      if (existsSync(file)) onStop(`SIGINT`)
+    }, 50).unref()
+  }
+  // A child of a supervisor that was stopped before its own handlers ran exits
+  // now (the supervisor writes the line). An unsupervised run keeps the stop
+  // and takes it once its note is written, below.
+  if (supervisor !== undefined && early !== undefined)
+    process.exit(128 + constants.signals[early])
   // The run's options, once its arguments parse.
   let options
   // An error thrown outside the awaited check, by a timer or a promise no one
@@ -580,6 +618,8 @@ async function run() {
       // Windows has no supervisor: this process opens the log and runs the
       // check. A child of a supervisor writes its stderr alone.
       if (supervisor === undefined) startLog(options.out)
+      runStarted = true
+      if (early !== undefined) return stopNow(early)
       const summary = await (options.daemon ? checkThroughDaemon : checkCold)(
         options,
       )

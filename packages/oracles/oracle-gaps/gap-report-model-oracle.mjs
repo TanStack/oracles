@@ -4331,7 +4331,7 @@ const verdictLine = (files, failing) =>
  * the path of its full report in output directory `out`.
  */
 const doneLine = (gaps, provisional, out) =>
-  `oracle-gaps: done completed, ${gaps} gap${gaps === 1 ? `` : `s`}${provisional ? ` (provisional)` : ``}, report ${out}/summary.md`
+  `oracle-gaps: done completed, ${gaps} gap${gaps === 1 ? `` : `s`}${provisional ? ` (provisional)` : ``}, report ${out.replaceAll(`\\`, `/`)}/summary.md`
 
 function model(plan) {
   const refused = refusal(plan)
@@ -5584,7 +5584,10 @@ function endingOf(exit, stderr, out, name = (text) => text, stdout = ``) {
     done,
     stdout: printed.map(name),
     namesOutput:
-      out !== undefined && done === name(`refused, report ${out}/summary.md`),
+      // The done line names the report in forward slashes on every platform
+      // (the register's Windows paths rule).
+      out !== undefined &&
+      done === name(`refused, report ${out.replaceAll(`\\`, `/`)}/summary.md`),
     // An internal error's log beside a refusal would be another run's.
     errorLog: out !== undefined && existsSync(join(out, `error.log`)),
     stackFrames: /^\s+at /m.test(text),

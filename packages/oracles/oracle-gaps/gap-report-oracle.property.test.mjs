@@ -1811,7 +1811,7 @@ async function driver(plan, observe) {
   const scratch = realpathSync(
     mkdtempSync(
       outsideRepository(plan)
-        ? join(realpathSync(tmpdir()), `gap-fixture-`)
+        ? join(realpathSync.native(tmpdir()), `gap-fixture-`)
         : join(here, `.scratch-`),
     ),
   )
@@ -3119,7 +3119,7 @@ const calibrations = [
     // only the law that the run must refuse rejects it.
     corrupt: corruptCli((cli) => {
       if (cli.exit === 0) return undefined
-      const done = `oracle-gaps: done completed, 0 gaps, report ${cli.outDir}/summary.md`
+      const done = `oracle-gaps: done completed, 0 gaps, report ${cli.outDir.replaceAll(`\\`, `/`)}/summary.md`
       const completed = (stream) => ({ ...stream, last: done, dones: 1 })
       return {
         ...cli,

@@ -148,9 +148,15 @@ describe(`configureOracles`, () => {
     )
   })
 
-  it(`rejects an empty prefix`, () => {
+  it(`rejects a prefix that is not an upper-case name`, () => {
     expect(() => configureOracles({ envPrefix: `` })).toThrow(
-      `envPrefix must be non-empty`,
+      `envPrefix must be an upper-case name`,
+    )
+    expect(() => configureOracles({ envPrefix: `oracle` })).toThrow(
+      `envPrefix must be an upper-case name`,
+    )
+    expect(() => configureOracles({ envPrefix: `A B` })).toThrow(
+      `envPrefix must be an upper-case name`,
     )
   })
 

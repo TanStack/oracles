@@ -36,7 +36,13 @@ import {
 } from 'node:fs'
 import { createRequire, isBuiltin, syncBuiltinESMExports } from 'node:module'
 import { constants, hostname } from 'node:os'
-import { basename, dirname, join, relative as relativePath } from 'node:path'
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative as relativePath,
+} from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { applyAuthored, loadAuthored } from './authored.mjs'
 import {
@@ -57,6 +63,14 @@ import {
 } from './stream.mjs'
 import { analyze, isRunnerCopy } from './analysis.mjs'
 import { Refusal } from './ending.mjs'
+import {
+  baseOf,
+  isWithin,
+  posix,
+  realPathOf,
+  relativeWithin,
+  specifierOf,
+} from './paths.mjs'
 import { stateDirOf } from './evidence.mjs'
 import {
   baselineOf,
@@ -118,7 +132,9 @@ function serveCopies() {
   promises.readFile = function (path, options, ...rest) {
     const text =
       typeof path === `string`
-        ? globalThis.__oracleGapsCopies?.get(path)
+        ? globalThis.__oracleGapsCopies?.get(
+            path.replaceAll(String.fromCharCode(92), '/'),
+          )
         : undefined
     if (text === undefined) return readFile.call(this, path, options, ...rest)
     const encoded =
@@ -244,7 +260,7 @@ export async function workspaceBundles(pkg) {
       if (linked.has(name)) continue
       const link = join(dir, `node_modules`, name)
       if (!existsSync(link)) continue
-      const real = realpathSync(link)
+      const real = realPathOf(link)
       if (real.includes(`/node_modules/`) || real === pkg) continue
       linked.set(name, { dir: real, from: dir })
       queue.push(real)
@@ -352,7 +368,7 @@ function discoveredConfig(pkg) {
   )
   for (let dir = pkg; ; dir = dirname(dir)) {
     const name = names.find((file) => existsSync(join(dir, file)))
-    if (name) return relativePath(pkg, join(dir, name))
+    if (name) return posix(relativePath(pkg, join(dir, name)))
     if (dirname(dir) === dir) return undefined
   }
 }
@@ -456,7 +472,7 @@ export async function openSession(pkg) {
 import { mergeConfig } from 'vitest/config'
 ${
   config
-    ? `import * as config from ${JSON.stringify(relativePath(home, join(pkg, config)))}
+    ? `import * as config from ${JSON.stringify(specifierOf(home, join(pkg, config)))}
 // The package's config, read from its namespace at run time: a config with
 // no default export then fails as it fails under Vitest, when it loads, and
 // not when Vite bundles this wrapper, which esbuild reports on stderr
@@ -482,7 +498,7 @@ export default async (env) => {
     resolveId(source) {
       const copies = globalThis.__oracleGapsCopies
       for (const path of [source, ${JSON.stringify(pkg)} + source])
-        if (copies?.has(path)) return path
+        if (copies?.has(path.replaceAll(String.fromCharCode(92), '/'))) return path
       return globalThis.__oracleGapsBundles?.get(source)
     },
     load(id) {
@@ -493,7 +509,7 @@ export default async (env) => {
       const at = id.indexOf('?')
       if (at >= 0 && [...new URLSearchParams(id.slice(at + 1)).keys()].every((key) => ['raw', 'url', 'worker', 'sharedworker', 'inline'].includes(key))) return undefined
       const path = at < 0 ? id : id.slice(0, at)
-      const copy = globalThis.__oracleGapsCopies?.get(path)
+      const copy = globalThis.__oracleGapsCopies?.get(path.replaceAll(String.fromCharCode(92), '/'))
       if (copy !== undefined) return copy
       // This context's authored patch, or else the instrumented source of the
       // current check, both set by the runner in this process.
@@ -559,7 +575,7 @@ export default async (env) => {
         )
           .replaceAll(wrapper, config === undefined ? name : join(pkg, config))
           .replaceAll(basename(wrapper), name)}`,
-        `Make ${name} load under Vitest: run vitest --run in the package and fix the error it reports.`,
+        `Fix the error that the message names in ${name}, then run the check again.`,
       )
     })
   // Each warm context is a Vitest instance, and each listens on the process
@@ -747,7 +763,7 @@ export default async (env) => {
   // This process's harness files are generated from this CLI's own files,
   // which every key covers, and their directory names the process, so they
   // are left out of every key and input.
-  const ownHarness = (path) => path.startsWith(`${home}/`)
+  const ownHarness = (path) => isWithin(home, path)
   // The files the Vite config loaded, for the global key.
   const configFiles = () =>
     (contexts[0]?.vite?.config?.configFileDependencies ?? []).filter(
@@ -789,7 +805,7 @@ export default async (env) => {
       pulse.log(
         streamLine(
           `busy`,
-          `${label} in ${relativePath(pkg, file)} for ${Math.floor(elapsed / 1000)}s`,
+          `${label} in ${posix(relativePath(pkg, file))} for ${Math.floor(elapsed / 1000)}s`,
         ),
       )
     }
@@ -875,7 +891,7 @@ export default async (env) => {
     // A run that spun is a timeout as it stands, even one that then ended.
     const spun = spinRow()
     const profiled = {
-      file: file.split(`/`).at(-1),
+      file: baseOf(file),
       mutant,
       select: select?.length ?? null,
       limitMs,
@@ -987,8 +1003,7 @@ export default async (env) => {
         ...loaded,
       ]),
     ].filter(
-      (path) =>
-        path.startsWith(`/`) && !ownHarness(path) && !isRunnerCopy(path),
+      (path) => isAbsolute(path) && !ownHarness(path) && !isRunnerCopy(path),
     )
   }
 
@@ -1008,9 +1023,11 @@ export default async (env) => {
     // file's do, and the wrapper's plugin serves its text: nothing is
     // written there.
     const copies = items.map((item) => {
-      const copy = join(
-        dirname(item.file),
-        `.oracle-gaps-${process.pid}-${++copyCounter}-${basename(item.file)}`,
+      const copy = posix(
+        join(
+          dirname(item.file),
+          `.oracle-gaps-${process.pid}-${++copyCounter}-${basename(item.file)}`,
+        ),
       )
       globalThis.__oracleGapsCopies.set(copy, readFileSync(item.file, `utf8`))
       return copy
@@ -1133,7 +1150,9 @@ export default async (env) => {
           .filter(Boolean)) {
           const row = JSON.parse(line)
           const copy = copies.find(
-            (c) => row.key?.startsWith(`${c} > `) || row.file === c,
+            (c) =>
+              posix(row.key ?? ``).startsWith(`${c} > `) ||
+              posix(row.file ?? ``) === c,
           )
           if (copy && row.skipped) skipped.add(copy)
           if (copy && row.closed) loaded.set(copy, row.loaded ?? [])
@@ -1481,7 +1500,7 @@ export default async (env) => {
       const looked = Date.now()
       const valid = lookup(id, index)
       span(`lookup`, looked, {
-        file: file.split(`/`).at(-1),
+        file: baseOf(file),
         spec,
         hit: Boolean(valid),
       })
@@ -1649,7 +1668,7 @@ export default async (env) => {
 
     const vitest = contexts[0]
     const fileSpecs = new Map(contextSpecs.get(vitest))
-    const relative = (file) => file.slice(pkg.length + 1)
+    const relative = (file) => relativeWithin(pkg, file) ?? posix(file)
     const oracleFiles = new Set(declarations.keys())
     const runIdentity = identityOf(
       options,
@@ -2348,7 +2367,7 @@ export default async (env) => {
       baseline: baselineFiles,
       config: options.config,
       paths: {
-        report: join(options.out, `summary.md`),
+        report: posix(join(options.out, `summary.md`)),
         results: join(options.out, `results.json`),
         out: options.out,
       },
@@ -2377,9 +2396,8 @@ function identityOf(options, authored, testFiles, oracleCount) {
   // the order of those names, so the same inputs in another checkout, or
   // the same CLI in another directory, have the same identity.
   const name = (file) =>
-    file.startsWith(`${options.pkg}/`)
-      ? file.slice(options.pkg.length + 1)
-      : `cli:${relativePath(here, file)}`
+    relativeWithin(options.pkg, file) ??
+    `cli:${posix(relativePath(here, file))}`
   const files = [
     ...options.sources.map((file) => join(options.pkg, file)),
     ...testFiles,

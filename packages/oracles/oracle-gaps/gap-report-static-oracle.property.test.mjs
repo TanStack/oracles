@@ -215,6 +215,10 @@ function analyzeFixture(dir, files, plan) {
 // state, and which pairs of outputs are the same directory.
 function defaultOutputsOf(dir, sources) {
   const other = realpathSync(mkdtempSync(join(here, `.scratch-`)))
+  writeFileSync(
+    join(other, `package.json`),
+    `{"name":"other","private":true}\n`,
+  )
   // The other package holds the same source files, which --source must name.
   for (const source of sources) {
     mkdirSync(dirname(join(other, source)), { recursive: true })
@@ -438,7 +442,14 @@ function argumentFault(bad, dir, sources) {
     // An option that takes a value, given last with none.
     noValue: [[...valid, bad.option], bad.option],
     unknown: [
-      [...valid, `--sources${bad.long ? `x`.repeat(100_000) : ``}`, sources],
+      // Windows caps a command line at 32,767 characters, and a longer one never
+      // starts (its status is null): there the long argument is 30,000 (a
+      // narrowing recorded in the PR; the POSIX runs keep 100,000).
+      [
+        ...valid,
+        `--sources${bad.long ? `x`.repeat(process.platform === `win32` ? 30_000 : 100_000) : ``}`,
+        sources,
+      ],
       `--sources`,
     ],
     missingMutants: [
@@ -766,6 +777,12 @@ async function driver(plan, observe) {
   const scratch = realpathSync(mkdtempSync(join(here, `.scratch-`)))
   const dir = plan.configPlace === `parent` ? join(scratch, `pkg`) : scratch
   mkdirSync(dir, { recursive: true })
+  // Every package has a manifest, which the CLI refuses without (args.mjs);
+  // the fixture's content is unchanged, so its histories are too.
+  writeFileSync(
+    join(dir, `package.json`),
+    `{"name":"fixture","private":true}\n`,
+  )
   try {
     // A symbolic link to the package, for sources spelled through it.
     symlinkSync(dir, `${dir}.link`, `dir`)

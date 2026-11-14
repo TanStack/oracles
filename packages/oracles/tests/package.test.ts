@@ -135,7 +135,12 @@ describe(`@tanstack/oracles`, () => {
     const pack = spawnSync(
       `npm`,
       [`pack`, `--dry-run`, `--json`, `--ignore-scripts`],
-      { cwd: packageDirectory, encoding: `utf8` },
+      // On Windows npm is an npm.cmd shim, which only a shell runs.
+      {
+        cwd: packageDirectory,
+        encoding: `utf8`,
+        shell: process.platform === `win32`,
+      },
     )
     expect(pack.status, pack.stderr).toBe(0)
     const [{ files }] = JSON.parse(pack.stdout) as [
@@ -232,7 +237,13 @@ console.log(JSON.stringify({ failed, unreached }))`,
       ),
     )
     const run = (command: string, args: Array<string>, cwd: string) => {
-      const ran = spawnSync(command, args, { cwd, encoding: `utf8`, env })
+      const ran = spawnSync(command, args, {
+        cwd,
+        encoding: `utf8`,
+        env,
+        // npm is an npm.cmd shim on Windows, which only a shell runs.
+        shell: command === `npm` && process.platform === `win32`,
+      })
       expect(ran.status, `${ran.stdout}\n${ran.stderr}`).toBe(0)
       return ran
     }
@@ -281,9 +292,17 @@ console.log(JSON.stringify({ failed, unreached }))`,
         npm(directory, `install`, ...specs)
         return directory
       }
-      // Where the project's `tsc` command links.
-      const tscOf = (directory: string) =>
-        readlinkSync(join(directory, `node_modules/.bin/tsc`))
+      // Where the project's `tsc` command links. npm makes a symlink on POSIX
+      // and, on Windows, a shell shim that names the same target.
+      const tscOf = (directory: string) => {
+        const bin = join(directory, `node_modules/.bin/tsc`)
+        if (process.platform !== `win32`) return readlinkSync(bin)
+        const target = /\.\.\/(.+?)\/bin\/tsc/.exec(
+          readFileSync(bin, `utf8`),
+        )?.[1]
+        if (target === undefined) throw new Error(`no tsc target in ${bin}`)
+        return join(`..`, target, `bin`, `tsc`)
+      }
       const aliasTsc = join(
         `..`,
         `typescript-for-tanstack-oracles`,

@@ -30,6 +30,7 @@ import {
   streamLine,
   verdictLine,
 } from './stream.mjs'
+import { posix, relativeWithin } from './paths.mjs'
 
 /** Outcomes that are gaps. Only a law verdict on a reproducible route kills. */
 export const gapOutcomes = new Set([
@@ -419,8 +420,7 @@ export function renderStdout({
     (r) => !r.probeGuard && r.outcome === `unowned`,
   )
   const killed = results.filter((r) => r.outcome === `killed` && !r.probeGuard)
-  const relative = (file) =>
-    file.startsWith(`${pkg}/`) ? file.slice(pkg.length + 1) : file
+  const relative = (file) => relativeWithin(pkg, file) ?? file
   const section = baselineSection(results, baseline, config)
   // Every line is a line of the stream (stream.mjs): the totals, one
   // directive per gap class, each function's heading over its gap lines,
@@ -468,7 +468,7 @@ export function renderStdout({
         `left out, failing with no mutant active: ${excluded.join(`, `)}`,
       ),
     )
-  lines.push(streamLine(`note`, `results ${paths.results}`))
+  lines.push(streamLine(`note`, `results ${posix(paths.results)}`))
   // The last line says the check ran to its end, how many gaps it found,
   // and where its full report is (G6, and the stream's done line): exit 0
   // means the run completed, not that it found none.
