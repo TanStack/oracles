@@ -58,7 +58,7 @@
 // Whether a mutant's two forms can make exactly one of them throw on some
 // input, by operator (a swap by its operator). The completion recording
 // depends on it: a site declared `false` is never recorded, so its declaration
-// is checked by the mutant-validity oracle (gap-report-mutant-validity-oracle),
+// is checked by the package's mutant-validity oracle (a test file, not shipped),
 // which generates each `false` operator's forms and finds no input that
 // splits the two completions. A `true` may over-claim, which costs a record
 // and never a skipped mutant. `if-true` and `if-false` are `true` until a

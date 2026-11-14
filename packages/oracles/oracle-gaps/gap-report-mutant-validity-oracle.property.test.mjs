@@ -3060,6 +3060,8 @@ function reached(program, trace, expected) {
     return detected ? [REACH.hostile(program.name)] : []
   }
   if (program.kind === `narrowed`) return []
+  // A throw-capability program decides its law by its declaration, not a reach state.
+  if (program.kind === `throws`) return []
   const states = expected.sites.some((site) => site.label) ? [REACH.label] : []
   const test = program.kind === `guard` ? program.test : program.expr.test
   if (
