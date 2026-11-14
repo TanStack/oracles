@@ -122,7 +122,7 @@
 // ended 2 s later is killed, and so is any process left in the group when
 // the run ends. The run kills its group itself if the CLI dies first.
 import { spawn } from 'node:child_process'
-import { realpathSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { constants } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { parseArgs, usage } from './args.mjs'
@@ -222,6 +222,15 @@ function superviseRun() {
   // starts is a stop too (re-review N3).
   process.on(`SIGINT`, stop)
   process.on(`SIGTERM`, stop)
+  // The test-only stop hook (ORACLE_GAPS_TEST_STOP, review F(f)): in a
+  // supervised run it goes through this supervisor's stop, which forwards to
+  // the child and writes the stopped line, as a SIGINT does.
+  if (process.env.ORACLE_GAPS_TEST_STOP !== undefined) {
+    const file = process.env.ORACLE_GAPS_TEST_STOP
+    setInterval(() => {
+      if (existsSync(file)) stop(`SIGINT`)
+    }, 50).unref()
+  }
   // An inspector flag would bind the CLI's own port a second time.
   child = spawn(
     process.execPath,
@@ -343,11 +352,34 @@ else if (main) {
   // its ending, it says so to the supervisor, and a stop no longer cuts it
   // off: its done line is then the last line of each stream.
   let writingEnding = false
+  // A run that has started owes its stop one stopped line on each stream
+  // (#57, all-or-nothing). A supervised run's supervisor writes it; an
+  // unsupervised run (win32, no process groups) writes it here. A stop before
+  // the run starts prints nothing, as the law allows.
+  let runStarted = false
   const onStop = (signal) => {
-    if (!writingEnding) process.exit(128 + constants.signals[signal])
+    if (writingEnding) return
+    const code = 128 + constants.signals[signal]
+    if (!runStarted || supervised) return process.exit(code)
+    const line = `oracle-gaps: done stopped (${signal})\n`
+    process.stdout.write(line, () =>
+      process.stderr.write(line, () => process.exit(code)),
+    )
   }
   process.on(`SIGINT`, onStop)
   process.on(`SIGTERM`, onStop)
+  // A test-only hook for the CLI's own oracle, not for users (as
+  // ORACLE_GAPS_TEST_HOLD_EXIT_MS): when the file ORACLE_GAPS_TEST_STOP names
+  // appears, the CLI takes the same stop as a SIGINT. CI's Windows witness uses
+  // it, since a non-console parent cannot deliver Ctrl+C there.
+  // Unsupervised runs only (win32, no supervisor); a supervised child's stop
+  // is the supervisor's.
+  if (process.env.ORACLE_GAPS_TEST_STOP !== undefined && !supervised) {
+    const file = process.env.ORACLE_GAPS_TEST_STOP
+    setInterval(() => {
+      if (existsSync(file)) onStop(`SIGINT`)
+    }, 50).unref()
+  }
   const holdStops = () => {
     writingEnding = true
     process.send?.(`ending`)
@@ -369,6 +401,7 @@ else if (main) {
     if (options.help) console.log(usage)
     else if (options.stop) await stopDaemon(options.pkg)
     else {
+      runStarted = true
       const summary = await (options.daemon ? checkThroughDaemon : checkCold)(
         options,
       )

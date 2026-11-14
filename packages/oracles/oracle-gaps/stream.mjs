@@ -77,6 +77,34 @@ export function testNamesOf(testCase) {
 // A word that a POSIX shell reads back as it is: plain, or in single quotes.
 const shellWord = (word) =>
   /^[\w./-]+$/.test(word) ? word : `'${word.replaceAll(`'`, `'\\''`)}'`
+// PowerShell reads these as single quotes: the ASCII one and the typographic
+// ones (U+2018 to U+201B). Inside a single-quoted word each is doubled.
+const PS_SINGLE_QUOTES = /['\u2018\u2019\u201A\u201B]/g
+const powerShellWord = (word) =>
+  /^[\w./-]+$/.test(word)
+    ? word
+    : `'${word.replace(PS_SINGLE_QUOTES, (quote) => quote + quote)}'`
+// cmd toggles its quoting on every double quote, expands `%`, and under
+// DelayedExpansion expands `!` (a conservative no-form set, a coordinator ruling), even inside
+// quotes; a name with either has no cmd form (undefined), so the line says so.
+// Inside double quotes cmd reads the other metacharacters literally.
+const cmdWord = (word) =>
+  /["%!]/.test(word) ? undefined : /^[\w./-]+$/.test(word) ? word : `"${word}"`
+// The replay line of a command. A POSIX shell reads one line; on Windows
+// there are two, one for PowerShell and one for cmd, since the words differ.
+// A cmd line with a word that has no cmd form says so instead of printing a
+// line that would not replay (the PowerShell line still does).
+export const replayLines = (words, platform = process.platform) => {
+  if (platform !== `win32`)
+    return [`  replay: ${words.map(shellWord).join(` `)}`]
+  const cmd = words.map(cmdWord)
+  return [
+    `  replay (PowerShell): ${words.map(powerShellWord).join(` `)}`,
+    cmd.every((word) => word !== undefined)
+      ? `  replay (cmd): ${cmd.join(` `)}`
+      : `  replay (cmd): use the PowerShell line for this name`,
+  ]
+}
 
 // A control character, or a line or paragraph separator, as its `\uXXXX`
 // escape: the line stays one line, and the escape is regular-expression
@@ -91,8 +119,18 @@ export const escapeControls = (text) =>
 // regular-expression syntax escaped, joined by what either Vitest puts
 // between them (a space in Vitest 4, ` > ` in Vitest 5), anchored at both
 // ends. The framework's own rerun command (oracle-property.ts) is built so.
+// The characters no shell reads safely inside a `-t` argument: a double quote,
+// `%` and `!` (cmd), and the curly quotes (PowerShell). Each becomes the regular
+// expression's `.`: the pattern stays anchored and only slightly broader, and
+// the exact test is carried by ORACLE_UNIT where a line sets it (review option
+// c, a coordinator ruling).
+const SHELL_HOSTILE = /["%!\u2018\u2019\u201A\u201B]/g
 const replayPattern = (names) =>
-  `^${names.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)).join(`(?: | > )`)}$`
+  `^${names
+    .map((name) =>
+      name.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`).replace(SHELL_HOSTILE, `.`),
+    )
+    .join(`(?: | > )`)}$`
 
 // A count of things.
 const counted = (n, thing) => `${n} ${thing}${n === 1 ? `` : `s`}`
@@ -138,11 +176,11 @@ function violationLines(message) {
  * the config `--config` named, relative to the package: Vitest would
  * discover another config or none, so the replay names it too.
  */
-export function baselineLines(files, config) {
+export function baselineLines(files, config, platform = process.platform) {
   const vitest =
     config === undefined
-      ? `vitest run`
-      : `vitest run --config ${shellWord(config)}`
+      ? [`vitest`, `run`]
+      : [`vitest`, `run`, `--config`, config]
   return files.flatMap(({ file, ordinary, failure, tests }) => {
     const name = `${file}${ordinary ? ` (ordinary)` : ``}`
     const ran = tests.filter(
@@ -164,7 +202,7 @@ export function baselineLines(files, config) {
           `baseline`,
           `fail ${name}: ${tests.length === 0 ? `did not load` : `failed outside its tests`}: ${codeSpan(escapeControls(failure.split(`\n`)[0]))}`,
         ),
-        `  replay: ${vitest} ${shellWord(file)}`,
+        ...replayLines([...vitest, file], platform),
       ]
     const message = first.message ?? ``
     return [
@@ -174,7 +212,16 @@ export function baselineLines(files, config) {
       ),
       `  failing: ${codeSpan(escapeControls((first.names ?? [first.fullName]).join(` > `)))}: ${codeSpan(escapeControls(message.split(`\n`)[0]))}`,
       ...violationLines(message),
-      `  replay: ${vitest} ${shellWord(file)}${first.names === undefined ? `` : ` -t ${shellWord(escapeControls(replayPattern(first.names)))}`}`,
+      ...replayLines(
+        [
+          ...vitest,
+          file,
+          ...(first.names === undefined
+            ? []
+            : [`-t`, escapeControls(replayPattern(first.names))]),
+        ],
+        platform,
+      ),
     ]
   })
 }

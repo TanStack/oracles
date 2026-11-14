@@ -1,17 +1,12 @@
 // The CLI's arguments, shared by the CLI (index.mjs) and the daemon
 // (daemon.mjs), which parses each request's arguments the same way.
-import {
-  existsSync,
-  readFileSync,
-  readdirSync,
-  realpathSync,
-  statSync,
-} from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { availableParallelism } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { loadAuthored } from './authored.mjs'
 import { stateDirOf } from './evidence.mjs'
+import { posix, realPathOf } from './paths.mjs'
 import { Refusal } from './ending.mjs'
 
 const flags = new Set([`daemon`, `stop-daemon`, `ordinary`, `help`])
@@ -114,8 +109,14 @@ function optionsOf(args, cwd) {
     )
   // Test reports name files by their real path (on macOS, /tmp is
   // /private/tmp), so the package path is resolved the same way.
-  const pkg = realpathSync.native(at)
+  const pkg = realPathOf(at)
   if (args[`stop-daemon`]) return { stop: true, pkg }
+  // A package is a directory with a manifest: every check reads it.
+  if (!existsSync(join(pkg, `package.json`)))
+    throw new Refusal(
+      `--package ${args.package} has no package.json`,
+      `Pass --package the directory of a package, which has a package.json.`,
+    )
   if (!args.source)
     throw new Refusal(
       `--source is required`,
@@ -244,14 +245,14 @@ export function packagePath(pkg, path) {
   // filesystem that ignores case.
   const named = relative(
     pkg,
-    existsSync(absolute) ? realpathSync.native(absolute) : absolute,
+    existsSync(absolute) ? realPathOf(absolute) : absolute,
   )
   if (isOutside(named))
     throw new Refusal(
       `${path} is outside the package`,
       `Name a file inside the package, relative to --package.`,
     )
-  return named
+  return posix(named)
 }
 
 /** A run's directory name: its start time, then random bytes, unique per run. */
@@ -264,7 +265,13 @@ function runName() {
  * `..` (a name such as `..gen` is inside), or it is absolute.
  */
 export function isOutside(path) {
-  return path === `..` || /^\.\.[\\/]/.test(path) || isAbsolute(path)
+  // On POSIX only `/` separates, so `..\\x` is a name, not a parent (review F5).
+  const separator = process.platform === `win32` ? `[\\\\/]` : `/`
+  return (
+    path === `..` ||
+    new RegExp(`^\\.\\.${separator}`).test(path) ||
+    isAbsolute(path)
+  )
 }
 
 /**
@@ -366,7 +373,7 @@ function locate(from, name, stamps) {
       stamps.push([path, stampOf(path)])
     const candidate = join(dir, `node_modules`, name)
     if (existsSync(join(candidate, `package.json`)))
-      return realpathSync(candidate)
+      return realPathOf(candidate)
     if (dirname(dir) === dir) return undefined
   }
 }

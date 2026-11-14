@@ -14,6 +14,7 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { posix, realPathOf } from './paths.mjs'
 
 /** A problem the author can fix: its cause, and the one step that fixes it. */
 export class Refusal extends Error {
@@ -42,7 +43,7 @@ export function endRun(error, out = error?.out) {
       results,
       `Refused: ${message}\n\nFix: ${error.fix}\n`,
     )
-      ? `oracle-gaps: done refused, report ${join(out, `summary.md`)}`
+      ? `oracle-gaps: done refused, report ${posix(join(out, `summary.md`))}`
       : `oracle-gaps: done refused`
     return { exitCode: 2, stderr: `${[...block, done].join(`\n`)}\n`, done }
   }
@@ -50,13 +51,13 @@ export function endRun(error, out = error?.out) {
   const stack = `${error?.stack ?? message}\n`
   let log = join(out ?? ``, `error.log`)
   if (!write(out, results, `Internal error: ${message}\n`, stack)) {
-    log = join(tmpdir(), `oracle-gaps-error-${process.pid}.log`)
+    log = join(realPathOf(tmpdir()), `oracle-gaps-error-${process.pid}.log`)
     writeFileSync(log, stack)
   }
-  const done = `oracle-gaps: done error, log ${log}`
+  const done = `oracle-gaps: done error, log ${posix(log)}`
   return {
     exitCode: 3,
-    stderr: `oracle-gaps internal error: ${message}\nThis is a bug in oracle-gaps, not in your oracle. Its stack is in ${log}.\n${done}\n`,
+    stderr: `oracle-gaps internal error: ${message}\nThis is a bug in oracle-gaps, not in your oracle. Its stack is in ${posix(log)}.\n${done}\n`,
     done,
   }
 }
