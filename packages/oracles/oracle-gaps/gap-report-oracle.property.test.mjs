@@ -639,6 +639,68 @@ const configArgs = (plan) => ({
   contexts: plan.contexts,
 })
 
+// Exact: a run writes one retention line per batch it ran (evidence.batches, cut batches
+// included), so its line count must equal that counter. Zero batches write none.
+// The batch-line count is owed only with a report: a run with no report is judged by the completion
+// law (cli: the model predicts a report unless it predicts a refusal), which fails it there with its
+// stderr. This check does not fail a run for lacking a report, so the two laws never both judge it.
+const unlogged = (run) =>
+  run.evidence === undefined || run.retention.length === run.evidence.batches
+    ? 0
+    : 1
+
+// A batch line (ORACLE_GAPS_TEST_RETENTION) left state behind when a total
+// after its retirement differs from its size before the batch.
+// The keys a settled batch left behind, sorted, for a violation's message.
+const leftKeys = (lines) =>
+  [
+    ...new Set(
+      lines.flatMap((line) => [
+        ...((line.copyNodes ?? 0) !== 0 ? [`copyNodes`] : []),
+        ...((line.nonCopyDup ?? 0) !== 0 ? [`nonCopyDup`] : []),
+        ...Object.keys(line.before ?? {}).filter(
+          (key) =>
+            !key.startsWith(`vite.`) &&
+            ((key.startsWith(`stale`) && line.before[key] !== 0) ||
+              (line.after !== undefined &&
+                line.before[key] !== line.after[key])),
+        ),
+      ]),
+    ),
+  ]
+    .sort()
+    .join(`, `)
+
+const leftBehind = (line) =>
+  (line.copyNodes ?? 0) !== 0 ||
+  (line.nonCopyDup ?? 0) !== 0 ||
+  Object.keys(line.before).some(
+    (key) =>
+      // Vite's totals are `vite.<environment>.<map>`: its non-copy modules are cached legitimately
+      // (checked by the copies' own nodes, copyNodes, and by the bound still to add).
+      !key.startsWith(`vite.`) &&
+      ((key.startsWith(`stale`) && line.before[key] !== 0) ||
+        (line.after !== undefined && line.before[key] !== line.after[key])),
+  )
+
+const hookFiles = new Map()
+let runSeq = 0
+const hookOf = (dir) => {
+  if (!hookFiles.has(dir))
+    hookFiles.set(
+      dir,
+      join(mkdtempSync(join(tmpdir(), `gap-retention-`)), `retention.jsonl`),
+    )
+  return hookFiles.get(dir)
+}
+const retentionLinesOf = (file) =>
+  existsSync(file)
+    ? readFileSync(file, `utf8`)
+        .split(`\n`)
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+    : []
+
 /**
  * Writes the fixture's files and runs the CLI on it. A file of an earlier
  * state that this state lacks is removed.
@@ -646,14 +708,25 @@ const configArgs = (plan) => ({
 function runCli(dir, files, how = {}) {
   writeFixture(dir, files)
   const before = new Set(filesUnder(dir))
-  const { args, out } = cliArgs(dir, files, how)
+  const { args, out: outBase } = cliArgs(dir, files, how)
+  // Each call has its own output directory: its retention lines are then its own, even when a
+  // daemon serves several checks of one test.
+  const out = `${outBase}-${++runSeq}`
+  args[args.indexOf(`--out`) + 1] = out
+  // The retention hook (ORACLE_GAPS_TEST_RETENTION): one line per batch,
+  // written beside the run's own temporary files, not in the package.
+  // One hook file per package: a daemon keeps the environment of the call that started it, so every call
+  // for this package writes to the same file; each line names its run (below).
+  const hook = hookOf(dir)
   const child = spawnSync(process.execPath, args, {
     cwd: repo,
     encoding: `utf8`,
     timeout: 300_000,
     maxBuffer: 64 * 1024 * 1024,
-    env: cleanEnv(),
+    env: { ...cleanEnv(), ORACLE_GAPS_TEST_RETENTION: hook },
   })
+  // Each line names its check's output directory, so this run keeps only its own (a daemon serves many calls).
+  const retention = retentionLinesOf(hook).filter((line) => line.run === out)
   const run = readRun(
     dir,
     out,
@@ -667,7 +740,12 @@ function runCli(dir, files, how = {}) {
     .split(`\n`)
     .find((line) => line.startsWith(`  replay: `))
     ?.slice(`  replay: `.length)
-  return { ...run, strayWrites: strays(dir, before), replay }
+  return {
+    ...run,
+    strayWrites: strays(dir, before, relative(dir, out)),
+    replay,
+    retention,
+  }
 }
 
 /**
@@ -677,12 +755,13 @@ function runCli(dir, files, how = {}) {
  * directory, `.oracle-gaps-<pid>/` (its capture setup and Vitest configs,
  * which resolve the package's modules from there), is its own too.
  */
-const strays = (dir, before, running = false) =>
+const strays = (dir, before, own, running = false) =>
   filesUnder(dir).filter(
     (file) =>
       !before.has(file) &&
       !(running && /^\.oracle-gaps-\d+\//.test(file)) &&
-      !OWN_WRITES.some((home) => file === home || file.startsWith(`${home}/`)),
+      // The one path a run may write under: the --out the driver gave it (cliArgs names it).
+      !(file === own || file.startsWith(`${own}/`)),
   )
 
 /**
@@ -780,7 +859,12 @@ async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
       : warm
         ? existsSync(join(pids, `warming`)) && !exited
         : readdirSync(pids).length >= 2
-  const strayWhileRunning = strays(dir, before, true)
+  const strayWhileRunning = strays(
+    dir,
+    before,
+    relative(dir, join(dir, `out-stop`)),
+    true,
+  )
   if (!abort) child.kill(signal)
   const ended = await Promise.race([exit, sleep(30_000).then(() => false)])
   await sleep(1000)
@@ -835,7 +919,7 @@ async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
       /^\.oracle-gaps-\d+$/.test(name),
     ),
     // What else it left in the package.
-    left: strays(dir, before).filter(
+    left: strays(dir, before, relative(dir, join(dir, `out-stop`))).filter(
       (file) => !/^\.oracle-gaps-\d+\//.test(file),
     ),
   }
@@ -894,17 +978,19 @@ function filesUnder(root, within = ``) {
 // (maintainer decision, 2026-11-11: the gap check's working files stay out
 // of the repository), so a package, and a workspace dependency in it, keeps
 // nothing of a run.
-const OWN_WRITES = [`out`, `out-daemon`, `out-stop`, `out-only`]
 
 /** Runs the CLI several times at once on one state of the fixture. */
 async function runClisAtOnce(dir, files, hows) {
   writeFixture(dir, files)
   return Promise.all(
     hows.map(async (how) => {
-      const { args, out } = cliArgs(dir, files, how)
+      const { args, out: outBase } = cliArgs(dir, files, how)
+      const out = `${outBase}-${++runSeq}`
+      args[args.indexOf(`--out`) + 1] = out
+      const hook = hookOf(dir)
       const child = spawn(process.execPath, args, {
         cwd: repo,
-        env: { ...cleanEnv(), ...how.env },
+        env: { ...cleanEnv(), ...how.env, ORACLE_GAPS_TEST_RETENTION: hook },
         stdio: [`ignore`, `pipe`, `pipe`],
       })
       // Both streams, as runCli reads them: law 15 judges each run's lines,
@@ -924,7 +1010,11 @@ async function runClisAtOnce(dir, files, hows) {
           resolvePromise(code)
         })
       })
-      return readRun(dir, out, status, stderr, how.cli ?? here, stdout)
+      const run = readRun(dir, out, status, stderr, how.cli ?? here, stdout)
+      return {
+        ...run,
+        retention: retentionLinesOf(hook).filter((line) => line.run === out),
+      }
     }),
   )
 }
@@ -1310,7 +1400,17 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       : await daemonChecks(step, files, how)
     if (!cold.has(key)) cold.set(key, runCli(dir, files, how))
     const coldRun = cold.get(key)
-    for (const [i, run] of [daemon, ...others].entries())
+    for (const [i, run] of [daemon, ...others].entries()) {
+      observe(
+        `retention:daemon`,
+        (run.retention ?? []).filter(leftBehind).length,
+      )
+      observe(`retentionLines:daemon`, unlogged(run))
+      observe(`retentionKeys:daemon`, leftKeys(run.retention ?? []))
+      observe(
+        `retention:cold`,
+        (coldRun.retention ?? []).filter(leftBehind).length,
+      )
       observe(`incremental`, {
         step: i === 0 ? step : `${step} (a second check at once)`,
         cold: {
@@ -1318,6 +1418,11 @@ async function incremental(dir, plan, cli, copy, observe, states) {
           refusal: coldRun.refusal,
           report: coldRun.report,
           notes: coldRun.stream.notes,
+          // An internal error's stack (its error.log, which readRun reads
+          // for a run that exits 3), for the violation's message. Only
+          // then: a completed run's stderr holds timings, which differ
+          // between two runs of one history.
+          stderr: coldRun.exit === 3 ? coldRun.stderr : undefined,
         },
         daemon: {
           exit: run.exit,
@@ -1332,6 +1437,7 @@ async function incremental(dir, plan, cli, copy, observe, states) {
           stderr: run.stderr?.split(`\n`)[0],
         },
       })
+    }
     if (twice && step === `start`)
       states.add(`two checks started the daemon at once`)
     if (
@@ -1571,6 +1677,8 @@ async function incremental(dir, plan, cli, copy, observe, states) {
 }
 
 async function driver(plan, observe) {
+  // Calls are counted within this history, so two runs of one history name the same directories.
+  runSeq = 0
   // A package that resolves no TypeScript, has no config, or has its
   // config in its parent directory lives outside this repository
   // (`outsideRepository`); the last in a directory `pkg` of the scratch
@@ -1600,15 +1708,24 @@ async function driver(plan, observe) {
       cli: plan.cliPath === `spaced` ? copy : here,
       ...configArgs(plan),
     }
-    const { replay, ...cli } = runCli(dir, files, how)
+    const { replay, retention, ...cli } = runCli(dir, files, how)
     // How many units were computed or reused says how the result was
     // produced, not what it is, so it is not observed.
     observe(`cli`, { ...cli, evidence: undefined })
+    // Deterministic: how many batches left a retired copy's state behind (0),
+    // not the per-batch lines, whose batch splits vary with hang cuts.
+    observe(`retention`, retention.filter(leftBehind).length)
+    observe(`retentionKeys`, leftKeys(retention))
+    observe(
+      `retentionLines:cold`,
+      unlogged({ retention, evidence: cli.evidence }),
+    )
     // A failing owner's replay, run as the author would run it (law 3).
     if (plan.fault === `brokenOwner`)
       observe(`replay`, { command: replay, ran: replayed(dir, replay) })
     // Reach comes from what the CLI reported, mapped onto the plan.
     const states = new Set()
+    if (retention.length > 1) states.add(`a check that ran more than one batch`)
     if (cli.exit === 0 && !plan.consoleOutput)
       states.add(`a completed run whose tests wrote nothing`)
     // Law 14: a partial run of one owned function's mutants, whose baseline
@@ -1625,6 +1742,9 @@ async function driver(plan, observe) {
         only: ids,
         outName: `out-only`,
       })
+      observe(`retention:partial`, partial.retention.filter(leftBehind).length)
+      observe(`retentionLines:partial`, unlogged(partial))
+      observe(`retentionKeys:partial`, leftKeys(partial.retention ?? []))
       observe(`partial`, {
         function: chosen.function,
         source: chosen.source,
@@ -2049,7 +2169,14 @@ async function driver(plan, observe) {
       const moved = { ...files, [SOURCE]: edited(plan) }
       // The evidence counts are not observed, as for `cli`: they depend on
       // timing (oracles-followups.md G1). Verdicts and keys are.
-      observe(`stability`, { ...runCli(dir, moved, how), evidence: undefined })
+      const { retention: movedRetention, ...movedRun } = runCli(dir, moved, how)
+      observe(`stability`, { ...movedRun, evidence: undefined })
+      observe(`retention:stability`, movedRetention.filter(leftBehind).length)
+      observe(
+        `retentionLines:stability`,
+        unlogged({ retention: movedRetention, evidence: movedRun.evidence }),
+      )
+      observe(`retentionKeys:stability`, leftKeys(movedRetention))
       states.add(`stability rerun`)
     }
     if (plan.steps.length > 0)
@@ -2090,7 +2217,7 @@ function incrementalCheck(observations) {
     )
       return violation(
         `incremental`,
-        `after ${step}, the daemon's check exited ${daemon.exit} (${daemon.refusal ?? daemon.stderr ?? `no refusal`}) and the cold run exited ${cold.exit} (${cold.refusal ?? `no refusal`})`,
+        `after ${step}, the daemon's check exited ${daemon.exit} (${daemon.refusal ?? daemon.stderr ?? `no refusal`}) and the cold run exited ${cold.exit} (${cold.refusal ?? `no refusal`})${cold.exit === 3 && cold.stderr ? `; its error log: ${cold.stderr}` : ``}`,
         `incremental equals cold`,
         { actual: daemon, expected: cold },
       )
@@ -2170,6 +2297,41 @@ function check(plan, observations, expected) {
     )
   const stream = streamBreach(`cli`, cli, expected, plan)
   if (stream) return stream
+  // Bounded retention (the register's C entry): once a batch's copies are
+  // retired, Vitest's filesMap, pathsSet, and idMap and Vite's module graph
+  // name none of them, so each count the hook reports is 0.
+  const unlogged_ = observations
+    .filter((o) => o.checkpoint.startsWith(`retentionLines`))
+    .reduce((sum, o) => sum + o.value, 0)
+  if (unlogged_ > 0)
+    return violation(
+      `retention`,
+      `${unlogged_} run(s) wrote a retention line count different from their batches (${observations
+        .filter((o) => o.checkpoint.startsWith(`retentionLines`) && o.value > 0)
+        .map((o) => o.checkpoint)
+        .join(`, `)})`,
+      `bounded retention`,
+      { actual: unlogged_, expected: 0 },
+    )
+  const fields = observations
+    .filter((o) => o.checkpoint.startsWith(`retentionKeys`))
+    .map((o) => o.value)
+    .filter(Boolean)
+    .join(`, `)
+  const held = observations
+    .filter(
+      (o) =>
+        o.checkpoint.startsWith(`retention`) &&
+        !o.checkpoint.startsWith(`retentionKeys`),
+    )
+    .reduce((sum, o) => sum + o.value, 0)
+  if (held > 0)
+    return violation(
+      `retention`,
+      `${held} batch(es) left a retired copy's Vitest or Vite state behind (fields: ${fields || `none named`})`,
+      `bounded retention`,
+      { actual: held, expected: 0 },
+    )
   // Through the daemon, each check streams the same kinds of line, and a
   // completed one ends with its done line (law 15). The state of each step
   // differs, so its verdict and counts are judged by law 9's comparison.
@@ -3350,6 +3512,8 @@ oracleProperty({
       ...staticStates,
       `extra work in a generated function`,
       `killed by a work bound in a generated function`,
+      // A check whose runs have more than one batch: the retention law's multi-batch reach.
+      `a check that ran more than one batch`,
     ],
     runs: 2,
     fixedSeeds: [20261105],

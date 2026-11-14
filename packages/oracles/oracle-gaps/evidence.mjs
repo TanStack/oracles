@@ -57,14 +57,14 @@ const withVersion = (row, variant) =>
     ),
   ].slice(0, VERSIONS)
 
-/** A store that lives for one check. */
+/**
+ * The store of a cold check. It keeps no unit: a cold run serves no lookup
+ * (its evidence reports `reused` 0 on every klona run measured), so a unit
+ * kept for reuse would only be retained, per mutant copy, for the whole run.
+ * `size` counts what it holds, for the retention law (check.mjs).
+ */
 export function memoryStore() {
-  const rows = new Map()
-  return {
-    get: (id) => rows.get(id),
-    put: (id, variant) =>
-      rows.set(id, { id, variants: withVersion(rows.get(id), variant) }),
-  }
+  return { get: () => undefined, put: () => {}, size: () => 0 }
 }
 
 /**
