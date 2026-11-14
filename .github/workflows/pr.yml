@@ -284,15 +284,55 @@ jobs:
         working-directory: packages/oracles
         env:
           SHARD: ${{ matrix.shard }}
-          GAP_IDLE_PROFILE: ${{ runner.temp }}/idle-${{ matrix.shard }}.jsonl
         # The verbose reporter prints each test with its duration, which sizes the shards.
         run: pnpm exec vitest --run --reporter=verbose --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-fixed-seed-windows "$SHARD")"
-      # Diagnostic (idle clock): which condition blocked each test's idle stretch.
-      - if: always()
+  daemon-history-profile:
+    # Temporary diagnostic (CI numbers for the daemon history's cost); remove before merge.
+    name: Daemon history profile (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Tools
+        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
+      - run: pnpm --filter @tanstack/oracles run build
+      - name: Daemon history, profiled
         shell: bash
-        run: cat "$RUNNER_TEMP/idle-$SHARD.jsonl" 2>/dev/null || echo no-idle-profile
+        working-directory: packages/oracles
         env:
-          SHARD: ${{ matrix.shard }}
+          GAP_PROFILE_ALL: ${{ runner.temp }}/profile.jsonl
+        run: |
+          start=$(date +%s)
+          pnpm exec vitest --run --testTimeout=2700000 --reporter=verbose --config oracle-gaps/vitest.config.mjs gap-report-oracle -t 'fixed seed 20261105: an edit sequence through the daemon$' || true
+          echo "wall $(( $(date +%s) - start )) s"
+          cat > "$RUNNER_TEMP/summ.mjs" <<'EOF'
+          import { readFileSync } from 'node:fs'
+          const rows = readFileSync(process.argv[2], 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+          const checks = rows.filter((r) => r.kind === 'check')
+          const runs = rows.filter((r) => r.kind === 'run')
+          const phases = rows.filter((r) => r.kind === 'phase')
+          const mutants = rows.filter((r) => r.kind === 'mutant')
+          const sum = (a) => a.reduce((s, r) => s + (r.ms ?? 0), 0)
+          console.log(`checks: ${checks.length}, total ${(sum(checks) / 1000).toFixed(1)} s`)
+          console.log(`runs (vitest batches/baseline): ${runs.length}, total ${(sum(runs) / 1000).toFixed(1)} s`)
+          console.log(`mutant evaluations: ${mutants.length}, total ${(sum(mutants) / 1000).toFixed(1)} s`)
+          const byPhase = {}
+          for (const p of phases) { byPhase[p.name] ??= { n: 0, ms: 0 }; byPhase[p.name].n++; byPhase[p.name].ms += p.ms }
+          for (const [name, v] of Object.entries(byPhase).sort((a, b) => b[1].ms - a[1].ms)) console.log(`  phase ${name}: n=${v.n} total ${(v.ms / 1000).toFixed(1)} s`)
+          const byRunKind = {}
+          for (const r of runs) { const k = r.file === 'batch' ? 'batch' : 'single'; byRunKind[k] ??= { n: 0, ms: 0 }; byRunKind[k].n++; byRunKind[k].ms += r.ms }
+          for (const [k, v] of Object.entries(byRunKind)) console.log(`  run ${k}: n=${v.n} total ${(v.ms / 1000).toFixed(1)} s`)
+
+          EOF
+          node "$RUNNER_TEMP/summ.mjs" "$GAP_PROFILE_ALL"
   windows-gap-cli:
     name: Windows gap CLI on a fixture
     runs-on: windows-latest
