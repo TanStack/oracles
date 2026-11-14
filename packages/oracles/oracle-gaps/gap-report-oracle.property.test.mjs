@@ -2365,6 +2365,15 @@ function daemonCheck(observations) {
 function check(plan, observations, expected) {
   const cli = observations.find((o) => o.checkpoint === `cli`)?.value
   if (!cli) return violation(`cli`, `no CLI run was observed`, `completion`)
+  // An internal error comes first: it also leaves the session directory, so
+  // the namespace law below would name only its symptom (issue #83). The
+  // message carries the run's error.log (readRun).
+  if (cli.exit === 3)
+    return violation(
+      `cli`,
+      `the run ended in an internal error: ${cli.stderr ?? `no stderr`}`,
+      `completion`,
+    )
   if (cli.strayWrites?.length > 0)
     return violation(
       `cli`,

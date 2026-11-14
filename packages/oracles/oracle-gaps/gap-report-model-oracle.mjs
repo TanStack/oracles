@@ -835,14 +835,6 @@ const drawn = fc.record({
       }),
     },
   ),
-  // Whether a batch's closing rows are written in two appends, the second
-  // after the watchdog has polled twice (ORACLE_GAPS_TEST_TORN_ROWS, issue
-  // #83). Rare in generated histories, since each closing row then waits
-  // for two polls; its constructed history always sets it.
-  tornRows: fc.oneof(
-    { weight: 19, arbitrary: fc.constant(false) },
-    { weight: 1, arbitrary: fc.constant(true) },
-  ),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -882,7 +874,9 @@ const keepsSteps = (history) => {
 // A history is drawn as on main; the plan takes its later edits after its
 // steps (`laterStepsOf`). Taking a history back returns it unchanged,
 // except a constructed one whose `steps` hold a later edit, which the
-// steps grammar cannot draw: its later edits move to `laterSteps`.
+// steps grammar cannot draw: its later edits move to `laterSteps`. A
+// constructed history may also set `tornRows`, which no generated history
+// draws (issue #83), and which is taken back without it.
 const histories = drawn.map(
   (history) => (keepsSteps(history) ? history : { ...history, steps: null }),
   (value) => {
@@ -890,13 +884,16 @@ const histories = drawn.map(
       /** @type {{ witness: unknown, steps: unknown[] | null }} */ (value)
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
+    const { tornRows, ...drawnValue } = /** @type {Record<string, unknown>} */ (
+      value
+    )
     const later = (history.steps ?? []).filter((step) =>
       laterEdits.includes(step),
     )
-    if (later.length === 0) return value
+    if (later.length === 0) return tornRows === undefined ? value : drawnValue
     const earlier = history.steps.filter((step) => !laterEdits.includes(step))
     return {
-      ...value,
+      ...drawnValue,
       steps: earlier.length > 0 ? earlier : null,
       laterSteps: later,
     }
