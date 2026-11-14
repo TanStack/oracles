@@ -524,6 +524,8 @@ export const partitions = {
         "test.projects in a parent's config",
       ]),
       2: anyOf([
+        'a stop with the default output directory',
+        'a daemon check with the default output directory',
         'a .ts config in a package with no module type that calls require',
         'a declaration fault: brokenVitest',
         'a declaration fault: noTypescript',
@@ -533,6 +535,9 @@ export const partitions = {
         'two authored mutants',
       ]),
       3: anyOf([
+        'a stop as the CLI starts',
+        'a stream log that cannot be written',
+        'two runs on one output directory',
         'a config fault in a run that owns nothing',
         'a declaration fault: configNoDefault',
         'a declaration fault: nonLiteral',
