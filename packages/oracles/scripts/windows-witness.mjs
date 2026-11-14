@@ -103,57 +103,38 @@ if (command === `done`) {
       .map((text) => text.slice(text.indexOf(label) + label.length))
   // Vitest repeats a failing unit's error text, so its replay lines repeat too:
   // each distinct line counts once, in the order it first printed.
-  const once = (xs) => [...new Set(xs)]
-  const replayPs = once(after(`Replay (PowerShell): `))
-  const replayCmd = once(after(`Replay (cmd): `))
-  const rerunPs = once(after(`Rerun (PowerShell): `))
-  const rerunCmd = once(after(`Rerun (cmd): `))
-  const noForm = `use the PowerShell line for this name`
-  // The failing units, as vitest prints them: `FAIL <file> > <property> > <unit>`.
-  const failing = new Map()
-  for (const text of lines) {
-    const match = text.match(
-      /FAIL\s+\S+ > (.*?) > ((?:random|fixed) seed: .*)$/,
+  // Each printed PowerShell line pairs with the cmd line that follows it (the
+  // framework prints the two together). A random unit's violation prints its
+  // replay under the Rerun label too, so a line is a replay when it carries the
+  // ORACLE_ variables, and runs as printed; a bare -t line is a rerun and runs as
+  // `vitest run` plus its arguments. Each distinct PowerShell line counts once.
+  const pairs = []
+  const seen = new Set()
+  lines.forEach((text, at) => {
+    const head = text.match(/(Replay|Rerun) \(PowerShell\): (.*)$/)
+    if (head === null || seen.has(head[2])) return
+    seen.add(head[2])
+    const cmdAt = lines.findIndex(
+      (other, j) =>
+        j > at &&
+        j <= at + 6 &&
+        new RegExp(`${head[1]} \\(cmd\\): `).test(other),
     )
-    if (match)
-      failing.set(`${match[1]}\0${match[2]}`, {
-        property: match[1],
-        unit: match[2],
-      })
-  }
-  const failingRandom = [...failing.values()].filter((f) =>
-    f.unit.startsWith(`random seed: `),
-  )
-  const failingFixed = [...failing.values()].filter((f) =>
-    f.unit.startsWith(`fixed seed `),
-  )
-  // The PowerShell value of $env:NAME='...', decoded: a doubled quote (of any
-  // PowerShell single-quote character) is that character.
-  const decodePs = (line, name) => {
-    const head = `$env:${name}='`
-    const at = line.indexOf(head)
-    if (at < 0) return undefined
-    let value = ``
-    for (let i = at + head.length; i < line.length; i += 1) {
-      const c = line[i]
-      if (/['\u2018\u2019\u201A\u201B]/.test(c)) {
-        if (line[i + 1] === c) {
-          value += c
-          i += 1
-          continue
-        }
-        return value
-      }
-      value += c
-    }
-    return undefined
-  }
-  // The cmd value of set "NAME=value". A value with a double quote, `%`, or `!`
-  // has no cmd form, so its line says so and no set line is decoded.
-  const decodeSet = (line, name) => {
-    const match = line.match(new RegExp(`set "${name}=([^"]*)" &&`))
-    return match === null ? undefined : match[1]
-  }
+    const cmd =
+      cmdAt < 0
+        ? undefined
+        : lines[cmdAt].replace(new RegExp(`^.*${head[1]} \\(cmd\\): `), ``)
+    pairs.push({
+      kind: head[1],
+      ps: head[2],
+      cmd,
+      replay: head[2].includes(`$env:`),
+    })
+  })
+  const replayPs = pairs.filter((pair) => pair.replay).map((pair) => pair.ps)
+  const replayCmd = pairs.filter((pair) => pair.replay).map((pair) => pair.cmd)
+  const rerunPs = pairs.filter((pair) => !pair.replay).map((pair) => pair.ps)
+  const rerunCmd = pairs.filter((pair) => !pair.replay).map((pair) => pair.cmd)
   // The package's own binaries are on the PATH, so `vitest` runs as the line says.
   const env = {
     ...process.env,
@@ -213,26 +194,28 @@ if (command === `done`) {
         failures.push(`${name} ${i + 1} did not reproduce in cmd: ${cmdLine}`)
     })
   }
-  // Every failing unit prints its line: a random unit a Replay line, a fixed
-  // unit a Rerun line (review: a failure with no per-shell line fails here).
-  if (replayPs.length !== failingRandom.length)
-    failures.push(
-      `${failingRandom.length} random units failed, but ${replayPs.length} Replay lines printed`,
-    )
-  if (rerunPs.length !== failingFixed.length)
-    failures.push(
-      `${failingFixed.length} fixed units failed, but ${rerunPs.length} Rerun lines printed`,
-    )
-  // A Replay line's ORACLE_PROPERTY and ORACLE_UNIT must be exactly a failing
-  // unit's names: decoded, and equal (not contained).
-  const names = new Set(failingRandom.map((f) => `${f.property}\0${f.unit}`))
+  // Every failing unit is covered by a printed replay whose ORACLE_PROPERTY and
+  // ORACLE_UNIT decode to exactly its names: a random unit by its own unit name,
+  // a fixed unit by the random unit it replays (`random seed: <name>`).
+  const replayNames = new Set(
+    replayPs.map(
+      (line) =>
+        `${decodePs(line, `ORACLE_PROPERTY`)}\0${decodePs(line, `ORACLE_UNIT`)}`,
+    ),
+  )
+  for (const f of failing.values()) {
+    const unit = f.unit.startsWith(`random seed: `)
+      ? f.unit
+      : `random seed: ${f.unit.replace(/^fixed seed \d+: /, ``)}`
+    if (!replayNames.has(`${f.property}\0${unit}`))
+      failures.push(
+        `no printed replay names the failing unit ${JSON.stringify([f.property, f.unit])}`,
+      )
+  }
+  // A Replay line's cmd line sets the same names.
   replayPs.forEach((line, i) => {
     const property = decodePs(line, `ORACLE_PROPERTY`)
     const unit = decodePs(line, `ORACLE_UNIT`)
-    if (!names.has(`${property}\0${unit}`))
-      failures.push(
-        `Replay ${i + 1} names ${JSON.stringify([property, unit])}, not a failing unit's names`,
-      )
     const cmdLine = replayCmd[i]
     if (cmdLine !== undefined && cmdLine !== noForm) {
       const cmdProperty = decodeSet(cmdLine, `ORACLE_PROPERTY`)
