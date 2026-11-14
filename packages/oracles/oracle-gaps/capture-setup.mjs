@@ -955,8 +955,6 @@ if (state.capture || idleProfile) {
   let longest = 0
   // Profiling only: how many samples each condition blocked the idle clock.
   let blocked = new Map()
-  // The test whose samples are being recorded (profiling).
-  let key
   let use = realUse()
   let reported = false
   beforeEach(() => {
@@ -969,7 +967,6 @@ if (state.capture || idleProfile) {
   })
   beforeEach((context) => {
     if (continuing) return
-    key = testKey(context.task)
     context.onTestFinished(() => {
       baseTimers = undefined
       if (idleProfile)
@@ -1005,13 +1002,6 @@ if (state.capture || idleProfile) {
             : timersListed(kinds) > baseTimers
               ? `timers listed`
               : undefined
-    // Each sample of a copy that can be cut off is written as it happens, so
-    // a copy the watchdog kills keeps its samples (profiling).
-    if (idleProfile && state.idleMs)
-      appendFileSync(
-        idleProfile,
-        `${JSON.stringify({ sample: blocker ?? `idle`, key, at: Math.round(now) })}\n`,
-      )
     if (blocker !== undefined) {
       since = undefined
       if (idleProfile) blocked.set(blocker, (blocked.get(blocker) ?? 0) + 1)

@@ -3359,7 +3359,10 @@ const posixStops =
   process.platform === `win32`
     ? []
     : [`a run stopped by SIGTERM while a worker spun`]
-const witnessed = [...required, ...posixStops].filter(
+// Every platform reaches the run whose process aborted: POSIX by SIGABRT to itself,
+// win32 by process.abort() (ORACLE_GAPS_TEST_ABORT_AT).
+const everyStops = [`a run whose process aborted`]
+const witnessed = [...required, ...posixStops, ...everyStops].filter(
   (s) => !separate.includes(s),
 )
 
@@ -3396,7 +3399,7 @@ oracleProperty({
     // verdict its first failure holds. The counterexample is the smallest
     // of those seven histories, its law the first failure's.
     arbitrary: fc.limitShrink(histories, 6),
-    states: [...required, ...posixStops],
+    states: [...required, ...posixStops, ...everyStops],
     measured: [
       ...staticStates,
       `extra work in a generated function`,
