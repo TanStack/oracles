@@ -301,12 +301,15 @@ export const partitions = {
         'a stale authored mutant and a reformat',
         'a failing owner under a config that --config names',
       ]),
-      // 134 s, 101 s, 27 s, and 15 s.
+      // 134 s, 101 s, 27 s, and 15 s; the two constructed histories of the
+      // deterministic cuts (a 16 s wait, and a timer under load), about 45 s.
       2: anyOf([
         'every outcome class',
         'a second daemon check of the budget witness',
         'a declaration fault: brokenVitest',
         'an edit that changed the cold result after a hang replaced the only context',
+        "a slow kill past Vitest's 15 s limit",
+        'a copy waiting on a timer under load',
       ]),
       // The rest: the edit sequence through the daemon (95 s), brokenOwner
       // (83 s), generated (23 s), the lazy module (12 s), and small units.
@@ -547,6 +550,8 @@ export const partitions = {
         'a load failure beside a hang',
         'an ambiguous authored mutant',
         "a slow owner's kill and another owner's kill",
+        "a slow kill past Vitest's 15 s limit",
+        'a copy waiting on a timer under load',
         'every outcome class',
       ]),
       5: anyOf([

@@ -135,13 +135,17 @@ const FULL_LIMIT_MS = 20000
 // How long a slow test waits, in real milliseconds: past the 1 s first
 // budget that the driver passes (`--first-limit`), within the full limit.
 const SLOW_MS = 3000
-// How long each slow test of `w_slowpair` waits: past its file's first
-// budget (the 1 s `--first-limit` plus three times its one-test file's
-// unmutated time t), so its copy is always cut and confirmed; past half the
-// mutant's budget, so two such confirmations never fit it; and under the
-// full limit, so each would fit alone. The window holds while t < 3 s and
-// ten times the two files' time stays under 2 × 10 s (their sum under 2 s).
-const PAIR_SLOW_MS = 10000
+// The site evaluations that each copy of `w_slowpair` makes: its test calls
+// the function this many times where its output differs. Each copy stays
+// inside its call budget (CALL_FLOOR in check.mjs, 100,000 site evaluations),
+// and the two copies together pass the mutant's work budget (WORK_FLOOR).
+// Work is counted, not timed, so the outcome is the same on any machine.
+const PAIR_LOOPS = 37_500
+// A mutant's work budget (maintainer disposition G1, under the deterministic
+// cuts decision of 2026-11-14): the larger of this floor and ten times its
+// owner files' unmutated work, in site evaluations. The floor is the copies'
+// call budget, so two copies that each stay inside theirs can pass it.
+const WORK_FLOOR = 100_000
 // A mutant's budget for the runs that confirm its cut-off copies, which the
 // driver passes (`--mutant-limit`): one slow owner's confirmation fits it
 // (SLOW_MS), and two of `w_slowpair`'s do not. Ten times the fixture's
@@ -414,6 +418,12 @@ const testCase = fc.record({
   // Only a witness waits on a timer, sleeps, reads the clock, or waits a
   // turn: its work could follow the clock.
   timed: fc.constant(false),
+  // The constructed-only fields (see `histories`): a witness's wait where its
+  // output differs, its repeated calls, and its load. A generated test has the
+  // neutral values, which change nothing.
+  slowMs: fc.constant(SLOW_MS),
+  loops: fc.constant(0),
+  busy: fc.constant(null),
 })
 // Law 9's edits. Each content edit changes what some evidence depends on:
 // a test file, a source statement, the source's line numbers, an owns list,
@@ -806,7 +816,18 @@ const keepsSteps = (history) => {
 // inverse on the histories it keeps, so fast-check takes every one of them
 // back and shrinks it.
 // A constructed history may set `slowTwin`, which no generated history
-// draws, and which is taken back without it.
+// draws, and which is taken back without it. Its tests may also set the
+// constructed-only fields `slowMs`, `loops` and `busy`, which the drawn
+// test record holds as constants at their neutral values (the generator rule,
+// 2026-11-14: a field that changes what a history runs is set only by a
+// constructed history, and taken back to its neutral value here).
+const takenBack = (t) => ({
+  ...t,
+  slow: false,
+  slowMs: SLOW_MS,
+  loops: 0,
+  busy: null,
+})
 const histories = drawn.map(
   (history) => (keepsSteps(history) ? history : { ...history, steps: null }),
   (value) => {
@@ -817,7 +838,8 @@ const histories = drawn.map(
     const { slowTwin, ...drawnValue } = /** @type {Record<string, unknown>} */ (
       value
     )
-    return slowTwin === undefined ? value : drawnValue
+    const tests = /** @type {Record<string, unknown>[]} */ (drawnValue.tests)
+    return { ...drawnValue, tests: tests.map(takenBack) }
   },
 )
 
@@ -1617,16 +1639,8 @@ const witness = [
     owners: PAIR_FILES,
     body: [kill],
     tests: [
-      judging(`p`, `fixed seed`, 7, {
-        judges: false,
-        slow: true,
-        slowMs: PAIR_SLOW_MS,
-      }),
-      judging(`q`, `fixed seed`, 7, {
-        judges: false,
-        slow: true,
-        slowMs: PAIR_SLOW_MS,
-      }),
+      judging(`p`, `fixed seed`, 7, { judges: false, loops: PAIR_LOOPS }),
+      judging(`q`, `fixed seed`, 7, { judges: false, loops: PAIR_LOOPS }),
     ],
   },
   // A kill as usual. In a run that the driver stops (`GAP_STOP_DIR` set),
@@ -3907,16 +3921,26 @@ function runsOf(plan, tests, sites, active) {
       for (const part of partsOf(t)) {
         const base = interpret(plan, t.fn, part.input, sites)
         const mutated = interpret(plan, t.fn, part.input, sites, active)
-        if (!t.judgesShared) {
-          before += base.work
-          after += mutated.work
-        }
         const route = routeOf(t, part)
-        // A loop that never ends cuts the file's run off, as a hang does.
-        if (mutated.spun)
-          return { t, route, hang: true, verdicts: found, changed: true }
         const changed =
           !mutated.threw && mutated.trace.join() !== base.trace.join()
+        // Where the output differs, a `loops` witness calls the function that
+        // many more times, so its work is the call's work once per call.
+        if (!t.judgesShared) {
+          before += base.work
+          after += mutated.work * (1 + (changed ? (t.loops ?? 0) : 0))
+        }
+        // A loop that never ends cuts the file's run off, as a hang does.
+        if (mutated.spun)
+          return {
+            t,
+            route,
+            hang: true,
+            verdicts: found,
+            changed: true,
+            work: after,
+            before,
+          }
         changedAny ||= changed
         slowed ||= changed && (t.slow || t.ioWait)
         if (mutated.threw)
@@ -3927,17 +3951,35 @@ function runsOf(plan, tests, sites, active) {
             verdicts: found,
             changed: changedAny,
             slowed,
+            work: after,
+            before,
           }
         // A test that hangs where another would judge never ends.
         if (changed && t.hangs)
-          return { t, route, hang: true, verdicts: found, changed: true }
+          return {
+            t,
+            route,
+            hang: true,
+            verdicts: found,
+            changed: true,
+            work: after,
+            before,
+          }
         if (changed && t.judges) {
           found.push({
             route,
             law: t.judgeBy === `verdict` ? t.law : `(unnamed)`,
           })
           if (t.judgeBy !== `soft`)
-            return { t, route, verdicts: found, changed: true, slowed }
+            return {
+              t,
+              route,
+              verdicts: found,
+              changed: true,
+              slowed,
+              work: after,
+              before,
+            }
         }
       }
       // A test that passed: its route is the last one it registered, and
@@ -3966,6 +4008,8 @@ function runsOf(plan, tests, sites, active) {
         changed: changedAny,
         slowed,
         rose: judgesWork && after > before,
+        work: after,
+        before,
       }
     })
 }
@@ -4023,20 +4067,51 @@ function judge(plan, tests, sites, active, { budgeted = true } = {}) {
   // a timeout); failing that, the mutant is a timeout.
   const hung = new Set()
   const slowed = new Map()
-  for (const file of new Set(runs.map((r) => r.t.file)))
+  // The mutant's work budget (G1): its owner files' copies are counted in
+  // their order, each copy's work being the site evaluations of its runs up
+  // to a hang or a kill. A copy past the budget is a timeout, and so is every
+  // copy after it, so a kill among them does not count. The budget is the
+  // larger of WORK_FLOOR and ten times the owner files' unmutated work, where
+  // a file's unmutated work is its most-working test's.
+  const files = [...new Set(runs.map((r) => r.t.file))]
+  const unmutated = files.reduce(
+    (sum, file) =>
+      sum +
+      Math.max(
+        0,
+        ...runs.filter((r) => r.t.file === file).map((r) => r.before),
+      ),
+    0,
+  )
+  const workBudget = Math.max(WORK_FLOOR, 10 * unmutated)
+  const counted = new Set()
+  let spent = 0
+  let exhausted = false
+  for (const file of files) {
+    let work = 0
     for (const r of runs.filter((x) => x.t.file === file)) {
       if (r.slowed) slowed.set(file, r.t.slowMs ?? SLOW_MS)
       if (r.hang) hung.add(file)
+      work += r.work
       if (r.hang || killsIn(r)) break
     }
-  const live = runs.filter((r) => !hung.has(r.t.file))
+    if (budgeted && spent + work > workBudget) {
+      exhausted = true
+      break
+    }
+    spent += work
+    counted.add(file)
+  }
+  const live = runs.filter(
+    (r) => counted.has(r.t.file) && !hung.has(r.t.file),
+  )
   const verdicts = (route) =>
     live.flatMap((r) =>
       r.verdicts.filter((v) => v.route === route).map((v) => v.law),
     )
   const reproducible = verdicts(`reproducible`)
   if (reproducible.some((law) => law !== `reach agreement`)) return `killed`
-  if (hung.size > 0) return `timeout`
+  if (hung.size > 0 || exhausted) return `timeout`
   // The runs that confirm a mutant's cut-off copies share its budget
   // (`--mutant-limit`, MUTANT_LIMIT_MS here; maintainer disposition G1,
   // 2026-11-11). Under two budgets, a slow owner file is cut at its first
@@ -4706,6 +4781,22 @@ function oracleTestFile(plan, file) {
         ...(t.slow
           ? [
               `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await new Promise((r) => setTimeout(r, ${t.slowMs ?? SLOW_MS}))`,
+            ]
+          : []),
+        // Where its output differs, a test that calls the function `loops`
+        // more times: each call is work the copy does, and the work budget
+        // counts it.
+        ...(t.loops
+          ? [
+              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) for (let k${i} = 0; k${i} < ${t.loops}; k${i} += 1) ${callFor(t.fn)}(${part.input}, [])`,
+            ]
+          : []),
+        // Where its output differs, a test that starts a timer, spins for
+        // `busyMs` (the load), and then waits for the timer. The timer is
+        // pending throughout, so the copy is never idle.
+        ...(t.busy
+          ? [
+              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) { const waiting${i} = new Promise((r) => setTimeout(r, ${t.busy.waitMs})); const until${i} = performance.now() + ${t.busy.busyMs}; while (performance.now() < until${i}) {}; await waiting${i} }`,
             ]
           : []),
         // A test that waits on I/O (a child process, about 3 s) where the

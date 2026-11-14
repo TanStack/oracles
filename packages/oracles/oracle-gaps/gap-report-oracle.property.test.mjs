@@ -1636,6 +1636,13 @@ async function driver(plan, observe) {
     const states = new Set()
     if (twinSame)
       states.add(`a slow owner's kill reported as when it did not wait`)
+    // A kill that waits past Vitest's 15 s test limit, and one whose copy
+    // waits on a timer under load, each killed as the report says.
+    const killed = cli.report?.results?.some((r) => r.outcome === `killed`)
+    if (killed && plan.history.tests.some((t) => t.slowMs > 15000))
+      states.add(`a slow kill past fifteen seconds killed`)
+    if (killed && plan.history.tests.some((t) => t.busy))
+      states.add(`a copy waiting on a timer under load killed`)
     if (cli.exit === 0 && !plan.consoleOutput)
       states.add(`a completed run whose tests wrote nothing`)
     // Law 14: a partial run of one owned function's mutants, whose baseline
@@ -3210,6 +3217,8 @@ const required = [
   `a hang alone timed out`,
   `a hang in one owner and a kill in another killed`,
   `a slow owner's kill reported as when it did not wait`,
+  `a slow kill past fifteen seconds killed`,
+  `a copy waiting on a timer under load killed`,
   `a hang in one owner and a survivor in another timed out`,
   `confirmations past a mutant's budget timed out`,
   `a heartbeat named a busy mutant`,
@@ -3375,6 +3384,40 @@ const withDeclaration = (constructed) =>
       }),
   }))
 
+// A constructed history whose only owned function is a kill, owned by file a
+// alone, with the tests given (the rest of the generated base is left as the
+// grammar draws it, as the histories above do).
+const soloKill = (generated, tests) => ({
+  ...generated,
+  functions: [[{ kind: `if`, op: `>`, k: 4, not: false, quote: `'` }]],
+  containers: [],
+  overloads: [],
+  owners: [`a`],
+  library: [],
+  libraryOwners: [],
+  runes: [],
+  derived: null,
+  dotGen: false,
+  dataOwners: [],
+  exportOwners: [],
+  importer: `none`,
+  wholeFile: `none`,
+  template: false,
+  tests,
+  witness: false,
+  authored: null,
+  secondAuthored: false,
+  fault: `none`,
+  stability: `none`,
+  ordinary: false,
+  native: `none`,
+  boot: false,
+  budget: `two`,
+  cliPath: `plain`,
+  concurrentStart: false,
+  contexts: 1,
+  steps: null,
+})
 oracleProperty({
   id: `oracle-gaps.report`,
   law: {
@@ -3554,51 +3597,6 @@ oracleProperty({
           wholeFile: `none`,
           fault: `none`,
           authored: { stmt: 0, kind: `ambiguous` },
-        }),
-      },
-      {
-        // File a's random-route test and file b's fixed-seed test both kill
-        // one mutant (as w_crosskill does). In the slow twin, a's test
-        // waits 3 s past its first budget before it judges, so its copy is
-        // cut and queued for a confirmation; b's kill decides the mutant
-        // first. The report must still be the one the package without the
-        // wait gives, its `randomAlso` included.
-        name: `a slow owner's kill and another owner's kill`,
-        enters: [`a slow owner's kill reported as when it did not wait`],
-        build: (generated) => ({
-          ...generated,
-          functions: [[{ kind: `if`, op: `>`, k: 4, not: false, quote: `'` }]],
-          containers: [],
-          overloads: [],
-          owners: [`both`],
-          library: [],
-          libraryOwners: [],
-          runes: [],
-          derived: null,
-          dotGen: false,
-          dataOwners: [],
-          exportOwners: [],
-          importer: `none`,
-          wholeFile: `none`,
-          template: false,
-          tests: [
-            { ...judging(`a`, `random seed`, 7), fn: 0 },
-            { ...judging(`b`, `fixed seed`, 7), fn: 0 },
-          ],
-          witness: false,
-          authored: null,
-          secondAuthored: false,
-          fault: `none`,
-          stability: `none`,
-          ordinary: false,
-          native: `none`,
-          boot: false,
-          budget: `two`,
-          cliPath: `plain`,
-          concurrentStart: false,
-          contexts: 1,
-          steps: null,
-          slowTwin: true,
         }),
       },
       {
@@ -4132,6 +4130,83 @@ oracleProperty({
           lazyGate: true,
           steps: [`lazy`],
         }),
+      },
+      {
+        // File a's random-route test and file b's fixed-seed test both kill
+        // one mutant (as w_crosskill does). In the slow twin, a's test
+        // waits 3 s past its first budget before it judges, so its copy is
+        // cut and queued for a confirmation; b's kill decides the mutant
+        // first. The report must still be the one the package without the
+        // wait gives, its `randomAlso` included.
+        name: `a slow owner's kill and another owner's kill`,
+        enters: [`a slow owner's kill reported as when it did not wait`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `if`, op: `>`, k: 4, not: false, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`both`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          derived: null,
+          dotGen: false,
+          dataOwners: [],
+          exportOwners: [],
+          importer: `none`,
+          wholeFile: `none`,
+          template: false,
+          tests: [
+            { ...judging(`a`, `random seed`, 7), fn: 0 },
+            { ...judging(`b`, `fixed seed`, 7), fn: 0 },
+          ],
+          witness: false,
+          authored: null,
+          secondAuthored: false,
+          fault: `none`,
+          stability: `none`,
+          ordinary: false,
+          native: `none`,
+          boot: false,
+          budget: `two`,
+          cliPath: `plain`,
+          concurrentStart: false,
+          contexts: 1,
+          steps: null,
+          slowTwin: true,
+        }),
+      },
+      // Constructed histories added by the deterministic-cuts change follow.
+      // A slow kill whose test waits 16 s where its output differs, past
+      // Vitest's 15 s per-test limit: no wall-clock limit decides an outcome,
+      // so the mutant is still killed.
+      {
+        name: `a slow kill past Vitest's 15 s limit`,
+        enters: [`a slow kill past fifteen seconds killed`],
+        build: (generated) =>
+          soloKill(generated, [
+            {
+              ...judging(`a`, `fixed seed`, 7),
+              fn: 0,
+              slow: true,
+              slowMs: 16000,
+            },
+          ]),
+      },
+      // A copy whose test starts a timer due inside its horizon, then spins
+      // under load, then waits for it: the copy is busy, never idle, and the
+      // mutant is killed.
+      {
+        name: `a copy waiting on a timer under load`,
+        enters: [`a copy waiting on a timer under load killed`],
+        build: (generated) =>
+          soloKill(generated, [
+            {
+              ...judging(`a`, `fixed seed`, 7),
+              fn: 0,
+              busy: { busyMs: 600, waitMs: 2000 },
+            },
+          ]),
       },
     ]),
   },
