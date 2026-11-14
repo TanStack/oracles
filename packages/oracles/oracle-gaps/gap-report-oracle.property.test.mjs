@@ -1903,6 +1903,14 @@ async function driver(plan, observe) {
       : undefined
     const { replay, ...cli } = overlapping?.cli ?? runCli(dir, files, how)
     if (overlapping) observe(`overlap`, overlapping.overlap)
+    // How many units were computed or reused says how the result was
+    // produced, not what it is, so it is not observed.
+    observe(`cli`, { ...cli, evidence: undefined })
+    // A failing owner's replay, run as the author would run it (law 3).
+    if (plan.fault === `brokenOwner`)
+      observe(`replay`, { command: replay, ran: replayed(dir, replay) })
+    // Reach comes from what the CLI reported, mapped onto the plan.
+    const states = new Set()
     if (plan.claimScenario) {
       const claim = await claimScenarioRuns(dir, files, how, plan.claimScenario)
       observe(`claimScenario`, claim)
@@ -1912,14 +1920,6 @@ async function driver(plan, observe) {
           : `a stale claim and mutex from a dead pid are taken over`,
       )
     }
-    // How many units were computed or reused says how the result was
-    // produced, not what it is, so it is not observed.
-    observe(`cli`, { ...cli, evidence: undefined })
-    // A failing owner's replay, run as the author would run it (law 3).
-    if (plan.fault === `brokenOwner`)
-      observe(`replay`, { command: replay, ran: replayed(dir, replay) })
-    // Reach comes from what the CLI reported, mapped onto the plan.
-    const states = new Set()
     if (plan.outMode === `default`)
       states.add(`a run with the default output directory`)
     if (plan.logBlocked && cli.exit === 2)
