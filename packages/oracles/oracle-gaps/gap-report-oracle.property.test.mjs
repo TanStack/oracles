@@ -663,6 +663,23 @@ const leftBehind = (line) =>
         (line.after !== undefined && line.before[key] !== line.after[key])),
   )
 
+const hookFiles = new Map()
+const hookOf = (dir) => {
+  if (!hookFiles.has(dir))
+    hookFiles.set(
+      dir,
+      join(mkdtempSync(join(tmpdir(), `gap-retention-`)), `retention.jsonl`),
+    )
+  return hookFiles.get(dir)
+}
+const retentionLinesOf = (file) =>
+  existsSync(file)
+    ? readFileSync(file, `utf8`)
+        .split(`\n`)
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
+    : []
+
 /**
  * Writes the fixture's files and runs the CLI on it. A file of an earlier
  * state that this state lacks is removed.
@@ -673,10 +690,10 @@ function runCli(dir, files, how = {}) {
   const { args, out } = cliArgs(dir, files, how)
   // The retention hook (ORACLE_GAPS_TEST_RETENTION): one line per batch,
   // written beside the run's own temporary files, not in the package.
-  const hook = join(
-    mkdtempSync(join(tmpdir(), `gap-retention-`)),
-    `retention.jsonl`,
-  )
+  // One hook file per package: a daemon keeps the environment of the call that started it, so every call
+  // for this package writes to the same file, and this run's lines are those after its start (the delta).
+  const hook = hookOf(dir)
+  const hookBefore = retentionLinesOf(hook)
   const child = spawnSync(process.execPath, args, {
     cwd: repo,
     encoding: `utf8`,
@@ -684,12 +701,7 @@ function runCli(dir, files, how = {}) {
     maxBuffer: 64 * 1024 * 1024,
     env: { ...cleanEnv(), ORACLE_GAPS_TEST_RETENTION: hook },
   })
-  const retention = existsSync(hook)
-    ? readFileSync(hook, `utf8`)
-        .split(`\n`)
-        .filter(Boolean)
-        .map((line) => JSON.parse(line))
-    : []
+  const retention = retentionLinesOf(hook).slice(hookBefore)
   const run = readRun(
     dir,
     out,
