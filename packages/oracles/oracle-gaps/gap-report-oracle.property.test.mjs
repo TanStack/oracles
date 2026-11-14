@@ -1097,6 +1097,9 @@ function readRun(dir, out, status, stderr, cli, stdout) {
     stdoutGaps: printed
       .filter((line) => streamedGap.test(line))
       .map((line) => namedScratch(line, scratch)),
+    stderrGaps: lines
+      .filter((line) => streamedGap.test(line))
+      .map((line) => namedScratch(line, scratch)),
     baselineFiles: lines.flatMap((line) => {
       const file = line.match(
         /^oracle-gaps: baseline (?:pass|fail) (\S+)(?: \(ordinary\))?: /,
@@ -2579,7 +2582,7 @@ function streamBreach(checkpoint, run, expected, plan) {
     )
   if (run.stdoutGaps.length !== expected.gaps.length)
     return breach(
-      `the stdout has ${run.stdoutGaps.length} gap lines for ${expected.gaps.length} gaps: ${JSON.stringify(run.stdoutGaps)}`,
+      `the stdout has ${run.stdoutGaps.length} gap lines for ${expected.gaps.length} gaps: ${JSON.stringify(run.stdoutGaps)}; the stderr has ${JSON.stringify(run.stderrGaps)}`,
     )
   return undefined
 }
