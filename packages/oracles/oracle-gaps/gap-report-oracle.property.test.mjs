@@ -1406,6 +1406,7 @@ async function incremental(dir, plan, cli, copy, observe, states) {
         (run.retention ?? []).filter(leftBehind).length,
       )
       observe(`retentionLines:daemon`, unlogged(run))
+      observe(`retentionKeys:daemon`, leftKeys(run.retention ?? []))
       observe(
         `retention:cold`,
         (coldRun.retention ?? []).filter(leftBehind).length,
@@ -1743,6 +1744,7 @@ async function driver(plan, observe) {
       })
       observe(`retention:partial`, partial.retention.filter(leftBehind).length)
       observe(`retentionLines:partial`, unlogged(partial))
+      observe(`retentionKeys:partial`, leftKeys(partial.retention ?? []))
       observe(`partial`, {
         function: chosen.function,
         source: chosen.source,
@@ -2174,6 +2176,7 @@ async function driver(plan, observe) {
         `retentionLines:stability`,
         unlogged({ retention: movedRetention, evidence: movedRun.evidence }),
       )
+      observe(`retentionKeys:stability`, leftKeys(movedRetention))
       states.add(`stability rerun`)
     }
     if (plan.steps.length > 0)
