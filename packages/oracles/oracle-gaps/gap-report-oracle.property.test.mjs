@@ -735,7 +735,11 @@ const strays = (dir, before, running = false) =>
     (file) =>
       !before.has(file) &&
       !(running && /^\.oracle-gaps-\d+\//.test(file)) &&
-      !OWN_WRITES.some((home) => file === home || file.startsWith(`${home}/`)),
+      !OWN_WRITES.some(
+        (home) => file === home || file.startsWith(`${home}/`),
+      ) &&
+      // The numbered output directories a run's CLI calls get (runCli): one per call.
+      !OWN_NUMBERED.test(file),
   )
 
 /**
@@ -948,6 +952,7 @@ function filesUnder(root, within = ``) {
 // of the repository), so a package, and a workspace dependency in it, keeps
 // nothing of a run.
 const OWN_WRITES = [`out`, `out-daemon`, `out-stop`, `out-only`]
+const OWN_NUMBERED = /^out(-daemon|-stop|-only)?-\d+(\/|$)/
 
 /** Runs the CLI several times at once on one state of the fixture. */
 async function runClisAtOnce(dir, files, hows) {
