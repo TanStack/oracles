@@ -593,8 +593,12 @@ export default async (env) => {
     const limit = process.getMaxListeners()
     if (limit > 0) process.setMaxListeners(limit + count)
   }
-  const closeContext = (context) =>
-    context.close().finally(() => allowListeners(-1))
+  // The contexts that are open (warmed and not yet closed): the replaced ones must leave it.
+  const openContexts = new Set()
+  const closeContext = (context) => {
+    openContexts.delete(context)
+    return context.close().finally(() => allowListeners(-1))
+  }
   // Vite's logger, writing each message as `oracle-gaps: note vite: …`.
   const viteNote = (message) => {
     for (const line of String(message)
@@ -739,6 +743,7 @@ export default async (env) => {
       )
     }
     lastServed.delete(index)
+    openContexts.add(context)
     return context
   }
   // A warm context caches the test files it found; a file added since the last check, such as a new oracle
@@ -1150,46 +1155,51 @@ export default async (env) => {
       }
       timer = setTimeout(poll, 50)
     })
-    const result = await Promise.race([running, watchdog])
-    clearTimeout(timer)
-    const seconds = (Date.now() - started) / 1000
-    // Each copy's rows, and the copies that skipped their tests because an
-    // earlier copy in the batch killed their mutant.
-    const skipped = new Set()
-    // The files of the modules each copy evaluated (its closing row).
-    const loaded = new Map()
-    const rowsOf = () => {
-      const rows = new Map(copies.map((copy) => [copy, []]))
-      loaded.clear()
-      if (existsSync(capture))
-        for (const line of readFileSync(capture, `utf8`)
-          .split(`\n`)
-          .filter(Boolean)) {
-          const row = JSON.parse(line)
-          const copy = copies.find(
-            (c) =>
-              posix(row.key ?? ``).startsWith(`${c} > `) ||
-              posix(row.file ?? ``) === c,
-          )
-          if (copy && row.skipped) skipped.add(copy)
-          if (copy && row.closed) loaded.set(copy, row.loaded ?? [])
-          if (copy && row.spin) spun.add(copy)
-          if (copy && !row.closed && !row.idle && !row.spin && !row.started)
-            rows.get(copy).push(row)
-        }
-      return rows
-    }
-    const skippedUnit = (item) => ({ file: item.file, skipped: true })
-    // A copy that ran past its call budget, even one whose throw ended the
-    // loop and let it finish, is a timeout as it stands (a count, not a
-    // clock: no confirming run).
-    const spunUnit = (item) => ({
-      file: item.file,
-      timedOut: true,
-      spin: true,
-      seconds,
-    })
+    // The race sits inside the try below, so a rejected run (a crash, not a cut) still retires its
+    // copies and writes its retention line. `raced` tells that apart from a cut, which resolves undefined.
+    let result
+    let raced = false
     try {
+      result = await Promise.race([running, watchdog])
+      raced = true
+      clearTimeout(timer)
+      const seconds = (Date.now() - started) / 1000
+      // Each copy's rows, and the copies that skipped their tests because an
+      // earlier copy in the batch killed their mutant.
+      const skipped = new Set()
+      // The files of the modules each copy evaluated (its closing row).
+      const loaded = new Map()
+      const rowsOf = () => {
+        const rows = new Map(copies.map((copy) => [copy, []]))
+        loaded.clear()
+        if (existsSync(capture))
+          for (const line of readFileSync(capture, `utf8`)
+            .split(`\n`)
+            .filter(Boolean)) {
+            const row = JSON.parse(line)
+            const copy = copies.find(
+              (c) =>
+                posix(row.key ?? ``).startsWith(`${c} > `) ||
+                posix(row.file ?? ``) === c,
+            )
+            if (copy && row.skipped) skipped.add(copy)
+            if (copy && row.closed) loaded.set(copy, row.loaded ?? [])
+            if (copy && row.spin) spun.add(copy)
+            if (copy && !row.closed && !row.idle && !row.spin && !row.started)
+              rows.get(copy).push(row)
+          }
+        return rows
+      }
+      const skippedUnit = (item) => ({ file: item.file, skipped: true })
+      // A copy that ran past its call budget, even one whose throw ended the
+      // loop and let it finish, is a timeout as it stands (a count, not a
+      // clock: no confirming run).
+      const spunUnit = (item) => ({
+        file: item.file,
+        timedOut: true,
+        spin: true,
+        seconds,
+      })
       if (result === undefined) {
         // Cancelled without waiting; the caller replaces the context (see
         // runUnit).
@@ -1295,10 +1305,13 @@ export default async (env) => {
       // A run cut off by a hang is still running: its worker may still send
       // updates, so its state is not touched here. Its context is replaced
       // by the caller (replace), which closes it and drops its state.
-      if (result !== undefined) {
+      clearTimeout(timer)
+      if (raced && result === undefined)
+        retiredEntries(context, before, copies, true)
+      else {
         retireCopies(context, copies)
         retiredEntries(context, before, copies)
-      } else retiredEntries(context, before, copies, true)
+      }
       rmSync(capture, { force: true })
     }
   }
@@ -1403,10 +1416,12 @@ export default async (env) => {
     const totals = {
       // The cold check's store: units it keeps for reuse (none, see evidence.mjs).
       store: heldUnits(),
-      // Maps keyed by a context: each holds one entry per live context. A replaced
-      // context left in one is stale: the excess over the live contexts.
-      staleIndexed: indexOf.size - contexts.length,
-      staleSpecs: contextSpecs.size - contexts.length,
+      // Identities, not sizes: a registry entry is stale unless it names a live context at its own slot
+      // (indexOf), or a live context (contextSpecs). Open contexts (not closed) must be the live ones.
+      staleIndexed: [...indexOf].filter(([c, i]) => contexts[i] !== c).length,
+      staleSpecs: [...contextSpecs.keys()].filter((c) => !contexts.includes(c))
+        .length,
+      staleOpen: openContexts.size - contexts.length,
       filesMap: filesMap.size,
       pathsSet: pathsSet.size,
       idMap: idMap.size,
@@ -1481,7 +1496,7 @@ export default async (env) => {
           environment.moduleGraph.fileToModulesMap.get(copy)?.size ?? 0
     appendFileSync(
       file,
-      `${JSON.stringify(cut ? { run: hookRun, batch: evidenceOf.batches, before, cut: true } : { run: hookRun, batch: evidenceOf.batches, before, after: retentionTotals(context), copyNodes, nonCopyDup: nonCopyDuplicates(context, owned).length, nonCopyIds: nonCopyDuplicates(context, owned) })}\n`,
+      `${JSON.stringify(cut ? { run: hookRun, batch: evidenceOf.batches, before, cut: true } : { run: hookRun, batch: evidenceOf.batches, before, after: retentionTotals(context), copyNodes, nonCopyDup: nonCopyDuplicates(context, owned).length })}\n`,
     )
   }
 

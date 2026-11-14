@@ -805,15 +805,21 @@ async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
     only: ids,
     pool: abort ? `threads` : pool,
   })
+  // The retention hook is set on every stop, so a stopped run's completed batches are judged too.
+  const hook = hookOf(dir)
   const child = spawn(process.execPath, args, {
     cwd: repo,
-    env: after
-      ? { ...cleanEnv(), ORACLE_GAPS_TEST_HOLD_EXIT_MS: `500` }
-      : warm
-        ? { ...cleanEnv(), ORACLE_GAPS_TEST_WARM_PROBE: join(pids, `warming`) }
-        : abort
-          ? { ...cleanEnv(), GAP_ABORT: `1` }
-          : { ...cleanEnv(), GAP_STOP_DIR: pids },
+    env: {
+      ...cleanEnv(),
+      ORACLE_GAPS_TEST_RETENTION: hook,
+      ...(after
+        ? { ORACLE_GAPS_TEST_HOLD_EXIT_MS: `500` }
+        : warm
+          ? { ORACLE_GAPS_TEST_WARM_PROBE: join(pids, `warming`) }
+          : abort
+            ? { GAP_ABORT: `1` }
+            : { GAP_STOP_DIR: pids }),
+    },
     stdio: [`ignore`, `pipe`, `pipe`],
   })
   let stdout = ``
@@ -897,6 +903,10 @@ async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
     survivors: alive.length,
     strayWhileRunning,
     when: when ?? `run`,
+    // The batches this run completed, each with its retention line (the hook above).
+    retention: retentionLinesOf(hook).filter(
+      (line) => line.run === join(dir, `out-stop`),
+    ),
     // Whether a refusal's block reached stderr: a stop is never a refusal.
     refused: stderr.split(`\n`).some((line) => line.startsWith(`refused: `)),
     exit: exitCode,
@@ -1785,7 +1795,15 @@ async function driver(plan, observe) {
     // of them the previous stopped run had left.
     if (cli.exit === 0 && stopIds.length > 0)
       for (const stop of plan.stopRuns) {
-        const run = await stoppedRun(dir, files, how, stopIds, stop)
+        const { retention, ...run } = await stoppedRun(
+          dir,
+          files,
+          how,
+          stopIds,
+          stop,
+        )
+        observe(`retention:stop`, retention.filter(leftBehind).length)
+        observe(`retentionKeys:stop`, leftKeys(retention))
         const stopped = {
           ...run,
           sessions: {
