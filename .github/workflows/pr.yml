@@ -168,10 +168,11 @@ jobs:
       - test-oracle-gaps-fast
       - test-oracle-gaps-end-to-end
       - test-vitest-5
-      # The blocking Windows jobs (the non-blocking static and e2e jobs are not
-      # a dependency until they are green).
+      # The blocking Windows jobs (the non-blocking end-to-end job is not a
+      # dependency until it is green).
       - windows-unit
       - windows-gap-classify
+      - windows-gap-oracles
       - windows-gap-cli
     runs-on: ubuntu-latest
     steps:
@@ -223,10 +224,6 @@ jobs:
   windows-gap-oracles:
     name: Windows gap report static oracle (${{ matrix.shard }}/6)
     runs-on: windows-latest
-    # Not blocking yet: these suites fail on Windows, tracked by class in
-    # https://github.com/TanStack/oracles/issues/72. Remove this line when they
-    # are green.
-    continue-on-error: true
     timeout-minutes: 20
     strategy:
       fail-fast: false
