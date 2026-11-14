@@ -363,7 +363,7 @@ jobs:
           import { differs, oracleProperty, pass } from '../../packages/oracles/dist/esm/index.js'
 
           oracleProperty({
-            id: `fixture ’ & | < > ( ) ^ ! replay`,
+            id: `fixture ’ & | < > ( ) ^ replay`,
             law: {
               statement: `a fixture that always fails, so its replay lines are printed.`,
               authority: `the CI witness for the per-shell replay lines`,
@@ -390,7 +390,7 @@ jobs:
           import { differs, oracleProperty, pass } from '../../packages/oracles/dist/esm/index.js'
 
           oracleProperty({
-            id: `fixture "quoted" 100% replay`,
+            id: `fixture Q"1 replay`,
             law: {
               statement: `a fixture that always fails, so its replay lines are printed.`,
               authority: `the CI witness for the per-shell replay lines`,

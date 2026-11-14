@@ -2256,6 +2256,16 @@ function rerunPatternOf(task: NamedTask): string {
     text
       .replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
       .replace(/["%!\u2018\u2019\u201A\u201B]/g, `.`)
+      // A control character (a line break, a tab) stays one line: as stream.mjs
+      // escapes it, the regular expression names the same character (F9).
+      .split(``)
+      .map((c) => {
+        const code = c.charCodeAt(0)
+        const control =
+          code < 0x20 || code === 0x7f || code === 0x2028 || code === 0x2029
+        return control ? `\\u${code.toString(16).padStart(4, `0`)}` : c
+      })
+      .join(``)
   return `^${names.map(escape).join(`(?: | > )`)}$`
 }
 
@@ -2287,12 +2297,12 @@ function commandOf(
   // inside a single-quoted word each is doubled.
   const psQuoted = (text: string) =>
     `'${text.replace(/['\u2018\u2019\u201A\u201B]/g, (quote) => quote + quote)}'`
-  // An environment value in cmd: `set "NAME=value"` takes everything up to the
-  // last quote, so a double quote inside is fine. `%` expands, and `!` expands
-  // under DelayedExpansion, so a value with either has no cmd form (a
-  // coordinator ruling). The `-t` argument carries no hostile character (above).
-  const cmdQuoted = (text: string) =>
-    /[%!]/.test(text) ? undefined : `"${text}"`
+  // cmd: a double quote in `set "NAME=value"` closes the quote early, so an odd
+  // number of them breaks the `&&` (F1); `%` expands, and `!` expands under
+  // DelayedExpansion. An environment value with any of these has no cmd form
+  // (the register's rule). The `-t` argument carries none (rerunPatternOf).
+  const cmdEnv = (value: string) => (/["%!]/.test(value) ? undefined : value)
+  const cmdQuoted = (text: string) => `"${text}"`
   const cmdWords = (...parts: ReadonlyArray<string | undefined>) =>
     parts.some((part) => part === undefined) ? undefined : words(parts)
   const words = (parts: ReadonlyArray<string | undefined>) =>
@@ -2313,12 +2323,12 @@ function commandOf(
     ]),
     cmd: cmdWords(
       ...env.map(([name, value]) => {
-        const quoted = cmdQuoted(value)
-        return quoted === undefined ? undefined : `set "${name}=${value}" &&`
+        const quoted = cmdEnv(value)
+        return quoted === undefined ? undefined : `set "${name}=${quoted}" &&`
       }),
       // An absent command is nothing in cmd too, not a text without a form.
       command ?? ``,
-      cmdQuoted(pattern) === undefined ? undefined : `-t ${cmdQuoted(pattern)}`,
+      `-t ${cmdQuoted(pattern)}`,
     ),
   }
 }

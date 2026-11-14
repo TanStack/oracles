@@ -92,8 +92,8 @@ const historyArbitrary = fc.record({
     fc.constantFrom(...(process.platform === `win32` ? [`/`, `\\`] : [`/`])),
     { minLength: 8, maxLength: 8 },
   ),
-  // Appended last, so the fields above keep their draws: the drives and
-  // separators a POSIX spelling uses (a backslash name and an `x:` drive).
+  // The drives and separators a POSIX spelling uses (a backslash name and an
+  // `x:` drive). The oracle is new in #58, so no earlier history is kept.
   wide: fc.record({
     drive: fc.constantFrom(`C`, `c`, `D`, `x`),
     dirDrive: fc.constantFrom(`C`, `c`, `x`),

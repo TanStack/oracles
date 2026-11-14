@@ -2748,15 +2748,19 @@ function printedBreach(h, lines, expected, platform) {
         `${file}'s replay lines are not the platform's: ${JSON.stringify(block.filter((line) => line.startsWith(`  replay`)))}`,
       )
     for (const { command, read } of replays) {
-      // cmd has no form for a name with a double quote or `%`: its line says so,
+      // cmd has no form for a word with a double quote, `%`, or `!`: its line says so,
       // and only such a test may print that line.
       // A CLI line has no environment values, so cmd always has its form: the
       // `-t` argument carries no shell-hostile character (review option c). No
       // fallback line may print for it.
-      if (command === CMD_FALLBACK)
+      if (command === CMD_FALLBACK) {
+        // The printer's cmd line has no form when a word has `"`, `%`, or `!`:
+        // the file path can carry one (the -t argument never does).
+        if (/["%!]/.test(relativeName(h, owed.fi))) continue
         return breach(
-          `the replay of ${file} says cmd cannot replay it, but its -t argument has no shell-hostile character to need that`,
+          `the replay of ${file} says cmd cannot replay it, but no word of it has a hostile character`,
         )
+      }
       const words = read(command)
       if (!words)
         return breach(
@@ -2878,13 +2882,23 @@ function powerShellWords(line) {
 // a double quote toggles quoting; outside quotes `^` escapes the next
 // character, and `& | < > ( )` separate or redirect; `%` expands even inside
 // quotes. `!` is literal, since delayed expansion is off. Undefined otherwise.
-function cmdWords(line) {
+function cmdWords(raw) {
+  // A `set "NAME=value" &&` prefix: each value must be plain (no `"`, `%`, `!`),
+  // and the words are those after the last `&&`.
+  let line = raw
+  for (;;) {
+    const set = line.match(/^set "([^"]*)" && /)
+    if (set === null) break
+    if (/[%!]/.test(set[1])) return undefined
+    line = line.slice(set[0].length)
+  }
+  if (/&&/.test(line)) return undefined
   const words = []
   let word
   let quoted = false
   for (let i = 0; i < line.length;) {
     const c = line[i]
-    if (c === `%`) return undefined
+    if (c === `%` || c === `!`) return undefined
     if (quoted) {
       if (c === `"`) quoted = false
       else word = (word ?? ``) + c
