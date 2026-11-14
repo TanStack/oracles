@@ -1192,10 +1192,14 @@ function namedScratch(text, names) {
   const longestFirst = names
     .filter(([path]) => path !== undefined)
     .sort(([a], [b]) => b.length - a.length)
-  for (const [path, name] of longestFirst)
-    named = named
-      .replaceAll(pathToFileURL(path).href, name)
-      .replaceAll(path, name)
+  for (const [path, name] of longestFirst) {
+    // On win32 the CLI names a path in forward slashes (the Windows paths
+    // rule), so the forward-slash spelling is named too; POSIX has one spelling.
+    const spellings =
+      process.platform === `win32` ? [path, path.replaceAll(`\\`, `/`)] : [path]
+    named = named.replaceAll(pathToFileURL(path).href, name)
+    for (const spelling of spellings) named = named.replaceAll(spelling, name)
+  }
   return named
     .replaceAll(/\.oracle-gaps-\d+/g, `.oracle-gaps-<pid>`)
     .replaceAll(/session-\d+/g, `session-<pid>`)
