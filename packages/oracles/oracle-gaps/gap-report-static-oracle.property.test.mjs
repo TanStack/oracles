@@ -135,6 +135,7 @@ import {
   written,
 } from './gap-report-model-oracle.mjs'
 import { parseArgs, usage } from './args.mjs'
+import { posix } from './paths.mjs'
 import { keyAndSelect } from './report.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -505,7 +506,10 @@ function argumentsRunOf(dir, plan) {
     run.status,
     run.stderr,
     out,
-    (text) => text.replaceAll(dir, `<package>`),
+    // The CLI names its paths in forward slashes (the Windows paths rule), so
+    // the package is named in both spellings.
+    (text) =>
+      text.replaceAll(posix(dir), `<package>`).replaceAll(dir, `<package>`),
     run.stdout,
   )
 }
