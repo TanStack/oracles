@@ -648,10 +648,12 @@ const unlogged = (run) =>
 // after its retirement differs from its size before the batch.
 const leftBehind = (line) =>
   (line.copyNodes ?? 0) !== 0 ||
+  (line.nonCopyDup ?? 0) !== 0 ||
   Object.keys(line.before).some(
     (key) =>
-      // Vite's keys (`ssr.*`, `client.*`) hold non-copy modules too: only the copies' nodes count there.
-      !key.includes(`.`) &&
+      // Vite's totals are `vite.<environment>.<map>`: its non-copy modules are cached legitimately
+      // (checked by the copies' own nodes, copyNodes, and by the bound still to add).
+      !key.startsWith(`vite.`) &&
       ((key.startsWith(`stale`) && line.before[key] !== 0) ||
         (line.after !== undefined && line.before[key] !== line.after[key])),
   )

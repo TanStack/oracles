@@ -1408,13 +1408,14 @@ export default async (env) => {
       context.getRootProject().vite?.environments ?? {},
     )) {
       const graph = environment.moduleGraph
-      totals[`${name}.url`] = graph.urlToModuleMap.size
-      totals[`${name}.id`] = graph.idToModuleMap.size
-      totals[`${name}.etag`] = graph.etagToModuleMap.size
-      totals[`${name}.file`] = graph.fileToModulesMap.size
-      totals[`${name}.transformed`] = [...graph.idToModuleMap.values()].filter(
-        (node) => node.transformResult != null,
-      ).length
+      // Vite's keys are named `vite.<environment>.<map>`, so the law can tell them from Vitest's state.
+      totals[`vite.${name}.url`] = graph.urlToModuleMap.size
+      totals[`vite.${name}.id`] = graph.idToModuleMap.size
+      totals[`vite.${name}.etag`] = graph.etagToModuleMap.size
+      totals[`vite.${name}.file`] = graph.fileToModulesMap.size
+      totals[`vite.${name}.transformed`] = [
+        ...graph.idToModuleMap.values(),
+      ].filter((node) => node.transformResult != null).length
     }
     return totals
   }
@@ -1423,6 +1424,24 @@ export default async (env) => {
   // that settled and its copies are retired, one line holds each structure's
   // total before the batch and after its retirement. The bounded-retention
   // law reads it: every total returns to its size before the batch.
+  // Files, without their query, with more than one node in an environment's graph, outside the copies:
+  // a non-copy file is cached once, so each count must be 0 (the law's bound on originals).
+  function nonCopyDuplicates(context, owned) {
+    let dup = 0
+    for (const environment of Object.values(
+      context.getRootProject().vite?.environments ?? {},
+    )) {
+      const perFile = new Map()
+      for (const node of environment.moduleGraph.idToModuleMap.values()) {
+        const file = node.id.split(`?`)[0]
+        if (owned.has(file)) continue
+        perFile.set(file, (perFile.get(file) ?? 0) + 1)
+      }
+      for (const n of perFile.values()) if (n > 1) dup += 1
+    }
+    return dup
+  }
+
   function retiredEntries(context, before, copies, cut = false) {
     const file = process.env.ORACLE_GAPS_TEST_RETENTION
     if (!file) return
@@ -1440,7 +1459,7 @@ export default async (env) => {
           environment.moduleGraph.fileToModulesMap.get(copy)?.size ?? 0
     appendFileSync(
       file,
-      `${JSON.stringify(cut ? { before, cut: true } : { before, after: retentionTotals(context), copyNodes })}\n`,
+      `${JSON.stringify(cut ? { before, cut: true } : { before, after: retentionTotals(context), copyNodes, nonCopyDup: nonCopyDuplicates(context, owned) })}\n`,
     )
   }
 
