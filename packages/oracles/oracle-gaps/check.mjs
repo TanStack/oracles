@@ -738,21 +738,22 @@ export default async (env) => {
         `Run the gap report on a package whose Vitest config has no test.projects.`,
       )
     }
-    indexOf.set(context, index)
     lastServed.delete(index)
     return context
   }
-  async function globSpecs(context) {
-    // A warm context caches the test files it found; a file added since the
-    // last check, such as a new oracle file, appears only after the cache is
-    // cleared.
+  // A warm context caches the test files it found; a file added since the last check, such as a new oracle
+  // file, appears only after the cache is cleared. Returns the context's specs (registered by the caller).
+  async function specsOf(context) {
     context.clearSpecificationsCache?.()
     const map = new Map()
     for (const spec of await context.globTestSpecifications()) {
       if (isRunnerCopy(spec.moduleId)) continue
       map.set(spec.moduleId, [...(map.get(spec.moduleId) ?? []), spec])
     }
-    contextSpecs.set(context, map)
+    return map
+  }
+  async function globSpecs(context) {
+    contextSpecs.set(context, await specsOf(context))
   }
   async function closeContexts() {
     await Promise.all(
@@ -1538,13 +1539,17 @@ export default async (env) => {
       (contexts.length > 0 && configHash() !== contextsConfig)
     ) {
       await closeContexts()
-      for (let i = 0; i < options.contexts; i += 1)
+      for (let i = 0; i < options.contexts; i += 1) {
         contexts.push(await warmContext(settings, i))
+        indexOf.set(contexts.at(-1), i)
+      }
       contextsKey = JSON.stringify(settings)
       contextsConfig = configHash()
     }
-    while (contexts.length < options.contexts)
+    while (contexts.length < options.contexts) {
       contexts.push(await warmContext(settings, contexts.length))
+      indexOf.set(contexts.at(-1), contexts.length - 1)
+    }
     endPhase(`warm contexts`, { contexts: contexts.length })
     // The run names the config its contexts loaded, before any refusal that
     // the analysis or the baseline makes.
@@ -1930,13 +1935,17 @@ export default async (env) => {
         closeContext(slot.context).catch(() => undefined),
         sleep(10_000),
       ])
-      // The replaced context leaves every map keyed by it, so it is no longer
-      // reachable (its Vitest and Vite state with it).
-      indexOf.delete(slot.context)
-      contextSpecs.delete(slot.context)
-      slot.context = await warmContext(settings, slot.index)
-      await globSpecs(slot.context)
-      contexts[slot.index] = slot.context
+      const replaced = slot.context
+      const next = await warmContext(settings, slot.index)
+      const specs = await specsOf(next)
+      // One synchronous step: the replaced context leaves every map keyed by it and the new one joins them,
+      // with the contexts array, so no reader (and no measurement) sees the registry and the array disagree.
+      indexOf.delete(replaced)
+      contextSpecs.delete(replaced)
+      indexOf.set(next, slot.index)
+      contextSpecs.set(next, specs)
+      contexts[slot.index] = next
+      slot.context = next
       span(`replace context`, started, { slot: slot.index })
     }
     // `after(index)` is more work for context `index` once its files ran.
