@@ -244,14 +244,22 @@ if (command === `done`) {
         failures.push(`Rerun ${i + 1} selects no failing fixed unit: ${line}`)
         return
       }
-      // Vitest colors its output: the names are matched with the colors removed.
+      // A target's own FAIL line, whole: it must end the line, so `generated2`
+      // does not satisfy `generated`. Vitest colors its output, so the color codes
+      // are removed first, and the names are regular-expression escaped.
+      const escapeRe = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
       const shownBy = (result) => {
         if (targets === undefined) return true
         const text = `${result.stdout}${result.stderr}`.replace(
           /\x1b\[[0-9;]*m/g,
           ``,
         )
-        return targets.every((f) => text.includes(`${f.property} > ${f.unit}`))
+        return targets.every((f) =>
+          new RegExp(
+            `FAIL\\s+\\S+ > ${escapeRe(f.property)} > ${escapeRe(f.unit)}$`,
+            `m`,
+          ).test(text),
+        )
       }
       for (const shell of [`pwsh`, `powershell`]) {
         checked += 1

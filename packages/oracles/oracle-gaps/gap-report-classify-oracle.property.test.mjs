@@ -621,6 +621,8 @@ const HOSTILE = [
   `% ! `,
   `use "x & y `,
   `back\\ `,
+  // A control character (F9): the printed pattern escapes it as `\\u0001`.
+  `ctl\u0001 `,
 ]
 const hostileOf = (t, ti) => {
   // A constructed test is plainTest, with ms 0: its names keep the reach of
