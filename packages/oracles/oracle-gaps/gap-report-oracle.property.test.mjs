@@ -1241,10 +1241,16 @@ function readRunIn(dir, out, status, stderr, cli, stdout, derived) {
   let results
   let report
   let summary = ``
+  // The state of `results.json` in the output directory: missing, unparseable,
+  // or read (review of #57, batch 3: the message names which).
+  let reportState = `missing`
   try {
-    report = JSON.parse(readFileSync(join(out, `results.json`), `utf8`))
+    const text = readFileSync(join(out, `results.json`), `utf8`)
+    reportState = `unparseable`
+    report = JSON.parse(text)
     results = report.results
     summary = readFileSync(join(out, `summary.md`), `utf8`)
+    reportState = `read`
   } catch {
     // A run that wrote no report is recorded by its exit status and output.
   }
@@ -1348,6 +1354,7 @@ function readRunIn(dir, out, status, stderr, cli, stdout, derived) {
         ? undefined
         : `${status === 3 && existsSync(join(out, `error.log`)) ? `error.log: ${namedScratch(readFileSync(join(out, `error.log`), `utf8`), scratch).slice(0, 2000)}\n` : ``}${named.slice(-1500)}`,
     reported: results !== undefined,
+    reportState,
     streamed,
     // Law 9 compares everything the run reports except how it was
     // produced: durations, the options it was given (the output directory
@@ -1552,6 +1559,7 @@ async function incremental(dir, plan, cli, copy, observe, states) {
           log: run.log,
           outDir: run.outDir,
           reported: run.reported,
+          reportState: run.reportState,
           // The first line of a failure, for the message; readRun has named
           // the scratch package and CLI copy in it.
           stderr: run.stderr?.split(`\n`)[0],
@@ -2903,7 +2911,7 @@ function endsBreach(run, { checked = true } = {}) {
   // of 2026-11-12).
   if (checked && run.exit === 0 && run.reported === false)
     return {
-      difference: `the run completed, but its results.json is not beside its stream log`,
+      difference: `the run completed, but ${run.outDir}/results.json is ${run.reportState ?? `missing or unparseable`}, not beside its stream log`,
     }
   for (const [where, stream] of streams)
     if (stream.strays.length > 0)

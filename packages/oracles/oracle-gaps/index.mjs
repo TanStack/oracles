@@ -213,6 +213,7 @@ process.on(`exit`, () => {
  */
 function claimOut(out) {
   const claim = join(out, `run.pid`)
+  const takeover = `${claim}.takeover`
   const temp = `${claim}.${process.pid}.tmp`
   try {
     mkdirSync(out, { recursive: true })
@@ -229,7 +230,8 @@ function claimOut(out) {
       } catch (error) {
         if (error.code !== `EEXIST`) throw cannotWrite(claim, error)
       }
-      const holder = Number(readFileSync(claim, `utf8`))
+      const holder = readHolder(claim)
+      if (holder === undefined) continue
       if (holder !== process.pid && holder > 0 && alive(holder)) {
         const refusal = new Refusal(
           `another run (pid ${holder}) is using ${out}`,
@@ -238,11 +240,72 @@ function claimOut(out) {
         refusal.reportless = true
         throw refusal
       }
-      rmSync(claim, { force: true })
+      // A stale claim: only the racer that creates the takeover mutex removes it,
+      // and only if it still names the stale pid it read (review F4).
+      testPause(`takeover`)
+      if (!takeMutex(takeover)) {
+        sleepMs(10)
+        continue
+      }
+      try {
+        if (readHolder(claim) === holder) rmSync(claim, { force: true })
+      } finally {
+        rmSync(takeover, { recursive: true, force: true })
+      }
     }
   } finally {
     rmSync(temp, { force: true })
   }
+}
+/** The pid a claim names, or undefined when the claim is gone. */
+function readHolder(claim) {
+  try {
+    return Number(readFileSync(claim, `utf8`))
+  } catch (error) {
+    if (error.code === `ENOENT`) return undefined
+    throw cannotWrite(claim, error)
+  }
+}
+/**
+ * Creates the takeover mutex: a directory only one racer can make. A mutex
+ * whose pid is gone (a crashed racer) is removed and made again; that rare case
+ * is in Limits.
+ */
+function takeMutex(mutex) {
+  try {
+    mkdirSync(mutex)
+  } catch (error) {
+    if (error.code !== `EEXIST`) throw error
+    const owner = Number(
+      (() => {
+        try {
+          return readFileSync(join(mutex, `pid`), `utf8`)
+        } catch {
+          return ``
+        }
+      })(),
+    )
+    if (!(owner > 0 && alive(owner))) {
+      rmSync(mutex, { recursive: true, force: true })
+      return takeMutex(mutex)
+    }
+    return false
+  }
+  writeFileSync(join(mutex, `pid`), `${process.pid}\n`)
+  return true
+}
+/** A test-only pause (ORACLE_GAPS_TEST_PAUSE_AT, inert unless set), see README. */
+function testPause(point) {
+  if (process.env.ORACLE_GAPS_TEST_PAUSE_AT === point)
+    Atomics.wait(
+      new Int32Array(new SharedArrayBuffer(4)),
+      0,
+      0,
+      Number(process.env.ORACLE_GAPS_TEST_PAUSE_MS ?? 0),
+    )
+}
+function sleepMs(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }
 /**
  * Claims the output directory and writes the run's first line, on both
