@@ -101,10 +101,13 @@ if (command === `done`) {
     lines
       .filter((text) => text.includes(label))
       .map((text) => text.slice(text.indexOf(label) + label.length))
-  const replayPs = after(`Replay (PowerShell): `)
-  const replayCmd = after(`Replay (cmd): `)
-  const rerunPs = after(`Rerun (PowerShell): `)
-  const rerunCmd = after(`Rerun (cmd): `)
+  // Vitest repeats a failing unit's error text, so its replay lines repeat too:
+  // each distinct line counts once, in the order it first printed.
+  const once = (xs) => [...new Set(xs)]
+  const replayPs = once(after(`Replay (PowerShell): `))
+  const replayCmd = once(after(`Replay (cmd): `))
+  const rerunPs = once(after(`Rerun (PowerShell): `))
+  const rerunCmd = once(after(`Rerun (cmd): `))
   const noForm = `use the PowerShell line for this name`
   // The failing units, as vitest prints them: `FAIL <file> > <property> > <unit>`.
   const failing = new Map()
@@ -151,6 +154,15 @@ if (command === `done`) {
     const match = line.match(new RegExp(`set "${name}=([^"]*)" &&`))
     return match === null ? undefined : match[1]
   }
+  // The package's own binaries are on the PATH, so `vitest` runs as the line says.
+  const env = {
+    ...process.env,
+    PATH: [
+      resolve(here, `../node_modules/.bin`),
+      join(dir, `node_modules`, `.bin`),
+      process.env.PATH,
+    ].join(delimiter),
+  }
   const runIn = (shell, line) => {
     // PowerShell reads the line from stdin (`-Command -`), as a typed line
     // arrives: an argument would pass through Node's quoting. cmd reads its line
@@ -158,7 +170,7 @@ if (command === `done`) {
     if (shell === `cmd`)
       return spawnSync(`cmd`, [`/d`, `/s`, `/c`, line], {
         cwd: dir,
-        env: process.env,
+        env,
         encoding: `utf8`,
         windowsVerbatimArguments: true,
       })
@@ -167,7 +179,7 @@ if (command === `done`) {
       [`-NoProfile`, `-Command`, `-`],
       {
         cwd: dir,
-        env: process.env,
+        env,
         encoding: `utf8`,
         input: line,
       },
