@@ -1001,11 +1001,6 @@ async function runClisAtOnce(dir, files, hows) {
 // `.oracle-gaps/session-<pid>`, and its copies of test files,
 // `.oracle-gaps-<pid>-<n>-<file>`, check.mjs), and Vitest names such a file
 // when it fails to load, so the id is named too.
-// A run's output directory carries its call number (runCli: out-<n>), which counts every call in the
-// process, so the number differs between two runs of one history. The observation names the directory.
-const outNumbers = (text) =>
-  text.replace(/(out(?:-daemon|-stop|-only)?)-\d+(?=[/\s\\"]|$)/g, `$1`)
-
 function namedScratch(text, names) {
   let named = text
   const longestFirst = names
@@ -1140,10 +1135,9 @@ function readRun(dir, out, status, stderr, cli, stdout) {
   const blank = printed.indexOf(``)
   return {
     lead: (blank < 0 ? printed : printed.slice(0, blank)).map((line) =>
-      outNumbers(namedScratch(line, scratch)),
+      namedScratch(line, scratch),
     ),
-    lastLine:
-      printed.at(-1) && outNumbers(namedScratch(printed.at(-1), scratch)),
+    lastLine: printed.at(-1) && namedScratch(printed.at(-1), scratch),
     // The stdout's own lines of the stream's kinds: the gap lines under
     // their functions, as the stream prints them (law 15).
     stdoutGaps: printed.filter((line) => streamedGap.test(line)).length,
@@ -1655,6 +1649,8 @@ async function incremental(dir, plan, cli, copy, observe, states) {
 }
 
 async function driver(plan, observe) {
+  // Calls are counted within this history, so two runs of one history name the same directories.
+  runSeq = 0
   // A package that resolves no TypeScript, has no config, or has its
   // config in its parent directory lives outside this repository
   // (`outsideRepository`); the last in a directory `pkg` of the scratch
