@@ -299,15 +299,18 @@ function takeMutex(mutex) {
     rmSync(temp, { force: true })
   }
 }
-/** A test-only pause (ORACLE_GAPS_TEST_PAUSE_AT, inert unless set), see README. */
+/**
+ * A test-only hold at one named point (ORACLE_GAPS_TEST_PAUSE_AT): the process
+ * writes its marker (ORACLE_GAPS_TEST_PAUSE_MARKER) when it reaches the point,
+ * then waits until the file ORACLE_GAPS_TEST_PAUSE_UNTIL exists. A test sequences
+ * other runs against it and releases it. Inert unless set (register: test hooks).
+ */
 function testPause(point) {
-  if (process.env.ORACLE_GAPS_TEST_PAUSE_AT === point)
-    Atomics.wait(
-      new Int32Array(new SharedArrayBuffer(4)),
-      0,
-      0,
-      Number(process.env.ORACLE_GAPS_TEST_PAUSE_MS ?? 0),
-    )
+  if (process.env.ORACLE_GAPS_TEST_PAUSE_AT !== point) return
+  const marker = process.env.ORACLE_GAPS_TEST_PAUSE_MARKER
+  if (marker !== undefined) writeFileSync(marker, ``)
+  const until = process.env.ORACLE_GAPS_TEST_PAUSE_UNTIL
+  if (until !== undefined) while (!existsSync(until)) sleepMs(20)
 }
 function sleepMs(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)

@@ -976,42 +976,62 @@ async function claimScenarioRuns(dir, files, how, scenario) {
   writeFileSync(join(out, `run.pid`), `999999\n`)
   if (scenario === `recovery`)
     writeFileSync(join(out, `run.pid.takeover`), `999998\n`)
-  const env =
-    scenario === `race`
-      ? {
-          ...cleanEnv(),
-          ORACLE_GAPS_TEST_PAUSE_AT: `mutex-create`,
-          ORACLE_GAPS_TEST_PAUSE_MS: `300`,
-        }
-      : cleanEnv()
-  const runOnce = () =>
-    new Promise((resolvePromise) => {
-      const child = spawn(process.execPath, args, {
-        cwd: repo,
-        env,
-        stdio: [`ignore`, `pipe`, `pipe`],
-      })
-      let stdout = ``
-      let stderr = ``
-      child.stdout.on(`data`, (chunk) => {
-        stdout += chunk
-      })
-      child.stderr.on(`data`, (chunk) => {
-        stderr += chunk
-      })
-      child.on(`close`, () => resolvePromise({ stdout, stderr }))
+  // A run, with its streams collected as they come.
+  const startRun = (env) => {
+    const got = { stdout: ``, stderr: `` }
+    const child = spawn(process.execPath, args, {
+      cwd: repo,
+      env,
+      stdio: [`ignore`, `pipe`, `pipe`],
     })
-  const runs =
-    scenario === `race`
-      ? await Promise.all([runOnce(), runOnce()])
-      : [await runOnce()]
+    child.stdout.on(`data`, (chunk) => {
+      got.stdout += chunk
+    })
+    child.stderr.on(`data`, (chunk) => {
+      got.stderr += chunk
+    })
+    const done = new Promise((resolvePromise) => {
+      child.on(`close`, () => resolvePromise(got))
+    })
+    return { got, done }
+  }
   const outcomeOf = (run) =>
     run.stdout.includes(`oracle-gaps: note log`)
       ? `claimed`
       : run.stderr.includes(`another run`)
         ? `refused`
         : `other`
-  return { scenario, outcomes: runs.map(outcomeOf).sort() }
+  if (scenario === `recovery`) {
+    const run = startRun(cleanEnv())
+    return { scenario, outcomes: [outcomeOf(await run.done)] }
+  }
+  // race: A is held inside the takeover mutex's creation; B starts once A is
+  // held and claims; A is released only after B has claimed, so A must refuse.
+  const marker = join(dir, `a-at-mutex-create`)
+  const release = join(dir, `release-a`)
+  const a = startRun({
+    ...cleanEnv(),
+    ORACLE_GAPS_TEST_PAUSE_AT: `mutex-create`,
+    ORACLE_GAPS_TEST_PAUSE_MARKER: marker,
+    ORACLE_GAPS_TEST_PAUSE_UNTIL: release,
+  })
+  for (let waited = 0; !existsSync(marker); waited += 1) {
+    if (waited > 6000) throw new Error(`run A never reached the takeover mutex`)
+    await sleep(10)
+  }
+  const b = startRun(cleanEnv())
+  for (
+    let waited = 0;
+    !b.got.stdout.includes(`oracle-gaps: note log`);
+    waited += 1
+  ) {
+    if (waited > 12000) throw new Error(`run B never claimed the directory`)
+    await sleep(10)
+  }
+  writeFileSync(release, ``)
+  const runA = await a.done
+  const runB = await b.done
+  return { scenario, outcomes: [outcomeOf(runA), outcomeOf(runB)].sort() }
 }
 
 async function overlappingRuns(dir, files, how) {
