@@ -1094,7 +1094,9 @@ function readRun(dir, out, status, stderr, cli, stdout) {
     lastLine: printed.at(-1) && namedScratch(printed.at(-1), scratch),
     // The stdout's own lines of the stream's kinds: the gap lines under
     // their functions, as the stream prints them (law 15).
-    stdoutGaps: printed.filter((line) => streamedGap.test(line)).length,
+    stdoutGaps: printed
+      .filter((line) => streamedGap.test(line))
+      .map((line) => namedScratch(line, scratch)),
     baselineFiles: lines.flatMap((line) => {
       const file = line.match(
         /^oracle-gaps: baseline (?:pass|fail) (\S+)(?: \(ordinary\))?: /,
@@ -2575,9 +2577,9 @@ function streamBreach(checkpoint, run, expected, plan) {
       `the stream's decisive baseline lines are ${JSON.stringify(run.stream.verdicts)}, owed ${JSON.stringify([verdict])}`,
       { actual: run.stream.verdicts, expected: [verdict] },
     )
-  if (run.stdoutGaps !== expected.gaps.length)
+  if (run.stdoutGaps.length !== expected.gaps.length)
     return breach(
-      `the stdout has ${run.stdoutGaps} gap lines for ${expected.gaps.length} gaps`,
+      `the stdout has ${run.stdoutGaps.length} gap lines for ${expected.gaps.length} gaps: ${JSON.stringify(run.stdoutGaps)}`,
     )
   return undefined
 }
