@@ -77,21 +77,33 @@ export function testNamesOf(testCase) {
 // A word that a POSIX shell reads back as it is: plain, or in single quotes.
 const shellWord = (word) =>
   /^[\w./-]+$/.test(word) ? word : `'${word.replaceAll(`'`, `'\\''`)}'`
-// The same word for PowerShell (a single quote is doubled) and for cmd (a
-// double-quoted word, which cmd reads as it is).
+// PowerShell reads these as single quotes: the ASCII one and the typographic
+// ones (U+2018 to U+201B). Inside a single-quoted word each is doubled.
+const PS_SINGLE_QUOTES = /['\u2018\u2019\u201A\u201B]/g
 const powerShellWord = (word) =>
-  /^[\w./-]+$/.test(word) ? word : `'${word.replaceAll(`'`, `''`)}'`
+  /^[\w./-]+$/.test(word)
+    ? word
+    : `'${word.replace(PS_SINGLE_QUOTES, (quote) => quote + quote)}'`
+// cmd toggles its quoting on every double quote, and expands `%`, even inside
+// quotes; a name with either has no cmd form (undefined), so the line says so.
+// Inside double quotes cmd reads the other metacharacters literally.
 const cmdWord = (word) =>
-  /^[\w./-]+$/.test(word) ? word : `"${word.replaceAll(`"`, `\\"`)}"`
+  /["%]/.test(word) ? undefined : /^[\w./-]+$/.test(word) ? word : `"${word}"`
 // The replay line of a command. A POSIX shell reads one line; on Windows
 // there are two, one for PowerShell and one for cmd, since the words differ.
-const replayLines = (words) =>
-  process.platform === `win32`
-    ? [
-        `  replay (PowerShell): ${words.map(powerShellWord).join(` `)}`,
-        `  replay (cmd): ${words.map(cmdWord).join(` `)}`,
-      ]
-    : [`  replay: ${words.map(shellWord).join(` `)}`]
+// A cmd line with a word that has no cmd form says so instead of printing a
+// line that would not replay (the PowerShell line still does).
+export const replayLines = (words, platform = process.platform) => {
+  if (platform !== `win32`)
+    return [`  replay: ${words.map(shellWord).join(` `)}`]
+  const cmd = words.map(cmdWord)
+  return [
+    `  replay (PowerShell): ${words.map(powerShellWord).join(` `)}`,
+    cmd.every((word) => word !== undefined)
+      ? `  replay (cmd): ${cmd.join(` `)}`
+      : `  replay (cmd): use the PowerShell line for this name`,
+  ]
+}
 
 // A control character, or a line or paragraph separator, as its `\uXXXX`
 // escape: the line stays one line, and the escape is regular-expression
@@ -153,7 +165,7 @@ function violationLines(message) {
  * the config `--config` named, relative to the package: Vitest would
  * discover another config or none, so the replay names it too.
  */
-export function baselineLines(files, config) {
+export function baselineLines(files, config, platform = process.platform) {
   const vitest =
     config === undefined
       ? [`vitest`, `run`]
@@ -179,7 +191,7 @@ export function baselineLines(files, config) {
           `baseline`,
           `fail ${name}: ${tests.length === 0 ? `did not load` : `failed outside its tests`}: ${codeSpan(escapeControls(failure.split(`\n`)[0]))}`,
         ),
-        ...replayLines([...vitest, file]),
+        ...replayLines([...vitest, file], platform),
       ]
     const message = first.message ?? ``
     return [
@@ -189,13 +201,16 @@ export function baselineLines(files, config) {
       ),
       `  failing: ${codeSpan(escapeControls((first.names ?? [first.fullName]).join(` > `)))}: ${codeSpan(escapeControls(message.split(`\n`)[0]))}`,
       ...violationLines(message),
-      ...replayLines([
-        ...vitest,
-        file,
-        ...(first.names === undefined
-          ? []
-          : [`-t`, escapeControls(replayPattern(first.names))]),
-      ]),
+      ...replayLines(
+        [
+          ...vitest,
+          file,
+          ...(first.names === undefined
+            ? []
+            : [`-t`, escapeControls(replayPattern(first.names))]),
+        ],
+        platform,
+      ),
     ]
   })
 }
