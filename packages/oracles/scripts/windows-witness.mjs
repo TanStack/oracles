@@ -139,7 +139,7 @@ if (command === `done`) {
   const failing = new Map()
   for (const text of lines) {
     const match = text.match(
-      /FAIL\s+\S+ > (.*?) > ((?:random|fixed) seed: .*)$/,
+      /FAIL\s+\S+ > (.*?) > ((?:random seed: |fixed seed \d+: ).*)$/,
     )
     if (match)
       failing.set(`${match[1]}\0${match[2]}`, {
