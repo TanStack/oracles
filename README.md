@@ -125,11 +125,22 @@ agent.
   A run through the daemon prints the same lines, at the end of its check.
   `--help` is not a check, so its usage text has no prefix.
 
-  For contributors: two environment variables in the `ORACLE_GAPS_TEST_`
-  namespace are test-only hooks for the CLI's own oracle, not settings for
-  users. `ORACLE_GAPS_TEST_HOLD_EXIT_MS` holds the run's exit after its done
-  line, and `ORACLE_GAPS_TEST_WARM_PROBE` makes the first config warm-up
-  wait where a stop signal can reach it.
+  For contributors: the `ORACLE_GAPS_TEST_` environment variables are test-only
+  hooks for the CLI's own oracle, not settings for users. Each is inert unless
+  set, and none changes an outcome by itself.
+  - `ORACLE_GAPS_TEST_HOLD_EXIT_MS` holds the run's exit after its done line.
+  - `ORACLE_GAPS_TEST_WARM_PROBE` makes the first config warm-up wait where a
+    stop signal can reach it.
+  - `ORACLE_GAPS_TEST_STOP` names a file whose appearance makes the CLI take a
+    stop as a SIGINT would (the win32 stop, which has no signal to deliver).
+  - `ORACLE_GAPS_TEST_PAUSE_AT` names one point at which the CLI blocks, with
+    `ORACLE_GAPS_TEST_PAUSE_MARK` naming a file the blocked process writes its
+    pid to: `daemon-reply` holds a daemon's reply after the check, and
+    `daemon-read` holds its first connection unread. The test kills the process
+    by that pid, so no signal is needed to pause on win32.
+  - `ORACLE_GAPS_TEST_WAIT_MARK` names a file the CLI writes once a request has
+    waited for its daemon's reply longer than `ORACLE_GAPS_WAIT_MS`, so a test
+    acts on the CLI's wait, not on the clock.
 
   A few endings print no done line, or one more line: a SIGKILL of the CLI,
   or a signal that comes while Node is still starting the CLI, before its

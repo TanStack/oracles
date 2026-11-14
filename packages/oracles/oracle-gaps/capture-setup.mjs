@@ -934,9 +934,7 @@ const thisFile = globalThis.__vitest_worker__?.filepath
 // outside the wrappers, such as `node:timers/promises`), nothing but the
 // channel and stdio is open, and its event loop is under 5% busy. After
 // `idleMs` of that it writes an idle row, and the batch's watchdog cuts it
-// off as a hang. A late sample means the thread was busy. With
-// ORACLE_GAPS_IDLE set, each test's longest idle stretch is recorded
-// (profiling).
+// off as a hang. A late sample means the thread was busy.
 const quiet = new Set([
   `MessagePort`,
   `PipeWrap`,
@@ -947,33 +945,22 @@ const quiet = new Set([
 const timersListed = (kinds) =>
   kinds.filter((kind) => kind === `Timeout` || kind === `Immediate`).length
 let sawIo = false
-const idleProfile = process.env.ORACLE_GAPS_IDLE
-if (state.capture || idleProfile) {
+if (state.capture) {
   let baseTimers
   let since
   let last
-  let longest = 0
-  // Profiling only: how many samples each condition blocked the idle clock.
-  let blocked = new Map()
   let use = realUse()
   let reported = false
   beforeEach(() => {
     if (continuing) return
     baseTimers = timersListed(process.getActiveResourcesInfo())
     since = undefined
-    longest = 0
-    blocked = new Map()
     sawIo = false
   })
   beforeEach((context) => {
     if (continuing) return
     context.onTestFinished(() => {
       baseTimers = undefined
-      if (idleProfile)
-        appendFileSync(
-          idleProfile,
-          `${JSON.stringify({ key: testKey(context.task), longest, blocked: Object.fromEntries(blocked) })}\n`,
-        )
     })
   })
   realInterval(() => {
@@ -991,24 +978,17 @@ if (state.capture || idleProfile) {
     // a timeout at the limit anyway (a collection's five-minute GC timer).
     const horizon = now + (state.idleHorizonMs ?? Infinity)
     const timerDue = [...pending.values()].some((due) => due <= horizon)
-    const blocker = late
-      ? `late`
-      : io
-        ? `io ${kinds.filter((kind) => !quiet.has(kind)).join(`,`)}`
-        : used.utilization > 0.05
-          ? `busy`
-          : timerDue
-            ? `timer due`
-            : timersListed(kinds) > baseTimers
-              ? `timers listed`
-              : undefined
-    if (blocker !== undefined) {
+    if (
+      late ||
+      io ||
+      used.utilization > 0.05 ||
+      timerDue ||
+      timersListed(kinds) > baseTimers
+    ) {
       since = undefined
-      if (idleProfile) blocked.set(blocker, (blocked.get(blocker) ?? 0) + 1)
       return
     }
     since ??= now
-    longest = Math.max(longest, now - since)
     if (!state.idleMs || now - since < state.idleMs) return
     reported = true
     appendFileSync(
