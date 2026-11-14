@@ -8,19 +8,20 @@
 //     code (completed 0, refused 2, error 3, a stop 130 or 143).
 //
 //   node scripts/windows-witness.mjs replay <vitest-output> <dir>
-//     The replay lines of a failing property: the PowerShell line and the
-//     cmd line each reproduce the failure when run in their own shell. The
-//     POSIX line is run in PowerShell too, and must not reproduce (that is the
-//     RED of the framework's per-shell lines). A run whose output has only
-//     the POSIX line on win32 fails here, because the per-shell lines are
-//     missing.
+//     Every printed command in a failing property's output: each `Replay` and
+//     `Rerun` line for PowerShell and for cmd. Each PowerShell line runs in
+//     pwsh and in Windows PowerShell 5.1 (powershell.exe), each cmd line in
+//     cmd. A line must reproduce the failure, except a cmd line that says cmd
+//     has no form for its name (a name with a double quote, `%`, or `!`). A
+//     Rerun line is run as `vitest run` plus its arguments, since it names the
+//     test only. A run whose output has no per-shell line for a failure fails.
 //
 //   node scripts/windows-witness.mjs stop <dir> <cli-args...>
-//     One early stop: the CLI starts, the witness sends SIGINT once the CLI
-//     has printed its first line, and the run must end in one of the two
-//     outcomes of the all-or-nothing law (#57): (a) the stop's done line on
-//     both streams, matching the exit code (130 or 143); (b) no output at all.
-//     Anything else, including a partial output, fails.
+//     One stop: the CLI runs with the test-only hook ORACLE_GAPS_TEST_STOP, and
+//     the witness writes that file on the CLI's first stderr line (its progress
+//     streams there; stdout gets the summary only at the end). The run must end
+//     with its stopped line on both streams and exit 130 (SIGINT). A run that
+//     completes first, or ends with another line or code, fails.
 import { spawn, spawnSync } from 'node:child_process'
 import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { delimiter, join, resolve } from 'node:path'
@@ -87,9 +88,10 @@ if (command === `done`) {
   if (problems.length > 0) fail(problems.join('; '))
   else console.log(`done line ok on both streams, exit ${exitCode}`)
 } else if (command === `replay`) {
-  // Every failing property in the output prints a PowerShell line and a cmd
-  // line (or says cmd has no form for its name). Each pair is run in its own
-  // shell, and each must reproduce the failure. The POSIX line is not run.
+  // Every printed command of a failing property: the Replay and Rerun lines,
+  // for PowerShell and for cmd. Each PowerShell line runs in pwsh and in
+  // Windows PowerShell 5.1; each cmd line runs in cmd. A cmd line that says it
+  // has no form (a name with `"`, `%`, or `!`) is the only line that may not run.
   const [outputFile, dir] = args
   const output = readFileSync(outputFile, `utf8`).replace(/\x1b\[[0-9;]*m/g, ``)
   const lines = output.split(/\r?\n/)
@@ -97,8 +99,11 @@ if (command === `done`) {
     lines
       .filter((text) => text.includes(label))
       .map((text) => text.slice(text.indexOf(label) + label.length))
-  const powershell = after(`Replay (PowerShell): `)
-  const cmd = after(`Replay (cmd): `)
+  const replayPs = after(`Replay (PowerShell): `)
+  const replayCmd = after(`Replay (cmd): `)
+  const rerunPs = after(`Rerun (PowerShell): `)
+  const rerunCmd = after(`Rerun (cmd): `)
+  const noForm = `use the PowerShell line for this name`
   // The shells find the test runner in this package's own binaries.
   const env = {
     ...process.env,
@@ -108,47 +113,63 @@ if (command === `done`) {
       process.env.PATH,
     ].join(delimiter),
   }
-  const runIn = (shell, line) =>
-    spawnSync(
-      shell === `pwsh` ? `pwsh` : `cmd`,
-      shell === `pwsh`
-        ? [`-NoProfile`, `-Command`, line]
-        : [`/d`, `/s`, `/c`, line],
+  const runIn = (shell, line) => {
+    const argv = {
+      pwsh: [`pwsh`, [`-NoProfile`, `-Command`, line]],
+      powershell: [`powershell.exe`, [`-NoProfile`, `-Command`, line]],
+      cmd: [`cmd`, [`/d`, `/s`, `/c`, line]],
+    }[shell]
+    return spawnSync(argv[0], argv[1], {
+      cwd: dir,
+      env,
+      encoding: `utf8`,
       // cmd reads its line as it is; Node's own quoting would break it.
-      {
-        cwd: dir,
-        env,
-        encoding: `utf8`,
-        windowsVerbatimArguments: shell !== `pwsh`,
-      },
-    )
+      windowsVerbatimArguments: shell === `cmd`,
+    })
+  }
   const reproduces = (result) =>
     result.status !== 0 &&
     /violated|failed/.test(`${result.stdout}${result.stderr}`)
-  if (powershell.length === 0) {
-    fail(`the failure printed no PowerShell replay line`)
-  } else if (powershell.length !== cmd.length) {
-    fail(`${powershell.length} PowerShell lines but ${cmd.length} cmd lines`)
-  } else {
-    const failures = []
-    powershell.forEach((psLine, i) => {
-      const psRun = runIn(`pwsh`, psLine)
-      if (!reproduces(psRun))
-        failures.push(`PowerShell line ${i + 1} did not reproduce: ${psLine}`)
-      const cmdLine = cmd[i]
-      if (cmdLine === `use the PowerShell line for this name`) {
-        console.log(`cmd has no form for name ${i + 1}, as printed`)
-        return
+  // A Rerun line names the test only: it runs as `vitest run <line>`.
+  const asRerun = (line, prefix) => `vitest run ${line}`
+  const failures = []
+  let checked = 0
+  const check = (name, lines, shells, cmdLines, runOf) => {
+    lines.forEach((line, i) => {
+      for (const shell of shells) {
+        checked += 1
+        const result = runIn(shell, runOf(line))
+        if (!reproduces(result))
+          failures.push(
+            `${name} ${i + 1} did not reproduce in ${shell}: ${line}`,
+          )
       }
-      const cmdRun = runIn(`cmd`, cmdLine)
-      if (!reproduces(cmdRun))
-        failures.push(`cmd line ${i + 1} did not reproduce: ${cmdLine}`)
+      if (cmdLines === undefined) return
+      const cmdLine = cmdLines[i]
+      if (cmdLine === noForm) return
+      checked += 1
+      const result = runIn(`cmd`, runOf(cmdLine))
+      if (!reproduces(result))
+        failures.push(`${name} ${i + 1} did not reproduce in cmd: ${cmdLine}`)
     })
-    if (failures.length > 0) fail(failures.join('; ').slice(0, 1500))
-    else
-      console.log(
-        `${powershell.length} printed name(s): PowerShell and cmd lines each reproduce`,
-      )
+  }
+  check(`Replay`, replayPs, [`pwsh`, `powershell`], replayCmd, (line) => line)
+  check(`Rerun`, rerunPs, [`pwsh`, `powershell`], rerunCmd, (line) =>
+    asRerun(line),
+  )
+  if (replayPs.length + rerunPs.length === 0) {
+    fail(`the failure printed no PowerShell replay or rerun line`)
+  } else if (
+    replayPs.length !== replayCmd.length ||
+    rerunPs.length !== rerunCmd.length
+  ) {
+    fail(`PowerShell and cmd lines differ in number`)
+  } else if (failures.length > 0) {
+    fail(failures.join(`; `).slice(0, 1500))
+  } else {
+    console.log(
+      `${checked} printed commands reproduce the failure (PowerShell 7, Windows PowerShell 5.1, cmd)`,
+    )
   }
 } else if (command === `stop`) {
   // The stop is the CLI's test-only hook (ORACLE_GAPS_TEST_STOP): a file that
@@ -197,7 +218,7 @@ if (command === `done`) {
     ].filter(Boolean)
     if (problems.length > 0)
       fail(
-        `stop was not all-or-nothing (signal ${signal}, exit ${code}): ${problems.join('; ')}`,
+        `the stop did not end with its stopped line on both streams and exit 130 (signal ${signal}, exit ${code}): ${problems.join('; ')}`,
       )
     else
       console.log(

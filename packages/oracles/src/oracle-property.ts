@@ -2282,10 +2282,12 @@ function commandOf(
   // inside a single-quoted word each is doubled.
   const psQuoted = (text: string) =>
     `'${text.replace(/['\u2018\u2019\u201A\u201B]/g, (quote) => quote + quote)}'`
-  // cmd toggles quoting on every double quote and expands `%`: a text with
-  // either has no cmd form (undefined), and its line says so.
+  // cmd toggles quoting on every double quote, expands `%`, and under
+  // DelayedExpansion expands `!`: a text with any of these has no cmd form
+  // (undefined), and its line says so. The set is conservative (a coordinator
+  // ruling).
   const cmdQuoted = (text: string) =>
-    /["%]/.test(text) ? undefined : `"${text}"`
+    /["%!]/.test(text) ? undefined : `"${text}"`
   const cmdWords = (...parts: ReadonlyArray<string | undefined>) =>
     parts.some((part) => part === undefined) ? undefined : words(parts)
   const words = (parts: ReadonlyArray<string | undefined>) =>
@@ -2309,7 +2311,8 @@ function commandOf(
         const quoted = cmdQuoted(value)
         return quoted === undefined ? undefined : `set "${name}=${value}" &&`
       }),
-      command,
+      // An absent command is nothing in cmd too, not a text without a form.
+      command ?? ``,
       cmdQuoted(pattern) === undefined ? undefined : `-t ${cmdQuoted(pattern)}`,
     ),
   }

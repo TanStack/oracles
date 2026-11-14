@@ -84,11 +84,12 @@ const powerShellWord = (word) =>
   /^[\w./-]+$/.test(word)
     ? word
     : `'${word.replace(PS_SINGLE_QUOTES, (quote) => quote + quote)}'`
-// cmd toggles its quoting on every double quote, and expands `%`, even inside
+// cmd toggles its quoting on every double quote, expands `%`, and under
+// DelayedExpansion expands `!` (a conservative no-form set, a coordinator ruling), even inside
 // quotes; a name with either has no cmd form (undefined), so the line says so.
 // Inside double quotes cmd reads the other metacharacters literally.
 const cmdWord = (word) =>
-  /["%]/.test(word) ? undefined : /^[\w./-]+$/.test(word) ? word : `"${word}"`
+  /["%!]/.test(word) ? undefined : /^[\w./-]+$/.test(word) ? word : `"${word}"`
 // The replay line of a command. A POSIX shell reads one line; on Windows
 // there are two, one for PowerShell and one for cmd, since the words differ.
 // A cmd line with a word that has no cmd form says so instead of printing a

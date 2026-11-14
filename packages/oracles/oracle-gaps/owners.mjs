@@ -301,7 +301,12 @@ export function ownership(ts, program, pkg, oracles) {
   const checker = program.getTypeChecker()
   const inPackage = (fileName) => {
     const path = relative(pkg, fileName)
-    return !isOutside(path) && !path.split(/[\\/]/).includes(`node_modules`)
+    return (
+      !isOutside(path) &&
+      !path
+        .split(process.platform === `win32` ? /[\\\\/]/ : `/`)
+        .includes(`node_modules`)
+    )
   }
   const indexed = new Map()
   const functionsOf = (source) => {

@@ -2756,7 +2756,7 @@ function printedBreach(h, lines, expected, platform) {
         const pattern = psLine
           ? powerShellWords(psLine.command)?.[4]
           : undefined
-        if (pattern === undefined || !/["%]/.test(pattern))
+        if (pattern === undefined || !/["%!]/.test(pattern))
           return breach(
             `the replay of ${file} says cmd cannot replay it, but no name in it needs that`,
           )
