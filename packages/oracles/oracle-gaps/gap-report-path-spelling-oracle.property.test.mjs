@@ -69,12 +69,21 @@ const NAMES = [`src`, `RUNNER~1`, `my dir`, `pkg`, `lib`, `a.js`, `b.ts`]
 const historyArbitrary = fc.record({
   text: fc.integer({ min: 0, max: TEXTS.length - 1 }),
   // The directory's drive letter may differ in case from the file's.
-  drive: fc.constantFrom(`C`, `c`, `D`),
-  dirDrive: fc.constantFrom(`C`, `c`),
+  drive: fc.constantFrom(
+    ...(process.platform === `win32` ? [`C`, `c`, `D`] : [`C`]),
+  ),
+  dirDrive: fc.constantFrom(
+    ...(process.platform === `win32` ? [`C`, `c`] : [`C`]),
+  ),
   root: fc.array(fc.constantFrom(...NAMES), { minLength: 1, maxLength: 3 }),
   rest: fc.array(fc.constantFrom(...NAMES), { minLength: 1, maxLength: 2 }),
   // One separator for each joint: the drive to the first name, and each name.
-  joints: fc.array(fc.constantFrom(`/`, `\\`), { minLength: 8, maxLength: 8 }),
+  // On win32 a backslash separates; on POSIX it is a name's character, so only
+  // `/` joins there (a narrowing: the POSIX law is the forward-slash spelling).
+  joints: fc.array(
+    fc.constantFrom(...(process.platform === `win32` ? [`/`, `\\`] : [`/`])),
+    { minLength: 8, maxLength: 8 },
+  ),
 })
 
 /** The segments of a history's spelling: the drive, then the names. */
