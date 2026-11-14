@@ -1151,9 +1151,14 @@ export default async (env) => {
     let copyStarted = Date.now()
     let timer
     const beat = heartbeat()
+    // A test-only hook (ORACLE_GAPS_TEST_TORN_ROWS, capture-setup.mjs): each
+    // poll counts itself, after it has read the capture.
+    const tornRows = process.env.ORACLE_GAPS_TEST_TORN_ROWS
+    let polls = 0
     const watchdog = new Promise((resolve) => {
       const poll = () => {
         const at = finished()
+        if (tornRows) writeFileSync(tornRows, String(++polls))
         if (at === -1) return
         if (at !== current) {
           current = at

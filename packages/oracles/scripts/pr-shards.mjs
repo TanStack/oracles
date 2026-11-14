@@ -552,6 +552,7 @@ export const partitions = {
         'a declaration fault: outsideSource',
         'a load failure beside a hang',
         'an ambiguous authored mutant',
+        'a capture row read while the worker wrote it',
         'every outcome class',
       ]),
       5: anyOf([

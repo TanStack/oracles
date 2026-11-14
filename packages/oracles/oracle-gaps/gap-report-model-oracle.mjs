@@ -835,6 +835,14 @@ const drawn = fc.record({
       }),
     },
   ),
+  // Whether a batch's closing rows are written in two appends, the second
+  // after the watchdog has polled twice (ORACLE_GAPS_TEST_TORN_ROWS, issue
+  // #83). Rare in generated histories, since each closing row then waits
+  // for two polls; its constructed history always sets it.
+  tornRows: fc.oneof(
+    { weight: 19, arbitrary: fc.constant(false) },
+    { weight: 1, arbitrary: fc.constant(true) },
+  ),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -2920,6 +2928,7 @@ function resolveHistory(history) {
     matcherOwns: history.matcherOwns ?? `none`,
     config: history.config ?? `object`,
     prePlugin: history.prePlugin === true,
+    tornRows: history.tornRows === true,
     ...configOf(history),
     configEnv: history.configEnv === true,
     native: history.native ?? `none`,

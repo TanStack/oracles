@@ -238,6 +238,32 @@ if (run.units && !skippedCopy) {
   vi.resetModules()
 }
 const state = unit ? { ...run, ...unit } : run
+// A test-only hook for the CLI's own oracle, not for users:
+// ORACLE_GAPS_TEST_TORN_ROWS names a file where a batch's watchdog counts
+// its polls (check.mjs). The closing row is then written in two appends,
+// and the second waits until the watchdog has polled twice after the first,
+// so a poll reads the row half written, by construction and not by timing
+// (issue #83). Every row ends with a newline in either case.
+function appendClosingRow(row) {
+  const polls = process.env.ORACLE_GAPS_TEST_TORN_ROWS
+  // Only a batch's copy (`unit`) has a watchdog that polls.
+  if (!polls || unit === undefined) return appendFileSync(state.capture, row)
+  const half = row.length >> 1
+  appendFileSync(state.capture, row.slice(0, half))
+  const counted = () => {
+    try {
+      return Number(readFileSync(polls, `utf8`))
+    } catch {
+      return 0
+    }
+  }
+  const seen = counted()
+  const pause = new Int32Array(new SharedArrayBuffer(4))
+  // The bound only keeps a broken watchdog from holding the worker forever.
+  for (let waited = 0; counted() < seen + 2 && waited < 60_000; waited += 10)
+    Atomics.wait(pause, 0, 0, 10)
+  appendFileSync(state.capture, row.slice(half))
+}
 // The files this copy reads through fs inside the package: by a sync, a
 // promise, or a callback read, or a check of whether a file exists or what
 // it is. The daemon stores the run under them as it does the modules the
@@ -1110,8 +1136,7 @@ afterAll(() => {
       hash,
     ]),
   )
-  appendFileSync(
-    state.capture,
+  appendClosingRow(
     `${JSON.stringify({ file: thisFile, closed: true, loaded, readAt, ...(skippedCopy ? { skipped: true } : {}) })}\n`,
   )
 })

@@ -659,7 +659,7 @@ function runCli(dir, files, how = {}) {
     encoding: `utf8`,
     timeout: 300_000,
     maxBuffer: 64 * 1024 * 1024,
-    env: cleanEnv(),
+    env: { ...cleanEnv(), ...how.env },
   })
   const run = readRun(
     dir,
@@ -1729,6 +1729,9 @@ async function driver(plan, observe) {
     // A symbolic link to the package, for sources spelled through it.
     symlinkSync(dir, `${dir}.link`, `dir`)
     const files = fixtureFiles(plan)
+    // A batch's closing rows written in two appends, around two polls of
+    // its watchdog (`tornRows`), whose count sits beside the package.
+    const tornPolls = `${dir}.torn-polls`
     const how = {
       ordinary: plan.ordinary,
       sources: sourceArgument(plan, `${dir}.link`),
@@ -1736,7 +1739,20 @@ async function driver(plan, observe) {
       cli: plan.cliPath === `spaced` ? copy : here,
       ...configArgs(plan),
     }
-    const { replay, ...cli } = runCli(dir, files, how)
+    const { replay, ...cli } = runCli(
+      dir,
+      files,
+      plan.tornRows
+        ? { ...how, env: { ORACLE_GAPS_TEST_TORN_ROWS: tornPolls } }
+        : how,
+    )
+    // The watchdog read a closing row while the worker wrote it: it polled
+    // at least twice in the run, and every closing row waited for two polls.
+    if (plan.tornRows && existsSync(tornPolls)) {
+      if (Number(readFileSync(tornPolls, `utf8`)) >= 2 && cli.reported)
+        states.add(`a capture row read while the worker wrote it`)
+      rmSync(tornPolls, { force: true })
+    }
     // How many units were computed or reused says how the result was
     // produced, not what it is, so it is not observed.
     observe(`cli`, { ...cli, evidence: undefined })
@@ -3359,6 +3375,7 @@ const ownedIncrementalStates = [
   `an unchanged check through the daemon computed nothing`,
   `an unchanged check through the daemon computed nothing under a config's pre plugin`,
   `an unchanged check through the daemon computed nothing while a test read a source through fs`,
+  `a capture row read while the worker wrote it`,
   `a run edited the data it had read, during a check through the daemon`,
   `edit fsData changed the cold result`,
   `an edit to data read through sync changed the cold result`,
@@ -4355,6 +4372,58 @@ oracleProperty({
           laterSteps: NO_LATER_STEPS,
           steps: [`recheck`],
           prePlugin: true,
+          configPlace: `discovered`,
+          configFile: `vite.config.mjs`,
+          config: `object`,
+        }),
+      },
+      {
+        // A batch's watchdog polls the capture while a worker appends its
+        // closing row. The hook holds each closing row half written until
+        // the watchdog has polled twice, so a poll reads a partial line by
+        // construction; the run must still complete and see every closing
+        // row (issue #83: a poll parsed the partial line and the CLI ended
+        // in an internal error).
+        name: `a capture row read while the worker wrote it`,
+        enters: [`a capture row read while the worker wrote it`],
+        build: (generated) => ({
+          ...generated,
+          functions: [
+            [{ kind: `push`, quote: `'` }],
+            [{ kind: `push`, quote: `'` }],
+          ],
+          containers: [],
+          overloads: [],
+          owners: [`a`, `b`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          derived: null,
+          dotGen: false,
+          dataOwners: [],
+          exportOwners: [],
+          importer: `none`,
+          wholeFile: `none`,
+          template: false,
+          tests: [
+            { ...judging(`a`, `fixed seed`, 1), fn: 0 },
+            { ...judging(`b`, `fixed seed`, 1), fn: 1 },
+          ],
+          witness: false,
+          authored: null,
+          secondAuthored: false,
+          fault: `none`,
+          stability: `none`,
+          ordinary: false,
+          native: `none`,
+          boot: false,
+          budget: `two`,
+          cliPath: `plain`,
+          concurrentStart: false,
+          contexts: 1,
+          steps: null,
+          tornRows: true,
+          prePlugin: false,
           configPlace: `discovered`,
           configFile: `vite.config.mjs`,
           config: `object`,
