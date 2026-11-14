@@ -213,12 +213,48 @@ if (command === `done`) {
   // A Rerun line names the test only: it runs as `vitest run <line>`.
   const failures = []
   let checked = 0
+  // The -t argument of a PowerShell line, decoded (a PowerShell single-quoted
+  // value): the coarse filter a Rerun line applies to test names.
+  const tArgument = (line) => {
+    const at = line.indexOf(`-t '`)
+    if (at < 0) return undefined
+    return decodePs(`$env:X='${line.slice(at + 4)}`, `X`)
+  }
+  // The failing fixed units a Rerun line's filter selects, by exact full name,
+  // and whose own FAIL line its output must show.
+  const rerunTargets = (line) => {
+    const pattern = tArgument(line)
+    if (pattern === undefined) return undefined
+    let filter
+    try {
+      filter = new RegExp(pattern)
+    } catch {
+      return undefined
+    }
+    return [...failing.values()].filter(
+      (f) =>
+        f.unit.startsWith(`fixed seed `) &&
+        filter.test(`${f.property} > ${f.unit}`),
+    )
+  }
   const runEach = (name, psLines, cmdLines, prefix) => {
     psLines.forEach((line, i) => {
+      const targets = name === `Rerun` ? rerunTargets(line) : undefined
+      if (name === `Rerun` && (targets === undefined || targets.length === 0)) {
+        failures.push(`Rerun ${i + 1} selects no failing fixed unit: ${line}`)
+        return
+      }
+      const shownBy = (result) =>
+        targets === undefined ||
+        targets.every((f) =>
+          `${result.stdout}${result.stderr}`.includes(
+            `${f.property} > ${f.unit}`,
+          ),
+        )
       for (const shell of [`pwsh`, `powershell`]) {
         checked += 1
         const result = runIn(shell, `${prefix}${line}`)
-        if (!reproduces(result))
+        if (!reproduces(result) || !shownBy(result))
           failures.push(
             `${name} ${i + 1} did not reproduce in ${shell} (exit ${result.status}: ${`${result.stderr}${result.stdout}`.trim().slice(0, 400)}): ${line}`,
           )
@@ -231,7 +267,7 @@ if (command === `done`) {
       if (cmdLine === noForm) return
       checked += 1
       const result = runIn(`cmd`, `${prefix}${cmdLine}`)
-      if (!reproduces(result))
+      if (!reproduces(result) || !shownBy(result))
         failures.push(`${name} ${i + 1} did not reproduce in cmd: ${cmdLine}`)
     })
   }
