@@ -2989,8 +2989,16 @@ function streamBreach(checkpoint, run, expected, plan) {
   return undefined
 }
 
-/** The line that names a run's stream log. */
-const logNoteOf = (run) => `oracle-gaps: note log ${run.outDir}/stream.log`
+/**
+ * The line that names a run's stream log. On win32 the note names the log in
+ * forward slashes (the Windows paths rule, register 2026-11-13); POSIX paths
+ * are used unchanged.
+ */
+const logNoteOf = (run) => {
+  const outDir =
+    process.platform === `win32` ? run.outDir.replaceAll(`\\`, `/`) : run.outDir
+  return `oracle-gaps: note log ${outDir}/stream.log`
+}
 
 /**
  * What law 15 judges of every run, on both streams, whatever its outcome:
