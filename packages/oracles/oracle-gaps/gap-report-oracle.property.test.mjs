@@ -487,7 +487,7 @@ import { delimiter, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import fc from 'fast-check'
 import { socketOf, stateDirOf } from './daemon.mjs'
-import { isWithin } from './paths.mjs'
+import { isWithin, posix, realPathOf } from './paths.mjs'
 import { oracleProperty, pass, violation } from '../src/oracle-property.ts'
 
 import {
