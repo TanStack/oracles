@@ -471,7 +471,6 @@
  */
 import { spawn, spawnSync } from 'node:child_process'
 import {
-  appendFileSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -665,6 +664,7 @@ const leftBehind = (line) =>
   )
 
 const hookFiles = new Map()
+let runSeq = 0
 const hookOf = (dir) => {
   if (!hookFiles.has(dir))
     hookFiles.set(
@@ -688,7 +688,11 @@ const retentionLinesOf = (file) =>
 function runCli(dir, files, how = {}) {
   writeFixture(dir, files)
   const before = new Set(filesUnder(dir))
-  const { args, out } = cliArgs(dir, files, how)
+  const { args, out: outBase } = cliArgs(dir, files, how)
+  // Each call has its own output directory: its retention lines are then its own, even when a
+  // daemon serves several checks of one test.
+  const out = `${outBase}-${++runSeq}`
+  args[args.indexOf(`--out`) + 1] = out
   // The retention hook (ORACLE_GAPS_TEST_RETENTION): one line per batch,
   // written beside the run's own temporary files, not in the package.
   // One hook file per package: a daemon keeps the environment of the call that started it, so every call
@@ -703,12 +707,6 @@ function runCli(dir, files, how = {}) {
   })
   // Each line names its check's output directory, so this run keeps only its own (a daemon serves many calls).
   const retention = retentionLinesOf(hook).filter((line) => line.run === out)
-  // Debug table (ORACLE_GAPS_RETENTION_TABLE): each run's batches against its lines, for the mismatch.
-  if (process.env.ORACLE_GAPS_RETENTION_TABLE)
-    appendFileSync(
-      process.env.ORACLE_GAPS_RETENTION_TABLE,
-      `${JSON.stringify({ out, batches: JSON.parse(readFileSync(join(out, `results.json`), `utf8`)).evidence?.batches ?? null, lines: retention.map((l) => [l.batch, l.cut === true]) })}\n`,
-    )
   const run = readRun(
     dir,
     out,
