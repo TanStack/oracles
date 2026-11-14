@@ -783,8 +783,11 @@ globalThis.__oracleWorkBound = (ratio) => {
 // budget), Node's, or this file's does not, while a user's read through a
 // spy (tinyspy's frame first) still does.
 let clocked = false
-const machinery =
-  /[\\/]node_modules[\\/](?:vitest|@vitest|fast-check|@fast-check|tinypool|tinyspy|chai|@tanstack[\\/]oracles)[\\/]|[\\/]packages[\\/]oracles[\\/]src[\\/]/
+// A backslash separates only on win32 (on POSIX it is a name's character).
+const SEP = process.platform === `win32` ? `[\\\\/]` : `/`
+const machinery = new RegExp(
+  `${SEP}node_modules${SEP}(?:vitest|@vitest|fast-check|@fast-check|tinypool|tinyspy|chai|@tanstack${SEP}oracles)${SEP}|${SEP}packages${SEP}oracles${SEP}src${SEP}`,
+)
 function fromTest() {
   const limit = Error.stackTraceLimit
   Error.stackTraceLimit = 50

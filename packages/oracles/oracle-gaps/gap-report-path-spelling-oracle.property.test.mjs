@@ -77,15 +77,36 @@ const NAMES = [`src`, `RUNNER~1`, `my dir`, `pkg`, `lib`, `a.js`, `b.ts`]
 const historyArbitrary = fc.record({
   text: fc.integer({ min: 0, max: TEXTS.length - 1 }),
   // The directory's drive letter may differ in case from the file's.
-  drive: fc.constantFrom(`C`, `c`, `D`, `x`),
-  dirDrive: fc.constantFrom(`C`, `c`, `x`),
+  drive: fc.constantFrom(
+    ...(process.platform === `win32` ? [`C`, `c`, `D`] : [`C`]),
+  ),
+  dirDrive: fc.constantFrom(
+    ...(process.platform === `win32` ? [`C`, `c`] : [`C`]),
+  ),
   root: fc.array(fc.constantFrom(...NAMES), { minLength: 1, maxLength: 3 }),
   rest: fc.array(fc.constantFrom(...NAMES), { minLength: 1, maxLength: 2 }),
   // One separator for each joint: the drive to the first name, and each name.
   // On win32 a backslash separates; on POSIX it is a name's character, so only
   // `/` joins there (a narrowing: the POSIX law is the forward-slash spelling).
-  joints: fc.array(fc.constantFrom(`/`, `\\`), { minLength: 8, maxLength: 8 }),
+  joints: fc.array(
+    fc.constantFrom(...(process.platform === `win32` ? [`/`, `\\`] : [`/`])),
+    { minLength: 8, maxLength: 8 },
+  ),
+  // Appended last, so the fields above keep their draws: the drives and
+  // separators a POSIX spelling uses (a backslash name and an `x:` drive).
+  wide: fc.record({
+    drive: fc.constantFrom(`C`, `c`, `D`, `x`),
+    dirDrive: fc.constantFrom(`C`, `c`, `x`),
+    joints: fc.array(fc.constantFrom(`/`, `\\`), {
+      minLength: 8,
+      maxLength: 8,
+    }),
+  }),
 })
+
+/** The spelling a platform uses: win32 the fields above, POSIX the wide ones. */
+const effective = (history) =>
+  process.platform === `win32` ? history : { ...history, ...history.wide }
 
 /** The segments of a history's spelling: the drive, then the names. */
 const segmentsOf = ({ drive, dirDrive, root, rest }) => ({
@@ -113,7 +134,8 @@ function idsAt(path, text) {
 // Law 2's answer, from the spelled strings alone. On win32 both separators
 // split and a drive's case is ignored; on POSIX only `/` splits, a backslash is
 // a name's character, and `x:` is an ordinary name. The rest is the answer.
-function relationModel(history) {
+function relationModel(raw) {
+  const history = effective(raw)
   const win = process.platform === `win32`
   const { directory, file } = segmentsOf(history)
   const dirPath = spell(
@@ -171,7 +193,8 @@ oracleProperty({
   },
   timeout: 10_000,
   model,
-  driver: (history, observe) => {
+  driver: (raw, observe) => {
+    const history = effective(raw)
     const { directory, file } = segmentsOf(history)
     const text = TEXTS[history.text]
     observe(`reference`, idsAt(posixOf(file), text))

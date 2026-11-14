@@ -265,7 +265,13 @@ function runName() {
  * `..` (a name such as `..gen` is inside), or it is absolute.
  */
 export function isOutside(path) {
-  return path === `..` || /^\.\.[\\/]/.test(path) || isAbsolute(path)
+  // On POSIX only `/` separates, so `..\\x` is a name, not a parent (review F5).
+  const separator = process.platform === `win32` ? `[\\\\/]` : `/`
+  return (
+    path === `..` ||
+    new RegExp(`^\\.\\.${separator}`).test(path) ||
+    isAbsolute(path)
+  )
 }
 
 /**

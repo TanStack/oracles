@@ -2250,7 +2250,12 @@ function rerunPatternOf(task: NamedTask): string {
   const names: Array<string> = []
   for (let at: NamedTask | undefined = task; at; at = at.suite)
     names.unshift(at.name)
-  const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
+  // The characters no shell reads safely in a `-t` argument become `.`: the
+  // pattern stays anchored and only slightly broader (review option c).
+  const escape = (text: string) =>
+    text
+      .replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
+      .replace(/["%!\u2018\u2019\u201A\u201B]/g, `.`)
   return `^${names.map(escape).join(`(?: | > )`)}$`
 }
 
@@ -2282,10 +2287,12 @@ function commandOf(
   // inside a single-quoted word each is doubled.
   const psQuoted = (text: string) =>
     `'${text.replace(/['\u2018\u2019\u201A\u201B]/g, (quote) => quote + quote)}'`
-  // cmd toggles quoting on every double quote and expands `%`: a text with
-  // either has no cmd form (undefined), and its line says so.
+  // An environment value in cmd: `set "NAME=value"` takes everything up to the
+  // last quote, so a double quote inside is fine. `%` expands, and `!` expands
+  // under DelayedExpansion, so a value with either has no cmd form (a
+  // coordinator ruling). The `-t` argument carries no hostile character (above).
   const cmdQuoted = (text: string) =>
-    /["%]/.test(text) ? undefined : `"${text}"`
+    /[%!]/.test(text) ? undefined : `"${text}"`
   const cmdWords = (...parts: ReadonlyArray<string | undefined>) =>
     parts.some((part) => part === undefined) ? undefined : words(parts)
   const words = (parts: ReadonlyArray<string | undefined>) =>
@@ -2309,7 +2316,8 @@ function commandOf(
         const quoted = cmdQuoted(value)
         return quoted === undefined ? undefined : `set "${name}=${value}" &&`
       }),
-      command,
+      // An absent command is nothing in cmd too, not a text without a form.
+      command ?? ``,
       cmdQuoted(pattern) === undefined ? undefined : `-t ${cmdQuoted(pattern)}`,
     ),
   }

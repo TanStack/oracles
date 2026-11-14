@@ -84,11 +84,12 @@ const powerShellWord = (word) =>
   /^[\w./-]+$/.test(word)
     ? word
     : `'${word.replace(PS_SINGLE_QUOTES, (quote) => quote + quote)}'`
-// cmd toggles its quoting on every double quote, and expands `%`, even inside
+// cmd toggles its quoting on every double quote, expands `%`, and under
+// DelayedExpansion expands `!` (a conservative no-form set, a coordinator ruling), even inside
 // quotes; a name with either has no cmd form (undefined), so the line says so.
 // Inside double quotes cmd reads the other metacharacters literally.
 const cmdWord = (word) =>
-  /["%]/.test(word) ? undefined : /^[\w./-]+$/.test(word) ? word : `"${word}"`
+  /["%!]/.test(word) ? undefined : /^[\w./-]+$/.test(word) ? word : `"${word}"`
 // The replay line of a command. A POSIX shell reads one line; on Windows
 // there are two, one for PowerShell and one for cmd, since the words differ.
 // A cmd line with a word that has no cmd form says so instead of printing a
@@ -118,8 +119,18 @@ export const escapeControls = (text) =>
 // regular-expression syntax escaped, joined by what either Vitest puts
 // between them (a space in Vitest 4, ` > ` in Vitest 5), anchored at both
 // ends. The framework's own rerun command (oracle-property.ts) is built so.
+// The characters no shell reads safely inside a `-t` argument: a double quote,
+// `%` and `!` (cmd), and the curly quotes (PowerShell). Each becomes the regular
+// expression's `.`: the pattern stays anchored and only slightly broader, and
+// the exact test is carried by ORACLE_UNIT where a line sets it (review option
+// c, a coordinator ruling).
+const SHELL_HOSTILE = /["%!\u2018\u2019\u201A\u201B]/g
 const replayPattern = (names) =>
-  `^${names.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)).join(`(?: | > )`)}$`
+  `^${names
+    .map((name) =>
+      name.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`).replace(SHELL_HOSTILE, `.`),
+    )
+    .join(`(?: | > )`)}$`
 
 // A count of things.
 const counted = (n, thing) => `${n} ${thing}${n === 1 ? `` : `s`}`

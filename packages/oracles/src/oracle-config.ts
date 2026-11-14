@@ -74,8 +74,12 @@ export function configureOracles({
   registry: propertyIds,
   retiredVariables: retired = [],
 }: OracleConfigurationOptions = {}): void {
-  if (envPrefix === ``) {
-    throw new Error(`configureOracles: envPrefix must be non-empty`)
+  // The prefix names environment variables that replay lines print, and a
+  // shell reads them as words only when they are plain (review item 8).
+  if (!/^[A-Z][A-Z0-9_]*$/.test(envPrefix)) {
+    throw new Error(
+      `configureOracles: envPrefix must be an upper-case name such as ORACLE (letters, digits, and underscores, starting with a letter), not ${JSON.stringify(envPrefix)}`,
+    )
   }
   const candidate: OracleSettings = {
     prefix: envPrefix,
