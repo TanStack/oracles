@@ -709,7 +709,7 @@ const strays = (dir, before, running = false) =>
  *
  * With `when` `after`, the run is not stopped while it runs: the witness
  * does not spin, the run's process holds its exit for 500 ms once it has
- * printed its done line (`ORACLE_GAPS_TEST_HOLD_EXIT_MS`, a hook for this
+ * printed its done line (`ORACLE_GAPS_TEST_HOLD_UNTIL`, a hook for this
  * driver), and the driver sends the signal once that line is on stdout
  * (review of #46, F3). The run then ends as it completed, with exactly one
  * done line. With `warm`, the driver sends the signal while the run warms
@@ -765,7 +765,10 @@ async function stoppedRun(
         ? { ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED: `200` }
         : {}),
       ...(after
-        ? { ...cleanEnv(), ORACLE_GAPS_TEST_HOLD_EXIT_MS: `500` }
+        ? {
+            ...cleanEnv(),
+            ORACLE_GAPS_TEST_HOLD_UNTIL: join(pids, `after-release`),
+          }
         : warm
           ? {
               ...cleanEnv(),
@@ -838,6 +841,8 @@ async function stoppedRun(
     if (win) writeFileSync(stopFile, ``)
     else child.kill(signal)
   }
+  // The `after` stop is sent while the exit is held; the hold is released now.
+  if (after) writeFileSync(join(pids, `after-release`), ``)
   const ended = await Promise.race([exit, sleep(30_000).then(() => false)])
   await sleep(1000)
   const alive = readdirSync(pids)
@@ -973,17 +978,17 @@ async function overlappingRuns(dir, files, how) {
   writeFixture(dir, files)
   const before = new Set(filesUnder(dir))
   const { args, out } = cliArgs(dir, files, how)
-  const start = (holdMs) => {
+  const start = (holdUntilFile) => {
     const child = spawn(process.execPath, args, {
       cwd: repo,
-      // A test-only hold (ORACLE_GAPS_TEST_HOLD_EXIT_MS, index.mjs): the first
-      // run keeps its output claim until the second has been refused, so the
-      // overlap does not depend on how fast the first run ends.
+      // The first run holds its exit (and its output claim) until the driver
+      // releases it after the second run has been refused: the overlap is
+      // deterministic (ORACLE_GAPS_TEST_HOLD_UNTIL, index.mjs).
       env: {
         ...cleanEnv(),
-        ...(holdMs === undefined
+        ...(holdUntilFile === undefined
           ? {}
-          : { ORACLE_GAPS_TEST_HOLD_EXIT_MS: String(holdMs) }),
+          : { ORACLE_GAPS_TEST_HOLD_UNTIL: holdUntilFile }),
       },
       stdio: [`ignore`, `pipe`, `pipe`],
     })
@@ -1003,7 +1008,10 @@ async function overlappingRuns(dir, files, how) {
     })
     return { got, status }
   }
-  const first = start(5000)
+  // The release file lives outside the package: a stray write there is judged.
+  const releaseDir = mkdtempSync(join(realpathSync(tmpdir()), `gap-release-`))
+  const releaseFile = join(releaseDir, `overlap-release`)
+  const first = start(releaseFile)
   let firstEnded = false
   first.status.then(() => {
     firstEnded = true
@@ -1025,6 +1033,7 @@ async function overlappingRuns(dir, files, how) {
     )
   const second = start()
   const secondStatus = await second.status
+  writeFileSync(releaseFile, ``)
   const firstStatus = await first.status
   const ended = readRun(
     dir,

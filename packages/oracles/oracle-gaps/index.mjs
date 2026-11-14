@@ -234,6 +234,11 @@ function claimOut(out) {
       }
       const holder = readHolder(claim)
       if (holder === undefined) continue
+      // An unreadable claim counts as live: wait for it, never take it over.
+      if (!(holder > 0)) {
+        sleepMs(10)
+        continue
+      }
       if (holder !== process.pid && holder > 0 && alive(holder)) {
         const refusal = new Refusal(
           `another run (pid ${holder}) is using ${out}`,
@@ -269,32 +274,31 @@ function readHolder(claim) {
   }
 }
 /**
- * Creates the takeover mutex: a directory only one racer can make. A mutex
- * whose pid is gone (a crashed racer) is removed and made again; that rare case
- * is in Limits.
+ * Takes the takeover mutex. The pid is written to a temp file first and linked
+ * into place, so no reader ever sees an empty mutex (review F4; register: #57
+ * claim rules). A mutex whose pid can't be read counts as live and is never
+ * taken over; only a mutex whose recorded pid is dead is removed, and then made
+ * again.
  */
 function takeMutex(mutex) {
+  const temp = `${mutex}.${process.pid}.tmp`
+  writeFileSync(temp, `${process.pid}\n`)
   try {
-    mkdirSync(mutex)
+    testPause(`mutex-create`)
+    linkSync(temp, mutex)
+    return true
   } catch (error) {
     if (error.code !== `EEXIST`) throw error
-    const owner = Number(
-      (() => {
-        try {
-          return readFileSync(join(mutex, `pid`), `utf8`)
-        } catch {
-          return ``
-        }
-      })(),
-    )
-    if (!(owner > 0 && alive(owner))) {
-      rmSync(mutex, { recursive: true, force: true })
+    const owner = readHolder(mutex)
+    if (owner === undefined) return false
+    if (owner > 0 && !alive(owner)) {
+      rmSync(mutex, { force: true })
       return takeMutex(mutex)
     }
     return false
+  } finally {
+    rmSync(temp, { force: true })
   }
-  writeFileSync(join(mutex, `pid`), `${process.pid}\n`)
-  return true
 }
 /** A test-only pause (ORACLE_GAPS_TEST_PAUSE_AT, inert unless set), see README. */
 function testPause(point) {
@@ -330,10 +334,22 @@ function startLog(out) {
 }
 
 /** Flushes both streams, then exits with `code` (after a test's hold). */
+/**
+ * A test-only hold (ORACLE_GAPS_TEST_HOLD_UNTIL, a path): after its done line the
+ * process keeps its exit, and its output claim, until the file exists. A test
+ * releases it once the overlapping run or the stop it sent has been observed, so
+ * the outcome does not depend on wall-clock timing. Inert unless set.
+ */
+function holdUntil() {
+  const file = process.env.ORACLE_GAPS_TEST_HOLD_UNTIL
+  if (file !== undefined) while (!existsSync(file)) sleepMs(20)
+}
 function exitWhenFlushed(code) {
-  const hold = Number(process.env.ORACLE_GAPS_TEST_HOLD_EXIT_MS ?? 0)
   process.stdout.write(``, () =>
-    process.stderr.write(``, () => setTimeout(() => process.exit(code), hold)),
+    process.stderr.write(``, () => {
+      holdUntil()
+      process.exit(code)
+    }),
   )
 }
 
