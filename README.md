@@ -134,6 +134,11 @@ agent.
   For contributors: the `ORACLE_GAPS_TEST_` environment variables are test-only
   hooks for the CLI's own oracle, not settings for users. Each is inert unless
   set; a hook may pause at one named point and never changes an outcome.
+  `ORACLE_GAPS_TEST_ABORT_AT=check` aborts the check's process after its session
+  has begun, where a V8 out-of-memory abort would strike: with `process.abort()`
+  on win32, and with a SIGABRT to itself on POSIX, which ends the process the
+  same way without the native backtrace `process.abort()` prints there (a line
+  of the stream it would break).
   `ORACLE_GAPS_TEST_STARTED` names a file that the CLI writes as its first project statement, before any project module loads, so a test can tell a stop that came before the CLI started from one that came during its loads.
   `ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED` (milliseconds) blocks the CLI for that long right after the started file is written, so a stop sent on seeing the file lands inside the pause.
   `ORACLE_GAPS_TEST_PAUSE_AT` names one point at which `ORACLE_GAPS_TEST_PAUSE_MS` (milliseconds) blocks the CLI: `takeover` (inside a stale-claim takeover, after the stale pid is read) and `mutex-create` (inside the takeover mutex's creation).

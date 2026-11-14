@@ -4257,8 +4257,7 @@ function baselineOf(plan) {
     // baseline too.
     const own =
       plan.tests.filter((t) => t.file === file).length +
-      (file === `a` && plan.consoleOutput ? 1 : 0) +
-      (file === `a` && plan.aborts ? 1 : 0)
+      (file === `a` && plan.consoleOutput ? 1 : 0)
     const broken = failing.find((f) => f.file === file)
     // The failing owner's suite holds two tests and a third of its name.
     const extra = broken?.test === undefined ? 0 : 3
@@ -4892,16 +4891,8 @@ function oracleTestFile(plan, file) {
       `})`,
       `test('fixed seed 999', () => {})`,
     )
-  // A test that ends the run's process by SIGABRT when the driver asks
-  // (`GAP_ABORT`), as a V8 out-of-memory abort does: in worker threads its
-  // process is the run's, and `process.abort()` is unavailable there. It
-  // runs and passes in every other run.
-  if (file === `a` && plan.aborts)
-    out.push(
-      `test('aborts the process when asked', () => {`,
-      `  if (process.env.GAP_ABORT === '1') process.kill(process.pid, 'SIGABRT')`,
-      `})`,
-    )
+  // The abort of an "aborts" run comes from the CLI's own check process
+  // (ORACLE_GAPS_TEST_ABORT_AT), so no test of file a is needed for it.
   // A file with no tests still loads, so the CLI can read what it owns.
   if (
     !plan.tests.some((t) => t.file === file) &&
