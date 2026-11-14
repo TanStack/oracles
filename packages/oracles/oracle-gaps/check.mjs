@@ -1299,9 +1299,8 @@ export default async (env) => {
     rmSync(testOutput, { force: true })
     profileFile = process.env.ORACLE_GAPS_PROFILE
       ? join(options.out, `profile.jsonl`)
-      : process.env.GAP_PROFILE_ALL
-    if (process.env.ORACLE_GAPS_PROFILE && profileFile)
-      rmSync(profileFile, { force: true })
+      : undefined
+    if (profileFile) rmSync(profileFile, { force: true })
     const checkStarted = Date.now()
     let phase = Date.now()
     const endPhase = (name, fields) => {
