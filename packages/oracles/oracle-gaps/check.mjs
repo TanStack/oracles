@@ -1288,8 +1288,8 @@ export default async (env) => {
       // by the caller (replace), which closes it and drops its state.
       if (result !== undefined) {
         retireCopies(context, copies)
-        retiredEntries(context, before)
-      } else retiredEntries(context, before, true)
+        retiredEntries(context, before, copies)
+      } else retiredEntries(context, before, copies, true)
       rmSync(capture, { force: true })
     }
   }
@@ -1423,14 +1423,24 @@ export default async (env) => {
   // that settled and its copies are retired, one line holds each structure's
   // total before the batch and after its retirement. The bounded-retention
   // law reads it: every total returns to its size before the batch.
-  function retiredEntries(context, before, cut = false) {
+  function retiredEntries(context, before, copies, cut = false) {
     const file = process.env.ORACLE_GAPS_TEST_RETENTION
     if (!file) return
     // A cut run is not retired (its context is replaced), so its line has no after: its before still
     // names the stale totals the next batch starts from.
+    // Vite's graph also holds modules that are not copies (a source or harness file is cached on its
+    // first import, legitimately), so for Vite the law counts the copies' own nodes, which must be 0.
+    const owned = new Set(copies)
+    let copyNodes = 0
+    for (const environment of Object.values(
+      context.getRootProject().vite?.environments ?? {},
+    ))
+      for (const copy of owned)
+        copyNodes +=
+          environment.moduleGraph.fileToModulesMap.get(copy)?.size ?? 0
     appendFileSync(
       file,
-      `${JSON.stringify(cut ? { before, cut: true } : { before, after: retentionTotals(context) })}\n`,
+      `${JSON.stringify(cut ? { before, cut: true } : { before, after: retentionTotals(context), copyNodes })}\n`,
     )
   }
 

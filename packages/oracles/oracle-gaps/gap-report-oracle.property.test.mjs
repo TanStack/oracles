@@ -647,10 +647,13 @@ const unlogged = (run) =>
 // A batch line (ORACLE_GAPS_TEST_RETENTION) left state behind when a total
 // after its retirement differs from its size before the batch.
 const leftBehind = (line) =>
+  (line.copyNodes ?? 0) !== 0 ||
   Object.keys(line.before).some(
     (key) =>
-      (key.startsWith(`stale`) && line.before[key] !== 0) ||
-      (line.after !== undefined && line.before[key] !== line.after[key]),
+      // Vite's keys (`ssr.*`, `client.*`) hold non-copy modules too: only the copies' nodes count there.
+      !key.includes(`.`) &&
+      ((key.startsWith(`stale`) && line.before[key] !== 0) ||
+        (line.after !== undefined && line.before[key] !== line.after[key])),
   )
 
 /**
