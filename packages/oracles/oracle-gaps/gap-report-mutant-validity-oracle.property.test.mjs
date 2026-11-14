@@ -113,6 +113,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import fc from 'fast-check'
 import { oracleProperty, pass, violation } from '../src/oracle-property.ts'
+import * as schemataTable from './schemata.mjs'
 import { instrument } from './schemata.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -127,6 +128,7 @@ const LAW_LABEL = `a mutant carries the outside-annotation label exactly when an
 const LAW_TYPELESS = `erasing the types changes no emitted site and no dead-code mark`
 const LAW_BOUNDARY = `a boundary hint sits only on a site that a 0 and -0 history distinguishes`
 const LAW_REFINE = `the mutant run agrees with the model`
+const LAW_THROW = `a canThrow declaration is present, and an operator declared false never makes exactly one of its two forms throw (the completion recording the gap CLI relies on depends on it)`
 const LAW_KNOWN = `every emitted mutant is a site of the grammar`
 const LAW_INERT = `instrumentation with no mutant active is inert`
 
@@ -2763,6 +2765,156 @@ function mutateText(text, mutant) {
 }
 
 // The families, each program one history.
+// ## Throw capability
+//
+// A family of one-operator functions, each with one site whose mutant is an
+// operator swap. Its two forms are written here as JavaScript closures (the
+// model, which the production instrumenter never sees). `canThrow` is the
+// question the gap CLI's completion recording depends on: is there an input
+// that makes exactly one of the two forms throw? The model answers it from
+// JavaScript's own semantics over the domain below. The declaration that the
+// CLI keeps (`CAN_THROW` in schemata.mjs) is checked against the model: an
+// operator declared `false` must never make exactly one form throw. A
+// declared `true` may over-claim, which costs a run and never a skipped
+// mutant, so it is not checked.
+const THROW_FORMS = {
+  strictEq: {
+    text: `a === b`,
+    args: 2,
+    orig: (a, b) => a === b,
+    alt: (a, b) => a !== b,
+  },
+  lessThan: {
+    text: `a < b`,
+    args: 2,
+    orig: (a, b) => a < b,
+    alt: (a, b) => a <= b,
+  },
+  andRead: {
+    text: `a && b.p`,
+    args: 2,
+    orig: (a, b) => a && read(b),
+    alt: (a, b) => a || read(b),
+  },
+  coalesceRead: {
+    text: `a ?? b.p`,
+    args: 2,
+    orig: (a, b) => a ?? read(b),
+    alt: (a, b) => a && read(b),
+  },
+  not: { text: `!a`, args: 1, orig: (a) => !a, alt: (a) => a },
+  boolLit: { text: `true`, args: 1, orig: () => true, alt: () => false },
+  plusOne: { text: `a + 1`, args: 1, orig: (a) => a + 1, alt: (a) => a - 1 },
+  optionalRead: {
+    text: `a?.p`,
+    args: 1,
+    orig: (a) => a?.p,
+    alt: (a) => read(a),
+  },
+}
+// A plain read of a property, which throws on a nullish object.
+function read(object) {
+  if (object === null || object === undefined)
+    throw new TypeError(`Cannot read properties of ${object}`)
+  return object.p
+}
+const THROW_FORM_NAMES = Object.keys(THROW_FORMS)
+// The values a form draws, with the cases the declarations must hold on: the
+// nullish receivers, BigInt and Symbol operands, and an object whose valueOf
+// throws.
+const THROW_VALUES = [
+  null,
+  undefined,
+  Symbol(`s`),
+  1n,
+  0n,
+  1,
+  0,
+  -0,
+  NaN,
+  `1`,
+  `x`,
+  true,
+  false,
+  {},
+  { p: 1 },
+  { p: null },
+  {
+    valueOf() {
+      throw new TypeError(`valueOf`)
+    },
+  },
+]
+const throwDomain = (form) => {
+  const { args } = THROW_FORMS[form]
+  if (args === 1) return THROW_VALUES.map((a) => [a])
+  return THROW_VALUES.flatMap((a) => THROW_VALUES.map((b) => [a, b]))
+}
+// The model's completion of one form on one input: its value, or THREW.
+function completionOf(form, input, change) {
+  const fn = THROW_FORMS[form][change ? `alt` : `orig`]
+  try {
+    return fn(...input)
+  } catch {
+    return THREW
+  }
+}
+// Whether some input makes exactly one of the two forms throw.
+function throwsCanDiffer(form) {
+  return throwDomain(form).some(
+    (input) =>
+      (completionOf(form, input, null) === THREW) !==
+      (completionOf(form, input, true) === THREW),
+  )
+}
+const throwPrograms = THROW_FORM_NAMES.map((form) => ({
+  kind: `throws`,
+  form,
+  lang: `js`,
+}))
+function renderThrows(program) {
+  const { text, args } = THROW_FORMS[program.form]
+  const params = args === 1 ? `a` : `a, b`
+  const head = `function f(${params}) {\n  return `
+  return { text: `${head}${text};\n}`, sites: throwSites(program, head) }
+}
+// A form's sites: its operator, at the token the CLI names (an operator token
+// for a swap, the expression's start for `!`, a literal, and a read through
+// `?.`), and the returned expression, which is a `return-undefined` site.
+const OPERATOR_AT = {
+  strictEq: [`binary-swap`, 2],
+  lessThan: [`binary-swap`, 2],
+  andRead: [`binary-swap`, 2],
+  coalesceRead: [`binary-swap`, 2],
+  not: [`drop-not`, 0],
+  boolLit: [`bool-flip`, 0],
+  plusOne: [`arithmetic-swap`, 2],
+  optionalRead: [`optional-chain`, 0],
+}
+function throwSites(program, head) {
+  const [operator, offset] = OPERATOR_AT[program.form]
+  return [
+    {
+      operator: `return-undefined`,
+      position: head.length,
+      change: { kind: `undefine` },
+    },
+    { operator, position: head.length + offset, change: { kind: `alt` } },
+  ]
+}
+// The model's completion under a change: `alt` is the operator's other form,
+// and `undefine` returns `undefined` after the expression's own completion.
+function evaluateThrows(program, input, change) {
+  if (change?.kind === `undefine`)
+    return completionOf(program.form, input, null) === THREW ? THREW : undefined
+  return completionOf(program.form, input, change)
+}
+const throwsFamily = {
+  render: renderThrows,
+  evaluate: evaluateThrows,
+  domain: (program) => throwDomain(program.form),
+}
+
 const histories = [
   ...programs,
   ...narrowedPrograms,
@@ -2770,6 +2922,7 @@ const histories = [
   ...returnPrograms,
   ...textPrograms,
   ...ESCAPES,
+  ...throwPrograms,
 ]
 
 // ## Reach
@@ -2858,6 +3011,8 @@ function reached(program, trace, expected) {
 
 // The structural state a program enters, derived from the grammar.
 function stateOf(program) {
+  if (program.kind === `throws`)
+    return `a ${program.form} operator's canThrow declaration is checked`
   if (program.kind === `optional`)
     return `an optional ${program.access} read of a ${program.width} ${program.receiver} receiver in ${program.lang}, ${program.strictness}`
   if (program.kind === `returned`)
@@ -3098,6 +3253,7 @@ const families = {
     typedDomain: textTypedDomain,
   },
 }
+families.throws = throwsFamily
 const familyOf = (program) => families[program.kind]
 const sourceOf = (program) => (familyOf(program)?.render ?? render)(program)
 const run = (program, input, change, counter) =>
@@ -3168,6 +3324,9 @@ function model(program) {
   }
   return {
     source: text,
+    ...(program.kind === `throws`
+      ? { canThrow: throwsCanDiffer(program.form) }
+      : {}),
     sites: sites.map((site, index) => {
       const distinct = distinctIn(program, index)
       const differs = (domain, change) =>
@@ -3421,6 +3580,10 @@ function driver(program, observe) {
     }
   })
   observe(`instrumented`, { clean, emitted })
+  if (program.kind === `throws`)
+    observe(`declared`, {
+      declared: schemataTable.CAN_THROW?.[program.form] ?? null,
+    })
 }
 
 // ## Comparison
@@ -3509,6 +3672,22 @@ function check(program, observations, expected) {
       `with no mutant active, the instrumented function differs from its source ${JSON.stringify(expected.source)}`,
       LAW_INERT,
     )
+  if (program.kind === `throws`) {
+    const declared = observations.find((o) => o.checkpoint === `declared`)
+      ?.value?.declared
+    if (typeof declared !== `boolean`)
+      return violation(
+        `declared`,
+        `${program.form} has no canThrow declaration in schemata.mjs`,
+        LAW_THROW,
+      )
+    if (!declared && expected.canThrow)
+      return violation(
+        `declared`,
+        `${program.form} declares canThrow false, but an input makes exactly one of its forms throw`,
+        LAW_THROW,
+      )
+  }
   const emitted = new Map(found.emitted.map((e) => [keyOf(e), e]))
   for (const site of expected.sites) {
     const where = `${site.operator} at offset ${site.position} of ${JSON.stringify(expected.source)}`
