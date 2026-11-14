@@ -138,8 +138,9 @@ agent.
   `ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED` (milliseconds) blocks the CLI for that long right after the started file is written, so a stop sent on seeing the file lands inside the pause.
   `ORACLE_GAPS_TEST_PAUSE_AT` names one point at which `ORACLE_GAPS_TEST_PAUSE_MS` (milliseconds) blocks the CLI: `takeover` (inside a stale-claim takeover, after the stale pid is read) and `mutex-create` (inside the takeover mutex's creation).
   `ORACLE_GAPS_TEST_STOP` names a file whose appearance makes the CLI take a stop as a SIGINT would.
-  `ORACLE_GAPS_TEST_HOLD_EXIT_MS` holds the run's exit after its done line,
-  and `ORACLE_GAPS_TEST_WARM_PROBE` makes the first config warm-up wait where a
+  `ORACLE_GAPS_TEST_HOLD_UNTIL` names a file: after its done line the run keeps
+  its exit, and its output claim, until the file exists, so a test can send a
+  stop or start a second run before the run ends. `ORACLE_GAPS_TEST_WARM_PROBE` makes the first config warm-up wait where a
   stop signal can reach it.
 
   A few endings print no done line, or one more line: a SIGKILL of the CLI,

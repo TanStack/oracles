@@ -332,10 +332,22 @@ function startLog(out) {
 }
 
 /** Flushes both streams, then exits with `code` (after a test's hold). */
+/**
+ * A test-only hold (ORACLE_GAPS_TEST_HOLD_UNTIL, a path): after its done line the
+ * process keeps its exit, and its output claim, until the file exists. A test
+ * releases it once the overlapping run or the stop it sent has been observed, so
+ * the outcome does not depend on wall-clock timing. Inert unless set.
+ */
+function holdUntil() {
+  const file = process.env.ORACLE_GAPS_TEST_HOLD_UNTIL
+  if (file !== undefined) while (!existsSync(file)) sleepMs(20)
+}
 function exitWhenFlushed(code) {
-  const hold = Number(process.env.ORACLE_GAPS_TEST_HOLD_EXIT_MS ?? 0)
   process.stdout.write(``, () =>
-    process.stderr.write(``, () => setTimeout(() => process.exit(code), hold)),
+    process.stderr.write(``, () => {
+      holdUntil()
+      process.exit(code)
+    }),
   )
 }
 
