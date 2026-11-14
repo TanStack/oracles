@@ -1748,11 +1748,11 @@ async function driver(plan, observe) {
     )
     // The watchdog read a closing row while the worker wrote it: it polled
     // at least twice in the run, and every closing row waited for two polls.
-    if (plan.tornRows && existsSync(tornPolls)) {
-      if (Number(readFileSync(tornPolls, `utf8`)) >= 2 && cli.reported)
-        states.add(`a capture row read while the worker wrote it`)
-      rmSync(tornPolls, { force: true })
-    }
+    const tornRead =
+      plan.tornRows &&
+      existsSync(tornPolls) &&
+      Number(readFileSync(tornPolls, `utf8`)) >= 2
+    rmSync(tornPolls, { force: true })
     // How many units were computed or reused says how the result was
     // produced, not what it is, so it is not observed.
     observe(`cli`, { ...cli, evidence: undefined })
@@ -1761,6 +1761,8 @@ async function driver(plan, observe) {
       observe(`replay`, { command: replay, ran: replayed(dir, replay) })
     // Reach comes from what the CLI reported, mapped onto the plan.
     const states = new Set()
+    if (tornRead && cli.reported)
+      states.add(`a capture row read while the worker wrote it`)
     if (cli.exit === 0 && !plan.consoleOutput)
       states.add(`a completed run whose tests wrote nothing`)
     // Law 14: a partial run of one owned function's mutants, whose baseline
