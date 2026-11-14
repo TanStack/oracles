@@ -491,6 +491,12 @@ const earlierEdits = edits.filter((edit) => !laterEdits.includes(edit))
 // A history's no later edits, one value, so `histories` can take it back
 // (fc.constant takes back only its own reference).
 const NO_LATER_STEPS = Object.freeze([])
+// The later edits a history takes after its steps: only one without the
+// witness module that has steps.
+const laterStepsOf = (history) =>
+  history.witness === false && history.steps != null
+    ? (history.laterSteps ?? [])
+    : []
 // The steps that act on the daemon and change no file.
 const daemonEvents = new Set([
   `restart`,
@@ -865,15 +871,11 @@ const keepsSteps = (history) => {
 // P1-a: the budget witness only in its own histories). The map is its own
 // inverse on the histories it keeps, so fast-check takes every one of them
 // back and shrinks it.
-// A history without the witness module takes its later edits after its
-// steps; one with no steps takes none.
+// A history is drawn as on main; the plan takes its later edits after its
+// steps (`laterStepsOf`). A constructed history whose steps hold a later
+// edit is taken back with that edit in `laterSteps`.
 const histories = drawn.map(
-  (history) =>
-    !keepsSteps(history)
-      ? { ...history, steps: null }
-      : history.witness === false && history.steps !== null
-        ? { ...history, steps: [...history.steps, ...history.laterSteps] }
-        : history,
+  (history) => (keepsSteps(history) ? history : { ...history, steps: null }),
   (value) => {
     const history =
       /** @type {{ witness: unknown, steps: unknown[] | null }} */ (value)
@@ -2889,12 +2891,14 @@ function resolveHistory(history) {
     template: history.template,
     fault: history.fault,
     stability: history.stability,
-    steps: history.steps ?? [],
+    steps: [...(history.steps ?? []), ...laterStepsOf(history)],
     lazyGate: history.lazyGate === true,
     fsRead: history.fsRead ?? `none`,
     // Whether a step edits file b's helper during a check (`midrun`): then
     // file a loads the helper and holds the test that edits it.
-    midrun: (history.steps ?? []).includes(`midrun`),
+    midrun: [...(history.steps ?? []), ...laterStepsOf(history)].includes(
+      `midrun`,
+    ),
     // Which file's test lands the mid-run edit (`midrunBy`), and what it
     // edits (`midrunTarget`): file a edits file b's helper after its
     // context loaded it, or file b edits its own helper or the data file
@@ -5812,6 +5816,7 @@ function readSummary(summary) {
 
 export {
   drawn,
+  NO_LATER_STEPS,
   MIDRUN_EDITORS,
   captureWitness,
   outsideRepository,

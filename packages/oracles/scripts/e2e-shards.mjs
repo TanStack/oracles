@@ -78,7 +78,7 @@ export const shards = {
     `random seed: a test edits the data it read, during a check through the daemon`,
     `determinism: constructed history: a test edits the data it read, during a check through the daemon`,
     `calibration: the check a mid-run edit did not reach flips a mutant of the editing file`,
-    `calibration: the check a mid-run edit reached reports a mutant of the editing file against both cold runs`,
+    `calibration: the check a mid-run edit reached reports another file's mutant as neither cold run did`,
     `fixed seed 20261105: an unchanged check through the daemon under a config's pre plugin`,
     `random seed: an unchanged check through the daemon under a config's pre plugin`,
     `determinism: constructed history: an unchanged check through the daemon under a config's pre plugin`,
