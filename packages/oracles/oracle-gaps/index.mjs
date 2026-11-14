@@ -117,7 +117,7 @@
 // Vitest worker joins, and every process a test starts unless it starts it
 // detached (in a session of its own, as a browser driver can), and waits
 // for it. Help, --stop-daemon, and arguments that refuse start no process,
-// so they end in the CLI's own process, without a second Node start. Windows has no process groups, so there the run is not supervised.
+// so they end in the CLI's own process, without a second Node start. On win32, which has no process groups, the supervisor ends the child's tree with taskkill.
 // SIGINT or SIGTERM is sent on to the whole group; a process that has not
 // ended 2 s later is killed, and so is any process left in the group when
 // the run ends. The run kills its group itself if the CLI dies first.
@@ -125,7 +125,7 @@
 // CLI's modules load (review of #57, P1): a signal during the loads is kept
 // and acted on once the stream log's note is written, so a stop as the CLI starts still
 // leaves the note and one done line. Only Node's own start is before them.
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import {
   appendFileSync,
   existsSync,
@@ -367,7 +367,7 @@ function superviseRun(out) {
   const finish = () => {
     if (finishing) return
     finishing = true
-    if (child) signalGroup(child.pid, `SIGKILL`)
+    if (child) signalTree(child.pid, `SIGKILL`)
     let decided = false
     const decide = () => {
       if (decided) return
@@ -396,11 +396,13 @@ function superviseRun(out) {
     if (stopped) return
     stopped = signal
     if (child === undefined) return finish()
-    signalGroup(child.pid, signal)
+    // On win32 a stop after the child wrote its ending is ignored, as on POSIX,
+    // where the child ignores the signal itself.
+    if (!ending || process.platform !== `win32`) signalTree(child.pid, signal)
     const deadline = Date.now() + STOP_GRACE_MS
     const poll = setInterval(() => {
       if (
-        (ended === undefined || signalGroup(child.pid, 0)) &&
+        (ended === undefined || signalTree(child.pid, 0)) &&
         Date.now() < deadline
       )
         return
@@ -432,7 +434,9 @@ function superviseRun(out) {
       out,
     ],
     {
-      detached: true,
+      // win32 has no process groups: the child is not detached there, and its
+      // tree is ended by signalTree.
+      detached: process.platform !== `win32`,
       stdio: [`inherit`, `inherit`, `pipe`, `ipc`],
       env: { ...process.env, ORACLE_GAPS_GROUP: String(process.pid) },
     },
@@ -459,13 +463,27 @@ function superviseRun(out) {
 }
 
 /** Signals every process of group `group`; false when none is left. */
-function signalGroup(group, signal) {
-  try {
-    process.kill(-group, signal)
-    return true
-  } catch {
-    return false
+/**
+ * Signals the process tree of `pid`: its process group on POSIX, where the
+ * run's workers are members. win32 has no groups and no signals a Node process
+ * can receive, so there the tree is ended with taskkill; signal 0 asks whether
+ * the process runs.
+ */
+function signalTree(pid, signal) {
+  if (process.platform !== `win32`) {
+    try {
+      process.kill(-pid, signal)
+      return true
+    } catch {
+      return false
+    }
   }
+  if (signal === 0) return alive(pid)
+  return (
+    spawnSync(`taskkill`, [`/T`, `/F`, `/PID`, String(pid)], {
+      stdio: `ignore`,
+    }).status === 0
+  )
 }
 
 /**
@@ -474,7 +492,7 @@ function signalGroup(group, signal) {
  */
 function watchSupervisor(supervisor) {
   setInterval(() => {
-    if (process.ppid !== supervisor) process.kill(-process.pid, `SIGKILL`)
+    if (!alive(supervisor)) signalTree(process.pid, `SIGKILL`)
   }, 1000).unref()
 }
 
@@ -497,6 +515,16 @@ async function checkCold(options) {
   const { openSession } = await import(`./check.mjs`)
   const { memoryStore } = await import(`./evidence.mjs`)
   const session = await openSession(options.pkg)
+  // A test-only abort (ORACLE_GAPS_TEST_ABORT_AT=check, inert unless set), after
+  // the session has begun, where a V8 out-of-memory abort would strike; the
+  // supervisor reports how the process ended.
+  if (process.env.ORACLE_GAPS_TEST_ABORT_AT === `check`) {
+    // process.abort() prints a native backtrace on POSIX, which is no line of
+    // the stream (law 15); a SIGABRT to itself ends the process the same way
+    // without it. win32 has no such signal, so there it is process.abort().
+    if (process.platform === `win32`) process.abort()
+    else process.kill(process.pid, `SIGABRT`)
+  }
   try {
     return await session.check(options, memoryStore(), (line) =>
       writeStream(`${line}\n`),
@@ -541,25 +569,13 @@ function endWith(error, out) {
 // compared with the URL of the path it was started as.
 const main =
   import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
-// Windows has no process groups: there the run is the CLI's own process.
-const supervised = process.platform !== `win32`
 const supervisor = process.env.ORACLE_GAPS_GROUP
-
-// Set once the note is written (the unsupervised run has started).
-let runStarted = false
-/** Ends an unsupervised run with its stopped line on both streams (#58). */
-function stopNow(signal) {
-  const line = `oracle-gaps: done stopped (${signal})\n`
-  process.stdout.write(line)
-  writeStream(line)
-  exitWhenFlushed(128 + constants.signals[signal])
-}
 
 async function run() {
   // The supervisor: it claims the output directory, writes the note, and runs
   // the child. A refusal of the claim or the log ends it through endWith (the
   // single path for every refusal of a check).
-  if (supervised && supervisor === undefined) {
+  if (supervisor === undefined) {
     const checking = asksForCheck(process.argv.slice(2))
     if (checking !== undefined) {
       try {
@@ -577,25 +593,16 @@ async function run() {
   // is no refusal, and the supervisor writes the stopped line. Once the run
   // writes its ending, a stop no longer cuts it off.
   // The all-or-nothing stop law (#57 and #58): a stop after the note writes one
-  // done stopped line on each stream; a supervised child's stop is the
-  // supervisor's line; a stop before the note waits for it (the early stop).
+  // done stopped line on each stream, and the child's stop is the supervisor's
+  // line.
   const onStop = (signal) => {
     if (writingEnding) return
-    if (!supervised) return runStarted && stopNow(signal)
     process.exit(128 + constants.signals[signal])
   }
   process.on(`SIGINT`, onStop)
   process.on(`SIGTERM`, onStop)
-  // A test-only stop for unsupervised runs (ORACLE_GAPS_TEST_STOP, #58).
-  if (process.env.ORACLE_GAPS_TEST_STOP !== undefined && !supervised) {
-    const file = process.env.ORACLE_GAPS_TEST_STOP
-    setInterval(() => {
-      if (existsSync(file)) onStop(`SIGINT`)
-    }, 50).unref()
-  }
-  // A child of a supervisor that was stopped before its own handlers ran exits
-  // now (the supervisor writes the line). An unsupervised run keeps the stop
-  // and takes it once its note is written, below.
+  // A child that was stopped before its own handlers ran exits now (the
+  // supervisor writes the line).
   if (supervisor !== undefined && early !== undefined)
     process.exit(128 + constants.signals[early])
   // The run's options, once its arguments parse.
@@ -611,11 +618,6 @@ async function run() {
       const { stopDaemon } = await import(`./daemon.mjs`)
       await stopDaemon(options.pkg)
     } else {
-      // Windows has no supervisor: this process opens the log and runs the
-      // check. A child of a supervisor writes its stderr alone.
-      if (supervisor === undefined) startLog(options.out)
-      runStarted = true
-      if (early !== undefined) return stopNow(early)
       const summary = await (options.daemon ? checkThroughDaemon : checkCold)(
         options,
       )

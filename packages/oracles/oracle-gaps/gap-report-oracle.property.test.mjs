@@ -749,11 +749,10 @@ async function stoppedRun(
   const atSpawn = when === `spawn`
   const after = when === `after`
   const warm = when === `warm`
-  // With `abort`, no signal comes: a test of file a aborts the run's
-  // process (`GAP_ABORT`), in worker threads, so the abort ends the process
-  // that runs the check, as a V8 out-of-memory abort does. The run then
-  // ends with one error line per stream that names how its process ended,
-  // and exits 3 (the coordinator's decision of 2026-11-12 on P10).
+  // With `abort`, no signal comes: the check's process aborts in its main
+  // thread (ORACLE_GAPS_TEST_ABORT_AT, as a V8 out-of-memory abort does). The
+  // run then ends with one error line per stream that names how its process
+  // ended, and exits 3 (the coordinator's decision of 2026-11-12 on P10).
   const abort = when === `abort`
   writeFixture(dir, files)
   const before = new Set(filesUnder(dir))
@@ -784,7 +783,7 @@ async function stoppedRun(
               ORACLE_GAPS_TEST_WARM_PROBE: join(pids, `warming`),
             }
           : abort
-            ? { ...cleanEnv(), GAP_ABORT: `1` }
+            ? { ...cleanEnv(), ORACLE_GAPS_TEST_ABORT_AT: `check` }
             : { ...cleanEnv(), GAP_STOP_DIR: pids }),
     },
     stdio: [`ignore`, `pipe`, `pipe`],
@@ -2790,7 +2789,10 @@ function check(plan, observations, expected) {
       value.when === `after`
         ? `oracle-gaps: done completed`
         : value.when === `abort`
-          ? `oracle-gaps: done error, the run's process exited with SIGABRT`
+          ? process.platform === `win32`
+            ? // win32 has no signal a process can die of: the exit code names it.
+              `oracle-gaps: done error, the run's process exited with code `
+            : `oracle-gaps: done error, the run's process exited with SIGABRT`
           : `oracle-gaps: done stopped (${value.signal})`
     if (value.spun && value.when === `warm` && value.refused)
       return violation(
