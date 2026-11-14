@@ -833,6 +833,23 @@ const drawn = fc.record({
   // spawns (the spawn-delay law, review of #57).
   spawnSignal: fc.constantFrom(`SIGINT`, `SIGINT`, `SIGTERM`),
   spawnDelay: fc.integer({ min: 0, max: 150 }),
+  // A claim left by a dead pid, then the starts that meet it: two racing starts
+  // (`race`) or one start that must take over a stale claim and its mutex
+  // (`recovery`). Constructed histories set it (review of #57, the claim rules).
+  claimScenario: fc.constantFrom(
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    `race`,
+    `recovery`,
+  ),
   // The spawn stop waits for the CLI's started marker, then signals at once (the
   // deterministic witness, event-driven rather than timed).
   spawnOnStart: fc.constantFrom(false, false, false, true),
@@ -2928,6 +2945,7 @@ function resolveHistory(history) {
     spawnStop: history.spawnStop === true,
     spawnSignal: history.spawnSignal ?? `SIGINT`,
     spawnDelay: history.spawnDelay ?? 0,
+    claimScenario: history.claimScenario ?? false,
     spawnOnStart: history.spawnOnStart === true,
     onlyRun: history.onlyRun === true,
     pragma: history.pragma === true,

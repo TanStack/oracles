@@ -962,6 +962,58 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
  * observation (the coordinator's decision of 2026-11-13 on F4: a second run
  * refuses, and the first's stream log stays its own).
  */
+/**
+ * Runs a claim scenario (review of #57, the claim rules): a run.pid left by a
+ * dead pid (and, for `recovery`, a takeover mutex left by a dead pid), then
+ * the starts that meet it. `race` starts two runs at once, each paused inside
+ * the takeover mutex's creation (ORACLE_GAPS_TEST_PAUSE_AT), and records each
+ * run as claimed, refused, or other.
+ */
+async function claimScenarioRuns(dir, files, how, scenario) {
+  writeFixture(dir, files)
+  const { args, out } = cliArgs(dir, files, { ...how, outName: `out-claim` })
+  mkdirSync(out, { recursive: true })
+  writeFileSync(join(out, `run.pid`), `999999\n`)
+  if (scenario === `recovery`)
+    writeFileSync(join(out, `run.pid.takeover`), `999998\n`)
+  const env =
+    scenario === `race`
+      ? {
+          ...cleanEnv(),
+          ORACLE_GAPS_TEST_PAUSE_AT: `mutex-create`,
+          ORACLE_GAPS_TEST_PAUSE_MS: `300`,
+        }
+      : cleanEnv()
+  const runOnce = () =>
+    new Promise((resolvePromise) => {
+      const child = spawn(process.execPath, args, {
+        cwd: repo,
+        env,
+        stdio: [`ignore`, `pipe`, `pipe`],
+      })
+      let stdout = ``
+      let stderr = ``
+      child.stdout.on(`data`, (chunk) => {
+        stdout += chunk
+      })
+      child.stderr.on(`data`, (chunk) => {
+        stderr += chunk
+      })
+      child.on(`close`, () => resolvePromise({ stdout, stderr }))
+    })
+  const runs =
+    scenario === `race`
+      ? await Promise.all([runOnce(), runOnce()])
+      : [await runOnce()]
+  const outcomeOf = (run) =>
+    run.stdout.includes(`oracle-gaps: note log`)
+      ? `claimed`
+      : run.stderr.includes(`another run`)
+        ? `refused`
+        : `other`
+  return { scenario, outcomes: runs.map(outcomeOf).sort() }
+}
+
 async function overlappingRuns(dir, files, how) {
   writeFixture(dir, files)
   const before = new Set(filesUnder(dir))
@@ -1851,6 +1903,15 @@ async function driver(plan, observe) {
       : undefined
     const { replay, ...cli } = overlapping?.cli ?? runCli(dir, files, how)
     if (overlapping) observe(`overlap`, overlapping.overlap)
+    if (plan.claimScenario) {
+      const claim = await claimScenarioRuns(dir, files, how, plan.claimScenario)
+      observe(`claimScenario`, claim)
+      states.add(
+        claim.scenario === `race`
+          ? `two starts race for a stale claim`
+          : `a stale claim and mutex from a dead pid are taken over`,
+      )
+    }
     // How many units were computed or reused says how the result was
     // produced, not what it is, so it is not observed.
     observe(`cli`, { ...cli, evidence: undefined })
@@ -2450,6 +2511,19 @@ function check(plan, observations, expected) {
   // anything (F4, the coordinator's decision of 2026-11-13): the refusal
   // names the directory, is one block with its fix, and its stdout is its
   // done line alone. The first run's own laws are judged on `cli`.
+  const claim = observations.find(
+    (o) => o.checkpoint === `claimScenario`,
+  )?.value
+  if (claim !== undefined) {
+    const owed =
+      claim.scenario === `race` ? [`claimed`, `refused`] : [`claimed`]
+    if (JSON.stringify(claim.outcomes) !== JSON.stringify(owed))
+      return violation(
+        `claimScenario`,
+        `a ${claim.scenario} gave ${JSON.stringify(claim.outcomes)}, owed ${JSON.stringify(owed)}`,
+        `ownership`,
+      )
+  }
   const overlap = observations.find((o) => o.checkpoint === `overlap`)?.value
   if (overlap !== undefined) {
     if (overlap.exit !== 2)
@@ -3477,6 +3551,8 @@ const staticStates = [
   `owned through bind`,
 ]
 const required = [
+  `two starts race for a stale claim`,
+  `a stale claim and mutex from a dead pid are taken over`,
   `a stop as the CLI starts`,
   `a stream log that cannot be written`,
   `two runs on one output directory`,
@@ -3653,6 +3729,8 @@ const faults = [
 // history: they are not witnessed by "every outcome class" (a named history
 // of its own must enter them, or registration fails).
 const ownHistoryStates = [
+  `two starts race for a stale claim`,
+  `a stale claim and mutex from a dead pid are taken over`,
   `a stop as the CLI starts`,
   `a stream log that cannot be written`,
   `two runs on one output directory`,
@@ -3958,6 +4036,68 @@ oracleProperty({
           outMode: `explicit`,
           logBlocked: false,
           overlap: true,
+        }),
+      },
+      {
+        // A second run on the first's output directory while the first is
+        // live refuses (F4, the coordinator's decision of 2026-11-13): the
+        // first run's stream log still equals its own stderr, line for line,
+        // and the refusal reports no directory it does not own.
+        name: `two starts race for a stale claim`,
+        enters: [`two starts race for a stale claim`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          wholeFile: `none`,
+          witness: false,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+          ordinary: false,
+          budget: `two`,
+          outMode: `explicit`,
+          logBlocked: false,
+          overlap: false,
+          claimScenario: `race`,
+        }),
+      },
+      {
+        // A second run on the first's output directory while the first is
+        // live refuses (F4, the coordinator's decision of 2026-11-13): the
+        // first run's stream log still equals its own stderr, line for line,
+        // and the refusal reports no directory it does not own.
+        name: `a stale claim and mutex from a dead pid are taken over`,
+        enters: [`a stale claim and mutex from a dead pid are taken over`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          wholeFile: `none`,
+          witness: false,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+          ordinary: false,
+          budget: `two`,
+          outMode: `explicit`,
+          logBlocked: false,
+          overlap: false,
+          claimScenario: `recovery`,
         }),
       },
       {

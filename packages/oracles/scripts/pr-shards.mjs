@@ -524,6 +524,8 @@ export const partitions = {
         "test.projects in a parent's config",
       ]),
       2: anyOf([
+        'two starts race for a stale claim',
+        'a stale claim and mutex from a dead pid are taken over',
         'a stop with the default output directory',
         'a daemon check with the default output directory',
         'a .ts config in a package with no module type that calls require',
