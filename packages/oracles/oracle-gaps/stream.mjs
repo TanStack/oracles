@@ -119,8 +119,18 @@ export const escapeControls = (text) =>
 // regular-expression syntax escaped, joined by what either Vitest puts
 // between them (a space in Vitest 4, ` > ` in Vitest 5), anchored at both
 // ends. The framework's own rerun command (oracle-property.ts) is built so.
+// The characters no shell reads safely inside a `-t` argument: a double quote,
+// `%` and `!` (cmd), and the curly quotes (PowerShell). Each becomes the regular
+// expression's `.`: the pattern stays anchored and only slightly broader, and
+// the exact test is carried by ORACLE_UNIT where a line sets it (review option
+// c, a coordinator ruling).
+const SHELL_HOSTILE = /["%!\u2018\u2019\u201A\u201B]/g
 const replayPattern = (names) =>
-  `^${names.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)).join(`(?: | > )`)}$`
+  `^${names
+    .map((name) =>
+      name.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`).replace(SHELL_HOSTILE, `.`),
+    )
+    .join(`(?: | > )`)}$`
 
 // A count of things.
 const counted = (n, thing) => `${n} ${thing}${n === 1 ? `` : `s`}`

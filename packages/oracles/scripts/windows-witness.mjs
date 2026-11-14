@@ -162,6 +162,36 @@ if (command === `done`) {
         failures.push(`${name} ${i + 1} did not reproduce in cmd: ${cmdLine}`)
     })
   }
+  // ORACLE_UNIT and ORACLE_PROPERTY carry the exact test (review option c): each
+  // must decode to the text the failure printed, and must not be lost to the
+  // `-t` pattern's wildcards. A PowerShell single-quoted value doubles its quotes.
+  const decodeEnv = (line, name) => {
+    const at = line.indexOf(`$env:${name}='`)
+    if (at < 0) return undefined
+    let value = ``
+    for (let i = at + name.length + 8; i < line.length; i += 1) {
+      const c = line[i]
+      if (/['\u2018\u2019\u201A\u201B]/.test(c)) {
+        if (line[i + 1] === c) {
+          value += c
+          i += 1
+          continue
+        }
+        return value
+      }
+      value += c
+    }
+    return undefined
+  }
+  for (const line of replayPs) {
+    for (const name of [`ORACLE_UNIT`, `ORACLE_PROPERTY`]) {
+      const value = decodeEnv(line, name)
+      if (value === undefined || !output.includes(value))
+        failures.push(
+          `${name} does not round-trip to the printed failure: ${JSON.stringify(value)}`,
+        )
+    }
+  }
   check(`Replay`, replayPs, [`pwsh`, `powershell`], replayCmd, (line) => line)
   check(`Rerun`, rerunPs, [`pwsh`, `powershell`], rerunCmd, (line) =>
     asRerun(line),

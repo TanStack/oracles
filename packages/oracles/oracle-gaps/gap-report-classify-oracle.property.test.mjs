@@ -2750,24 +2750,28 @@ function printedBreach(h, lines, expected, platform) {
     for (const { command, read } of replays) {
       // cmd has no form for a name with a double quote or `%`: its line says so,
       // and only such a test may print that line.
-      if (command === CMD_FALLBACK) {
-        // The pattern the PowerShell line runs (the names carry the labels).
-        const psLine = replays.find((r) => r.read === powerShellWords)
-        const pattern = psLine
-          ? powerShellWords(psLine.command)?.[4]
-          : undefined
-        if (pattern === undefined || !/["%!]/.test(pattern))
-          return breach(
-            `the replay of ${file} says cmd cannot replay it, but no name in it needs that`,
-          )
-        continue
-      }
+      // A CLI line has no environment values, so cmd always has its form: the
+      // `-t` argument carries no shell-hostile character (review option c). No
+      // fallback line may print for it.
+      if (command === CMD_FALLBACK)
+        return breach(
+          `the replay of ${file} says cmd cannot replay it, but its -t argument has no shell-hostile character to need that`,
+        )
       const words = read(command)
       if (!words)
         return breach(
           `the replay of ${file} is ${JSON.stringify(command)}, which the shell does not read as plain words`,
         )
       const [vitest, run, target, flag, pattern, ...more] = words
+      // The -t argument is safe in every shell: no double quote, `%`, `!`, or
+      // curly quote (the regular expression's `.` stands in for each).
+      if (
+        pattern !== undefined &&
+        /["%!\u2018\u2019\u201A\u201B]/.test(pattern)
+      )
+        return breach(
+          `the replay of ${file} puts ${JSON.stringify(pattern)} in its -t argument, which a shell reads unsafely`,
+        )
       const path = relativeName(h, owed.fi)
       if (vitest !== `vitest` || run !== `run` || target !== path)
         return breach(`the replay of ${file} is not \`vitest run ${path}\``)
