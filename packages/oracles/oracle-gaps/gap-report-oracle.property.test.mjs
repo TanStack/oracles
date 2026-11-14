@@ -752,6 +752,11 @@ async function stoppedRun(
     cwd: repo,
     env: {
       ...(atSpawn ? { ORACLE_GAPS_TEST_STARTED: startedPath } : {}),
+      // The constructed witness pauses after the marker, so the signal it sends
+      // on seeing the marker lands inside the pause (review F2).
+      ...(atSpawn && onStart
+        ? { ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED: `200` }
+        : {}),
       ...(after
         ? { ...cleanEnv(), ORACLE_GAPS_TEST_HOLD_EXIT_MS: `500` }
         : warm

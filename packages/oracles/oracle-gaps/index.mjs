@@ -139,18 +139,24 @@ import { constants } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-// A test-only marker (ORACLE_GAPS_TEST_STARTED): the first statement that runs
-// project code writes this file, before any project module loads, so a test can
-// tell a stop that came before the CLI started from one that came during its loads.
-if (process.env.ORACLE_GAPS_TEST_STARTED)
-  writeFileSync(process.env.ORACLE_GAPS_TEST_STARTED, ``)
-
 let early
 const keepEarly = (signal) => {
   early ??= signal
 }
 process.on(`SIGINT`, keepEarly)
 process.on(`SIGTERM`, keepEarly)
+// A test-only marker (ORACLE_GAPS_TEST_STARTED): the first statement that runs
+// project code writes this file, before any project module loads, so a test can
+// tell a stop that came before the CLI started from one that came during its loads.
+if (process.env.ORACLE_GAPS_TEST_STARTED)
+  writeFileSync(process.env.ORACLE_GAPS_TEST_STARTED, ``)
+// A test-only pause after the marker (ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED, ms):
+// it blocks this thread synchronously, so a stop sent during it lands before the
+// handlers below are installed (the widened witness of review F2). Inert unless set.
+const pauseMs = Number(process.env.ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED ?? 0)
+if (pauseMs > 0)
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, pauseMs)
+
 const { parseArgs, usage } = await import(`./args.mjs`)
 const { endRun, Refusal } = await import(`./ending.mjs`)
 
