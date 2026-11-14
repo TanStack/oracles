@@ -553,6 +553,8 @@ export default async (env) => {
     return lastServed.get(index)
   }
   const indexOf = new Map()
+  // The units the check's store holds, set by check() (its store's size).
+  let heldUnits = () => 0
   let contexts = []
   let contextsKey
   let contextsConfig
@@ -1387,6 +1389,8 @@ export default async (env) => {
   function retentionTotals(context) {
     const { filesMap, pathsSet, idMap, errorsSet, leakSet } = context.state
     const totals = {
+      // The cold check's store: units it keeps for reuse (none, see evidence.mjs).
+      store: heldUnits(),
       // Maps keyed by a context: each holds one entry per live context. A replaced
       // context left in one is stale: the excess over the live contexts.
       staleIndexed: indexOf.size - contexts.length,
@@ -1426,6 +1430,7 @@ export default async (env) => {
   }
 
   async function check(options, store, log = console.error) {
+    heldUnits = () => store.size?.() ?? 0
     const authored = options.mutants ? loadAuthored(options.mutants) : []
     seedVariable = `${options.envPrefix}_SEED`
     if (options.hangLimit > options.mutantLimit)
