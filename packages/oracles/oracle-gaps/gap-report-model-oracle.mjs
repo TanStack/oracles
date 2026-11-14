@@ -1713,6 +1713,30 @@ const witness = [
     body: [{ kind: `optional` }],
     tests: [judging(`a`, `fixed seed`, 1)],
   },
+  // The same read where the object is absent, `undefined` or `null`: the
+  // plain read throws on it, so the mutant changes the run and the test
+  // crashes (a bare throw, with no verdict). Each receiver must make the
+  // capture infect the site, or the mutant is skipped as unchanged.
+  {
+    id: `w_absent`,
+    owners: [`a`],
+    body: [{ kind: `optional`, absent: `undefined` }],
+    tests: [judging(`a`, `fixed seed`, 0)],
+  },
+  {
+    id: `w_absentNull`,
+    owners: [`a`],
+    body: [{ kind: `optional`, absent: `null` }],
+    tests: [judging(`a`, `fixed seed`, 0)],
+  },
+  // The same read, caught and ignored by its owner: the throw of the mutant
+  // is swallowed, no observation changes, and the test passes.
+  {
+    id: `w_swallow`,
+    owners: [`a`],
+    body: [{ kind: `optional`, absent: `undefined`, caught: true }],
+    tests: [judging(`a`, `fixed seed`, 0)],
+  },
   // A test that waits on a child process where the output differs: an I/O
   // handle is open, so its copy is busy, never cut for idleness, and the
   // confirming run kills it.
@@ -1823,6 +1847,9 @@ const captureWitness = new Set([
   `w_record`,
   `w_data`,
   `w_optional`,
+  `w_absent`,
+  `w_absentNull`,
+  `w_swallow`,
   `w_oldprobe`,
   `w_spin`,
 ])
@@ -2092,8 +2119,11 @@ function renderStatement(stmt, callText) {
       return [`out.push(...loaded);`]
     case `optional`:
       return [
-        `const o${stmt.label} = x ? { v: 'p${stmt.label}' } : undefined;`,
-        `out.push(\`\${o${stmt.label}?.v}\`);`,
+        `const o${stmt.label} = x ? { v: 'p${stmt.label}' } : ${stmt.absent === `null` ? `null` : `undefined`};`,
+        // A caught read writes nothing: its owner catches the error and goes on.
+        stmt.caught
+          ? `try { void o${stmt.label}?.v; } catch {}`
+          : `out.push(\`\${o${stmt.label}?.v}\`);`,
       ]
     case `readData`:
       return [`out.push(${dataOf(stmt.shape).read});`]
@@ -3099,8 +3129,17 @@ function sitesOf(plan) {
       // The object literal's field, then the push and its optional read.
       if (stmt.kind === `optional`) {
         at(`field-drop`, `dropV`, stmt.line, stmt.lines[0])
-        at(`delete-call`, `push`, stmt.line + 1, stmt.lines[1])
-        at(`optional-chain`, `chain`, stmt.line + 1, stmt.lines[1])
+        // A caught read writes nothing, so it has no push to delete.
+        if (!stmt.caught)
+          at(`delete-call`, `push`, stmt.line + 1, stmt.lines[1])
+        // A caught read's innermost statement is its own expression statement,
+        // which names the site (the anchor), not the `try` line that holds it.
+        at(
+          `optional-chain`,
+          `chain`,
+          stmt.line + 1,
+          stmt.caught ? `void o${stmt.label} ?. v ;` : stmt.lines[1],
+        )
       }
       // Two arrows on one line: each property's field drop, its call, and
       // the `+ 1` belong to the arrow whose text holds them; the push and
@@ -3481,6 +3520,9 @@ function ownersOf(plan) {
 function interpret(plan, fnId, x, sites, active) {
   const trace = []
   const reached = new Set()
+  // The optional reads whose active mutant threw there (the capture's `threw`
+  // row): a caught read's throw changes nothing else the test observes.
+  const threwAt = new Set()
   // The run's work: one for each site evaluation, as the capture counts a
   // test's `calls` (capture-setup.mjs), which a work bound judges.
   let work = 0
@@ -3680,15 +3722,26 @@ function interpret(plan, fnId, x, sites, active) {
           ? isActive(drop)
             ? {}
             : { v: `p${stmt.label}` }
-          : undefined
-        const site = siteOf(stmt, `push`)
-        reach(site.id)
-        if (!isActive(site)) {
-          const chain = siteOf(stmt, `chain`)
+          : stmt.absent === `null`
+            ? null
+            : undefined
+        const chain = siteOf(stmt, `chain`)
+        if (stmt.caught) {
+          // The owner catches the read's error and writes nothing.
           reach(chain.id)
-          if (isActive(chain) && made === undefined)
-            throw new TypeError(`Cannot read properties of undefined`)
-          trace.push(String(made?.v))
+          if (isActive(chain) && (made === undefined || made === null))
+            threwAt.add(chain.id)
+        } else {
+          const site = siteOf(stmt, `push`)
+          reach(site.id)
+          if (!isActive(site)) {
+            reach(chain.id)
+            if (isActive(chain) && (made === undefined || made === null)) {
+              threwAt.add(chain.id)
+              throw new TypeError(`Cannot read properties of ${made}`)
+            }
+            trace.push(String(made?.v))
+          }
         }
       }
       if (stmt.kind === `innerReturned`) reach(siteOf(stmt, `returned`).id)
@@ -3871,7 +3924,7 @@ function interpret(plan, fnId, x, sites, active) {
     if (error instanceof Spin) spun = true
     else threw = true
   }
-  return { trace, threw, spun, reached, outcomes, infected, work }
+  return { trace, threw, spun, reached, outcomes, infected, work, threwAt }
 }
 
 /** A loop that never ends, as the interpreter sees one. */
@@ -4327,6 +4380,21 @@ function model(plan) {
     // infected site that no observation shows.
     const isIf = site.operator === `if-true` || site.operator === `if-false`
     const comparison = site.operator === `binary-swap` && site.role === `swap`
+    // An optional read whose mutant threw in an owner test that caught the
+    // error and went on: the test passed, and the throw was swallowed. Its
+    // directive names the read and the test, and asks for the read's
+    // completion (value or error) to be observed. It is never an exit.
+    if (
+      site.operator === `optional-chain` &&
+      tests.some((t) =>
+        partsOf(t).some((part) =>
+          interpret(plan, t.fn, part.input, sites, {
+            site: site.id,
+          }).threwAt.has(site.id),
+        ),
+      )
+    )
+      return `swallowed-throw`
     // A mutant that changes a value only on some inputs, with no capture to
     // show which: a loop's condition, an undefined call value, a dropped
     // field, a skipped call, and a logical operator (the `&&` of the old

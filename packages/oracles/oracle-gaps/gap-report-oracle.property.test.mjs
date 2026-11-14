@@ -168,7 +168,12 @@
  *    would judge such a verdict, is not built.) A copy that a batch skipped
  *    because an earlier copy killed the mutant runs again, through the batch,
  *    only while no kill is in hand, so every mutant gets an outcome and no
- *    other missing unit is rerun. A test's work is the number of site
+ *    other missing unit is rerun. A mutant is judged without a run only when
+ *    every owner's unmutated run completes its site as the original does, with
+ *    the same value or the same thrown error: the capture infects every site
+ *    whose mutant would change that completion, so a `?.` whose receiver is
+ *    nullish (a plain read throws on it) runs, as a comparison whose operators
+ *    disagree does. A test's work is the number of site
  *    evaluations that its instrumented production code made (the capture's
  *    call count, never a time): a call statement, a call whose value is
  *    used, a comparison, an `if`, each pass of a loop's condition. A
@@ -1859,6 +1864,12 @@ async function driver(plan, observe) {
         states.add(`a returned value made undefined not distinguished`)
       if (m.operator === `optional-chain` && m.class === `not-distinguished`)
         states.add(`a plain read in place of ?. not distinguished`)
+      if (m.function === `w_absent` && m.outcome === `crashed`)
+        states.add(`a plain read of an absent object crashed`)
+      if (m.function === `w_absentNull` && m.outcome === `crashed`)
+        states.add(`a plain read of a null object crashed`)
+      if (m.function === `w_swallow` && m.class === `swallowed-throw`)
+        states.add(`a plain read whose throw the owner swallowed`)
       if (m.operator === `arithmetic-swap` && m.outcome === `killed`)
         states.add(`an arithmetic swap killed`)
       if (m.function === `w_leaf` && m.outcome !== `unowned`)
@@ -3140,6 +3151,9 @@ const required = [
   `a mutant of module data killed through its reader`,
   `a returned value made undefined not distinguished`,
   `a plain read in place of ?. not distinguished`,
+  `a plain read of an absent object crashed`,
+  `a plain read of a null object crashed`,
+  `a plain read whose throw the owner swallowed`,
   `a module-level cache judged afresh`,
   `ordinary tests run when asked`,
   `ordinary tests left out by default`,
