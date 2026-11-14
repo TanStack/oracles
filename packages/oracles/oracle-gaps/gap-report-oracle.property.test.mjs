@@ -2331,7 +2331,7 @@ async function driver(plan, observe) {
  * Law 9: each check through the daemon reports what the cold run of the same
  * state reports. A refused state is compared by the cause it names.
  */
-function incrementalCheck(observations) {
+function incrementalCheck(observations, expected) {
   for (const { value } of observations.filter(
     (o) => o.checkpoint === `incremental`,
   )) {
@@ -2352,7 +2352,7 @@ function incrementalCheck(observations) {
     if (cold.refusal !== undefined) {
       const breach = refusalBreach(daemon.ending, {
         outKnown: true,
-        logNote: logNoteOf(daemon),
+        logNote: owesNote(expected) ? logNoteOf(daemon) : undefined,
       })
       if (breach)
         return violation(
@@ -2451,7 +2451,7 @@ function check(plan, observations, expected) {
     (o) => o.checkpoint === `incremental`,
   )) {
     const { daemon, cold } = value
-    const ends = endsBreach(daemon)
+    const ends = endsBreach(daemon, { checked: owesNote(expected) })
     if (ends)
       return violation(
         `incremental`,
@@ -2519,7 +2519,11 @@ function check(plan, observations, expected) {
         `the refusal before the check started wrote a stream log`,
         `greppable stream`,
       )
-    return incrementalCheck(observations) ?? daemonCheck(observations) ?? pass
+    return (
+      incrementalCheck(observations, expected) ??
+      daemonCheck(observations) ??
+      pass
+    )
   }
   if (cli.exit !== 0 || !cli.reported)
     return violation(
@@ -2781,7 +2785,11 @@ function check(plan, observations, expected) {
         { actual: after, expected: before },
       )
   }
-  return incrementalCheck(observations) ?? daemonCheck(observations) ?? pass
+  return (
+    incrementalCheck(observations, expected) ??
+    daemonCheck(observations) ??
+    pass
+  )
 }
 
 /**
@@ -2797,6 +2805,11 @@ function check(plan, observations, expected) {
  * (stopped). `run` is a run as readRun records it, observed at
  * `checkpoint`.
  */
+// The stage at which a run refuses decides whether it owes its note (law 15,
+// review of #57): a refusal of the arguments comes before any check, so its
+// output is its done line alone. Both the cold run and a run through the daemon
+// are judged by this one decision.
+const owesNote = (expected) => !expected.refused?.arguments
 function streamBreach(checkpoint, run, expected, plan) {
   const breach = (difference, extra) =>
     violation(checkpoint, difference, `greppable stream`, extra)
@@ -2807,7 +2820,7 @@ function streamBreach(checkpoint, run, expected, plan) {
     return run.stdoutLength === 0 && !run.log.exists && run.exit !== 0
       ? undefined
       : breach(`a stop before the CLI started left output or a log`)
-  const ends = endsBreach(run, { checked: !expected.refused?.arguments })
+  const ends = endsBreach(run, { checked: owesNote(expected) })
   if (ends) return breach(ends.difference, ends.extra)
   if (run.stream.mutantBeforeVerdict)
     return breach(
