@@ -691,9 +691,8 @@ function runCli(dir, files, how = {}) {
   // The retention hook (ORACLE_GAPS_TEST_RETENTION): one line per batch,
   // written beside the run's own temporary files, not in the package.
   // One hook file per package: a daemon keeps the environment of the call that started it, so every call
-  // for this package writes to the same file, and this run's lines are those after its start (the delta).
+  // for this package writes to the same file; each line names its run (below).
   const hook = hookOf(dir)
-  const hookBefore = retentionLinesOf(hook)
   const child = spawnSync(process.execPath, args, {
     cwd: repo,
     encoding: `utf8`,
@@ -701,7 +700,8 @@ function runCli(dir, files, how = {}) {
     maxBuffer: 64 * 1024 * 1024,
     env: { ...cleanEnv(), ORACLE_GAPS_TEST_RETENTION: hook },
   })
-  const retention = retentionLinesOf(hook).slice(hookBefore)
+  // Each line names its check's output directory, so this run keeps only its own (a daemon serves many calls).
+  const retention = retentionLinesOf(hook).filter((line) => line.run === out)
   const run = readRun(
     dir,
     out,

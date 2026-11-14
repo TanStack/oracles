@@ -565,6 +565,8 @@ export default async (env) => {
   let runCounter = 0
   // The current check's evidence, which runBatch counts its batches in (set by check).
   let evidenceOf
+  // The output directory of the check being run (the test hook names each line with it).
+  let hookRun
 
   // A context loads the package's own config through its wrapper, so an
   // error there is the author's: the run refuses, naming the config file
@@ -1459,11 +1461,12 @@ export default async (env) => {
           environment.moduleGraph.fileToModulesMap.get(copy)?.size ?? 0
     appendFileSync(
       file,
-      `${JSON.stringify(cut ? { before, cut: true } : { before, after: retentionTotals(context), copyNodes, nonCopyDup: nonCopyDuplicates(context, owned) })}\n`,
+      `${JSON.stringify(cut ? { run: hookRun, before, cut: true } : { run: hookRun, before, after: retentionTotals(context), copyNodes, nonCopyDup: nonCopyDuplicates(context, owned) })}\n`,
     )
   }
 
   async function check(options, store, log = console.error) {
+    hookRun = options.out
     heldUnits = () => store.size?.() ?? 0
     const authored = options.mutants ? loadAuthored(options.mutants) : []
     seedVariable = `${options.envPrefix}_SEED`
