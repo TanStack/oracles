@@ -114,18 +114,27 @@ if (command === `done`) {
     ].join(delimiter),
   }
   const runIn = (shell, line) => {
-    const argv = {
-      pwsh: [`pwsh`, [`-NoProfile`, `-Command`, line]],
-      powershell: [`powershell.exe`, [`-NoProfile`, `-Command`, line]],
-      cmd: [`cmd`, [`/d`, `/s`, `/c`, line]],
-    }[shell]
-    return spawnSync(argv[0], argv[1], {
-      cwd: dir,
-      env,
-      encoding: `utf8`,
-      // cmd reads its line as it is; Node's own quoting would break it.
-      windowsVerbatimArguments: shell === `cmd`,
-    })
+    // PowerShell reads the line from stdin (`-Command -`), as a user's typed
+    // line arrives: an argument would pass through Node's quoting, which turns
+    // a double quote into `\"`, and Windows PowerShell 5.1 does not read that as
+    // an escape. cmd reads its line as it is (verbatim arguments).
+    if (shell === `cmd`)
+      return spawnSync(`cmd`, [`/d`, `/s`, `/c`, line], {
+        cwd: dir,
+        env,
+        encoding: `utf8`,
+        windowsVerbatimArguments: true,
+      })
+    return spawnSync(
+      shell === `pwsh` ? `pwsh` : `powershell.exe`,
+      [`-NoProfile`, `-Command`, `-`],
+      {
+        cwd: dir,
+        env,
+        encoding: `utf8`,
+        input: line,
+      },
+    )
   }
   const reproduces = (result) =>
     result.status !== 0 &&
