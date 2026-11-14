@@ -139,6 +139,7 @@ import {
 import { constants } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { posix } from './paths.mjs'
 
 let early
 const keepEarly = (signal) => {
@@ -322,7 +323,8 @@ function startLog(out) {
     throw cannotWrite(path, error)
   }
   streamLog = path
-  const note = `oracle-gaps: note log ${path}\n`
+  // The log is named in forward slashes on every platform (the Windows paths rule).
+  const note = `oracle-gaps: note log ${posix(path)}\n`
   process.stdout.write(note)
   writeStream(note)
 }
