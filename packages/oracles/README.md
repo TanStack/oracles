@@ -14,3 +14,9 @@ Show me what oracle testing with @tanstack/oracles can find in this repository.
 3. Read node_modules/@tanstack/oracles/skills/oracles-explore/SKILL.md in full,
    and follow it. Use <sha> wherever a skill asks for the commit to pin.
 ```
+
+## Test hooks
+
+`ORACLE_GAPS_TEST_RETENTION` (a file path, unset in normal use) makes the gap CLI append one JSON line per mutant batch it runs, cut or not. It only observes: it never changes an outcome. The e2e oracle reads it to check bounded retention.
+
+Each line has `run` (the run's `--out` path), `batch` (the batch count so far), and `before` (Vitest's and Vite's structure sizes before the batch). A settled batch also has `after` (the sizes after its copies are retired), `copyNodes` (Vite module nodes that still name a copy, must be 0), and `nonCopyDup` (non-copy files with more than one module node in an environment, must be 0 beyond the measured plain-plus-`?raw` pair). A cut batch has `cut: true` and no `after`. The `stale*` fields count registry entries that name no live context, and `staleOpen` counts open contexts beyond the live ones; all must be 0 before a batch.
