@@ -641,8 +641,13 @@ const configArgs = (plan) => ({
 
 // Exact: a run writes one retention line per batch it ran (evidence.batches, cut batches
 // included), so its line count must equal that counter. Zero batches write none.
+// The batch-line count is owed only with a report: a run with no report is judged by the completion
+// law (cli: the model predicts a report unless it predicts a refusal), which fails it there with its
+// stderr. This check does not fail a run for lacking a report, so the two laws never both judge it.
 const unlogged = (run) =>
-  run.retention.length === run.evidence.batches ? 0 : 1
+  run.evidence === undefined || run.retention.length === run.evidence.batches
+    ? 0
+    : 1
 
 // A batch line (ORACLE_GAPS_TEST_RETENTION) left state behind when a total
 // after its retirement differs from its size before the batch.
@@ -3435,6 +3440,8 @@ oracleProperty({
       ...staticStates,
       `extra work in a generated function`,
       `killed by a work bound in a generated function`,
+      // A check whose runs have more than one batch: the retention law's multi-batch reach.
+      `a check that ran more than one batch`,
     ],
     runs: 2,
     fixedSeeds: [20261105],
