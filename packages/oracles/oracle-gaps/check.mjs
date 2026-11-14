@@ -764,6 +764,12 @@ export default async (env) => {
         ]),
       ),
     )
+    // The closed contexts leave the registry with the array: a context closed for a config change is no longer
+    // reachable through indexOf or contextSpecs (the daemon's edit sequence left them there before).
+    for (const context of contexts) {
+      indexOf.delete(context)
+      contextSpecs.delete(context)
+    }
     contexts = []
     lastServed.clear()
   }
