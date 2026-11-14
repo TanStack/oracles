@@ -805,6 +805,8 @@ const keepsSteps = (history) => {
 // P1-a: the budget witness only in its own histories). The map is its own
 // inverse on the histories it keeps, so fast-check takes every one of them
 // back and shrinks it.
+// A constructed history may set `slowTwin`, which no generated history
+// draws, and which is taken back without it.
 const histories = drawn.map(
   (history) => (keepsSteps(history) ? history : { ...history, steps: null }),
   (value) => {
@@ -812,7 +814,10 @@ const histories = drawn.map(
       /** @type {{ witness: unknown, steps: unknown[] | null }} */ (value)
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
-    return value
+    const { slowTwin, ...drawnValue } = /** @type {Record<string, unknown>} */ (
+      value
+    )
+    return slowTwin === undefined ? value : drawnValue
   },
 )
 

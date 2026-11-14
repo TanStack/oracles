@@ -1604,11 +1604,38 @@ async function driver(plan, observe) {
     // How many units were computed or reused says how the result was
     // produced, not what it is, so it is not observed.
     observe(`cli`, { ...cli, evidence: undefined })
+    // The slow twin (`slowTwin`): the same package, where file a's first
+    // test waits 3 s past its first budget wherever the output differs, and
+    // then judges as before. Its verdicts are the same, so its report must
+    // be too ("Determinism under load", 2026-11-13: an outcome does not
+    // depend on how long a run took).
+    let twinSame = false
+    if (plan.history.slowTwin) {
+      const twin = resolveHistory({
+        ...plan.history,
+        slowTwin: undefined,
+        tests: plan.history.tests.map((t, i) =>
+          i === 0 ? { ...t, slow: true } : t,
+        ),
+      })
+      const slow = runCli(dir, fixtureFiles(twin), how)
+      twinSame =
+        slow.exit === cli.exit &&
+        JSON.stringify(slow.report?.results) ===
+          JSON.stringify(cli.report?.results)
+      observe(`twin`, {
+        fast: cli.report?.results,
+        slow: slow.report?.results,
+        exit: slow.exit,
+      })
+    }
     // A failing owner's replay, run as the author would run it (law 3).
     if (plan.fault === `brokenOwner`)
       observe(`replay`, { command: replay, ran: replayed(dir, replay) })
     // Reach comes from what the CLI reported, mapped onto the plan.
     const states = new Set()
+    if (twinSame)
+      states.add(`a slow owner's kill reported as when it did not wait`)
     if (cli.exit === 0 && !plan.consoleOutput)
       states.add(`a completed run whose tests wrote nothing`)
     // Law 14: a partial run of one owned function's mutants, whose baseline
@@ -2143,6 +2170,23 @@ function daemonCheck(observations) {
 function check(plan, observations, expected) {
   const cli = observations.find((o) => o.checkpoint === `cli`)?.value
   if (!cli) return violation(`cli`, `no CLI run was observed`, `completion`)
+  // A run's outcome does not depend on how long its runs took: the slow
+  // twin reports each mutant as the package does (determinism under load).
+  const twin = observations.find((o) => o.checkpoint === `twin`)?.value
+  if (twin) {
+    const at = (twin.fast ?? []).findIndex(
+      (r, i) => JSON.stringify(r) !== JSON.stringify(twin.slow?.[i]),
+    )
+    if (twin.exit !== cli.exit || at >= 0)
+      return violation(
+        `twin`,
+        `the slow twin reports ${at >= 0 ? twin.fast[at].key : `exit ${twin.exit}`} otherwise than the package whose test does not wait`,
+        `determinism under load`,
+        at >= 0
+          ? { actual: twin.slow?.[at], expected: twin.fast[at] }
+          : undefined,
+      )
+  }
   if (cli.strayWrites?.length > 0)
     return violation(
       `cli`,
@@ -3165,6 +3209,7 @@ const required = [
   `each owner's value change killed its own mutant`,
   `a hang alone timed out`,
   `a hang in one owner and a kill in another killed`,
+  `a slow owner's kill reported as when it did not wait`,
   `a hang in one owner and a survivor in another timed out`,
   `confirmations past a mutant's budget timed out`,
   `a heartbeat named a busy mutant`,
@@ -3509,6 +3554,51 @@ oracleProperty({
           wholeFile: `none`,
           fault: `none`,
           authored: { stmt: 0, kind: `ambiguous` },
+        }),
+      },
+      {
+        // File a's random-route test and file b's fixed-seed test both kill
+        // one mutant (as w_crosskill does). In the slow twin, a's test
+        // waits 3 s past its first budget before it judges, so its copy is
+        // cut and queued for a confirmation; b's kill decides the mutant
+        // first. The report must still be the one the package without the
+        // wait gives, its `randomAlso` included.
+        name: `a slow owner's kill and another owner's kill`,
+        enters: [`a slow owner's kill reported as when it did not wait`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `if`, op: `>`, k: 4, not: false, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`both`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          derived: null,
+          dotGen: false,
+          dataOwners: [],
+          exportOwners: [],
+          importer: `none`,
+          wholeFile: `none`,
+          template: false,
+          tests: [
+            { ...judging(`a`, `random seed`, 7), fn: 0 },
+            { ...judging(`b`, `fixed seed`, 7), fn: 0 },
+          ],
+          witness: false,
+          authored: null,
+          secondAuthored: false,
+          fault: `none`,
+          stability: `none`,
+          ordinary: false,
+          native: `none`,
+          boot: false,
+          budget: `two`,
+          cliPath: `plain`,
+          concurrentStart: false,
+          contexts: 1,
+          steps: null,
+          slowTwin: true,
         }),
       },
       {

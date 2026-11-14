@@ -60,6 +60,9 @@ export const shards = {
     `determinism: constructed history: a declaration fault: projects`,
     `determinism: constructed history: a package with no config`,
     `determinism: constructed history: an edit sequence through the daemon`,
+    `fixed seed 20261105: a slow owner's kill and another owner's kill`,
+    `random seed: a slow owner's kill and another owner's kill`,
+    `determinism: constructed history: a slow owner's kill and another owner's kill`,
     // The witness module's edit sequence (option M): 189 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
     `determinism: constructed history: an edit sequence over the witness module`,
