@@ -1133,7 +1133,12 @@ export default async (env) => {
     const finished = () => {
       if (!existsSync(capture)) return 0
       let at = 0
-      for (const line of readFileSync(capture, `utf8`).split(`\n`)) {
+      // Only whole rows: a worker may be appending the last one, and every
+      // row ends with a newline (issue #83).
+      const text = readFileSync(capture, `utf8`)
+      for (const line of text
+        .slice(0, text.lastIndexOf(`\n`) + 1)
+        .split(`\n`)) {
         if (line.includes(`"started":true`))
           at = Math.max(at, copies.indexOf(JSON.parse(line).file))
         if (line.includes(`"closed":true`)) closed.add(JSON.parse(line).file)
