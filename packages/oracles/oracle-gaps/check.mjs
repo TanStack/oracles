@@ -67,6 +67,7 @@ import {
   baseOf,
   isWithin,
   posix,
+  realPathOf,
   relativeWithin,
   specifierOf,
 } from './paths.mjs'
@@ -259,7 +260,7 @@ export async function workspaceBundles(pkg) {
       if (linked.has(name)) continue
       const link = join(dir, `node_modules`, name)
       if (!existsSync(link)) continue
-      const real = realpathSync(link)
+      const real = realPathOf(link)
       if (real.includes(`/node_modules/`) || real === pkg) continue
       linked.set(name, { dir: real, from: dir })
       queue.push(real)

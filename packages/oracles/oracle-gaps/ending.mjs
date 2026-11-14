@@ -54,10 +54,10 @@ export function endRun(error, out = error?.out) {
     log = join(realPathOf(tmpdir()), `oracle-gaps-error-${process.pid}.log`)
     writeFileSync(log, stack)
   }
-  const done = `oracle-gaps: done error, log ${log}`
+  const done = `oracle-gaps: done error, log ${posix(log)}`
   return {
     exitCode: 3,
-    stderr: `oracle-gaps internal error: ${message}\nThis is a bug in oracle-gaps, not in your oracle. Its stack is in ${log}.\n${done}\n`,
+    stderr: `oracle-gaps internal error: ${message}\nThis is a bug in oracle-gaps, not in your oracle. Its stack is in ${posix(log)}.\n${done}\n`,
     done,
   }
 }

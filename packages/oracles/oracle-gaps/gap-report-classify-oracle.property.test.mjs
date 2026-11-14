@@ -609,12 +609,32 @@ const fileName = (h, fi) => `/pkg/${relativeName(h, fi)}`
 // units, as JavaScript's `<` compares strings.
 const byPath = (h) => (a, b) =>
   fileName(h, a) < fileName(h, b) ? -1 : fileName(h, a) > fileName(h, b) ? 1 : 0
+// Names a Windows shell reads as quotes, metacharacters, or expansions (the
+// replay line must replay in PowerShell and cmd, or say it cannot). Derived
+// from the test's own fields, not drawn: a draw would shift every later draw of
+// the fixed seeds, so the generator stays as it was.
+const HOSTILE = [
+  `\u2019 `,
+  `\u201C\u201D `,
+  `& | < > `,
+  `( ) ^ `,
+  `% ! `,
+  `use "x & y `,
+  `back\\ `,
+]
+const hostileOf = (t, ti) => {
+  // A constructed test is plainTest, with ms 0: its names keep the reach of
+  // each constructed history, so only a generated test (ms >= 1) takes one.
+  const pick =
+    t.ms >= 1 && (t.ms + ti) % 4 === 0 ? (t.ms + ti) % HOSTILE.length : -1
+  return pick < 0 ? `` : HOSTILE[pick]
+}
 // A test's names, as the runner reports them: its suites' names, then its
 // own. Its own name holds its index, so the names within a file are
 // distinct. Its full name joins them with ` > `.
 const namesOf = (h, fi, ti) => {
   const t = h.files[fi].tests[ti]
-  return [...t.suites, `${t.label}t${ti}${t.tail}`]
+  return [...t.suites, `${t.label}${hostileOf(t, ti)}t${ti}${t.tail}`]
 }
 const nameOf = (h, fi, ti) => namesOf(h, fi, ti).join(` > `)
 const keyOf = (h, fi, ti) => `${fileName(h, fi)} > ${nameOf(h, fi, ti)}`
@@ -2128,6 +2148,10 @@ async function driver(h, observe) {
   })
   // The baseline the printer shows before any mutant (law 9).
   observe(`baseline`, printer?.baselineLines(baselineGiven) ?? [])
+  observe(
+    `baseline-win32`,
+    printer?.baselineLines(baselineGiven, undefined, `win32`) ?? [],
+  )
   for (const r of results) {
     states.add(
       r.authored ? `authored ${r.class ?? r.outcome}` : (r.class ?? r.outcome),
@@ -2627,7 +2651,20 @@ function check(h, observations, expected) {
 // replay command, read as a POSIX shell reads it, which runs exactly the
 // owed test of the file under either Vitest's join of its names.
 function baselineBreach(h, observations, expected) {
-  const lines = observations.find((o) => o.checkpoint === `baseline`)?.value
+  // The host's baseline, and the baseline the printer gives for win32: the
+  // Windows lines are judged on every host (review F2, F3).
+  for (const [checkpoint, platform] of [
+    [`baseline`, process.platform],
+    [`baseline-win32`, `win32`],
+  ]) {
+    const lines = observations.find((o) => o.checkpoint === checkpoint)?.value
+    const breach = printedBreach(h, lines, expected, platform)
+    if (breach) return breach
+  }
+  return undefined
+}
+
+function printedBreach(h, lines, expected, platform) {
   if (!Array.isArray(lines))
     return violation(`baseline`, `no baseline was printed`, `baseline`)
   const breach = (difference) =>
@@ -2705,12 +2742,26 @@ function baselineBreach(h, observations, expected) {
     }
     // The platform's replay lines: one POSIX line, or on Windows one line for
     // PowerShell and one for cmd. Each reads as the same words.
-    const replays = replayLinesOf(block)
+    const replays = replayLinesOf(block, platform)
     if (replays === undefined)
       return breach(
         `${file}'s replay lines are not the platform's: ${JSON.stringify(block.filter((line) => line.startsWith(`  replay`)))}`,
       )
     for (const { command, read } of replays) {
+      // cmd has no form for a name with a double quote or `%`: its line says so,
+      // and only such a test may print that line.
+      if (command === CMD_FALLBACK) {
+        // The pattern the PowerShell line runs (the names carry the labels).
+        const psLine = replays.find((r) => r.read === powerShellWords)
+        const pattern = psLine
+          ? powerShellWords(psLine.command)?.[4]
+          : undefined
+        if (pattern === undefined || !/["%]/.test(pattern))
+          return breach(
+            `the replay of ${file} says cmd cannot replay it, but no name in it needs that`,
+          )
+        continue
+      }
       const words = read(command)
       if (!words)
         return breach(
@@ -2756,9 +2807,9 @@ function baselineBreach(h, observations, expected) {
 // The replay lines the platform prints, each with the reader of its shell:
 // one POSIX line elsewhere; on Windows a PowerShell line and a cmd line.
 // Undefined when the block holds a different set of forms.
-function replayLinesOf(block) {
+function replayLinesOf(block, platform) {
   const forms =
-    process.platform === `win32`
+    platform === `win32`
       ? [
           [`  replay (PowerShell): `, powerShellWords],
           [`  replay (cmd): `, cmdWords],
@@ -2775,8 +2826,13 @@ function replayLinesOf(block) {
   return found.every(Boolean) ? found : undefined
 }
 
-// The words a PowerShell command line splits into: single quotes hold text,
-// a doubled single quote is one quote, and nothing expands.
+// The words a PowerShell command line splits into, as PowerShell reads it: a
+// word is plain characters or single-quoted text. The ASCII single quote and
+// U+2018 to U+201B each open and close a quote; inside one, a doubled quote
+// character is that character. Anything else outside quotes is not a word the
+// printer makes.
+const CMD_FALLBACK = `use the PowerShell line for this name`
+const PS_QUOTES = [`'`, `‘`, `’`, `‚`, `‛`]
 function powerShellWords(line) {
   const words = []
   let word
@@ -2789,66 +2845,67 @@ function powerShellWords(line) {
       continue
     }
     word ??= ``
-    if (c === `'`) {
+    if (PS_QUOTES.includes(c)) {
       let j = i + 1
       for (;;) {
         if (j >= line.length) return undefined
-        if (line[j] === `'` && line[j + 1] === `'`) {
-          word += `'`
-          j += 2
-        } else if (line[j] === `'`) break
-        else {
-          word += line[j]
-          j += 1
+        if (PS_QUOTES.includes(line[j])) {
+          if (line[j + 1] === line[j]) {
+            word += line[j]
+            j += 2
+            continue
+          }
+          break
         }
+        word += line[j]
+        j += 1
       }
       i = j + 1
-    } else if (/[$"()\`;&|<>]/.test(c)) {
-      return undefined
-    } else {
+    } else if (/[\w./-]/.test(c)) {
       word += c
       i += 1
-    }
+    } else return undefined
   }
   if (word !== undefined) words.push(word)
   return words
 }
 
-// The words a cmd command line splits into: double quotes hold text, and
-// nothing expands or chains.
+// The words a cmd command line splits into, as cmd reads it under `/d /s /c`:
+// a double quote toggles quoting; outside quotes `^` escapes the next
+// character, and `& | < > ( )` separate or redirect; `%` expands even inside
+// quotes. `!` is literal, since delayed expansion is off. Undefined otherwise.
 function cmdWords(line) {
   const words = []
   let word
+  let quoted = false
   for (let i = 0; i < line.length;) {
     const c = line[i]
+    if (c === `%`) return undefined
+    if (quoted) {
+      if (c === `"`) quoted = false
+      else word = (word ?? ``) + c
+      i += 1
+      continue
+    }
     if (c === ` `) {
       if (word !== undefined) words.push(word)
       word = undefined
       i += 1
-      continue
-    }
-    word ??= ``
-    if (c === `"`) {
-      // Inside double quotes, `\"` is a quote, as the program's argument parser
-      // reads it (Node's on Windows); cmd itself does not escape it.
-      let text = ``
-      let j = i + 1
-      for (; j < line.length && line[j] !== `"`; j += 1) {
-        if (line[j] === `\\` && line[j + 1] === `"`) {
-          text += `"`
-          j += 1
-        } else text += line[j]
-      }
-      if (j >= line.length) return undefined
-      word += text
-      i = j + 1
-    } else if (/[%&|<>^]/.test(c)) {
-      return undefined
-    } else {
-      word += c
+    } else if (c === `"`) {
+      quoted = true
+      word ??= ``
+      i += 1
+    } else if (c === `^`) {
+      if (i + 1 >= line.length) return undefined
+      word = (word ?? ``) + line[i + 1]
+      i += 2
+    } else if (/[&|<>()]/.test(c)) return undefined
+    else {
+      word = (word ?? ``) + c
       i += 1
     }
   }
+  if (quoted) return undefined
   if (word !== undefined) words.push(word)
   return words
 }

@@ -43,12 +43,20 @@
  * needs a real file (realpath, a short name that the OS expands) belongs to the
  * end-to-end oracle, which runs on Windows in CI.
  */
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
 import fc from 'fast-check'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { differs, oracleProperty, pass } from '../src/oracle-property.ts'
-import { relativeWithin } from './paths.mjs'
+import { posix, realPathOf, relativeWithin } from './paths.mjs'
 import { instrument } from './schemata.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -69,11 +77,13 @@ const NAMES = [`src`, `RUNNER~1`, `my dir`, `pkg`, `lib`, `a.js`, `b.ts`]
 const historyArbitrary = fc.record({
   text: fc.integer({ min: 0, max: TEXTS.length - 1 }),
   // The directory's drive letter may differ in case from the file's.
-  drive: fc.constantFrom(`C`, `c`, `D`),
-  dirDrive: fc.constantFrom(`C`, `c`),
+  drive: fc.constantFrom(`C`, `c`, `D`, `x`),
+  dirDrive: fc.constantFrom(`C`, `c`, `x`),
   root: fc.array(fc.constantFrom(...NAMES), { minLength: 1, maxLength: 3 }),
   rest: fc.array(fc.constantFrom(...NAMES), { minLength: 1, maxLength: 2 }),
   // One separator for each joint: the drive to the first name, and each name.
+  // On win32 a backslash separates; on POSIX it is a name's character, so only
+  // `/` joins there (a narrowing: the POSIX law is the forward-slash spelling).
   joints: fc.array(fc.constantFrom(`/`, `\\`), { minLength: 8, maxLength: 8 }),
 })
 
@@ -100,17 +110,29 @@ function idsAt(path, text) {
   return mutants.map((m) => m.id).sort()
 }
 
-// Law 2's answer, from the segments alone: the directory's segments start the
-// file's (the drive compared case-insensitively), and the rest is the answer.
-function relationModel({ root, rest, drive, dirDrive }) {
-  const dir = [dirDrive.toUpperCase(), ...root]
-  const file = [drive.toUpperCase(), ...root, ...rest]
-  const starts = dir.every((segment, i) => file[i] === segment)
-  return starts ? rest.join(`/`) : undefined
+// Law 2's answer, from the spelled strings alone. On win32 both separators
+// split and a drive's case is ignored; on POSIX only `/` splits, a backslash is
+// a name's character, and `x:` is an ordinary name. The rest is the answer.
+function relationModel(history) {
+  const win = process.platform === `win32`
+  const { directory, file } = segmentsOf(history)
+  const dirPath = spell(
+    directory,
+    history.joints.slice(0, directory.length - 1),
+  )
+  const filePath = spell(file, history.joints.slice(0, file.length - 1))
+  const split = (text) => text.split(win ? /[\\/]/ : /\//)
+  const same = (a, b) => (win ? a.toUpperCase() === b.toUpperCase() : a === b)
+  const dir = split(dirPath)
+  const all = split(filePath)
+  const starts = dir.every((segment, i) => same(segment, all[i] ?? ``))
+  return starts ? all.slice(dir.length).join(`/`) : undefined
 }
 
 const model = (history) => ({
   relation: relationModel(history),
+  // On POSIX a backslash spelling is a name the OS keeps: its real path exists.
+  disk: process.platform === `win32` ? undefined : true,
 })
 
 const check = (history, trace, expected) => {
@@ -121,6 +143,14 @@ const check = (history, trace, expected) => {
   return (
     differs(`enumeration`, `the forward-slash spelling`, spelled, reference) ??
     differs(`relation`, `segments`, find(`relation`), expected.relation) ??
+    (expected.disk === undefined
+      ? undefined
+      : differs(
+          `disk`,
+          `a backslash name is kept native`,
+          find(`disk`),
+          true,
+        )) ??
     pass
   )
 }
@@ -149,13 +179,31 @@ oracleProperty({
       `spelled`,
       idsAt(spell(file, history.joints.slice(0, file.length - 1)), text),
     )
-    observe(
-      `relation`,
-      relativeWithin(
-        spell(directory, history.joints.slice(0, directory.length - 1)),
-        spell(file, history.joints.slice(0, file.length - 1)),
-      ),
+    const dirPath = spell(
+      directory,
+      history.joints.slice(0, directory.length - 1),
     )
+    const filePath = spell(file, history.joints.slice(0, file.length - 1))
+    observe(`relation`, relativeWithin(dirPath, filePath))
+    // The F5 witness on POSIX: the name is created with its backslashes, and
+    // its real path is that name, not a rewritten one.
+    if (process.platform !== `win32`) {
+      const base = realpathSync.native(
+        mkdtempSync(join(tmpdir(), `path-spelling-`)),
+      )
+      try {
+        const made = join(base, filePath)
+        mkdirSync(made, { recursive: true })
+        observe(
+          `disk`,
+          existsSync(made) &&
+            realPathOf(made) === realpathSync.native(made) &&
+            posix(made) === made,
+        )
+      } finally {
+        rmSync(base, { recursive: true, force: true })
+      }
+    }
   },
   check,
 })

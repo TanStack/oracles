@@ -222,6 +222,15 @@ function superviseRun() {
   // starts is a stop too (re-review N3).
   process.on(`SIGINT`, stop)
   process.on(`SIGTERM`, stop)
+  // The test-only stop hook (ORACLE_GAPS_TEST_STOP, review F(f)): in a
+  // supervised run it goes through this supervisor's stop, which forwards to
+  // the child and writes the stopped line, as a SIGINT does.
+  if (process.env.ORACLE_GAPS_TEST_STOP !== undefined) {
+    const file = process.env.ORACLE_GAPS_TEST_STOP
+    setInterval(() => {
+      if (existsSync(file)) stop(`SIGINT`)
+    }, 50).unref()
+  }
   // An inspector flag would bind the CLI's own port a second time.
   child = spawn(
     process.execPath,
@@ -363,7 +372,9 @@ else if (main) {
   // ORACLE_GAPS_TEST_HOLD_EXIT_MS): when the file ORACLE_GAPS_TEST_STOP names
   // appears, the CLI takes the same stop as a SIGINT. CI's Windows witness uses
   // it, since a non-console parent cannot deliver Ctrl+C there.
-  if (process.env.ORACLE_GAPS_TEST_STOP !== undefined) {
+  // Unsupervised runs only (win32, no supervisor); a supervised child's stop
+  // is the supervisor's.
+  if (process.env.ORACLE_GAPS_TEST_STOP !== undefined && !supervised) {
     const file = process.env.ORACLE_GAPS_TEST_STOP
     setInterval(() => {
       if (existsSync(file)) onStop(`SIGINT`)

@@ -11,10 +11,16 @@ import { relative } from 'node:path'
 
 /**
  * The forward-slash spelling of `path`, with a drive letter in capitals: a
- * Windows drive's letter is one letter whatever its case.
+ * Windows drive's letter is one letter whatever its case. Only Windows has a
+ * `\` separator: on POSIX a backslash is a name's character (a directory
+ * named `a\b` is one name), so the path is left as it is (review F5).
  */
 export const posix = (path) =>
-  path.replaceAll(`\\`, `/`).replace(/^[a-z]:/, (drive) => drive.toUpperCase())
+  process.platform !== `win32`
+    ? path
+    : path
+        .replaceAll(`\\`, `/`)
+        .replace(/^[a-z]:/, (drive) => drive.toUpperCase())
 
 /** The real path of `path`, in forward slashes. */
 export const realPathOf = (path) => posix(realpathSync.native(path))

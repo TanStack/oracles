@@ -168,6 +168,11 @@ jobs:
       - test-oracle-gaps-fast
       - test-oracle-gaps-end-to-end
       - test-vitest-5
+      # The blocking Windows jobs (the non-blocking static and e2e jobs are not
+      # a dependency until they are green).
+      - windows-unit
+      - windows-gap-classify
+      - windows-gap-cli
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -218,8 +223,9 @@ jobs:
   windows-gap-oracles:
     name: Windows gap report static oracle (${{ matrix.shard }}/6)
     runs-on: windows-latest
-    # Not blocking yet: these suites fail on Windows (tracked in the follow-up
-    # PR's body, by class). Remove this line when they are green.
+    # Not blocking yet: these suites fail on Windows, tracked by class in
+    # https://github.com/TanStack/oracles/issues/72. Remove this line when they
+    # are green.
     continue-on-error: true
     timeout-minutes: 20
     strategy:
@@ -259,8 +265,9 @@ jobs:
   windows-gap-end-to-end:
     name: Windows gap report end-to-end oracle (fixed seed, ${{ matrix.shard }}/6)
     runs-on: windows-latest
-    # Not blocking yet: these suites fail on Windows (tracked in the follow-up
-    # PR's body, by class). Remove this line when they are green.
+    # Not blocking yet: these suites fail on Windows, tracked by class in
+    # https://github.com/TanStack/oracles/issues/72. Remove this line when they
+    # are green.
     continue-on-error: true
     timeout-minutes: 20
     strategy:
@@ -356,7 +363,34 @@ jobs:
           import { differs, oracleProperty, pass } from '../../packages/oracles/dist/esm/index.js'
 
           oracleProperty({
-            id: `fixture.replay`,
+            id: `fixture ’ & | < > ( ) ^ ! replay`,
+            law: {
+              statement: `a fixture that always fails, so its replay lines are printed.`,
+              authority: `the CI witness for the per-shell replay lines`,
+              limits: `integers from -20 to 20`,
+            },
+            histories: {
+              arbitrary: fc.integer({ min: -20, max: 20 }),
+              runs: 20,
+              fixedSeeds: [1],
+              states: [],
+              measured: [],
+            },
+            timeout: 5_000,
+            model: (x: number) => x,
+            driver: (x: number, observe: (checkpoint: string, value: unknown) => void) => {
+              observe(`result`, x + 1)
+            },
+            check: (_x: number, trace: ReadonlyArray<{ checkpoint: string; value: unknown }>, expected: number) =>
+              differs(`result`, `plus one`, trace.find(({ checkpoint }) => checkpoint === `result`)?.value, expected) ?? pass,
+          })
+          EOT
+          cat > "$dir/tests/hostile.property.test.ts" <<'EOT'
+          import fc from 'fast-check'
+          import { differs, oracleProperty, pass } from '../../packages/oracles/dist/esm/index.js'
+
+          oracleProperty({
+            id: `fixture "quoted" 100% replay`,
             law: {
               statement: `a fixture that always fails, so its replay lines are printed.`,
               authority: `the CI witness for the per-shell replay lines`,
