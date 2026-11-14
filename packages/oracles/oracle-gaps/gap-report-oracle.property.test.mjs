@@ -639,15 +639,24 @@ const configArgs = (plan) => ({
   contexts: plan.contexts,
 })
 
-// A run that computed a unit ran at least one batch (its evidence counts it), so it
-// owes a retention line; a run that computed none (a full reuse, or a refusal) may write none.
+// A mutant whose owner files reached it ran their units in batches (runOwners), so a
+// run with such a mutant owes at least one batch line. Single-file runs (unmutated and
+// selected) write none and are not counted: `evidence.computed` includes them, so it
+// does not say whether a batch ran. A refused or fully reused run may write none.
 const missingLine = (run) =>
-  run.evidence?.computed > 0 && run.retention.length === 0 ? 1 : 0
+  run.mutants?.some((m) => m.oracleFiles.length > 0) &&
+  run.retention.length === 0
+    ? 1
+    : 0
 
 // A batch line (ORACLE_GAPS_TEST_RETENTION) left state behind when a total
 // after its retirement differs from its size before the batch.
 const leftBehind = (line) =>
-  Object.keys(line.before).some((key) => line.before[key] !== line.after[key])
+  Object.keys(line.before).some(
+    (key) =>
+      line.before[key] !== line.after[key] ||
+      (key.startsWith(`stale`) && line.before[key] !== 0),
+  )
 
 /**
  * Writes the fixture's files and runs the CLI on it. A file of an earlier
@@ -1646,7 +1655,7 @@ async function driver(plan, observe) {
     observe(`retention`, retention.filter(leftBehind).length)
     observe(
       `retentionLines:cold`,
-      missingLine({ evidence: cli.evidence, retention }),
+      missingLine({ mutants: cli.mutants, retention }),
     )
     // A failing owner's replay, run as the author would run it (law 3).
     if (plan.fault === `brokenOwner`)
@@ -2101,7 +2110,7 @@ async function driver(plan, observe) {
       observe(`retention:stability`, movedRetention.filter(leftBehind).length)
       observe(
         `retentionLines:stability`,
-        missingLine({ evidence: movedRun.evidence, retention: movedRetention }),
+        missingLine({ mutants: movedRun.mutants, retention: movedRetention }),
       )
       states.add(`stability rerun`)
     }

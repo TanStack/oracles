@@ -1368,6 +1368,10 @@ export default async (env) => {
   function retentionTotals(context) {
     const { filesMap, pathsSet, idMap, errorsSet, leakSet } = context.state
     const totals = {
+      // Maps keyed by a context: each holds one entry per live context. A replaced
+      // context left in one is stale: the excess over the live contexts.
+      staleIndexed: indexOf.size - contexts.length,
+      staleSpecs: contextSpecs.size - contexts.length,
       filesMap: filesMap.size,
       pathsSet: pathsSet.size,
       idMap: idMap.size,
