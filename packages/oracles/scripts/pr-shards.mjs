@@ -295,11 +295,14 @@ export const partitions = {
     // select exactly these.
     previously: `fixed seed`,
     shards: {
-      // 261 s, 25 s, and a small unit.
+      // 261 s, 25 s, and a small unit, and the two constructed claim histories
+      // (about 22 s together, measured on the pool).
       1: anyOf([
         'an edit sequence over the witness module',
         'a stale authored mutant and a reformat',
         'a failing owner under a config that --config names',
+        'two starts race for a stale claim',
+        'a stale claim and mutex from a dead pid are taken over',
       ]),
       // 134 s, 101 s, 27 s, and 15 s.
       2: anyOf([
