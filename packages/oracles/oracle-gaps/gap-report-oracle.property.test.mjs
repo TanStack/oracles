@@ -1006,6 +1006,9 @@ async function claimScenarioRuns(dir, files, how, scenario) {
   }
   // race: A is held inside the takeover mutex's creation; B starts once A is
   // held and claims; A is released only after B has claimed, so A must refuse.
+  // A run that ends before the mutex (a refusal) is an outcome too: the driver
+  // records it and does not wait for the pause, so a wrong CLI is judged by the
+  // law rather than by a driver error.
   const marker = join(dir, `a-at-mutex-create`)
   const release = join(dir, `release-a`)
   const a = startRun({
@@ -1014,17 +1017,25 @@ async function claimScenarioRuns(dir, files, how, scenario) {
     ORACLE_GAPS_TEST_PAUSE_MARKER: marker,
     ORACLE_GAPS_TEST_PAUSE_UNTIL: release,
   })
-  for (let waited = 0; !existsSync(marker); waited += 1) {
-    if (waited > 6000) throw new Error(`run A never reached the takeover mutex`)
+  let aEnded = false
+  a.done.then(() => {
+    aEnded = true
+  })
+  for (let waited = 0; !existsSync(marker) && !aEnded; waited += 1) {
+    if (waited > 6000) throw new Error(`run A neither paused nor ended`)
     await sleep(10)
   }
   const b = startRun(cleanEnv())
+  let bEnded = false
+  b.done.then(() => {
+    bEnded = true
+  })
   for (
     let waited = 0;
-    !b.got.stdout.includes(`oracle-gaps: note log`);
+    !b.got.stdout.includes(`oracle-gaps: note log`) && !bEnded;
     waited += 1
   ) {
-    if (waited > 12000) throw new Error(`run B never claimed the directory`)
+    if (waited > 12000) throw new Error(`run B neither claimed nor ended`)
     await sleep(10)
   }
   writeFileSync(release, ``)
