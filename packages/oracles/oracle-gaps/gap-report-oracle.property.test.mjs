@@ -3775,6 +3775,7 @@ oracleProperty({
         enters: [`stale authored mutant`, `stability rerun`],
         build: (generated) => ({
           ...generated,
+          laterSteps: NO_LATER_STEPS,
           witness: false,
           functions: [
             [
@@ -3793,6 +3794,7 @@ oracleProperty({
         enters: [`ambiguous authored mutant`],
         build: (generated) => ({
           ...generated,
+          laterSteps: NO_LATER_STEPS,
           witness: false,
           functions: [
             [

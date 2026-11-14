@@ -872,8 +872,9 @@ const keepsSteps = (history) => {
 // inverse on the histories it keeps, so fast-check takes every one of them
 // back and shrinks it.
 // A history is drawn as on main; the plan takes its later edits after its
-// steps (`laterStepsOf`). A constructed history whose steps hold a later
-// edit is taken back with that edit in `laterSteps`.
+// steps (`laterStepsOf`). Taking a history back returns it unchanged,
+// except a constructed one whose `steps` hold a later edit, which the
+// steps grammar cannot draw: its later edits move to `laterSteps`.
 const histories = drawn.map(
   (history) => (keepsSteps(history) ? history : { ...history, steps: null }),
   (value) => {
@@ -881,13 +882,15 @@ const histories = drawn.map(
       /** @type {{ witness: unknown, steps: unknown[] | null }} */ (value)
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
-    if (history.steps === null) return { ...value, laterSteps: NO_LATER_STEPS }
+    const later = (history.steps ?? []).filter((step) =>
+      laterEdits.includes(step),
+    )
+    if (later.length === 0) return value
     const earlier = history.steps.filter((step) => !laterEdits.includes(step))
-    const later = history.steps.filter((step) => laterEdits.includes(step))
     return {
       ...value,
       steps: earlier.length > 0 ? earlier : null,
-      laterSteps: later.length > 0 ? later : NO_LATER_STEPS,
+      laterSteps: later,
     }
   },
 )
