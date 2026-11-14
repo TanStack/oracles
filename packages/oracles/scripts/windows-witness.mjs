@@ -150,7 +150,7 @@ if (command === `done`) {
         const result = runIn(shell, runOf(line))
         if (!reproduces(result))
           failures.push(
-            `${name} ${i + 1} did not reproduce in ${shell}: ${line}`,
+            `${name} ${i + 1} did not reproduce in ${shell} (exit ${result.status}: ${`${result.stderr}${result.stdout}`.trim().slice(0, 400)}): ${line}`,
           )
       }
       if (cmdLines === undefined) return
