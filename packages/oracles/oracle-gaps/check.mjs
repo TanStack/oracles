@@ -778,7 +778,7 @@ export default async (env) => {
       for (const path of paths) {
         const hash = servedHash(path, index)
         if (served.get(path) === hash) continue
-        context.invalidateFile(path)
+        context.invalidateFile(posix(path))
         served.set(path, hash)
       }
     }
@@ -1457,7 +1457,7 @@ export default async (env) => {
         const hash = started.get(path) ?? now
         const read = served.get(path) ?? hash
         // The context may hold other text than the path's text now.
-        if (read !== now || hash !== now) context.invalidateFile(path)
+        if (read !== now || hash !== now) context.invalidateFile(posix(path))
         if (hash !== now) stable = false
         served.set(path, now)
         return [path, hash]

@@ -29,6 +29,7 @@
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import {
+  existsSync,
   linkSync,
   mkdirSync,
   openSync,
@@ -370,6 +371,22 @@ async function serve(pkg) {
             stderr.push(`${line}\n`),
           )
           await store.flush()
+          // A test-only pause (ORACLE_GAPS_TEST_PAUSE_AT=daemon-reply, as
+          // ORACLE_GAPS_TEST_STOP): the check is done and its reply is held,
+          // so the CLI waits as it would for a daemon that is slow and dies.
+          // The pause is marked in the check's output directory, with this
+          // daemon's pid, for the oracle to kill it by (no signal pauses a
+          // process on win32).
+          // Once: a daemon that the CLI restarts after this one died inherits the
+          // variable, and must answer, or the CLI waits as long as the run allows.
+          const mark = join(options.out, `paused`)
+          if (
+            process.env.ORACLE_GAPS_TEST_PAUSE_AT === `daemon-reply` &&
+            !existsSync(mark)
+          ) {
+            writeFileSync(mark, `${process.pid}`)
+            await new Promise(() => {})
+          }
         } catch (error) {
           failed = sent(error)
         }
