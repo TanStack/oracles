@@ -204,10 +204,19 @@ function fileHashes() {
     } catch {
       return `missing`
     }
+    // A test can stat or test for a directory (a fixtures folder): its input
+    // is that a directory is there, not its content (review of #55).
+    if (!stat.isFile()) return `not a file`
     const stamp = `${stat.size}:${stat.mtimeMs}`
     const known = memo.get(path)
     if (known?.stamp === stamp) return known.hash
-    const hash = sha1(readFileSync(path))
+    let hash
+    try {
+      hash = sha1(readFileSync(path))
+    } catch {
+      // Removed between the stat and the read.
+      return `missing`
+    }
     memo.set(path, { stamp, hash })
     return hash
   }
@@ -501,6 +510,13 @@ export default async (env) => {
         if (copies?.has(path.replaceAll(String.fromCharCode(92), '/'))) return path
       return globalThis.__oracleGapsBundles?.get(source)
     },
+    // Each module this context transforms, so a run is stored under the
+    // text its context served, not under an edit that lands later in the
+    // run (review of #55, F1). The runner hashes it as it hashes every
+    // input (servedHash), not as another pre plugin has rewritten it (F-A).
+    transform(code, id) {
+      globalThis.__oracleGapsTransformed?.(${index}, id.split('?')[0])
+    },
     load(id) {
       // Vite's own asset and worker queries ('?raw', '?url', '?worker&url', ...)
       // are loaded as written, so their module is not instrumented (a stated
@@ -529,6 +545,8 @@ export default async (env) => {
     )
   }
   globalThis.__oracleGapsServe = []
+  // Per context: the hash of each module's text when it last transformed it.
+  globalThis.__oracleGapsLoads = []
   // The text of each copy of a test file that a batch runs, by its path.
   globalThis.__oracleGapsCopies = new Map()
   serveCopies()
@@ -540,12 +558,22 @@ export default async (env) => {
   // context last served, so a changed file is invalidated in the warm
   // contexts before it is read again.
   globalThis.__oracleGapsSchemata = new Map()
+  // A test's read of a file (`fs:<path>`) is hashed by the file's text, a
+  // module by the text that its context serves.
   const servedHash = (path, index) => {
+    if (path.startsWith(`fs:`)) return hashOf(path.slice(3))
     const text =
       globalThis.__oracleGapsServe[index]?.get(path) ??
       globalThis.__oracleGapsSchemata.get(path)
     return text === undefined ? hashOf(path) : sha1(text)
   }
+  // A context transformed a module (its wrapper's transform hook): the hash
+  // of what it then serves.
+  globalThis.__oracleGapsTransformed = (index, path) =>
+    (globalThis.__oracleGapsLoads[index] ??= new Map()).set(
+      path,
+      servedHash(path, index),
+    )
   // Per context: the hash of what it last served for each path.
   const lastServed = new Map()
   const servedBy = (index) => {
@@ -779,6 +807,8 @@ export default async (env) => {
         const hash = servedHash(path, index)
         if (served.get(path) === hash) continue
         context.invalidateFile(path)
+        // Its next transform records the text it then serves.
+        globalThis.__oracleGapsLoads[index]?.delete(path)
         served.set(path, hash)
       }
     }
@@ -907,10 +937,6 @@ export default async (env) => {
       rmSync(capture, { force: true })
       return { file, timedOut: true, seconds, ...(spun ? { spin: true } : {}) }
     }
-    if (spun) {
-      rmSync(capture, { force: true })
-      return { file, timedOut: true, spin: true, seconds }
-    }
     // The result also lists test modules from earlier runs, with their old
     // results. Only this run's file counts.
     const modules = result.testModules.filter((m) => m.moduleId === file)
@@ -931,7 +957,7 @@ export default async (env) => {
       })
     }
     const rows = []
-    let loaded = []
+    let closing = {}
     if (existsSync(capture)) {
       for (const line of readFileSync(capture, `utf8`)
         .split(`\n`)
@@ -939,10 +965,20 @@ export default async (env) => {
         const row = JSON.parse(line)
         // A closing row marks the end of a file for a batch's watchdog.
         if (!row.closed && !row.idle) rows.push([row.key, row])
-        if (row.closed && row.file === file) loaded = row.loaded ?? []
+        if (row.closed && row.file === file) closing = row
       }
       rmSync(capture)
     }
+    // A run that spun ended, so its closing row names what it read (F-D).
+    if (spun)
+      return {
+        file,
+        timedOut: true,
+        spin: true,
+        seconds,
+        inputs: importsOf(file, modules, closing),
+        readAt: closing.readAt,
+      }
     const tests = modules.flatMap((module) =>
       [...module.children.allTests()].map((testCase) => {
         const testResult = testCase.result()
@@ -984,7 +1020,8 @@ export default async (env) => {
         String(error?.message ?? error),
       ),
       rows,
-      inputs: importsOf(file, modules, loaded),
+      inputs: importsOf(file, modules, closing),
+      readAt: closing.readAt,
     }
   }
 
@@ -993,18 +1030,22 @@ export default async (env) => {
    * and those its copy evaluated (`loaded`, from the capture's closing row),
    * which include a module that only a mutated branch imports at run time.
    */
-  function importsOf(file, modules, loaded) {
+  function importsOf(file, modules, closing = {}) {
     return [
-      ...new Set([
-        file,
-        ...modules.flatMap((m) =>
-          Object.keys(m.diagnostic?.().importDurations ?? {}),
-        ),
-        ...loaded,
-      ]),
-    ].filter(
-      (path) => isAbsolute(path) && !ownHarness(path) && !isRunnerCopy(path),
-    )
+      ...[
+        ...new Set([
+          file,
+          ...modules.flatMap((m) =>
+            Object.keys(m.diagnostic?.().importDurations ?? {}),
+          ),
+          ...(closing.loaded ?? []),
+        ]),
+      ].filter(
+        (path) => isAbsolute(path) && !ownHarness(path) && !isRunnerCopy(path),
+      ),
+      // The files its tests read through fs, each its own input.
+      ...Object.keys(closing.readAt ?? {}),
+    ]
   }
 
   /**
@@ -1139,11 +1180,12 @@ export default async (env) => {
     // Each copy's rows, and the copies that skipped their tests because an
     // earlier copy in the batch killed their mutant.
     const skipped = new Set()
-    // The files of the modules each copy evaluated (its closing row).
-    const loaded = new Map()
+    // Each copy's closing row: the files of the modules it evaluated, and the
+    // files it read with their hashes.
+    const closings = new Map()
     const rowsOf = () => {
       const rows = new Map(copies.map((copy) => [copy, []]))
-      loaded.clear()
+      closings.clear()
       if (existsSync(capture))
         for (const line of readFileSync(capture, `utf8`)
           .split(`\n`)
@@ -1155,7 +1197,7 @@ export default async (env) => {
               posix(row.file ?? ``) === c,
           )
           if (copy && row.skipped) skipped.add(copy)
-          if (copy && row.closed) loaded.set(copy, row.loaded ?? [])
+          if (copy && row.closed) closings.set(copy, row)
           if (copy && row.spin) spun.add(copy)
           if (copy && !row.closed && !row.idle && !row.spin && !row.started)
             rows.get(copy).push(row)
@@ -1216,7 +1258,8 @@ export default async (env) => {
                 })),
               unhandled: [],
               rows: own.map((row) => [row.key, row]),
-              inputs: importsOf(item.file, [], loaded.get(copies[i]) ?? []),
+              inputs: importsOf(item.file, [], closings.get(copies[i])),
+              readAt: closings.get(copies[i])?.readAt,
             }
           }),
           timedOutAt: current,
@@ -1269,7 +1312,8 @@ export default async (env) => {
             rows: rows
               .get(copy)
               .map((row) => [map(row.key), { ...row, key: map(row.key) }]),
-            inputs: importsOf(item.file, modules, loaded.get(copy) ?? []),
+            inputs: importsOf(item.file, modules, closings.get(copy)),
+            readAt: closings.get(copy)?.readAt,
           }
         }),
       }
@@ -1444,20 +1488,26 @@ export default async (env) => {
     }
     // Records what a settled run read in its context's ledger, so the next
     // check invalidates any of it that changes, and returns the inputs to
-    // store the run under: a path known at the start with its hash from
-    // then, any other with its hash now. A path that changed while the run
-    // ran is invalidated, and the run, which may have read either text, is
+    // store the run under: each path with the hash of the text the run read,
+    // a file's from the copy's first read of it (`readAt`), a module's from
+    // its context's transform of it, or else its hash at the start, or now.
+    // A path that changed while the run ran is invalidated, and the run is
     // not stored (undefined); nor is a run with no known input.
-    function settleIn(context, started, paths) {
+    function settleIn(context, started, paths, readAt = {}) {
       const index = indexOf.get(context)
       const served = servedBy(index)
+      const loads = globalThis.__oracleGapsLoads[index]
       let stable = paths.length > 0
       const inputs = paths.map((path) => {
         const now = servedHash(path, index)
-        const hash = started.get(path) ?? now
+        const hash =
+          readAt[path] ?? loads?.get(path) ?? started.get(path) ?? now
         const read = served.get(path) ?? hash
         // The context may hold other text than the path's text now.
-        if (read !== now || hash !== now) context.invalidateFile(path)
+        if (read !== now || hash !== now) {
+          context.invalidateFile(path)
+          loads?.delete(path)
+        }
         if (hash !== now) stable = false
         served.set(path, now)
         return [path, hash]
@@ -1483,12 +1533,17 @@ export default async (env) => {
         options.seed ?? null,
       )
       const inputs = items.map(({ file }, k) =>
-        settleIn(context, started, [
-          ...new Set([
-            ...(fileInputs.get(file) ?? []),
-            ...(batch.units[k]?.inputs ?? []),
-          ]),
-        ]),
+        settleIn(
+          context,
+          started,
+          [
+            ...new Set([
+              ...(fileInputs.get(file) ?? []),
+              ...(batch.units[k]?.inputs ?? []),
+            ]),
+          ],
+          batch.units[k]?.readAt,
+        ),
       )
       return { ...batch, inputs }
     }
@@ -1517,11 +1572,20 @@ export default async (env) => {
       })
       evidence.computed += 1
       if (result.timedOut) evidence.cut += 1
-      const paths = result.timedOut ? fileInputs.get(file) : result.inputs
+      // A run cut off keeps its file's known inputs and any it named itself
+      // (third review of #55, F-D).
+      const paths = result.timedOut
+        ? [
+            ...new Set([
+              ...(fileInputs.get(file) ?? []),
+              ...(result.inputs ?? []),
+            ]),
+          ]
+        : result.inputs
       if (!result.timedOut && spec.startsWith(`unmutated:`))
         fileInputs.set(file, result.inputs)
       if (paths) {
-        const inputs = settleIn(context, started, paths)
+        const inputs = settleIn(context, started, paths, result.readAt)
         if (keep) remember(id, result, inputs)
       }
       return result

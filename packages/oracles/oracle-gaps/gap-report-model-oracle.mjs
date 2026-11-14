@@ -438,6 +438,13 @@ const edits = [
   `cli`,
   // The module that only file b's mutated runs import (`lazyGate`).
   `lazy`,
+  // The data file that file b's verdict reads through fs (`fsRead`): no
+  // test or source changes, only a file a test reads at run time.
+  `fsData`,
+  // File b's helper edited while a check through the daemon runs (law 9's
+  // mid-run edit): a test of file a, which has loaded the helper, rewrites
+  // it the first time it runs, before file b's runs read it.
+  `midrun`,
   `restart`,
   `revert`,
   // Events that end a daemon, not edits: a crash (killed, its socket and
@@ -476,6 +483,20 @@ const edits = [
   // A second check through the daemon of a state that nothing changed.
   `recheck`,
 ]
+// The edits that came after the steps grammar was first drawn: a fixed
+// seed's steps draw from the earlier ones, and these come from
+// `laterSteps` (the generator rule: new draws go last).
+const laterEdits = [`fsData`, `midrun`]
+const earlierEdits = edits.filter((edit) => !laterEdits.includes(edit))
+// A history's no later edits, one value, so `histories` can take it back
+// (fc.constant takes back only its own reference).
+const NO_LATER_STEPS = Object.freeze([])
+// The later edits a history takes after its steps: only one without the
+// witness module that has steps.
+const laterStepsOf = (history) =>
+  history.witness === false && history.steps != null
+    ? (history.laterSteps ?? [])
+    : []
 // The steps that act on the daemon and change no file.
 const daemonEvents = new Set([
   `restart`,
@@ -746,13 +767,16 @@ const drawn = fc.record({
   ),
   // Most histories have no steps, which keeps the campaign's cost down. A
   // history with the witness module has none (see `histories`).
+  // The steps draw from the edits that came before the later ones, so a
+  // fixed seed's steps stay as they were; the later edits are drawn last
+  // (`laterSteps`) and follow these steps.
   steps: fc.oneof(
     { weight: 5, arbitrary: fc.constant(null) },
     {
       weight: 1,
-      arbitrary: fc.array(fc.constantFrom(...edits), {
+      arbitrary: fc.array(fc.constantFrom(...earlierEdits), {
         minLength: 1,
-        maxLength: edits.length * 2,
+        maxLength: earlierEdits.length * 2,
       }),
     },
   ),
@@ -769,6 +793,48 @@ const drawn = fc.record({
   }),
   // Who names the importer's function in an owns entry, if any.
   importer: fc.constantFrom(`none`, `a`, `b`),
+  // Last, so the fields above draw as before.
+  // Which file's test lands a mid-run edit (`midrun`), and what it edits:
+  // file b's helper, or the data file when file b reads one (`midrunTarget`
+  // is the helper otherwise). Only a check through the daemon takes the
+  // `midrun` step.
+  midrunBy: fc.constantFrom(`a`, `b`),
+  midrunTarget: fc.constantFrom(`helper`, `data`),
+  // The package's config also has a plugin of its own, `enforce: 'pre'`,
+  // whose transform appends a comment to every module in the package, as a
+  // code-rewriting plugin does: the runner must store a run under what it
+  // served, not under the text after another pre plugin (third review of
+  // #55, F-A).
+  prePlugin: fc.constantFrom(false, false, false, true),
+  // File b's verdicts also wait on `tests/data.json`, which the test reads
+  // through fs at run time, by a sync, a promise, or a callback read (law
+  // 9: a file a test reads is an input of its run, as a module it imports
+  // is). The `fsData` edit changes only that file.
+  // A `statDir` read stats the test's own directory first, as a test that
+  // looks for a fixtures folder does (review of #55: a directory that a
+  // test stats is no file to hash).
+  fsRead: fc.constantFrom(
+    `none`,
+    `none`,
+    `none`,
+    `sync`,
+    `promise`,
+    `callback`,
+    `statDir`,
+  ),
+  // The edits added after the first steps were drawn, which follow a
+  // history's steps (`histories`): the data file's edit and the mid-run
+  // edit. Most histories take none.
+  laterSteps: fc.oneof(
+    { weight: 9, arbitrary: fc.constant(NO_LATER_STEPS) },
+    {
+      weight: 1,
+      arbitrary: fc.array(fc.constantFrom(...laterEdits), {
+        minLength: 1,
+        maxLength: 2,
+      }),
+    },
+  ),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -805,6 +871,10 @@ const keepsSteps = (history) => {
 // P1-a: the budget witness only in its own histories). The map is its own
 // inverse on the histories it keeps, so fast-check takes every one of them
 // back and shrinks it.
+// A history is drawn as on main; the plan takes its later edits after its
+// steps (`laterStepsOf`). Taking a history back returns it unchanged,
+// except a constructed one whose `steps` hold a later edit, which the
+// steps grammar cannot draw: its later edits move to `laterSteps`.
 const histories = drawn.map(
   (history) => (keepsSteps(history) ? history : { ...history, steps: null }),
   (value) => {
@@ -812,7 +882,16 @@ const histories = drawn.map(
       /** @type {{ witness: unknown, steps: unknown[] | null }} */ (value)
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
-    return value
+    const later = (history.steps ?? []).filter((step) =>
+      laterEdits.includes(step),
+    )
+    if (later.length === 0) return value
+    const earlier = history.steps.filter((step) => !laterEdits.includes(step))
+    return {
+      ...value,
+      steps: earlier.length > 0 ? earlier : null,
+      laterSteps: later,
+    }
   },
 )
 
@@ -2815,8 +2894,22 @@ function resolveHistory(history) {
     template: history.template,
     fault: history.fault,
     stability: history.stability,
-    steps: history.steps ?? [],
+    steps: [...(history.steps ?? []), ...laterStepsOf(history)],
     lazyGate: history.lazyGate === true,
+    fsRead: history.fsRead ?? `none`,
+    // Whether a step edits file b's helper during a check (`midrun`): then
+    // file a loads the helper and holds the test that edits it.
+    midrun: [...(history.steps ?? []), ...laterStepsOf(history)].includes(
+      `midrun`,
+    ),
+    // Which file's test lands the mid-run edit (`midrunBy`), and what it
+    // edits (`midrunTarget`): file a edits file b's helper after its
+    // context loaded it, or file b edits its own helper or the data file
+    // that its verdict reads through fs, after its judged tests read them.
+    // Then the run that lands the edit read the old text, and its verdict
+    // follows it (review of #55, F1).
+    midrunBy: history.midrunBy ?? `a`,
+    midrunTarget: midrunTargetOf(history),
     consoleOutput: history.consoleOutput === true,
     // Whether a run aborts its process (a stop run `abort`): then file a has
     // the test that aborts when the driver asks.
@@ -2826,6 +2919,7 @@ function resolveHistory(history) {
     // assertion form and whether its list is a literal, or none.
     matcherOwns: history.matcherOwns ?? `none`,
     config: history.config ?? `object`,
+    prePlugin: history.prePlugin === true,
     ...configOf(history),
     configEnv: history.configEnv === true,
     native: history.native ?? `none`,
@@ -4149,10 +4243,12 @@ function blockingOf(plan) {
 function baselineOf(plan) {
   const failing = blockingOf(plan)
   return [...oracleFilesOf(plan), `c`].map((file) => {
-    // File a's test that writes to the console streams runs in every
-    // baseline too.
+    // File a's tests beyond the plan's run in every baseline too: the mid-run
+    // edit test, the one that writes to the console streams, and the one
+    // that aborts when the driver asks.
     const own =
       plan.tests.filter((t) => t.file === file).length +
+      (plan.midrun && file === plan.midrunBy ? 1 : 0) +
       (file === `a` && plan.consoleOutput ? 1 : 0) +
       (file === `a` && plan.aborts ? 1 : 0)
     const broken = failing.find((f) => f.file === file)
@@ -4503,6 +4599,39 @@ const quoteEntry = (plan, entry) =>
 // Whether a test's verdict waits on file b's lazy gate (`lazyGate`).
 const lazyGated = (plan, file, t) =>
   plan.lazyGate && file === `b` && t.judges && t.judgeBy === `verdict`
+// Whether a test's verdict waits on the data file it reads through fs.
+const fsGated = (plan, file, t) =>
+  plan.fsRead !== `none` && file === `b` && t.judges && t.judgeBy === `verdict`
+// How file b reads `tests/data.json`, by each kind of fs read.
+// Each read first checks that the fs function it uses keeps its own name
+// and length, as code that dispatches on a function's arity does: a test
+// that passes alone passes under the CLI (law 3), whatever the CLI does to
+// see the read (review of #55).
+const keptFs = (local, name, length) =>
+  `if (${local}.name !== '${name}' || ${local}.length !== ${length}) throw new Error('fs.${name} lost its own properties')`
+const dataReads = {
+  sync: [
+    `import { readFileSync as readDataSync } from 'node:fs'`,
+    keptFs(`readDataSync`, `readFileSync`, 2),
+    `const readData = async () => JSON.parse(readDataSync(new URL('./data.json', import.meta.url), 'utf8'))`,
+  ],
+  promise: [
+    `import { readFile as readDataFile } from 'node:fs/promises'`,
+    keptFs(`readDataFile`, `readFile`, 2),
+    `const readData = async () => JSON.parse(await readDataFile(new URL('./data.json', import.meta.url), 'utf8'))`,
+  ],
+  statDir: [
+    `import { existsSync as dataDirExists, readFileSync as readDataSync, statSync as statDataDir } from 'node:fs'`,
+    keptFs(`statDataDir`, `statSync`, 1),
+    keptFs(`dataDirExists`, `existsSync`, 1),
+    `const readData = async () => (statDataDir(new URL('./', import.meta.url)).isDirectory() && dataDirExists(new URL('./', import.meta.url)) ? JSON.parse(readDataSync(new URL('./data.json', import.meta.url), 'utf8')) : { open: false })`,
+  ],
+  callback: [
+    `import { readFile as readDataCallback } from 'node:fs'`,
+    keptFs(`readDataCallback`, `readFile`, 3),
+    `const readData = () => new Promise((resolve, reject) => readDataCallback(new URL('./data.json', import.meta.url), 'utf8', (error, text) => (error ? reject(error) : resolve(JSON.parse(text)))))`,
+  ],
+}
 
 function oracleTestFile(plan, file) {
   const sites = sitesOf(plan)
@@ -4577,6 +4706,17 @@ function oracleTestFile(plan, file) {
           `import { join as pidPath } from 'node:path'`,
         ]
       : []),
+    // The mid-run edit (`midrun`): file a loads file b's helper, so its
+    // context holds the helper's old text when the edit lands.
+    ...(plan.midrun && file === plan.midrunBy
+      ? [
+          `import { readFileSync as readMarker, writeFileSync as writeEdit } from 'node:fs'`,
+          `import { dirname as markerDir, join as markerPath } from 'node:path'`,
+          ...(file === `a`
+            ? [`import { strict as strictAtLoad } from './strict'`]
+            : []),
+        ]
+      : []),
     // A module's text through a query import, which Vite loads (see rawImport).
     ...(plan.tests.some((t) => t.file === file && t.rawImport)
       ? [
@@ -4589,6 +4729,7 @@ function oracleTestFile(plan, file) {
       : []),
     `import * as sut from '../src/sut'`,
     ...(file === `b` ? [`import { strict } from './strict'`] : []),
+    ...(file === `b` && plan.fsRead !== `none` ? dataReads[plan.fsRead] : []),
     ...stubs,
     // State that tests of this file share (the `w_shared` witness).
     `const shared = { value: 0 }`,
@@ -4747,7 +4888,7 @@ function oracleTestFile(plan, file) {
                 // A lazy gate is imported only where the output differs, so
                 // the unmutated run never loads it. It is open before any
                 // edit, so the model need not read it.
-                `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}${lazyGated(plan, file, t) ? ` && (await import('./lazy')).open` : ``}) {`,
+                `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}${lazyGated(plan, file, t) ? ` && (await import('./lazy')).open` : ``}${fsGated(plan, file, t) ? ` && (await readData()).open` : ``}) {`,
                 `      g.__oracleVerdict?.({ property: 'fixture-${file}', law: '${t.law}', checkpoint: 'trace' })`,
                 `      throw new Error('violation')`,
                 `    }`,
@@ -4765,7 +4906,7 @@ function oracleTestFile(plan, file) {
         : []),
       t.asProp
         ? `  fcTest.prop([fcv.integer({ min: 0, max: 10 })], { numRuns: 20, seed: 1 })('${testName(t, index)}', async (n) => {`
-        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || t.timed || lazyGated(plan, file, t) ? `async ` : ``}() => {`,
+        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || t.timed || lazyGated(plan, file, t) || fsGated(plan, file, t) ? `async ` : ``}() => {`,
       ...partsOf(t).flatMap(campaign),
       `  })`,
       `})`,
@@ -4786,6 +4927,42 @@ function oracleTestFile(plan, file) {
       `})`,
       `test('fixed seed 999', () => {})`,
     )
+  // The mid-run edit: the first run of this test after the driver marks an
+  // edit pending (`midrun.txt`, `pending:<value>`) rewrites file b's
+  // helper, or the data file, with that value and marks the edit done, so
+  // every later run of it, in this check or another, changes nothing. It
+  // calls nothing of the source under test, so no mutant reaches it. In
+  // file b it first reads what it edits and fails unless the helper is
+  // strict or the data open, as in the history's first state: the run that
+  // lands the edit passes, and every run that reads the edited text fails,
+  // so a run stored under the edited text with the old verdict shows in
+  // the baseline (review of #55, F1).
+  if (plan.midrun && file === plan.midrunBy)
+    out.push(
+      `test('${MIDRUN_EDITORS[plan.midrunTarget].test}', async () => {`,
+      ...(file === `a`
+        ? [`  void strictAtLoad`]
+        : [
+            `  if (!(${plan.midrunTarget === `data` ? `(await readData()).open` : `strict`})) throw new Error('${MIDRUN_EDITORS[plan.midrunTarget].message}')`,
+          ]),
+      // The marker sits in the run's own session directory, beside the
+      // runner's harness (the worker's first setup file), which is no input
+      // of a run by design (check.mjs, ownHarness). So the marker's own edit
+      // does not decide whether the run is stored: only the helper's or the
+      // data's text does. A run with no harness, or no marker, edits nothing.
+      `  const harness = (globalThis as { __vitest_worker__?: { config?: { setupFiles?: Array<string> } } }).__vitest_worker__?.config?.setupFiles?.[0]`,
+      `  if (!harness) return`,
+      `  const marker = markerPath(markerDir(harness), 'midrun.txt')`,
+      `  let text = ''`,
+      `  try { text = readMarker(marker, 'utf8') } catch { return }`,
+      `  if (!text.startsWith('pending:')) return`,
+      `  const value = text.slice('pending:'.length).trim()`,
+      plan.midrunTarget === `data`
+        ? `  writeEdit(new URL('./data.json', import.meta.url), \`{"open":\${value}}\\n\`)`
+        : `  writeEdit(new URL('./strict.ts', import.meta.url), \`export const strict = \${value}\\n\`)`,
+      `  writeEdit(marker, 'done\\n')`,
+      `})`,
+    )
   // A test that ends the run's process by SIGABRT when the driver asks
   // (`GAP_ABORT`), as a V8 out-of-memory abort does: in worker threads its
   // process is the run's, and `process.abort()` is unavailable there. It
@@ -4799,6 +4976,7 @@ function oracleTestFile(plan, file) {
   // A file with no tests still loads, so the CLI can read what it owns.
   if (
     !plan.tests.some((t) => t.file === file) &&
+    !(plan.midrun && file === plan.midrunBy) &&
     !(file === `a` && (plan.consoleOutput || plan.aborts))
   )
     out.push(`test.skip('no tests', () => {})`)
@@ -4922,6 +5100,27 @@ function edited(plan) {
 
 const AUTHORED = `mutants/authored-mutant.json`
 
+/**
+ * The test that lands a mid-run edit, by what it edits: its name, and the
+ * error it throws in file b when it reads the edited text.
+ */
+const MIDRUN_EDITORS = {
+  helper: {
+    test: `edits the helper during the check`,
+    message: `the helper this run read is not strict`,
+  },
+  data: {
+    test: `edits the data during the check`,
+    message: `the data this run read is closed`,
+  },
+}
+
+/** What a mid-run edit changes: the data file only when file b reads one. */
+const midrunTargetOf = (history) =>
+  history.midrunTarget === `data` && (history.fsRead ?? `none`) !== `none`
+    ? `data`
+    : `helper`
+
 // Law 9's fixture state: the history, and what the edits outside it set.
 const initialState = (plan) => ({
   history: plan.history,
@@ -4929,6 +5128,10 @@ const initialState = (plan) => ({
   strict: true,
   // What `tests/lazy.ts` exports: whether file b's lazy gate is open.
   lazyOpen: true,
+  // What `tests/data.json` holds: whether file b's data gate is open.
+  dataOpen: true,
+  // How many mid-run edits have landed (`midrun`).
+  midruns: 0,
   seed: 1,
   // Whether the check's `--config` names the second config (`altConfig`).
   altConfig: false,
@@ -4947,6 +5150,10 @@ const initialState = (plan) => ({
 const altConfigPath = (plan) =>
   `config/gap-vitest-alt.${plan.configFile.split(`.`).at(-1)}`
 
+// The config's own pre plugin (`prePlugin`): it rewrites each module of the
+// package that it transforms, keeping what the module does.
+const PRE_PLUGIN = `{ name: 'gap-pre-rewrite', enforce: 'pre', transform(code, id) { const path = id.split('?')[0]; return /\\.(ts|js|mjs)$/.test(path) && !path.includes('/node_modules/') ? code + '\\n// rewritten by a pre plugin\\n' : undefined } }`
+
 /**
  * The text of the package's config, in its syntax (`configOf`), with the
  * fault, the top-level await, or the `require` calls the plan holds. `test`
@@ -4962,7 +5169,7 @@ function configText(plan, test) {
     plan.fault === `projects`
       ? `{ projects: [{ test: { name: 'unit', ...${test} } }] }`
       : test
-  } }${plan.config === `object` || plan.config === `promise` ? `` : `)`})`
+  }${plan.prePlugin ? `, plugins: [${PRE_PLUGIN}]` : ``} }${plan.config === `object` || plan.config === `promise` ? `` : `)`})`
   // A promise of the config, a null default, or a config cut off mid-object.
   const body =
     plan.fault === `configNull`
@@ -5125,6 +5332,9 @@ function fixtureFiles(plan, state = initialState(plan)) {
     ...(plan.lazyGate
       ? { 'tests/lazy.ts': `export const open = ${state.lazyOpen}\n` }
       : {}),
+    ...(plan.fsRead !== `none`
+      ? { 'tests/data.json': `${JSON.stringify({ open: state.dataOpen })}\n` }
+      : {}),
     // A workspace dependency with module state, linked through node_modules.
     'deps/state-dep/package.json': manifest({
       name: `state-dep`,
@@ -5246,6 +5456,13 @@ function fixtureFiles(plan, state = initialState(plan)) {
   }
   for (const file of oracleFilesOf(plan))
     files[`tests/${file}.test.ts`] = oracleTestFile(plan, file)
+  // Each mid-run edit changes file a's own text too (a count of them), so
+  // the daemon runs file a's tests again in the check the edit lands in,
+  // instead of reusing their evidence: the marker sits in the daemon's
+  // session directory, which is no input of a run.
+  if (plan.midrun)
+    files[`tests/${plan.midrunBy}.test.ts`] +=
+      `// mid-run edits: ${state.midruns}\n`
   // The new oracle file d owns the first generated function and judges it.
   if (state.newOracle) {
     const target = plan.functions.find((fn) => fn.generated && !fn.library)
@@ -5388,8 +5605,14 @@ function applyEdit(state, edit) {
             : { stmt: (h.authored?.stmt ?? -1) + 1, kind: `apply` },
       },
     }
+  // A mid-run edit leaves file b's helper as the helper edit does.
   if (edit === `helper`) return { ...state, strict: !state.strict }
+  if (edit === `midrun`)
+    return midrunTargetOf(state.history) === `data`
+      ? { ...state, dataOpen: !state.dataOpen, midruns: state.midruns + 1 }
+      : { ...state, strict: !state.strict, midruns: state.midruns + 1 }
   if (edit === `lazy`) return { ...state, lazyOpen: !state.lazyOpen }
+  if (edit === `fsData`) return { ...state, dataOpen: !state.dataOpen }
   if (edit === `seed`) return { ...state, seed: state.seed === 1 ? 2 : 1 }
   if (edit === `config`) return { ...state, altConfig: !state.altConfig }
   // A seed no other step uses, so the check has fresh work to be killed in.
@@ -5598,6 +5821,9 @@ function readSummary(summary) {
 }
 
 export {
+  drawn,
+  NO_LATER_STEPS,
+  MIDRUN_EDITORS,
   captureWitness,
   outsideRepository,
   endingOf,

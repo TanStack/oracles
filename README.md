@@ -158,6 +158,41 @@ exited with <signal or code>` and exits 3; after an out-of-memory crash
   it with `oracle-gaps --stop-daemon --package <dir>`. On Windows, which has
   no process groups, the run is not supervised.
 
+  A check through the daemon reuses a run while its inputs are unchanged:
+  the modules the run loaded, and the files in the package that its tests
+  read through `fs` (`readFileSync`, `readFile`, `existsSync`, `statSync`,
+  and `fs/promises` `readFile` and `stat`), each by the content that the
+  run read. A run that an edit overlapped, because a file changed after the
+  run read it, is not reused. A directory that a test stats or tests for is
+  an input as a directory, not by its content.
+
+  Two kinds of input are not tracked yet. A Vite plugin whose output depends
+  on anything but a module's text, such as a sidecar file that it reads, can
+  make the daemon serve a run that read the plugin's old output. And the
+  daemon's environment is fixed when it starts, so an environment variable
+  that a later check sets does not reach the daemon's runs. After such a
+  change, run the check cold (without `--daemon`), or stop the daemon with
+  `oracle-gaps --stop-daemon --package <dir>`. The maintainer decided on
+  2026-11-13 that the daemon tracks both and restarts when they change; a
+  later release does that.
+
+  These reads are no input, so an edit to the file alone does not rerun the
+  tests that read it: a read outside the package or under `node_modules`; a
+  read from a worker thread or child process that the test starts; and a
+  read through any `fs` or `fs/promises` function other than the six above,
+  or through one of those six given a file descriptor. That catch-all
+  includes, for example, `readdir`, `opendir`, `glob`, `globSync`,
+  `createReadStream`, `realpath`, `lstat`, `access`, `open`, `read`,
+  `readSync`, `readv`, `fstat`, `fstatSync`, `copyFile`, `copyFileSync`, `cp`,
+  `cpSync`, `openAsBlob`, `statfs`, `readlink`, the callback `stat`,
+  `exists`, `watch`, and `watchFile`, and the `fs/promises` `readdir`,
+  `opendir`, `glob`, `lstat`, `realpath`, `readlink`, `access`, `open`,
+  `copyFile`, `cp`, `statfs`, and `watch`. Run the check cold (without
+  `--daemon`) after an edit to a file read that way. A later release records
+  all of them except `watch` and `watchFile`, which wait for future changes
+  and stay no input (maintainer decision, 2026-11-13, with `watchFile` in the
+  family of `watch`).
+
 - `packages/eslint-plugin-oracles` (`@tanstack/eslint-plugin-oracles`): the
   `oracle/*` lint rules. The rules recognize the framework by its package
   specifier and by a relative module with its file name. A project names its
