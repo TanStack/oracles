@@ -12,7 +12,7 @@
 //     `Rerun` line for PowerShell and for cmd. Each PowerShell line runs in
 //     pwsh and in Windows PowerShell 5.1 (powershell.exe), each cmd line in
 //     cmd. A line must reproduce the failure, except a cmd line that says cmd
-//     has no form for its name (a name with a double quote, `%`, or `!`). A
+//     has no form for its name (a word with a double quote, `%`, or `!`). A
 //     Rerun line is run as `vitest run` plus its arguments, since it names the
 //     test only. A run whose output has no per-shell line for a failure fails.
 //
@@ -88,10 +88,12 @@ if (command === `done`) {
   if (problems.length > 0) fail(problems.join('; '))
   else console.log(`done line ok on both streams, exit ${exitCode}`)
 } else if (command === `replay`) {
-  // Every printed command of a failing property: the Replay and Rerun lines,
-  // for PowerShell and for cmd. Each PowerShell line runs in pwsh and in
-  // Windows PowerShell 5.1; each cmd line runs in cmd. A cmd line that says it
-  // has no form (a name with `"`, `%`, or `!`) is the only line that may not run.
+  // Every printed command of a failing property: the Replay and Rerun lines for
+  // PowerShell and for cmd. Each PowerShell line runs in pwsh and in Windows
+  // PowerShell 5.1; each cmd line runs in cmd. A cmd line that says cmd has no
+  // form (an environment value with `"`, `%`, or `!`) is the only line that may
+  // not run. Every failing unit must print its line, and each Replay line's
+  // ORACLE_PROPERTY and ORACLE_UNIT must be exactly a failing unit's names.
   const [outputFile, dir] = args
   const output = readFileSync(outputFile, `utf8`).replace(/\x1b\[[0-9;]*m/g, ``)
   const lines = output.split(/\r?\n/)
@@ -104,72 +106,32 @@ if (command === `done`) {
   const rerunPs = after(`Rerun (PowerShell): `)
   const rerunCmd = after(`Rerun (cmd): `)
   const noForm = `use the PowerShell line for this name`
-  // The shells find the test runner in this package's own binaries.
-  const env = {
-    ...process.env,
-    PATH: [
-      resolve(here, `../node_modules/.bin`),
-      join(dir, `node_modules`, `.bin`),
-      process.env.PATH,
-    ].join(delimiter),
-  }
-  const runIn = (shell, line) => {
-    // PowerShell reads the line from stdin (`-Command -`), as a user's typed
-    // line arrives: an argument would pass through Node's quoting, which turns
-    // a double quote into `\"`, and Windows PowerShell 5.1 does not read that as
-    // an escape. cmd reads its line as it is (verbatim arguments).
-    if (shell === `cmd`)
-      return spawnSync(`cmd`, [`/d`, `/s`, `/c`, line], {
-        cwd: dir,
-        env,
-        encoding: `utf8`,
-        windowsVerbatimArguments: true,
-      })
-    return spawnSync(
-      shell === `pwsh` ? `pwsh` : `powershell.exe`,
-      [`-NoProfile`, `-Command`, `-`],
-      {
-        cwd: dir,
-        env,
-        encoding: `utf8`,
-        input: line,
-      },
+  // The failing units, as vitest prints them: `FAIL <file> > <property> > <unit>`.
+  const failing = new Map()
+  for (const text of lines) {
+    const match = text.match(
+      /FAIL\s+\S+ > (.*?) > ((?:random|fixed) seed: .*)$/,
     )
+    if (match)
+      failing.set(`${match[1]}\0${match[2]}`, {
+        property: match[1],
+        unit: match[2],
+      })
   }
-  const reproduces = (result) =>
-    result.status !== 0 &&
-    /violated|failed/.test(`${result.stdout}${result.stderr}`)
-  // A Rerun line names the test only: it runs as `vitest run <line>`.
-  const asRerun = (line, prefix) => `vitest run ${line}`
-  const failures = []
-  let checked = 0
-  const check = (name, lines, shells, cmdLines, runOf) => {
-    lines.forEach((line, i) => {
-      for (const shell of shells) {
-        checked += 1
-        const result = runIn(shell, runOf(line))
-        if (!reproduces(result))
-          failures.push(
-            `${name} ${i + 1} did not reproduce in ${shell}: ${line}`,
-          )
-      }
-      if (cmdLines === undefined) return
-      const cmdLine = cmdLines[i]
-      if (cmdLine === noForm) return
-      checked += 1
-      const result = runIn(`cmd`, runOf(cmdLine))
-      if (!reproduces(result))
-        failures.push(`${name} ${i + 1} did not reproduce in cmd: ${cmdLine}`)
-    })
-  }
-  // ORACLE_UNIT and ORACLE_PROPERTY carry the exact test (review option c): each
-  // must decode to the text the failure printed, and must not be lost to the
-  // `-t` pattern's wildcards. A PowerShell single-quoted value doubles its quotes.
-  const decodeEnv = (line, name) => {
-    const at = line.indexOf(`$env:${name}='`)
+  const failingRandom = [...failing.values()].filter((f) =>
+    f.unit.startsWith(`random seed: `),
+  )
+  const failingFixed = [...failing.values()].filter((f) =>
+    f.unit.startsWith(`fixed seed `),
+  )
+  // The PowerShell value of $env:NAME='...', decoded: a doubled quote (of any
+  // PowerShell single-quote character) is that character.
+  const decodePs = (line, name) => {
+    const head = `$env:${name}='`
+    const at = line.indexOf(head)
     if (at < 0) return undefined
     let value = ``
-    for (let i = at + name.length + 8; i < line.length; i += 1) {
+    for (let i = at + head.length; i < line.length; i += 1) {
       const c = line[i]
       if (/['\u2018\u2019\u201A\u201B]/.test(c)) {
         if (line[i + 1] === c) {
@@ -183,32 +145,102 @@ if (command === `done`) {
     }
     return undefined
   }
-  for (const line of replayPs) {
-    for (const name of [`ORACLE_UNIT`, `ORACLE_PROPERTY`]) {
-      const value = decodeEnv(line, name)
-      if (value === undefined || !output.includes(value))
+  // The cmd value of set "NAME=value". A value with a double quote, `%`, or `!`
+  // has no cmd form, so its line says so and no set line is decoded.
+  const decodeSet = (line, name) => {
+    const match = line.match(new RegExp(`set "${name}=([^"]*)" &&`))
+    return match === null ? undefined : match[1]
+  }
+  const runIn = (shell, line) => {
+    // PowerShell reads the line from stdin (`-Command -`), as a typed line
+    // arrives: an argument would pass through Node's quoting. cmd reads its line
+    // as it is (verbatim arguments).
+    if (shell === `cmd`)
+      return spawnSync(`cmd`, [`/d`, `/s`, `/c`, line], {
+        cwd: dir,
+        env: process.env,
+        encoding: `utf8`,
+        windowsVerbatimArguments: true,
+      })
+    return spawnSync(
+      shell === `pwsh` ? `pwsh` : `powershell.exe`,
+      [`-NoProfile`, `-Command`, `-`],
+      {
+        cwd: dir,
+        env: process.env,
+        encoding: `utf8`,
+        input: line,
+      },
+    )
+  }
+  const reproduces = (result) =>
+    result.status !== 0 &&
+    /violated|failed/.test(`${result.stdout}${result.stderr}`)
+  // A Rerun line names the test only: it runs as `vitest run <line>`.
+  const failures = []
+  let checked = 0
+  const runEach = (name, psLines, cmdLines, prefix) => {
+    psLines.forEach((line, i) => {
+      for (const shell of [`pwsh`, `powershell`]) {
+        checked += 1
+        const result = runIn(shell, `${prefix}${line}`)
+        if (!reproduces(result))
+          failures.push(
+            `${name} ${i + 1} did not reproduce in ${shell} (exit ${result.status}: ${`${result.stderr}${result.stdout}`.trim().slice(0, 400)}): ${line}`,
+          )
+      }
+      const cmdLine = cmdLines[i]
+      if (cmdLine === undefined) {
+        failures.push(`${name} ${i + 1} has no cmd line`)
+        return
+      }
+      if (cmdLine === noForm) return
+      checked += 1
+      const result = runIn(`cmd`, `${prefix}${cmdLine}`)
+      if (!reproduces(result))
+        failures.push(`${name} ${i + 1} did not reproduce in cmd: ${cmdLine}`)
+    })
+  }
+  // Every failing unit prints its line: a random unit a Replay line, a fixed
+  // unit a Rerun line (review: a failure with no per-shell line fails here).
+  if (replayPs.length !== failingRandom.length)
+    failures.push(
+      `${failingRandom.length} random units failed, but ${replayPs.length} Replay lines printed`,
+    )
+  if (rerunPs.length !== failingFixed.length)
+    failures.push(
+      `${failingFixed.length} fixed units failed, but ${rerunPs.length} Rerun lines printed`,
+    )
+  // A Replay line's ORACLE_PROPERTY and ORACLE_UNIT must be exactly a failing
+  // unit's names: decoded, and equal (not contained).
+  const names = new Set(failingRandom.map((f) => `${f.property}\0${f.unit}`))
+  replayPs.forEach((line, i) => {
+    const property = decodePs(line, `ORACLE_PROPERTY`)
+    const unit = decodePs(line, `ORACLE_UNIT`)
+    if (!names.has(`${property}\0${unit}`))
+      failures.push(
+        `Replay ${i + 1} names ${JSON.stringify([property, unit])}, not a failing unit's names`,
+      )
+    const cmdLine = replayCmd[i]
+    if (cmdLine !== undefined && cmdLine !== noForm) {
+      const cmdProperty = decodeSet(cmdLine, `ORACLE_PROPERTY`)
+      const cmdUnit = decodeSet(cmdLine, `ORACLE_UNIT`)
+      if (cmdProperty !== property || cmdUnit !== unit)
         failures.push(
-          `${name} does not round-trip to the printed failure: ${JSON.stringify(value)}`,
+          `Replay ${i + 1}: cmd names ${JSON.stringify([cmdProperty, cmdUnit])}, PowerShell ${JSON.stringify([property, unit])}`,
         )
     }
-  }
-  check(`Replay`, replayPs, [`pwsh`, `powershell`], replayCmd, (line) => line)
-  check(`Rerun`, rerunPs, [`pwsh`, `powershell`], rerunCmd, (line) =>
-    asRerun(line),
-  )
-  if (replayPs.length + rerunPs.length === 0) {
+  })
+  if (replayPs.length + rerunPs.length === 0)
     fail(`the failure printed no PowerShell replay or rerun line`)
-  } else if (
-    replayPs.length !== replayCmd.length ||
-    rerunPs.length !== rerunCmd.length
-  ) {
-    fail(`PowerShell and cmd lines differ in number`)
-  } else if (failures.length > 0) {
-    fail(failures.join(`; `).slice(0, 1500))
-  } else {
-    console.log(
-      `${checked} printed commands reproduce the failure (PowerShell 7, Windows PowerShell 5.1, cmd)`,
-    )
+  else {
+    runEach(`Replay`, replayPs, replayCmd, ``)
+    runEach(`Rerun`, rerunPs, rerunCmd, `vitest run `)
+    if (failures.length > 0) fail(failures.join(`; `).slice(0, 1500))
+    else
+      console.log(
+        `${checked} printed commands reproduce the failure (PowerShell 7, Windows PowerShell 5.1, cmd)`,
+      )
   }
 } else if (command === `stop`) {
   // The stop is the CLI's test-only hook (ORACLE_GAPS_TEST_STOP): a file that
