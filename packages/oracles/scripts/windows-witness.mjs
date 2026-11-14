@@ -135,6 +135,47 @@ if (command === `done`) {
   const replayCmd = pairs.filter((pair) => pair.replay).map((pair) => pair.cmd)
   const rerunPs = pairs.filter((pair) => !pair.replay).map((pair) => pair.ps)
   const rerunCmd = pairs.filter((pair) => !pair.replay).map((pair) => pair.cmd)
+  // The failing units, as vitest prints them: `FAIL <file> > <property> > <unit>`.
+  const failing = new Map()
+  for (const text of lines) {
+    const match = text.match(
+      /FAIL\s+\S+ > (.*?) > ((?:random|fixed) seed: .*)$/,
+    )
+    if (match)
+      failing.set(`${match[1]}\0${match[2]}`, {
+        property: match[1],
+        unit: match[2],
+      })
+  }
+  // The PowerShell value of $env:NAME='...', decoded: a doubled quote (of any
+  // PowerShell single-quote character) is that character.
+  const decodePs = (line, name) => {
+    const head = `$env:${name}='`
+    const at = line.indexOf(head)
+    if (at < 0) return undefined
+    let value = ``
+    for (let i = at + head.length; i < line.length; i += 1) {
+      const c = line[i]
+      if (/['\u2018\u2019\u201A\u201B]/.test(c)) {
+        if (line[i + 1] === c) {
+          value += c
+          i += 1
+          continue
+        }
+        return value
+      }
+      value += c
+    }
+    return undefined
+  }
+  // The cmd value of set "NAME=value". A value with a double quote, `%`, or `!`
+  // has no cmd form, so its line says so and no set line is decoded.
+  const decodeSet = (line, name) => {
+    const match = line.match(new RegExp(`set "${name}=([^"]*)" &&`))
+    return match === null ? undefined : match[1]
+  }
+  // The line a cmd line prints when its words have no cmd form.
+  const noForm = `use the PowerShell line for this name`
   // The package's own binaries are on the PATH, so `vitest` runs as the line says.
   const env = {
     ...process.env,
