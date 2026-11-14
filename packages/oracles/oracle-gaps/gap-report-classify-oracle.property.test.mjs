@@ -623,7 +623,10 @@ const HOSTILE = [
   `back\\ `,
 ]
 const hostileOf = (t, ti) => {
-  const pick = (t.ms + ti) % 4 === 0 ? (t.ms + ti) % HOSTILE.length : -1
+  // A constructed test is plainTest, with ms 0: its names keep the reach of
+  // each constructed history, so only a generated test (ms >= 1) takes one.
+  const pick =
+    t.ms >= 1 && (t.ms + ti) % 4 === 0 ? (t.ms + ti) % HOSTILE.length : -1
   return pick < 0 ? `` : HOSTILE[pick]
 }
 // A test's names, as the runner reports them: its suites' names, then its
