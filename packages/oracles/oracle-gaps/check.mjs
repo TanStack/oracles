@@ -1439,8 +1439,17 @@ export default async (env) => {
         if (owned.has(file)) continue
         perFile.set(file, [...(perFile.get(file) ?? []), node.id])
       }
+      // The one measured allowance: a source file's plain node and its ?raw node (the oracle reads source text
+      // with ?raw). One pair per file, not per batch (shard 1 on 270e6f4: the same pair in every batch line).
       for (const [file, ids] of perFile)
-        if (ids.length > 1)
+        if (
+          ids.length > 1 &&
+          !(
+            ids.length === 2 &&
+            ids.includes(file) &&
+            ids.includes(`${file}?raw`)
+          )
+        )
           dup.push(
             `${environment.name ?? `env`} ${file} ${ids.sort().join(` | `)}`,
           )
