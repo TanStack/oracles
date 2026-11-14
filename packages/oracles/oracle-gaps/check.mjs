@@ -1461,7 +1461,7 @@ export default async (env) => {
           environment.moduleGraph.fileToModulesMap.get(copy)?.size ?? 0
     appendFileSync(
       file,
-      `${JSON.stringify(cut ? { run: hookRun, before, cut: true } : { run: hookRun, before, after: retentionTotals(context), copyNodes, nonCopyDup: nonCopyDuplicates(context, owned) })}\n`,
+      `${JSON.stringify(cut ? { run: hookRun, batch: evidenceOf.batches, before, cut: true } : { run: hookRun, batch: evidenceOf.batches, before, after: retentionTotals(context), copyNodes, nonCopyDup: nonCopyDuplicates(context, owned) })}\n`,
     )
   }
 
