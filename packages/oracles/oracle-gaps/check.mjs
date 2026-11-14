@@ -1429,7 +1429,7 @@ export default async (env) => {
   // Files, without their query, with more than one node in an environment's graph, outside the copies:
   // a non-copy file is cached once, so each count must be 0 (the law's bound on originals).
   function nonCopyDuplicates(context, owned) {
-    let dup = 0
+    const dup = []
     for (const environment of Object.values(
       context.getRootProject().vite?.environments ?? {},
     )) {
@@ -1437,9 +1437,13 @@ export default async (env) => {
       for (const node of environment.moduleGraph.idToModuleMap.values()) {
         const file = node.id.split(`?`)[0]
         if (owned.has(file)) continue
-        perFile.set(file, (perFile.get(file) ?? 0) + 1)
+        perFile.set(file, [...(perFile.get(file) ?? []), node.id])
       }
-      for (const n of perFile.values()) if (n > 1) dup += 1
+      for (const [file, ids] of perFile)
+        if (ids.length > 1)
+          dup.push(
+            `${environment.name ?? `env`} ${file} ${ids.sort().join(` | `)}`,
+          )
     }
     return dup
   }
@@ -1461,7 +1465,7 @@ export default async (env) => {
           environment.moduleGraph.fileToModulesMap.get(copy)?.size ?? 0
     appendFileSync(
       file,
-      `${JSON.stringify(cut ? { run: hookRun, batch: evidenceOf.batches, before, cut: true } : { run: hookRun, batch: evidenceOf.batches, before, after: retentionTotals(context), copyNodes, nonCopyDup: nonCopyDuplicates(context, owned) })}\n`,
+      `${JSON.stringify(cut ? { run: hookRun, batch: evidenceOf.batches, before, cut: true } : { run: hookRun, batch: evidenceOf.batches, before, after: retentionTotals(context), copyNodes, nonCopyDup: nonCopyDuplicates(context, owned).length, nonCopyIds: nonCopyDuplicates(context, owned) })}\n`,
     )
   }
 
