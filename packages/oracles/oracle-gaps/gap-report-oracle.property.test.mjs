@@ -720,7 +720,12 @@ function runCli(dir, files, how = {}) {
     .split(`\n`)
     .find((line) => line.startsWith(`  replay: `))
     ?.slice(`  replay: `.length)
-  return { ...run, strayWrites: strays(dir, before), replay, retention }
+  return {
+    ...run,
+    strayWrites: strays(dir, before, relative(dir, out)),
+    replay,
+    retention,
+  }
 }
 
 /**
@@ -730,16 +735,13 @@ function runCli(dir, files, how = {}) {
  * directory, `.oracle-gaps-<pid>/` (its capture setup and Vitest configs,
  * which resolve the package's modules from there), is its own too.
  */
-const strays = (dir, before, running = false) =>
+const strays = (dir, before, own, running = false) =>
   filesUnder(dir).filter(
     (file) =>
       !before.has(file) &&
       !(running && /^\.oracle-gaps-\d+\//.test(file)) &&
-      !OWN_WRITES.some(
-        (home) => file === home || file.startsWith(`${home}/`),
-      ) &&
-      // The numbered output directories a run's CLI calls get (runCli): one per call.
-      !OWN_NUMBERED.test(file),
+      // The one path a run may write under: the --out the driver gave it (cliArgs names it).
+      !(file === own || file.startsWith(`${own}/`)),
   )
 
 /**
@@ -837,7 +839,12 @@ async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
       : warm
         ? existsSync(join(pids, `warming`)) && !exited
         : readdirSync(pids).length >= 2
-  const strayWhileRunning = strays(dir, before, true)
+  const strayWhileRunning = strays(
+    dir,
+    before,
+    relative(dir, join(dir, `out-stop`)),
+    true,
+  )
   if (!abort) child.kill(signal)
   const ended = await Promise.race([exit, sleep(30_000).then(() => false)])
   await sleep(1000)
@@ -892,7 +899,7 @@ async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
       /^\.oracle-gaps-\d+$/.test(name),
     ),
     // What else it left in the package.
-    left: strays(dir, before).filter(
+    left: strays(dir, before, relative(dir, join(dir, `out-stop`))).filter(
       (file) => !/^\.oracle-gaps-\d+\//.test(file),
     ),
   }
@@ -951,8 +958,6 @@ function filesUnder(root, within = ``) {
 // (maintainer decision, 2026-11-11: the gap check's working files stay out
 // of the repository), so a package, and a workspace dependency in it, keeps
 // nothing of a run.
-const OWN_WRITES = [`out`, `out-daemon`, `out-stop`, `out-only`]
-const OWN_NUMBERED = /^out(-daemon|-stop|-only)?-\d+(\/|$)/
 
 /** Runs the CLI several times at once on one state of the fixture. */
 async function runClisAtOnce(dir, files, hows) {
