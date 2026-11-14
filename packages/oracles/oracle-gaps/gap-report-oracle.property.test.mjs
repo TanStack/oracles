@@ -2246,7 +2246,10 @@ function check(plan, observations, expected) {
   if (unlogged_ > 0)
     return violation(
       `retention`,
-      `${unlogged_} run(s) wrote a retention line count different from their batches`,
+      `${unlogged_} run(s) wrote a retention line count different from their batches (${observations
+        .filter((o) => o.checkpoint.startsWith(`retentionLines`) && o.value > 0)
+        .map((o) => o.checkpoint)
+        .join(`, `)})`,
       `bounded retention`,
       { actual: unlogged_, expected: 0 },
     )
