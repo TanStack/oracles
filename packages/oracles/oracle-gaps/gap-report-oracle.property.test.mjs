@@ -483,7 +483,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, relative, resolve } from 'node:path'
+import { delimiter, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import fc from 'fast-check'
 import { socketOf, stateDirOf } from './daemon.mjs'
@@ -663,10 +663,13 @@ function runCli(dir, files, how = {}) {
     child.stdout,
   )
   // The command the baseline printed to replay a failing owner (law 3).
+  // On win32 the CLI prints the PowerShell line (its POSIX form is not printed).
+  const label =
+    process.platform === `win32` ? `  replay (PowerShell): ` : `  replay: `
   const replay = `${child.stderr ?? ``}`
     .split(`\n`)
-    .find((line) => line.startsWith(`  replay: `))
-    ?.slice(`  replay: `.length)
+    .find((line) => line.startsWith(label))
+    ?.slice(label.length)
   return { ...run, strayWrites: strays(dir, before), replay }
 }
 
@@ -852,10 +855,22 @@ function replayed(dir, command) {
   const scratch = mkdtempSync(join(realpathSync(tmpdir()), `gap-replay-`))
   try {
     const report = join(scratch, `report.json`)
-    spawnSync(
-      `sh`,
-      [`-c`, `${command} --reporter=json --outputFile='${report}'`],
-      {
+    const full = `${command} --reporter=json --outputFile='${report}'`
+    // On win32 the line runs in PowerShell, as a user's typed line does: on stdin.
+    if (process.platform === `win32`)
+      spawnSync(`pwsh`, [`-NoProfile`, `-Command`, `-`], {
+        cwd: dir,
+        encoding: `utf8`,
+        input: full,
+        env: {
+          ...process.env,
+          PATH: [join(here, `../node_modules/.bin`), process.env.PATH].join(
+            delimiter,
+          ),
+        },
+      })
+    else
+      spawnSync(`sh`, [`-c`, full], {
         cwd: dir,
         encoding: `utf8`,
         timeout: 120_000,
@@ -863,8 +878,7 @@ function replayed(dir, command) {
           ...cleanEnv(),
           PATH: `${join(here, `..`, `node_modules`, `.bin`)}:${process.env.PATH}`,
         },
-      },
-    )
+      })
     if (!existsSync(report)) return []
     return JSON.parse(readFileSync(report, `utf8`))
       .testResults.flatMap((file) => file.assertionResults)
