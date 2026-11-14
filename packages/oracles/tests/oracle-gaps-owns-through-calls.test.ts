@@ -18,7 +18,10 @@ import { analyze } from '../oracle-gaps/analysis.mjs'
 // generate a history where the owning entry is in another file.
 describe(`gap report ownership through the call trees`, () => {
   test(`a selected source owned only through another file's call tree is not refused`, () => {
-    const pkg = realpathSync(mkdtempSync(join(tmpdir(), `owns-through-calls-`)))
+    // The native real path, as the CLI takes it: JavaScript's keeps an 8.3 name.
+    const pkg = realpathSync.native(
+      mkdtempSync(join(tmpdir(), `owns-through-calls-`)),
+    )
     mkdirSync(join(pkg, `src`))
     mkdirSync(join(pkg, `tests`))
     writeFileSync(

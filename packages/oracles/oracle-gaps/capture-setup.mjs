@@ -26,7 +26,7 @@
 import { createHash } from 'node:crypto'
 import fs, { appendFileSync, readFileSync } from 'node:fs'
 import { createRequire, syncBuiltinESMExports } from 'node:module'
-import { dirname, join, resolve as resolvePath } from 'node:path'
+import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeEach, chai, expect, inject, vi } from 'vitest'
 
@@ -251,7 +251,17 @@ const state = unit ? { ...run, ...unit } : run
 globalThis.__oracleGapsReads = new Map()
 if (!globalThis.__oracleGapsReading) {
   globalThis.__oracleGapsReading = true
-  const root = `${process.cwd()}/`
+  // A read's key follows the gap CLI's path rule (paths.mjs, which this
+  // copied file cannot import): forward slashes and a capital drive letter
+  // on win32, the path as it is on POSIX, where `\` is a name's character.
+  // The file system gets the native path.
+  const keyOf = (path) =>
+    process.platform === `win32`
+      ? path
+          .replaceAll(`\\`, `/`)
+          .replace(/^[a-z]:/, (drive) => drive.toUpperCase())
+      : path
+  const root = `${keyOf(process.cwd()).replace(/\/+$/, ``)}/`
   const { readFileSync: readNow, statSync: statNow } = fs
   const hashNow = (path) => {
     try {
@@ -271,14 +281,16 @@ if (!globalThis.__oracleGapsReading) {
     } catch {
       return
     }
+    if (path === undefined) return
+    const key = keyOf(path)
     const reads = globalThis.__oracleGapsReads
     if (
-      path?.startsWith(root) &&
-      !path.includes(`/node_modules/`) &&
-      !path.includes(`/.oracle-gaps`) &&
-      !reads.has(path)
+      key.startsWith(root) &&
+      !key.includes(`/node_modules/`) &&
+      !key.includes(`/.oracle-gaps`) &&
+      !reads.has(key)
     )
-      reads.set(path, hashNow(path))
+      reads.set(key, hashNow(path))
   }
   // A wrapper keeps the function's own properties (its name and length,
   // which code that dispatches on arity reads), so a test that passes alone
@@ -844,8 +856,11 @@ globalThis.__oracleWorkBound = (ratio) => {
 // budget), Node's, or this file's does not, while a user's read through a
 // spy (tinyspy's frame first) still does.
 let clocked = false
-const machinery =
-  /[\\/]node_modules[\\/](?:vitest|@vitest|fast-check|@fast-check|tinypool|tinyspy|chai|@tanstack[\\/]oracles)[\\/]|[\\/]packages[\\/]oracles[\\/]src[\\/]/
+// A backslash separates only on win32 (on POSIX it is a name's character).
+const SEP = process.platform === `win32` ? `[\\\\/]` : `/`
+const machinery = new RegExp(
+  `${SEP}node_modules${SEP}(?:vitest|@vitest|fast-check|@fast-check|tinypool|tinyspy|chai|@tanstack${SEP}oracles)${SEP}|${SEP}packages${SEP}oracles${SEP}src${SEP}`,
+)
 function fromTest() {
   const limit = Error.stackTraceLimit
   Error.stackTraceLimit = 50
@@ -1084,7 +1099,7 @@ afterAll(() => {
   const loaded = [...(evaluated?.idToModuleMap ?? [])]
     .filter(([, node]) => node.evaluated)
     .map(([id]) => id.split(`?`)[0])
-    .filter((path) => path.startsWith(`/`))
+    .filter((path) => isAbsolute(path))
   // The hash of each file the copy read, from its first read, under its own
   // key (`fs:<path>`): a test's read of a file is another input than the
   // module that its context serves from that file, which can differ from
