@@ -47,7 +47,8 @@ function shippedFiles(dir) {
   const packed = spawnSync(
     `npm`,
     [`pack`, `--dry-run`, `--json`, `--ignore-scripts`],
-    { cwd: dir, encoding: `utf8` },
+    // On Windows npm is an npm.cmd shim, which only a shell runs.
+    { cwd: dir, encoding: `utf8`, shell: process.platform === `win32` },
   )
   return JSON.parse(packed.stdout)[0].files.map((file) => file.path)
 }
@@ -86,7 +87,8 @@ function strays(dir, file, text) {
     .filter((cited) => {
       const ships = [dirname(file), `.`].some((base) =>
         [cited, cited.replace(/\.js$/, `.ts`)].some((name) =>
-          shipped.includes(join(base, name)),
+          // npm names a shipped file with forward slashes, on every platform.
+          shipped.includes(join(base, name).replaceAll(`\\`, `/`)),
         ),
       )
       const names =
@@ -101,7 +103,8 @@ function strays(dir, file, text) {
     .map((match) => match[1])
     .filter((name) => repoOnlyNames.has(name))
   return [...paths, ...names].map(
-    (cited) => `${relative(repo, join(dir, file))}: ${cited}`,
+    (cited) =>
+      `${relative(repo, join(dir, file)).replaceAll(`\\`, `/`)}: ${cited}`,
   )
 }
 

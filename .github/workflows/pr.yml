@@ -99,7 +99,7 @@ jobs:
       # and the classify, probe-form, and mutant-validity oracles in a third.
       - run: |
           if [ "$SHARD" = 3 ]; then
-            exec pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-classify gap-report-probe-form gap-report-mutant-validity
+            exec pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-classify gap-report-probe-form gap-report-mutant-validity gap-report-path-spelling
           fi
           pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-static -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-static "$SHARD")"
         working-directory: packages/oracles
@@ -168,6 +168,11 @@ jobs:
       - test-oracle-gaps-fast
       - test-oracle-gaps-end-to-end
       - test-vitest-5
+      # The blocking Windows jobs (the non-blocking static and e2e jobs are not
+      # a dependency until they are green).
+      - windows-unit
+      - windows-gap-classify
+      - windows-gap-cli
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -196,3 +201,293 @@ jobs:
         with:
           advanced-security: false
           annotations: true
+  # Windows is a required part of CI: the framework, the eslint plugin, and
+  # the gap CLI run on windows-latest, split the way the Linux jobs split
+  # them. Each job stays under 10 minutes; each has a timeout backstop.
+  windows-unit:
+    name: Windows unit suites
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Tools
+        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
+      - run: pnpm --filter @tanstack/oracles run build
+      - run: pnpm --filter @tanstack/oracles run test
+      # Runs even when the framework tests fail, so each suite reports.
+      - if: always()
+        run: pnpm --filter @tanstack/eslint-plugin-oracles run test
+  windows-gap-oracles:
+    name: Windows gap report static oracle (${{ matrix.shard }}/6)
+    runs-on: windows-latest
+    # Not blocking yet: these suites fail on Windows, tracked by class in
+    # https://github.com/TanStack/oracles/issues/72. Remove this line when they
+    # are green.
+    continue-on-error: true
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Tools
+        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
+      - run: pnpm --filter @tanstack/oracles run build
+      # The same partition of the static oracle that Linux runs, by pattern.
+      - name: Gap report static oracle
+        shell: bash
+        working-directory: packages/oracles
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-static -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-static-windows "$SHARD")"
+  windows-gap-classify:
+    name: Windows gap report classify, probe-form, and mutant-validity oracles
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Tools
+        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
+      - run: pnpm --filter @tanstack/oracles run build
+      - name: Gap report oracles
+        working-directory: packages/oracles
+        run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-classify gap-report-probe-form gap-report-mutant-validity gap-report-path-spelling
+  windows-gap-end-to-end:
+    name: Windows gap report end-to-end oracle (fixed seed, ${{ matrix.shard }}/6)
+    runs-on: windows-latest
+    # Not blocking yet: these suites fail on Windows, tracked by class in
+    # https://github.com/TanStack/oracles/issues/72. Remove this line when they
+    # are green.
+    continue-on-error: true
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Tools
+        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
+      - run: pnpm --filter @tanstack/oracles run build
+      - name: Gap report end-to-end oracle
+        shell: bash
+        working-directory: packages/oracles
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-fixed-seed-windows "$SHARD")"
+  windows-gap-cli:
+    name: Windows gap CLI on a fixture
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Tools
+        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
+      - run: pnpm --filter @tanstack/oracles run build
+      - name: Write gap CLI fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="$GITHUB_WORKSPACE/.ci-fixture"
+          mkdir -p "$dir/src" "$dir/tests"
+          cat > "$dir/package.json" <<'EOT'
+          {"name": "ci-fixture", "private": true, "type": "module"}
+          EOT
+          cat > "$dir/src/clamp.ts" <<'EOT'
+          export function clamp(x: number): number {
+            return x < 0 ? 0 : x > 10 ? 10 : x
+          }
+          EOT
+          cat > "$dir/tests/clamp.property.test.ts" <<'EOT'
+          import fc from 'fast-check'
+          import { differs, oracleProperty, pass } from '../../packages/oracles/dist/esm/index.js'
+          import { clamp } from '../src/clamp'
+
+          oracleProperty({
+            owns: ['src/clamp.ts#clamp'],
+            id: `fixture.clamp`,
+            law: {
+              statement: `clamp returns its argument within 0 and 10.`,
+              authority: `the CI fixture for the Windows gap-CLI run`,
+              limits: `integers from -20 to 20`,
+            },
+            histories: {
+              arbitrary: fc.integer({ min: -20, max: 20 }),
+              runs: 50,
+              fixedSeeds: [1],
+              states: [],
+              measured: [],
+            },
+            timeout: 5_000,
+            model: (x: number) => (x < 0 ? 0 : x > 10 ? 10 : x),
+            driver: (x: number, observe: (checkpoint: string, value: unknown) => void) => {
+              observe(`result`, clamp(x))
+            },
+            check: (_x: number, trace: ReadonlyArray<{ checkpoint: string; value: unknown }>, expected: number) => {
+              const seen = trace.find(({ checkpoint }) => checkpoint === `result`)?.value
+              return differs(`result`, `clamp`, seen, expected) ?? pass
+            },
+          })
+          EOT
+          cat > "$dir/vitest.config.mjs" <<'EOT'
+          export default {
+            test: { include: ['tests/**/*.test.ts'], environment: 'node', coverage: { enabled: false } },
+          }
+          EOT
+      # A failing property for the replay witness: every history fails, so a
+      # random unit prints its replay lines. Written in bash, as the fixture is.
+      - name: Write replay fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="$GITHUB_WORKSPACE/.ci-replay"
+          mkdir -p "$dir/tests"
+          cat > "$dir/tests/fail.property.test.ts" <<'EOT'
+          import fc from 'fast-check'
+          import { differs, oracleProperty, pass } from '../../packages/oracles/dist/esm/index.js'
+
+          oracleProperty({
+            id: `fixture ’ & | < > ( ) ^ replay`,
+            law: {
+              statement: `a fixture that always fails, so its replay lines are printed.`,
+              authority: `the CI witness for the per-shell replay lines`,
+              limits: `integers from -20 to 20`,
+            },
+            histories: {
+              arbitrary: fc.integer({ min: -20, max: 20 }),
+              runs: 20,
+              fixedSeeds: [1],
+              states: [],
+              measured: [],
+            },
+            timeout: 5_000,
+            model: (x: number) => x,
+            driver: (x: number, observe: (checkpoint: string, value: unknown) => void) => {
+              observe(`result`, x + 1)
+            },
+            check: (_x: number, trace: ReadonlyArray<{ checkpoint: string; value: unknown }>, expected: number) =>
+              differs(`result`, `plus one`, trace.find(({ checkpoint }) => checkpoint === `result`)?.value, expected) ?? pass,
+          })
+          EOT
+          cat > "$dir/tests/hostile.property.test.ts" <<'EOT'
+          import fc from 'fast-check'
+          import { differs, oracleProperty, pass } from '../../packages/oracles/dist/esm/index.js'
+
+          oracleProperty({
+            id: `fixture Q"1 replay`,
+            law: {
+              statement: `a fixture that always fails, so its replay lines are printed.`,
+              authority: `the CI witness for the per-shell replay lines`,
+              limits: `integers from -20 to 20`,
+            },
+            histories: {
+              arbitrary: fc.integer({ min: -20, max: 20 }),
+              runs: 20,
+              fixedSeeds: [1],
+              states: [],
+              measured: [],
+            },
+            timeout: 5_000,
+            model: (x: number) => x,
+            driver: (x: number, observe: (checkpoint: string, value: unknown) => void) => {
+              observe(`result`, x + 1)
+            },
+            check: (_x: number, trace: ReadonlyArray<{ checkpoint: string; value: unknown }>, expected: number) =>
+              differs(`result`, `plus one`, trace.find(({ checkpoint }) => checkpoint === `result`)?.value, expected) ?? pass,
+          })
+          EOT
+          cat > "$dir/tests/percent.property.test.ts" <<'EOT'
+          import fc from 'fast-check'
+          import { differs, oracleProperty, pass } from '../../packages/oracles/dist/esm/index.js'
+
+          oracleProperty({
+            id: `fixture 100% done!`,
+            law: {
+              statement: `a fixture that always fails, so its replay lines are printed.`,
+              authority: `the CI witness for the per-shell replay lines`,
+              limits: `integers from -20 to 20`,
+            },
+            histories: {
+              arbitrary: fc.integer({ min: -20, max: 20 }),
+              runs: 20,
+              fixedSeeds: [1],
+              states: [],
+              measured: [],
+            },
+            timeout: 5_000,
+            model: (x: number) => x,
+            driver: (x: number, observe: (checkpoint: string, value: unknown) => void) => {
+              observe(`result`, x + 1)
+            },
+            check: (_x: number, trace: ReadonlyArray<{ checkpoint: string; value: unknown }>, expected: number) =>
+              differs(`result`, `plus one`, trace.find(({ checkpoint }) => checkpoint === `result`)?.value, expected) ?? pass,
+          })
+          EOT
+          printf '%s\n' "export default { test: { include: ['tests/**/*.test.ts'], environment: 'node', coverage: { enabled: false } } }" > "$dir/vitest.config.mjs"
+      # The user-facing path: PowerShell, the default shell, as a user runs it.
+      # Each run's stdout and stderr are kept apart, and the done line is
+      # checked on both streams against the exit code (P10).
+      - name: Gap CLI on the fixture
+        run: |
+          node packages/oracles/oracle-gaps/index.mjs --package .ci-fixture --source src/clamp.ts --config vitest.config.mjs > cli-out.txt 2> cli-err.txt
+          $code = $LASTEXITCODE
+          node packages/oracles/scripts/windows-witness.mjs done cli-out.txt cli-err.txt $code
+          if ($LASTEXITCODE -ne 0) { throw "the done line failed" }
+      - name: Gap CLI on the fixture, discovered config
+        run: |
+          node packages/oracles/oracle-gaps/index.mjs --package .ci-fixture --source src/clamp.ts > cli-out2.txt 2> cli-err2.txt
+          $code = $LASTEXITCODE
+          node packages/oracles/scripts/windows-witness.mjs done cli-out2.txt cli-err2.txt $code
+          if ($LASTEXITCODE -ne 0) { throw "the done line failed" }
+      # The daemon path: start it, check through it, then stop it.
+      - name: Gap CLI through the daemon
+        run: |
+          node packages/oracles/oracle-gaps/index.mjs --package .ci-fixture --source src/clamp.ts --config vitest.config.mjs --daemon > cli-out3.txt 2> cli-err3.txt
+          $code = $LASTEXITCODE
+          node packages/oracles/scripts/windows-witness.mjs done cli-out3.txt cli-err3.txt $code
+          if ($LASTEXITCODE -ne 0) { throw "the done line failed" }
+      - name: Stop the gap CLI daemon
+        if: always()
+        run: node packages/oracles/oracle-gaps/index.mjs --stop-daemon --package .ci-fixture
+      # A package with no package.json is refused, with exit 2 and a done line
+      # that says so.
+      - name: Gap CLI refuses a package with no package.json
+        run: |
+          New-Item -ItemType Directory -Force .ci-no-manifest | Out-Null
+          node packages/oracles/oracle-gaps/index.mjs --package .ci-no-manifest --source src/x.ts > nm-out.txt 2> nm-err.txt
+          $code = $LASTEXITCODE
+          if ($code -ne 2) { throw "want a refusal with exit 2, got $code" }
+          if (-not (Select-String -Path nm-out.txt, nm-err.txt -Pattern 'has no package.json' -Quiet)) { throw "the refusal does not name package.json" }
+          node packages/oracles/scripts/windows-witness.mjs done nm-out.txt nm-err.txt $code
+          if ($LASTEXITCODE -ne 0) { throw "the done line failed" }
+      # One early stop: SIGINT once the CLI has printed its first line. The
+      # run must end with the stop's done line on both streams, or with no
+      # output at all (the all-or-nothing law, #57).
+      - name: Early stop of the gap CLI
+        run: node packages/oracles/scripts/windows-witness.mjs stop .ci-fixture --package . --source src/clamp.ts --config vitest.config.mjs
+      # The per-shell replay lines: a failing property's PowerShell and cmd
+      # lines each reproduce its failure in their own shell (RED: the POSIX
+      # line does not, in PowerShell).
+      - name: Replay lines reproduce the failure in PowerShell and cmd
+        if: always()
+        run: |
+          node "$env:GITHUB_WORKSPACE\packages\oracles\node_modules\vitest\vitest.mjs" run --root .ci-replay > replay-out.txt 2>&1
+          Get-Content replay-out.txt
+          node packages/oracles/scripts/windows-witness.mjs replay replay-out.txt "$env:GITHUB_WORKSPACE\.ci-replay"
+          if ($LASTEXITCODE -ne 0) { throw "the replay witness failed" }

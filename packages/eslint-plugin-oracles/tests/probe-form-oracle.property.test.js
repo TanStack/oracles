@@ -107,7 +107,10 @@ const TEST_FILE = join(
 // test file has it off. Production source is `src` under a package or at the
 // root, as the production config's globs say.
 function predictSeverity(filePath) {
-  return filePath.includes(`/src/`) ? `error` : `off`
+  // A file is production when one of its directories is `src`. The path's
+  // separators are either kind on Windows, so the directories are split on both.
+  const directories = filePath.split(/[\\/]+/).slice(0, -1)
+  return directories.includes(`src`) ? `error` : `off`
 }
 
 // The rule's behavior is linted through the plugin's production config alone:

@@ -43,7 +43,8 @@ import { connect, createServer } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Refusal } from './ending.mjs'
-import { socketOf, stateDirOf } from './evidence.mjs'
+import { removeSocket, socketOf, stateDirOf } from './evidence.mjs'
+import { realPathOf } from './paths.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const idleMs = 30 * 60_000
@@ -108,6 +109,19 @@ const errorSince = (pkg, since) => {
     // No daemon failed, or the file was removed meanwhile.
   }
   return undefined
+}
+
+/** The end of the package's daemon log, for a failure that names none. */
+function daemonLogTail(pkg) {
+  try {
+    const lines = readFileSync(
+      join(stateDirOf(pkg), `daemon.log`),
+      `utf8`,
+    ).split(`\n`)
+    return `; its log ends:\n${lines.slice(-30).join(`\n`)}`
+  } catch {
+    return `; it wrote no log`
+  }
 }
 
 /** Starts a daemon for the package, detached from this process. */
@@ -180,7 +194,7 @@ export async function requestDaemon(pkg, argv, code) {
     if (reply) mayStart = true
     if (Date.now() - began - held > WAIT_MS)
       throw new Error(
-        `the package's daemon did not answer within ${WAIT_MS / 1000} s`,
+        `the package's daemon did not answer within ${WAIT_MS / 1000} s${daemonLogTail(pkg)}`,
       )
     await sleep(100)
   }
@@ -277,7 +291,7 @@ async function serve(pkg) {
   const socket = socketOf(pkg)
   if (!(await takeLock(lock, socket))) process.exit(0)
   // A dead daemon's socket; this daemon holds the lock.
-  rmSync(socket, { force: true })
+  removeSocket(socket)
   let closing = false
   // Why the daemon could not load or open its session.
   let failure
@@ -377,7 +391,7 @@ async function serve(pkg) {
     await session?.close()
     await store?.close()
     if (readText(lock) === token) {
-      rmSync(socket, { force: true })
+      removeSocket(socket)
       rmSync(lock, { force: true })
     }
     server.close()
@@ -419,5 +433,7 @@ async function serve(pkg) {
 
 if (import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   const at = process.argv.indexOf(`--package`)
-  await serve(realpathSync.native(resolve(process.argv[at + 1])))
+  // The CLI keys the daemon by the same real path (paths.mjs), so the two
+  // compute one socket and one state directory.
+  await serve(realPathOf(resolve(process.argv[at + 1])))
 }

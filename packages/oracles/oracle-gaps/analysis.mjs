@@ -7,6 +7,7 @@
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { packagePath } from './args.mjs'
+import { posix, relativeWithin } from './paths.mjs'
 import { Refusal } from './ending.mjs'
 import { ownership, readOwns, splitEntry } from './owners.mjs'
 import { instrument } from './schemata.mjs'
@@ -59,7 +60,7 @@ function hostFor(ts) {
  * has an owner through the call trees, throws too.
  */
 export function analyze(ts, pkg, sources, testFiles) {
-  const relative = (file) => file.slice(pkg.length + 1)
+  const relative = (file) => relativeWithin(pkg, file) ?? posix(file)
   // An oracle file is a test file that calls `oracleProperty`, or passes a
   // literal `owns` list to any call, such as a wrapper's (owners.mjs).
   const declarations = new Map()
@@ -124,7 +125,7 @@ export function analyze(ts, pkg, sources, testFiles) {
           .flat()
           .map((entry) => splitEntry(entry)[0]),
       ]),
-    ].map((source) => join(pkg, source)),
+    ].map((source) => posix(join(pkg, source))),
     compilerOptions(ts),
     hostFor(ts),
   )

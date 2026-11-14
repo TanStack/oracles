@@ -66,6 +66,7 @@
 // reported as `unowned`, a warning rather than a gap.
 import { relative, resolve } from 'node:path'
 import { isOutside } from './args.mjs'
+import { posix } from './paths.mjs'
 
 /**
  * An owns entry's file and function. The file ends at the first `#`, so a
@@ -148,7 +149,12 @@ function isAssertion(ts, call, names) {
  * CLI cannot read would hide gaps.
  */
 export function readOwns(ts, path, text) {
-  const file = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true)
+  const file = ts.createSourceFile(
+    posix(path),
+    text,
+    ts.ScriptTarget.Latest,
+    true,
+  )
   const result = { declares: false, entries: [], problem: undefined }
   const assertions = assertionBindings(ts, file)
   // `compared` is true inside an assertion's arguments.
@@ -295,12 +301,17 @@ export function ownership(ts, program, pkg, oracles) {
   const checker = program.getTypeChecker()
   const inPackage = (fileName) => {
     const path = relative(pkg, fileName)
-    return !isOutside(path) && !path.split(/[\\/]/).includes(`node_modules`)
+    return (
+      !isOutside(path) &&
+      !path
+        .split(process.platform === `win32` ? /[\\\\/]/ : `/`)
+        .includes(`node_modules`)
+    )
   }
   const indexed = new Map()
   const functionsOf = (source) => {
     if (!indexed.has(source)) {
-      const file = program.getSourceFile(resolve(pkg, source))
+      const file = program.getSourceFile(posix(resolve(pkg, source)))
       indexed.set(source, file ? functionsIn(ts, file) : [])
     }
     return indexed.get(source)
@@ -311,7 +322,7 @@ export function ownership(ts, program, pkg, oracles) {
   const targetsOf = (declaration, constructed) => {
     const file = declaration.getSourceFile()
     if (!inPackage(file.fileName)) return []
-    const functions = functionsOf(relative(pkg, file.fileName))
+    const functions = functionsOf(posix(relative(pkg, file.fileName)))
     if (ts.isClassDeclaration(declaration) && declaration.name)
       return functions.filter(
         (fn) =>
@@ -380,7 +391,7 @@ export function ownership(ts, program, pkg, oracles) {
         // Module data owns only its own sites, not the functions it holds.
         const functions = ts.isVariableDeclaration(fn.node)
           ? []
-          : functionsOf(relative(pkg, fn.node.getSourceFile().fileName))
+          : functionsOf(posix(relative(pkg, fn.node.getSourceFile().fileName)))
         for (
           let at = functions.indexOf(fn) + 1;
           at < functions.length && functions[at].start < fn.end;
