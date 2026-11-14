@@ -833,6 +833,9 @@ const drawn = fc.record({
   // spawns (the spawn-delay law, review of #57).
   spawnSignal: fc.constantFrom(`SIGINT`, `SIGINT`, `SIGTERM`),
   spawnDelay: fc.integer({ min: 0, max: 150 }),
+  // The spawn stop waits for the CLI's started marker, then signals at once (the
+  // deterministic witness, event-driven rather than timed).
+  spawnOnStart: fc.constantFrom(false, false, false, true),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -2925,6 +2928,7 @@ function resolveHistory(history) {
     spawnStop: history.spawnStop === true,
     spawnSignal: history.spawnSignal ?? `SIGINT`,
     spawnDelay: history.spawnDelay ?? 0,
+    spawnOnStart: history.spawnOnStart === true,
     onlyRun: history.onlyRun === true,
     pragma: history.pragma === true,
     cliPath: history.cliPath ?? `plain`,

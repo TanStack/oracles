@@ -723,7 +723,7 @@ async function stoppedRun(
   files,
   how,
   ids,
-  { signal, pool, when, delay = 0 },
+  { signal, pool, when, delay = 0, onStart = false },
 ) {
   // `spawn`: the signal comes as the CLI starts, once its own code runs (a
   // signal during Node's own start has no handler yet; Limits of #57).
@@ -812,7 +812,16 @@ async function stoppedRun(
           ? existsSync(join(pids, `warming`)) && !exited
           : readdirSync(pids).length >= 2
   const strayWhileRunning = strays(dir, before, true)
-  if (atSpawn) await sleep(delay)
+  // A spawn stop signals after its drawn delay, or, when it waits for the
+  // started marker, at once once the marker exists (event-driven, 30 s cap).
+  if (atSpawn && onStart)
+    for (
+      let waited = 0;
+      !existsSync(startedPath) && waited < 30_000;
+      waited += 1
+    )
+      await sleep(1)
+  else if (atSpawn) await sleep(delay)
   if (!abort) child.kill(signal)
   const ended = await Promise.race([exit, sleep(30_000).then(() => false)])
   await sleep(1000)
@@ -1885,6 +1894,7 @@ async function driver(plan, observe) {
                 pool: `threads`,
                 when: `spawn`,
                 delay: plan.spawnDelay,
+                onStart: plan.spawnOnStart,
               },
             ]
           : []),
@@ -3848,9 +3858,9 @@ oracleProperty({
           logBlocked: false,
           overlap: false,
           spawnStop: true,
-          // Pinned inside the CLI's module-load window (about 20–50 ms after
-          // spawn, measured): the handlers must already be installed there.
-          spawnDelay: 30,
+          // The signal waits for the CLI's started marker, so it lands during
+          // the loads of a CLI that loads before it installs its handlers.
+          spawnOnStart: true,
           budget: `two`,
         }),
       },
