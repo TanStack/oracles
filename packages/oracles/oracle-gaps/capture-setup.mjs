@@ -953,6 +953,8 @@ if (state.capture || idleProfile) {
   let since
   let last
   let longest = 0
+  // Profiling only: how many samples each condition blocked the idle clock.
+  let blocked = new Map()
   let use = realUse()
   let reported = false
   beforeEach(() => {
@@ -960,6 +962,7 @@ if (state.capture || idleProfile) {
     baseTimers = timersListed(process.getActiveResourcesInfo())
     since = undefined
     longest = 0
+    blocked = new Map()
     sawIo = false
   })
   beforeEach((context) => {
@@ -969,7 +972,7 @@ if (state.capture || idleProfile) {
       if (idleProfile)
         appendFileSync(
           idleProfile,
-          `${JSON.stringify({ key: testKey(context.task), longest })}\n`,
+          `${JSON.stringify({ key: testKey(context.task), longest, blocked: Object.fromEntries(blocked) })}\n`,
         )
     })
   })
@@ -988,14 +991,20 @@ if (state.capture || idleProfile) {
     // a timeout at the limit anyway (a collection's five-minute GC timer).
     const horizon = now + (state.idleHorizonMs ?? Infinity)
     const timerDue = [...pending.values()].some((due) => due <= horizon)
-    if (
-      late ||
-      io ||
-      used.utilization > 0.05 ||
-      timerDue ||
-      timersListed(kinds) > baseTimers
-    ) {
+    const blocker = late
+      ? `late`
+      : io
+        ? `io ${kinds.filter((kind) => !quiet.has(kind)).join(`,`)}`
+        : used.utilization > 0.05
+          ? `busy`
+          : timerDue
+            ? `timer due`
+            : timersListed(kinds) > baseTimers
+              ? `timers listed`
+              : undefined
+    if (blocker !== undefined) {
       since = undefined
+      if (idleProfile) blocked.set(blocker, (blocked.get(blocker) ?? 0) + 1)
       return
     }
     since ??= now

@@ -284,8 +284,15 @@ jobs:
         working-directory: packages/oracles
         env:
           SHARD: ${{ matrix.shard }}
+          GAP_IDLE_PROFILE: ${{ runner.temp }}/idle-${{ matrix.shard }}.jsonl
         # The verbose reporter prints each test with its duration, which sizes the shards.
         run: pnpm exec vitest --run --reporter=verbose --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-fixed-seed-windows "$SHARD")"
+      # Diagnostic (idle clock): which condition blocked each test's idle stretch.
+      - if: always()
+        shell: bash
+        run: cat "$RUNNER_TEMP/idle-$SHARD.jsonl" 2>/dev/null || echo no-idle-profile
+        env:
+          SHARD: ${{ matrix.shard }}
   windows-gap-cli:
     name: Windows gap CLI on a fixture
     runs-on: windows-latest

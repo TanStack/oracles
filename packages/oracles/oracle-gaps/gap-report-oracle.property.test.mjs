@@ -563,6 +563,11 @@ const cleanEnv = () => ({
         name !== `NODE_ENV`,
     ),
   ),
+  // Diagnostic (CI): GAP_IDLE_PROFILE names a file that the idle clock's
+  // profile is appended to (ORACLE_GAPS_IDLE, which cleanEnv would drop).
+  ...(process.env.GAP_IDLE_PROFILE
+    ? { ORACLE_GAPS_IDLE: process.env.GAP_IDLE_PROFILE }
+    : {}),
   ORACLE_GAPS_HEARTBEAT_MS: String(HEARTBEAT_MS),
 })
 
