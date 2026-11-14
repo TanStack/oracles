@@ -479,7 +479,6 @@
  */
 import { spawn, spawnSync } from 'node:child_process'
 import {
-  appendFileSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -492,7 +491,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join, relative, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import fc from 'fast-check'
 import { socketOf, stateDirOf } from './daemon.mjs'
@@ -655,35 +654,17 @@ const configArgs = (plan) => ({
  * Writes the fixture's files and runs the CLI on it. A file of an earlier
  * state that this state lacks is removed.
  */
-// Per-run log (GAP_RUN_LOG, a file the driver appends to): each CLI run's
-// start and end, its status or signal, and whether the driver's kill timeout
-// ended it. Test-side only; the CLI never sees it.
-const runLog = process.env.GAP_RUN_LOG
-const logRun = (entry) => {
-  if (runLog !== undefined) appendFileSync(runLog, `${JSON.stringify(entry)}\n`)
-}
-
 function runCli(dir, files, how = {}) {
   writeFixture(dir, files)
   const before = new Set(filesUnder(dir))
   const { args, out } = cliArgs(dir, files, how)
   if (how.logBlocked) mkdirSync(join(out, `stream.log`), { recursive: true })
-  const started = Date.now()
   const child = spawnSync(process.execPath, args, {
     cwd: repo,
     encoding: `utf8`,
     timeout: 300_000,
     maxBuffer: 64 * 1024 * 1024,
     env: cleanEnv(),
-  })
-  logRun({
-    via: `runCli`,
-    dir: basename(dir),
-    ms: Date.now() - started,
-    status: child.status,
-    signal: child.signal,
-    killedByTimeout: child.error?.code === `ETIMEDOUT`,
-    daemon: how.daemon === true,
   })
   const run = readRun(
     dir,
@@ -1106,23 +1087,10 @@ async function runClisAtOnce(dir, files, hows) {
       child.stderr.on(`data`, (chunk) => {
         stderr += chunk
       })
-      const started = Date.now()
-      let timedOut = false
       const status = await new Promise((resolvePromise) => {
-        const timer = setTimeout(() => {
-          timedOut = true
-          child.kill()
-        }, 300_000)
+        const timer = setTimeout(() => child.kill(), 300_000)
         child.on(`close`, (code) => {
           clearTimeout(timer)
-          logRun({
-            via: `runClisAtOnce`,
-            dir: basename(dir),
-            ms: Date.now() - started,
-            status: code,
-            killedByTimeout: timedOut,
-            daemon: how.daemon === true,
-          })
           resolvePromise(code)
         })
       })

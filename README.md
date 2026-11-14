@@ -131,9 +131,13 @@ agent.
   end of its check, so the file fills then.
   `--help` is not a check, so its usage text has no prefix.
 
-  For contributors: two environment variables in the `ORACLE_GAPS_TEST_`
+  For contributors: the environment variables in the `ORACLE_GAPS_TEST_`
   namespace are test-only hooks for the CLI's own oracle, not settings for
-  users. `ORACLE_GAPS_TEST_STARTED` names a file that the CLI writes as its first project statement, before any project module loads, so a test can tell a stop that came before the CLI started from one that came during its loads (test-only, like the hooks below). `ORACLE_GAPS_TEST_HOLD_EXIT_MS` holds the run's exit after its done
+  users. `ORACLE_GAPS_TEST_ABORT_AT=check` aborts the check's process after its
+  session has begun, where a V8 out-of-memory abort would strike: with
+  `process.abort()` on win32, and with a SIGABRT to itself on POSIX, which
+  ends the process the same way without the native backtrace `process.abort()`
+  prints there (a line of the stream it would break). `ORACLE_GAPS_TEST_STARTED` names a file that the CLI writes as its first project statement, before any project module loads, so a test can tell a stop that came before the CLI started from one that came during its loads (test-only, like the hooks below). `ORACLE_GAPS_TEST_HOLD_EXIT_MS` holds the run's exit after its done
   line, and `ORACLE_GAPS_TEST_WARM_PROBE` makes the first config warm-up
   wait where a stop signal can reach it.
 
