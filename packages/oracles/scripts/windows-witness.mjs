@@ -167,22 +167,22 @@ if (command === `done`) {
   })
   let stdout = ``
   let stderr = ``
-  // The stop lands 400 ms after the run starts: the fixture's whole run lasts
-  // about a second, and the CLI's output is written in one burst near its end,
-  // so the first output line is no clock. A run that ends first is a failure.
+  // The stop lands on an event, not a clock: the CLI's first live line. Its
+  // progress lines stream on stderr as the run goes; stdout gets the done
+  // summary only at the end (measured, 2026-11-14), so stdout is no start
+  // marker. A run that ends before its first line is a failure.
   let requested = false
-  const stopTimer = setTimeout(() => {
-    requested = true
-    writeFileSync(stopFile, ``)
-  }, 400)
   child.stdout.on(`data`, (chunk) => {
     stdout += chunk
   })
   child.stderr.on(`data`, (chunk) => {
     stderr += chunk
+    if (!requested) {
+      requested = true
+      writeFileSync(stopFile, ``)
+    }
   })
   child.on(`close`, (code, signal) => {
-    clearTimeout(stopTimer)
     if (!requested) {
       fail(
         `the run ended before the stop landed (exit ${code}, signal ${signal})`,

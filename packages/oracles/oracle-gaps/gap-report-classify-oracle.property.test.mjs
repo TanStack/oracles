@@ -510,21 +510,6 @@ const testRecord = fc.record({
     },
   ),
   ms: fc.nat({ max: 40 }),
-  // Names a Windows shell reads as quotes, metacharacters, or expansions (the
-  // replay line must replay in PowerShell and cmd, or say it cannot). Drawn
-  // last, so the fixed seeds keep their other draws.
-  hostile: fc.constantFrom(
-    ``,
-    ``,
-    ``,
-    `\u2019 `,
-    `\u201C\u201D `,
-    `& | < > `,
-    `( ) ^ `,
-    `% ! `,
-    `use "x & y `,
-    `back\\ `,
-  ),
 })
 const records = fc.record({
   files: fc.array(
@@ -624,12 +609,29 @@ const fileName = (h, fi) => `/pkg/${relativeName(h, fi)}`
 // units, as JavaScript's `<` compares strings.
 const byPath = (h) => (a, b) =>
   fileName(h, a) < fileName(h, b) ? -1 : fileName(h, a) > fileName(h, b) ? 1 : 0
+// Names a Windows shell reads as quotes, metacharacters, or expansions (the
+// replay line must replay in PowerShell and cmd, or say it cannot). Derived
+// from the test's own fields, not drawn: a draw would shift every later draw of
+// the fixed seeds, so the generator stays as it was.
+const HOSTILE = [
+  `\u2019 `,
+  `\u201C\u201D `,
+  `& | < > `,
+  `( ) ^ `,
+  `% ! `,
+  `use "x & y `,
+  `back\\ `,
+]
+const hostileOf = (t, ti) => {
+  const pick = (t.ms + ti) % 4 === 0 ? (t.ms + ti) % HOSTILE.length : -1
+  return pick < 0 ? `` : HOSTILE[pick]
+}
 // A test's names, as the runner reports them: its suites' names, then its
 // own. Its own name holds its index, so the names within a file are
 // distinct. Its full name joins them with ` > `.
 const namesOf = (h, fi, ti) => {
   const t = h.files[fi].tests[ti]
-  return [...t.suites, `${t.label}${t.hostile ?? ``}t${ti}${t.tail}`]
+  return [...t.suites, `${t.label}${hostileOf(t, ti)}t${ti}${t.tail}`]
 }
 const nameOf = (h, fi, ti) => namesOf(h, fi, ti).join(` > `)
 const keyOf = (h, fi, ti) => `${fileName(h, fi)} > ${nameOf(h, fi, ti)}`
@@ -3231,7 +3233,6 @@ const plainTest = (effect = {}, test = {}) => ({
   suites: [],
   label: ``,
   tail: ``,
-  hostile: ``,
   fails: false,
   runOrder: 0,
   work: 10,
