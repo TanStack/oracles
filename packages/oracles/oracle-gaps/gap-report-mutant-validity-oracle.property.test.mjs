@@ -2784,11 +2784,35 @@ const THROW_FORMS = {
     orig: (a, b) => a === b,
     alt: (a, b) => a !== b,
   },
+  strictNe: {
+    text: `a !== b`,
+    args: 2,
+    orig: (a, b) => a !== b,
+    alt: (a, b) => a === b,
+  },
   lessThan: {
     text: `a < b`,
     args: 2,
     orig: (a, b) => a < b,
     alt: (a, b) => a <= b,
+  },
+  lessEq: {
+    text: `a <= b`,
+    args: 2,
+    orig: (a, b) => a <= b,
+    alt: (a, b) => a < b,
+  },
+  greater: {
+    text: `a > b`,
+    args: 2,
+    orig: (a, b) => a > b,
+    alt: (a, b) => a >= b,
+  },
+  greaterEq: {
+    text: `a >= b`,
+    args: 2,
+    orig: (a, b) => a >= b,
+    alt: (a, b) => a > b,
   },
   andRead: {
     text: `a && b.p`,
@@ -2859,12 +2883,18 @@ function completionOf(form, input, change) {
     return THREW
   }
 }
-// Whether some input makes exactly one of the two forms throw.
-function throwsCanDiffer(form) {
-  return throwDomain(form).some(
-    (input) =>
-      (completionOf(form, input, null) === THREW) !==
-      (completionOf(form, input, true) === THREW),
+// For each site key: whether some input of the domain makes exactly one of
+// the program's two completions throw, the site's and the original's.
+function throwsByKey(program, sites) {
+  return Object.fromEntries(
+    sites.map((site) => [
+      site.key,
+      domainOf(program).some(
+        (input) =>
+          (evaluateThrows(program, input, site.change) === THREW) !==
+          (evaluateThrows(program, input, null) === THREW),
+      ),
+    ]),
   )
 }
 const throwPrograms = THROW_FORM_NAMES.map((form) => ({
@@ -2881,7 +2911,27 @@ function renderThrows(program) {
 // A form's sites: its operator, at the token the CLI names (an operator token
 // for a swap, the expression's start for `!`, a literal, and a read through
 // `?.`), and the returned expression, which is a `return-undefined` site.
+// The table key of each form's sites (CAN_THROW in schemata.mjs): a swap is
+// keyed by its operator, every other site by its operator.
+const SITE_KEY = {
+  strictEq: `binary-swap:===`,
+  strictNe: `binary-swap:!==`,
+  lessThan: `binary-swap:<`,
+  lessEq: `binary-swap:<=`,
+  greater: `binary-swap:>`,
+  greaterEq: `binary-swap:>=`,
+  andRead: `binary-swap:&&`,
+  coalesceRead: `binary-swap:??`,
+  not: `drop-not`,
+  boolLit: `bool-flip`,
+  plusOne: `arithmetic-swap`,
+  optionalRead: `optional-chain`,
+}
 const OPERATOR_AT = {
+  strictNe: [`binary-swap`, 2],
+  lessEq: [`binary-swap`, 2],
+  greater: [`binary-swap`, 2],
+  greaterEq: [`binary-swap`, 2],
   strictEq: [`binary-swap`, 2],
   lessThan: [`binary-swap`, 2],
   andRead: [`binary-swap`, 2],
@@ -2896,12 +2946,24 @@ function throwSites(program, head) {
   return [
     {
       operator: `return-undefined`,
+      key: `return-undefined`,
       position: head.length,
       change: { kind: `undefine` },
     },
-    { operator, position: head.length + offset, change: { kind: `alt` } },
+    {
+      operator,
+      key: SITE_KEY[program.form],
+      position: head.length + offset,
+      change: { kind: `alt` },
+    },
   ]
 }
+// The keys of every form's sites: a declared `false` must be one of them.
+const FAMILY_KEYS = new Set(
+  THROW_FORM_NAMES.flatMap((form) =>
+    throwSites({ form }, ``).map((site) => site.key),
+  ),
+)
 // The model's completion under a change: `alt` is the operator's other form,
 // and `undefine` returns `undefined` after the expression's own completion.
 function evaluateThrows(program, input, change) {
@@ -3325,7 +3387,7 @@ function model(program) {
   return {
     source: text,
     ...(program.kind === `throws`
-      ? { canThrow: throwsCanDiffer(program.form) }
+      ? { canThrowByKey: throwsByKey(program, sites) }
       : {}),
     sites: sites.map((site, index) => {
       const distinct = distinctIn(program, index)
@@ -3582,7 +3644,12 @@ function driver(program, observe) {
   observe(`instrumented`, { clean, emitted })
   if (program.kind === `throws`)
     observe(`declared`, {
-      declared: schemataTable.CAN_THROW?.[program.form] ?? null,
+      declared: Object.fromEntries(
+        sourceOf(program).sites.map((site) => [
+          site.key,
+          schemataTable.CAN_THROW?.[site.key] ?? null,
+        ]),
+      ),
     })
 }
 
@@ -3675,18 +3742,28 @@ function check(program, observations, expected) {
   if (program.kind === `throws`) {
     const declared = observations.find((o) => o.checkpoint === `declared`)
       ?.value?.declared
-    if (typeof declared !== `boolean`)
-      return violation(
-        `declared`,
-        `${program.form} has no canThrow declaration in schemata.mjs`,
-        LAW_THROW,
-      )
-    if (!declared && expected.canThrow)
-      return violation(
-        `declared`,
-        `${program.form} declares canThrow false, but an input makes exactly one of its forms throw`,
-        LAW_THROW,
-      )
+    for (const [key, throws] of Object.entries(expected.canThrowByKey)) {
+      if (typeof declared?.[key] !== `boolean`)
+        return violation(
+          `declared`,
+          `${key} has no canThrow declaration in schemata.mjs`,
+          LAW_THROW,
+        )
+      if (!declared[key] && throws)
+        return violation(
+          `declared`,
+          `${key} declares canThrow false, but an input makes exactly one of its two forms throw`,
+          LAW_THROW,
+        )
+    }
+    // A declared false must be generated, or the claim is not checked.
+    for (const [key, throws] of Object.entries(schemataTable.CAN_THROW ?? {}))
+      if (throws === false && !FAMILY_KEYS.has(key))
+        return violation(
+          `declared`,
+          `${key} is declared canThrow false, and no generated form covers it`,
+          LAW_THROW,
+        )
   }
   const emitted = new Map(found.emitted.map((e) => [keyOf(e), e]))
   for (const site of expected.sites) {

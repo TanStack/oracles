@@ -55,6 +55,37 @@
 // written out and the switch picks one. Every replacement starts with an
 // identifier, so it cannot join the previous line under automatic semicolon
 // insertion.
+// Whether a mutant's two forms can make exactly one of them throw on some
+// input, by operator (a swap by its operator). The completion recording
+// depends on it: a site declared `false` is never recorded, so its declaration
+// is checked by the mutant-validity oracle (gap-report-mutant-validity-oracle),
+// which generates each `false` operator's forms and finds no input that
+// splits the two completions. A `true` may over-claim, which costs a record
+// and never a skipped mutant. `if-true` and `if-false` are `true` until a
+// generated form covers them (a limit of the oracle; over-claiming is safe).
+export const CAN_THROW = {
+  'binary-swap:===': false,
+  'binary-swap:!==': false,
+  'binary-swap:<': false,
+  'binary-swap:<=': false,
+  'binary-swap:>': false,
+  'binary-swap:>=': false,
+  'binary-swap:&&': true,
+  'binary-swap:||': true,
+  'binary-swap:??': true,
+  'drop-not': false,
+  'bool-flip': false,
+  'arithmetic-swap': false,
+  'return-undefined': false,
+  'optional-chain': true,
+  'value-undefined': true,
+  'field-drop': true,
+  'delete-call': true,
+  'loop-false': true,
+  'if-true': true,
+  'if-false': true,
+}
+
 const G = `globalThis.__oracleGaps`
 
 const comparisons = new Map([
