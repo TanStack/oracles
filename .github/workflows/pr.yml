@@ -412,6 +412,33 @@ jobs:
               differs(`result`, `plus one`, trace.find(({ checkpoint }) => checkpoint === `result`)?.value, expected) ?? pass,
           })
           EOT
+          cat > "$dir/tests/percent.property.test.ts" <<'EOT'
+          import fc from 'fast-check'
+          import { differs, oracleProperty, pass } from '../../packages/oracles/dist/esm/index.js'
+
+          oracleProperty({
+            id: `fixture 100% done!`,
+            law: {
+              statement: `a fixture that always fails, so its replay lines are printed.`,
+              authority: `the CI witness for the per-shell replay lines`,
+              limits: `integers from -20 to 20`,
+            },
+            histories: {
+              arbitrary: fc.integer({ min: -20, max: 20 }),
+              runs: 20,
+              fixedSeeds: [1],
+              states: [],
+              measured: [],
+            },
+            timeout: 5_000,
+            model: (x: number) => x,
+            driver: (x: number, observe: (checkpoint: string, value: unknown) => void) => {
+              observe(`result`, x + 1)
+            },
+            check: (_x: number, trace: ReadonlyArray<{ checkpoint: string; value: unknown }>, expected: number) =>
+              differs(`result`, `plus one`, trace.find(({ checkpoint }) => checkpoint === `result`)?.value, expected) ?? pass,
+          })
+          EOT
           printf '%s\n' "export default { test: { include: ['tests/**/*.test.ts'], environment: 'node', coverage: { enabled: false } } }" > "$dir/vitest.config.mjs"
       # The user-facing path: PowerShell, the default shell, as a user runs it.
       # Each run's stdout and stderr are kept apart, and the done line is
@@ -461,5 +488,6 @@ jobs:
         if: always()
         run: |
           node "$env:GITHUB_WORKSPACE\packages\oracles\node_modules\vitest\vitest.mjs" run --root .ci-replay > replay-out.txt 2>&1
+          Get-Content replay-out.txt
           node packages/oracles/scripts/windows-witness.mjs replay replay-out.txt "$env:GITHUB_WORKSPACE\.ci-replay"
           if ($LASTEXITCODE -ne 0) { throw "the replay witness failed" }
