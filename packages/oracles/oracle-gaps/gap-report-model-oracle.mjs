@@ -834,23 +834,10 @@ const drawn = fc.record({
   spawnSignal: fc.constantFrom(`SIGINT`, `SIGINT`, `SIGTERM`),
   spawnDelay: fc.integer({ min: 0, max: 150 }),
   spawnOnStart: fc.constantFrom(false, false, false, true),
-  // A claim left by a dead pid, then the starts that meet it: two racing starts
-  // (`race`) or one start that must take over a stale claim and its mutex
-  // (`recovery`). Constructed histories set it (review of #57, the claim rules).
-  claimScenario: fc.constantFrom(
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    `race`,
-    `recovery`,
-  ),
+  // A claim scenario (`race` or `recovery`, review of #57) is constructed only.
+  // A constant draws nothing, so generated histories never run the claim driver,
+  // and `histories` below takes a constructed scenario back as this constant.
+  claimScenario: fc.constant(false),
   // The spawn stop waits for the CLI's started marker, then signals at once (the
   // deterministic witness, event-driven rather than timed).
 })
@@ -892,15 +879,24 @@ const keepsSteps = (history) => {
 // `budgetSteps` (the review of the gap CLI's runtime fixes, 2026-11-12,
 // P1-a: the budget witness only in its own histories). The map is its own
 // inverse on the histories it keeps, so fast-check takes every one of them
-// back and shrinks it.
+// back and shrinks it. A constructed claim scenario (`claimScenario`) is not a
+// value `drawn` can produce, so its take-back reads it as the drawn constant
+// `false`. A shrink of a claim counterexample is therefore claim-free: it never
+// runs the claim driver, so it cannot reproduce a claim violation, and the
+// constructed history stays the counterexample for that law (a stated limit:
+// the claim field is not shrunk).
 const histories = drawn.map(
   (history) => (keepsSteps(history) ? history : { ...history, steps: null }),
   (value) => {
     const history =
-      /** @type {{ witness: unknown, steps: unknown[] | null }} */ (value)
+      /** @type {{ witness: unknown, steps: unknown[] | null, claimScenario: unknown }} */ (
+        value
+      )
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
-    return value
+    return history.claimScenario === false
+      ? value
+      : { ...history, claimScenario: false }
   },
 )
 
@@ -2945,6 +2941,11 @@ function resolveHistory(history) {
     spawnStop: history.spawnStop === true,
     spawnSignal: history.spawnSignal ?? `SIGINT`,
     spawnDelay: history.spawnDelay ?? 0,
+    // A claim left by a dead pid, then the starts that meet it: two racing
+    // starts (`race`) or one start that must take over a stale claim and its
+    // mutex (`recovery`). Only constructed histories set it, so generated
+    // histories keep their fixed-seed draws and run no claim driver (P4, the
+    // coordinator's decision on the claim rules).
     claimScenario: history.claimScenario ?? false,
     spawnOnStart: history.spawnOnStart === true,
     onlyRun: history.onlyRun === true,

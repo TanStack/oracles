@@ -970,7 +970,6 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
  * run as claimed, refused, or other.
  */
 async function claimScenarioRuns(dir, files, how, scenario) {
-  writeFixture(dir, files)
   const { args, out } = cliArgs(dir, files, { ...how, outName: `out-claim` })
   mkdirSync(out, { recursive: true })
   writeFileSync(join(out, `run.pid`), `999999\n`)
@@ -1133,7 +1132,7 @@ async function overlappingRuns(dir, files, how) {
 // (maintainer decision, 2026-11-11: the gap check's working files stay out
 // of the repository), so a package, and a workspace dependency in it, keeps
 // nothing of a run.
-const OWN_WRITES = [`out`, `out-daemon`, `out-stop`, `out-only`]
+const OWN_WRITES = [`out`, `out-daemon`, `out-stop`, `out-only`, `out-claim`]
 
 /** Runs the CLI several times at once on one state of the fixture. */
 async function runClisAtOnce(dir, files, hows) {
