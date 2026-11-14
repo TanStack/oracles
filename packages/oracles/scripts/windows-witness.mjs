@@ -244,13 +244,15 @@ if (command === `done`) {
         failures.push(`Rerun ${i + 1} selects no failing fixed unit: ${line}`)
         return
       }
-      const shownBy = (result) =>
-        targets === undefined ||
-        targets.every((f) =>
-          `${result.stdout}${result.stderr}`.includes(
-            `${f.property} > ${f.unit}`,
-          ),
+      // Vitest colors its output: the names are matched with the colors removed.
+      const shownBy = (result) => {
+        if (targets === undefined) return true
+        const text = `${result.stdout}${result.stderr}`.replace(
+          /\x1b\[[0-9;]*m/g,
+          ``,
         )
+        return targets.every((f) => text.includes(`${f.property} > ${f.unit}`))
+      }
       for (const shell of [`pwsh`, `powershell`]) {
         checked += 1
         const result = runIn(shell, `${prefix}${line}`)
