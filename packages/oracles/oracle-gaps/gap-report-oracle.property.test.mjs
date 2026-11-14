@@ -639,23 +639,18 @@ const configArgs = (plan) => ({
   contexts: plan.contexts,
 })
 
-// A mutant whose owner files reached it ran their units in batches (runOwners), so a
-// run with such a mutant owes at least one batch line. Single-file runs (unmutated and
-// selected) write none and are not counted: `evidence.computed` includes them, so it
-// does not say whether a batch ran. A refused or fully reused run may write none.
-const missingLine = (run) =>
-  run.mutants?.some((m) => m.oracleFiles.length > 0) &&
-  run.retention.length === 0
-    ? 1
-    : 0
+// Exact: a run writes one retention line per batch it ran (evidence.batches, cut batches
+// included), so its line count must equal that counter. Zero batches write none.
+const unlogged = (run) =>
+  run.retention.length === run.evidence.batches ? 0 : 1
 
 // A batch line (ORACLE_GAPS_TEST_RETENTION) left state behind when a total
 // after its retirement differs from its size before the batch.
 const leftBehind = (line) =>
   Object.keys(line.before).some(
     (key) =>
-      line.before[key] !== line.after[key] ||
-      (key.startsWith(`stale`) && line.before[key] !== 0),
+      (key.startsWith(`stale`) && line.before[key] !== 0) ||
+      (line.after !== undefined && line.before[key] !== line.after[key]),
   )
 
 /**
@@ -1346,7 +1341,7 @@ async function incremental(dir, plan, cli, copy, observe, states) {
         `retention:daemon`,
         (run.retention ?? []).filter(leftBehind).length,
       )
-      observe(`retentionLines:daemon`, missingLine(run))
+      observe(`retentionLines:daemon`, unlogged(run))
       observe(
         `retention:cold`,
         (coldRun.retention ?? []).filter(leftBehind).length,
@@ -1655,7 +1650,7 @@ async function driver(plan, observe) {
     observe(`retention`, retention.filter(leftBehind).length)
     observe(
       `retentionLines:cold`,
-      missingLine({ mutants: cli.mutants, retention }),
+      unlogged({ retention, evidence: cli.evidence }),
     )
     // A failing owner's replay, run as the author would run it (law 3).
     if (plan.fault === `brokenOwner`)
@@ -1680,7 +1675,7 @@ async function driver(plan, observe) {
         outName: `out-only`,
       })
       observe(`retention:partial`, partial.retention.filter(leftBehind).length)
-      observe(`retentionLines:partial`, missingLine(partial))
+      observe(`retentionLines:partial`, unlogged(partial))
       observe(`partial`, {
         function: chosen.function,
         source: chosen.source,
@@ -2110,7 +2105,7 @@ async function driver(plan, observe) {
       observe(`retention:stability`, movedRetention.filter(leftBehind).length)
       observe(
         `retentionLines:stability`,
-        missingLine({ mutants: movedRun.mutants, retention: movedRetention }),
+        unlogged({ retention: movedRetention, evidence: movedRun.evidence }),
       )
       states.add(`stability rerun`)
     }
@@ -2235,22 +2230,18 @@ function check(plan, observations, expected) {
   // Bounded retention (the register's C entry): once a batch's copies are
   // retired, Vitest's filesMap, pathsSet, and idMap and Vite's module graph
   // name none of them, so each count the hook reports is 0.
-  const unlogged = observations
+  const unlogged_ = observations
     .filter((o) => o.checkpoint.startsWith(`retentionLines`))
     .reduce((sum, o) => sum + o.value, 0)
-  if (unlogged > 0)
+  if (unlogged_ > 0)
     return violation(
       `retention`,
-      `${unlogged} run(s) computed a unit but wrote no batch retention line`,
+      `${unlogged_} run(s) wrote a retention line count different from their batches`,
       `bounded retention`,
-      { actual: unlogged, expected: 0 },
+      { actual: unlogged_, expected: 0 },
     )
   const held = observations
-    .filter(
-      (o) =>
-        o.checkpoint.startsWith(`retention`) &&
-        !o.checkpoint.startsWith(`retentionLines`),
-    )
+    .filter((o) => o.checkpoint.startsWith(`retention`))
     .reduce((sum, o) => sum + o.value, 0)
   if (held > 0)
     return violation(

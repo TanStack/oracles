@@ -563,6 +563,8 @@ export default async (env) => {
   let seedVariable = `ORACLE_SEED`
   const contextSpecs = new Map()
   let runCounter = 0
+  // The current check's evidence, which runBatch counts its batches in (set by check).
+  let evidenceOf
 
   // A context loads the package's own config through its wrapper, so an
   // error there is the author's: the run refuses, naming the config file
@@ -1020,6 +1022,7 @@ export default async (env) => {
    */
   let copyCounter = 0
   async function runBatch(context, out, items, seed) {
+    evidenceOf.batches += 1
     const capture = join(out, `run-${process.pid}-${++runCounter}.jsonl`)
     const before = process.env.ORACLE_GAPS_TEST_RETENTION
       ? retentionTotals(context)
@@ -1286,7 +1289,7 @@ export default async (env) => {
       if (result !== undefined) {
         retireCopies(context, copies)
         retiredEntries(context, before)
-      }
+      } else retiredEntries(context, before, true)
       rmSync(capture, { force: true })
     }
   }
@@ -1420,12 +1423,14 @@ export default async (env) => {
   // that settled and its copies are retired, one line holds each structure's
   // total before the batch and after its retirement. The bounded-retention
   // law reads it: every total returns to its size before the batch.
-  function retiredEntries(context, before) {
+  function retiredEntries(context, before, cut = false) {
     const file = process.env.ORACLE_GAPS_TEST_RETENTION
     if (!file) return
+    // A cut run is not retired (its context is replaced), so its line has no after: its before still
+    // names the stale totals the next batch starts from.
     appendFileSync(
       file,
-      `${JSON.stringify({ before, after: retentionTotals(context) })}\n`,
+      `${JSON.stringify(cut ? { before, cut: true } : { before, after: retentionTotals(context) })}\n`,
     )
   }
 
@@ -1563,7 +1568,10 @@ export default async (env) => {
       unchanged: 0,
       // Confirmations that a mutant's budget cut short or left no time.
       budget: 0,
+      // Every batch run (runBatch), cut or not: each writes one retention line.
+      batches: 0,
     }
+    evidenceOf = evidence
     // Each file's imports in its unmutated run. A run that timed out reports
     // none, so it is stored under these: a mutant changes no import.
     const fileInputs = new Map()
