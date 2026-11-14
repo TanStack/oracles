@@ -141,11 +141,20 @@ function anchorOf(ts, file, node) {
 // because one switch serves them all. A mutant names no function: the runner
 // names it by the function declaration whose lines hold it (owners.mjs), so
 // keys and ownership read one source.
+import { posix } from './paths.mjs'
+
 const placedRune =
   /^\$(state(\.raw)?|derived(\.by)?|effect(\.pre)?|props(\.id)?|bindable|inspect(\.trace)?)$/
 
 export function instrument(ts, path, text, source, offset = 0) {
-  const file = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true)
+  // TypeScript keeps a file's name as given and matches it with forward
+  // slashes, so the file is named in them (paths.mjs).
+  const file = ts.createSourceFile(
+    posix(path),
+    text,
+    ts.ScriptTarget.Latest,
+    true,
+  )
   // Without the word `super` no site can be in a super region: skip the walk.
   const mentionsSuper = /\bsuper\b/.test(text)
   const svelte = /\.svelte\.[cm]?[jt]s$/.test(path)

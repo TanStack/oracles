@@ -26,7 +26,7 @@
 import { createHash } from 'node:crypto'
 import { appendFileSync, readFileSync } from 'node:fs'
 import { createRequire, syncBuiltinESMExports } from 'node:module'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { afterAll, beforeEach, chai, expect, inject, vi } from 'vitest'
 
 const run =
@@ -787,8 +787,11 @@ globalThis.__oracleWorkBound = (ratio) => {
 // budget), Node's, or this file's does not, while a user's read through a
 // spy (tinyspy's frame first) still does.
 let clocked = false
-const machinery =
-  /[\\/]node_modules[\\/](?:vitest|@vitest|fast-check|@fast-check|tinypool|tinyspy|chai|@tanstack[\\/]oracles)[\\/]|[\\/]packages[\\/]oracles[\\/]src[\\/]/
+// A backslash separates only on win32 (on POSIX it is a name's character).
+const SEP = process.platform === `win32` ? `[\\\\/]` : `/`
+const machinery = new RegExp(
+  `${SEP}node_modules${SEP}(?:vitest|@vitest|fast-check|@fast-check|tinypool|tinyspy|chai|@tanstack${SEP}oracles)${SEP}|${SEP}packages${SEP}oracles${SEP}src${SEP}`,
+)
 function fromTest() {
   const limit = Error.stackTraceLimit
   Error.stackTraceLimit = 50
@@ -1027,7 +1030,7 @@ afterAll(() => {
   const loaded = [...(evaluated?.idToModuleMap ?? [])]
     .filter(([, node]) => node.evaluated)
     .map(([id]) => id.split(`?`)[0])
-    .filter((path) => path.startsWith(`/`))
+    .filter((path) => isAbsolute(path))
   appendFileSync(
     state.capture,
     `${JSON.stringify({ file: thisFile, closed: true, loaded, ...(skippedCopy ? { skipped: true } : {}) })}\n`,
