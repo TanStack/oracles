@@ -927,13 +927,14 @@ const histories = drawn.map(
       )
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
-    const { slowTwin, ...drawnValue } = /** @type {Record<string, unknown>} */ (
-      value
-    )
+    // A constructed backstop (`hangMs`) comes back as the drawn constant (null).
+    const { slowTwin, hangMs, ...drawnValue } =
+      /** @type {Record<string, unknown>} */ (value)
     const tests = /** @type {Record<string, unknown>[]} */ (drawnValue.tests)
     const plain =
       /** @type {{ witness: unknown, steps: unknown[] | null, tornRows: unknown }} */ ({
         ...drawnValue,
+        hangMs: null,
         tests: tests.map(takenBack),
       })
     // Take-back into the drawn language: a disarmed pause (pauseEngages false,

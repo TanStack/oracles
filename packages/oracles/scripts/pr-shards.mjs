@@ -306,16 +306,13 @@ export const partitions = {
       // Both halves of `every outcome class` (134 s and 155 s on the CI runner),
       // a second daemon check (101 s), and two small units. The second half
       // is named here: `every outcome class` alone matches the first half only,
-      // and the second would fall into the rest (shard 3). The two
-      // deterministic-cuts histories (a 16 s wait, and a timer) are about 45 s.
+      // and the second would fall into the rest (shard 3).
       2: anyOf([
         'every outcome class',
         'every outcome class, the warm and abort stops',
         'a second daemon check of the budget witness',
         'a declaration fault: brokenVitest',
         'an edit that changed the cold result after a hang replaced the only context',
-        'a slow kill after a 16 s wait',
-        'a copy waiting on a timer',
       ]),
       // The rest: noTypescript (174 s on the CI runner), the edit sequence
       // through the daemon (94 s), brokenOwner (83 s), generated (23 s), the
@@ -537,33 +534,6 @@ export const partitions = {
         'a second daemon check of the budget witness',
         'a declaration fault: missingSource',
         'a config fault in a run that owns nothing',
-        'a declaration fault: configNoDefault',
-        'a declaration fault: nonLiteral',
-        'a lazy module loaded before a hang in the same batch',
-        'a stale authored mutant and a reformat',
-        'an edit to a module that only mutated runs load',
-        'an edit during a check through the daemon',
-        'a test edits the helper it read, during a check through the daemon',
-        'a test edits the data it read, during a check through the daemon',
-      ]),
-      4: anyOf([
-        'a config that --config names',
-        'a declaration fault: configNull',
-        'a declaration fault: outsideSource',
-        'a load failure beside a hang',
-        'an ambiguous authored mutant',
-        "a slow owner's kill and another owner's kill",
-        'a slow kill after a 16 s wait',
-        'a copy waiting on a timer',
-        'a kill past the work budget in a later owner',
-        'a backstop cut ends the copies ahead of a later kill',
-        'a capture row read while the worker wrote it',
-        'two batches each read a capture row while its worker wrote it',
-        'every outcome class',
-      ]),
-      5: anyOf([
-        'a declaration fault: apiLessTypescript',
-        'a declaration fault: configSyntax',
         "test.projects in a parent's config",
         'a declaration fault: projects',
         'a declaration fault: outsideSource',
@@ -604,7 +574,14 @@ export const partitions = {
         'ordinary tests left out by default',
         'a declaration fault: configNull',
       ]),
+      // The deterministic-cuts histories (the 16 s wait, the backstop, the work
+      // budget, the twin and the timer) are short, except the 16 s wait.
       10: anyOf([
+        "a slow owner's kill and another owner's kill",
+        'a backstop cut ends the copies ahead of a later kill',
+        'a kill past the work budget in a later owner',
+        'a slow kill after a 16 s wait',
+        'a copy waiting on a timer',
         'an edit that changed the cold result after a hang replaced the only context',
         'a test edits the helper it read, during a check through the daemon',
         'an edit to data a test reads through fs (callback)',
