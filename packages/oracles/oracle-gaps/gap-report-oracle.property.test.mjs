@@ -2722,7 +2722,7 @@ async function driver(plan, observe) {
  * Law 9: each check through the daemon reports what the cold run of the same
  * state reports. A refused state is compared by the cause it names.
  */
-function incrementalCheck(observations, expected) {
+function incrementalCheck(observations, expected, plan) {
   for (const { value } of observations.filter(
     (o) => o.checkpoint === `incremental`,
   )) {
@@ -2811,8 +2811,10 @@ function incrementalCheck(observations, expected) {
     // A refusal through the daemon ends as a cold refusal does (law 12):
     // the CLI that asked the daemon writes it to its own output directory.
     if (cold.refusal !== undefined) {
+      // As the cold refusal: the driver knows the directory only for an explicit
+      // --out.
       const breach = refusalBreach(daemon.ending, {
-        outKnown: true,
+        outKnown: plan.outMode === `explicit`,
         logNote: owesNote(expected) ? logNoteOf(daemon) : undefined,
       })
       if (breach)
@@ -3063,7 +3065,7 @@ function check(plan, observations, expected) {
         `greppable stream`,
       )
     return (
-      incrementalCheck(observations, expected) ??
+      incrementalCheck(observations, expected, plan) ??
       daemonCheck(observations) ??
       pass
     )
@@ -3335,7 +3337,7 @@ function check(plan, observations, expected) {
       )
   }
   return (
-    incrementalCheck(observations, expected) ??
+    incrementalCheck(observations, expected, plan) ??
     daemonCheck(observations) ??
     pass
   )
