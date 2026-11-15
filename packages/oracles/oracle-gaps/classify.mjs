@@ -47,9 +47,15 @@ export function outcomeOf(
   assertions = false,
   pastBound = () => false,
 ) {
-  // A run that timed out recorded nothing. A kill in another run still
-  // decides; failing that, the mutant is `timeout`.
-  const timeout = units.some((unit) => unit.timedOut)
+  // A run that timed out recorded nothing, and a test that Vitest's own limit
+  // ended (`Test timed out`) is the same kind of backstop (deterministic cuts,
+  // 2026-11-14): a gap that never keeps a kill from deciding. A kill in another
+  // run still decides; failing that, the mutant is `timeout`.
+  const timedOutTest = (test) =>
+    test.state === `failed` && /Test timed out/.test(test.message)
+  const timeout = units.some(
+    (unit) => unit.timedOut || (unit.tests ?? []).some(timedOutTest),
+  )
     ? { outcome: `timeout`, detail: `run time limit` }
     : undefined
   const failures = []
@@ -87,7 +93,6 @@ export function outcomeOf(
           // fast-check's wrapper text ("Property failed …") is not an
           // assertion; the wrapped error, which its message quotes, decides.
           /AssertionError|expected .+ to /.test(test.message),
-        timeout: /Test timed out/.test(test.message),
         // fast-check quotes the error its predicate threw after its own
         // header; that error is the cause the report shows.
         message: (
@@ -153,9 +158,7 @@ export function outcomeOf(
       laws: lawsOf(unregistered),
     }
   const tests = failures.filter((f) => f.test)
-  if (tests.length > 0 && tests.every((f) => f.timeout))
-    return { outcome: `timeout`, by: tests.map((f) => f.test) }
-  const crashed = tests.filter((f) => f.route !== `framework` && !f.timeout)
+  const crashed = tests.filter((f) => f.route !== `framework`)
   if (crashed.length > 0)
     return {
       outcome: `crashed`,

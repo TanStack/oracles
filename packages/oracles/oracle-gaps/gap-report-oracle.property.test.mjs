@@ -3345,6 +3345,11 @@ const separate = [
   `a session failure larger than a socket buffer`,
   `a config fault in a run that owns nothing`,
   `a refused run whose package lies inside the CLI's directory`,
+  // The deterministic-cuts states have constructed histories of their own, so
+  // no history that names every state (`every outcome class`) must enter them.
+  `a slow owner's kill reported as when it did not wait`,
+  `a slow kill past fifteen seconds killed`,
+  `a copy waiting on a timer under load killed`,
   // The config and contexts states have constructed histories of their own.
   `a config that --config names ran`,
   `a package with no config ran`,

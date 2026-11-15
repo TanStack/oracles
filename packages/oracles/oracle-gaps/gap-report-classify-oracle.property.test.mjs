@@ -36,8 +36,8 @@
  *    so a kill names a non-empty part of them. An operator mutant's owner
  *    files run one after another in report order (law 7), and the runner
  *    stops at the first that kills, so its kill names laws of that file
- *    alone. Failing that, a run that
- *    timed out makes it `timeout`. Failing that, reproducible verdicts under
+ *    alone. Failing that, a run that timed out, or a test that Vitest's limit
+ *    ended, makes it `timeout`. Failing that, reproducible verdicts under
  *    reach agreement alone make it an `agreement-only-kill`, which names
  *    them all. Failing that, a verdict on the random campaign
  *    makes it a `random-only-kill`, and one on an unknown or unregistered
@@ -62,7 +62,10 @@
  *    and the design decided with it that day: a speed shortcut is owed a
  *    cost law, not an exit, so a regression that deletes it must be
  *    catchable, by a deterministic count and never by wall-clock time.
- * 4. Failing that, if every failing test timed out, it is `timeout`; a
+ * 4. Failing that, a test that Vitest's own limit ended (its message is
+ *    `Test timed out`) is a backstop, with a run that timed out: the mutant
+ *    is `timeout`, a gap that never keeps a kill from deciding (deterministic
+ *    cuts, option A, 2026-11-14). Otherwise a
  *    failing test outside the framework's own checks makes it `crashed`; a
  *    failing framework check alone (the `calibration` route, which covers
  *    calibrations, probe calibrations, and the determinism test) makes it a
@@ -720,7 +723,14 @@ function boundBelow(before, after) {
 // at a kill reads no work.
 function failureOf(h, slot, tests, work = false) {
   const under = ({ t }) => t.under[slot].kind
-  const timedOut = tests.some((x) => under(x) === `runTimeout`)
+  // A test that Vitest's own limit ended is a backstop, as a cut run is,
+  // in a file that loaded (a file that failed to load has no tests to end).
+  const timedOut = tests.some(
+    (x) =>
+      under(x) === `runTimeout` ||
+      (under(x) === `timeoutMessage` &&
+        !h.files[x.fi].tests.some((t) => t.under[slot].kind === `setupError`)),
+  )
   const setup = tests.some((x) => under(x) === `setupError`)
   const ran = tests.filter(
     (x) =>
@@ -771,11 +781,7 @@ function failureOf(h, slot, tests, work = false) {
     return naming(`random-only-kill`, verdictsIn(`random`))
   if (verdictsIn(`unknown`).length > 0)
     return naming(`unregistered-kill`, verdictsIn(`unknown`))
-  if (failing.length > 0 && failing.every((x) => under(x) === `timeoutMessage`))
-    return decided({ outcome: `timeout` })
-  const crashed = failing.filter(
-    (x) => under(x) !== `timeoutMessage` && kindOf(x.t.route) !== `framework`,
-  )
+  const crashed = failing.filter((x) => kindOf(x.t.route) !== `framework`)
   if (crashed.length > 0) return naming(`crashed`, crashed)
   if (failing.length > 0) return naming(`framework-error`, failing)
   const unhandled = ran.some((x) => under(x) === `unhandled`)
@@ -1102,7 +1108,14 @@ function operandsSeen(h, mi, owners) {
 function ordinaryOutcome(h, mi, files) {
   const tests = files.flatMap((fi) => h.files[fi].tests.map((t) => ({ t, fi })))
   const under = ({ t }) => t.under[mi].kind
-  const timedOut = tests.some((x) => under(x) === `runTimeout`)
+  // A test that Vitest's own limit ended is a backstop, as a cut run is,
+  // in a file that loaded (a file that failed to load has no tests to end).
+  const timedOut = tests.some(
+    (x) =>
+      under(x) === `runTimeout` ||
+      (under(x) === `timeoutMessage` &&
+        !h.files[x.fi].tests.some((t) => t.under[mi].kind === `setupError`)),
+  )
   const ran = tests.filter(
     (x) =>
       !h.files[x.fi].tests.some((t) =>
@@ -1130,14 +1143,7 @@ function ordinaryOutcome(h, mi, files) {
   if (kills.length > 0) return `agreement-only-kill`
   if (judgedOn(`random`).length > 0) return `random-only-kill`
   if (judgedOn(`unknown`).length > 0) return `unregistered-kill`
-  if (failing.length > 0 && failing.every((x) => under(x) === `timeoutMessage`))
-    return `timeout`
-  if (
-    failing.some(
-      (x) => under(x) !== `timeoutMessage` && kindOf(x.t.route) !== `framework`,
-    )
-  )
-    return `crashed`
+  if (failing.some((x) => kindOf(x.t.route) !== `framework`)) return `crashed`
   if (failing.length > 0) return `framework-error`
   if (tests.some((x) => under(x) === `setupError` || under(x) === `unhandled`))
     return `setup-error`
