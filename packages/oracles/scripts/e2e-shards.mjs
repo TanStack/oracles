@@ -200,7 +200,9 @@ export const shards = {
     // Added with the gap CLI's runtime fixes (not yet measured).
     `fixed seed 20261105: a second daemon check of the budget witness`,
     `calibration: a stopped run leaves a process it started running`,
-    `calibration: a busy mutant is named in no heartbeat`,
+    // The heartbeat calibrations after the shape-only change (not yet measured).
+    `calibration: a heartbeat names a mutant whose gap line came first`,
+    `calibration: a heartbeat names no mutant of its run`,
     // Law 15's calibrations (the greppable stream), measured at ab18c60:
     // 79 s and 70 s; the daemon-notes one, bound to its history, 2 s (it
     // took 433 s searching for one).
