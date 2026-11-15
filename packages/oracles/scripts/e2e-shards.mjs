@@ -36,8 +36,9 @@ const suite = `oracle-gaps.report`
 // cost follows its seed, so a shard's time varies from run to run. Option M
 // of the e2e speed plan bounds the random units' tail: a generated history
 // with the witness module takes no steps, and the one edit sequence over it
-// is a constructed history. CI keeps its one fixed-seed job until the
-// maintainer decides which units run on a pull request.
+// is a constructed history. A pull request runs the fixed-seed, random, and
+// determinism units as the partitions of pr-shards.mjs; these shards are
+// the full-suite plan, which this file's check keeps partitioned.
 export const shards = {
   // 522 s in the measured run, about 221 s idle.
   'e2e-1': [

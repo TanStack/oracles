@@ -313,6 +313,101 @@ export const partitions = {
       3: rest,
     },
   },
+  // The end-to-end gap oracle's random units, which every pull request runs
+  // (maintainer decision CI-1): each run draws a fresh campaign seed, and a
+  // counterexample prints its replay line. 38 units, measured on main at
+  // 35422e3 on one Arclet (8 vCPU Linux, one Vitest worker): 624 s in all.
+  // The witness module's edit sequence alone takes 178 s, so two shards of
+  // about 312 s each are the fewest that keep a job near 5 minutes.
+  'oracle-gaps-random': {
+    args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-oracle`],
+    suite: `oracle-gaps.report`,
+    select: `random seed: `,
+    shards: {
+      // 312 s: the witness module's edit sequence (178 s), brokenOwner
+      // (74 s), and the small units.
+      1: anyOf([
+        'an edit sequence over the witness module',
+        'a declaration fault: brokenOwner',
+        'a declaration fault: brokenVitest',
+        'a declaration fault: noTypescript',
+        'an edit that changed the cold result after a hang replaced the only context',
+        'generated',
+        'an edit to a module that only mutated runs load',
+        'a failing owner under a config that --config names',
+        'a load failure beside a hang',
+        'an ambiguous authored mutant',
+        'a package whose parent directory has its config',
+        'a .ts config in a package with no module type that calls require',
+        'a config that --config names',
+        'ordinary tests left out by default',
+        'a declaration fault: configNull',
+        'a declaration fault: configThrows',
+        'a declaration fault: missingSource',
+        'a declaration fault: nonLiteral',
+        'a config fault in a run that owns nothing',
+        'a declaration fault: outsideSource',
+      ]),
+      // The rest: every outcome class (104 s), apiLessTypescript (75 s), the
+      // daemon's edit sequence (65 s), and the second daemon check (44 s),
+      // about 312 s, and any unit added later.
+      2: rest,
+    },
+  },
+  // The end-to-end gap oracle's determinism units, which every pull request
+  // runs: each runs one constructed or generated history twice and compares
+  // the two traces. 40 units, measured in the same run on main at 35422e3:
+  // 1,337 s in all. Six of them fail on main (their full time is counted):
+  // the traces differ in the heartbeat list, which records which busy mutants
+  // beat, so the check is wall-clock dependent. The longest unit, the witness
+  // module's edit sequence, takes 339 s, so four shards of 333 to 339 s are
+  // the fewest that keep each job near 6 minutes.
+  'oracle-gaps-determinism': {
+    args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-oracle`],
+    suite: `oracle-gaps.report`,
+    select: `determinism: `,
+    shards: {
+      // 339 s: the witness module's edit sequence, alone.
+      1: 'constructed history: an edit sequence over the witness module',
+      // 333 s: every outcome class (223 s) and the small units.
+      2: anyOf([
+        'constructed history: every outcome class',
+        'constructed history: a declaration fault: brokenVitest',
+        'constructed history: a stale authored mutant and a reformat',
+        'constructed history: an edit that changed the cold result after a hang replaced the only context',
+        'constructed history: two authored mutants',
+        'constructed history: an ambiguous authored mutant',
+        'constructed history: a run with eleven contexts',
+        'constructed history: a package whose parent directory has its config',
+        'constructed history: a declaration fault: configNoDefault',
+        'constructed history: a declaration fault: configThrows',
+        'constructed history: a declaration fault: nonLiteral',
+        'constructed history: a declaration fault: projects',
+        'constructed history: a config fault in a run that owns nothing',
+      ]),
+      // 333 s: generated 2 (192 s), the second daemon check (88 s), and the
+      // small units.
+      3: anyOf([
+        'generated 2',
+        'constructed history: a second daemon check of the budget witness',
+        'constructed history: a lazy module loaded before a hang in the same batch',
+        'constructed history: an edit to a module that only mutated runs load',
+        'constructed history: a failing owner under a config that --config names',
+        'constructed history: a load failure beside a hang',
+        'constructed history: a config that --config names',
+        'constructed history: a .ts config in a package with no module type that calls require',
+        'constructed history: ordinary tests left out by default',
+        'constructed history: a declaration fault: configSyntax',
+        'constructed history: a declaration fault: missingSource',
+        'generated 0',
+        'constructed history: a declaration fault: outsideSource',
+      ]),
+      // The rest: the daemon's edit sequence (134 s), noTypescript (89 s),
+      // brokenOwner (76 s), and the small units, about 333 s, and any unit
+      // added later.
+      4: rest,
+    },
+  },
   'oracle-gaps-static-windows': {
     args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-static`],
     suite: `oracle-gaps.report-static`,
