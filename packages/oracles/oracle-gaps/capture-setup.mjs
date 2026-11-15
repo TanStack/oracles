@@ -1035,9 +1035,7 @@ const thisFile = globalThis.__vitest_worker__?.filepath
 // outside the wrappers, such as `node:timers/promises`), nothing but the
 // channel and stdio is open, and its event loop is under 5% busy. After
 // `idleMs` of that it writes an idle row, and the batch's watchdog cuts it
-// off as a hang. A late sample means the thread was busy. With
-// ORACLE_GAPS_IDLE set, each test's longest idle stretch is recorded
-// (profiling).
+// off as a hang. A late sample means the thread was busy.
 const quiet = new Set([
   `MessagePort`,
   `PipeWrap`,
@@ -1048,30 +1046,22 @@ const quiet = new Set([
 const timersListed = (kinds) =>
   kinds.filter((kind) => kind === `Timeout` || kind === `Immediate`).length
 let sawIo = false
-const idleProfile = process.env.ORACLE_GAPS_IDLE
-if (state.capture || idleProfile) {
+if (state.capture) {
   let baseTimers
   let since
   let last
-  let longest = 0
   let use = realUse()
   let reported = false
   beforeEach(() => {
     if (continuing) return
     baseTimers = timersListed(process.getActiveResourcesInfo())
     since = undefined
-    longest = 0
     sawIo = false
   })
   beforeEach((context) => {
     if (continuing) return
     context.onTestFinished(() => {
       baseTimers = undefined
-      if (idleProfile)
-        appendFileSync(
-          idleProfile,
-          `${JSON.stringify({ key: testKey(context.task), longest })}\n`,
-        )
     })
   })
   realInterval(() => {
@@ -1100,7 +1090,6 @@ if (state.capture || idleProfile) {
       return
     }
     since ??= now
-    longest = Math.max(longest, now - since)
     if (!state.idleMs || now - since < state.idleMs) return
     reported = true
     appendFileSync(

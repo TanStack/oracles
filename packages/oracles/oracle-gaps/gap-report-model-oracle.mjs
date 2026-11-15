@@ -840,6 +840,14 @@ const drawn = fc.record({
   // `histories` takes a constructed one back as this constant (as
   // `claimScenario` does). Its neutral value is recorded by the canary.
   tornRows: fc.constant(false),
+  // Whether the daemon's pause engages in the daemon steps (dieMidCheck and
+  // resetBeforeRead). Always true in drawn histories, so the seeds' histories are
+  // unchanged; only the constructed history "a daemon pause that cannot engage" sets
+  // it false.
+  pauseEngages: fc.constant(true),
+  // Whether the warm daemon is replaced after the warm check (review of #73, B2).
+  // Only the constructed history of a replaced warm daemon sets it.
+  warmReplaced: fc.constant(false),
   // Where the run writes: the output directory `--out` names (`explicit`), or
   // the one the CLI picks when `--out` is left out (`default`, args.mjs), whose
   // stream log, results, and done line must still agree (law 15).
@@ -975,6 +983,9 @@ const histories = drawn.map(
       )
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
+    // Take-back into the drawn language: a disarmed pause (pauseEngages false,
+    // only the constructed history sets it) comes back as engaged, so the
+    // arbitrary can shrink it. The disarm is therefore not kept by a shrink.
     const reset =
       history.claimScenario === false &&
       history.logLost === false &&
@@ -991,10 +1002,13 @@ const histories = drawn.map(
     const later = (history.steps ?? []).filter((step) =>
       laterEdits.includes(step),
     )
-    if (later.length === 0) return taken
+    if (later.length === 0)
+      return { ...taken, pauseEngages: true, warmReplaced: false }
     const earlier = history.steps.filter((step) => !laterEdits.includes(step))
     return {
       ...taken,
+      pauseEngages: true,
+      warmReplaced: false,
       steps: earlier.length > 0 ? earlier : null,
       laterSteps: later,
     }
@@ -3002,6 +3016,8 @@ function resolveHistory(history) {
     fault: history.fault,
     stability: history.stability,
     steps: [...(history.steps ?? []), ...laterStepsOf(history)],
+    pauseEngages: history.pauseEngages !== false,
+    warmReplaced: history.warmReplaced === true,
     lazyGate: history.lazyGate === true,
     fsRead: history.fsRead ?? `none`,
     // Whether a step edits file b's helper during a check (`midrun`): then

@@ -53,6 +53,8 @@
     ["fsRead", "265eb24ce88fdbe2"],
     ["laterSteps", "fb28f2575c00f223"],
     ["tornRows", "ed6866229ecc4969"],
+    ["pauseEngages", "c93e2e40cd0c4b9f"],
+    ["warmReplaced", "ed6866229ecc4969"],
     ["outMode", "41cdfe2f2bf3d461"],
     ["logBlocked", "7e3d565dd085831c"],
     ["overlap", "70f12bc4ddb9358a"],
@@ -62,7 +64,8 @@
     ["spawnDelay", "3b0468d849c5df4c"],
     ["spawnOnStart", "88d5b71848a9c6cd"],
     ["claimScenario", "ed6866229ecc4969"],
-    ["logLost", "ed6866229ecc4969"]
+    ["logLost", "ed6866229ecc4969"],
+    ["supervisorDeath", "ed6866229ecc4969"]
   ],
   "histories": [
     ["functions", "66c0e9c56951c377"],
@@ -118,6 +121,8 @@
     ["fsRead", "265eb24ce88fdbe2"],
     ["laterSteps", "fb28f2575c00f223"],
     ["tornRows", "ed6866229ecc4969"],
+    ["pauseEngages", "c93e2e40cd0c4b9f"],
+    ["warmReplaced", "ed6866229ecc4969"],
     ["outMode", "41cdfe2f2bf3d461"],
     ["logBlocked", "7e3d565dd085831c"],
     ["overlap", "70f12bc4ddb9358a"],
@@ -127,6 +132,7 @@
     ["spawnDelay", "3b0468d849c5df4c"],
     ["spawnOnStart", "88d5b71848a9c6cd"],
     ["claimScenario", "ed6866229ecc4969"],
-    ["logLost", "ed6866229ecc4969"]
+    ["logLost", "ed6866229ecc4969"],
+    ["supervisorDeath", "ed6866229ecc4969"]
   ]
 }

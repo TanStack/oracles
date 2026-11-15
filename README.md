@@ -133,21 +133,54 @@ agent.
 
   For contributors: the `ORACLE_GAPS_TEST_` environment variables are test-only
   hooks for the CLI's own oracle, not settings for users. Each is inert unless
-  set; a hook may pause at one named point and never changes an outcome.
-  `ORACLE_GAPS_TEST_STARTED` names a file that the CLI writes as its first project statement, before any project module loads, so a test can tell a stop that came before the CLI started from one that came during its loads.
-  `ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED` (milliseconds) blocks the CLI for that long right after the started file is written, so a stop sent on seeing the file lands inside the pause.
-  `ORACLE_GAPS_TEST_PAUSE_AT` names one point at which the CLI writes the file `ORACLE_GAPS_TEST_PAUSE_MARKER` (when set) and waits until the file `ORACLE_GAPS_TEST_PAUSE_UNTIL` exists: `note` (after the note line is written, before the check starts).
-  `ORACLE_GAPS_TEST_STOP` names a file whose appearance makes the CLI take a stop as a SIGINT would.
-  `ORACLE_GAPS_INTERNAL_SUPERVISED` is set by a supervisor for the child it starts (its own pid). It is internal, not a user setting: the child kills its own process group only when the supervisor that started it has gone and the child leads that group.
-  `ORACLE_GAPS_TEST_HOLD_UNTIL` names a file: after its done line the run keeps
-  its exit, and its output claim, until the file exists, so a test can send a
-  stop or start a second run before the run ends. `ORACLE_GAPS_TEST_WARM_PROBE` makes the first config warm-up wait where a
-  stop signal can reach it.
-  `ORACLE_GAPS_TEST_TORN_ROWS` names a directory where each batch's
-  watchdog counts its polls, and a batch's closing row is held half written
-  until the watchdog has polled twice. The directory holds a `.begun` marker
-  per batch and a `.reached` or `.unreached` marker per hold (`.unreached`
-  after 60 s with no two polls).
+  set, and none changes an outcome by itself.
+  - `ORACLE_GAPS_TEST_HOLD_UNTIL` names a file: after its done line the run keeps
+    its exit, and its output claim, until the file exists, so a test can send a
+    stop or start a second run before the run ends. A hold the CLI cannot
+    release is marked by a `<file>.unreleased` file.
+  - `ORACLE_GAPS_TEST_WARM_PROBE` makes the first config warm-up wait where a
+    stop signal can reach it.
+  - `ORACLE_GAPS_TEST_STOP` names a file whose appearance makes the CLI take a
+    stop as a SIGINT would (the win32 stop, which has no signal to deliver).
+  - `ORACLE_GAPS_TEST_STARTED` names a file that the CLI writes as its first
+    project statement, before any project module loads, so a test can tell a stop
+    that came before the CLI started from one that came during its loads.
+  - `ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED` (milliseconds) blocks the CLI for that
+    long right after the started file is written, so a stop sent on seeing the
+    file lands inside the pause.
+  - `ORACLE_GAPS_TEST_PAUSE_AT` names one point at which the CLI holds: `note`
+    (after the note line is written, before the check starts), and `child` (a
+    supervised child, before it writes anything; it waits on timers, so its
+    orphan watchdog keeps running). A hold at `note` blocks synchronously. At
+    either point the CLI writes the file `ORACLE_GAPS_TEST_PAUSE_MARKER` (when
+    set) and waits until the file `ORACLE_GAPS_TEST_PAUSE_UNTIL` exists.
+  - `ORACLE_GAPS_TEST_PAUSE_MARK` and `ORACLE_GAPS_TEST_PAUSE_ARM` (daemon points):
+    `ORACLE_GAPS_TEST_PAUSE_AT` also names `daemon-reply` (holds a daemon's reply
+    after the check) and `daemon-read` (holds its first connection unread, once
+    `ORACLE_GAPS_TEST_PAUSE_ARM` names an existing file). The blocked process
+    writes its pid to `ORACLE_GAPS_TEST_PAUSE_MARK`, whole (a temp file, then a
+    rename), and the test parses the pid as a positive integer before it sends
+    any signal, so no signal is needed to pause on win32.
+  - `ORACLE_GAPS_TEST_WAIT_MARK` names a file a request writes when its reply has
+    not come `ORACLE_GAPS_TEST_WAIT_MS` after it was sent. A request has no
+    timeout of its own: this timer starts with the request, and is cleared when
+    the request settles, whether it resolves or rejects. The test acts on the
+    CLI's wait, not on the clock.
+  - `ORACLE_GAPS_TEST_WAIT_MS` (milliseconds, default 60000) is the CLI's wait
+    for a daemon to start or to close; a test shortens it to outlast a paused
+    daemon. It is a test-only knob, not a setting for users.
+  - `ORACLE_GAPS_TEST_SERVED_MARK` names a file the daemon writes its pid to
+    after it answers a check, so a test can tell which daemon served an
+    earlier check (the warm daemon that a later check's pause must match).
+  - `ORACLE_GAPS_INTERNAL_SUPERVISED` is set by a supervisor for the child it
+    starts (its own pid). It is internal, not a user setting: the child kills its
+    own process group only when the supervisor that started it has gone and the
+    child leads that group.
+  - `ORACLE_GAPS_TEST_TORN_ROWS` names a directory where each batch's watchdog
+    counts its polls, and a batch's closing row is held half written until the
+    watchdog has polled twice. The directory holds a `.begun` marker per batch and
+    a `.reached` or `.unreached` marker per hold (`.unreached` after 60 s with no
+    two polls).
 
   A few endings print no done line, or one more line: a SIGKILL of the CLI,
   or a signal that comes while Node is still starting the CLI, before its

@@ -136,6 +136,7 @@ import {
   written,
 } from './gap-report-model-oracle.mjs'
 import { parseArgs, usage } from './args.mjs'
+import { posix } from './paths.mjs'
 import { keyAndSelect } from './report.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -228,14 +229,15 @@ function defaultOutputsOf(dir, sources) {
     const run = (pkg) =>
       parseArgs([`--package`, pkg, `--source`, sources.join(`,`)], pkg).out
     const outs = [run(dir), run(dir), run(other)]
-    const temp = realpathSync(tmpdir()) + sep
+    // The OS temporary directory by its native real path (the realpath rule):
+    // a JavaScript realpath keeps an 8.3 name such as RUNNER~1 on Windows.
+    const temp = realpathSync.native(tmpdir()) + sep
     return {
       // Under the OS temp directory, which the OS cleans, and never in the
       // package (maintainer decision, 2026-11-11).
       contained: outs.map(
         (out, i) =>
-          (out.startsWith(temp) || out.startsWith(tmpdir() + sep)) &&
-          !out.startsWith([dir, dir, other][i] + sep),
+          out.startsWith(temp) && !out.startsWith([dir, dir, other][i] + sep),
       ),
       // Each package's outputs lie in a directory of their own, which is not
       // the temp directory itself or a shared `oracle-gaps` directory.
@@ -514,10 +516,13 @@ function argumentsRunOf(dir, plan) {
       run.status,
       run.stderr,
       out,
-      // A default output directory's name is random (a run name), so it is
-      // normalized as the package's directory is.
+      // The CLI names its paths in forward slashes (the Windows paths rule), so
+      // the package is named in both spellings. A default output directory's
+      // name is random (a run name), so it is normalized as the package's
+      // directory is.
       (text) =>
         text
+          .replaceAll(posix(dir), `<package>`)
           .replaceAll(dir, `<package>`)
           .replaceAll(
             /\S*oracle-gaps-[^/\s]+\/out\/\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f]{8}/g,
