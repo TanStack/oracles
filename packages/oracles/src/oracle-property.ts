@@ -2407,13 +2407,18 @@ function generatedTests<THistory, TExpected, TPlan>(
       ? source.arbitrary
       : fc.oneof(
           { arbitrary: source.arbitrary, weight: constructions.length },
-          ...constructions.map((construction) => ({
-            arbitrary: source.arbitrary.map(
-              construction.build,
-              construction.unbuild,
-            ),
-            weight: 1,
-          })),
+          ...constructions.map((construction) => {
+            const unbuild = construction.unbuild
+            return {
+              arbitrary:
+                unbuild === undefined
+                  ? source.arbitrary.map(construction.build)
+                  : source.arbitrary.map(construction.build, (built: unknown) =>
+                      unbuild(built as THistory),
+                    ),
+              weight: 1,
+            }
+          }),
         )
   for (const construction of constructions) {
     const undeclared = construction.enters.filter(
