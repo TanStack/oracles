@@ -962,6 +962,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
  * observation (the coordinator's decision of 2026-11-13 on F4: a second run
  * refuses, and the first's stream log stays its own).
  */
+/** The state each claim scenario enters. */
+const claimStateOf = {
+  race: `two starts race for a stale claim`,
+  stale: `a start refuses a stale claim`,
+  empty: `a start refuses an empty claim`,
+}
+
 /**
  * Runs a claim scenario (the maintainer's decision, "Stale claims refuse; no
  * takeover"): a run.pid that names a dead pid (`stale`), an empty run.pid
@@ -976,6 +983,8 @@ async function claimScenarioRuns(dir, files, how, scenario) {
   const claim = join(out, `run.pid`)
   const written = scenario === `empty` ? `` : `999999\n`
   writeFileSync(claim, written)
+  // Every start this driver spawns, so a failure here never leaves one running.
+  const children = []
   const startRun = () => {
     const got = { stdout: ``, stderr: `` }
     const child = spawn(process.execPath, args, {
@@ -983,6 +992,7 @@ async function claimScenarioRuns(dir, files, how, scenario) {
       env: cleanEnv(),
       stdio: [`ignore`, `pipe`, `pipe`],
     })
+    children.push(child)
     child.stdout.on(`data`, (chunk) => {
       got.stdout += chunk
     })
@@ -997,9 +1007,16 @@ async function claimScenarioRuns(dir, files, how, scenario) {
       })
     })
   }
-  const runs = await Promise.all(
-    scenario === `race` ? [startRun(), startRun()] : [startRun()],
-  )
+  let runs
+  try {
+    runs = await Promise.all(
+      scenario === `race` ? [startRun(), startRun()] : [startRun()],
+    )
+  } finally {
+    for (const child of children)
+      if (child.exitCode === null && child.signalCode === null)
+        child.kill(`SIGKILL`)
+  }
   // A refusal's cause and its fix line, as the start printed them.
   const outcomeOf = (run) => {
     if (run.stdout.includes(`oracle-gaps: note log`)) return `claimed`
@@ -1014,7 +1031,7 @@ async function claimScenarioRuns(dir, files, how, scenario) {
     outcomes: runs.map(outcomeOf).sort(),
     // The claim is kept as it was, and nothing else is in the directory: a
     // refusal writes no note, no log, and no temp file.
-    claimKept: readFileSync(claim, `utf8`) === written,
+    claimKept: existsSync(claim) && readFileSync(claim, `utf8`) === written,
     otherFiles: readdirSync(out).filter((name) => name !== `run.pid`),
   }
 }
