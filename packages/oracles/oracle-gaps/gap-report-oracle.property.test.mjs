@@ -2983,7 +2983,9 @@ function check(plan, observations, expected) {
         ends.extra,
       )
     // The check that a mid-run edit overlapped streams as any check does.
-    const duringEnds = value.midrun && endsBreach(value.midrun.during)
+    const duringEnds =
+      value.midrun &&
+      endsBreach(value.midrun.during, { checked: owesNote(expected) })
     if (duringEnds)
       return violation(
         `incremental`,
