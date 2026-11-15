@@ -802,14 +802,25 @@ export default async (env) => {
     }
     contextSpecs.set(context, map)
   }
+  // A context's close, up to the backstop (60 s). A close still pending past it
+  // is a loud backstop gap (register L8), never a silent one: the caller never
+  // warms a replacement while the old context is still closing.
+  async function closeWithin(context, label) {
+    const closed = await Promise.race([
+      closeContext(context).then(
+        () => true,
+        () => true,
+      ),
+      sleep(60_000).then(() => false),
+    ])
+    if (!closed)
+      throw new Error(
+        `oracle-gaps: gap backstop: a context close (${label}) is still pending after 60 s; no replacement is warmed while it closes`,
+      )
+  }
   async function closeContexts() {
     await Promise.all(
-      contexts.map((context) =>
-        Promise.race([
-          closeContext(context).catch(() => undefined),
-          sleep(10_000),
-        ]),
-      ),
+      contexts.map((context) => closeWithin(context, `end of run`)),
     )
     contexts = []
     lastServed.clear()
@@ -1784,10 +1795,7 @@ export default async (env) => {
     // it stops the worker.
     const replace = async (slot) => {
       const started = Date.now()
-      await Promise.race([
-        closeContext(slot.context).catch(() => undefined),
-        sleep(10_000),
-      ])
+      await closeWithin(slot.context, `slot ${slot.index}`)
       slot.context = await warmContext(settings, slot.index)
       await globSpecs(slot.context)
       contexts[slot.index] = slot.context
