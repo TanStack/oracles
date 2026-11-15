@@ -148,12 +148,12 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
   test-oracle-gaps-determinism:
-    name: Gap report end-to-end oracle (determinism, ${{ matrix.shard }}/2)
+    name: Gap report end-to-end oracle (determinism, ${{ matrix.shard }}/5)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3, 4, 5]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -161,9 +161,9 @@ jobs:
           persist-credentials: false
       - name: Setup Tools
         uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
-      # The end-to-end oracle's determinism units, in two shards, except the
-      # six that fail on main and are excluded in pr-shards.mjs, each with an
-      # issue. Each unit runs a history twice and compares the two traces.
+      # The end-to-end oracle's determinism units, in five shards, except the
+      # one excluded in pr-shards.mjs (#92). Each unit runs a history twice and
+      # compares the results and fixed lines; heartbeats are checked for shape.
       - run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-determinism "$SHARD")"
         working-directory: packages/oracles
         env:

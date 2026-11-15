@@ -5,10 +5,12 @@
 // shard of its partition takes. The check lists the suite's tests with
 // `vitest list` and fails unless every selected test is in exactly one
 // shard, no other test is in any shard, and every test that a shard names
-// exists. So the jobs together run exactly the tests that one job ran
-// before: a test in no shard would leave its law out of CI, and a test in
-// two would run twice. A new test lands in the `rest` shard, so the jobs'
-// balance can drift, but no test is left out.
+// exists. A partition's `excluded` names are the exception: each is in no
+// shard on purpose, with its own issue, and must exist. So the jobs together
+// run exactly the tests that one job ran before: a test in no shard would
+// leave its law out of CI, and a test in two would run twice. A new test
+// lands in the `rest` shard, so the jobs' balance can drift, but no test is
+// left out.
 //
 //   node scripts/pr-shards.mjs check                       checks every
 //                                                          partition
@@ -367,51 +369,74 @@ export const partitions = {
     },
   },
   // The end-to-end gap oracle's determinism units, which pull requests run
-  // except the excluded ones below. Each unit runs one history twice and
-  // compares the two traces. 40 units, measured on main at 35422e3 on one
-  // Arclet: 1,337 s in all. Six fail on main, and their time is what they
-  // take to fail: the traces differ in the heartbeat list (wall-clock
-  // timing, #91) or in a daemon note (#92). Those six are excluded, one
-  // issue each (#93 to #98), so this job gates every other unit. A test that
-  // a pull request adds runs here, since only the names below are excluded;
-  // a change to an excluded unit's history does not run it until its issue
-  // closes. The other 34 units take 284 s here, in two shards.
+  // except the one excluded below. Each unit runs one history twice and
+  // compares the two traces: results and fixed lines, not the heartbeats,
+  // which are progress (maintainer decision, 2026-11-14). 51 units; measured
+  // on Arclets at d77b63e, one Vitest worker: 1,305 s for the 50 units that
+  // are not excluded. The witness module's edit sequence is 344 s alone, so
+  // it is a shard by itself; the other 49 units are packed longest first into
+  // three shards of 240 s, and the rest shard takes the fourth bin and any
+  // unit added later. The excluded unit, the daemon's test-output note (#92),
+  // has a cause that is not heartbeats, so it stays out until #92 is fixed.
   'oracle-gaps-determinism': {
     args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-oracle`],
     suite: `oracle-gaps.report`,
     select: `determinism: `,
     excluded: [
-      // Heartbeat list (#91): #93 to #97.
-      `constructed history: every outcome class`,
-      `constructed history: a declaration fault: brokenOwner`,
-      `constructed history: a declaration fault: noTypescript`,
-      `constructed history: an edit sequence over the witness module`,
-      `generated 2`,
-      // Daemon test-output note (#92): #98.
+      // The daemon's test-output note (#92).
       `constructed history: an edit sequence through the daemon`,
     ],
     shards: {
-      // 142 s here.
+      // 344 s: the witness module's edit sequence, alone.
       1: anyOf([
-        `constructed history: a second daemon check of the budget witness`,
-        `constructed history: an edit that changed the cold result after a hang replaced the only context`,
+        `constructed history: an edit sequence over the witness module`,
+      ]),
+      // 240 s here.
+      2: anyOf([
+        `constructed history: every outcome class`,
+        `constructed history: an edit to data a test reads through fs (statDir)`,
         `constructed history: a declaration fault: apiLessTypescript`,
-        `constructed history: two authored mutants`,
-        `constructed history: an ambiguous authored mutant`,
         `constructed history: a failing owner under its parent's config`,
-        `constructed history: a config that --config names`,
+        `constructed history: a package with no config`,
         `constructed history: a .ts config in a package with no module type that calls require`,
-        `constructed history: a package whose parent directory has its config`,
         `constructed history: a declaration fault: configNoDefault`,
-        `constructed history: a declaration fault: configThrows`,
-        `constructed history: a declaration fault: configSyntax`,
-        `constructed history: a declaration fault: nonLiteral`,
-        `constructed history: a declaration fault: projects`,
-        `constructed history: test.projects in a parent's config`,
+        `constructed history: a declaration fault: badEntry`,
         `constructed history: a declaration fault: outsideSource`,
       ]),
-      // The rest: 142 s here, and any unit added later.
-      2: rest,
+      // 240 s here.
+      3: anyOf([
+        `generated 2`,
+        `constructed history: an edit during a check through the daemon`,
+        `constructed history: an edit to data a test reads through fs (sync)`,
+        `constructed history: an unchanged check through the daemon while a test reads a source through fs`,
+        `constructed history: two authored mutants`,
+        `constructed history: a capture row read while the worker wrote it`,
+        `constructed history: two batches each read a capture row while its worker wrote it`,
+        `constructed history: a package whose parent directory has its config`,
+        `constructed history: a declaration fault: configNull`,
+        `constructed history: a declaration fault: missingSource`,
+        `constructed history: a config fault in a run that owns nothing`,
+      ]),
+      // 240 s here.
+      4: anyOf([
+        `constructed history: a declaration fault: noTypescript`,
+        `constructed history: a declaration fault: brokenVitest`,
+        `constructed history: a stale authored mutant and a reformat`,
+        `constructed history: an edit that changed the cold result after a hang replaced the only context`,
+        `constructed history: a test edits the helper it read, during a check through the daemon`,
+        `generated 1`,
+        `constructed history: an edit to data a test reads through fs (callback)`,
+        `constructed history: an unchanged check through the daemon under a config's pre plugin`,
+        `constructed history: an awaiting config in a package with no module type`,
+        `constructed history: a run with eleven contexts`,
+        `constructed history: a .cjs config that calls require`,
+        `constructed history: ordinary tests left out by default`,
+        `constructed history: a declaration fault: setupThrows`,
+        `constructed history: a declaration fault: nonLiteral`,
+        `generated 0`,
+      ]),
+      // The rest: 240 s here, and any unit added later.
+      5: rest,
     },
   },
   'oracle-gaps-static-windows': {
