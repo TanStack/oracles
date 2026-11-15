@@ -135,12 +135,13 @@ const FULL_LIMIT_MS = 20000
 // How long a slow test waits, in real milliseconds: past the 1 s first
 // budget that the driver passes (`--first-limit`), within the full limit.
 const SLOW_MS = 3000
-// The site evaluations that each copy of `w_slowpair` makes: its test calls
-// the function this many times where its output differs. Each copy stays
-// inside its call budget (CALL_FLOOR in check.mjs, 100,000 site evaluations),
-// and the two copies together pass the mutant's work budget (WORK_FLOOR).
+// The calls that each copy of `w_slowpair` makes beyond its first: its test
+// calls the function this many more times where its output differs. A call
+// evaluates two or three instrumented sites, so a copy makes 60,000 to 90,000
+// site evaluations: inside its call budget (CALL_FLOOR in check.mjs, 100,000),
+// and the two copies together past the mutant's work budget (WORK_FLOOR).
 // Work is counted, not timed, so the outcome is the same on any machine.
-const PAIR_LOOPS = 37_500
+const PAIR_LOOPS = 30_000
 // A mutant's work budget (maintainer disposition G1, under the deterministic
 // cuts decision of 2026-11-14): the larger of this floor and ten times its
 // owner files' unmutated work, in site evaluations. The floor is the copies'
