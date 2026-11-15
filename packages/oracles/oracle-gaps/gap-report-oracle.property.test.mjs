@@ -4287,6 +4287,7 @@ oracleProperty({
           authored: null,
           fault: `none`,
           stability: `none`,
+          ordinary: false,
           steps: null,
           rejectBatch: 1,
         }),
