@@ -24,10 +24,12 @@
 // In a mutant run, fast-check stops a property at its first failure instead
 // of shrinking it: a kill needs one failing history, not the smallest one.
 import { createHash } from 'node:crypto'
-import { appendFileSync, readFileSync } from 'node:fs'
+import fs, { appendFileSync, readFileSync } from 'node:fs'
 import { createRequire, syncBuiltinESMExports } from 'node:module'
-import { dirname, isAbsolute, join } from 'node:path'
+import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterAll, beforeEach, chai, expect, inject, vi } from 'vitest'
+import { posix, writeWhole } from './paths.mjs'
 
 const run =
   inject(`oracleGaps`) ??
@@ -237,6 +239,105 @@ if (run.units && !skippedCopy) {
   vi.resetModules()
 }
 const state = unit ? { ...run, ...unit } : run
+// A test-only hook for the CLI's own oracle, not for users:
+// ORACLE_GAPS_TEST_TORN_ROWS names a directory where each batch's watchdog
+// counts its polls (`state.hold`, check.mjs). A batch's closing row is then
+// written in two appends, and the second waits until the watchdog has polled
+// twice after the first, so a poll reads the row half written, by construction
+// and not by timing (issue #83). The hold writes `<hold>.reached` once that
+// happens, or `<hold>.unreached` if the watchdog does not poll within 60 s,
+// which the oracle reports as an unreached witness. Every row ends with a
+// newline in either case.
+function appendClosingRow(row) {
+  const hold = state.hold
+  // Only a batch's copy (`unit`) has a watchdog that polls.
+  if (hold === undefined || unit === undefined)
+    return appendFileSync(state.capture, row)
+  const half = row.length >> 1
+  appendFileSync(state.capture, row.slice(0, half))
+  const counted = () => {
+    try {
+      return Number(readFileSync(`${hold}.polls`, `utf8`))
+    } catch {
+      return 0
+    }
+  }
+  const seen = counted()
+  const pause = new Int32Array(new SharedArrayBuffer(4))
+  // The bound only keeps a broken watchdog from holding the worker forever.
+  let waited = 0
+  while (counted() < seen + 2 && waited < 60_000) {
+    Atomics.wait(pause, 0, 0, 10)
+    waited += 10
+  }
+  const marker = counted() >= seen + 2 ? `reached` : `unreached`
+  writeWhole(`${hold}.${marker}`, ``)
+  appendFileSync(state.capture, row.slice(half))
+}
+// The files this copy reads through fs inside the package: by a sync, a
+// promise, or a callback read, or a check of whether a file exists or what
+// it is. The daemon stores the run under them as it does the modules the
+// copy evaluated (the closing row's `loaded`), so an edit of only such a
+// file runs it again, as a cold run sees the edit (law 9). Reads under
+// node_modules and of the runner's own files are left out. Each path keeps
+// its hash from the copy's first read of it, taken as the runner hashes an
+// input (check.mjs, fileHashes), so the run is stored under the text it
+// read and not under an edit that lands later in the run (review of #55,
+// F1).
+globalThis.__oracleGapsReads = new Map()
+if (!globalThis.__oracleGapsReading) {
+  globalThis.__oracleGapsReading = true
+  // A read's key follows the gap CLI's path rule (paths.mjs, copied beside
+  // this file with it). The file system gets the native path.
+  const root = `${posix(process.cwd()).replace(/\/+$/, ``)}/`
+  const { readFileSync: readNow, statSync: statNow } = fs
+  const hashNow = (path) => {
+    try {
+      return statNow(path).isFile()
+        ? createHash(`sha1`).update(readNow(path)).digest(`hex`)
+        : `not a file`
+    } catch {
+      return `missing`
+    }
+  }
+  const record = (target) => {
+    let path
+    try {
+      if (target instanceof URL) path = fileURLToPath(target)
+      else if (typeof target === `string`) path = resolvePath(target)
+      else if (Buffer.isBuffer(target)) path = resolvePath(target.toString())
+    } catch {
+      return
+    }
+    if (path === undefined) return
+    const key = posix(path)
+    const reads = globalThis.__oracleGapsReads
+    if (
+      key.startsWith(root) &&
+      !key.includes(`/node_modules/`) &&
+      !key.includes(`/.oracle-gaps`) &&
+      !reads.has(key)
+    )
+      reads.set(key, hashNow(path))
+  }
+  // A wrapper keeps the function's own properties (its name and length,
+  // which code that dispatches on arity reads), so a test that passes alone
+  // passes under the capture (law 3; review of #55).
+  for (const [owner, names] of [
+    [fs, [`readFileSync`, `readFile`, `existsSync`, `statSync`]],
+    [fs.promises, [`readFile`, `stat`]],
+  ])
+    for (const name of names) {
+      const original = owner[name]
+      owner[name] = keepProperties(original, function (target, ...rest) {
+        record(target)
+        return original.call(this, target, ...rest)
+      })
+    }
+  // An ES module's `import { readFileSync } from 'node:fs'` (and from
+  // 'node:fs/promises') reads these from now on.
+  syncBuiltinESMExports()
+}
 // A test's own writes to the process's stdout and stderr (a debugging
 // `process.stdout.write`) go to the run's test-output.log, beside its
 // capture, not to the CLI's streams, whose every line is a line of the
@@ -1016,8 +1117,17 @@ afterAll(() => {
     .filter(([, node]) => node.evaluated)
     .map(([id]) => id.split(`?`)[0])
     .filter((path) => isAbsolute(path))
-  appendFileSync(
-    state.capture,
-    `${JSON.stringify({ file: thisFile, closed: true, loaded, ...(skippedCopy ? { skipped: true } : {}) })}\n`,
+  // The hash of each file the copy read, from its first read, under its own
+  // key (`fs:<path>`): a test's read of a file is another input than the
+  // module that its context serves from that file, which can differ from
+  // the file's text (fourth review of #55, F-A2).
+  const readAt = Object.fromEntries(
+    [...globalThis.__oracleGapsReads].map(([path, hash]) => [
+      `fs:${path}`,
+      hash,
+    ]),
+  )
+  appendClosingRow(
+    `${JSON.stringify({ file: thisFile, closed: true, loaded, readAt, ...(skippedCopy ? { skipped: true } : {}) })}\n`,
   )
 })
