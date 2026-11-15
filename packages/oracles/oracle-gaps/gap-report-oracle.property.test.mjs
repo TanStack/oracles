@@ -487,7 +487,7 @@ import { delimiter, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import fc from 'fast-check'
 import { socketOf, stateDirOf } from './daemon.mjs'
-import { isWithin, posix, realPathOf } from './paths.mjs'
+import { isWithin, posix } from './paths.mjs'
 import { oracleProperty, pass, violation } from '../src/oracle-property.ts'
 
 import {
@@ -1243,6 +1243,18 @@ function copyCli(plan) {
  * The daemons that serve a package, by process id: the processes running
  * daemon.mjs for it, as the operating system lists them.
  */
+// The pid a test mark holds, once it is a positive integer. A mark is written whole,
+// and the driver still parses it before it signals anything: process.kill(0) would
+// signal the driver's own group.
+const pidOf = (path) => {
+  try {
+    const text = readFileSync(path, `utf8`).trim()
+    return /^[1-9]\d*$/.test(text) ? Number(text) : undefined
+  } catch {
+    return undefined
+  }
+}
+
 function daemonsOf(dir) {
   const listed = spawnSync(`ps`, [`-A`, `-o`, `pid=,command=`], {
     encoding: `utf8`,
@@ -1400,8 +1412,6 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       crashAtOnce: `two checks at once after a crash`,
       stopAtOnce: `a check during a stop`,
       cliAtOnce: `two checks at once after a code change`,
-      dieMidCheck: `a check whose daemon died during it`,
-      resetBeforeRead: `a check whose connection was reset`,
       fixSession: `a check after the session's failure was fixed`,
       otherInstall: `a check from another install of the CLI`,
       cleanState: `a check after the OS cleaned the daemon's state`,
@@ -1491,54 +1501,60 @@ async function incremental(dir, plan, cli, copy, observe, states) {
   async function daemonChecks(step, files, how) {
     if (step !== `dieMidCheck` && step !== `resetBeforeRead`)
       return [runCli(dir, files, { ...how, daemon: true })]
-    // The daemon this check's CLI starts is the one that is paused and killed,
-    // so the one that exists before is stopped first (both steps).
+    // Each of these steps pauses a daemon at a test-only point and kills it by
+    // the pid the daemon wrote. The labels are observations of that: a pause
+    // the driver read, a kill it sent, and, for the hold, a wait the CLI marked.
     stop()
-    // Event-driven, not clock-driven (review of #73): the daemon holds its reply
-    // (dieMidCheck) or its first connection (resetBeforeRead) at a test-only
-    // pause, which writes its pid to a mark; dieMidCheck's CLI also writes a
-    // second mark once its wait for the reply has passed WAIT_MS. The driver
-    // kills the daemon when the marks say so, never after a guessed delay.
     const marks = mkdtempSync(join(realpathSync(tmpdir()), `gap-pause-`))
     const pauseMark = join(marks, `pid`)
+    const armMark = join(marks, `armed`)
     const waitMark = join(marks, `waited`)
     const mid = step === `dieMidCheck`
+    const env = {
+      ORACLE_GAPS_TEST_PAUSE_AT: mid ? `daemon-reply` : `daemon-read`,
+      ORACLE_GAPS_TEST_PAUSE_MARK: pauseMark,
+      ORACLE_GAPS_TEST_PAUSE_ARM: armMark,
+      ...(mid
+        ? {
+            ORACLE_GAPS_TEST_WAIT_MS: `3000`,
+            ORACLE_GAPS_TEST_WAIT_MARK: waitMark,
+          }
+        : {}),
+    }
+    if (!mid)
+      // The warm daemon: an earlier check through it serves, before the pause is armed,
+      // so the reset hits a daemon that already holds a session (P7).
+      await runClisAtOnce(dir, files, [
+        { ...how, daemon: true, outName: `out-warm`, env },
+      ])
+    if (!mid) writeFileSync(armMark, ``)
     let finished = false
-    const running = runClisAtOnce(dir, files, [
-      {
-        ...how,
-        daemon: true,
-        env: {
-          ORACLE_GAPS_TEST_PAUSE_AT: mid ? `daemon-reply` : `daemon-read`,
-          ORACLE_GAPS_TEST_PAUSE_MARK: pauseMark,
-          ...(mid
-            ? {
-                ORACLE_GAPS_WAIT_MS: `3000`,
-                ORACLE_GAPS_TEST_WAIT_MARK: waitMark,
-              }
-            : {}),
-        },
-      },
-    ])
+    const running = runClisAtOnce(dir, files, [{ ...how, daemon: true, env }])
     running.then(() => {
       finished = true
     })
-    // The pid is known once the daemon has paused. A check that ends first (a
-    // refusal runs nothing, or the daemon never paused) has nothing to kill.
-    let held = false
+    let pid
     for (let waited = 0; !finished && waited < 60_000; waited += 20) {
-      const paused = existsSync(pauseMark)
-      if (paused && (!mid || existsSync(waitMark))) {
-        process.kill(Number(readFileSync(pauseMark, `utf8`)), `SIGKILL`)
-        held = mid && !finished
-        break
-      }
+      pid = pidOf(pauseMark)
+      if (pid !== undefined && (!mid || existsSync(waitMark))) break
       await new Promise((r) => setTimeout(r, 20))
     }
+    const waited = mid && existsSync(waitMark)
+    // Killed only as the test saw it paused and still running. A paused daemon whose
+    // wait mark never came is killed too, so the run cannot hang.
+    const killed = pid !== undefined && !finished
+    if (killed) process.kill(pid, `SIGKILL`)
     const runs = await running
     rmSync(marks, { recursive: true, force: true })
-    if (held && runs[0].reported)
-      states.add(`a check whose daemon held it past the CLI's wait, then died`)
+    if (killed && runs[0].reported) {
+      if (mid) {
+        states.add(`a check whose daemon died during it`)
+        if (waited)
+          states.add(
+            `a check whose daemon held it past the CLI's wait, then died`,
+          )
+      } else states.add(`a check whose connection was reset`)
+    }
     return runs
   }
   // Kills the package's daemons as a crash or a power loss would, leaving
