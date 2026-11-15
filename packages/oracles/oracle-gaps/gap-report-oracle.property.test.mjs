@@ -3862,21 +3862,6 @@ oracleProperty({
     fixedSeeds: [20261105],
     constructed: withDeclaration([
       {
-        // The pauses are disarmed: no daemon is paused, so no pid is observed, and
-        // neither daemon label is added. The history declares that it does not engage.
-        name: `a daemon pause that cannot engage`,
-        enters: [`a daemon pause that did not engage`],
-        build: (generated) => ({
-          ...generated,
-          // Without the witness module, the grammar takes these steps back.
-          witness: false,
-          // A check that refuses reports nothing, so the variant pins a clean config.
-          fault: `none`,
-          steps: [`dieMidCheck`, `resetBeforeRead`],
-          pauseEngages: false,
-        }),
-      },
-      {
         name: `every outcome class`,
         // The first half (review of #73, P12): the rest of the states, with the stop
         // runs of the first three stops; the second half (below) enters the warm and
@@ -4113,39 +4098,6 @@ oracleProperty({
             `addRelease`,
             `addScopedAddon`,
           ],
-        }),
-      },
-      {
-        // The second half of `every outcome class` (review of #73, P12): the warm and
-        // abort stop runs, over a base that enters only their states. Its stops and
-        // states are the other half of the original's; the union is checked by the
-        // framework's reach over both halves.
-        name: `every outcome class, the warm and abort stops`,
-        enters: stopsSecond,
-        build: (generated) => ({
-          ...generated,
-          witness: `capture`,
-          wholeFile: `none`,
-          fault: `none`,
-          authored: { stmt: 0, kind: `apply` },
-          stability: `insertGuard`,
-          steps: null,
-          ordinary: true,
-          configEnv: false,
-          native: `none`,
-          setupGlobal: false,
-          depSubpath: false,
-          unbuiltDep: false,
-          sourceSpelling: `plain`,
-          cliPath: `plain`,
-          boot: false,
-          budget: `two`,
-          pragma: false,
-          stopRuns: [
-            { signal: `SIGINT`, pool: `threads`, when: `warm` },
-            { signal: `SIGINT`, pool: `threads`, when: `abort` },
-          ],
-          consoleOutput: true,
         }),
       },
       {
@@ -5159,6 +5111,54 @@ oracleProperty({
           configPlace: `discovered`,
           configFile: `vite.config.mjs`,
           config: `object`,
+        }),
+      },
+      {
+        // The pauses are disarmed: no daemon is paused, so no pid is observed, and
+        // neither daemon label is added. The history declares that it does not engage.
+        name: `a daemon pause that cannot engage`,
+        enters: [`a daemon pause that did not engage`],
+        build: (generated) => ({
+          ...generated,
+          // Without the witness module, the grammar takes these steps back.
+          witness: false,
+          // A check that refuses reports nothing, so the variant pins a clean config.
+          fault: `none`,
+          steps: [`dieMidCheck`, `resetBeforeRead`],
+          pauseEngages: false,
+        }),
+      },
+      {
+        // The second half of `every outcome class` (review of #73, P12): the warm and
+        // abort stop runs, over a base that enters only their states. Its stops and
+        // states are the other half of the original's; the union is checked by the
+        // framework's reach over both halves.
+        name: `every outcome class, the warm and abort stops`,
+        enters: stopsSecond,
+        build: (generated) => ({
+          ...generated,
+          witness: `capture`,
+          wholeFile: `none`,
+          fault: `none`,
+          authored: { stmt: 0, kind: `apply` },
+          stability: `insertGuard`,
+          steps: null,
+          ordinary: true,
+          configEnv: false,
+          native: `none`,
+          setupGlobal: false,
+          depSubpath: false,
+          unbuiltDep: false,
+          sourceSpelling: `plain`,
+          cliPath: `plain`,
+          boot: false,
+          budget: `two`,
+          pragma: false,
+          stopRuns: [
+            { signal: `SIGINT`, pool: `threads`, when: `warm` },
+            { signal: `SIGINT`, pool: `threads`, when: `abort` },
+          ],
+          consoleOutput: true,
         }),
       },
     ]),
