@@ -143,12 +143,6 @@ agent.
   its exit, and its output claim, until the file exists, so a test can send a
   stop or start a second run before the run ends. `ORACLE_GAPS_TEST_WARM_PROBE` makes the first config warm-up wait where a
   stop signal can reach it.
-  ||||||| 35422e3
-  For contributors: two environment variables in the `ORACLE_GAPS_TEST_`
-  namespace are test-only hooks for the CLI's own oracle, not settings for
-  users. `ORACLE_GAPS_TEST_HOLD_EXIT_MS` holds the run's exit after its done
-  line, and `ORACLE_GAPS_TEST_WARM_PROBE` makes the first config warm-up
-  wait where a stop signal can reach it.
   `ORACLE_GAPS_TEST_TORN_ROWS` names a directory where each batch's
   watchdog counts its polls, and a batch's closing row is held half written
   until the watchdog has polled twice. The directory holds a `.begun` marker

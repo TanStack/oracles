@@ -173,7 +173,6 @@ const STOP_GRACE_MS = 2000
 let streamLog
 let writingEnding = false
 const logPathOf = (out) => join(out, `stream.log`)
-/** Writes `text` to stderr and, once the log is open, to the stream log. */
 /** Appends `text` to the stream log at `path`; a failure is the refusal that ends the run. */
 const appendLog = (path, text) => {
   try {
@@ -182,6 +181,7 @@ const appendLog = (path, text) => {
     throw cannotWrite(path, error)
   }
 }
+/** Writes `text` to stderr and, once the log is open, to the stream log. */
 const writeStream = (text) => {
   process.stderr.write(text)
   if (streamLog) appendLog(streamLog, text)
@@ -227,7 +227,7 @@ function claimOut(out) {
     mkdirSync(out, { recursive: true })
     writeFileSync(temp, `${process.pid}\n`)
   } catch (error) {
-    throw cannotWrite(claim, error)
+    throw claimCannotWrite(out, claim, error)
   }
   try {
     // A claim that vanishes between the link and the read was released by a run
@@ -238,7 +238,7 @@ function claimOut(out) {
         claimed = claim
         return
       } catch (error) {
-        if (error.code !== `EEXIST`) throw cannotWrite(claim, error)
+        if (error.code !== `EEXIST`) throw claimCannotWrite(out, claim, error)
         const holder = readHolder(claim)
         if (holder === undefined && attempt < 3) continue
         if (holder === undefined)
@@ -252,6 +252,13 @@ function claimOut(out) {
   } finally {
     rmSync(temp, { force: true })
   }
+}
+/** The refusal for a `run.pid` that cannot be written: the claim's own cause. */
+function claimCannotWrite(out, claim, error) {
+  return new Refusal(
+    `run.pid in ${out} cannot be written (${error.code ?? error.message})`,
+    `if no run uses ${out}, delete ${claim}, or pass --out a directory whose run.pid can be written`,
+  )
 }
 /** The refusal for a `run.pid` that holds its directory or cannot be read. */
 function heldRefusal(out, claim, holder) {

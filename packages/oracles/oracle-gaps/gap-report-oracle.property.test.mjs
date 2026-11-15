@@ -1050,8 +1050,9 @@ async function claimScenarioRuns(dir, files, how, scenario) {
     if (run.stdout.includes(`oracle-gaps: note log`)) return `claimed`
     const cause = run.stderr.match(/^refused: (.*)$/m)?.[1]
     if (cause === undefined || run.code !== 2) return `other`
-    const fix = run.stderr.match(/^fix: (.*)$/m)?.[1] ?? ``
-    return `refused (${namedScratch(cause, names)}; fix ${fix.includes(`run.pid`) ? `names the claim` : `does not name the claim`})`
+    // The fix line is judged exactly: the claim's directive, named by the run.
+    const fix = namedScratch(run.stderr.match(/^fix: (.*)$/m)?.[1] ?? ``, names)
+    return `refused (${namedScratch(cause, names)}; fix ${fix})`
   }
   return {
     scenario,
@@ -2918,7 +2919,7 @@ function check(plan, observations, expected) {
       race: `run.pid names pid 999999, which is not running`,
       stale: `run.pid names pid 999999, which is not running`,
     }[claim.scenario]
-    const refused = `refused (${cause}; fix names the claim)`
+    const refused = `refused (${cause}; fix if no run uses <out>, delete <out>/run.pid)`
     const owed = claim.scenario === `race` ? [refused, refused] : [refused]
     if (JSON.stringify(claim.outcomes) !== JSON.stringify(owed))
       return violation(
@@ -4441,165 +4442,6 @@ oracleProperty({
         }),
       },
       {
-        // Without `--out`, the CLI picks the run's output directory
-        // (args.mjs). A run stopped while its config warms must still leave
-        // its stream log beside its results, with the done line last on both
-        // streams (law 15). The stop witness runs alone (witness `stop`), and a history
-        // with the witness module takes no steps.
-        name: `a stop with the default output directory`,
-        enters: [
-          `a run with the default output directory`,
-          `a stop with the default output directory`,
-        ],
-        build: (generated) => ({
-          ...generated,
-          functions: [[{ kind: `push`, quote: `'` }]],
-          containers: [],
-          overloads: [],
-          owners: [`a`],
-          library: [],
-          libraryOwners: [],
-          runes: [],
-          wholeFile: `none`,
-          witness: false,
-          stopWitness: true,
-          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
-          authored: null,
-          fault: `none`,
-          stability: `none`,
-          steps: null,
-          ordinary: false,
-          outMode: `default`,
-          budget: `two`,
-          stopRuns: [{ signal: `SIGINT`, pool: `threads`, when: `warm` }],
-        }),
-      },
-      {
-        // Through the daemon, a check that the CLI parses without `--out`
-        // would write its results to a directory of its own, apart from the
-        // stream log the CLI names (law 15).
-        name: `a daemon check with the default output directory`,
-        enters: [
-          `a run with the default output directory`,
-          `a daemon check with the default output directory`,
-        ],
-        build: (generated) => ({
-          ...generated,
-          functions: [[{ kind: `push`, quote: `'` }]],
-          containers: [],
-          overloads: [],
-          owners: [`a`],
-          library: [],
-          libraryOwners: [],
-          runes: [],
-          wholeFile: `none`,
-          witness: false,
-          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
-          authored: null,
-          fault: `none`,
-          stability: `none`,
-          steps: [`test`],
-          ordinary: false,
-          outMode: `default`,
-          budget: `two`,
-        }),
-      },
-      {
-        // A stop sent as the CLI spawns, before its note's run has started:
-        // the note is written first, and the stopped line follows it on both
-        // streams, with one done line (P1 of the review of #57).
-        name: `a stop as the CLI starts`,
-        enters: [`a stop as the CLI starts`],
-        build: (generated) => ({
-          ...generated,
-          functions: [[{ kind: `push`, quote: `'` }]],
-          containers: [],
-          overloads: [],
-          owners: [`a`],
-          library: [],
-          libraryOwners: [],
-          runes: [],
-          wholeFile: `none`,
-          witness: false,
-          stopWitness: true,
-          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
-          authored: null,
-          fault: `none`,
-          stability: `none`,
-          steps: null,
-          ordinary: false,
-          outMode: `explicit`,
-          logBlocked: false,
-          overlap: false,
-          spawnStop: true,
-          // The signal waits for the CLI's started marker, so it lands during
-          // the loads of a CLI that loads before it installs its handlers.
-          spawnOnStart: true,
-          budget: `two`,
-        }),
-      },
-      {
-        // A stream log that is a directory cannot be written: the CLI refuses
-        // before its first line (index.mjs opens the log first), with its
-        // block, its fix, and its report in the output directory, and its
-        // stdout is its done line alone (law 12, law 15, and F3 of the
-        // coordinator's review of #57). No stack trace, and exit 2 or 3.
-        name: `a stream log that cannot be written`,
-        enters: [`a stream log that cannot be written`],
-        build: (generated) => ({
-          ...generated,
-          functions: [[{ kind: `push`, quote: `'` }]],
-          containers: [],
-          overloads: [],
-          owners: [`a`],
-          library: [],
-          libraryOwners: [],
-          runes: [],
-          wholeFile: `none`,
-          witness: false,
-          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
-          authored: null,
-          fault: `none`,
-          stability: `none`,
-          steps: null,
-          ordinary: false,
-          budget: `two`,
-          outMode: `explicit`,
-          logBlocked: true,
-          overlap: false,
-        }),
-      },
-      {
-        // A second run on the first's output directory while the first is
-        // live refuses (F4, the coordinator's decision of 2026-11-13): the
-        // first run's stream log still equals its own stderr, line for line,
-        // and the refusal reports no directory it does not own.
-        name: `two runs on one output directory`,
-        enters: [`two runs on one output directory`],
-        build: (generated) => ({
-          ...generated,
-          functions: [[{ kind: `push`, quote: `'` }]],
-          containers: [],
-          overloads: [],
-          owners: [`a`],
-          library: [],
-          libraryOwners: [],
-          runes: [],
-          wholeFile: `none`,
-          witness: false,
-          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
-          authored: null,
-          fault: `none`,
-          stability: `none`,
-          steps: null,
-          ordinary: false,
-          budget: `two`,
-          outMode: `explicit`,
-          logBlocked: false,
-          overlap: true,
-        }),
-      },
-      {
         // The budget witness checked through the daemon twice with nothing
         // changed between: the second check reuses the confirmations the
         // first ran, and must report what a cold run reports (law 9, with
@@ -5705,6 +5547,266 @@ oracleProperty({
         }),
       },
       {
+        // A batch's watchdog polls the capture while a worker appends its
+        // closing row. The hook holds each closing row half written until
+        // the watchdog has polled twice, so a poll reads a partial line by
+        // construction; the run must still complete and see every closing
+        // row (issue #83: a poll parsed the partial line and the CLI ended
+        // in an internal error).
+        name: `a capture row read while the worker wrote it`,
+        enters: [`a capture row read while the worker wrote it`],
+        build: (generated) => ({
+          ...generated,
+          functions: [
+            [{ kind: `push`, quote: `'` }],
+            [{ kind: `push`, quote: `'` }],
+          ],
+          containers: [],
+          overloads: [],
+          owners: [`a`, `b`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          derived: null,
+          dotGen: false,
+          dataOwners: [],
+          exportOwners: [],
+          importer: `none`,
+          wholeFile: `none`,
+          template: false,
+          tests: [
+            { ...judging(`a`, `fixed seed`, 1), fn: 0 },
+            { ...judging(`b`, `fixed seed`, 1), fn: 1 },
+          ],
+          witness: false,
+          authored: null,
+          secondAuthored: false,
+          fault: `none`,
+          stability: `none`,
+          ordinary: false,
+          native: `none`,
+          boot: false,
+          budget: `two`,
+          cliPath: `plain`,
+          concurrentStart: false,
+          contexts: 1,
+          steps: null,
+          tornRows: true,
+          prePlugin: false,
+          configPlace: `discovered`,
+          configFile: `vite.config.mjs`,
+          config: `object`,
+        }),
+      },
+      {
+        // The same witness with two concurrent batches (two contexts): a shared
+        // hold counter would release one batch's hold on the other's polls, so
+        // each batch must have its own (issue #83, review of #55).
+        name: `two batches each read a capture row while its worker wrote it`,
+        enters: [`a capture row read while the worker wrote it`],
+        build: (generated) => ({
+          ...generated,
+          functions: [
+            [{ kind: `if`, op: `>`, k: 4, not: false, quote: `'` }],
+            [{ kind: `if`, op: `>`, k: 4, not: false, quote: `'` }],
+          ],
+          containers: [],
+          overloads: [],
+          owners: [`a`, `b`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          derived: null,
+          dotGen: false,
+          dataOwners: [],
+          exportOwners: [],
+          importer: `none`,
+          wholeFile: `none`,
+          template: false,
+          tests: [
+            { ...judging(`a`, `fixed seed`, 1), fn: 0 },
+            { ...judging(`b`, `fixed seed`, 1), fn: 1 },
+          ],
+          witness: false,
+          authored: null,
+          secondAuthored: false,
+          fault: `none`,
+          stability: `none`,
+          ordinary: false,
+          native: `none`,
+          boot: false,
+          budget: `two`,
+          cliPath: `plain`,
+          concurrentStart: false,
+          contexts: 4,
+          steps: null,
+          tornRows: true,
+          prePlugin: false,
+          configPlace: `discovered`,
+          configFile: `vite.config.mjs`,
+          config: `object`,
+        }),
+      },
+      {
+        // Without `--out`, the CLI picks the run's output directory
+        // (args.mjs). A run stopped while its config warms must still leave
+        // its stream log beside its results, with the done line last on both
+        // streams (law 15). The stop witness runs alone (witness `stop`), and a history
+        // with the witness module takes no steps.
+        name: `a stop with the default output directory`,
+        enters: [
+          `a run with the default output directory`,
+          `a stop with the default output directory`,
+        ],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          wholeFile: `none`,
+          witness: false,
+          stopWitness: true,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+          ordinary: false,
+          outMode: `default`,
+          budget: `two`,
+          stopRuns: [{ signal: `SIGINT`, pool: `threads`, when: `warm` }],
+        }),
+      },
+      {
+        // Through the daemon, a check that the CLI parses without `--out`
+        // would write its results to a directory of its own, apart from the
+        // stream log the CLI names (law 15).
+        name: `a daemon check with the default output directory`,
+        enters: [
+          `a run with the default output directory`,
+          `a daemon check with the default output directory`,
+        ],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          wholeFile: `none`,
+          witness: false,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: [`test`],
+          ordinary: false,
+          outMode: `default`,
+          budget: `two`,
+        }),
+      },
+      {
+        // A stop sent as the CLI spawns, before its note's run has started:
+        // the note is written first, and the stopped line follows it on both
+        // streams, with one done line (P1 of the review of #57).
+        name: `a stop as the CLI starts`,
+        enters: [`a stop as the CLI starts`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          wholeFile: `none`,
+          witness: false,
+          stopWitness: true,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+          ordinary: false,
+          outMode: `explicit`,
+          logBlocked: false,
+          overlap: false,
+          spawnStop: true,
+          // The signal waits for the CLI's started marker, so it lands during
+          // the loads of a CLI that loads before it installs its handlers.
+          spawnOnStart: true,
+          budget: `two`,
+        }),
+      },
+      {
+        // A stream log that is a directory cannot be written: the CLI refuses
+        // before its first line (index.mjs opens the log first), with its
+        // block, its fix, and its report in the output directory, and its
+        // stdout is its done line alone (law 12, law 15, and F3 of the
+        // coordinator's review of #57). No stack trace, and exit 2 or 3.
+        name: `a stream log that cannot be written`,
+        enters: [`a stream log that cannot be written`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          wholeFile: `none`,
+          witness: false,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+          ordinary: false,
+          budget: `two`,
+          outMode: `explicit`,
+          logBlocked: true,
+          overlap: false,
+        }),
+      },
+      {
+        // A second run on the first's output directory while the first is
+        // live refuses (F4, the coordinator's decision of 2026-11-13): the
+        // first run's stream log still equals its own stderr, line for line,
+        // and the refusal reports no directory it does not own.
+        name: `two runs on one output directory`,
+        enters: [`two runs on one output directory`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          wholeFile: `none`,
+          witness: false,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+          ordinary: false,
+          budget: `two`,
+          outMode: `explicit`,
+          logBlocked: false,
+          overlap: true,
+        }),
+      },
+      {
         // Two starts meet a dead pid's claim (the maintainer's decision, "Stale claims refuse; no takeover"): both refuse, each names the claim, and neither writes past its claim attempt.
         name: `two starts race for a stale claim`,
         enters: [`two starts race for a stale claim`],
@@ -5871,107 +5973,6 @@ oracleProperty({
           logBlocked: false,
           overlap: false,
           claimScenario: `unreadable`,
-        }),
-      },
-      {
-        // A batch's watchdog polls the capture while a worker appends its
-        // closing row. The hook holds each closing row half written until
-        // the watchdog has polled twice, so a poll reads a partial line by
-        // construction; the run must still complete and see every closing
-        // row (issue #83: a poll parsed the partial line and the CLI ended
-        // in an internal error).
-        name: `a capture row read while the worker wrote it`,
-        enters: [`a capture row read while the worker wrote it`],
-        build: (generated) => ({
-          ...generated,
-          functions: [
-            [{ kind: `push`, quote: `'` }],
-            [{ kind: `push`, quote: `'` }],
-          ],
-          containers: [],
-          overloads: [],
-          owners: [`a`, `b`],
-          library: [],
-          libraryOwners: [],
-          runes: [],
-          derived: null,
-          dotGen: false,
-          dataOwners: [],
-          exportOwners: [],
-          importer: `none`,
-          wholeFile: `none`,
-          template: false,
-          tests: [
-            { ...judging(`a`, `fixed seed`, 1), fn: 0 },
-            { ...judging(`b`, `fixed seed`, 1), fn: 1 },
-          ],
-          witness: false,
-          authored: null,
-          secondAuthored: false,
-          fault: `none`,
-          stability: `none`,
-          ordinary: false,
-          native: `none`,
-          boot: false,
-          budget: `two`,
-          cliPath: `plain`,
-          concurrentStart: false,
-          contexts: 1,
-          steps: null,
-          tornRows: true,
-          prePlugin: false,
-          configPlace: `discovered`,
-          configFile: `vite.config.mjs`,
-          config: `object`,
-        }),
-      },
-      {
-        // The same witness with two concurrent batches (two contexts): a shared
-        // hold counter would release one batch's hold on the other's polls, so
-        // each batch must have its own (issue #83, review of #55).
-        name: `two batches each read a capture row while its worker wrote it`,
-        enters: [`a capture row read while the worker wrote it`],
-        build: (generated) => ({
-          ...generated,
-          functions: [
-            [{ kind: `if`, op: `>`, k: 4, not: false, quote: `'` }],
-            [{ kind: `if`, op: `>`, k: 4, not: false, quote: `'` }],
-          ],
-          containers: [],
-          overloads: [],
-          owners: [`a`, `b`],
-          library: [],
-          libraryOwners: [],
-          runes: [],
-          derived: null,
-          dotGen: false,
-          dataOwners: [],
-          exportOwners: [],
-          importer: `none`,
-          wholeFile: `none`,
-          template: false,
-          tests: [
-            { ...judging(`a`, `fixed seed`, 1), fn: 0 },
-            { ...judging(`b`, `fixed seed`, 1), fn: 1 },
-          ],
-          witness: false,
-          authored: null,
-          secondAuthored: false,
-          fault: `none`,
-          stability: `none`,
-          ordinary: false,
-          native: `none`,
-          boot: false,
-          budget: `two`,
-          cliPath: `plain`,
-          concurrentStart: false,
-          contexts: 4,
-          steps: null,
-          tornRows: true,
-          prePlugin: false,
-          configPlace: `discovered`,
-          configFile: `vite.config.mjs`,
-          config: `object`,
         }),
       },
     ]),
