@@ -4296,6 +4296,8 @@ oracleProperty({
         // retention line is written with its state after retirement (the bounded retention law).
         name: `a batch whose run rejects`,
         enters: [`a rejected batch retired its copies and logged them`],
+        // Takes the built history back to a generated one (rejectBatch 0), so that the framework can shrink it.
+        unbuild: (history) => ({ ...history, rejectBatch: 0 }),
         build: (generated) => ({
           ...generated,
           functions: [[{ kind: `push`, quote: `'` }]],

@@ -559,6 +559,12 @@ export interface ConstructedHistory<THistory> {
   name: string
   enters: ReadonlyArray<string>
   build: (generated: THistory) => THistory
+  /**
+   * Takes a built history back to a generated one, so fast-check can shrink
+   * it (its `.map` unmapper). Without it the history is outside the
+   * arbitrary's language, and the framework refuses it.
+   */
+  unbuild?: (built: THistory) => THistory
 }
 
 /**
@@ -2399,7 +2405,10 @@ function generatedTests<THistory, TExpected, TPlan>(
       : fc.oneof(
           { arbitrary: source.arbitrary, weight: constructions.length },
           ...constructions.map((construction) => ({
-            arbitrary: source.arbitrary.map(construction.build),
+            arbitrary: source.arbitrary.map(
+              construction.build,
+              construction.unbuild,
+            ),
             weight: 1,
           })),
         )
