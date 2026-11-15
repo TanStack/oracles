@@ -2823,6 +2823,7 @@ function resolveHistory(history) {
     fault: history.fault,
     stability: history.stability,
     steps: history.steps ?? [],
+    pauseEngages: history.pauseEngages !== false,
     lazyGate: history.lazyGate === true,
     consoleOutput: history.consoleOutput === true,
     // Whether a run aborts its process (a stop run `abort`): then file a has

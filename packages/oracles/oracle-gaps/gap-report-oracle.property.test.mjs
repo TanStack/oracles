@@ -3450,8 +3450,10 @@ const posixStops =
 // supervisor in #79; until then the Windows end-to-end job stays non-blocking
 // under C entry (c).
 const everyStops = [`a run whose process aborted`]
+// The state of the disarmed pause is reached only by its own constructed history.
+const disarmedOnly = [`a daemon pause that did not engage`]
 const witnessed = [...required, ...posixStops, ...everyStops].filter(
-  (s) => !separate.includes(s),
+  (s) => !separate.includes(s) && !disarmedOnly.includes(s),
 )
 
 // A constructed history builds from a generated base whose first function is
