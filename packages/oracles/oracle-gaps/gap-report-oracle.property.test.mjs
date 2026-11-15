@@ -3798,8 +3798,9 @@ const everyStops = [`a run whose process aborted`]
 // The state of the disarmed pause is reached only by its own constructed history.
 const disarmedOnly = [`a daemon pause that did not engage`]
 // The stop-specific states of `every outcome class`, split between its two halves.
+// The SIGTERM state is declared on POSIX only (posixStops), so only there is it named.
 const stopsFirst = [
-  `a run stopped by SIGTERM while a worker spun`,
+  ...posixStops,
   `a run stopped by SIGINT while a worker spun`,
   `a stopped run whose workers are child processes`,
   `a stopped run whose workers are threads`,
