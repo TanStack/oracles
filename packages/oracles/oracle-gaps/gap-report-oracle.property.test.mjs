@@ -1239,6 +1239,18 @@ function copyCli(plan) {
   return copy
 }
 
+// The pid a test mark holds, once it is a positive integer. A mark is written whole,
+// and the driver still parses it before it signals anything: process.kill(0) would
+// signal the driver's own group.
+const pidOf = (path) => {
+  try {
+    const text = readFileSync(path, `utf8`).trim()
+    return /^[1-9]\d*$/.test(text) ? Number(text) : undefined
+  } catch {
+    return undefined
+  }
+}
+
 // Whether a process runs. EPERM means it runs under another user.
 const isAlive = (pid) => {
   try {
