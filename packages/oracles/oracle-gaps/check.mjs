@@ -517,18 +517,25 @@ export default async (env) => {
   const loaded = typeof base === 'function' ? await base(env) : await base
   if (loaded === null || typeof loaded !== 'object')
     throw new Error(${JSON.stringify(`${config ?? `the config`}: config must export or return an object.`)})
+  // A path as copies are keyed: on Windows, forward slashes and an uppercase
+  // drive letter (paths.mjs \`posix\`); on POSIX, as it is.
+  const spelled = (path) => process.platform !== 'win32' ? path : path.replaceAll(String.fromCharCode(92), '/').replace(/^[a-z]:/, (drive) => drive.toUpperCase())
   const merged = mergeConfig(loaded, {
   plugins: [{
     name: 'oracle-gaps-schemata',
     enforce: 'pre',
     // A copy of a test file (runBatch) exists only here, so no other Vitest
-    // run finds it; Vite names a file in the package by its path from the
-    // package. A workspace dependency loads from its one-file bundle
-    // (workspaceBundles).
+    // run finds it. Vitest names a module by its path from the package, or,
+    // when the test root is a directory of the package (test.root), from that
+    // root (globalThis.__oracleGapsRoots, issue #101). A workspace dependency
+    // loads from its one-file bundle (workspaceBundles).
     resolveId(source) {
       const copies = globalThis.__oracleGapsCopies
-      for (const path of [source, ${JSON.stringify(pkg)} + source])
-        if (copies?.has(path.replaceAll(String.fromCharCode(92), '/'))) return path
+      const root = globalThis.__oracleGapsRoots?.[${index}] ?? ''
+      for (const path of [source, ${JSON.stringify(pkg)} + source, root + source]) {
+        const copy = spelled(path)
+        if (copies?.has(copy)) return copy
+      }
       return globalThis.__oracleGapsBundles?.get(source)
     },
     // Each module this context transforms, so a run is stored under the
@@ -546,7 +553,7 @@ export default async (env) => {
       const at = id.indexOf('?')
       if (at >= 0 && [...new URLSearchParams(id.slice(at + 1)).keys()].every((key) => ['raw', 'url', 'worker', 'sharedworker', 'inline'].includes(key))) return undefined
       const path = at < 0 ? id : id.slice(0, at)
-      const copy = globalThis.__oracleGapsCopies?.get(path.replaceAll(String.fromCharCode(92), '/'))
+      const copy = globalThis.__oracleGapsCopies?.get(spelled(path))
       if (copy !== undefined) return copy
       // This context's authored patch, or else the instrumented source of the
       // current check, both set by the runner in this process.
@@ -566,6 +573,10 @@ export default async (env) => {
     )
   }
   globalThis.__oracleGapsServe = []
+  // Per context: the root that Vitest names its modules from (the test root,
+  // which a config sets as `test.root`), set once the context has resolved it
+  // (warmContext). A copy's id is named from that root (issue #101).
+  globalThis.__oracleGapsRoots = []
   // Per context: the hash of each module's text when it last transformed it.
   globalThis.__oracleGapsLoads = []
   // The text of each copy of a test file that a batch runs, by its path.
@@ -760,6 +771,7 @@ export default async (env) => {
         throw error
       }),
     )
+    globalThis.__oracleGapsRoots[index] = context.getRootProject().config.root
     // Vitest 3 calls this step `init`; Vitest 4 renamed it `standalone`.
     await fromConfig(
       index,
