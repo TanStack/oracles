@@ -230,11 +230,25 @@ function claimOut(out) {
     throw cannotWrite(claim, error)
   }
   try {
-    linkSync(temp, claim)
-    claimed = claim
-  } catch (error) {
-    if (error.code !== `EEXIST`) throw cannotWrite(claim, error)
-    throw heldRefusal(out, claim, readHolder(claim))
+    // A claim that vanishes between the link and the read was released by a run
+    // that just ended: the link is tried again, a few times at most.
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        linkSync(temp, claim)
+        claimed = claim
+        return
+      } catch (error) {
+        if (error.code !== `EEXIST`) throw cannotWrite(claim, error)
+        const holder = readHolder(claim)
+        if (holder === undefined && attempt < 3) continue
+        if (holder === undefined)
+          throw new Refusal(
+            `run.pid in ${out} keeps changing`,
+            `rerun the check; if no run uses ${out}, delete ${claim}`,
+          )
+        throw heldRefusal(out, claim, holder)
+      }
+    }
   } finally {
     rmSync(temp, { force: true })
   }
@@ -242,30 +256,40 @@ function claimOut(out) {
 /** The refusal for a `run.pid` that holds its directory or cannot be read. */
 function heldRefusal(out, claim, holder) {
   const refusal =
-    holder > 0 && alive(holder)
+    holder === UNREADABLE
       ? new Refusal(
-          `another run (pid ${holder}) is using ${out}`,
-          `If no run is using it, delete ${claim}; otherwise pass --out a directory no run is using.`,
+          `run.pid in ${out} can't be read`,
+          `if no run uses ${out}, delete ${claim}`,
         )
-      : holder > 0
+      : holder > 0 && alive(holder)
         ? new Refusal(
-            `run.pid names pid ${holder}, which is not running`,
-            `if no run uses ${out}, delete ${claim}`,
+            `another run (pid ${holder}) is using ${out}`,
+            `If no run is using it, delete ${claim}; otherwise pass --out a directory no run is using.`,
           )
-        : new Refusal(
-            `run.pid in ${out} does not name a pid`,
-            `if no run uses ${out}, delete ${claim}`,
-          )
+        : holder > 0
+          ? new Refusal(
+              `run.pid names pid ${holder}, which is not running`,
+              `if no run uses ${out}, delete ${claim}`,
+            )
+          : new Refusal(
+              `run.pid in ${out} does not name a pid`,
+              `if no run uses ${out}, delete ${claim}`,
+            )
   refusal.reportless = true
   return refusal
 }
-/** The pid a claim names, or undefined when the claim is gone. */
+/** Read a claim that cannot be read (a directory, or no permission). */
+const UNREADABLE = `unreadable`
+/**
+ * The pid a claim names: undefined when the claim is gone, UNREADABLE when it
+ * cannot be read at all, and NaN or 0 when its text names no pid.
+ */
 function readHolder(claim) {
   try {
     return Number(readFileSync(claim, `utf8`))
   } catch (error) {
     if (error.code === `ENOENT`) return undefined
-    throw cannotWrite(claim, error)
+    return UNREADABLE
   }
 }
 // The longest a test-only wait lasts before it fails the run loudly.
@@ -332,7 +356,16 @@ function holdUntil() {
 function exitWhenFlushed(code) {
   process.stdout.write(``, () =>
     process.stderr.write(``, () => {
-      holdUntil()
+      try {
+        holdUntil()
+      } catch (error) {
+        // A hold that never releases is a failed test: the run exits nonzero.
+        process.stderr.write(
+          `oracle-gaps: internal error, ${error.message}\n`,
+          () => process.exit(1),
+        )
+        return
+      }
       process.exit(code)
     }),
   )
@@ -357,8 +390,6 @@ function superviseRun(out) {
   // of memory.
   let outOfMemory = false
   let stderrTail = ``
-  // The first error that the stream log raised after it was open, if any.
-  let logLost
   // Whether the run's streams and channel have closed.
   let closed = false
   // Ends the CLI once the run has ended (or the grace has passed), with what
@@ -454,14 +485,13 @@ function superviseRun(out) {
   // for V8's out-of-memory message.
   child.stderr.on(`data`, (chunk) => {
     process.stderr.write(chunk)
-    // A log that cannot take the run's stderr is recorded once, and the relay
-    // goes on: the run's own ending stays the only done line on each stream.
-    if (logLost === undefined)
-      try {
-        appendLog(streamLog, chunk)
-      } catch (error) {
-        logLost = error
-      }
+    // A chunk the log cannot take is not written to it, and the relay goes on: the
+    // run's own ending stays the only done line on each stream.
+    try {
+      appendLog(streamLog, chunk)
+    } catch {
+      // The stream log cannot be written; stderr above has the chunk.
+    }
     stderrTail = (stderrTail + chunk).slice(-200)
     if (/heap out of memory/i.test(stderrTail)) outOfMemory = true
   })
@@ -490,8 +520,14 @@ function signalGroup(group, signal) {
  */
 function watchSupervisor(supervisor) {
   // Only a process that leads its own group kills it: an inherited variable
-  // (a test's child, say) must not name a group this process does not lead.
-  if (groupOf(process.pid) !== process.pid) return
+  // (a test's child, say) must not name a group this process does not lead. A
+  // group that cannot be read fails the run: the watchdog would not be armed.
+  const group = groupOf(process.pid)
+  if (group === undefined)
+    throw new Error(
+      `the run cannot read its process group, so it cannot arm its supervisor watchdog`,
+    )
+  if (group !== process.pid) return
   setInterval(() => {
     if (process.ppid !== supervisor) process.kill(-process.pid, `SIGKILL`)
   }, 1000).unref()
@@ -622,7 +658,13 @@ async function run() {
       return superviseRun(checking.out)
     }
   }
-  if (supervisor !== undefined) watchSupervisor(Number(supervisor))
+  if (supervisor !== undefined) {
+    try {
+      watchSupervisor(Number(supervisor))
+    } catch (error) {
+      return endWith(error, options?.out)
+    }
+  }
   // A test that runs this CLI starts a run of its own, in a group of its own.
   delete process.env.ORACLE_GAPS_INTERNAL_SUPERVISED
   // A stop ends the run at once, with no line: an error that the stop causes

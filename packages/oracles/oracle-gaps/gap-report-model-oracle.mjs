@@ -834,7 +834,7 @@ const drawn = fc.record({
   spawnSignal: fc.constantFrom(`SIGINT`, `SIGINT`, `SIGTERM`),
   spawnDelay: fc.integer({ min: 0, max: 150 }),
   spawnOnStart: fc.constantFrom(false, false, false, true),
-  // A claim scenario (`race` or `recovery`, review of #57) is constructed only.
+  // A claim scenario (`race`, `stale`, `empty` or `unreadable`, review of #57) is constructed only.
   // A constant draws nothing, so generated histories never run the claim driver,
   // and `histories` below takes a constructed scenario back as this constant.
   claimScenario: fc.constant(false),
@@ -2944,9 +2944,9 @@ function resolveHistory(history) {
     spawnStop: history.spawnStop === true,
     spawnSignal: history.spawnSignal ?? `SIGINT`,
     spawnDelay: history.spawnDelay ?? 0,
-    // A claim left by a dead pid, then the starts that meet it: two racing
-    // starts (`race`) or one start that must take over a stale claim and its
-    // mutex (`recovery`). Only constructed histories set it, so generated
+    // A claim that a start must refuse: two racing starts on a dead pid's claim
+    // (`race`), one start on it (`stale`), or one on an empty (`empty`) or
+    // unreadable (`unreadable`) claim. Only constructed histories set it, so generated
     // histories keep their fixed-seed draws and run no claim driver (P4, the
     // coordinator's decision on the claim rules).
     claimScenario: history.claimScenario ?? false,

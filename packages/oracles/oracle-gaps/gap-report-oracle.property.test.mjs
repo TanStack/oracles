@@ -974,6 +974,7 @@ const claimStateOf = {
   race: `two starts race for a stale claim`,
   stale: `a start refuses a stale claim`,
   empty: `a start refuses an empty claim`,
+  unreadable: `a start refuses an unreadable claim`,
 }
 
 /**
@@ -988,8 +989,16 @@ async function claimScenarioRuns(dir, files, how, scenario) {
   const { args, out } = cliArgs(dir, files, { ...how, outName: `out-claim` })
   mkdirSync(out, { recursive: true })
   const claim = join(out, `run.pid`)
-  const written = scenario === `empty` ? `` : `999999\n`
-  writeFileSync(claim, written)
+  // The claim's text, or none: an unreadable claim is a directory, which no
+  // read can take.
+  const written = {
+    empty: ``,
+    race: `999999\n`,
+    stale: `999999\n`,
+    unreadable: undefined,
+  }[scenario]
+  if (written === undefined) mkdirSync(claim)
+  else writeFileSync(claim, written)
   // Every start this driver spawns, so a failure here never leaves one running.
   const children = []
   const startRun = () => {
@@ -1024,21 +1033,28 @@ async function claimScenarioRuns(dir, files, how, scenario) {
       if (child.exitCode === null && child.signalCode === null)
         child.kill(`SIGKILL`)
   }
-  // A refusal's cause and its fix line, as the start printed them.
+  // A refusal's cause and its fix line, as the start printed them. The scratch
+  // names are normalized, so the observation does not depend on the run's paths.
+  const names = [
+    [out, `<out>`],
+    [dir, `<package>`],
+  ]
   const outcomeOf = (run) => {
     if (run.stdout.includes(`oracle-gaps: note log`)) return `claimed`
     const cause = run.stderr.match(/^refused: (.*)$/m)?.[1]
     if (cause === undefined || run.code !== 2) return `other`
     const fix = run.stderr.match(/^fix: (.*)$/m)?.[1] ?? ``
-    return `refused (${cause}; fix ${fix.includes(`run.pid`) ? `names the claim` : `does not name the claim`})`
+    return `refused (${namedScratch(cause, names)}; fix ${fix.includes(`run.pid`) ? `names the claim` : `does not name the claim`})`
   }
   return {
     scenario,
-    outDir: out,
     outcomes: runs.map(outcomeOf).sort(),
     // The claim is kept as it was, and nothing else is in the directory: a
     // refusal writes no note, no log, and no temp file.
-    claimKept: existsSync(claim) && readFileSync(claim, `utf8`) === written,
+    claimKept:
+      scenario === `unreadable`
+        ? existsSync(claim) && statSync(claim).isDirectory()
+        : existsSync(claim) && readFileSync(claim, `utf8`) === written,
     otherFiles: readdirSync(out).filter((name) => name !== `run.pid`),
   }
 }
@@ -1095,12 +1111,16 @@ async function unwritableLogRuns(dir, files, how, ending) {
       writeFileSync(release, ``)
     }
     const { code, signal } = await exited
+    const names = [
+      [out, `<out>`],
+      [dir, `<package>`],
+    ]
     return {
       ending,
       exit: code,
       signal,
-      stdout: got.stdout,
-      stderr: got.stderr,
+      stdout: namedScratch(got.stdout, names),
+      stderr: namedScratch(got.stderr, names),
       logIsDirectory: existsSync(log) && statSync(log).isDirectory(),
     }
   } finally {
@@ -2618,10 +2638,12 @@ function check(plan, observations, expected) {
   if (claim !== undefined) {
     // A stale claim refuses every start (the maintainer's decision, "Stale claims
     // refuse; no takeover"); each refusal names its cause and the claim.
-    const cause =
-      claim.scenario === `empty`
-        ? `run.pid in ${claim.outDir} does not name a pid`
-        : `run.pid names pid 999999, which is not running`
+    const cause = {
+      empty: `run.pid in <out> does not name a pid`,
+      unreadable: `run.pid in <out> can't be read`,
+      race: `run.pid names pid 999999, which is not running`,
+      stale: `run.pid names pid 999999, which is not running`,
+    }[claim.scenario]
     const refused = `refused (${cause}; fix names the claim)`
     const owed = claim.scenario === `race` ? [refused, refused] : [refused]
     if (JSON.stringify(claim.outcomes) !== JSON.stringify(owed))
@@ -2978,7 +3000,9 @@ function check(plan, observations, expected) {
     // killed like SIGKILL and no done line is owed (register, "Windows stops",
     // C 2026-11-13). An abort is the run's own end, which is judged as before.
     const owesDone = process.platform !== `win32` || value.when === `abort`
-    const ends = value.spun && owesDone ? endsBreach(value) : undefined
+    const ends = value.spun
+      ? endsBreach(value, { doneOwed: owesDone })
+      : undefined
     if (ends)
       return violation(
         `stopped`,
@@ -3126,7 +3150,7 @@ const logNoteOf = (run) => {
  * 3 error, and a signal's code stopped). With `checked`, the run started a
  * check, so its first line names its stream log. Undefined when it holds.
  */
-function endsBreach(run, { checked = true } = {}) {
+function endsBreach(run, { checked = true, doneOwed = true } = {}) {
   const streams = [
     [`stderr`, run.stream],
     [`stdout`, run.stdoutStream],
@@ -3159,6 +3183,9 @@ function endsBreach(run, { checked = true } = {}) {
         difference: `the run wrote a line on ${where} that is not a line of the stream: ${stream.strays[0]}`,
         extra: { actual: stream.strays, expected: [] },
       }
+  // A run whose done line is not owed (a stop sent by child.kill on win32) is
+  // judged on everything above: its note, its log, and its results.
+  if (!doneOwed) return undefined
   for (const [where, stream] of streams)
     if (stream.dones !== 1 || !stream.last.startsWith(`oracle-gaps: done `))
       return {
@@ -3711,6 +3738,7 @@ const required = [
   `two starts race for a stale claim`,
   `a start refuses a stale claim`,
   `a start refuses an empty claim`,
+  `a start refuses an unreadable claim`,
   `a stream log lost after its note, then stopped`,
   `a stream log lost after its note, then completed`,
   `a stop as the CLI starts`,
@@ -3892,6 +3920,7 @@ const ownHistoryStates = [
   `two starts race for a stale claim`,
   `a start refuses a stale claim`,
   `a start refuses an empty claim`,
+  `a start refuses an unreadable claim`,
   `a stream log lost after its note, then stopped`,
   `a stream log lost after its note, then completed`,
   `a stop as the CLI starts`,
@@ -4983,6 +5012,35 @@ oracleProperty({
           logBlocked: false,
           overlap: false,
           logLost: `complete`,
+        }),
+      },
+      {
+        // An unreadable claim (a directory where run.pid should be) cannot be read
+        // at all: its start refuses, and names the claim as unreadable.
+        name: `a start refuses an unreadable claim`,
+        enters: [`a start refuses an unreadable claim`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          wholeFile: `none`,
+          witness: false,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+          ordinary: false,
+          budget: `two`,
+          outMode: `explicit`,
+          logBlocked: false,
+          overlap: false,
+          claimScenario: `unreadable`,
         }),
       },
     ]),
