@@ -1096,10 +1096,19 @@ export default async (env) => {
     writeFileSync(join(out, `state.json`), JSON.stringify(state))
     const project = context.getRootProject()
     const started = Date.now()
-    const running = context.runTestSpecifications(
-      copies.map((copy) => project.createSpecification(copy)),
-      false,
-    )
+    // Test-only fault (ORACLE_GAPS_TEST_REJECT_BATCH=<n>, inert unless set): the n-th batch's run rejects,
+    // as a crash in Vitest would, so the CLI's rejection path runs (register: test-only hooks).
+    const running =
+      process.env.ORACLE_GAPS_TEST_REJECT_BATCH === String(evidenceOf.batches)
+        ? Promise.reject(
+            new Error(
+              `oracle-gaps test fault: batch ${evidenceOf.batches} rejected`,
+            ),
+          )
+        : context.runTestSpecifications(
+            copies.map((copy) => project.createSpecification(copy)),
+            false,
+          )
     // The watchdog: each copy writes a starting row when its setup runs and
     // a closing row when it finishes, so the copy that is running is the
     // last that started, or the one after it once that one closed. A copy

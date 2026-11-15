@@ -4449,6 +4449,8 @@ function model(plan) {
   const gaps = entries.map((e) => e.key)
   return {
     configLines,
+    // The batch whose run the model predicts rejects (a constructed fault): the run ends as an internal error.
+    rejectedBatch: plan.rejectBatch,
     baseline: baselineOf(plan),
     blocking: blockingOf(plan).filter((f) => !f.ordinary),
     replayed: blockingOf(plan).find((f) => f.replayed)?.replayed,
