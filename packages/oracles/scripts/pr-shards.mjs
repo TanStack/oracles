@@ -577,6 +577,7 @@ export const partitions = {
       // The deterministic-cuts histories (the 16 s wait, the backstop, the work
       // budget, the twin and the timer) are short, except the 16 s wait.
       10: anyOf([
+        "a copy waiting on an unref'd timer",
         "a slow owner's kill and another owner's kill",
         'a backstop cut ends the copies ahead of a later kill',
         'a kill past the work budget in a later owner',
