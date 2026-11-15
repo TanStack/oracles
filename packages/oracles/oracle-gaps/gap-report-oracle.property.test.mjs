@@ -586,6 +586,7 @@ function cliArgs(
     ordinary = false,
     sources = `${SOURCE},${LIB}`,
     budget = `two`,
+    hangMs = FULL_LIMIT_MS,
     outName = daemon ? `out-daemon` : `out`,
     config,
     contexts = 4,
@@ -621,7 +622,7 @@ function cliArgs(
     // history passes it, and the CLI notes that it changes nothing.
     ...(budget === `one` ? [`--first-limit`, `1000`] : []),
     `--hang-limit`,
-    String(plan.history.hangMs ?? FULL_LIMIT_MS),
+    String(hangMs),
     `--out`,
     path(out),
   ]
@@ -1311,6 +1312,7 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       ordinary: plan.ordinary,
       sources: sourceArgument(plan, `${dir}.link`),
       budget: plan.budget,
+      hangMs: plan.history.hangMs,
       ...configArgs(plan),
       // After the `config` edit, `--config` names the second config.
       ...(state.altConfig ? { config: altConfigPath(plan) } : {}),
@@ -1733,6 +1735,7 @@ async function driver(plan, observe) {
       ordinary: plan.ordinary,
       sources: sourceArgument(plan, `${dir}.link`),
       budget: plan.budget,
+      hangMs: plan.history.hangMs,
       cli: plan.cliPath === `spaced` ? copy : here,
       ...configArgs(plan),
     }
