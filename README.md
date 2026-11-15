@@ -136,11 +136,19 @@ agent.
   - `ORACLE_GAPS_TEST_PAUSE_AT` names one point at which the CLI blocks, with
     `ORACLE_GAPS_TEST_PAUSE_MARK` naming a file the blocked process writes its
     pid to: `daemon-reply` holds a daemon's reply after the check, and
-    `daemon-read` holds its first connection unread. The test kills the process
-    by that pid, so no signal is needed to pause on win32.
-  - `ORACLE_GAPS_TEST_WAIT_MARK` names a file the CLI writes once a request has
-    waited for its daemon's reply longer than `ORACLE_GAPS_WAIT_MS`, so a test
-    acts on the CLI's wait, not on the clock.
+    `daemon-read` holds its first connection unread, once `ORACLE_GAPS_TEST_PAUSE_ARM`
+    names an existing file. The test kills the process by that pid, so no signal
+    is needed to pause on win32. Both marks are written whole (a temp file, then
+    a rename), and the test parses the pid as a positive integer before it sends
+    any signal.
+  - `ORACLE_GAPS_TEST_WAIT_MARK` names a file a request writes when its reply has
+    not come `ORACLE_GAPS_TEST_WAIT_MS` after it was sent. A request has no
+    timeout of its own: this timer starts with the request, and is cleared when
+    the request settles, whether it resolves or rejects. The test acts on the
+    CLI's wait, not on the clock.
+  - `ORACLE_GAPS_TEST_WAIT_MS` (milliseconds, default 60000) is the CLI's wait
+    for a daemon to start or to close; a test shortens it to outlast a paused
+    daemon. It is a test-only knob, not a setting for users.
 
   A few endings print no done line, or one more line: a SIGKILL of the CLI,
   or a signal that comes while Node is still starting the CLI, before its
