@@ -1,5 +1,7 @@
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import fc from 'fast-check'
 import { describe, expect, test } from 'vitest'
 import { drawn, histories } from '../oracle-gaps/gap-report-model-oracle.mjs'
@@ -58,5 +60,51 @@ describe(`the gap oracle's history grammar`, () => {
         recorded[kind].map(([key]) => key),
       )
     }
+  })
+
+  // The constructed histories of the end-to-end gap oracle, in the order the
+  // oracle registers them: each one is built from the fixed seed and its index
+  // (`seed + index`), so a history inserted before a recorded one changes every
+  // later history's draw. The register's generator rule (2026-11-14) says new
+  // constructed histories are appended at the end. The recorded names are
+  // the list the oracle registered on main; the current list must begin with
+  // them, so a new name can only follow.
+  test(`appends new constructed histories, and never inserts one before a recorded one`, () => {
+    const recorded = JSON.parse(
+      readFileSync(
+        new URL(`../oracle-gaps/constructed-order.json`, import.meta.url),
+        `utf8`,
+      ),
+    ) as { constructed: Array<string> }
+    const listing = spawnSync(
+      `pnpm`,
+      [
+        `exec`,
+        `vitest`,
+        `list`,
+        `--json`,
+        `--config`,
+        `oracle-gaps/vitest.config.mjs`,
+        `gap-report-oracle`,
+      ],
+      {
+        cwd: fileURLToPath(new URL(`..`, import.meta.url)),
+        encoding: `utf8`,
+        maxBuffer: 64 * 1024 * 1024,
+      },
+    )
+    expect(listing.status).toBe(0)
+    const tests = JSON.parse(
+      listing.stdout.slice(listing.stdout.indexOf(`[`)),
+    ) as Array<{ name: string }>
+    const unit = `oracle-gaps.report > fixed seed ${FIXED_SEED}: `
+    const current = tests
+      .map(({ name }) => name)
+      .filter((name) => name.startsWith(unit))
+      .map((name) => name.slice(unit.length))
+      .filter((name) => name !== `generated`)
+    expect(current.slice(0, recorded.constructed.length)).toEqual(
+      recorded.constructed,
+    )
   })
 })
