@@ -317,95 +317,96 @@ export const partitions = {
   // (maintainer decision CI-1): each run draws a fresh campaign seed, and a
   // counterexample prints its replay line. 38 units, measured on main at
   // 35422e3 on one Arclet (8 vCPU Linux, one Vitest worker): 624 s in all.
-  // The witness module's edit sequence alone takes 178 s, so two shards of
-  // about 312 s each are the fewest that keep a job near 5 minutes.
+  // CI ran the random shards 1.7 times slower than the Arclet (9 min for a
+  // 312 s shard, in #90's first run), and a random unit's cost follows its
+  // seed. So the shards are three of about 208 s here, which is about 6 min
+  // in CI. The witness module's edit sequence alone is 178 s.
   'oracle-gaps-random': {
     args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-oracle`],
     suite: `oracle-gaps.report`,
     select: `random seed: `,
     shards: {
-      // 312 s: the witness module's edit sequence (178 s), brokenOwner
-      // (74 s), and the small units.
+      // 208 s here.
       1: anyOf([
-        'an edit sequence over the witness module',
-        'a declaration fault: brokenOwner',
-        'a declaration fault: brokenVitest',
-        'a declaration fault: noTypescript',
-        'an edit that changed the cold result after a hang replaced the only context',
-        'generated',
-        'an edit to a module that only mutated runs load',
-        'a failing owner under a config that --config names',
-        'a load failure beside a hang',
-        'an ambiguous authored mutant',
-        'a package whose parent directory has its config',
-        'a .ts config in a package with no module type that calls require',
-        'a config that --config names',
-        'ordinary tests left out by default',
-        'a declaration fault: configNull',
-        'a declaration fault: configThrows',
-        'a declaration fault: missingSource',
-        'a declaration fault: nonLiteral',
-        'a config fault in a run that owns nothing',
-        'a declaration fault: outsideSource',
+        `an edit sequence over the witness module`,
+        `a declaration fault: noTypescript`,
+        `a lazy module loaded before a hang in the same batch`,
+        `a load failure beside a hang`,
+        `an ambiguous authored mutant`,
+        `a .ts config in a package with no module type that calls require`,
+        `an awaiting config in a package with no module type`,
+        `a declaration fault: configNull`,
+        `a declaration fault: configSyntax`,
+        `a declaration fault: missingSource`,
+        `a config fault in a run that owns nothing`,
       ]),
-      // The rest: every outcome class (104 s), apiLessTypescript (75 s), the
-      // daemon's edit sequence (65 s), and the second daemon check (44 s),
-      // about 312 s, and any unit added later.
-      2: rest,
+      // 208 s here.
+      2: anyOf([
+        `every outcome class`,
+        `an edit sequence through the daemon`,
+        `a declaration fault: brokenVitest`,
+        `an edit that changed the cold result after a hang replaced the only context`,
+        `an edit to a module that only mutated runs load`,
+        `a failing owner under a config that --config names`,
+        `a failing owner under its parent's config`,
+        `a package whose parent directory has its config`,
+        `a package with no config`,
+        `ordinary tests left out by default`,
+        `a declaration fault: configNoDefault`,
+        `a declaration fault: badEntry`,
+        `a declaration fault: projects`,
+        `a declaration fault: outsideSource`,
+      ]),
+      // The rest: 208 s here, and any unit added later.
+      3: rest,
     },
   },
-  // The end-to-end gap oracle's determinism units, which every pull request
-  // runs: each runs one constructed or generated history twice and compares
-  // the two traces. 40 units, measured in the same run on main at 35422e3:
-  // 1,337 s in all. Six of them fail on main (their full time is counted):
-  // the traces differ in the heartbeat list, which records which busy mutants
-  // beat, so the check is wall-clock dependent. The longest unit, the witness
-  // module's edit sequence, takes 339 s, so four shards of 333 to 339 s are
-  // the fewest that keep each job near 6 minutes.
+  // The end-to-end gap oracle's determinism units, which pull requests run
+  // except the excluded ones below. Each unit runs one history twice and
+  // compares the two traces. 40 units, measured on main at 35422e3 on one
+  // Arclet: 1,337 s in all. Six fail on main, and their time is what they
+  // take to fail: the traces differ in the heartbeat list (wall-clock
+  // timing, #91) or in a daemon note (#92). Those six are excluded, one
+  // issue each (#93 to #98), so this job gates every other unit. A test that
+  // a pull request adds runs here, since only the names below are excluded;
+  // a change to an excluded unit's history does not run it until its issue
+  // closes. The other 34 units take 284 s here, in two shards.
   'oracle-gaps-determinism': {
     args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-oracle`],
     suite: `oracle-gaps.report`,
     select: `determinism: `,
+    excluded: [
+      // Heartbeat list (#91): #93 to #97.
+      `constructed history: every outcome class`,
+      `constructed history: a declaration fault: brokenOwner`,
+      `constructed history: a declaration fault: noTypescript`,
+      `constructed history: an edit sequence over the witness module`,
+      `generated 2`,
+      // Daemon test-output note (#92): #98.
+      `constructed history: an edit sequence through the daemon`,
+    ],
     shards: {
-      // 339 s: the witness module's edit sequence, alone.
-      1: 'constructed history: an edit sequence over the witness module',
-      // 333 s: every outcome class (223 s) and the small units.
-      2: anyOf([
-        'constructed history: every outcome class',
-        'constructed history: a declaration fault: brokenVitest',
-        'constructed history: a stale authored mutant and a reformat',
-        'constructed history: an edit that changed the cold result after a hang replaced the only context',
-        'constructed history: two authored mutants',
-        'constructed history: an ambiguous authored mutant',
-        'constructed history: a run with eleven contexts',
-        'constructed history: a package whose parent directory has its config',
-        'constructed history: a declaration fault: configNoDefault',
-        'constructed history: a declaration fault: configThrows',
-        'constructed history: a declaration fault: nonLiteral',
-        'constructed history: a declaration fault: projects',
-        'constructed history: a config fault in a run that owns nothing',
+      // 142 s here.
+      1: anyOf([
+        `constructed history: a second daemon check of the budget witness`,
+        `constructed history: an edit that changed the cold result after a hang replaced the only context`,
+        `constructed history: a declaration fault: apiLessTypescript`,
+        `constructed history: two authored mutants`,
+        `constructed history: an ambiguous authored mutant`,
+        `constructed history: a failing owner under its parent's config`,
+        `constructed history: a config that --config names`,
+        `constructed history: a .ts config in a package with no module type that calls require`,
+        `constructed history: a package whose parent directory has its config`,
+        `constructed history: a declaration fault: configNoDefault`,
+        `constructed history: a declaration fault: configThrows`,
+        `constructed history: a declaration fault: configSyntax`,
+        `constructed history: a declaration fault: nonLiteral`,
+        `constructed history: a declaration fault: projects`,
+        `constructed history: test.projects in a parent's config`,
+        `constructed history: a declaration fault: outsideSource`,
       ]),
-      // 333 s: generated 2 (192 s), the second daemon check (88 s), and the
-      // small units.
-      3: anyOf([
-        'generated 2',
-        'constructed history: a second daemon check of the budget witness',
-        'constructed history: a lazy module loaded before a hang in the same batch',
-        'constructed history: an edit to a module that only mutated runs load',
-        'constructed history: a failing owner under a config that --config names',
-        'constructed history: a load failure beside a hang',
-        'constructed history: a config that --config names',
-        'constructed history: a .ts config in a package with no module type that calls require',
-        'constructed history: ordinary tests left out by default',
-        'constructed history: a declaration fault: configSyntax',
-        'constructed history: a declaration fault: missingSource',
-        'generated 0',
-        'constructed history: a declaration fault: outsideSource',
-      ]),
-      // The rest: the daemon's edit sequence (134 s), noTypescript (89 s),
-      // brokenOwner (76 s), and the small units, about 333 s, and any unit
-      // added later.
-      4: rest,
+      // The rest: 142 s here, and any unit added later.
+      2: rest,
     },
   },
   'oracle-gaps-static-windows': {
@@ -674,11 +675,18 @@ export const partitions = {
   },
 }
 
+/** A partition's excluded names, relative to its select: tests in no shard. */
+const excludedOf = (partition) => new Set(partition.excluded ?? [])
+
 /** A shard's pattern over the name that follows the suite's. */
 function bodyOf(partition, shard) {
   const own = partition.shards[shard]
   if (own !== rest) return `${escape(partition.select)}(?:${own})`
-  const others = Object.values(partition.shards).filter((body) => body !== rest)
+  // A rest shard takes what no other shard and no exclusion takes.
+  const others = [
+    ...Object.values(partition.shards).filter((body) => body !== rest),
+    ...[...excludedOf(partition)].map(escape),
+  ]
   return `(?!${escape(partition.select)}(?:${others.join(`|`)})$)${escape(partition.select)}.*`
 }
 
@@ -726,7 +734,12 @@ export function partitionErrors(name, listed) {
       joined.every((text) => owners[0].pattern.test(text))
     const own = full.startsWith(prefix) ? full.slice(prefix.length) : undefined
     const selected = own !== undefined && own.startsWith(partition.select)
-    if (selected && !whole)
+    // An excluded test is in no shard on purpose; its issue is the record.
+    const excluded =
+      selected && excludedOf(partition).has(own.slice(partition.select.length))
+    if (excluded && owners.length > 0)
+      errors.push(`${JSON.stringify(full)} is excluded, but is in a shard`)
+    if (selected && !whole && !excluded)
       errors.push(
         `${JSON.stringify(full)} is in ${owners.length === 0 ? `no shard` : owners.length === 1 ? `shard ${owners[0].shard} under only one of Vitest's name joins` : `shards ${owners.map(({ shard }) => shard).join(`, `)}`}`,
       )
@@ -744,6 +757,9 @@ export function partitionErrors(name, listed) {
   for (const exception of partition.exceptions ?? [])
     if (!names.has(`${prefix}${exception}`))
       errors.push(`exception ${JSON.stringify(exception)} names no test`)
+  for (const exclusion of excludedOf(partition))
+    if (!names.has(`${prefix}${partition.select}${exclusion}`))
+      errors.push(`excluded ${JSON.stringify(exclusion)} names no test`)
   for (const [shard, body] of Object.entries(partition.shards))
     if (
       body !== rest &&
