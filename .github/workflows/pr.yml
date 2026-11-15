@@ -153,7 +153,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5]
+        # Shard 1 is the witness module's edit sequence, which runs in its own
+        # non-blocking job below (#106).
+        shard: [2, 3, 4, 5]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -161,13 +163,30 @@ jobs:
           persist-credentials: false
       - name: Setup Tools
         uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
-      # The end-to-end oracle's determinism units, in five shards, except the
-      # one excluded in pr-shards.mjs (#92). Each unit runs a history twice and
-      # compares the results and fixed lines; heartbeats are checked for shape.
+      # The end-to-end oracle's determinism units, in shards 2 to 5 (shard 1 is
+      # below), except the one excluded in pr-shards.mjs (#92). Each unit runs a
+      # history twice and compares the results and fixed lines; heartbeats are
+      # checked for shape.
       - run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-determinism "$SHARD")"
         working-directory: packages/oracles
         env:
           SHARD: ${{ matrix.shard }}
+  # The witness module's edit sequence alone takes 10 to 11 minutes here,
+  # over P12's 10-minute budget. It is non-blocking and not a dependency of
+  # preview, so it still runs on every pull request until its cost is cut (#106).
+  test-oracle-gaps-witness:
+    name: Gap report end-to-end oracle (determinism, witness module; non-blocking, #106)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Tools
+        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
+      - run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-determinism 1)"
+        working-directory: packages/oracles
   test-vitest-5:
     name: Test on Vitest 5 (${{ matrix.suite }})
     # The package's vitest peer range includes 5; this job is the evidence.
