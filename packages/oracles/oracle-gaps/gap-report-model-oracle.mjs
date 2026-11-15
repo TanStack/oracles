@@ -5861,7 +5861,7 @@ function endingOf(exit, stderr, out, name = (text) => text, stdout = ``) {
  * of 2026-11-12 that every run that starts a check names its stream log
  * first).
  */
-function refusalBreach(ending, { cause, outKnown, logNote }) {
+function refusalBreach(ending, { cause, outKnown, defaultOut, logNote }) {
   if (ending.exit !== 2) return `the refusal exited ${ending.exit}, not 2`
   if (ending.stackFrames) return `the refusal printed a stack trace`
   if (ending.cause === undefined)
@@ -5889,6 +5889,26 @@ function refusalBreach(ending, { cause, outKnown, logNote }) {
   if (JSON.stringify(ending.stdout) !== JSON.stringify(owedStdout))
     return `the refusal's stdout is ${JSON.stringify(ending.stdout)}, not ${JSON.stringify(owedStdout)}`
   if (!outKnown) return undefined
+  if (defaultOut) {
+    // The CLI chose the directory (args.mjs, the default rule): the report is
+    // in `<state>/oracle-gaps-<key>/out/<run name>`, and a run that logged its
+    // note names the same directory. The rule's shape is judged here, not the
+    // directory's name.
+    const report = /^refused, report (.+)\/summary\.md$/.exec(ending.done)?.[1]
+    if (
+      report === undefined ||
+      !/(^<default out>|oracle-gaps-[^/\s]+\/out\/\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f]{8})$/.test(
+        report,
+      )
+    )
+      return `the refusal does not name its report in the default output directory: done ${ending.done}`
+    if (
+      logNote !== undefined &&
+      logNote !== `oracle-gaps: note log ${report}/stream.log`
+    )
+      return `the refusal's report is not in the directory its stream log names: ${logNote}`
+    return undefined
+  }
   if (!ending.namesOutput)
     return `the refusal does not name its report in its output directory: done ${ending.done}`
   const { written } = ending

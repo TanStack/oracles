@@ -1297,7 +1297,13 @@ function namedScratch(text, names) {
     named = named.replaceAll(pathToFileURL(path).href, name)
     for (const spelling of spellings) named = named.replaceAll(spelling, name)
   }
+  // A run's default output directory is named by the default rule (a random run
+  // name), so it is normalized the same way.
   return named
+    .replaceAll(
+      /\S*oracle-gaps-[^/\s]+\/out\/\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f]{8}/g,
+      `<default out>`,
+    )
     .replaceAll(/\.oracle-gaps-\d+/g, `.oracle-gaps-<pid>`)
     .replaceAll(/session-\d+/g, `session-<pid>`)
 }
@@ -2811,10 +2817,10 @@ function incrementalCheck(observations, expected, plan) {
     // A refusal through the daemon ends as a cold refusal does (law 12):
     // the CLI that asked the daemon writes it to its own output directory.
     if (cold.refusal !== undefined) {
-      // As the cold refusal: the driver knows the directory only for an explicit
-      // --out.
+      // As the cold refusal: the default directory is predicted by its rule.
       const breach = refusalBreach(daemon.ending, {
-        outKnown: plan.outMode === `explicit`,
+        outKnown: true,
+        defaultOut: plan.outMode === `default`,
         logNote: owesNote(expected) ? logNoteOf(daemon) : undefined,
       })
       if (breach)
@@ -3047,12 +3053,12 @@ function check(plan, observations, expected) {
     // directory the run was given holds it.
     // Every e2e run names its output directory (`--out`), so even a
     // refusal of its arguments is written there.
-    // A run with the default output directory (`--out` left out) lets the CLI
-    // choose it, so the driver cannot name the directory: the refusal's shape is
-    // judged, and its directory where the driver knows it.
+    // A run with the default output directory (`--out` left out) has its
+    // directory predicted by the default rule, not named by the driver.
     const breach = refusalBreach(cli.ending, {
       cause: expected.refused.cause,
-      outKnown: plan.outMode === `explicit`,
+      outKnown: true,
+      defaultOut: plan.outMode === `default`,
       logNote: expected.refused.arguments ? undefined : logNoteOf(cli),
     })
     if (breach) return violation(`cli`, breach, `report-shaped ending`)
