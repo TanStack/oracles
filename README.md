@@ -125,11 +125,17 @@ agent.
   A run through the daemon prints the same lines, at the end of its check.
   `--help` is not a check, so its usage text has no prefix.
 
-  For contributors: two environment variables in the `ORACLE_GAPS_TEST_`
+  For contributors: four environment variables in the `ORACLE_GAPS_TEST_`
   namespace are test-only hooks for the CLI's own oracle, not settings for
   users. `ORACLE_GAPS_TEST_HOLD_EXIT_MS` holds the run's exit after its done
   line, and `ORACLE_GAPS_TEST_WARM_PROBE` makes the first config warm-up
-  wait where a stop signal can reach it.
+  wait where a stop signal can reach it. `ORACLE_GAPS_TEST_STOP` names a
+  file: when it appears, an unsupervised run takes the same stop as a
+  SIGINT. `ORACLE_GAPS_TEST_TORN_ROWS` names a directory where each batch's
+  watchdog counts its polls, and a batch's closing row is held half written
+  until the watchdog has polled twice. The directory then holds a
+  `.reached` or `.unreached` marker for each hold (`.unreached` after 60 s
+  with no two polls).
 
   A few endings print no done line, or one more line: a SIGKILL of the CLI,
   or a signal that comes while Node is still starting the CLI, before its

@@ -835,6 +835,11 @@ const drawn = fc.record({
       }),
     },
   ),
+  // A batch's closing row written in two halves (issue #83) is constructed
+  // only: the constant draws nothing, so generated histories hold no row, and
+  // `histories` takes a constructed one back as this constant (as
+  // `claimScenario` does). Its neutral value is recorded by the canary.
+  tornRows: fc.constant(false),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -875,25 +880,27 @@ const keepsSteps = (history) => {
 // steps (`laterStepsOf`). Taking a history back returns it unchanged,
 // except a constructed one whose `steps` hold a later edit, which the
 // steps grammar cannot draw: its later edits move to `laterSteps`. A
-// constructed history may also set `tornRows`, which no generated history
-// draws (issue #83), and which is taken back without it.
+// constructed history may also set `tornRows` (issue #83), which `drawn`
+// cannot produce, so its take-back reads it as the drawn constant `false`
+// (as `claimScenario` does): a shrink is torn-row-free.
 const histories = drawn.map(
   (history) => (keepsSteps(history) ? history : { ...history, steps: null }),
   (value) => {
     const history =
-      /** @type {{ witness: unknown, steps: unknown[] | null }} */ (value)
+      /** @type {{ witness: unknown, steps: unknown[] | null, tornRows: unknown }} */ (
+        value
+      )
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
-    const { tornRows, ...drawnValue } = /** @type {Record<string, unknown>} */ (
-      value
-    )
+    const taken =
+      history.tornRows === false ? value : { ...history, tornRows: false }
     const later = (history.steps ?? []).filter((step) =>
       laterEdits.includes(step),
     )
-    if (later.length === 0) return tornRows === undefined ? value : drawnValue
+    if (later.length === 0) return taken
     const earlier = history.steps.filter((step) => !laterEdits.includes(step))
     return {
-      ...drawnValue,
+      ...taken,
       steps: earlier.length > 0 ? earlier : null,
       laterSteps: later,
     }

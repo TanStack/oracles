@@ -29,6 +29,7 @@ import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeEach, chai, expect, inject, vi } from 'vitest'
+import { posix } from './paths.mjs'
 
 const run =
   inject(`oracleGaps`) ??
@@ -239,20 +240,24 @@ if (run.units && !skippedCopy) {
 }
 const state = unit ? { ...run, ...unit } : run
 // A test-only hook for the CLI's own oracle, not for users:
-// ORACLE_GAPS_TEST_TORN_ROWS names a file where a batch's watchdog counts
-// its polls (check.mjs). The closing row is then written in two appends,
-// and the second waits until the watchdog has polled twice after the first,
-// so a poll reads the row half written, by construction and not by timing
-// (issue #83). Every row ends with a newline in either case.
+// ORACLE_GAPS_TEST_TORN_ROWS names a directory where each batch's watchdog
+// counts its polls (`state.hold`, check.mjs). A batch's closing row is then
+// written in two appends, and the second waits until the watchdog has polled
+// twice after the first, so a poll reads the row half written, by construction
+// and not by timing (issue #83). The hold writes `<hold>.reached` once that
+// happens, or `<hold>.unreached` if the watchdog does not poll within 60 s,
+// which the oracle reports as an unreached witness. Every row ends with a
+// newline in either case.
 function appendClosingRow(row) {
-  const polls = process.env.ORACLE_GAPS_TEST_TORN_ROWS
+  const hold = state.hold
   // Only a batch's copy (`unit`) has a watchdog that polls.
-  if (!polls || unit === undefined) return appendFileSync(state.capture, row)
+  if (hold === undefined || unit === undefined)
+    return appendFileSync(state.capture, row)
   const half = row.length >> 1
   appendFileSync(state.capture, row.slice(0, half))
   const counted = () => {
     try {
-      return Number(readFileSync(polls, `utf8`))
+      return Number(readFileSync(`${hold}.polls`, `utf8`))
     } catch {
       return 0
     }
@@ -260,9 +265,21 @@ function appendClosingRow(row) {
   const seen = counted()
   const pause = new Int32Array(new SharedArrayBuffer(4))
   // The bound only keeps a broken watchdog from holding the worker forever.
-  for (let waited = 0; counted() < seen + 2 && waited < 60_000; waited += 10)
+  let waited = 0
+  while (counted() < seen + 2 && waited < 60_000) {
     Atomics.wait(pause, 0, 0, 10)
+    waited += 10
+  }
+  const marker = counted() >= seen + 2 ? `reached` : `unreached`
+  writeWhole(`${hold}.${marker}`, ``)
   appendFileSync(state.capture, row.slice(half))
+}
+// A file is written whole, by a temporary file and a rename, as evidence.mjs
+// writes its store, so a reader never sees a part of it.
+function writeWhole(file, text) {
+  const temporary = `${file}.${process.pid}.tmp`
+  fs.writeFileSync(temporary, text)
+  fs.renameSync(temporary, file)
 }
 // The files this copy reads through fs inside the package: by a sync, a
 // promise, or a callback read, or a check of whether a file exists or what
@@ -277,17 +294,9 @@ function appendClosingRow(row) {
 globalThis.__oracleGapsReads = new Map()
 if (!globalThis.__oracleGapsReading) {
   globalThis.__oracleGapsReading = true
-  // A read's key follows the gap CLI's path rule (paths.mjs, which this
-  // copied file cannot import): forward slashes and a capital drive letter
-  // on win32, the path as it is on POSIX, where `\` is a name's character.
-  // The file system gets the native path.
-  const keyOf = (path) =>
-    process.platform === `win32`
-      ? path
-          .replaceAll(`\\`, `/`)
-          .replace(/^[a-z]:/, (drive) => drive.toUpperCase())
-      : path
-  const root = `${keyOf(process.cwd()).replace(/\/+$/, ``)}/`
+  // A read's key follows the gap CLI's path rule (paths.mjs, copied beside
+  // this file with it). The file system gets the native path.
+  const root = `${posix(process.cwd()).replace(/\/+$/, ``)}/`
   const { readFileSync: readNow, statSync: statNow } = fs
   const hashNow = (path) => {
     try {
@@ -308,7 +317,7 @@ if (!globalThis.__oracleGapsReading) {
       return
     }
     if (path === undefined) return
-    const key = keyOf(path)
+    const key = posix(path)
     const reads = globalThis.__oracleGapsReads
     if (
       key.startsWith(root) &&

@@ -30,6 +30,7 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -159,6 +160,7 @@ const ownFiles = [
   `stream.mjs`,
   `authored.mjs`,
   `capture-setup.mjs`,
+  `paths.mjs`,
   `evidence.mjs`,
   `daemon.mjs`,
   `ending.mjs`,
@@ -174,6 +176,27 @@ const span = (kind, started, fields = {}) => {
     profileFile,
     `${JSON.stringify({ kind, ms: Date.now() - started, at: started, ...fields })}\n`,
   )
+}
+
+/**
+ * A capture's lines, whole rows only. A worker may be appending a row while
+ * the CLI reads, and every row ends with a newline, so the text after the last
+ * newline is a row still being written (issue #83). Every reader of a batch's
+ * capture takes its rows this way.
+ */
+function captureLines(capture) {
+  const text = readFileSync(capture, `utf8`)
+  return text
+    .slice(0, text.lastIndexOf(`\n`) + 1)
+    .split(`\n`)
+    .filter(Boolean)
+}
+
+/** A file written whole: a temporary file, then a rename (evidence.mjs). */
+function writeWhole(file, text) {
+  const temporary = `${file}.${process.pid}.tmp`
+  writeFileSync(temporary, text)
+  renameSync(temporary, file)
 }
 
 /** A hash of this CLI's own code and the framework it reads. */
@@ -460,6 +483,8 @@ export async function openSession(pkg) {
   writeFileSync(join(home, `host`), hostname())
   const harness = join(home, `capture-setup.mjs`)
   copyFileSync(join(here, `capture-setup.mjs`), harness)
+  // The harness imports the path rule beside it (capture-setup.mjs).
+  copyFileSync(join(here, `paths.mjs`), join(home, `paths.mjs`))
   // One wrapper config per context, over the package's own config (a path
   // relative to the package, or undefined for none). Each serves its own
   // context's patched sources, so authored mutants run in every context at
@@ -1058,6 +1083,7 @@ export default async (env) => {
    * finished item, in order, and the index of the item that timed out.
    */
   let copyCounter = 0
+  let holdCounter = 0
   async function runBatch(context, out, items, seed) {
     const capture = join(out, `run-${process.pid}-${++runCounter}.jsonl`)
     // Each copy is named beside its file, so that its imports resolve as the
@@ -1073,6 +1099,16 @@ export default async (env) => {
       globalThis.__oracleGapsCopies.set(copy, readFileSync(item.file, `utf8`))
       return copy
     })
+    // A test-only hook (ORACLE_GAPS_TEST_TORN_ROWS, a directory): this batch's
+    // watchdog counts its polls there, and its copies hold their closing rows
+    // until it has polled twice (capture-setup.mjs). Each batch has its own
+    // counter, so batches that run at once do not share one.
+    const hold = process.env.ORACLE_GAPS_TEST_TORN_ROWS
+      ? join(
+          process.env.ORACLE_GAPS_TEST_TORN_ROWS,
+          `batch-${process.pid}-${++holdCounter}`,
+        )
+      : undefined
     const keyFor = (copy, file) => (key) =>
       key.startsWith(`${copy} > `) ? `${file}${key.slice(copy.length)}` : key
     // A file's test keys, named as its copy names them.
@@ -1107,6 +1143,7 @@ export default async (env) => {
       seed,
       seedVariable,
       units,
+      hold,
     }
     context.getRootProject?.().provide(`oracleGaps`, state)
     writeFileSync(join(out, `state.json`), JSON.stringify(state))
@@ -1133,12 +1170,7 @@ export default async (env) => {
     const finished = () => {
       if (!existsSync(capture)) return 0
       let at = 0
-      // Only whole rows: a worker may be appending the last one, and every
-      // row ends with a newline (issue #83).
-      const text = readFileSync(capture, `utf8`)
-      for (const line of text
-        .slice(0, text.lastIndexOf(`\n`) + 1)
-        .split(`\n`)) {
+      for (const line of captureLines(capture)) {
         if (line.includes(`"started":true`))
           at = Math.max(at, copies.indexOf(JSON.parse(line).file))
         if (line.includes(`"closed":true`)) closed.add(JSON.parse(line).file)
@@ -1156,14 +1188,13 @@ export default async (env) => {
     let copyStarted = Date.now()
     let timer
     const beat = heartbeat()
-    // A test-only hook (ORACLE_GAPS_TEST_TORN_ROWS, capture-setup.mjs): each
-    // poll counts itself, after it has read the capture.
-    const tornRows = process.env.ORACLE_GAPS_TEST_TORN_ROWS
+    // Each poll counts itself, after it has read the capture (the hold in
+    // capture-setup.mjs waits for two of these).
     let polls = 0
     const watchdog = new Promise((resolve) => {
       const poll = () => {
         const at = finished()
-        if (tornRows) writeFileSync(tornRows, String(++polls))
+        if (hold !== undefined) writeWhole(`${hold}.polls`, String(++polls))
         if (at === -1) return
         if (at !== current) {
           current = at
@@ -1197,9 +1228,7 @@ export default async (env) => {
       const rows = new Map(copies.map((copy) => [copy, []]))
       closings.clear()
       if (existsSync(capture))
-        for (const line of readFileSync(capture, `utf8`)
-          .split(`\n`)
-          .filter(Boolean)) {
+        for (const line of captureLines(capture)) {
           const row = JSON.parse(line)
           const copy = copies.find(
             (c) =>
