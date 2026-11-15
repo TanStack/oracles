@@ -5472,6 +5472,8 @@ oracleProperty({
           configFile: `vitest.config.ts`,
           configAwait: false,
           configRequire: false,
+          configPlace: `discovered`,
+          native: `none`,
           rejectBatch: 1,
         }),
       },
