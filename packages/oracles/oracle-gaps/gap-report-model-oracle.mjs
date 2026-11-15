@@ -844,7 +844,7 @@ const drawn = fc.record({
   // holds the tests (issue #101). The constant draws nothing, so generated
   // histories keep their values; `histories` takes a constructed one back as
   // this constant, as `tornRows` does.
-  configRoot: fc.constant(false),
+  testRoot: fc.constant(false),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -885,7 +885,7 @@ const keepsSteps = (history) => {
 // steps (`laterStepsOf`). Taking a history back returns it unchanged,
 // except a constructed one whose `steps` hold a later edit, which the
 // steps grammar cannot draw: its later edits move to `laterSteps`. A
-// constructed history may also set `tornRows` (issue #83) or `configRoot`
+// constructed history may also set `tornRows` (issue #83) or `testRoot`
 // (issue #101), which `drawn` cannot produce, so its take-back reads each as
 // the drawn constant `false` (as `claimScenario` does): a shrink is
 // torn-row-free and runs with the package as the config's root.
@@ -893,15 +893,15 @@ const histories = drawn.map(
   (history) => (keepsSteps(history) ? history : { ...history, steps: null }),
   (value) => {
     const history =
-      /** @type {{ witness: unknown, steps: unknown[] | null, tornRows: unknown, configRoot: unknown }} */ (
+      /** @type {{ witness: unknown, steps: unknown[] | null, tornRows: unknown, testRoot: unknown }} */ (
         value
       )
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
     const taken =
-      history.tornRows === false && history.configRoot === false
+      history.tornRows === false && history.testRoot === false
         ? value
-        : { ...history, tornRows: false, configRoot: false }
+        : { ...history, tornRows: false, testRoot: false }
     const later = (history.steps ?? []).filter((step) =>
       laterEdits.includes(step),
     )
@@ -2946,7 +2946,7 @@ function resolveHistory(history) {
     // Whether the config sets `root` to the directory that holds the tests
     // (issue #101): only a constructed history sets it, so a generated one
     // runs with the package as the root.
-    configRoot: history.configRoot === true,
+    testRoot: history.testRoot === true,
     native: history.native ?? `none`,
     // A prebuilt addon in the workspace dependency's build/Release
     // (`addRelease`).
@@ -5186,15 +5186,11 @@ const PRE_PLUGIN = `{ name: 'gap-pre-rewrite', enforce: 'pre', transform(code, i
  */
 function configText(plan, test) {
   const commonjs = plan.configSyntax === `cjs`
-  // The directory that holds the tests, as the config's `root` (issue #101).
-  const root = plan.configRoot
-    ? `root: ${commonjs ? `require('node:path').join(__dirname, 'tests')` : `fileURLToPath(new URL('./tests', import.meta.url))`}, `
-    : ``
   const config = `defineConfig(${
     { object: ``, function: `() => (`, async: `async () => (`, promise: `` }[
       plan.config
     ]
-  }{ ${root}test: ${
+  }{ test: ${
     plan.fault === `projects`
       ? `{ projects: [{ test: { name: 'unit', ...${test} } }] }`
       : test
@@ -5212,7 +5208,7 @@ function configText(plan, test) {
     commonjs
       ? `const { defineConfig } = require('vitest/config')`
       : `import { defineConfig } from 'vitest/config'`,
-    ...(plan.configRoot && !commonjs
+    ...(plan.testRoot && !commonjs
       ? [`import { fileURLToPath } from 'node:url'`]
       : []),
     ...(plan.fault === `configThrows`
@@ -5272,10 +5268,14 @@ function fixtureFiles(plan, state = initialState(plan)) {
       : `${JSON.stringify({ private: true, ...fields })}\n`
   // A symbolic link, as a package manager links a workspace package.
   const link = (target) => ({ link: target })
-  // The test files' glob, relative to the config's root: the package, or the
-  // directory that holds the tests when the config sets it (issue #101).
-  const glob = plan.configRoot ? `**/*.test.ts` : `tests/**/*.test.ts`
-  const test = `{ include: ${
+  // The test files' glob, relative to the test root: the package, or the
+  // directory that holds the tests when the config sets `test.root` to it
+  // (issue #101), as the repository's own oracle-gaps config does.
+  const glob = plan.testRoot ? `**/*.test.ts` : `tests/**/*.test.ts`
+  const testRootOption = plan.testRoot
+    ? `root: ${plan.configSyntax === `cjs` ? `require('node:path').join(__dirname, 'tests')` : `fileURLToPath(new URL('./tests', import.meta.url))`}, `
+    : ``
+  const test = `{ ${testRootOption}include: ${
     plan.configEnv
       ? `process.env.VITEST === 'true' && process.env.TEST === 'true' && process.env.NODE_ENV === 'test' ? ['${glob}'] : []`
       : `['${glob}']`
