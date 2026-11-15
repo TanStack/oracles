@@ -581,7 +581,7 @@ function cliArgs(
     ordinary = false,
     sources = `${SOURCE},${LIB}`,
     budget = `two`,
-    hangMs = FULL_LIMIT_MS,
+    hangMs: hangMsOrNull = null,
     outName = daemon ? `out-daemon` : `out`,
     config,
     contexts = 4,
@@ -595,6 +595,8 @@ function cliArgs(
   // relative to there, as an author types them, and the daemon must read
   // them as the CLI's caller meant them.
   const path = (absolute) => (daemon ? relative(repo, absolute) : absolute)
+  // A generated history's backstop is the drawn null: the full limit.
+  const hangMs = hangMsOrNull ?? FULL_LIMIT_MS
   const args = [
     join(cli, `index.mjs`),
     ...(daemon ? [`--daemon`] : []),
