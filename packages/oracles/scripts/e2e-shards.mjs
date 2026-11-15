@@ -66,9 +66,9 @@ export const shards = {
     `fixed seed 20261105: a slow kill past Vitest's 15 s limit`,
     `random seed: a slow kill past Vitest's 15 s limit`,
     `determinism: constructed history: a slow kill past Vitest's 15 s limit`,
-    `fixed seed 20261105: a copy waiting on a timer under load`,
-    `random seed: a copy waiting on a timer under load`,
-    `determinism: constructed history: a copy waiting on a timer under load`,
+    `fixed seed 20261105: a copy waiting on a timer`,
+    `random seed: a copy waiting on a timer`,
+    `determinism: constructed history: a copy waiting on a timer`,
     // The witness module's edit sequence (option M): 189 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
     `determinism: constructed history: an edit sequence over the witness module`,

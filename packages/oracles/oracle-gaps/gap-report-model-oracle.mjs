@@ -424,7 +424,7 @@ const testCase = fc.record({
   // neutral values, which change nothing.
   slowMs: fc.constant(SLOW_MS),
   loops: fc.constant(0),
-  busy: fc.constant(null),
+  timerWait: fc.constant(null),
 })
 // Law 9's edits. Each content edit changes what some evidence depends on:
 // a test file, a source statement, the source's line numbers, an owns list,
@@ -827,7 +827,7 @@ const takenBack = (t) => ({
   slow: false,
   slowMs: SLOW_MS,
   loops: 0,
-  busy: null,
+  timerWait: null,
 })
 const histories = drawn.map(
   (history) => (keepsSteps(history) ? history : { ...history, steps: null }),
@@ -4779,12 +4779,13 @@ function oracleTestFile(plan, file) {
               `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) for (let k${i} = 0; k${i} < ${t.loops}; k${i} += 1) ${callFor(t.fn)}(${part.input}, [])`,
             ]
           : []),
-        // Where its output differs, a test that starts a timer, spins for
-        // `busyMs` (the load), and then waits for the timer. The timer is
-        // pending throughout, so the copy is never idle.
-        ...(t.busy
+        // Where its output differs, a test that waits on one timer due well
+        // inside its horizon. Nothing else keeps it busy: no load is in the test
+        // (a loaded variant would be a CPU hog outside the worker), so the timer
+        // check alone stands between this copy and an idle cut.
+        ...(t.timerWait
           ? [
-              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) { const waiting${i} = new Promise((r) => setTimeout(r, ${t.busy.waitMs})); const until${i} = performance.now() + ${t.busy.busyMs}; while (performance.now() < until${i}) {}; await waiting${i} }`,
+              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await new Promise((r) => setTimeout(r, ${t.timerWait.waitMs}))`,
             ]
           : []),
         // A test that waits on I/O (a child process, about 3 s) where the
@@ -4849,7 +4850,7 @@ function oracleTestFile(plan, file) {
         : []),
       t.asProp
         ? `  fcTest.prop([fcv.integer({ min: 0, max: 10 })], { numRuns: 20, seed: 1 })('${testName(t, index)}', async (n) => {`
-        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || t.busy || t.timed || lazyGated(plan, file, t) ? `async ` : ``}() => {`,
+        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || t.timerWait || t.timed || lazyGated(plan, file, t) ? `async ` : ``}() => {`,
       ...partsOf(t).flatMap(campaign),
       `  })`,
       `})`,
