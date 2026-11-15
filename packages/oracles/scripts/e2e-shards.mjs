@@ -181,6 +181,9 @@ export const shards = {
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-5': [
+    `fixed seed 20261105: every outcome class, the warm and abort stops`,
+    `random seed: every outcome class, the warm and abort stops`,
+    `determinism: constructed history: every outcome class, the warm and abort stops`,
     `fixed seed 20261105: an edit sequence through the daemon`,
     `fixed seed 20261105: ordinary tests left out by default`,
     `fixed seed 20261105: two authored mutants`,

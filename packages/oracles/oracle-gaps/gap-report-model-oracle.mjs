@@ -817,7 +817,10 @@ const histories = drawn.map(
       /** @type {{ witness: unknown, steps: unknown[] | null }} */ (value)
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
-    return value
+    // Take-back into the drawn language: a disarmed pause (pauseEngages false,
+    // only the constructed history sets it) comes back as engaged, so the
+    // arbitrary can shrink it. The disarm is therefore not kept by a shrink.
+    return { ...value, pauseEngages: true }
   },
 )
 

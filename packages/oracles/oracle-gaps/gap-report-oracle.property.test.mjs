@@ -3452,8 +3452,25 @@ const posixStops =
 const everyStops = [`a run whose process aborted`]
 // The state of the disarmed pause is reached only by its own constructed history.
 const disarmedOnly = [`a daemon pause that did not engage`]
+// The stop-specific states of `every outcome class`, split between its two halves.
+const stopsFirst = [
+  `a run stopped by SIGTERM while a worker spun`,
+  `a run stopped by SIGINT while a worker spun`,
+  `a stopped run whose workers are child processes`,
+  `a stopped run whose workers are threads`,
+  `a run after a stopped one that left its session`,
+  `a stop signal after the completed line`,
+]
+const stopsSecond = [
+  `a stop signal while the config warms`,
+  `a run whose process aborted`,
+]
 const witnessed = [...required, ...posixStops, ...everyStops].filter(
   (s) => !separate.includes(s) && !disarmedOnly.includes(s),
+)
+// Every state of `witnessed` that the stop runs of either half do not own.
+const witnessedRest = witnessed.filter(
+  (state) => !stopsFirst.includes(state) && !stopsSecond.includes(state),
 )
 
 // A constructed history builds from a generated base whose first function is
@@ -3515,7 +3532,10 @@ oracleProperty({
       },
       {
         name: `every outcome class`,
-        enters: witnessed,
+        // The first half (review of #73, P12): the rest of the states, with the stop
+        // runs of the first three stops; the second half (below) enters the warm and
+        // abort states. The union is `witnessed` (the framework checks each half).
+        enters: [...witnessedRest, ...stopsFirst],
         // A whole-file owns entry would own the unowned witness, so the
         // construction keeps ownership per function.
         build: (generated) => ({
@@ -3551,8 +3571,6 @@ oracleProperty({
             { signal: `SIGTERM`, pool: `forks`, when: `run` },
             { signal: `SIGINT`, pool: `threads`, when: `run` },
             { signal: `SIGINT`, pool: `threads`, when: `after` },
-            { signal: `SIGINT`, pool: `threads`, when: `warm` },
-            { signal: `SIGINT`, pool: `threads`, when: `abort` },
           ],
           // File a writes to the console, so the run captures it.
           consoleOutput: true,
@@ -3746,6 +3764,39 @@ oracleProperty({
             `addRelease`,
             `addScopedAddon`,
           ],
+        }),
+      },
+      {
+        // The second half of `every outcome class` (review of #73, P12): the warm and
+        // abort stop runs, over a base that enters only their states. Its stops and
+        // states are the other half of the original's; the union is checked by the
+        // framework's reach over both halves.
+        name: `every outcome class, the warm and abort stops`,
+        enters: stopsSecond,
+        build: (generated) => ({
+          ...generated,
+          witness: `capture`,
+          wholeFile: `none`,
+          fault: `none`,
+          authored: { stmt: 0, kind: `apply` },
+          stability: `insertGuard`,
+          steps: null,
+          ordinary: true,
+          configEnv: false,
+          native: `none`,
+          setupGlobal: false,
+          depSubpath: false,
+          unbuiltDep: false,
+          sourceSpelling: `plain`,
+          cliPath: `plain`,
+          boot: false,
+          budget: `two`,
+          pragma: false,
+          stopRuns: [
+            { signal: `SIGINT`, pool: `threads`, when: `warm` },
+            { signal: `SIGINT`, pool: `threads`, when: `abort` },
+          ],
+          consoleOutput: true,
         }),
       },
       {
