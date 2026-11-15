@@ -149,6 +149,9 @@ agent.
   - `ORACLE_GAPS_TEST_WAIT_MS` (milliseconds, default 60000) is the CLI's wait
     for a daemon to start or to close; a test shortens it to outlast a paused
     daemon. It is a test-only knob, not a setting for users.
+  - `ORACLE_GAPS_TEST_SERVED_MARK` names a file the daemon writes its pid to
+    after it answers a check, so a test can tell which daemon served an
+    earlier check (the warm daemon that a later check's pause must match).
   - `ORACLE_GAPS_TEST_TORN_ROWS` names a directory where each batch's watchdog
     counts its polls, and a batch's closing row is held half written until the
     watchdog has polled twice. The directory holds a `.begun` marker per batch and

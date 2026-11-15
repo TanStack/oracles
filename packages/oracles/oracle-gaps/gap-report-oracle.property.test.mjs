@@ -1602,7 +1602,8 @@ async function incremental(dir, plan, cli, copy, observe, states) {
   // meanwhile: paused once the check has begun for longer than the CLI
   // waits for a daemon, then killed (`dieMidCheck`), or stopped and killed
   // before it reads the request, which resets the connection
-  // (`resetBeforeRead`).
+  // (`resetBeforeRead`). A plan whose warm daemon is replaced stops it after the
+  // warm check, so the paused check is served by a daemon that did not serve it.
   async function daemonChecks(step, files, how) {
     // The mid-run edit: the check starts from the state before the edit,
     // with the edit marked pending, and a test lands it while the check
@@ -1694,6 +1695,7 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       ])
       warm = pidOf(servedMark)
       writeFileSync(armMark, ``)
+      if (plan.warmReplaced) stop()
     }
     let finished = false
     const running = runClisAtOnce(dir, files, [{ ...how, daemon: true, env }])
@@ -1745,12 +1747,20 @@ async function incremental(dir, plan, cli, copy, observe, states) {
         labels.push(`a check whose connection was reset`)
         if (warm !== undefined && warm === pid)
           labels.push(`a warm daemon's connection was reset`)
+        if (warm !== undefined && warm !== pid)
+          states.add(`a warm daemon was replaced before the pause`)
       }
     }
     if (!killed) states.add(`a daemon pause that did not engage`)
     if (labels.length > 0 && !killed)
       throw new Error(
         `oracle-gaps.report: ${step} recorded ${labels.join(`, `)} without a daemon pause`,
+      )
+    // The warm label names the daemon that served the warm check. A reset of
+    // another daemon carries no warm label, whatever the warm check served.
+    if (labels.includes(`a warm daemon's connection was reset`) && warm !== pid)
+      throw new Error(
+        `oracle-gaps.report: ${step} recorded a warm daemon's connection was reset, but its daemon did not serve the warm check`,
       )
     for (const label of labels) states.add(label)
     return runs
@@ -3570,6 +3580,8 @@ const staticStates = [
 const required = [
   // Reached only by the constructed history of the disarmed pause (see there).
   `a daemon pause that did not engage`,
+  // Reached only by the constructed history of a replaced warm daemon (see there).
+  `a warm daemon was replaced before the pause`,
   `killed by a second owner`,
   `killed`,
   `random-only kill`,
@@ -3795,8 +3807,12 @@ const posixStops =
 // supervisor in #79; until then the Windows end-to-end job stays non-blocking
 // under C entry (c).
 const everyStops = [`a run whose process aborted`]
-// The state of the disarmed pause is reached only by its own constructed history.
-const disarmedOnly = [`a daemon pause that did not engage`]
+// The states of the disarmed pause and of a replaced warm daemon are reached
+// only by their own constructed histories.
+const disarmedOnly = [
+  `a daemon pause that did not engage`,
+  `a warm daemon was replaced before the pause`,
+]
 // The stop-specific states of `every outcome class`, split between its two halves.
 // The SIGTERM state is declared on POSIX only (posixStops), so only there is it named.
 const stopsFirst = [
@@ -5159,6 +5175,25 @@ oracleProperty({
             { signal: `SIGINT`, pool: `threads`, when: `abort` },
           ],
           consoleOutput: true,
+        }),
+      },
+      {
+        // A warm daemon replaced before the pause (review of #73, B2): the warm
+        // check is served by one daemon, which is then stopped, so the paused
+        // check's daemon is another. The reset label needs the daemon that
+        // served the warm check, so only the state of the replacement holds.
+        name: `a reset check after its warm daemon was replaced`,
+        enters: [
+          `a warm daemon was replaced before the pause`,
+          `a check whose connection was reset`,
+        ],
+        build: (generated) => ({
+          ...generated,
+          // Without the witness module, the grammar takes these steps back.
+          witness: false,
+          fault: `none`,
+          steps: [`resetBeforeRead`],
+          warmReplaced: true,
         }),
       },
     ]),

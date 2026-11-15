@@ -21,6 +21,8 @@
 // space followed by `> ` is no separator: otherwise a negative lookahead
 // after it would pass on the `> ` of a Vitest 5 name and select every test.
 import { spawnSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -578,6 +580,7 @@ export const partitions = {
         'a .cjs config that calls require',
         'a package with no config',
         'a declaration fault: configThrows',
+        'a reset check after its warm daemon was replaced',
       ]),
     },
   },
@@ -681,15 +684,27 @@ export function partitionErrors(name, listed) {
   return errors
 }
 
+// Vitest writes the listing to a file, so no package manager's own stdout line
+// (pnpm prints "Scope: ..." in some workspaces) can reach the JSON.
 function listed({ args }) {
-  const run = spawnSync(`pnpm`, [`exec`, `vitest`, `list`, `--json`, ...args], {
-    cwd: join(dirname(fileURLToPath(import.meta.url)), `..`),
-    encoding: `utf8`,
-    maxBuffer: 64 * 1024 * 1024,
-  })
-  if (run.status !== 0)
-    throw new Error(`vitest list failed:\n${run.stderr}${run.stdout}`)
-  return JSON.parse(run.stdout).map((test) => test.name)
+  const dir = mkdtempSync(join(tmpdir(), `pr-shards-`))
+  try {
+    const file = join(dir, `list.json`)
+    const run = spawnSync(
+      `pnpm`,
+      [`exec`, `vitest`, `list`, `--json=${file}`, ...args],
+      {
+        cwd: join(dirname(fileURLToPath(import.meta.url)), `..`),
+        encoding: `utf8`,
+        maxBuffer: 64 * 1024 * 1024,
+      },
+    )
+    if (run.status !== 0)
+      throw new Error(`vitest list failed:\n${run.stderr}${run.stdout}`)
+    return JSON.parse(readFileSync(file, `utf8`)).map((test) => test.name)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 }
 
 const [command, ...operands] = process.argv.slice(2)

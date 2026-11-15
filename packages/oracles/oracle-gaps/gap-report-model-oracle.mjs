@@ -845,6 +845,9 @@ const drawn = fc.record({
   // unchanged; only the constructed history "a daemon pause that cannot engage" sets
   // it false.
   pauseEngages: fc.constant(true),
+  // Whether the warm daemon is replaced after the warm check (review of #73, B2).
+  // Only the constructed history of a replaced warm daemon sets it.
+  warmReplaced: fc.constant(false),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -905,11 +908,13 @@ const histories = drawn.map(
     const later = (history.steps ?? []).filter((step) =>
       laterEdits.includes(step),
     )
-    if (later.length === 0) return { ...taken, pauseEngages: true }
+    if (later.length === 0)
+      return { ...taken, pauseEngages: true, warmReplaced: false }
     const earlier = history.steps.filter((step) => !laterEdits.includes(step))
     return {
       ...taken,
       pauseEngages: true,
+      warmReplaced: false,
       steps: earlier.length > 0 ? earlier : null,
       laterSteps: later,
     }
@@ -2917,6 +2922,7 @@ function resolveHistory(history) {
     stability: history.stability,
     steps: [...(history.steps ?? []), ...laterStepsOf(history)],
     pauseEngages: history.pauseEngages !== false,
+    warmReplaced: history.warmReplaced === true,
     lazyGate: history.lazyGate === true,
     fsRead: history.fsRead ?? `none`,
     // Whether a step edits file b's helper during a check (`midrun`): then
