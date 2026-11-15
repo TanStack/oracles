@@ -1766,6 +1766,12 @@ async function incremental(dir, plan, cli, copy, observe, states) {
                   report: midrunChecks.during.report,
                   stream: midrunChecks.during.stream,
                   stdoutStream: midrunChecks.during.stdoutStream,
+                  // The stream check (endsBreach) judges the log, the output directory
+                  // and the results of the run too.
+                  log: midrunChecks.during.log,
+                  outDir: midrunChecks.during.outDir,
+                  reported: midrunChecks.during.reported,
+                  reportState: midrunChecks.during.reportState,
                 },
                 before: {
                   exit: midrunChecks.before.exit,
