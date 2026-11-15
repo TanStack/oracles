@@ -21,6 +21,21 @@ import { drawn, histories } from '../oracle-gaps/gap-report-model-oracle.mjs'
 // campaign draws 2 histories, and those resolve as on main.
 const FIXED_SEED = 20261105
 const DRAWS = 500
+// The constructed-only test fields (deterministic-cuts change, 2026-11-14):
+// constants in every drawn test record, which no generated history sets. A
+// test's record hashes without them, so its line is main's, and each one is
+// recorded as its own line after the others, with its neutral value checked.
+const CONSTRUCTED_TEST_FIELDS = [`slowMs`, `loops`, `timerWait`, `pulse`]
+const NEUTRAL_TEST_VALUES: Record<string, unknown> = {
+  slowMs: 3000,
+  loops: 0,
+  timerWait: null,
+  pulse: false,
+}
+type Sample = Record<string, unknown>
+
+const hashOf = (value: unknown): string =>
+  createHash(`sha1`).update(JSON.stringify(value)).digest(`hex`).slice(0, 16)
 
 const fingerprints = (
   arbitrary: fc.Arbitrary<unknown>,
@@ -29,14 +44,37 @@ const fingerprints = (
   const samples = fc.sample(arbitrary, {
     seed: FIXED_SEED,
     numRuns: DRAWS,
-  }) as Array<Record<string, unknown>>
-  return Object.keys(samples[0] ?? {}).map((key) => [
-    key,
-    createHash(`sha1`)
-      .update(JSON.stringify(samples.map((history) => history[key])))
-      .digest(`hex`)
-      .slice(0, 16),
-  ])
+  }) as Array<Sample>
+  const testsOf = (history: Sample) => history.tests as Array<Sample>
+  const withoutConstructed = (test: Sample) =>
+    Object.fromEntries(
+      Object.entries(test).filter(
+        ([key]) => !CONSTRUCTED_TEST_FIELDS.includes(key),
+      ),
+    )
+  const lines: Array<[string, string]> = Object.keys(samples[0] ?? {}).map(
+    (key) => [
+      key,
+      hashOf(
+        samples.map((history) =>
+          key === `tests`
+            ? testsOf(history).map(withoutConstructed)
+            : history[key],
+        ),
+      ),
+    ],
+  )
+  for (const field of CONSTRUCTED_TEST_FIELDS) {
+    const values = samples.flatMap((history) =>
+      testsOf(history).map((test) => test[field]),
+    )
+    // Generated tests hold the neutral value: only a constructed history sets it.
+    expect(values.every((value) => value === NEUTRAL_TEST_VALUES[field])).toBe(
+      true,
+    )
+    lines.push([`tests.${field}`, hashOf(values)])
+  }
+  return lines
 }
 
 describe(`the gap oracle's history grammar`, () => {

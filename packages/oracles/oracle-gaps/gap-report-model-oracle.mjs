@@ -129,11 +129,10 @@ const TOP_LOOP = `<module>@..gen`
 // Whether this filesystem ignores letter case, so that `src/Sut.ts` names
 // `src/sut.ts`; the `cased` spelling applies only where it does.
 const caseless = existsSync(fileURLToPath(import.meta.url).toUpperCase())
-// The full limit of a cut-off copy's confirmation that the driver passes
-// (`--hang-limit`), and, under one budget, the first budget too.
+// The backstop base that the driver passes (`--hang-limit`): a copy that runs
+// past it, plus three seconds per second of its file's time, is cut.
 const FULL_LIMIT_MS = 20000
-// How long a slow test waits, in real milliseconds: past the 1 s first
-// budget that the driver passes (`--first-limit`), within the full limit.
+// How long a slow test waits, in real milliseconds, where its output differs.
 const SLOW_MS = 3000
 // The calls that each copy of `w_slowpair` makes beyond its first: its test
 // calls the function this many more times where its output differs. A call
@@ -152,17 +151,11 @@ const WORK_FLOOR = 100_000
 // is a hundred times the most its unmutated tests did, if more. Past it, the
 // copy is cut by count (a spin) and charged nothing (the outcome rule, item 4).
 const CALL_FLOOR = 100_000
-// A mutant's budget for the runs that confirm its cut-off copies, which the
-// driver passes (`--mutant-limit`): one slow owner's confirmation fits it
-// (SLOW_MS), and two of `w_slowpair`'s do not. Ten times the fixture's
-// one-test files' time stays under it, so the floor is the budget.
-const MUTANT_LIMIT_MS = 15000
 // How often the CLI says which mutant a busy copy runs (its heartbeat): the
 // driver shortens it from 30 s (`ORACLE_GAPS_HEARTBEAT_MS`), so that a slow
 // test's wait of SLOW_MS passes it. A copy beats once its own run has lasted
-// an interval, so the interval is twice the 1 s first budget: a copy cut at
-// its first budget never lasts it, and whether a run beats is a function of
-// the history, not of the machine's load, as the determinism tests require.
+// an interval, and whether a run beats is a function of the history, not of
+// the machine's load, as the determinism tests require.
 const HEARTBEAT_MS = 2000
 const ORACLE_FILES = [`a`, `b`]
 // The owners of the budget witness (`w_slowpair`): two oracle files of one
@@ -577,9 +570,10 @@ const drawn = fc.record({
   tests: fc.array(testCase, { minLength: 1, maxLength: 5 }),
   // The witness module: all of it, or only the functions whose outcomes
   // need real test runs (see `captureWitness`).
-  // The budget witness alone (`budget`) costs two 10 s confirmations per
-  // mutant in every CLI run of a history, so generated histories rarely
-  // draw it; its constructed history (the daemon recheck) always does.
+  // The budget witness alone (`budget`) makes two copies of about 90,000
+  // site evaluations each in every CLI run of a history, so generated
+  // histories rarely draw it; its constructed history (the daemon recheck)
+  // always does.
   witness: fc.oneof(
     { weight: 30, arbitrary: fc.constantFrom(false, true, `capture`) },
     { weight: 1, arbitrary: fc.constant(`budget`) },
@@ -699,9 +693,9 @@ const drawn = fc.record({
   // module loads, with 0. A mutant under which it throws then fails every
   // file that imports the module, before any test runs.
   boot: fc.constantFrom(false, false, false, true),
-  // The run's time budgets: a short first budget confirmed by a run alone
-  // with the full limit, or one budget (`--first-limit` equal to
-  // `--hang-limit`), where a run past it is a timeout at once.
+  // The run's budget mode: `one` passes the retired `--first-limit`, which
+  // the CLI checks and notes and which changes nothing; `two` passes no
+  // retired option.
   budget: fc.constantFrom(`two`, `two`, `two`, `one`),
   // Runs that the driver stops by a signal while the stop witness's test
   // spins (`w_stop`), each in a pool: Vitest's workers as child processes or
@@ -858,6 +852,9 @@ const drawn = fc.record({
   // `histories` takes a constructed one back as this constant (as
   // `claimScenario` does). Its neutral value is recorded by the canary.
   tornRows: fc.constant(false),
+  // A constructed history's backstop (`--hang-limit`), which no generated
+  // history sets: null is the full limit. Recorded by the canary as well.
+  hangMs: fc.constant(null),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -866,7 +863,7 @@ const drawn = fc.record({
 // only file b, so the daemon reuses file a's timed-out runs; the revert
 // returns to a state that the daemon has seen. The budget witness alone
 // (`budget`) takes its own one step instead: a second daemon check with
-// nothing changed, which reuses the confirmations that the first check ran.
+// nothing changed, which reuses the results that the first check ran.
 const witnessSteps = [`test`, `helper`, `revert`]
 const budgetSteps = [`recheck`]
 const keepsSteps = (history) => {
@@ -887,8 +884,8 @@ const keepsSteps = (history) => {
 // witness module" takes `witnessSteps`, so every campaign still judges law
 // 9 over the witness module's outcome classes, along one short sequence
 // (maintainer decision, 2026-11-11, option M of the CI plan; a stated
-// limit of the property). The budget witness's confirmations cost about
-// 15 s a mutant, so its histories follow the same rule, and its constructed
+// limit of the property). The budget witness's two copies make about 90,000
+// site evaluations each, so its histories follow the same rule, and its constructed
 // history "a second daemon check of the budget witness" takes
 // `budgetSteps` (the review of the gap CLI's runtime fixes, 2026-11-12,
 // P1-a: the budget witness only in its own histories). The map is its own
@@ -922,8 +919,9 @@ const histories = drawn.map(
       )
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
-    const { slowTwin, hangMs, ...drawnValue } =
-      /** @type {Record<string, unknown>} */ (value)
+    const { slowTwin, ...drawnValue } = /** @type {Record<string, unknown>} */ (
+      value
+    )
     const tests = /** @type {Record<string, unknown>[]} */ (drawnValue.tests)
     const plain =
       /** @type {{ witness: unknown, steps: unknown[] | null, tornRows: unknown }} */ ({
@@ -1724,18 +1722,17 @@ const witness = [
     body: [kill],
     tests: [judging(`a`, `random seed`, 7), judging(`b`, `fixed seed`, 7)],
   },
-  // A slow kill: the run ends after the first budget, within the full
-  // limit, so the confirming rerun kills it (a run is a timeout only when
-  // it passes the full limit alone).
+  // A slow kill: its owner test waits 3 s where its output differs, then
+  // judges, so its copy runs to its end and the kill decides.
   {
     id: `w_slowkill`,
     owners: [`a`],
     body: [kill],
     tests: [judging(`a`, `fixed seed`, 7, { slow: true })],
   },
-  // Slow in both owners, and judged by neither: each owner's copy is cut at
-  // its first budget, and the two confirmations together need more than the
-  // mutant's budget, so the mutant is a timeout, not a survivor.
+  // Slow in both owners, and judged by neither: each owner's copy makes
+  // 30,000 more calls, and the two copies together pass the work budget, so
+  // the mutant is a timeout by count, not a survivor.
   {
     id: `w_slowpair`,
     owners: PAIR_FILES,
@@ -1835,8 +1832,8 @@ const witness = [
     tests: [judging(`a`, `fixed seed`, 1)],
   },
   // A test that waits on a child process where the output differs: an I/O
-  // handle is open, so its copy is busy, never cut for idleness, and the
-  // confirming run kills it.
+  // handle is open, so its copy is busy, never cut for idleness, and its
+  // kill decides.
   {
     id: `w_iowait`,
     owners: [`a`],
@@ -2594,8 +2591,8 @@ function resolveHistory(history) {
       ? witness
           .filter(
             (w) =>
-              // The budget witness costs two 10 s confirmations per mutant,
-              // so only histories of the `budget` mode carry it.
+              // The budget witness's two copies make about 90,000 site
+              // evaluations each, so only histories of the `budget` mode carry it.
               (history.witness === true && w.id !== `w_slowpair`) ||
               (history.witness === `capture` && captureWitness.has(w.id)) ||
               (history.witness === `budget` && w.id === `w_slowpair`),
@@ -4196,9 +4193,9 @@ function slowedFiles(plan, tests, sites, active) {
 const CUT_CAUSE = { wall: `backstop`, count: `spin`, state: `no progress` }
 
 /**
- * A mutant's kind from its owner tests' runs. An operator mutant's
- * confirming runs share its budget (`budgeted`); an authored mutant's runs
- * are each final at the full limit, so it has no confirmations to budget.
+ * A mutant's kind from its owner tests' runs. An operator mutant's copies
+ * share its work budget (`budgeted`); an authored mutant's copies are judged
+ * alone, with no budget.
  */
 function judge(plan, tests, sites, active, { budgeted = true, detail } = {}) {
   const runs = runsOf(plan, tests, sites, active)
@@ -4985,8 +4982,7 @@ function oracleTestFile(plan, file) {
               `    if (reads${i} !== 0) throw new Error('the payload was read')`,
             ]
           : []),
-        // A slow test waits past the first budget, within the full limit,
-        // where the output differs; it then judges as usual.
+        // A slow test waits where the output differs; it then judges as usual.
         ...(t.slow
           ? [
               `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await new Promise((r) => setTimeout(r, ${t.slowMs ?? SLOW_MS}))`,
@@ -6051,7 +6047,6 @@ export {
   interpret,
   judge,
   slowedFiles,
-  MUTANT_LIMIT_MS,
   HEARTBEAT_MS,
   FULL_LIMIT_MS,
   refusal,

@@ -52,7 +52,12 @@
     ["prePlugin", "7093bcf61828dea9"],
     ["fsRead", "265eb24ce88fdbe2"],
     ["laterSteps", "fb28f2575c00f223"],
-    ["tornRows", "ed6866229ecc4969"]
+    ["tornRows", "ed6866229ecc4969"],
+    ["hangMs", "f6e71aca47bcb3e2"],
+    ["tests.slowMs", "33494e17be1a5ba5"],
+    ["tests.loops", "4bc867dd43aad13c"],
+    ["tests.timerWait", "02f66613e9490d15"],
+    ["tests.pulse", "04378653193a64e7"]
   ],
   "histories": [
     ["functions", "66c0e9c56951c377"],
@@ -107,6 +112,11 @@
     ["prePlugin", "7093bcf61828dea9"],
     ["fsRead", "265eb24ce88fdbe2"],
     ["laterSteps", "fb28f2575c00f223"],
-    ["tornRows", "ed6866229ecc4969"]
+    ["tornRows", "ed6866229ecc4969"],
+    ["hangMs", "f6e71aca47bcb3e2"],
+    ["tests.slowMs", "33494e17be1a5ba5"],
+    ["tests.loops", "4bc867dd43aad13c"],
+    ["tests.timerWait", "02f66613e9490d15"],
+    ["tests.pulse", "04378653193a64e7"]
   ]
 }
