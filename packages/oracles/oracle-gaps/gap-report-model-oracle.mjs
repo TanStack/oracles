@@ -5897,7 +5897,7 @@ function refusalBreach(ending, { cause, outKnown, defaultOut, logNote }) {
     const report = /^refused, report (.+)\/summary\.md$/.exec(ending.done)?.[1]
     if (
       report === undefined ||
-      !/(^<default out>|oracle-gaps-[^/\s]+\/out\/\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f]{8})$/.test(
+      !/(^<default out>|^<out>|oracle-gaps-[^/\s]+\/out\/\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f]{8})$/.test(
         report,
       )
     )
