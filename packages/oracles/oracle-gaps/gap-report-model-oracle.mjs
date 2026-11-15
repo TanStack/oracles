@@ -756,6 +756,13 @@ const drawn = fc.record({
       }),
     },
   ),
+  // Whether the daemon's pause engages in the daemon steps (dieMidCheck and
+  // resetBeforeRead). Disarmed in a few histories, so the labels that need a pause
+  // are absent and the history declares it (see the constructed history of that name).
+  pauseEngages: fc.oneof(
+    { weight: 20, arbitrary: fc.constant(true) },
+    { weight: 1, arbitrary: fc.constant(false) },
+  ),
   // Who owns each module-level data declaration directly (`src/sut.ts#D_OBJ`),
   // in `MODULE_DATA`'s order. A declaration is written when a function reads
   // it or an entry names it.

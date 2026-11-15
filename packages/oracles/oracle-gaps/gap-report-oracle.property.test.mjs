@@ -487,7 +487,7 @@ import { delimiter, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import fc from 'fast-check'
 import { socketOf, stateDirOf } from './daemon.mjs'
-import { isWithin, posix } from './paths.mjs'
+import { isWithin, posix, realPathOf } from './paths.mjs'
 import { oracleProperty, pass, violation } from '../src/oracle-property.ts'
 
 import {
@@ -1239,32 +1239,41 @@ function copyCli(plan) {
   return copy
 }
 
-/**
- * The daemons that serve a package, by process id: the processes running
- * daemon.mjs for it, as the operating system lists them.
- */
-// The pid a test mark holds, once it is a positive integer. A mark is written whole,
-// and the driver still parses it before it signals anything: process.kill(0) would
-// signal the driver's own group.
-const pidOf = (path) => {
+// Whether a process runs. EPERM means it runs under another user.
+const isAlive = (pid) => {
   try {
-    const text = readFileSync(path, `utf8`).trim()
-    return /^[1-9]\d*$/.test(text) ? Number(text) : undefined
-  } catch {
-    return undefined
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error.code === `EPERM`
   }
 }
 
+// Once a killed process has gone (its exit is observed, not waited for by the clock).
+const waitGone = async (pid) => {
+  for (let waited = 0; waited < 10_000 && isAlive(pid); waited += 20)
+    await new Promise((r) => setTimeout(r, 20))
+  return !isAlive(pid)
+}
+
+/**
+ * The daemon that serves a package, by process id: the pid its lock names,
+ * when that process runs. Read from the lock, not from `ps`: Windows has no
+ * `ps` the driver can rely on, and a process's command line spells the path
+ * in another form (review of #73).
+ */
 function daemonsOf(dir) {
-  const listed = spawnSync(`ps`, [`-A`, `-o`, `pid=,command=`], {
-    encoding: `utf8`,
-  }).stdout
-  return listed
-    .split(`\n`)
-    .filter(
-      (line) => line.includes(`daemon.mjs --package`) && line.includes(dir),
+  let token
+  try {
+    token = readFileSync(
+      join(stateDirOf(realPathOf(dir)), `daemon.lock`),
+      `utf8`,
     )
-    .map((line) => Number(line.trim().split(/\s+/)[0]))
+  } catch {
+    return []
+  }
+  const pid = Number(token.split(`:`)[0])
+  return Number.isInteger(pid) && pid > 0 && isAlive(pid) ? [pid] : []
 }
 
 // The faults under which a check's session cannot open, cold or through the
@@ -1501,19 +1510,25 @@ async function incremental(dir, plan, cli, copy, observe, states) {
   async function daemonChecks(step, files, how) {
     if (step !== `dieMidCheck` && step !== `resetBeforeRead`)
       return [runCli(dir, files, { ...how, daemon: true })]
-    // Each of these steps pauses a daemon at a test-only point and kills it by
-    // the pid the daemon wrote. The labels are observations of that: a pause
-    // the driver read, a kill it sent, and, for the hold, a wait the CLI marked.
     stop()
     const marks = mkdtempSync(join(realpathSync(tmpdir()), `gap-pause-`))
     const pauseMark = join(marks, `pid`)
     const armMark = join(marks, `armed`)
     const waitMark = join(marks, `waited`)
+    const servedMark = join(marks, `served`)
     const mid = step === `dieMidCheck`
+    // A plan may disarm the pause (a constructed history): then nothing engages.
+    const pause =
+      plan.pauseEngages === false
+        ? {}
+        : {
+            ORACLE_GAPS_TEST_PAUSE_AT: mid ? `daemon-reply` : `daemon-read`,
+            ORACLE_GAPS_TEST_PAUSE_MARK: pauseMark,
+            ORACLE_GAPS_TEST_PAUSE_ARM: armMark,
+          }
     const env = {
-      ORACLE_GAPS_TEST_PAUSE_AT: mid ? `daemon-reply` : `daemon-read`,
-      ORACLE_GAPS_TEST_PAUSE_MARK: pauseMark,
-      ORACLE_GAPS_TEST_PAUSE_ARM: armMark,
+      ...pause,
+      ORACLE_GAPS_TEST_SERVED_MARK: servedMark,
       ...(mid
         ? {
             ORACLE_GAPS_TEST_WAIT_MS: `3000`,
@@ -1521,40 +1536,75 @@ async function incremental(dir, plan, cli, copy, observe, states) {
           }
         : {}),
     }
-    if (!mid)
-      // The warm daemon: an earlier check through it serves, before the pause is armed,
-      // so the reset hits a daemon that already holds a session (P7).
+    // The warm daemon: an earlier check through it serves before the pause is
+    // armed, so the reset hits a daemon with a session. Its pid is the one the
+    // served mark holds (the witness for the warm label).
+    let warm
+    if (!mid) {
       await runClisAtOnce(dir, files, [
         { ...how, daemon: true, outName: `out-warm`, env },
       ])
-    if (!mid) writeFileSync(armMark, ``)
+      warm = pidOf(servedMark)
+      writeFileSync(armMark, ``)
+    }
     let finished = false
     const running = runClisAtOnce(dir, files, [{ ...how, daemon: true, env }])
     running.then(() => {
       finished = true
     })
+    // The pause's pid, as the daemon wrote it. No pause within 60 s, with the
+    // check still running, is a failure of the test, not a skipped label.
     let pid
-    for (let waited = 0; !finished && waited < 60_000; waited += 20) {
+    for (let waited = 0; !finished; waited += 20) {
       pid = pidOf(pauseMark)
-      if (pid !== undefined && (!mid || existsSync(waitMark))) break
+      if (pid !== undefined) break
+      if (waited >= 60_000)
+        throw new Error(
+          `oracle-gaps.report: ${step} saw no daemon pause within 60 s`,
+        )
       await new Promise((r) => setTimeout(r, 20))
     }
-    const waited = mid && existsSync(waitMark)
-    // Killed only as the test saw it paused and still running. A paused daemon whose
-    // wait mark never came is killed too, so the run cannot hang.
+    // dieMidCheck's CLI marks its wait; a missing mark means the hold is not
+    // observed (the label is absent), and the kill still comes.
+    for (
+      let waited = 0;
+      pid !== undefined &&
+      mid &&
+      !finished &&
+      !existsSync(waitMark) &&
+      waited < 60_000;
+      waited += 20
+    )
+      await new Promise((r) => setTimeout(r, 20))
+    const held = mid && existsSync(waitMark)
     const killed = pid !== undefined && !finished
     if (killed) process.kill(pid, `SIGKILL`)
+    const gone = killed ? await waitGone(pid) : false
     const runs = await running
     rmSync(marks, { recursive: true, force: true })
-    if (killed && runs[0].reported) {
+    // Each label needs its pause's observation: a kill the driver sent and saw
+    // through (gone), and the CLI's report of the check. A label without a pause
+    // is attested, not observed, so it is an error rather than a state.
+    const labels = []
+    if (killed && gone && runs[0].reported) {
       if (mid) {
-        states.add(`a check whose daemon died during it`)
-        if (waited)
-          states.add(
+        labels.push(`a check whose daemon died during it`)
+        if (held)
+          labels.push(
             `a check whose daemon held it past the CLI's wait, then died`,
           )
-      } else states.add(`a check whose connection was reset`)
+      } else {
+        labels.push(`a check whose connection was reset`)
+        if (warm !== undefined && warm === pid)
+          labels.push(`a warm daemon's connection was reset`)
+      }
     }
+    if (!killed) states.add(`a daemon pause that did not engage`)
+    if (labels.length > 0 && !killed)
+      throw new Error(
+        `oracle-gaps.report: ${step} recorded ${labels.join(`, `)} without a daemon pause`,
+      )
+    for (const label of labels) states.add(label)
     return runs
   }
   // Kills the package's daemons as a crash or a power loss would, leaving
@@ -3124,6 +3174,8 @@ const incrementalStates = [
     .map((edit) => `edit ${edit} changed the cold result`),
   `a check whose daemon died during it`,
   `a check whose daemon held it past the CLI's wait, then died`,
+  `a warm daemon's connection was reset`,
+  `a daemon pause that did not engage`,
   `a check whose connection was reset`,
   `a check after a daemon crash`,
   `a check after a reboot`,
@@ -3431,6 +3483,19 @@ oracleProperty({
     runs: 2,
     fixedSeeds: [20261105],
     constructed: withDeclaration([
+      {
+        // The pauses are disarmed: no daemon is paused, so no pid is observed, and
+        // neither daemon label is added. The history declares that it does not engage.
+        name: `a daemon pause that cannot engage`,
+        enters: [`a daemon pause that did not engage`],
+        build: (generated) => ({
+          ...generated,
+          // Without the witness module, the grammar takes these steps back.
+          witness: false,
+          steps: [`dieMidCheck`, `resetBeforeRead`],
+          pauseEngages: false,
+        }),
+      },
       {
         name: `every outcome class`,
         enters: witnessed,

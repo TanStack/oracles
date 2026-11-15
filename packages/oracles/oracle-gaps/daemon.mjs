@@ -438,6 +438,11 @@ async function serve(pkg) {
           stderr: stderr.join(``),
           failed,
         })
+        // Test-only (ORACLE_GAPS_TEST_SERVED_MARK, a path): this daemon's pid is
+        // written after it answers a check, so a test can tell which daemon
+        // served an earlier check (a warm daemon, review of #73).
+        const served = process.env.ORACLE_GAPS_TEST_SERVED_MARK
+        if (served !== undefined) writeMark(served, `${process.pid}`)
         closeAfter(idleMs)
       })
     })
