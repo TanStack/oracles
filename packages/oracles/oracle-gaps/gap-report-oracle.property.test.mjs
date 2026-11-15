@@ -3187,7 +3187,6 @@ const incrementalStates = [
   `a check whose daemon died during it`,
   `a check whose daemon held it past the CLI's wait, then died`,
   `a warm daemon's connection was reset`,
-  `a daemon pause that did not engage`,
   `a check whose connection was reset`,
   `a check after a daemon crash`,
   `a check after a reboot`,
@@ -3226,6 +3225,8 @@ const staticStates = [
   `owned through bind`,
 ]
 const required = [
+  // Reached only by the constructed history of the disarmed pause (see there).
+  `a daemon pause that did not engage`,
   `killed by a second owner`,
   `killed`,
   `random-only kill`,
