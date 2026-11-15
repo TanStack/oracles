@@ -420,11 +420,13 @@ const testCase = fc.record({
   // turn: its work could follow the clock.
   timed: fc.constant(false),
   // The constructed-only fields (see `histories`): a witness's wait where its
-  // output differs, its repeated calls, and its load. A generated test has the
-  // neutral values, which change nothing.
+  // output differs, its repeated calls, its load, and a repeating timer kept
+  // due while a hang waits. A generated test has the neutral values, which
+  // change nothing.
   slowMs: fc.constant(SLOW_MS),
   loops: fc.constant(0),
   timerWait: fc.constant(null),
+  pulse: fc.constant(false),
 })
 // Law 9's edits. Each content edit changes what some evidence depends on:
 // a test file, a source statement, the source's line numbers, an owns list,
@@ -895,14 +897,16 @@ const keepsSteps = (history) => {
 // take-back reads it as the drawn constant `false` (as `claimScenario` does): a
 // shrink is torn-row-free. A constructed history may set `slowTwin`, which no
 // generated history draws, and which is taken back without it. Its tests may
-// set the constructed-only fields `slowMs`, `loops` and `timerWait`, which the
-// drawn test record holds at neutral values (the generator rule, 2026-11-14).
+// set the constructed-only fields `slowMs`, `loops`, `timerWait` and `pulse`,
+// which the drawn test record holds at neutral values (the generator rule,
+// 2026-11-14).
 const takenBack = (t) => ({
   ...t,
   slow: false,
   slowMs: SLOW_MS,
   loops: 0,
   timerWait: null,
+  pulse: false,
 })
 const histories = drawn.map(
   (history) => (keepsSteps(history) ? history : { ...history, steps: null }),
@@ -4080,13 +4084,15 @@ function runsOf(plan, tests, sites, active) {
             work: after,
             before,
           }
-        // A test that hangs where another would judge never ends.
+        // A test that hangs where another would judge never ends. Without a
+        // `pulse` it goes idle (no progress); with one, its timer keeps it busy,
+        // so only the backstop cuts it (a wall-clock cut).
         if (changed && t.hangs)
           return {
             t,
             route,
             hang: true,
-            cut: 'state',
+            cut: t.pulse ? 'wall' : 'state',
             verdicts: found,
             changed: true,
             work: after,
@@ -4999,10 +5005,14 @@ function oracleTestFile(plan, file) {
               `    }`,
             ]
           : []),
-        // A flaky test never hangs: the model leaves flaky tests out.
+        // A flaky test never hangs: the model leaves flaky tests out. A
+        // `pulse` hang keeps a repeating timer due inside its horizon, so the
+        // copy is never idle, and it never finishes: only the backstop cuts it.
         ...(t.hangs && !t.flaky
           ? [
-              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await new Promise(() => {})`,
+              t.pulse
+                ? `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) { setInterval(() => {}, 100); await new Promise(() => {}) }`
+                : `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await new Promise(() => {})`,
             ]
           : []),
         ...(!t.judges

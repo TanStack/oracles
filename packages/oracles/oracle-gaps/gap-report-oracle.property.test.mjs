@@ -5106,9 +5106,11 @@ oracleProperty({
         }),
       },
       // Constructed histories added by the deterministic-cuts change follow.
-      // Owner a's copy waits past the history's 2 s backstop, so it is cut
-      // off; owner b would kill. The cut ends the copies, so b does not run:
-      // the mutant is a backstop gap (a timeout), never a kill.
+      // Owner a's copy never finishes and never goes idle: it awaits a promise
+      // that never resolves, while a repeating timer stays due inside its
+      // horizon (`pulse`). So it is cut only by the 2 s backstop, on every
+      // machine, and owner b would kill. The cut ends the copies, so b does
+      // not run: the mutant is a backstop gap (a timeout), never a kill.
       {
         name: `a backstop cut ends the copies ahead of a later kill`,
         enters: [`a backstop cut ends the copies ahead of a later kill`],
@@ -5132,8 +5134,8 @@ oracleProperty({
             {
               ...judging(`a`, `fixed seed`, 7),
               fn: 0,
-              slow: true,
-              slowMs: 12_000,
+              hangs: true,
+              pulse: true,
             },
             { ...judging(`b`, `fixed seed`, 7), fn: 0 },
           ],
