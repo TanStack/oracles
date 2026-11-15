@@ -546,6 +546,9 @@ export const partitions = {
         'a second daemon check of the budget witness',
         'an edit that changed the cold result after a hang replaced the only context',
         'two authored mutants',
+        'an edit to data a test reads through fs (sync)',
+        'an edit to data a test reads through fs (promise)',
+        'an edit to data a test reads through fs (callback)',
       ]),
       3: anyOf([
         'a stop as the CLI starts',
@@ -557,6 +560,9 @@ export const partitions = {
         'a lazy module loaded before a hang in the same batch',
         'a stale authored mutant and a reformat',
         'an edit to a module that only mutated runs load',
+        'an edit during a check through the daemon',
+        'a test edits the helper it read, during a check through the daemon',
+        'a test edits the data it read, during a check through the daemon',
       ]),
       4: anyOf([
         'a config that --config names',
@@ -564,6 +570,8 @@ export const partitions = {
         'a declaration fault: outsideSource',
         'a load failure beside a hang',
         'an ambiguous authored mutant',
+        'a capture row read while the worker wrote it',
+        'two batches each read a capture row while its worker wrote it',
         'every outcome class',
       ]),
       5: anyOf([
@@ -573,6 +581,9 @@ export const partitions = {
         'a package whose parent directory has its config',
         'an awaiting config in a package with no module type',
         'generated',
+        "an unchanged check through the daemon under a config's pre plugin",
+        'an unchanged check through the daemon while a test reads a source through fs',
+        'an edit to data a test reads through fs (statDir)',
       ]),
       6: anyOf([
         'a declaration fault: badEntry',
