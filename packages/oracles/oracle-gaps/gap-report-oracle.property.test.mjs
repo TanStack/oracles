@@ -3045,9 +3045,12 @@ function check(plan, observations, expected) {
     // directory the run was given holds it.
     // Every e2e run names its output directory (`--out`), so even a
     // refusal of its arguments is written there.
+    // A run with the default output directory (`--out` left out) lets the CLI
+    // choose it, so the driver cannot name the directory: the refusal's shape is
+    // judged, and its directory where the driver knows it.
     const breach = refusalBreach(cli.ending, {
       cause: expected.refused.cause,
-      outKnown: true,
+      outKnown: plan.outMode === `explicit`,
       logNote: expected.refused.arguments ? undefined : logNoteOf(cli),
     })
     if (breach) return violation(`cli`, breach, `report-shaped ending`)
