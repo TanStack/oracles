@@ -770,8 +770,12 @@ const drawn = fc.record({
   // Who names the importer's function in an owns entry, if any.
   importer: fc.constantFrom(`none`, `a`, `b`),
   // The batch whose run rejects (a test-only fault, see the constructed history at the end of the
-  // campaign): 0 is no fault. A constant draws nothing, so fixed seeds keep their histories.
-  rejectBatch: fc.constant(0),
+  // campaign): 0 is no fault. Appended last in the draw order (the generator rule), so existing fields
+  // draw as before.
+  rejectBatch: fc.oneof(
+    { weight: 199, arbitrary: fc.constant(0) },
+    { weight: 1, arbitrary: fc.constant(1) },
+  ),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
