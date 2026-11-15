@@ -6,7 +6,7 @@
 // real path, `realpathSync.native`, is taken on both sides of a comparison:
 // the JavaScript `realpathSync` keeps an 8.3 short name (RUNNER~1), which the
 // native call expands, so the two never agree on Windows.
-import { realpathSync } from 'node:fs'
+import { realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { relative } from 'node:path'
 
 /**
@@ -21,6 +21,17 @@ export const posix = (path) =>
     : path
         .replaceAll(`\\`, `/`)
         .replace(/^[a-z]:/, (drive) => drive.toUpperCase())
+
+/**
+ * Writes `file` whole: a temporary file, then a rename, so a reader sees the
+ * old text or the new, never a part (evidence.mjs writes its store the same
+ * way). Both the CLI and the harness copy write their markers with it.
+ */
+export function writeWhole(file, text) {
+  const temporary = `${file}.${process.pid}.tmp`
+  writeFileSync(temporary, text)
+  renameSync(temporary, file)
+}
 
 /** The real path of `path`, in forward slashes. */
 export const realPathOf = (path) => posix(realpathSync.native(path))
