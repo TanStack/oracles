@@ -913,9 +913,8 @@ const histories = drawn.map(
       )
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
-    const { slowTwin, ...drawnValue } = /** @type {Record<string, unknown>} */ (
-      value
-    )
+    const { slowTwin, hangMs, ...drawnValue } =
+      /** @type {Record<string, unknown>} */ (value)
     const tests = /** @type {Record<string, unknown>[]} */ (drawnValue.tests)
     const plain =
       /** @type {{ witness: unknown, steps: unknown[] | null, tornRows: unknown }} */ ({
@@ -4040,12 +4039,29 @@ function runsOf(plan, tests, sites, active) {
           before += base.work
           after += mutated.work * (1 + (changed ? (t.loops ?? 0) : 0))
         }
+        // A wait past the history's backstop (its `hangMs`, else the full limit)
+        // and a margin of 6 s for three seconds per second of a one-test file
+        // (the file's time is under 2 s) is a backstop cut: the file's run is cut
+        // off, as a hang is, with no clock decision in the verdicts.
+        const backstopMs = plan.history.hangMs ?? FULL_LIMIT_MS
+        if (changed && t.slow && (t.slowMs ?? SLOW_MS) > backstopMs + 6000)
+          return {
+            t,
+            route,
+            hang: true,
+            cut: 'wall',
+            verdicts: found,
+            changed: true,
+            work: after,
+            before,
+          }
         // A loop that never ends cuts the file's run off, as a hang does.
         if (mutated.spun)
           return {
             t,
             route,
             hang: true,
+            cut: 'count',
             verdicts: found,
             changed: true,
             work: after,
@@ -4070,6 +4086,7 @@ function runsOf(plan, tests, sites, active) {
             t,
             route,
             hang: true,
+            cut: 'state',
             verdicts: found,
             changed: true,
             work: after,
@@ -4176,6 +4193,10 @@ function judge(plan, tests, sites, active, { budgeted = true } = {}) {
   // earlier verdicts. A kill in another file still decides (a kill outranks
   // a timeout); failing that, the mutant is a timeout.
   const hung = new Set()
+  // Only a wall-clock cut (the backstop) ends the owner files after it. A count
+  // or a state cut (a spin, or no progress) ends its own copy only (the outcome
+  // rule, 2026-11-14, as refined: the next owner's copy still runs).
+  const wallHung = new Set()
   // The mutant's work budget (G1): its owner files' copies are counted in
   // their order, each copy's work being the site evaluations of its runs up
   // to a hang or a kill. A copy past the budget is a timeout, and so is every
@@ -4200,13 +4221,13 @@ function judge(plan, tests, sites, active, { budgeted = true } = {}) {
     let work = 0
     for (const r of runs.filter((x) => x.t.file === file)) {
       if (r.hang) hung.add(file)
-      // A copy cut off by its backstop, or by spinning, records no work.
+      if (r.hang && r.cut === `wall`) wallHung.add(file)
+      // A cut copy records no work (its calls are not rows the CLI keeps).
       work += r.hang ? 0 : r.work
       if (r.hang || killsIn(r)) break
     }
-    // A copy cut by a clock or by its call count ends the mutant's copies
-    // here: no later copy runs (register, 2026-11-14, the outcome rule).
-    if (hung.has(file)) {
+    // A copy cut by a clock ends the mutant's copies here: no later copy runs.
+    if (wallHung.has(file)) {
       exhausted = true
       break
     }

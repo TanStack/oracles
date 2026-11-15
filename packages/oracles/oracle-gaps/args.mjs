@@ -221,9 +221,9 @@ function optionsOf(args, cwd) {
     // The `--first-limit` option is retired (option A): it is validated and
     // noted, and changes nothing.
     retiredFirstLimit: args[`first-limit`] !== undefined,
-    // The floor of a mutant's wall-clock backstop (check.mjs, `budgetOf`): 180 s
-    // by default, three full copies at the default backstop.
-    mutantLimit: Number(args[`mutant-limit`] ?? 180000),
+    // `--mutant-limit` is retired too (deterministic cuts, option A): the work
+    // budget bounds a mutant, so it is validated and noted, and changes nothing.
+    retiredMutantLimit: args[`mutant-limit`] !== undefined,
     // Vitest's worker pool. Threads start much faster than child processes;
     // a package with a native addon in its tree runs with `forks`.
     pool: args.pool ?? defaultPool(pkg),

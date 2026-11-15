@@ -621,11 +621,7 @@ function cliArgs(
     // history passes it, and the CLI notes that it changes nothing.
     ...(budget === `one` ? [`--first-limit`, `1000`] : []),
     `--hang-limit`,
-    String(FULL_LIMIT_MS),
-    // The budget that a mutant's confirming runs share, the full limit of
-    // one copy: one slow owner's confirmation fits it, two do not (law 4).
-    `--mutant-limit`,
-    String(MUTANT_LIMIT_MS),
+    String(plan.history.hangMs ?? FULL_LIMIT_MS),
     `--out`,
     path(out),
   ]
@@ -1816,6 +1812,13 @@ async function driver(plan, observe) {
       states.add(`a slow kill past fifteen seconds killed`)
     if (killed && plan.history.tests.some((t) => t.timerWait))
       states.add(`a copy waiting on a timer killed`)
+    // A copy that waits past the history's backstop is cut off, and no later
+    // owner runs, so the mutant is a timeout, not the later owner's kill.
+    if (
+      plan.history.hangMs &&
+      cli.report?.results?.some((r) => r.outcome === `timeout`)
+    )
+      states.add(`a backstop cut ends the copies ahead of a later kill`)
     // Two owners that each make 30,000 extra calls: the second owner's copy
     // passes the work budget, and its kill does not count (the outcome rule).
     if (
@@ -3570,6 +3573,7 @@ const required = [
   `a slow kill past fifteen seconds killed`,
   `a copy waiting on a timer killed`,
   `a kill past the work budget in a later owner does not count`,
+  `a backstop cut ends the copies ahead of a later kill`,
   `a hang in one owner and a survivor in another timed out`,
   `confirmations past a mutant's budget timed out`,
   `a heartbeat named a busy mutant`,
@@ -3703,6 +3707,7 @@ const separate = [
   `a slow kill past fifteen seconds killed`,
   `a copy waiting on a timer killed`,
   `a kill past the work budget in a later owner does not count`,
+  `a backstop cut ends the copies ahead of a later kill`,
   // The config and contexts states have constructed histories of their own.
   `a config that --config names ran`,
   `a package with no config ran`,
@@ -5098,6 +5103,53 @@ oracleProperty({
         }),
       },
       // Constructed histories added by the deterministic-cuts change follow.
+      // Owner a's copy waits past the history's 2 s backstop, so it is cut
+      // off; owner b would kill. The cut ends the copies, so b does not run:
+      // the mutant is a backstop gap (a timeout), never a kill.
+      {
+        name: `a backstop cut ends the copies ahead of a later kill`,
+        enters: [`a backstop cut ends the copies ahead of a later kill`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `if`, op: `>`, k: 4, not: false, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`both`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          derived: null,
+          dotGen: false,
+          dataOwners: [],
+          exportOwners: [],
+          importer: `none`,
+          wholeFile: `none`,
+          template: false,
+          tests: [
+            {
+              ...judging(`a`, `fixed seed`, 7),
+              fn: 0,
+              slow: true,
+              slowMs: 12_000,
+            },
+            { ...judging(`b`, `fixed seed`, 7), fn: 0 },
+          ],
+          witness: false,
+          authored: null,
+          secondAuthored: false,
+          fault: `none`,
+          stability: `none`,
+          ordinary: false,
+          native: `none`,
+          boot: false,
+          budget: `two`,
+          cliPath: `plain`,
+          concurrentStart: false,
+          contexts: 1,
+          steps: null,
+          hangMs: 2_000,
+        }),
+      },
       // Owner a's copy makes 30,000 extra calls (under its budget), and so does
       // owner b's, which would kill. Together they pass the work budget, so b's
       // kill does not count: the mutant is a timeout by count.

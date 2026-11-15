@@ -72,6 +72,9 @@ export const shards = {
     `fixed seed 20261105: a kill past the work budget in a later owner`,
     `random seed: a kill past the work budget in a later owner`,
     `determinism: constructed history: a kill past the work budget in a later owner`,
+    `fixed seed 20261105: a backstop cut ends the copies ahead of a later kill`,
+    `random seed: a backstop cut ends the copies ahead of a later kill`,
+    `determinism: constructed history: a backstop cut ends the copies ahead of a later kill`,
     // The witness module's edit sequence (option M): 189 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
     `determinism: constructed history: an edit sequence over the witness module`,

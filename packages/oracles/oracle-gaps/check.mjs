@@ -1373,9 +1373,9 @@ export default async (env) => {
       log(
         `oracle-gaps: note --first-limit is retired: a copy has no first budget, so it changes nothing (deterministic cuts, option A)`,
       )
-    if (options.hangLimit > options.mutantLimit)
+    if (options.retiredMutantLimit)
       log(
-        `oracle-gaps: note --hang-limit ${options.hangLimit} ms is above --mutant-limit ${options.mutantLimit} ms; a mutant's copies together get at most the larger of --mutant-limit and ten times its owner files' unmutated time`,
+        `oracle-gaps: note --mutant-limit is retired: a mutant's work budget bounds it, so it changes nothing (deterministic cuts, option A)`,
       )
     pulse = {
       log,
@@ -1486,7 +1486,6 @@ export default async (env) => {
         settings,
         // A run cut off under one limit may end under a longer one.
         options.hangLimit,
-        options.mutantLimit,
       ]),
     )
     // How the evidence was produced: units reused and computed, runs cut off
@@ -1693,9 +1692,17 @@ export default async (env) => {
         if (batch.idle) evidence.idle += 1
         if (batch.spin) evidence.spin += 1
         await replace(slot)
+        // A count or state cut (a spin, or no progress) is a timeout for its
+        // copy alone; only a wall-clock cut ends the mutant's copies (cutByTime).
         settle(
           hung,
-          { file: hung.file, timedOut: true, seconds: hung.limitMs / 1000 },
+          {
+            file: hung.file,
+            timedOut: true,
+            seconds: hung.limitMs / 1000,
+            ...(batch.spin ? { spin: true } : {}),
+            ...(batch.idle ? { idle: true } : {}),
+          },
           batch.inputs[batch.timedOutAt],
         )
         rest = [
@@ -1757,7 +1764,7 @@ export default async (env) => {
     // copy is never charged, and it ends the mutant's copies (the outcome rule,
     // register 2026-11-14, `Deterministic cuts, outcome rule`).
     const cutByTime = (unit) =>
-      unit.timedOut ||
+      (unit.timedOut && !unit.spin && !unit.idle) ||
       (unit.tests ?? []).some(
         (test) =>
           test.state === `failed` && /Test timed out/.test(test.message),

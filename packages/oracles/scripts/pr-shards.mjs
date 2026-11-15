@@ -559,6 +559,7 @@ export const partitions = {
         "a slow kill past Vitest's 15 s limit",
         'a copy waiting on a timer',
         'a kill past the work budget in a later owner',
+        'a backstop cut ends the copies ahead of a later kill',
         'a capture row read while the worker wrote it',
         'two batches each read a capture row while its worker wrote it',
         'every outcome class',
