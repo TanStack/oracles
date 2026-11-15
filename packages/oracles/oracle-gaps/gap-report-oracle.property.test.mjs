@@ -1748,12 +1748,6 @@ async function driver(plan, observe) {
         `retentionLines:reject`,
         retention.some((line) => line.batch === plan.rejectBatch) ? 0 : 1,
       )
-      if (
-        retention.some(
-          (line) => line.batch === plan.rejectBatch && line.after !== undefined,
-        )
-      )
-        states.add(`a rejected batch retired its copies and logged them`)
     }
     observe(
       `retentionLines:cold`,
@@ -1764,6 +1758,13 @@ async function driver(plan, observe) {
       observe(`replay`, { command: replay, ran: replayed(dir, replay) })
     // Reach comes from what the CLI reported, mapped onto the plan.
     const states = new Set()
+    if (
+      plan.rejectBatch > 0 &&
+      retention.some(
+        (line) => line.batch === plan.rejectBatch && line.after !== undefined,
+      )
+    )
+      states.add(`a rejected batch retired its copies and logged them`)
     if (retention.length > 1) states.add(`a check that ran more than one batch`)
     if (cli.exit === 0 && !plan.consoleOutput)
       states.add(`a completed run whose tests wrote nothing`)
@@ -2342,7 +2343,12 @@ function check(plan, observations, expected) {
       `config`,
       { actual: cli.configLines, expected: expected.configLines },
     )
-  const stream = streamBreach(`cli`, cli, expected, plan)
+  // A rejected batch's run ends with the internal error's lines, which are not stream lines: its ending is
+  // judged below, after retention (the constructed fault only).
+  const stream =
+    expected.rejectedBatch === undefined
+      ? streamBreach(`cli`, cli, expected, plan)
+      : undefined
   if (stream) return stream
   // Bounded retention (the register's C entry): once a batch's copies are
   // retired, Vitest's filesMap, pathsSet, and idMap and Vite's module graph
