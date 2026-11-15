@@ -244,7 +244,7 @@ function claimOut(out) {
         if (holder === undefined)
           throw new Refusal(
             `run.pid in ${out} keeps changing`,
-            `rerun the check; if no run uses ${out}, delete ${claim}`,
+            `rerun the check; if no run uses ${out}, delete ${posix(claim)}`,
           )
         throw heldRefusal(out, claim, holder)
       }
@@ -257,7 +257,7 @@ function claimOut(out) {
 function claimCannotWrite(out, claim, error) {
   return new Refusal(
     `run.pid in ${out} cannot be written (${error.code ?? error.message})`,
-    `if no run uses ${out}, delete ${claim}, or pass --out a directory whose run.pid can be written`,
+    `if no run uses ${out}, delete ${posix(claim)}, or pass --out a directory whose run.pid can be written`,
   )
 }
 /** The refusal for a `run.pid` that holds its directory or cannot be read. */
@@ -266,21 +266,21 @@ function heldRefusal(out, claim, holder) {
     holder === UNREADABLE
       ? new Refusal(
           `run.pid in ${out} can't be read`,
-          `if no run uses ${out}, delete ${claim}`,
+          `if no run uses ${out}, delete ${posix(claim)}`,
         )
       : holder > 0 && alive(holder)
         ? new Refusal(
             `another run (pid ${holder}) is using ${out}`,
-            `If no run is using it, delete ${claim}; otherwise pass --out a directory no run is using.`,
+            `If no run is using it, delete ${posix(claim)}; otherwise pass --out a directory no run is using.`,
           )
         : holder > 0
           ? new Refusal(
               `run.pid names pid ${holder}, which is not running`,
-              `if no run uses ${out}, delete ${claim}`,
+              `if no run uses ${out}, delete ${posix(claim)}`,
             )
           : new Refusal(
               `run.pid in ${out} does not name a pid`,
-              `if no run uses ${out}, delete ${claim}`,
+              `if no run uses ${out}, delete ${posix(claim)}`,
             )
   refusal.reportless = true
   return refusal

@@ -4340,6 +4340,13 @@ const staticStates = [
   `a class passed as a value brings its methods`,
   `owned through bind`,
 ]
+// The supervisor-death state exists only where a supervisor does: win32 has no
+// supervisor until #79, so there the state is not required and no history
+// enters it (platform-scoped reach, register "Platform-scoped reach (#73)").
+const posixSupervision =
+  process.platform === `win32`
+    ? []
+    : [`a supervised child exits when its supervisor is killed`]
 const required = [
   // Reached only by the constructed history of the disarmed pause (see there).
   `a daemon pause that did not engage`,
@@ -4349,7 +4356,7 @@ const required = [
   `a start refuses a stale claim`,
   `a start refuses an empty claim`,
   `a start refuses an unreadable claim`,
-  `a supervised child exits when its supervisor is killed`,
+  ...posixSupervision,
   `a stream log lost after its note, then stopped`,
   `a stream log lost after its note, then completed`,
   `a stop as the CLI starts`,
@@ -4531,7 +4538,7 @@ const ownHistoryStates = [
   `a start refuses a stale claim`,
   `a start refuses an empty claim`,
   `a start refuses an unreadable claim`,
-  `a supervised child exits when its supervisor is killed`,
+  ...posixSupervision,
   `a stream log lost after its note, then stopped`,
   `a stream log lost after its note, then completed`,
   `a stop as the CLI starts`,
@@ -6345,7 +6352,7 @@ oracleProperty({
         // A supervised check whose supervisor is killed with SIGKILL: its child exits
         // within the watchdog's tick, so no run's process outlives its CLI (POSIX).
         name: `a supervised child exits when its supervisor is killed`,
-        enters: [`a supervised child exits when its supervisor is killed`],
+        enters: posixSupervision,
         build: (generated) => ({
           ...generated,
           functions: [[{ kind: `push`, quote: `'` }]],
