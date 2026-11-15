@@ -2439,6 +2439,9 @@ async function driver(plan, observe) {
       observe(`claimScenario`, claim)
       states.add(claimStateOf[claim.scenario])
     }
+    // Platform-scoped reach: win32 has no supervisor until #79, so the state is
+    // not reached there, and the law has no observation to judge. The reason is
+    // recorded in the PR's Limits.
     if (plan.supervisorDeath && process.platform !== `win32`) {
       observe(`supervisorDeath`, await supervisorDeathRuns(dir, files, how))
       states.add(`a supervised child exits when its supervisor is killed`)
