@@ -780,11 +780,6 @@ const drawn = fc.record({
       }),
     },
   ),
-  // Whether the daemon's pause engages in the daemon steps (dieMidCheck and
-  // resetBeforeRead). Always true in drawn histories, so the seeds' histories are
-  // unchanged; only the constructed history "a daemon pause that cannot engage" sets
-  // it false.
-  pauseEngages: fc.constant(true),
   // Who owns each module-level data declaration directly (`src/sut.ts#D_OBJ`),
   // in `MODULE_DATA`'s order. A declaration is written when a function reads
   // it or an entry names it.
@@ -845,6 +840,11 @@ const drawn = fc.record({
   // `histories` takes a constructed one back as this constant (as
   // `claimScenario` does). Its neutral value is recorded by the canary.
   tornRows: fc.constant(false),
+  // Whether the daemon's pause engages in the daemon steps (dieMidCheck and
+  // resetBeforeRead). Always true in drawn histories, so the seeds' histories are
+  // unchanged; only the constructed history "a daemon pause that cannot engage" sets
+  // it false.
+  pauseEngages: fc.constant(true),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
