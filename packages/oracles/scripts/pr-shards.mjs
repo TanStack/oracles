@@ -304,6 +304,8 @@ export const partitions = {
         'two starts race for a stale claim',
         'a start refuses a stale claim',
         'a start refuses an empty claim',
+        'a stream log lost after its note, then stopped',
+        'a stream log lost after its note, then completed',
       ]),
       // 134 s, 101 s, 27 s, and 15 s.
       2: anyOf([
@@ -531,6 +533,8 @@ export const partitions = {
         'two starts race for a stale claim',
         'a start refuses a stale claim',
         'a start refuses an empty claim',
+        'a stream log lost after its note, then stopped',
+        'a stream log lost after its note, then completed',
         'a stop with the default output directory',
         'a daemon check with the default output directory',
         'a .ts config in a package with no module type that calls require',

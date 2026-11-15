@@ -838,6 +838,9 @@ const drawn = fc.record({
   // A constant draws nothing, so generated histories never run the claim driver,
   // and `histories` below takes a constructed scenario back as this constant.
   claimScenario: fc.constant(false),
+  // A stream log that becomes a directory right after the note (review of #57,
+  // F1): constructed only, and taken back as the constant false below.
+  logLost: fc.constant(false),
   // The spawn stop waits for the CLI's started marker, then signals at once (the
   // deterministic witness, event-driven rather than timed).
 })
@@ -894,9 +897,9 @@ const histories = drawn.map(
       )
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
-    return history.claimScenario === false
+    return history.claimScenario === false && history.logLost === false
       ? value
-      : { ...history, claimScenario: false }
+      : { ...history, claimScenario: false, logLost: false }
   },
 )
 
@@ -2947,6 +2950,7 @@ function resolveHistory(history) {
     // histories keep their fixed-seed draws and run no claim driver (P4, the
     // coordinator's decision on the claim rules).
     claimScenario: history.claimScenario ?? false,
+    logLost: history.logLost ?? false,
     spawnOnStart: history.spawnOnStart === true,
     onlyRun: history.onlyRun === true,
     pragma: history.pragma === true,

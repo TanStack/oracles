@@ -357,6 +357,8 @@ function superviseRun(out) {
   // of memory.
   let outOfMemory = false
   let stderrTail = ``
+  // The first error that the stream log raised after it was open, if any.
+  let logLost
   // Whether the run's streams and channel have closed.
   let closed = false
   // Ends the CLI once the run has ended (or the grace has passed), with what
@@ -452,7 +454,14 @@ function superviseRun(out) {
   // for V8's out-of-memory message.
   child.stderr.on(`data`, (chunk) => {
     process.stderr.write(chunk)
-    appendLog(streamLog, chunk)
+    // A log that cannot take the run's stderr is recorded once, and the relay
+    // goes on: the run's own ending stays the only done line on each stream.
+    if (logLost === undefined)
+      try {
+        appendLog(streamLog, chunk)
+      } catch (error) {
+        logLost = error
+      }
     stderrTail = (stderrTail + chunk).slice(-200)
     if (/heap out of memory/i.test(stderrTail)) outOfMemory = true
   })

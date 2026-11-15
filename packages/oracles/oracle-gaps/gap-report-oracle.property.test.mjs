@@ -481,6 +481,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import {
   cpSync,
   existsSync,
+  statSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -962,6 +963,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
  * observation (the coordinator's decision of 2026-11-13 on F4: a second run
  * refuses, and the first's stream log stays its own).
  */
+/** The state each unwritable-log ending enters. */
+const lostStateOf = {
+  stop: `a stream log lost after its note, then stopped`,
+  complete: `a stream log lost after its note, then completed`,
+}
+
 /** The state each claim scenario enters. */
 const claimStateOf = {
   race: `two starts race for a stale claim`,
@@ -1033,6 +1040,71 @@ async function claimScenarioRuns(dir, files, how, scenario) {
     // refusal writes no note, no log, and no temp file.
     claimKept: existsSync(claim) && readFileSync(claim, `utf8`) === written,
     otherFiles: readdirSync(out).filter((name) => name !== `run.pid`),
+  }
+}
+
+/**
+ * Runs a check whose stream log becomes a directory right after its note
+ * (review of #57, F1). The supervisor pauses at the note (ORACLE_GAPS_TEST_PAUSE_AT),
+ * the driver replaces stream.log with a directory, and the run is then stopped
+ * (`stop`, through the test stop file) or allowed to complete (`complete`). The
+ * stop file is written before the release, and the stop watcher starts only
+ * once the supervisor runs, so the stop is taken by an event, not a timer.
+ */
+async function unwritableLogRuns(dir, files, how, ending) {
+  const { args, out } = cliArgs(dir, files, { ...how, outName: `out-lost` })
+  const marker = join(dir, `lost-at-note`)
+  const release = join(dir, `release-lost`)
+  const stopFile = join(dir, `stop-lost`)
+  const log = join(out, `stream.log`)
+  const got = { stdout: ``, stderr: `` }
+  const child = spawn(process.execPath, args, {
+    cwd: repo,
+    env: {
+      ...cleanEnv(),
+      ORACLE_GAPS_TEST_PAUSE_AT: `note`,
+      ORACLE_GAPS_TEST_PAUSE_MARKER: marker,
+      ORACLE_GAPS_TEST_PAUSE_UNTIL: release,
+      ORACLE_GAPS_TEST_STOP: stopFile,
+    },
+    stdio: [`ignore`, `pipe`, `pipe`],
+  })
+  child.stdout.on(`data`, (chunk) => {
+    got.stdout += chunk
+  })
+  child.stderr.on(`data`, (chunk) => {
+    got.stderr += chunk
+  })
+  const exited = new Promise((resolvePromise) => {
+    child.on(`close`, (code, signal) => resolvePromise({ code, signal }))
+  })
+  let hasEnded = false
+  exited.then(() => {
+    hasEnded = true
+  })
+  const timer = setTimeout(() => child.kill(`SIGKILL`), 60_000)
+  try {
+    for (let waited = 0; !existsSync(marker) && !hasEnded; waited += 1) {
+      if (waited > 6000) throw new Error(`the run never reached its note`)
+      await sleep(10)
+    }
+    if (existsSync(marker)) {
+      rmSync(log, { force: true })
+      mkdirSync(log)
+      if (ending === `stop`) writeFileSync(stopFile, ``)
+      writeFileSync(release, ``)
+    }
+    const { code, signal } = await exited
+    return {
+      ending,
+      exit: code,
+      signal,
+      stdout: got.stdout,
+      stderr: got.stderr,
+      logIsDirectory: existsSync(log) && statSync(log).isDirectory(),
+    }
+  } finally {
+    clearTimeout(timer)
   }
 }
 
@@ -1942,6 +2014,13 @@ async function driver(plan, observe) {
       observe(`claimScenario`, claim)
       states.add(claimStateOf[claim.scenario])
     }
+    if (plan.logLost) {
+      observe(
+        `unwritableLog`,
+        await unwritableLogRuns(dir, files, how, plan.logLost),
+      )
+      states.add(lostStateOf[plan.logLost])
+    }
     if (plan.outMode === `default`)
       states.add(`a run with the default output directory`)
     if (plan.logBlocked && cli.exit === 2)
@@ -2558,6 +2637,38 @@ function check(plan, observations, expected) {
         `ownership`,
       )
   }
+  const lost = observations.find((o) => o.checkpoint === `unwritableLog`)?.value
+  if (lost !== undefined) {
+    // The stream log became a directory after the note. Whatever ends the run,
+    // each stream ends with one done line, the same on both, the exit code is
+    // the one that line owes, and no stack trace is printed (review of #57, F1).
+    const doneOf = (text) =>
+      text.split(`\n`).filter((line) => line.startsWith(`oracle-gaps: done `))
+    const owedExit = (line) =>
+      /done stopped \(SIGINT\)/.test(line)
+        ? 128 + 2
+        : /done completed/.test(line)
+          ? 0
+          : /done error/.test(line)
+            ? 3
+            : /done refused/.test(line)
+              ? 2
+              : undefined
+    const outDone = doneOf(lost.stdout)
+    const errDone = doneOf(lost.stderr)
+    const streams = `${lost.stdout}${lost.stderr}`
+    let difference
+    if (outDone.length !== 1 || errDone.length !== 1)
+      difference = `the lost log's run printed ${outDone.length} done lines on stdout and ${errDone.length} on stderr`
+    else if (outDone[0] !== errDone[0])
+      difference = `the done lines differ: ${JSON.stringify(outDone[0])} on stdout, ${JSON.stringify(errDone[0])} on stderr`
+    else if (lost.exit !== owedExit(errDone[0]))
+      difference = `the exit code is ${lost.exit}, owed ${owedExit(errDone[0])} for ${JSON.stringify(errDone[0])}`
+    else if (/^\s+at \S/m.test(streams) || /^\w*Error: /m.test(streams))
+      difference = `a stack trace was printed`
+    if (difference !== undefined)
+      return violation(`unwritableLog`, difference, `greppable stream`)
+  }
   const overlap = observations.find((o) => o.checkpoint === `overlap`)?.value
   if (overlap !== undefined) {
     if (overlap.exit !== 2)
@@ -2862,8 +2973,12 @@ function check(plan, observations, expected) {
         { actual: value.survivors, expected: 0 },
       )
     // A stopped run ends both streams with its stopped line, and one that
-    // had printed its completed line ends as it completed (law 15).
-    const ends = value.spun ? endsBreach(value) : undefined
+    // had printed its completed line ends as it completed (law 15). On win32
+    // the driver's stop is child.kill, which is TerminateProcess, so the run is
+    // killed like SIGKILL and no done line is owed (register, "Windows stops",
+    // C 2026-11-13). An abort is the run's own end, which is judged as before.
+    const owesDone = process.platform !== `win32` || value.when === `abort`
+    const ends = value.spun && owesDone ? endsBreach(value) : undefined
     if (ends)
       return violation(
         `stopped`,
@@ -2883,7 +2998,7 @@ function check(plan, observations, expected) {
         `the run stopped while its config warmed reported a refusal`,
         `greppable stream`,
       )
-    if (value.spun && !value.stream.last.startsWith(owedEnd))
+    if (value.spun && owesDone && !value.stream.last.startsWith(owedEnd))
       return violation(
         `stopped`,
         `the stopped run's last line is ${JSON.stringify(value.stream.last)}, not ${owedEnd}`,
@@ -3596,6 +3711,8 @@ const required = [
   `two starts race for a stale claim`,
   `a start refuses a stale claim`,
   `a start refuses an empty claim`,
+  `a stream log lost after its note, then stopped`,
+  `a stream log lost after its note, then completed`,
   `a stop as the CLI starts`,
   `a stream log that cannot be written`,
   `two runs on one output directory`,
@@ -3775,6 +3892,8 @@ const ownHistoryStates = [
   `two starts race for a stale claim`,
   `a start refuses a stale claim`,
   `a start refuses an empty claim`,
+  `a stream log lost after its note, then stopped`,
+  `a stream log lost after its note, then completed`,
   `a stop as the CLI starts`,
   `a stream log that cannot be written`,
   `two runs on one output directory`,
@@ -4808,6 +4927,62 @@ oracleProperty({
           logBlocked: false,
           overlap: false,
           claimScenario: `empty`,
+        }),
+      },
+      {
+        // The stream log becomes a directory after the note, then the run is stopped: one done line on each stream, the exit code it owes, and no stack.
+        name: `a stream log lost after its note, then stopped`,
+        enters: [`a stream log lost after its note, then stopped`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          wholeFile: `none`,
+          witness: false,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+          ordinary: false,
+          budget: `two`,
+          outMode: `explicit`,
+          logBlocked: false,
+          overlap: false,
+          logLost: `stop`,
+        }),
+      },
+      {
+        // The stream log becomes a directory after the note, and the run completes: the same law as the stop.
+        name: `a stream log lost after its note, then completed`,
+        enters: [`a stream log lost after its note, then completed`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          wholeFile: `none`,
+          witness: false,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+          ordinary: false,
+          budget: `two`,
+          outMode: `explicit`,
+          logBlocked: false,
+          overlap: false,
+          logLost: `complete`,
         }),
       },
     ]),
