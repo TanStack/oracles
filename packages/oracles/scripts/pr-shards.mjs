@@ -537,6 +537,7 @@ export const partitions = {
         "test.projects in a parent's config",
         'a declaration fault: projects',
         'a declaration fault: outsideSource',
+        'a config whose test root is a subdirectory that holds the tests',
       ]),
       7: anyOf([
         'a daemon pause that cannot engage',
