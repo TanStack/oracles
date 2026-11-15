@@ -734,7 +734,10 @@ function runCli(dir, files, how = {}) {
     env: { ...cleanEnv(), ORACLE_GAPS_TEST_RETENTION: hook, ...how.env },
   })
   // Each line names its check's output directory, so this run keeps only its own (a daemon serves many calls).
-  const retention = retentionLinesOf(hook).filter((line) => line.run === out)
+  // A line names the process that wrote it: this run's own lines are its child's; a daemon it killed writes others.
+  const retention = retentionLinesOf(hook).filter(
+    (line) => line.run === out && line.pid === child.pid,
+  )
   const run = readRun(
     dir,
     out,
@@ -1059,7 +1062,12 @@ async function runClisAtOnce(dir, files, hows, outs = []) {
       const run = readRun(dir, out, status, stderr, how.cli ?? here, stdout)
       return {
         ...run,
-        retention: retentionLinesOf(hook).filter((line) => line.run === out),
+        retention: retentionLinesOf(hook).filter(
+          (line) => line.run === out && line.pid === child.pid,
+        ),
+        killedRetention: retentionLinesOf(hook).filter(
+          (line) => line.run === out && line.pid !== child.pid,
+        ),
       }
     }),
   )
@@ -1527,6 +1535,11 @@ async function incremental(dir, plan, cli, copy, observe, states) {
         (run.retention ?? []).filter(leftBehind).length,
       )
       observe(`retentionLines:daemon`, unlogged(run))
+      // The batches a daemon ran before it was killed are judged as that daemon's: each complete, retired.
+      observe(
+        `retention:killed`,
+        (run.killedRetention ?? []).filter(leftBehind).length,
+      )
       observe(`retentionKeys:daemon`, leftKeys(run.retention ?? []))
       observe(
         `retention:cold`,
