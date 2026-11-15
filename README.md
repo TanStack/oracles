@@ -125,17 +125,38 @@ agent.
   A run through the daemon prints the same lines, at the end of its check.
   `--help` is not a check, so its usage text has no prefix.
 
-  For contributors: four environment variables in the `ORACLE_GAPS_TEST_`
-  namespace are test-only hooks for the CLI's own oracle, not settings for
-  users. `ORACLE_GAPS_TEST_HOLD_EXIT_MS` holds the run's exit after its done
-  line, and `ORACLE_GAPS_TEST_WARM_PROBE` makes the first config warm-up
-  wait where a stop signal can reach it. `ORACLE_GAPS_TEST_STOP` names a
-  file: when it appears, an unsupervised run takes the same stop as a
-  SIGINT. `ORACLE_GAPS_TEST_TORN_ROWS` names a directory where each batch's
-  watchdog counts its polls, and a batch's closing row is held half written
-  until the watchdog has polled twice. The directory holds a `.begun` marker
-  per batch and a `.reached` or `.unreached` marker per hold (`.unreached`
-  after 60 s with no two polls).
+  For contributors: the `ORACLE_GAPS_TEST_` environment variables are test-only
+  hooks for the CLI's own oracle, not settings for users. Each is inert unless
+  set, and none changes an outcome by itself.
+  - `ORACLE_GAPS_TEST_HOLD_EXIT_MS` holds the run's exit after its done line.
+  - `ORACLE_GAPS_TEST_WARM_PROBE` makes the first config warm-up wait where a
+    stop signal can reach it.
+  - `ORACLE_GAPS_TEST_STOP` names a file whose appearance makes the CLI take a
+    stop as a SIGINT would (the win32 stop, which has no signal to deliver).
+  - `ORACLE_GAPS_TEST_PAUSE_AT` names one point at which the CLI blocks, with
+    `ORACLE_GAPS_TEST_PAUSE_MARK` naming a file the blocked process writes its
+    pid to: `daemon-reply` holds a daemon's reply after the check, and
+    `daemon-read` holds its first connection unread, once `ORACLE_GAPS_TEST_PAUSE_ARM`
+    names an existing file. The test kills the process by that pid, so no signal
+    is needed to pause on win32. Both marks are written whole (a temp file, then
+    a rename), and the test parses the pid as a positive integer before it sends
+    any signal.
+  - `ORACLE_GAPS_TEST_WAIT_MARK` names a file a request writes when its reply has
+    not come `ORACLE_GAPS_TEST_WAIT_MS` after it was sent. A request has no
+    timeout of its own: this timer starts with the request, and is cleared when
+    the request settles, whether it resolves or rejects. The test acts on the
+    CLI's wait, not on the clock.
+  - `ORACLE_GAPS_TEST_WAIT_MS` (milliseconds, default 60000) is the CLI's wait
+    for a daemon to start or to close; a test shortens it to outlast a paused
+    daemon. It is a test-only knob, not a setting for users.
+  - `ORACLE_GAPS_TEST_SERVED_MARK` names a file the daemon writes its pid to
+    after it answers a check, so a test can tell which daemon served an
+    earlier check (the warm daemon that a later check's pause must match).
+  - `ORACLE_GAPS_TEST_TORN_ROWS` names a directory where each batch's watchdog
+    counts its polls, and a batch's closing row is held half written until the
+    watchdog has polled twice. The directory holds a `.begun` marker per batch and
+    a `.reached` or `.unreached` marker per hold (`.unreached` after 60 s with no
+    two polls).
 
   A few endings print no done line, or one more line: a SIGKILL of the CLI,
   or a signal that comes while Node is still starting the CLI, before its

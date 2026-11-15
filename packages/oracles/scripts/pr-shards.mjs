@@ -21,6 +21,8 @@
 // space followed by `> ` is no separator: otherwise a negative lookahead
 // after it would pass on the `> ` of a Vitest 5 name and select every test.
 import { spawnSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -301,15 +303,20 @@ export const partitions = {
         'a stale authored mutant and a reformat',
         'a failing owner under a config that --config names',
       ]),
-      // 134 s, 101 s, 27 s, and 15 s.
+      // Both halves of `every outcome class` (134 s and 155 s on the CI runner),
+      // a second daemon check (101 s), and two small units. The second half
+      // is named here: `every outcome class` alone matches the first half only,
+      // and the second would fall into the rest (shard 3).
       2: anyOf([
         'every outcome class',
+        'every outcome class, the warm and abort stops',
         'a second daemon check of the budget witness',
         'a declaration fault: brokenVitest',
         'an edit that changed the cold result after a hang replaced the only context',
       ]),
-      // The rest: the edit sequence through the daemon (95 s), brokenOwner
-      // (83 s), generated (23 s), the lazy module (12 s), and small units.
+      // The rest: noTypescript (174 s on the CI runner), the edit sequence
+      // through the daemon (94 s), brokenOwner (83 s), generated (23 s), the
+      // lazy module (12 s), and small units.
       3: rest,
     },
   },
@@ -511,69 +518,74 @@ export const partitions = {
     suite: `oracle-gaps.report`,
     select: `fixed seed 20261105: `,
     previously: `fixed seed`,
-    // Windows runs on its own partition: the same tests, in six shards,
-    // because each Linux shard takes 3 to 6 times as long on windows-latest.
+    // Every name is checked against the listed tests (partitionErrors).
+    exactNames: true,
+    // Windows runs on its own partition, in ten shards sized by the measured
+    // durations (review of #73, P12): the heaviest tests each have a shard of
+    // their own, and the rest are dealt out longest-first. Each shard's pattern
+    // stays short: cmd.exe limits the command line.
     shards: {
-      1: anyOf([
-        'a .cjs config that calls require',
-        'a declaration fault: brokenOwner',
-        'a declaration fault: missingSource',
-        'a failing owner under a config that --config names',
-        'a run with eleven contexts',
-        'an edit sequence through the daemon',
-        "test.projects in a parent's config",
-      ]),
-      2: anyOf([
-        'a .ts config in a package with no module type that calls require',
-        'a declaration fault: brokenVitest',
-        'a declaration fault: noTypescript',
-        "a failing owner under its parent's config",
+      1: anyOf(['an edit sequence over the witness module']),
+      2: anyOf(['every outcome class']),
+      3: anyOf(['a declaration fault: noTypescript']),
+      4: anyOf(['every outcome class, the warm and abort stops']),
+      5: anyOf(['an edit sequence through the daemon']),
+      6: anyOf([
         'a second daemon check of the budget witness',
-        'an edit that changed the cold result after a hang replaced the only context',
-        'two authored mutants',
-        'an edit to data a test reads through fs (sync)',
-        'an edit to data a test reads through fs (promise)',
-        'an edit to data a test reads through fs (callback)',
-      ]),
-      3: anyOf([
+        'a declaration fault: missingSource',
         'a config fault in a run that owns nothing',
-        'a declaration fault: configNoDefault',
-        'a declaration fault: nonLiteral',
-        'a lazy module loaded before a hang in the same batch',
-        'a stale authored mutant and a reformat',
-        'an edit to a module that only mutated runs load',
-        'an edit during a check through the daemon',
-        'a test edits the helper it read, during a check through the daemon',
-        'a test edits the data it read, during a check through the daemon',
-      ]),
-      4: anyOf([
-        'a config that --config names',
-        'a declaration fault: configNull',
-        'a declaration fault: outsideSource',
-        'a load failure beside a hang',
-        'an ambiguous authored mutant',
-        'a capture row read while the worker wrote it',
-        'two batches each read a capture row while its worker wrote it',
-        'every outcome class',
-      ]),
-      5: anyOf([
-        'a declaration fault: apiLessTypescript',
-        'a declaration fault: configSyntax',
+        "test.projects in a parent's config",
         'a declaration fault: projects',
+        'a declaration fault: outsideSource',
+      ]),
+      7: anyOf([
+        'a daemon pause that cannot engage',
+        'an edit to data a test reads through fs (statDir)',
+        'an edit to data a test reads through fs (promise)',
+        'a declaration fault: brokenOwner',
+        'a stale authored mutant and a reformat',
+        'two authored mutants',
+        'two batches each read a capture row while its worker wrote it',
         'a package whose parent directory has its config',
-        'an awaiting config in a package with no module type',
-        'generated',
+        'a declaration fault: configSyntax',
+        'a declaration fault: nonLiteral',
+      ]),
+      8: anyOf([
+        'a declaration fault: brokenVitest',
+        'a test edits the data it read, during a check through the daemon',
         "an unchanged check through the daemon under a config's pre plugin",
         'an unchanged check through the daemon while a test reads a source through fs',
-        'an edit to data a test reads through fs (statDir)',
-      ]),
-      6: anyOf([
+        'a failing owner under a config that --config names',
+        'generated',
+        'a run with eleven contexts',
+        'an awaiting config in a package with no module type',
+        'a declaration fault: configNoDefault',
         'a declaration fault: badEntry',
-        'a declaration fault: configThrows',
-        'a declaration fault: setupThrows',
-        'a package with no config',
-        'an edit sequence over the witness module',
+      ]),
+      9: anyOf([
+        'a lazy module loaded before a hang in the same batch',
+        'an edit during a check through the daemon',
+        'an ambiguous authored mutant',
+        'an edit to data a test reads through fs (sync)',
+        "a failing owner under its parent's config",
+        'a config that --config names',
+        'a capture row read while the worker wrote it',
+        'a .ts config in a package with no module type that calls require',
         'ordinary tests left out by default',
+        'a declaration fault: configNull',
+      ]),
+      10: anyOf([
+        'an edit that changed the cold result after a hang replaced the only context',
+        'a test edits the helper it read, during a check through the daemon',
+        'an edit to data a test reads through fs (callback)',
+        'an edit to a module that only mutated runs load',
+        'a load failure beside a hang',
+        'a declaration fault: apiLessTypescript',
+        'a declaration fault: setupThrows',
+        'a .cjs config that calls require',
+        'a package with no config',
+        'a declaration fault: configThrows',
+        'a reset check after its warm daemon was replaced',
       ]),
     },
   },
@@ -655,18 +667,49 @@ export function partitionErrors(name, listed) {
       !listed.some((full) => new RegExp(patternOf(name, shard)).test(full))
     )
       errors.push(`shard ${shard} selects no test`)
+  // Every name a shard lists must be a listed test: a name that matches no test
+  // is a dead entry (a shard that selects one real test still passes the check above).
+  const own = (full) =>
+    full.startsWith(prefix) ? full.slice(prefix.length) : undefined
+  for (const [shard, body] of Object.entries(partition.shards)) {
+    if (body === rest || !partition.exactNames) continue
+    // A shard's body is `(?:name|name|…)`, every name escaped.
+    const names = body
+      .slice(3, -1)
+      .split(/(?<!\\)\|/)
+      .map((alt) => alt.replace(/\\(.)/g, '$1'))
+    for (const entry of names) {
+      const exists = listed.some(
+        (full) => own(full) === partition.select + entry,
+      )
+      if (!exists)
+        errors.push(`shard ${shard} names no test: ${JSON.stringify(entry)}`)
+    }
+  }
   return errors
 }
 
+// Vitest writes the listing to a file, so no package manager's own stdout line
+// (pnpm prints "Scope: ..." in some workspaces) can reach the JSON.
 function listed({ args }) {
-  const run = spawnSync(`pnpm`, [`exec`, `vitest`, `list`, `--json`, ...args], {
-    cwd: join(dirname(fileURLToPath(import.meta.url)), `..`),
-    encoding: `utf8`,
-    maxBuffer: 64 * 1024 * 1024,
-  })
-  if (run.status !== 0)
-    throw new Error(`vitest list failed:\n${run.stderr}${run.stdout}`)
-  return JSON.parse(run.stdout).map((test) => test.name)
+  const dir = mkdtempSync(join(tmpdir(), `pr-shards-`))
+  try {
+    const file = join(dir, `list.json`)
+    const run = spawnSync(
+      `pnpm`,
+      [`exec`, `vitest`, `list`, `--json=${file}`, ...args],
+      {
+        cwd: join(dirname(fileURLToPath(import.meta.url)), `..`),
+        encoding: `utf8`,
+        maxBuffer: 64 * 1024 * 1024,
+      },
+    )
+    if (run.status !== 0)
+      throw new Error(`vitest list failed:\n${run.stderr}${run.stdout}`)
+    return JSON.parse(readFileSync(file, `utf8`)).map((test) => test.name)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 }
 
 const [command, ...operands] = process.argv.slice(2)
