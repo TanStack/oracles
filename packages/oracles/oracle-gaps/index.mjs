@@ -308,11 +308,31 @@ const TEST_WAIT_LIMIT_MS = 60_000
  * other runs against it and releases it. Inert unless set (register: test hooks).
  */
 function testPause(point) {
-  if (process.env.ORACLE_GAPS_TEST_PAUSE_AT !== point) return
+  const until = enterTestPause(point)
+  if (until !== undefined) waitForFile(until, `the pause at ${point}`)
+}
+/**
+ * The same hold for the supervised child, which must keep its event loop
+ * running: its orphan watchdog is a timer, and a synchronous wait would stop it,
+ * so the child could never end itself while held.
+ */
+async function testPauseOnTimers(point) {
+  const until = enterTestPause(point)
+  if (until === undefined) return
+  for (let waited = 0; !existsSync(until); waited += 20) {
+    if (waited >= TEST_WAIT_LIMIT_MS)
+      throw new Error(
+        `the pause at ${point} was not released within ${TEST_WAIT_LIMIT_MS} ms`,
+      )
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+}
+/** Writes the marker of the hold at `point`; returns its release file, when the point is held. */
+function enterTestPause(point) {
+  if (process.env.ORACLE_GAPS_TEST_PAUSE_AT !== point) return undefined
   const marker = process.env.ORACLE_GAPS_TEST_PAUSE_MARKER
   if (marker !== undefined) writeFileSync(marker, ``)
-  const until = process.env.ORACLE_GAPS_TEST_PAUSE_UNTIL
-  if (until !== undefined) waitForFile(until, `the pause at ${point}`)
+  return process.env.ORACLE_GAPS_TEST_PAUSE_UNTIL
 }
 /** Waits for `file` for at most TEST_WAIT_LIMIT_MS, then throws. */
 function waitForFile(file, what) {
@@ -679,7 +699,7 @@ async function run() {
     }
     // A supervised child waits here, before it writes anything, so a test can
     // kill its supervisor while the child is silent (the watchdog's own case).
-    testPause(`child`)
+    await testPauseOnTimers(`child`)
   }
   // A test that runs this CLI starts a run of its own, in a group of its own.
   delete process.env.ORACLE_GAPS_INTERNAL_SUPERVISED

@@ -1170,25 +1170,31 @@ async function supervisorDeathRuns(dir, files, how) {
     },
     stdio: [`ignore`, `pipe`, `pipe`],
   })
+  // `exit`, not `close`: the child inherits the supervisor's stdout pipe, so
+  // `close` waits until the child itself has ended, which would make the 5 s
+  // check below measure a child that had already gone.
   let hasEnded = false
   const exited = new Promise((resolvePromise) => {
-    supervisor.on(`close`, (code, signal) => {
+    supervisor.on(`exit`, (code, signal) => {
       hasEnded = true
       resolvePromise({ code, signal })
     })
   })
+  let childPid
+  let childGone = false
   const timer = setTimeout(() => supervisor.kill(`SIGKILL`), 60_000)
   try {
     for (let waited = 0; !existsSync(paused) && !hasEnded; waited += 1) {
       if (waited > 3000) throw new Error(`the supervised child never paused`)
       await sleep(10)
     }
+    // A supervisor that ended before its child paused proves nothing about the
+    // watchdog, so the witness fails rather than passing.
     if (!existsSync(paused))
-      return { childGone: true, supervisorSignal: undefined, ended: true }
-    const childPid = Number(readFileSync(`${started}.child`, `utf8`))
+      throw new Error(`the supervisor ended before its child paused`)
+    childPid = Number(readFileSync(`${started}.child`, `utf8`))
     supervisor.kill(`SIGKILL`)
     const { signal } = await exited
-    let childGone = false
     for (let waited = 0; waited < 5000; waited += 50) {
       try {
         process.kill(childPid, 0)
@@ -1198,11 +1204,18 @@ async function supervisorDeathRuns(dir, files, how) {
       }
       await sleep(50)
     }
-    return { childGone, supervisorSignal: signal, ended: false }
+    return { childGone, supervisorSignal: signal }
   } finally {
     clearTimeout(timer)
-    // Released last: a child the watchdog did not end then runs on and ends
-    // through its own pause, so the run leaves no process behind.
+    // A child the watchdog did not end is still ours (its pid is recorded), so
+    // the run leaves no process behind.
+    if (childPid !== undefined && !childGone)
+      try {
+        process.kill(childPid, `SIGKILL`)
+      } catch {
+        // It ended on its own in the meantime.
+      }
+    // Released last, for the child's own pause.
     writeFileSync(release, ``)
   }
 }
