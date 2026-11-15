@@ -1788,7 +1788,10 @@ function buildConstruction<THistory>(
       { cause: error },
     )
   }
-  if (!arbitrary.canShrinkWithoutContext(history))
+  // The history is taken back through its unbuild mapping (when it has one): a constructed value may
+  // lie outside the generator's language only where its take-back is inside it.
+  const takenBack = construction.unbuild?.(history) ?? history
+  if (!arbitrary.canShrinkWithoutContext(takenBack))
     throw untakeable(id, `constructed history "${construction.name}" built`)
   return history
 }
