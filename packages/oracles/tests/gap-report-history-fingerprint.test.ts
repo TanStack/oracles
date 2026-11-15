@@ -1,8 +1,9 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import fc from 'fast-check'
 import { describe, expect, test } from 'vitest'
@@ -91,11 +92,13 @@ describe(`the gap oracle's history grammar`, () => {
       let tests: Array<{ name: string }>
       try {
         const file = join(dir, `list.json`)
+        const packageDir = dirname(
+          createRequire(import.meta.url).resolve(`vitest/package.json`),
+        )
         const listing = spawnSync(
-          `pnpm`,
+          process.execPath,
           [
-            `exec`,
-            `vitest`,
+            join(packageDir, `vitest.mjs`),
             `list`,
             `--json=${file}`,
             `--config`,
