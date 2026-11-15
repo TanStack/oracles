@@ -3553,6 +3553,7 @@ const separate = [
   `an edit that changed the cold result after a hang replaced the only context`,
   `edit lazy changed the cold result`,
   `a lazy edit changed the cold result after a batch was cut off`,
+  `a rejected batch retired its copies and logged them`,
 ]
 const witnessed = required.filter((s) => !separate.includes(s))
 
