@@ -47,6 +47,9 @@
     "an edit to a module that only mutated runs load",
     "a lazy module loaded before a hang in the same batch",
     "a capture row read while the worker wrote it",
-    "two batches each read a capture row while its worker wrote it"
+    "two batches each read a capture row while its worker wrote it",
+    "a daemon pause that cannot engage",
+    "every outcome class, the warm and abort stops",
+    "a reset check after its warm daemon was replaced"
   ]
 }
