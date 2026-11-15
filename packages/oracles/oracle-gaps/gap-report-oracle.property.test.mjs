@@ -1736,8 +1736,22 @@ async function driver(plan, observe) {
     }
     const { replay, retention, ...cli } = runCli(dir, files, how)
     // How many units were computed or reused says how the result was
-    // produced, not what it is, so it is not observed.
-    observe(`cli`, { ...cli, evidence: undefined })
+    // produced, not what it is, so it is not observed. A rejected batch's run ends in an internal error:
+    // the baseline lines printed before its batch come in no fixed order, so it observes its exit, its
+    // last line and the laws that judge the run before retention (the register: the order of streamed
+    // lines is not part of the contract).
+    observe(
+      `cli`,
+      plan.rejectBatch > 0
+        ? {
+            exit: cli.exit,
+            lastLine: cli.lastLine,
+            configLines: cli.configLines,
+            strayWrites: cli.strayWrites,
+            warnings: cli.warnings,
+          }
+        : { ...cli, evidence: undefined },
+    )
     // Deterministic: how many batches left a retired copy's state behind (0),
     // not the per-batch lines, whose batch splits vary with hang cuts.
     observe(`retention`, retention.filter(leftBehind).length)
@@ -2390,11 +2404,11 @@ function check(plan, observations, expected) {
   if (expected.rejectedBatch !== undefined) {
     if (
       cli.exit !== 3 ||
-      !cli.stderr?.includes(`oracle-gaps: done error, log `)
+      !cli.lastLine?.startsWith(`oracle-gaps: done error, log `)
     )
       return violation(
         `cli`,
-        `the rejected batch owes exit 3 and an internal error's done line, got exit ${cli.exit}: ${cli.stderr ?? `no stderr`}`,
+        `the rejected batch owes exit 3 and an internal error's done line, got exit ${cli.exit} ending ${JSON.stringify(cli.lastLine)}`,
         `internal error`,
       )
     return pass
