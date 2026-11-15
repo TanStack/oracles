@@ -514,7 +514,15 @@ function argumentsRunOf(dir, plan) {
       run.status,
       run.stderr,
       out,
-      (text) => text.replaceAll(dir, `<package>`),
+      // A default output directory's name is random (a run name), so it is
+      // normalized as the package's directory is.
+      (text) =>
+        text
+          .replaceAll(dir, `<package>`)
+          .replaceAll(
+            /\S*oracle-gaps-[^/\s]+\/out\/\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f]{8}/g,
+            `<default out>`,
+          ),
       run.stdout,
     ),
     // A refusal of the arguments, or before a check starts, writes no stream
