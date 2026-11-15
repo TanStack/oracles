@@ -86,8 +86,11 @@ export const shards = {
     `random seed: an unchanged check through the daemon while a test reads a source through fs`,
     `determinism: constructed history: an unchanged check through the daemon while a test reads a source through fs`,
     `fixed seed 20261105: a capture row read while the worker wrote it`,
+    `fixed seed 20261105: two batches each read a capture row while its worker wrote it`,
     `random seed: a capture row read while the worker wrote it`,
+    `random seed: two batches each read a capture row while its worker wrote it`,
     `determinism: constructed history: a capture row read while the worker wrote it`,
+    `determinism: constructed history: two batches each read a capture row while its worker wrote it`,
     // The fs-read data histories (law 9): 2.7 to 5.4 s each here, fixed seed.
     `fixed seed 20261105: an edit to data a test reads through fs (sync)`,
     `random seed: an edit to data a test reads through fs (sync)`,
