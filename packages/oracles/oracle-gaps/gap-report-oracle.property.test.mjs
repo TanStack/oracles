@@ -1694,8 +1694,10 @@ async function incremental(dir, plan, cli, copy, observe, states) {
         { ...how, daemon: true, outName: `out-warm`, env },
       ])
       warm = pidOf(servedMark)
-      writeFileSync(armMark, ``)
+      // The warm daemon is stopped before the pause is armed: an armed daemon
+      // holds the stop's own connection unread, so the stop would never end.
       if (plan.warmReplaced) stop()
+      writeFileSync(armMark, ``)
     }
     let finished = false
     const running = runClisAtOnce(dir, files, [{ ...how, daemon: true, env }])
