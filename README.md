@@ -35,15 +35,20 @@ agent.
   While one copy of a test file runs for 30 s or more, the CLI prints
   `oracle-gaps: busy <mutant id> in <test file> for <n>s` every 30 s. A run of many fast
   copies prints none, and a check through `--daemon` prints its heartbeats
-  only when the check ends. The runs that confirm a mutant's cut-off copies
-  share one budget: the larger of `--mutant-limit` (30 s by default) and ten
-  times the owner files' unmutated time. They run in the owner files'
-  order, each with at most what its mutant's earlier confirmations left. A
-  mutant whose confirmations pass the budget is a `timeout` gap. With the
-  default limits one owner's confirmation always fits; the budget binds
-  when several owners need long confirmations, or when `--hang-limit` is
-  above it, which the run notes. To give one copy more time with
-  `--hang-limit`, raise `--mutant-limit` too.
+  only when the check ends. No wall-clock limit decides an outcome. A copy
+  is cut in one of three ways: by its call count, when it runs past its
+  call budget (`spin`); by its state, when it makes no progress (`no progress`);
+  or by the backstop, when it runs past `--hang-limit` (60 s by default) plus
+  3 s per second of its file's unmutated time (`backstop`). A spin or no
+  progress ends only its own copy, and a backstop ends the mutant's later
+  copies. The copies of one mutant share a work budget, counted in site
+  evaluations and not in time: the larger of 100,000 and ten times their owner
+  files' unmutated work. Past it, the mutant is a `timeout`. A timeout names
+  its cause in `results.json` (`detail`) and on its gap line, as
+  `(cause: <cause>)`, where the cause is the first cut in owner order, or
+  `work budget`. A kill in another owner decides a mutant unless a backstop
+  ended its copies first. `--first-limit` and `--mutant-limit` are retired:
+  they are checked and noted, and change nothing.
 
   The report, on stdout and in `summary.md`, leads with the baseline: each
   test file's result with its test counts (ordinary files too), and for a
@@ -106,7 +111,7 @@ agent.
   | `baseline`                               | `oracle-gaps: baseline pass tests/a.test.ts: 3 tests`, `oracle-gaps: baseline fail tests/b.test.ts: 1 of 2 tests failed`                                                                                                                                    |
   | `baseline` (decisive, before any mutant) | `oracle-gaps: baseline all 4 oracle files pass`, or `oracle-gaps: baseline 1 of 4 oracle files failed (provisional)`                                                                                                                                        |
   | `blocked`                                | `oracle-gaps: blocked <file> fails with no mutant active at <test>, so the mutants it owns wait for it: …`                                                                                                                                                  |
-  | `gap`                                    | `oracle-gaps: gap <kind> L<line> <id> <change>`                                                                                                                                                                                                             |
+  | `gap`                                    | `oracle-gaps: gap <kind> L<line> <id> <change>`, and for a `timeout` ` (cause: <cause>)`                                                                                                                                                                    |
   | `progress`                               | `oracle-gaps: progress judged 25 of 120 mutants: 7 gaps so far, 18 not gaps`                                                                                                                                                                                |
   | `busy`                                   | `oracle-gaps: busy <mutant id or baseline> in <test file> for <n>s`                                                                                                                                                                                         |
   | `note`                                   | `oracle-gaps: note …`: the `--hang-limit` note, Vite's own messages (`note vite: …`), ordinary files left out, the provisional count, unowned counts, the results' path, and where the tests' console output went (`note test output in <path>`)            |
