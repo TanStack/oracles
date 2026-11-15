@@ -2935,6 +2935,10 @@ function resolveHistory(history) {
     tornRows: history.tornRows === true,
     ...configOf(history),
     configEnv: history.configEnv === true,
+    // Whether the config sets `root` to the directory that holds the tests
+    // (issue #101): only a constructed history sets it, so a generated one
+    // runs with the package as the root.
+    configRoot: history.configRoot === true,
     native: history.native ?? `none`,
     // A prebuilt addon in the workspace dependency's build/Release
     // (`addRelease`).
@@ -5174,11 +5178,15 @@ const PRE_PLUGIN = `{ name: 'gap-pre-rewrite', enforce: 'pre', transform(code, i
  */
 function configText(plan, test) {
   const commonjs = plan.configSyntax === `cjs`
+  // The directory that holds the tests, as the config's `root` (issue #101).
+  const root = plan.configRoot
+    ? `root: ${commonjs ? `require('node:path').join(__dirname, 'tests')` : `fileURLToPath(new URL('./tests', import.meta.url))`}, `
+    : ``
   const config = `defineConfig(${
     { object: ``, function: `() => (`, async: `async () => (`, promise: `` }[
       plan.config
     ]
-  }{ test: ${
+  }{ ${root}test: ${
     plan.fault === `projects`
       ? `{ projects: [{ test: { name: 'unit', ...${test} } }] }`
       : test
@@ -5196,6 +5204,9 @@ function configText(plan, test) {
     commonjs
       ? `const { defineConfig } = require('vitest/config')`
       : `import { defineConfig } from 'vitest/config'`,
+    ...(plan.configRoot && !commonjs
+      ? [`import { fileURLToPath } from 'node:url'`]
+      : []),
     ...(plan.fault === `configThrows`
       ? [`throw new Error('the fixture config broke')`]
       : []),
@@ -5253,10 +5264,13 @@ function fixtureFiles(plan, state = initialState(plan)) {
       : `${JSON.stringify({ private: true, ...fields })}\n`
   // A symbolic link, as a package manager links a workspace package.
   const link = (target) => ({ link: target })
+  // The test files' glob, relative to the config's root: the package, or the
+  // directory that holds the tests when the config sets it (issue #101).
+  const glob = plan.configRoot ? `**/*.test.ts` : `tests/**/*.test.ts`
   const test = `{ include: ${
     plan.configEnv
-      ? `process.env.VITEST === 'true' && process.env.TEST === 'true' && process.env.NODE_ENV === 'test' ? ['tests/**/*.test.ts'] : []`
-      : `['tests/**/*.test.ts']`
+      ? `process.env.VITEST === 'true' && process.env.TEST === 'true' && process.env.NODE_ENV === 'test' ? ['${glob}'] : []`
+      : `['${glob}']`
   }${plan.setupGlobal || plan.fault === `setupThrows` ? `, setupFiles: ['./tests/setup.ts']` : ``} }`
   // A history that installs a scoped addon later declares it from the
   // start, beside a scoped package already installed in its scope.
