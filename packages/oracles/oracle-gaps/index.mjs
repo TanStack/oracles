@@ -677,6 +677,9 @@ async function run() {
     } catch (error) {
       return endWith(error, options?.out)
     }
+    // A supervised child waits here, before it writes anything, so a test can
+    // kill its supervisor while the child is silent (the watchdog's own case).
+    testPause(`child`)
   }
   // A test that runs this CLI starts a run of its own, in a group of its own.
   delete process.env.ORACLE_GAPS_INTERNAL_SUPERVISED

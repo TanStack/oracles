@@ -1155,9 +1155,19 @@ const pidFree = (value) =>
 async function supervisorDeathRuns(dir, files, how) {
   const { args } = cliArgs(dir, files, { ...how, outName: `out-death` })
   const started = join(dir, `death-started`)
+  const paused = join(dir, `child-paused`)
+  const release = join(dir, `child-release`)
   const supervisor = spawn(process.execPath, args, {
     cwd: repo,
-    env: { ...cleanEnv(), ORACLE_GAPS_TEST_STARTED: started },
+    env: {
+      ...cleanEnv(),
+      ORACLE_GAPS_TEST_STARTED: started,
+      // The child pauses silently, before its check, with its watchdog armed; the
+      // driver releases it last.
+      ORACLE_GAPS_TEST_PAUSE_AT: `child`,
+      ORACLE_GAPS_TEST_PAUSE_MARKER: paused,
+      ORACLE_GAPS_TEST_PAUSE_UNTIL: release,
+    },
     stdio: [`ignore`, `pipe`, `pipe`],
   })
   let hasEnded = false
@@ -1169,16 +1179,11 @@ async function supervisorDeathRuns(dir, files, how) {
   })
   const timer = setTimeout(() => supervisor.kill(`SIGKILL`), 60_000)
   try {
-    for (
-      let waited = 0;
-      !existsSync(`${started}.child`) && !hasEnded;
-      waited += 1
-    ) {
-      if (waited > 3000)
-        throw new Error(`the supervisor never started its child`)
+    for (let waited = 0; !existsSync(paused) && !hasEnded; waited += 1) {
+      if (waited > 3000) throw new Error(`the supervised child never paused`)
       await sleep(10)
     }
-    if (!existsSync(`${started}.child`))
+    if (!existsSync(paused))
       return { childGone: true, supervisorSignal: undefined, ended: true }
     const childPid = Number(readFileSync(`${started}.child`, `utf8`))
     supervisor.kill(`SIGKILL`)
@@ -1196,6 +1201,9 @@ async function supervisorDeathRuns(dir, files, how) {
     return { childGone, supervisorSignal: signal, ended: false }
   } finally {
     clearTimeout(timer)
+    // Released last: a child the watchdog did not end then runs on and ends
+    // through its own pause, so the run leaves no process behind.
+    writeFileSync(release, ``)
   }
 }
 
