@@ -46,9 +46,9 @@ const fingerprints = (
     numRuns: DRAWS,
   }) as Array<Sample>
   const testsOf = (history: Sample) => history.tests as Array<Sample>
-  const withoutConstructed = (test: Sample) =>
+  const withoutConstructed = (record: Sample) =>
     Object.fromEntries(
-      Object.entries(test).filter(
+      Object.entries(record).filter(
         ([key]) => !CONSTRUCTED_TEST_FIELDS.includes(key),
       ),
     )
@@ -66,7 +66,7 @@ const fingerprints = (
   )
   for (const field of CONSTRUCTED_TEST_FIELDS) {
     const values = samples.flatMap((history) =>
-      testsOf(history).map((test) => test[field]),
+      testsOf(history).map((record) => record[field]),
     )
     // Generated tests hold the neutral value: only a constructed history sets it.
     expect(values.every((value) => value === NEUTRAL_TEST_VALUES[field])).toBe(
