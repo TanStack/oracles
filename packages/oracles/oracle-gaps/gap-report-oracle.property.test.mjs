@@ -1406,13 +1406,21 @@ function namedScratch(text, names) {
       .replaceAll(posix(path), name)
   // A run's default output directory is named by the default rule (a random run
   // name), so it is normalized the same way.
-  return named
-    .replaceAll(
-      /\S*oracle-gaps-[^/\s]+\/out\/\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f]{8}/g,
-      `<default out>`,
-    )
-    .replaceAll(/\.oracle-gaps-\d+/g, `.oracle-gaps-<pid>`)
-    .replaceAll(/session-\d+/g, `session-<pid>`)
+  return (
+    named
+      .replaceAll(
+        /\S*oracle-gaps-[^/\s]+\/out\/\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f]{8}/g,
+        `<default out>`,
+      )
+      .replaceAll(/\.oracle-gaps-\d+/g, `.oracle-gaps-<pid>`)
+      .replaceAll(/session-\d+/g, `session-<pid>`)
+      // A progress line's wall-clock durations ("in 0.2s") are live progress, not
+      // outcome: results.json is the stable record (register: heartbeats are
+      // progress). Every other field of the line stays.
+      .replaceAll(/oracle-gaps: progress [^\\\n"]*/g, (line) =>
+        line.replaceAll(/\b\d+(?:\.\d+)?s\b/g, `<t>`),
+      )
+  )
 }
 
 /** What one run of the CLI reported, from its exit status and its files. */
@@ -3161,7 +3169,7 @@ function check(plan, observations, expected) {
     return violation(
       `supervisorDeath`,
       `the supervised child outlived its supervisor, which was killed with SIGKILL`,
-      `output namespace`,
+      `stopping`,
     )
   const lost = observations.find((o) => o.checkpoint === `unwritableLog`)?.value
   if (lost !== undefined) {
