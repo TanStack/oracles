@@ -1816,6 +1816,11 @@ async function driver(plan, observe) {
       states.add(`a slow kill past fifteen seconds killed`)
     if (killed && plan.history.tests.some((t) => t.timerWait))
       states.add(`a copy waiting on a timer killed`)
+    if (
+      plan.history.spinFirst &&
+      cli.report?.results?.some((r) => r.outcome === `timeout`)
+    )
+      states.add(`a spin in an owner ahead of a kill in another timed out`)
     if (tornRead && cli.reported)
       states.add(`a capture row read while the worker wrote it`)
     if (cli.exit === 0 && !plan.consoleOutput)
@@ -3561,6 +3566,7 @@ const required = [
   `a slow owner's kill reported as when it did not wait`,
   `a slow kill past fifteen seconds killed`,
   `a copy waiting on a timer killed`,
+  `a spin in an owner ahead of a kill in another timed out`,
   `a hang in one owner and a survivor in another timed out`,
   `confirmations past a mutant's budget timed out`,
   `a heartbeat named a busy mutant`,
@@ -3693,6 +3699,7 @@ const separate = [
   `a slow owner's kill reported as when it did not wait`,
   `a slow kill past fifteen seconds killed`,
   `a copy waiting on a timer killed`,
+  `a spin in an owner ahead of a kill in another timed out`,
   // The config and contexts states have constructed histories of their own.
   `a config that --config names ran`,
   `a package with no config ran`,
@@ -5088,6 +5095,47 @@ oracleProperty({
         }),
       },
       // Constructed histories added by the deterministic-cuts change follow.
+      // An owner whose copy spins (a count) ends the mutant's copies before a
+      // later owner's test that would kill it: the outcome is a timeout.
+      {
+        name: `a spin in an owner ahead of a kill in another`,
+        enters: [`a spin in an owner ahead of a kill in another timed out`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `until`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`both`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          derived: null,
+          dotGen: false,
+          dataOwners: [],
+          exportOwners: [],
+          importer: `none`,
+          wholeFile: `none`,
+          template: false,
+          tests: [
+            { ...judging(`a`, `fixed seed`, 1), fn: 0 },
+            { ...judging(`b`, `fixed seed`, 1), fn: 0 },
+          ],
+          witness: false,
+          authored: null,
+          secondAuthored: false,
+          fault: `none`,
+          stability: `none`,
+          ordinary: false,
+          native: `none`,
+          boot: false,
+          budget: `two`,
+          cliPath: `plain`,
+          concurrentStart: false,
+          contexts: 1,
+          steps: null,
+          spinFirst: true,
+        }),
+      },
       // A slow kill whose test waits 16 s where its output differs, past
       // Vitest's 15 s per-test limit: no wall-clock limit decides an outcome,
       // so the mutant is still killed.

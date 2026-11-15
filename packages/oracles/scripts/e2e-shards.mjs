@@ -69,6 +69,9 @@ export const shards = {
     `fixed seed 20261105: a copy waiting on a timer`,
     `random seed: a copy waiting on a timer`,
     `determinism: constructed history: a copy waiting on a timer`,
+    `fixed seed 20261105: a spin in an owner ahead of a kill in another`,
+    `random seed: a spin in an owner ahead of a kill in another`,
+    `determinism: constructed history: a spin in an owner ahead of a kill in another`,
     // The witness module's edit sequence (option M): 189 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
     `determinism: constructed history: an edit sequence over the witness module`,
