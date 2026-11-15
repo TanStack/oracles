@@ -2829,6 +2829,8 @@ function resolveHistory(history) {
     // the test that aborts when the driver asks.
     aborts: (history.stopRuns ?? []).some((stop) => stop.when === `abort`),
     ordinary: history.ordinary === true,
+    // The batch whose run rejects (a test-only fault; 0 is none).
+    rejectBatch: history.rejectBatch ?? 0,
     // An `owns` key in an assertion's arguments, in the ordinary file: its
     // assertion form and whether its list is a literal, or none.
     matcherOwns: history.matcherOwns ?? `none`,
