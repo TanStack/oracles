@@ -106,6 +106,9 @@ export const shards = {
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-3': [
+    `fixed seed 20261105: a daemon pause that cannot engage`,
+    `random seed: a daemon pause that cannot engage`,
+    `determinism: constructed history: a daemon pause that cannot engage`,
     `fixed seed 20261105: a config fault in a run that owns nothing`,
     `fixed seed 20261105: a declaration fault: brokenOwner`,
     `fixed seed 20261105: a declaration fault: configThrows`,
