@@ -125,7 +125,7 @@
 // CLI's modules load (review of #57, P1): a signal during the loads is kept
 // and acted on once the stream log's note is written, so a stop as the CLI starts still
 // leaves the note and one done line. Only Node's own start is before them.
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import {
   appendFileSync,
   existsSync,
@@ -174,9 +174,17 @@ let streamLog
 let writingEnding = false
 const logPathOf = (out) => join(out, `stream.log`)
 /** Writes `text` to stderr and, once the log is open, to the stream log. */
+/** Appends `text` to the stream log at `path`; a failure is the refusal that ends the run. */
+const appendLog = (path, text) => {
+  try {
+    appendFileSync(path, text)
+  } catch (error) {
+    throw cannotWrite(path, error)
+  }
+}
 const writeStream = (text) => {
   process.stderr.write(text)
-  if (streamLog) appendFileSync(streamLog, text)
+  if (streamLog) appendLog(streamLog, text)
 }
 const cannotWrite = (path, error) =>
   new Refusal(
@@ -192,30 +200,28 @@ const alive = (pid) => {
     return error.code === `EPERM`
   }
 }
-// The pid this process claimed each output directory with, released when the
-// process exits (on every exit but SIGKILL).
-const claims = new Set()
+// The output directory this process claimed (its run.pid), released when the
+// process exits, on every exit but SIGKILL.
+let claimed
 process.on(`exit`, () => {
-  for (const claim of claims) {
-    try {
-      if (Number(readFileSync(claim, `utf8`)) === process.pid)
-        rmSync(claim, { force: true })
-    } catch {
-      // Already gone.
-    }
+  if (claimed === undefined) return
+  try {
+    if (Number(readFileSync(claimed, `utf8`)) === process.pid)
+      rmSync(claimed, { force: true })
+  } catch {
+    // Already gone.
   }
 })
 /**
- * Claims output directory `out` for this process (review of #57, P2 and P3):
- * a run keeps it while it lives, and a second run on it refuses without
- * writing into it (the maintainer's decision of 2026-11-13). The claim is a
- * temp file that already holds the pid, linked to `run.pid`, which fails when
- * `run.pid` exists, so the claim is atomic. A claim whose pid no longer runs
- * is taken over.
+ * Claims output directory `out` for this process. The claim is a temp file that
+ * already holds the pid, linked to `run.pid`, which fails when `run.pid` exists,
+ * so the claim is atomic. A `run.pid` that names no running process, or that
+ * cannot be read, refuses as a live one does: nothing is taken over (the
+ * maintainer's decision, "Stale claims refuse; no takeover"), and the user
+ * removes the file.
  */
 function claimOut(out) {
   const claim = join(out, `run.pid`)
-  const takeover = `${claim}.takeover`
   const temp = `${claim}.${process.pid}.tmp`
   try {
     mkdirSync(out, { recursive: true })
@@ -224,45 +230,34 @@ function claimOut(out) {
     throw cannotWrite(claim, error)
   }
   try {
-    for (;;) {
-      try {
-        linkSync(temp, claim)
-        claims.add(claim)
-        return
-      } catch (error) {
-        if (error.code !== `EEXIST`) throw cannotWrite(claim, error)
-      }
-      const holder = readHolder(claim)
-      if (holder === undefined) continue
-      // An unreadable claim counts as live: wait for it, never take it over.
-      if (!(holder > 0)) {
-        sleepMs(10)
-        continue
-      }
-      if (holder !== process.pid && holder > 0 && alive(holder)) {
-        const refusal = new Refusal(
-          `another run (pid ${holder}) is using ${out}`,
-          `If no run is using it, delete ${claim}; otherwise pass --out a directory no run is using.`,
-        )
-        refusal.reportless = true
-        throw refusal
-      }
-      // A stale claim: only the racer that creates the takeover mutex removes it,
-      // and only if it still names the stale pid it read (review F4).
-      testPause(`takeover`)
-      if (!takeMutex(takeover)) {
-        sleepMs(10)
-        continue
-      }
-      try {
-        if (readHolder(claim) === holder) rmSync(claim, { force: true })
-      } finally {
-        rmSync(takeover, { recursive: true, force: true })
-      }
-    }
+    linkSync(temp, claim)
+    claimed = claim
+  } catch (error) {
+    if (error.code !== `EEXIST`) throw cannotWrite(claim, error)
+    throw heldRefusal(out, claim, readHolder(claim))
   } finally {
     rmSync(temp, { force: true })
   }
+}
+/** The refusal for a `run.pid` that holds its directory or cannot be read. */
+function heldRefusal(out, claim, holder) {
+  const refusal =
+    holder > 0 && alive(holder)
+      ? new Refusal(
+          `another run (pid ${holder}) is using ${out}`,
+          `If no run is using it, delete ${claim}; otherwise pass --out a directory no run is using.`,
+        )
+      : holder > 0
+        ? new Refusal(
+            `run.pid names pid ${holder}, which is not running`,
+            `if no run uses ${out}, delete ${claim}`,
+          )
+        : new Refusal(
+            `run.pid in ${out} does not name a pid`,
+            `if no run uses ${out}, delete ${claim}`,
+          )
+  refusal.reportless = true
+  return refusal
 }
 /** The pid a claim names, or undefined when the claim is gone. */
 function readHolder(claim) {
@@ -273,33 +268,8 @@ function readHolder(claim) {
     throw cannotWrite(claim, error)
   }
 }
-/**
- * Takes the takeover mutex. The pid is written to a temp file first and linked
- * into place, so no reader ever sees an empty mutex (review F4; register: #57
- * claim rules). A mutex whose pid can't be read counts as live and is never
- * taken over; only a mutex whose recorded pid is dead is removed, and then made
- * again.
- */
-function takeMutex(mutex) {
-  const temp = `${mutex}.${process.pid}.tmp`
-  writeFileSync(temp, `${process.pid}\n`)
-  try {
-    testPause(`mutex-create`)
-    linkSync(temp, mutex)
-    return true
-  } catch (error) {
-    if (error.code !== `EEXIST`) throw error
-    const owner = readHolder(mutex)
-    if (owner === undefined) return false
-    if (owner > 0 && !alive(owner)) {
-      rmSync(mutex, { force: true })
-      return takeMutex(mutex)
-    }
-    return false
-  } finally {
-    rmSync(temp, { force: true })
-  }
-}
+// The longest a test-only wait lasts before it fails the run loudly.
+const TEST_WAIT_LIMIT_MS = 60_000
 /**
  * A test-only hold at one named point (ORACLE_GAPS_TEST_PAUSE_AT): the process
  * writes its marker (ORACLE_GAPS_TEST_PAUSE_MARKER) when it reaches the point,
@@ -311,7 +281,17 @@ function testPause(point) {
   const marker = process.env.ORACLE_GAPS_TEST_PAUSE_MARKER
   if (marker !== undefined) writeFileSync(marker, ``)
   const until = process.env.ORACLE_GAPS_TEST_PAUSE_UNTIL
-  if (until !== undefined) while (!existsSync(until)) sleepMs(20)
+  if (until !== undefined) waitForFile(until, `the pause at ${point}`)
+}
+/** Waits for `file` for at most TEST_WAIT_LIMIT_MS, then throws. */
+function waitForFile(file, what) {
+  for (let waited = 0; !existsSync(file); waited += 20) {
+    if (waited >= TEST_WAIT_LIMIT_MS)
+      throw new Error(
+        `${what} was not released within ${TEST_WAIT_LIMIT_MS} ms`,
+      )
+    sleepMs(20)
+  }
 }
 function sleepMs(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
@@ -335,6 +315,7 @@ function startLog(out) {
   const note = `oracle-gaps: note log ${posix(path)}\n`
   process.stdout.write(note)
   writeStream(note)
+  testPause(`note`)
 }
 
 /** Flushes both streams, then exits with `code` (after a test's hold). */
@@ -346,7 +327,7 @@ function startLog(out) {
  */
 function holdUntil() {
   const file = process.env.ORACLE_GAPS_TEST_HOLD_UNTIL
-  if (file !== undefined) while (!existsSync(file)) sleepMs(20)
+  if (file !== undefined) waitForFile(file, `the hold`)
 }
 function exitWhenFlushed(code) {
   process.stdout.write(``, () =>
@@ -403,8 +384,14 @@ function superviseRun(out) {
         ? `oracle-gaps: done stopped (${stopped})\n`
         : `oracle-gaps: done error, the run's process exited with ${how}${outOfMemory ? `: it ran out of memory; give Node more (NODE_OPTIONS=--max-old-space-size=<MB>) or run fewer --contexts` : ``}\n`
       process.stdout.write(line, () => {
-        // The log was opened before the run started (startLog).
-        appendFileSync(streamLog, line)
+        // The log was opened before the run started (startLog). A log that
+        // cannot take the line does not change the ending: both streams still
+        // get it, and the code is the decided one.
+        try {
+          appendLog(streamLog, line)
+        } catch {
+          // The line is still written to stderr below.
+        }
         process.stderr.write(line, () =>
           process.exit(stopped ? 128 + constants.signals[stopped] : 3),
         )
@@ -437,12 +424,7 @@ function superviseRun(out) {
   process.on(`SIGTERM`, stop)
   // A test-only stop (ORACLE_GAPS_TEST_STOP, #58): once the named file exists, the
   // stop is taken as a SIGINT would be. Inert unless set.
-  if (process.env.ORACLE_GAPS_TEST_STOP !== undefined) {
-    const file = process.env.ORACLE_GAPS_TEST_STOP
-    setInterval(() => {
-      if (existsSync(file)) stop(`SIGINT`)
-    }, 50).unref()
-  }
+  watchTestStop(stop)
   if (early !== undefined) return stop(early)
   // An inspector flag would bind the CLI's own port a second time.
   child = spawn(
@@ -456,7 +438,10 @@ function superviseRun(out) {
     {
       detached: true,
       stdio: [`inherit`, `inherit`, `pipe`, `ipc`],
-      env: { ...process.env, ORACLE_GAPS_GROUP: String(process.pid) },
+      env: {
+        ...process.env,
+        ORACLE_GAPS_INTERNAL_SUPERVISED: String(process.pid),
+      },
     },
   )
   child.on(`message`, (message) => {
@@ -467,7 +452,7 @@ function superviseRun(out) {
   // for V8's out-of-memory message.
   child.stderr.on(`data`, (chunk) => {
     process.stderr.write(chunk)
-    appendFileSync(streamLog, chunk)
+    appendLog(streamLog, chunk)
     stderrTail = (stderrTail + chunk).slice(-200)
     if (/heap out of memory/i.test(stderrTail)) outOfMemory = true
   })
@@ -495,9 +480,35 @@ function signalGroup(group, signal) {
  * kills its group, itself included.
  */
 function watchSupervisor(supervisor) {
+  // Only a process that leads its own group kills it: an inherited variable
+  // (a test's child, say) must not name a group this process does not lead.
+  if (groupOf(process.pid) !== process.pid) return
   setInterval(() => {
     if (process.ppid !== supervisor) process.kill(-process.pid, `SIGKILL`)
   }, 1000).unref()
+}
+/** The process group of `pid` (POSIX, through ps); undefined when unknown. */
+function groupOf(pid) {
+  try {
+    return Number(
+      execFileSync(`ps`, [`-o`, `pgid=`, `-p`, String(pid)], {
+        encoding: `utf8`,
+      }).trim(),
+    )
+  } catch {
+    return undefined
+  }
+}
+/**
+ * A test-only stop (ORACLE_GAPS_TEST_STOP, #58): once the named file exists, the
+ * stop is taken as a SIGINT would be. Inert unless set.
+ */
+function watchTestStop(onStop) {
+  const file = process.env.ORACLE_GAPS_TEST_STOP
+  if (file === undefined) return
+  setInterval(() => {
+    if (existsSync(file)) onStop(`SIGINT`)
+  }, 50).unref()
 }
 
 /**
@@ -554,7 +565,11 @@ function endWith(error, out) {
   ended = true
   const ending = endRun(error, out)
   holdStops()
-  writeStream(ending.stderr)
+  try {
+    writeStream(ending.stderr)
+  } catch {
+    // The log cannot take the ending, which writeStream wrote to stderr first.
+  }
   process.stdout.write(`${ending.done}\n`)
   exitWhenFlushed(ending.exitCode)
 }
@@ -565,7 +580,7 @@ const main =
   import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
 // Windows has no process groups: there the run is the CLI's own process.
 const supervised = process.platform !== `win32`
-const supervisor = process.env.ORACLE_GAPS_GROUP
+const supervisor = process.env.ORACLE_GAPS_INTERNAL_SUPERVISED
 
 // Set once the note is written (the unsupervised run has started).
 let runStarted = false
@@ -578,12 +593,18 @@ function stopNow(signal) {
 }
 
 async function run() {
+  // The run's options, once its arguments parse. The handlers come first, so an
+  // error thrown by the supervisor ends the run through endWith too.
+  let options
+  process.on(`uncaughtException`, (error) => endWith(error, options?.out))
+  process.on(`unhandledRejection`, (error) => endWith(error, options?.out))
   // The supervisor: it claims the output directory, writes the note, and runs
   // the child. A refusal of the claim or the log ends it through endWith (the
   // single path for every refusal of a check).
   if (supervised && supervisor === undefined) {
     const checking = asksForCheck(process.argv.slice(2))
     if (checking !== undefined) {
+      options = checking
       try {
         startLog(checking.out)
       } catch (error) {
@@ -594,7 +615,7 @@ async function run() {
   }
   if (supervisor !== undefined) watchSupervisor(Number(supervisor))
   // A test that runs this CLI starts a run of its own, in a group of its own.
-  delete process.env.ORACLE_GAPS_GROUP
+  delete process.env.ORACLE_GAPS_INTERNAL_SUPERVISED
   // A stop ends the run at once, with no line: an error that the stop causes
   // is no refusal, and the supervisor writes the stopped line. Once the run
   // writes its ending, a stop no longer cuts it off.
@@ -609,23 +630,12 @@ async function run() {
   process.on(`SIGINT`, onStop)
   process.on(`SIGTERM`, onStop)
   // A test-only stop for unsupervised runs (ORACLE_GAPS_TEST_STOP, #58).
-  if (process.env.ORACLE_GAPS_TEST_STOP !== undefined && !supervised) {
-    const file = process.env.ORACLE_GAPS_TEST_STOP
-    setInterval(() => {
-      if (existsSync(file)) onStop(`SIGINT`)
-    }, 50).unref()
-  }
+  if (!supervised) watchTestStop(onStop)
   // A child of a supervisor that was stopped before its own handlers ran exits
   // now (the supervisor writes the line). An unsupervised run keeps the stop
   // and takes it once its note is written, below.
   if (supervisor !== undefined && early !== undefined)
     process.exit(128 + constants.signals[early])
-  // The run's options, once its arguments parse.
-  let options
-  // An error thrown outside the awaited check, by a timer or a promise no one
-  // awaits, ends the run the same way.
-  process.on(`uncaughtException`, (error) => endWith(error, options?.out))
-  process.on(`unhandledRejection`, (error) => endWith(error, options?.out))
   try {
     options = parseArgs(process.argv.slice(2))
     if (options.help) console.log(usage)

@@ -963,24 +963,24 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
  * refuses, and the first's stream log stays its own).
  */
 /**
- * Runs a claim scenario (review of #57, the claim rules): a run.pid left by a
- * dead pid (and, for `recovery`, a takeover mutex left by a dead pid), then
- * the starts that meet it. `race` starts two runs at once, each paused inside
- * the takeover mutex's creation (ORACLE_GAPS_TEST_PAUSE_AT), and records each
- * run as claimed, refused, or other.
+ * Runs a claim scenario (the maintainer's decision, "Stale claims refuse; no
+ * takeover"): a run.pid that names a dead pid (`stale`), an empty run.pid
+ * (`empty`), or two starts at once on a dead pid's claim (`race`). Every start
+ * refuses and names its cause and its claim, writes no note and no log, and
+ * leaves run.pid as it was. A start that never ends is killed after 30 s, and
+ * its outcome is other.
  */
 async function claimScenarioRuns(dir, files, how, scenario) {
   const { args, out } = cliArgs(dir, files, { ...how, outName: `out-claim` })
   mkdirSync(out, { recursive: true })
-  writeFileSync(join(out, `run.pid`), `999999\n`)
-  if (scenario === `recovery`)
-    writeFileSync(join(out, `run.pid.takeover`), `999998\n`)
-  // A run, with its streams collected as they come.
-  const startRun = (env) => {
+  const claim = join(out, `run.pid`)
+  const written = scenario === `empty` ? `` : `999999\n`
+  writeFileSync(claim, written)
+  const startRun = () => {
     const got = { stdout: ``, stderr: `` }
     const child = spawn(process.execPath, args, {
       cwd: repo,
-      env,
+      env: cleanEnv(),
       stdio: [`ignore`, `pipe`, `pipe`],
     })
     child.stdout.on(`data`, (chunk) => {
@@ -989,59 +989,34 @@ async function claimScenarioRuns(dir, files, how, scenario) {
     child.stderr.on(`data`, (chunk) => {
       got.stderr += chunk
     })
-    const done = new Promise((resolvePromise) => {
-      child.on(`close`, () => resolvePromise(got))
+    const timer = setTimeout(() => child.kill(`SIGKILL`), 30_000)
+    return new Promise((resolvePromise) => {
+      child.on(`close`, (code) => {
+        clearTimeout(timer)
+        resolvePromise({ ...got, code })
+      })
     })
-    return { got, done }
   }
-  const outcomeOf = (run) =>
-    run.stdout.includes(`oracle-gaps: note log`)
-      ? `claimed`
-      : run.stderr.includes(`another run`)
-        ? `refused`
-        : `other`
-  if (scenario === `recovery`) {
-    const run = startRun(cleanEnv())
-    return { scenario, outcomes: [outcomeOf(await run.done)] }
+  const runs = await Promise.all(
+    scenario === `race` ? [startRun(), startRun()] : [startRun()],
+  )
+  // A refusal's cause and its fix line, as the start printed them.
+  const outcomeOf = (run) => {
+    if (run.stdout.includes(`oracle-gaps: note log`)) return `claimed`
+    const cause = run.stderr.match(/^refused: (.*)$/m)?.[1]
+    if (cause === undefined || run.code !== 2) return `other`
+    const fix = run.stderr.match(/^fix: (.*)$/m)?.[1] ?? ``
+    return `refused (${cause}; fix ${fix.includes(`run.pid`) ? `names the claim` : `does not name the claim`})`
   }
-  // race: A is held inside the takeover mutex's creation; B starts once A is
-  // held and claims; A is released only after B has claimed, so A must refuse.
-  // A run that ends before the mutex (a refusal) is an outcome too: the driver
-  // records it and does not wait for the pause, so a wrong CLI is judged by the
-  // law rather than by a driver error.
-  const marker = join(dir, `a-at-mutex-create`)
-  const release = join(dir, `release-a`)
-  const a = startRun({
-    ...cleanEnv(),
-    ORACLE_GAPS_TEST_PAUSE_AT: `mutex-create`,
-    ORACLE_GAPS_TEST_PAUSE_MARKER: marker,
-    ORACLE_GAPS_TEST_PAUSE_UNTIL: release,
-  })
-  let aEnded = false
-  a.done.then(() => {
-    aEnded = true
-  })
-  for (let waited = 0; !existsSync(marker) && !aEnded; waited += 1) {
-    if (waited > 6000) throw new Error(`run A neither paused nor ended`)
-    await sleep(10)
+  return {
+    scenario,
+    outDir: out,
+    outcomes: runs.map(outcomeOf).sort(),
+    // The claim is kept as it was, and nothing else is in the directory: a
+    // refusal writes no note, no log, and no temp file.
+    claimKept: readFileSync(claim, `utf8`) === written,
+    otherFiles: readdirSync(out).filter((name) => name !== `run.pid`),
   }
-  const b = startRun(cleanEnv())
-  let bEnded = false
-  b.done.then(() => {
-    bEnded = true
-  })
-  for (
-    let waited = 0;
-    !b.got.stdout.includes(`oracle-gaps: note log`) && !bEnded;
-    waited += 1
-  ) {
-    if (waited > 12000) throw new Error(`run B neither claimed nor ended`)
-    await sleep(10)
-  }
-  writeFileSync(release, ``)
-  const runA = await a.done
-  const runB = await b.done
-  return { scenario, outcomes: [outcomeOf(runA), outcomeOf(runB)].sort() }
 }
 
 async function overlappingRuns(dir, files, how) {
@@ -1948,11 +1923,7 @@ async function driver(plan, observe) {
     if (plan.claimScenario) {
       const claim = await claimScenarioRuns(dir, files, how, plan.claimScenario)
       observe(`claimScenario`, claim)
-      states.add(
-        claim.scenario === `race`
-          ? `two starts race for a stale claim`
-          : `a stale claim and mutex from a dead pid are taken over`,
-      )
+      states.add(claimStateOf[claim.scenario])
     }
     if (plan.outMode === `default`)
       states.add(`a run with the default output directory`)
@@ -2549,12 +2520,24 @@ function check(plan, observations, expected) {
     (o) => o.checkpoint === `claimScenario`,
   )?.value
   if (claim !== undefined) {
-    const owed =
-      claim.scenario === `race` ? [`claimed`, `refused`] : [`claimed`]
+    // A stale claim refuses every start (the maintainer's decision, "Stale claims
+    // refuse; no takeover"); each refusal names its cause and the claim.
+    const cause =
+      claim.scenario === `empty`
+        ? `run.pid in ${claim.outDir} does not name a pid`
+        : `run.pid names pid 999999, which is not running`
+    const refused = `refused (${cause}; fix names the claim)`
+    const owed = claim.scenario === `race` ? [refused, refused] : [refused]
     if (JSON.stringify(claim.outcomes) !== JSON.stringify(owed))
       return violation(
         `claimScenario`,
         `a ${claim.scenario} gave ${JSON.stringify(claim.outcomes)}, owed ${JSON.stringify(owed)}`,
+        `ownership`,
+      )
+    if (!claim.claimKept || claim.otherFiles.length > 0)
+      return violation(
+        `claimScenario`,
+        `a ${claim.scenario} wrote beyond its claim attempt: run.pid kept ${claim.claimKept}, other files ${JSON.stringify(claim.otherFiles)}`,
         `ownership`,
       )
   }
@@ -3594,7 +3577,8 @@ const staticStates = [
 ]
 const required = [
   `two starts race for a stale claim`,
-  `a stale claim and mutex from a dead pid are taken over`,
+  `a start refuses a stale claim`,
+  `a start refuses an empty claim`,
   `a stop as the CLI starts`,
   `a stream log that cannot be written`,
   `two runs on one output directory`,
@@ -3772,7 +3756,8 @@ const faults = [
 // of its own must enter them, or registration fails).
 const ownHistoryStates = [
   `two starts race for a stale claim`,
-  `a stale claim and mutex from a dead pid are taken over`,
+  `a start refuses a stale claim`,
+  `a start refuses an empty claim`,
   `a stop as the CLI starts`,
   `a stream log that cannot be written`,
   `two runs on one output directory`,
@@ -4725,9 +4710,7 @@ oracleProperty({
         }),
       },
       {
-        // Two starts meet a stale claim (review of #57, the claim rules): both
-        // are paused in the takeover mutex, and the race must end claimed and
-        // refused, one run each.
+        // Two starts meet a dead pid's claim (the maintainer's decision, "Stale claims refuse; no takeover"): both refuse, each names the claim, and neither writes past its claim attempt.
         name: `two starts race for a stale claim`,
         enters: [`two starts race for a stale claim`],
         build: (generated) => ({
@@ -4755,10 +4738,9 @@ oracleProperty({
         }),
       },
       {
-        // A start meets a claim and a takeover mutex left by dead pids: it takes
-        // both over and claims the output directory.
-        name: `a stale claim and mutex from a dead pid are taken over`,
-        enters: [`a stale claim and mutex from a dead pid are taken over`],
+        // One start meets a dead pid's claim: it refuses and names the claim and its fix.
+        name: `a start refuses a stale claim`,
+        enters: [`a start refuses a stale claim`],
         build: (generated) => ({
           ...generated,
           functions: [[{ kind: `push`, quote: `'` }]],
@@ -4780,7 +4762,35 @@ oracleProperty({
           outMode: `explicit`,
           logBlocked: false,
           overlap: false,
-          claimScenario: `recovery`,
+          claimScenario: `stale`,
+        }),
+      },
+      {
+        // One start meets an empty claim: it refuses, and the claim is never taken over.
+        name: `a start refuses an empty claim`,
+        enters: [`a start refuses an empty claim`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          wholeFile: `none`,
+          witness: false,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+          ordinary: false,
+          budget: `two`,
+          outMode: `explicit`,
+          logBlocked: false,
+          overlap: false,
+          claimScenario: `empty`,
         }),
       },
     ]),

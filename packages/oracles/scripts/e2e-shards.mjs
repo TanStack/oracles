@@ -79,7 +79,8 @@ export const shards = {
   // 522 s in the measured run, about 221 s idle.
   'e2e-2': [
     `fixed seed 20261105: two starts race for a stale claim`,
-    `fixed seed 20261105: a stale claim and mutex from a dead pid are taken over`,
+    `fixed seed 20261105: a start refuses a stale claim`,
+    `fixed seed 20261105: a start refuses an empty claim`,
     `fixed seed 20261105: a stop as the CLI starts`,
     `fixed seed 20261105: a declaration fault: setupThrows`,
     `fixed seed 20261105: a package with no config`,
@@ -114,7 +115,8 @@ export const shards = {
   // 522 s in the measured run, about 221 s idle.
   'e2e-3': [
     `determinism: constructed history: two starts race for a stale claim`,
-    `determinism: constructed history: a stale claim and mutex from a dead pid are taken over`,
+    `determinism: constructed history: a start refuses a stale claim`,
+    `determinism: constructed history: a start refuses an empty claim`,
     `determinism: constructed history: a stop as the CLI starts`,
     `random seed: a stop with the default output directory`,
     `random seed: a daemon check with the default output directory`,
@@ -151,7 +153,8 @@ export const shards = {
   // 522 s in the measured run, about 221 s idle.
   'e2e-4': [
     `random seed: two starts race for a stale claim`,
-    `random seed: a stale claim and mutex from a dead pid are taken over`,
+    `random seed: a start refuses a stale claim`,
+    `random seed: a start refuses an empty claim`,
     `random seed: a stop as the CLI starts`,
     `fixed seed 20261105: a .ts config in a package with no module type that calls require`,
     `fixed seed 20261105: a config that --config names`,
