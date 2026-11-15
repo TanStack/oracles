@@ -4240,6 +4240,7 @@ oracleProperty({
         // cheapest legal setting, so that the history costs about two cold
         // runs and four daemon checks of the witness module.
         name: `an edit sequence over the witness module`,
+        enters: [],
         build: (generated) => ({
           ...generated,
           functions: [
