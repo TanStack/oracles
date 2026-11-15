@@ -852,6 +852,14 @@ const drawn = fc.record({
   // `histories` takes a constructed one back as this constant (as
   // `claimScenario` does). Its neutral value is recorded by the canary.
   tornRows: fc.constant(false),
+  // Whether the daemon's pause engages in the daemon steps (dieMidCheck and
+  // resetBeforeRead). Always true in drawn histories, so the seeds' histories are
+  // unchanged; only the constructed history "a daemon pause that cannot engage" sets
+  // it false.
+  pauseEngages: fc.constant(true),
+  // Whether the warm daemon is replaced after the warm check (review of #73, B2).
+  // Only the constructed history of a replaced warm daemon sets it.
+  warmReplaced: fc.constant(false),
   // A constructed history's backstop (`--hang-limit`), which no generated
   // history sets: null is the full limit. Recorded by the canary as well.
   hangMs: fc.constant(null),
@@ -928,15 +936,21 @@ const histories = drawn.map(
         ...drawnValue,
         tests: tests.map(takenBack),
       })
+    // Take-back into the drawn language: a disarmed pause (pauseEngages false,
+    // only the constructed history sets it) comes back as engaged, so the
+    // arbitrary can shrink it. The disarm is therefore not kept by a shrink.
     const taken =
       plain.tornRows === false ? plain : { ...plain, tornRows: false }
     const later = (plain.steps ?? []).filter((step) =>
       laterEdits.includes(step),
     )
-    if (later.length === 0) return taken
+    if (later.length === 0)
+      return { ...taken, pauseEngages: true, warmReplaced: false }
     const earlier = plain.steps.filter((step) => !laterEdits.includes(step))
     return {
       ...taken,
+      pauseEngages: true,
+      warmReplaced: false,
       steps: earlier.length > 0 ? earlier : null,
       laterSteps: later,
     }
@@ -2934,6 +2948,8 @@ function resolveHistory(history) {
     fault: history.fault,
     stability: history.stability,
     steps: [...(history.steps ?? []), ...laterStepsOf(history)],
+    pauseEngages: history.pauseEngages !== false,
+    warmReplaced: history.warmReplaced === true,
     lazyGate: history.lazyGate === true,
     fsRead: history.fsRead ?? `none`,
     // Whether a step edits file b's helper during a check (`midrun`): then
