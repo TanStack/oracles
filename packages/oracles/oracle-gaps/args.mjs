@@ -210,17 +210,20 @@ function optionsOf(args, cwd) {
     sample: args.sample ? Number(args.sample) : undefined,
     // A mutant can make a test hang. Oracles that run in milliseconds do not
     // need Vitest's default limits, which would make each hang cost seconds.
-    testTimeout: Number(args[`test-timeout`] ?? 15000),
-    // The base of each mutant run's time limit, in milliseconds; the limit
-    // adds three times the file's unmutated duration (see limitFor).
-    hangLimit: Number(args[`hang-limit`] ?? 10000),
-    // The base of a mutant run's first, short budget; a copy past it runs
-    // again alone with the full limit before it can be a timeout.
-    firstLimit: Number(args[`first-limit`] ?? 2000),
-    // The floor of a mutant's budget, which the runs that confirm its
-    // cut-off copies share (check.mjs, `budgetOf`): 30 s by default, room
-    // for three confirmations at the default hang limit.
-    mutantLimit: Number(args[`mutant-limit`] ?? 30000),
+    // Vitest's per-test limit, above the copies' backstop (`hangLimit` plus
+    // five seconds, so a copy that waits for its backstop is cut by it first).
+    testTimeout: Number(args[`test-timeout`] ?? 65000),
+    // The base of each mutant run's backstop time limit, in milliseconds; the
+    // limit adds three times the file's unmutated duration (see limitFor). A
+    // backstop reports a gap and never decides a kill (deterministic cuts,
+    // option A, 2026-11-14).
+    hangLimit: Number(args[`hang-limit`] ?? 60000),
+    // The `--first-limit` option is retired (option A): it is validated and
+    // noted, and changes nothing.
+    retiredFirstLimit: args[`first-limit`] !== undefined,
+    // The floor of a mutant's wall-clock backstop (check.mjs, `budgetOf`): 180 s
+    // by default, three full copies at the default backstop.
+    mutantLimit: Number(args[`mutant-limit`] ?? 180000),
     // Vitest's worker pool. Threads start much faster than child processes;
     // a package with a native addon in its tree runs with `forks`.
     pool: args.pool ?? defaultPool(pkg),

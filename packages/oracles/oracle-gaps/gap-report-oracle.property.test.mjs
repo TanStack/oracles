@@ -608,12 +608,11 @@ function cliArgs(
     // in a fixed order; results do not depend on the count.
     `--contexts`,
     String(contexts),
-    // A fixture's tests run in milliseconds. A 1 s first budget cuts off
-    // the slow witnesses, and the full limit lets them end; a hang is cut
-    // for idleness. With one budget, a run past the full limit is a timeout
-    // at once.
-    `--first-limit`,
-    budget === `one` ? String(FULL_LIMIT_MS) : `1000`,
+    // A fixture's tests run in milliseconds. A run's copies have no first
+    // budget (option A): the full limit is the only time limit, and a hang
+    // is cut for idleness. `--first-limit` is retired; the budget `one`
+    // history passes it, and the CLI notes that it changes nothing.
+    ...(budget === `one` ? [`--first-limit`, `1000`] : []),
     `--hang-limit`,
     String(FULL_LIMIT_MS),
     // The budget that a mutant's confirming runs share, the full limit of

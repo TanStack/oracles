@@ -95,6 +95,11 @@ const IDLE_MS = 500
 // in one test before it counts as a loop that never ends. A file's budget is
 // a hundred times the most calls any of its unmutated tests made, if more.
 const CALL_FLOOR = 100_000
+// The least work (site evaluations) a mutant's copies may do together: the
+// larger of this and ten times their owner files' unmutated work (`workBudgetOf`).
+// It is the call floor: two copies that each stay inside their own call budget
+// can pass it together.
+const WORK_FLOOR = CALL_FLOOR
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 /** The host that a session directory names, if it names one. */
 function sessionHostOf(dir) {
@@ -1282,9 +1287,13 @@ export default async (env) => {
   async function check(options, store, log = console.error) {
     const authored = options.mutants ? loadAuthored(options.mutants) : []
     seedVariable = `${options.envPrefix}_SEED`
+    if (options.retiredFirstLimit)
+      log(
+        `oracle-gaps: note --first-limit is retired: a copy has no first budget, so it changes nothing (deterministic cuts, option A)`,
+      )
     if (options.hangLimit > options.mutantLimit)
       log(
-        `oracle-gaps: note --hang-limit ${options.hangLimit} ms is above --mutant-limit ${options.mutantLimit} ms; a mutant's confirmations together get at most the larger of --mutant-limit and ten times its owner files' unmutated time`,
+        `oracle-gaps: note --hang-limit ${options.hangLimit} ms is above --mutant-limit ${options.mutantLimit} ms; a mutant's copies together get at most the larger of --mutant-limit and ten times its owner files' unmutated time`,
       )
     pulse = {
       log,
@@ -1410,7 +1419,7 @@ export default async (env) => {
       spin: 0,
       rerun: 0,
       unchanged: 0,
-      // Confirmations that a mutant's budget cut short or left no time.
+      // Copies past their mutant's work budget (each a timeout).
       budget: 0,
     }
     // Each file's imports in its unmutated run. A run that timed out reports
@@ -1492,8 +1501,7 @@ export default async (env) => {
       )
       return { ...batch, inputs }
     }
-    // A unit that depends on more than its inputs (a confirmation that its
-    // mutant's budget cut short) is not kept (`keep`).
+    // A unit that depends on more than its inputs is not kept (`keep`).
     async function unit(context, file, spec, keep, runOptions = {}) {
       const index = indexOf.get(context)
       const id = idOf(file, spec, runOptions.select, runOptions.ignore)
@@ -1527,9 +1535,9 @@ export default async (env) => {
       return result
     }
     // Units for many requests at once. Each is looked up first; the rest run
-    // as one batch (runBatch). A batch cut off by a hang queues that item's
-    // confirming run, which any free slot takes, and reruns the rest in a
-    // fresh context; a batch with
+    // as one batch (runBatch). A batch cut off (a copy's backstop, idleness,
+    // or a spin) settles that copy as a timeout and reruns the rest in a fresh
+    // context; a batch with
     // errors outside any test runs its items alone. `needed` says, from the
     // units found so far, whether a request must still run; a request that
     // need not run, gets no unit; a copy that skipped its tests gets a
@@ -1576,25 +1584,18 @@ export default async (env) => {
           evidence.computed += 1
         })
         if (batch.timedOutAt === undefined) break
-        // A copy past its first budget may only be slow: a loaded machine
-        // slows a run that ends. It runs again alone, in a fresh context,
-        // with the full limit, and only a run cut off there too is a timeout.
+        // A copy cut off by its backstop, for idleness, or for spinning is a
+        // timeout as it stands: no clock decides a kill (deterministic cuts).
         const hung = rest[batch.timedOutAt]
-        const full = limitFor(hung.file)
         evidence.cut += 1
         if (batch.idle) evidence.idle += 1
         if (batch.spin) evidence.spin += 1
         await replace(slot)
-        // A copy that already had the full limit, or that sat idle, is
-        // final; any other comes back marked `cut`, for its mutant's own
-        // confirmation (`runOwners`).
-        if (hung.limitMs >= full || batch.idle || batch.spin)
-          settle(
-            hung,
-            { file: hung.file, timedOut: true, seconds: full / 1000 },
-            batch.inputs[batch.timedOutAt],
-          )
-        else got[hung.i] = { file: hung.file, cut: true }
+        settle(
+          hung,
+          { file: hung.file, timedOut: true, seconds: hung.limitMs / 1000 },
+          batch.inputs[batch.timedOutAt],
+        )
         rest = [
           ...rest.slice(0, batch.timedOutAt).filter((_, k) => !batch.units[k]),
           ...rest.slice(batch.timedOutAt + 1),
@@ -1619,53 +1620,6 @@ export default async (env) => {
       if (u.timedOut) await replace(slot)
       return u
     }
-    // A hung copy's confirming run: alone, in a clean context, with the full
-    // limit, or with what is left of its mutant's budget when that is less
-    // (`left`, in milliseconds). Only a run cut off there too is a timeout.
-    // An idle copy in a file with no I/O is final at once (see unitsBatch):
-    // it waits on nothing that can come. The unit is marked `confirmed`, so
-    // its seconds count against the budget whenever it is used, reused ones
-    // too. One that the budget cut short, or left no time, depends on the
-    // mutant's other units, so it is not kept.
-    async function confirmAlone(slot, request, left) {
-      // The confirmation is kept under the request's own identity, so a
-      // later check reuses it in place of the request's first run.
-      const hung = {
-        ...request,
-        id: idOf(request.file, request.spec, request.select, request.ignore),
-      }
-      const full = limitFor(hung.file)
-      const limit = Math.min(full, left)
-      const confirmed = (u) => ({ ...u, confirmed: true })
-      if (limit <= 0) {
-        evidence.budget += 1
-        return confirmed({ file: hung.file, timedOut: true, seconds: 0 })
-      }
-      const alone = await batchIn(slot, [{ ...hung, limitMs: limit }])
-      if (alone.unattributed)
-        return confirmed(
-          await runAlone(slot, { ...hung, limitMs: limit }, limit >= full),
-        )
-      const [inputs] = alone.inputs
-      if (alone.timedOutAt === 0) {
-        evidence.cut += 1
-        if (alone.idle) evidence.idle += 1
-        if (limit < full) evidence.budget += 1
-        const u = confirmed({
-          file: hung.file,
-          timedOut: true,
-          seconds: limit / 1000,
-        })
-        if (limit >= full) remember(hung.id, u, inputs)
-        await replace(slot)
-        return u
-      }
-      const u = confirmed(alone.units[0])
-      remember(hung.id, u, inputs)
-      evidence.computed += 1
-      return u
-    }
-
     const vitest = contexts[0]
     const fileSpecs = new Map(contextSpecs.get(vitest))
     const relative = (file) => relativeWithin(pkg, file) ?? posix(file)
@@ -1683,41 +1637,34 @@ export default async (env) => {
     // detect anything, and it may read source text that instrumentation
     // changes. Each file's unmutated duration sets a mutant run's time limit.
     const fileSeconds = new Map()
-    // A mutant can slow a run that still ends, for example by lengthening a
-    // retry backoff, and a loaded machine slows every run. A mutant run
-    // first gets a short budget (`--first-limit`); a copy cut off there runs
-    // again alone, with the full limit (`--hang-limit`, 10 s by default:
-    // a 5 s base once turned a slow kill into a timeout), and only a run
-    // cut off there too is a timeout (see unitsBatch).
+    // A copy's time limit is a backstop: the full limit, which reports a gap and
+    // never decides a kill (deterministic cuts, option A, 2026-11-14). There is
+    // no first budget, so a copy runs once, to its end.
     const limitFor = (file) =>
       options.hangLimit + 3000 * (fileSeconds.get(file) ?? 10)
-    const firstLimitFor = (file) =>
-      Math.min(
-        limitFor(file),
-        options.firstLimit + 3000 * (fileSeconds.get(file) ?? 10),
-      )
-    // Each mutant's budget (maintainer disposition G1, 2026-11-11), for the
-    // runs that confirm its cut-off copies: the larger of `--mutant-limit`
-    // (30 s by default) and ten times its owner files' unmutated time. Its
-    // confirmations run in its owner files' order, and each gets at most the
-    // smaller of its full limit and what the budget has left after the
-    // seconds of the mutant's earlier confirmed units, reused ones included
-    // (`runOwners`), so the outcome is a function of the units, whatever ran
-    // first or was reused. With the default limits the budget cuts a
-    // confirmation below its full limit (10 s plus three times its file's
-    // time t) only when the mutant's confirmations together pass it: for
-    // one owner file that is never, since 10t >= 10 + 3t once t >= 1.43 s
-    // and the 30 s floor covers a smaller t; it binds when `--hang-limit` is
-    // raised past the budget, or when several owner files need long
-    // confirmations. It does not bound a mutant's first runs (each has its
-    // first budget) or the context replacements after cuts (each up to a
-    // 10 s close and a warm start).
+    // A mutant's wall-clock backstop (`--mutant-limit`, or ten times its owner
+    // files' unmutated time, whichever is larger): past it, a mutant with no kill
+    // is a timeout (runOwners). It never decides a kill.
     const budgetOf = (files) =>
       Math.max(
         options.mutantLimit,
         10_000 *
           files.reduce((sum, file) => sum + (fileSeconds.get(file) ?? 0), 0),
       )
+    // A mutant's work budget (maintainer disposition G1, option A): the larger of
+    // WORK_FLOOR and ten times its owner files' unmutated work, in site
+    // evaluations, each file counted by its most-working unmutated test.
+    const workBudgetOf = (files) =>
+      Math.max(
+        WORK_FLOOR,
+        10 * files.reduce((sum, file) => sum + (mostCalls.get(file) ?? 0), 0),
+      )
+    // A copy's work: the site evaluations its tests made. A copy that timed out
+    // recorded none, and counts none.
+    const workOf = (unit) =>
+      unit.timedOut
+        ? 0
+        : (unit.rows ?? []).reduce((sum, [, row]) => sum + (row.calls ?? 0), 0)
     // A run cut off is still running, so its context is replaced; closing
     // it stops the worker.
     const replace = async (slot) => {
@@ -2029,8 +1976,12 @@ export default async (env) => {
     // verdicts of its own yet.
     const kills = (u) =>
       !u.skipped &&
-      !u.cut &&
       outcomeOf([u], baseline.nondeterministic).outcome === `killed`
+    // A mutant's copies run in their owner files' order and are summed in that
+    // order (the work budget, below). The order is the report's, so it does not
+    // depend on the timing of the copies. A later owner's kill does not count
+    // once the budget is passed; that is deterministic because the work is a
+    // count, and it is the rule the design note (option A) states.
     const runOwners = async (slot, states, filesOf, keysOf) => {
       const active = states.filter((st) => !st.done)
       const requests = []
@@ -2047,7 +1998,7 @@ export default async (env) => {
             spec: `mutant:${st.mutant.number}`,
             mutant: st.mutant.number,
             select: await selectionFor(slot, file, keysOf(st)),
-            limitMs: firstLimitFor(file),
+            limitMs: limitFor(file),
             // Idle detection only where no unmutated test of the file did I/O.
             idleMs: ioFiles.has(file) ? null : IDLE_MS,
             // A loop that spins on instrumented code is cut by count.
@@ -2073,46 +2024,42 @@ export default async (env) => {
         (request, found) => !killedBefore(request, found),
       )
       for (const st of active) {
-        // The mutant's budget, spent in its files' order by the seconds of
-        // each confirmed unit, reused or run now, so its outcome is a
-        // function of its units, whatever ran first or was reused.
-        let left = budgetOf(filesOf(st))
+        const files = filesOf(st)
+        // The mutant's copies in their files' order, judged by count: each copy's
+        // work is added, and once the sum passes the work budget, that copy and
+        // every later one is a timeout, so a kill among them does not count.
+        const budget = workBudgetOf(files)
+        let work = 0
         for (const [i, request] of requests.entries()) {
           if (request.st !== st) continue
-          // A copy its batch skipped (an earlier copy killed the mutant)
-          // runs again through unitsBatch, so it is confirmed like any copy
-          // while no kill is in hand.
+          // A copy its batch skipped (an earlier copy killed the mutant) runs
+          // again through unitsBatch, while no kill is in hand.
           if (got[i]?.skipped) {
             if (st.units.some(kills)) break
             got[i] = (await unitsBatch(slot, [request], () => true))[0]
           }
-          // A kill earlier in the mutant's files leaves a file without a
-          // unit. Any other missing unit stops the run.
+          // A kill earlier in the mutant's files leaves a file without a unit.
+          // Any other missing unit stops the run.
           if (got[i] === undefined || got[i].skipped) {
             if (st.units.some(kills)) break
             throw new Error(
               `${st.mutant.id}: ${relative(request.file)} has no unit and no earlier kill`,
             )
           }
-          // A cut copy is confirmed only while no later owner's unit already
-          // killed the mutant: a kill decides, so its confirmation would
-          // spend time for nothing.
-          if (
-            got[i].cut &&
-            requests.some(
-              (other, j) =>
-                other.st === st &&
-                j > i &&
-                got[j] !== undefined &&
-                kills(got[j]),
-            )
-          )
-            continue
-          if (got[i].cut) got[i] = await confirmAlone(slot, request, left)
-          if (got[i].confirmed) left -= got[i].seconds * 1000
+          work += workOf(got[i])
+          if (work > budget) {
+            evidence.budget += 1
+            st.units.push({ file: request.file, timedOut: true, seconds: 0 })
+            break
+          }
           st.units.push(got[i])
           if (kills(got[i])) break
         }
+        // The wall-clock backstop: no kill, and the copies' measured time past
+        // the mutant's wall budget, makes a timeout. A kill decides before it.
+        const elapsed = st.units.reduce((sum, u) => sum + (u.seconds ?? 0), 0)
+        if (!st.units.some(kills) && elapsed * 1000 > budgetOf(files))
+          st.units.push({ file: files[0], timedOut: true, seconds: 0 })
         st.done = true
       }
     }

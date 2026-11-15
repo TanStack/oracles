@@ -4091,7 +4091,8 @@ function judge(plan, tests, sites, active, { budgeted = true } = {}) {
     let work = 0
     for (const r of runs.filter((x) => x.t.file === file)) {
       if (r.hang) hung.add(file)
-      work += r.work
+      // A copy cut off by its backstop, or by spinning, records no work.
+      work += r.hang ? 0 : r.work
       if (r.hang || killsIn(r)) break
     }
     if (budgeted && spent + work > workBudget) {

@@ -281,7 +281,9 @@ export function targetsOf(mutant, baseline, owners, oracleFiles) {
   return {
     oracleKeys,
     testKeys,
-    oracleTargets: [...new Set(oracleKeys.map(fileOf))],
+    // Report order (byPath), so a mutant's owners are summed in one order
+    // however its copies ran.
+    oracleTargets: [...new Set(oracleKeys.map(fileOf))].sort(byPath),
     testTargets: [...new Set(testKeys.map(fileOf))],
   }
 }
