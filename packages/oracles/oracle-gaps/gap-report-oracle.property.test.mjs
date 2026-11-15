@@ -3505,6 +3505,8 @@ oracleProperty({
           ...generated,
           // Without the witness module, the grammar takes these steps back.
           witness: false,
+          // A check that refuses reports nothing, so the variant pins a clean config.
+          fault: `none`,
           steps: [`dieMidCheck`, `resetBeforeRead`],
           pauseEngages: false,
         }),
