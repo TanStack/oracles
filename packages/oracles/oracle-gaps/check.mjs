@@ -1596,6 +1596,12 @@ export default async (env) => {
 
   async function check(options, store, log = console.error) {
     hookRun = options.out
+    // The test hook names the process that runs the check (the CLI's supervised child, or a daemon): its
+    // retention lines are that process's, and the driver reads this file (observation only).
+    if (process.env.ORACLE_GAPS_TEST_RETENTION) {
+      mkdirSync(options.out, { recursive: true })
+      writeFileSync(join(options.out, `check.pid`), String(process.pid))
+    }
     heldUnits = () => store.size?.() ?? 0
     const authored = options.mutants ? loadAuthored(options.mutants) : []
     seedVariable = `${options.envPrefix}_SEED`

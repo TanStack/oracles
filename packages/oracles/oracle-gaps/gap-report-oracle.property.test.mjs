@@ -701,6 +701,11 @@ const hookOf = (dir) => {
     )
   return hookFiles.get(dir)
 }
+// The pid of the process that ran a check, which the check writes into its output directory under the hook.
+const checkPidOf = (out) =>
+  existsSync(join(out, `check.pid`))
+    ? Number(readFileSync(join(out, `check.pid`), `utf8`))
+    : undefined
 const retentionLinesOf = (file) =>
   existsSync(file)
     ? readFileSync(file, `utf8`)
@@ -734,9 +739,10 @@ function runCli(dir, files, how = {}) {
     env: { ...cleanEnv(), ORACLE_GAPS_TEST_RETENTION: hook, ...how.env },
   })
   // Each line names its check's output directory, so this run keeps only its own (a daemon serves many calls).
-  // A line names the process that wrote it: this run's own lines are its child's; a daemon it killed writes others.
+  // A line names the process that wrote it: this run's own lines are its check's; a daemon it killed writes others.
+  const checkPid = checkPidOf(out)
   const retention = retentionLinesOf(hook).filter(
-    (line) => line.run === out && line.pid === child.pid,
+    (line) => line.run === out && line.pid === checkPid,
   )
   const run = readRun(
     dir,
@@ -1063,10 +1069,10 @@ async function runClisAtOnce(dir, files, hows, outs = []) {
       return {
         ...run,
         retention: retentionLinesOf(hook).filter(
-          (line) => line.run === out && line.pid === child.pid,
+          (line) => line.run === out && line.pid === checkPidOf(out),
         ),
         killedRetention: retentionLinesOf(hook).filter(
-          (line) => line.run === out && line.pid !== child.pid,
+          (line) => line.run === out && line.pid !== checkPidOf(out),
         ),
       }
     }),
