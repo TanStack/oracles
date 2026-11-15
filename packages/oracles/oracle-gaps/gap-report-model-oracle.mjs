@@ -4100,18 +4100,6 @@ function filesRun(runs) {
 }
 
 /**
- * The owner files in which a slow test waits under a mutant, among the
- * files its run reaches: each copy of such a file is busy for SLOW_MS, so
- * the CLI owes a heartbeat for it.
- */
-function slowedFiles(plan, tests, sites, active) {
-  const slowed = new Set()
-  for (const [file, own] of filesRun(runsOf(plan, tests, sites, active)))
-    if (own.some((r) => r.slowed)) slowed.add(file)
-  return slowed
-}
-
-/**
  * A mutant's kind from its owner tests' runs. An operator mutant's
  * confirming runs share its budget (`budgeted`); an authored mutant's runs
  * are each final at the full limit, so it has no confirmations to budget.
@@ -4506,15 +4494,6 @@ function model(plan) {
       ordinal: site.ordinal,
       probe: site.probe,
       kind,
-      // A mutant whose run reaches a slow owner test keeps a copy busy for
-      // SLOW_MS, so the CLI must name it in a heartbeat while it runs.
-      heartbeat:
-        kind !== undefined &&
-        ![`unowned`, `unreached`, `setup-error`, `indeterminate`].includes(
-          kind,
-        ) &&
-        slowedFiles(plan, ownerTests(site.fnId), sites, { site: site.id })
-          .size > 0,
       ordinaryOutcome:
         plan.ordinary && survivorKinds.has(kind) && ordinaryReaches(site),
     }
@@ -5894,7 +5873,6 @@ export {
   ownersOf,
   interpret,
   judge,
-  slowedFiles,
   MUTANT_LIMIT_MS,
   HEARTBEAT_MS,
   FULL_LIMIT_MS,
