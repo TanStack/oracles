@@ -133,9 +133,9 @@ agent.
   file: when it appears, an unsupervised run takes the same stop as a
   SIGINT. `ORACLE_GAPS_TEST_TORN_ROWS` names a directory where each batch's
   watchdog counts its polls, and a batch's closing row is held half written
-  until the watchdog has polled twice. The directory then holds a
-  `.reached` or `.unreached` marker for each hold (`.unreached` after 60 s
-  with no two polls).
+  until the watchdog has polled twice. The directory holds a `.begun` marker
+  per batch and a `.reached` or `.unreached` marker per hold (`.unreached`
+  after 60 s with no two polls).
 
   A few endings print no done line, or one more line: a SIGKILL of the CLI,
   or a signal that comes while Node is still starting the CLI, before its

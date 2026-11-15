@@ -30,7 +30,6 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
-  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -68,6 +67,7 @@ import {
   baseOf,
   isWithin,
   posix,
+  writeWhole,
   realPathOf,
   relativeWithin,
   specifierOf,
@@ -179,24 +179,20 @@ const span = (kind, started, fields = {}) => {
 }
 
 /**
- * A capture's lines, whole rows only. A worker may be appending a row while
- * the CLI reads, and every row ends with a newline, so the text after the last
- * newline is a row still being written (issue #83). Every reader of a batch's
- * capture takes its rows this way.
+ * A capture's lines. Every row ends with a newline, so text after the last
+ * newline is a row still being written. A poll of a running batch (`partial`)
+ * and a read after a cut-off, where a cancelled worker may stop mid-write, drop
+ * that fragment (issue #83). Any other read is strict: the run has finished, so
+ * a fragment is an internal error, not a row to skip.
  */
-function captureLines(capture) {
+function captureLines(capture, { partial = false } = {}) {
   const text = readFileSync(capture, `utf8`)
-  return text
-    .slice(0, text.lastIndexOf(`\n`) + 1)
-    .split(`\n`)
-    .filter(Boolean)
-}
-
-/** A file written whole: a temporary file, then a rename (evidence.mjs). */
-function writeWhole(file, text) {
-  const temporary = `${file}.${process.pid}.tmp`
-  writeFileSync(temporary, text)
-  renameSync(temporary, file)
+  const end = text.lastIndexOf(`\n`) + 1
+  if (!partial && end !== text.length)
+    throw new Error(
+      `oracle-gaps internal error: the capture ${capture} ends in a row with no newline after its run finished`,
+    )
+  return text.slice(0, end).split(`\n`).filter(Boolean)
 }
 
 /** A hash of this CLI's own code and the framework it reads. */
@@ -1109,6 +1105,7 @@ export default async (env) => {
           `batch-${process.pid}-${++holdCounter}`,
         )
       : undefined
+    if (hold !== undefined) writeWhole(`${hold}.begun`, ``)
     const keyFor = (copy, file) => (key) =>
       key.startsWith(`${copy} > `) ? `${file}${key.slice(copy.length)}` : key
     // A file's test keys, named as its copy names them.
@@ -1170,7 +1167,7 @@ export default async (env) => {
     const finished = () => {
       if (!existsSync(capture)) return 0
       let at = 0
-      for (const line of captureLines(capture)) {
+      for (const line of captureLines(capture, { partial: true })) {
         if (line.includes(`"started":true`))
           at = Math.max(at, copies.indexOf(JSON.parse(line).file))
         if (line.includes(`"closed":true`)) closed.add(JSON.parse(line).file)
@@ -1224,11 +1221,11 @@ export default async (env) => {
     // Each copy's closing row: the files of the modules it evaluated, and the
     // files it read with their hashes.
     const closings = new Map()
-    const rowsOf = () => {
+    const rowsOf = (partial) => {
       const rows = new Map(copies.map((copy) => [copy, []]))
       closings.clear()
       if (existsSync(capture))
-        for (const line of captureLines(capture)) {
+        for (const line of captureLines(capture, { partial })) {
           const row = JSON.parse(line)
           const copy = copies.find(
             (c) =>
@@ -1267,7 +1264,9 @@ export default async (env) => {
         // The copies before the one that hung finished: their units come
         // from their capture rows. One that never closed failed to load, and
         // a cut-off run does not say why, so it runs again (`undefined`).
-        const rows = rowsOf()
+        // A cut-off copy may still be appending its closing row, so the last
+        // fragment is dropped (issue #83).
+        const rows = rowsOf(true)
         return {
           units: items.slice(0, current).map((item, i) => {
             if (!closed.has(copies[i])) return undefined
@@ -1310,7 +1309,7 @@ export default async (env) => {
       // caller runs those items alone.
       if ((result.unhandledErrors ?? []).length > 0)
         return { units: [], unattributed: true }
-      const rows = rowsOf()
+      const rows = rowsOf(false)
       span(`run`, started, { file: `batch`, items: items.length })
       return {
         units: items.map((item, i) => {

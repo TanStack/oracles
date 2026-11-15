@@ -29,7 +29,7 @@ import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeEach, chai, expect, inject, vi } from 'vitest'
-import { posix } from './paths.mjs'
+import { posix, writeWhole } from './paths.mjs'
 
 const run =
   inject(`oracleGaps`) ??
@@ -273,13 +273,6 @@ function appendClosingRow(row) {
   const marker = counted() >= seen + 2 ? `reached` : `unreached`
   writeWhole(`${hold}.${marker}`, ``)
   appendFileSync(state.capture, row.slice(half))
-}
-// A file is written whole, by a temporary file and a rename, as evidence.mjs
-// writes its store, so a reader never sees a part of it.
-function writeWhole(file, text) {
-  const temporary = `${file}.${process.pid}.tmp`
-  fs.writeFileSync(temporary, text)
-  fs.renameSync(temporary, file)
 }
 // The files this copy reads through fs inside the package: by a sync, a
 // promise, or a callback read, or a check of whether a file exists or what

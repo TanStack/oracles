@@ -553,6 +553,7 @@ export const partitions = {
         'a load failure beside a hang',
         'an ambiguous authored mutant',
         'a capture row read while the worker wrote it',
+        'two batches each read a capture row while its worker wrote it',
         'every outcome class',
       ]),
       5: anyOf([
