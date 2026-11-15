@@ -39,9 +39,17 @@ export const usage = `Usage: oracle-gaps --package <dir> --source <src/x.ts,...>
   [--env-prefix <name>] [--daemon] [--ordinary] [--seed <n>] [--mutants <dir>]
   [--out <dir>] [--only <id,id>] [--diff-base <rev>] [--test-timeout <ms>]
   [--sample <n>] [--contexts <n>] [--pool threads|forks] [--config <file>]
-  [--first-limit <ms>] [--hang-limit <ms>] [--mutant-limit <ms>]
+  [--hang-limit <ms>] [--first-limit <ms>] [--mutant-limit <ms>]
   oracle-gaps --stop-daemon --package <dir>
   oracle-gaps --help
+
+Defaults: --env-prefix ORACLE; --test-timeout 65000 (Vitest's per-test limit,
+in ms); --hang-limit 60000 (the base of each copy's backstop, in ms, plus 3 s
+per second of its file's unmutated time); --contexts the machine's parallelism
+minus 2, at most 16; --pool threads (forks when a package has a native
+addon); --sample and --only off; --out a directory under the package's state.
+Retired: --first-limit and --mutant-limit are checked and print a note, and
+change nothing. A copy has no first budget, and a mutant's work budget bounds it.
 
 The paths in --source and --config are relative to --package. Without
 --config, the run loads the Vitest config that Vitest discovers for the

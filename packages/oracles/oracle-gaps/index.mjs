@@ -84,15 +84,13 @@
 //     [--ordinary]            (also run ordinary test files, for information)
 //     [--seed <n>] [--mutants <dir>] [--out <dir>] [--only <id,id>]
 //     [--diff-base <rev>]
-//     [--first-limit <ms>]    (a copy's first budget; default 2000)
-//     [--hang-limit <ms>]     (the full limit a cut copy gets again; default 10000)
-//     [--mutant-limit <ms>]   (the floor of each mutant's budget, which the
-//                              runs that confirm its cut copies share; the
-//                              budget is the larger of this and ten times
-//                              its owner files' unmutated time; default 30000)
-//     [--test-timeout <ms>]   (default 15000; also bounds hooks and teardown.
-//                              Each mutant run also has a wall-clock limit of
-//                              10 s plus three times its file's unmutated time.)
+//     [--hang-limit <ms>]     (the base of each copy's backstop, which adds
+//                              3 s per second of its file's unmutated time;
+//                              default 60000)
+//     [--first-limit <ms>]    (retired: checked and noted, no effect)
+//     [--mutant-limit <ms>]   (retired: checked and noted, no effect)
+//     [--test-timeout <ms>]   (Vitest's per-test limit, also bounding hooks
+//                              and teardown; default 65000)
 //     [--sample <n>]          (a fixed-seed sample of n mutants per source;
 //                              the report marks the run as partial)
 //     [--contexts <n>]        (warm contexts, one worker each; default

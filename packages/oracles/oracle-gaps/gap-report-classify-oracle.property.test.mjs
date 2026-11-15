@@ -2132,6 +2132,8 @@ async function driver(h, observe) {
       class: r.class,
       laws: r.laws && [...r.laws].sort(),
       testOutcome: r.testOutcome,
+      // A timeout's detail is its cut (`outcomeOf`).
+      detail: r.outcome === `timeout` ? r.detail : undefined,
     })),
     summary: readSummary(summary),
     messages: messagesOf(summary),
@@ -2617,11 +2619,18 @@ function check(h, observations, expected) {
     )
   // Law 8: each gap line is one line, and shows its change shortened: an
   // operator mutant's original and replacement as two code spans, an
-  // authored mutant's intent as a code span and its author. The results keep the full text.
+  // authored mutant's intent as a code span and its author. A timeout's line
+  // ends with its cause, `(cause: <cause>)`, after the change. The results
+  // keep the full text.
   for (const owed of gapsOfModel) {
     const head = `oracle-gaps: gap ${owed.class ?? owed.outcome} L${owed.line} ${owed.id} `
     const line = streamed.find((l) => l.startsWith(head))
-    const rest = line?.slice(head.length)
+    const cause = owed.outcome === `timeout` ? ` (cause: ${owed.detail})` : ``
+    const tail = line?.slice(head.length)
+    const rest =
+      tail !== undefined && tail.endsWith(cause)
+        ? tail.slice(0, tail.length - cause.length)
+        : undefined
     let shown
     if (owed.authored) {
       // The intent is the author's text, so it sits in a code span.

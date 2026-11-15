@@ -1274,7 +1274,7 @@ export default async (env) => {
     const skippedUnit = (item) => ({ file: item.file, skipped: true })
     // A copy that ran past its call budget, even one whose throw ended the
     // loop and let it finish, is a timeout as it stands (a count, not a
-    // clock: no confirming run).
+    // clock).
     const spunUnit = (item) => ({
       file: item.file,
       timedOut: true,
@@ -2135,7 +2135,7 @@ export default async (env) => {
     // hang), so a result never depends on how its evidence was produced. The
     // ordinary tier, when asked for, runs the same way afterwards.
     const GROUP = 4
-    // A copy that a batch skipped, or cut off for its confirmation, has no
+    // A copy that a batch skipped, or cut off by a count or a state, has no
     // verdicts of its own yet.
     const kills = (u) =>
       !u.skipped &&
