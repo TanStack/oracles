@@ -25,7 +25,12 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
-const anyOf = (names) => `(?:${names.map(escape).join(`|`)})`
+// The names a shard lists are kept with its pattern, so the check can find a
+// name that matches no test.
+const anyOf = (names) => ({
+  names,
+  toString: () => `(?:${names.map(escape).join(`|`)})`,
+})
 const rest = Symbol(`rest`)
 
 // The self-oracle's test names, split by the start of the name after its
@@ -760,6 +765,12 @@ export function partitionErrors(name, listed) {
   for (const exclusion of excludedOf(partition))
     if (!names.has(`${prefix}${partition.select}${exclusion}`))
       errors.push(`excluded ${JSON.stringify(exclusion)} names no test`)
+  for (const body of Object.values(partition.shards))
+    for (const name of body.names ?? [])
+      if (!names.has(`${prefix}${partition.select}${name}`))
+        errors.push(
+          `a shard names ${JSON.stringify(name)}, which matches no test`,
+        )
   for (const [shard, body] of Object.entries(partition.shards))
     if (
       body !== rest &&

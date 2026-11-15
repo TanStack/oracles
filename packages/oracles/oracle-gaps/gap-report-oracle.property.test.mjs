@@ -1023,6 +1023,17 @@ function streamOf(lines, name) {
   }
 }
 
+// A run as the trace observes it: its heartbeats and their positions are
+// progress (see heartbeatBreaches), and its evidence counts are timing.
+function unbeaten(run) {
+  return {
+    ...run,
+    evidence: undefined,
+    beats: undefined,
+    heartbeats: undefined,
+  }
+}
+
 /**
  * Law 11, shape only (maintainer decision, 2026-11-14). A heartbeat names the
  * baseline or a mutant of this run, in a file that runs it, and a CLI prints
@@ -1830,12 +1841,7 @@ async function driver(plan, observe) {
     // Heartbeats are progress, not outcome (maintainer decision, 2026-11-14):
     // their set depends on wall-clock timing, so the trace keeps none of them.
     // Their shape breaches are observed as `beats`, which is empty in a correct run.
-    observe(`cli`, {
-      ...cli,
-      evidence: undefined,
-      beats: undefined,
-      heartbeats: undefined,
-    })
+    observe(`cli`, unbeaten(cli))
     observe(`beats`, { breaches: heartbeatBreaches(cli) })
     // A failing owner's replay, run as the author would run it (law 3).
     if (plan.fault === `brokenOwner`)
@@ -2284,7 +2290,9 @@ async function driver(plan, observe) {
       const moved = { ...files, [SOURCE]: edited(plan) }
       // The evidence counts are not observed, as for `cli`: they depend on
       // timing (oracles-followups.md G1). Verdicts and keys are.
-      observe(`stability`, { ...runCli(dir, moved, how), evidence: undefined })
+      const again = runCli(dir, moved, how)
+      observe(`beats`, { breaches: heartbeatBreaches(again) })
+      observe(`stability`, unbeaten(again))
       states.add(`stability rerun`)
     }
     if (plan.steps.length > 0)
@@ -2627,14 +2635,14 @@ function check(plan, observations, expected) {
     )
   // Law 11, shape only (maintainer decision, 2026-11-14): the driver observes
   // the heartbeats that break the shape, and a breach is a streaming failure.
-  const beats = observations.find((o) => o.checkpoint === `beats`)?.value
-  if (beats?.breaches.length > 0)
-    return violation(
-      `cli`,
-      `a heartbeat breaks its shape: ${beats.breaches[0]}`,
-      `streaming`,
-      { actual: beats.breaches },
-    )
+  for (const { value } of observations.filter((o) => o.checkpoint === `beats`))
+    if (value.breaches.length > 0)
+      return violation(
+        `cli`,
+        `a heartbeat breaks its shape: ${value.breaches[0]}`,
+        `streaming`,
+        { actual: value.breaches },
+      )
   for (const [owed, got] of pairs)
     if (!owed.probe && got.ordinaryOutcome !== owed.ordinaryOutcome)
       return violation(
