@@ -3450,6 +3450,7 @@ const required = [
   `an edit that changed the cold result after a hang replaced the only context`,
   `edit lazy changed the cold result`,
   `a lazy edit changed the cold result after a batch was cut off`,
+  `a rejected batch retired its copies and logged them`,
 ]
 // The faults the CLI analyzes anyway: a package's TypeScript is no input.
 const analyzedFaults = [`noTypescript`, `apiLessTypescript`]
@@ -3487,7 +3488,6 @@ const faults = [
   `configSyntax`,
   `setupThrows`,
   ...analyzedFaults,
-  `a rejected batch retired its copies and logged them`,
 ]
 const separate = [
   `ordinary tests left out by default`,
