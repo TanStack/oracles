@@ -516,6 +516,7 @@ export const partitions = {
     shards: {
       1: anyOf([
         'a .cjs config that calls require',
+        'a batch whose run rejects',
         'a declaration fault: brokenOwner',
         'a declaration fault: missingSource',
         'a failing owner under a config that --config names',
