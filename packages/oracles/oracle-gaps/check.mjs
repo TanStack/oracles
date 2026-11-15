@@ -1744,15 +1744,6 @@ export default async (env) => {
     // no first budget, so a copy runs once, to its end.
     const limitFor = (file) =>
       options.hangLimit + 3000 * (fileSeconds.get(file) ?? 10)
-    // A mutant's wall-clock backstop (`--mutant-limit`, or ten times its owner
-    // files' unmutated time, whichever is larger): past it, a mutant with no kill
-    // is a timeout (runOwners). It never decides a kill.
-    const budgetOf = (files) =>
-      Math.max(
-        options.mutantLimit,
-        10_000 *
-          files.reduce((sum, file) => sum + (fileSeconds.get(file) ?? 0), 0),
-      )
     // A mutant's work budget (maintainer disposition G1, option A): the larger of
     // WORK_FLOOR and ten times its owner files' unmutated work, in site
     // evaluations, each file counted by its most-working unmutated test.
@@ -1761,12 +1752,27 @@ export default async (env) => {
         WORK_FLOOR,
         10 * files.reduce((sum, file) => sum + (mostCalls.get(file) ?? 0), 0),
       )
-    // A copy's work: the site evaluations its tests made. A copy that timed out
-    // recorded none, and counts none.
+    // A copy cut by a clock or by its call count: its own run's timeout, or
+    // Vitest's own limit ("Test timed out"), which the copy outlived. Such a
+    // copy is never charged, and it ends the mutant's copies (the outcome rule,
+    // register 2026-11-14, `Deterministic cuts, outcome rule`).
+    const cutByTime = (unit) =>
+      unit.timedOut ||
+      (unit.tests ?? []).some(
+        (test) =>
+          test.state === `failed` && /Test timed out/.test(test.message),
+      )
+    // A copy's work: the calls of its deterministic, unclocked tests
+    // (`baseline.work`, classify.mjs), so a row that a clock could move counts
+    // nothing.
     const workOf = (unit) =>
-      unit.timedOut
+      cutByTime(unit)
         ? 0
-        : (unit.rows ?? []).reduce((sum, [, row]) => sum + (row.calls ?? 0), 0)
+        : (unit.rows ?? []).reduce(
+            (sum, [key, row]) =>
+              sum + (baseline.work.has(key) ? (row.calls ?? 0) : 0),
+            0,
+          )
     // A run cut off is still running, so its context is replaced; closing
     // it stops the worker.
     const replace = async (slot) => {
@@ -2014,13 +2020,11 @@ export default async (env) => {
     // any of its unmutated tests made, and at least CALL_FLOOR. A copy past it
     // is spinning (capture-setup.mjs) and is a timeout as it stands.
     const mostCalls = new Map()
-    for (const rows of [first.rows, second.rows])
-      for (const [key, row] of rows)
-        if (!row.background)
-          mostCalls.set(
-            fileOf(key),
-            Math.max(mostCalls.get(fileOf(key)) ?? 0, row.calls ?? 0),
-          )
+    for (const [key, calls] of baseline.work)
+      mostCalls.set(
+        fileOf(key),
+        Math.max(mostCalls.get(fileOf(key)) ?? 0, calls),
+      )
     const callBudgetFor = (file) =>
       Math.max(CALL_FLOOR, 100 * (mostCalls.get(file) ?? 0))
     const changesNothing = (mutant, targets) =>
@@ -2148,6 +2152,12 @@ export default async (env) => {
               `${st.mutant.id}: ${relative(request.file)} has no unit and no earlier kill`,
             )
           }
+          // A copy cut by a clock or its count is a timeout, uncharged, and no
+          // later copy runs (the outcome rule).
+          if (cutByTime(got[i])) {
+            st.units.push(got[i])
+            break
+          }
           work += workOf(got[i])
           if (work > budget) {
             evidence.budget += 1
@@ -2157,11 +2167,6 @@ export default async (env) => {
           st.units.push(got[i])
           if (kills(got[i])) break
         }
-        // The wall-clock backstop: no kill, and the copies' measured time past
-        // the mutant's wall budget, makes a timeout. A kill decides before it.
-        const elapsed = st.units.reduce((sum, u) => sum + (u.seconds ?? 0), 0)
-        if (!st.units.some(kills) && elapsed * 1000 > budgetOf(files))
-          st.units.push({ file: files[0], timedOut: true, seconds: 0 })
         st.done = true
       }
     }

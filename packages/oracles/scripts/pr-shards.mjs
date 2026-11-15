@@ -558,7 +558,7 @@ export const partitions = {
         "a slow owner's kill and another owner's kill",
         "a slow kill past Vitest's 15 s limit",
         'a copy waiting on a timer',
-        'a spin in an owner ahead of a kill in another',
+        'a kill past the work budget in a later owner',
         'a capture row read while the worker wrote it',
         'two batches each read a capture row while its worker wrote it',
         'every outcome class',

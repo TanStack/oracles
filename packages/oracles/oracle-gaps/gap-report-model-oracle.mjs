@@ -913,8 +913,9 @@ const histories = drawn.map(
       )
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
-    const { slowTwin, spinFirst, ...drawnValue } =
-      /** @type {Record<string, unknown>} */ (value)
+    const { slowTwin, ...drawnValue } = /** @type {Record<string, unknown>} */ (
+      value
+    )
     const tests = /** @type {Record<string, unknown>[]} */ (drawnValue.tests)
     const plain =
       /** @type {{ witness: unknown, steps: unknown[] | null, tornRows: unknown }} */ ({

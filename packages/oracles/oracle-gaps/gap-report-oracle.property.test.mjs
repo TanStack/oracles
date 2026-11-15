@@ -1816,11 +1816,14 @@ async function driver(plan, observe) {
       states.add(`a slow kill past fifteen seconds killed`)
     if (killed && plan.history.tests.some((t) => t.timerWait))
       states.add(`a copy waiting on a timer killed`)
+    // Two owners that each make 30,000 extra calls: the second owner's copy
+    // passes the work budget, and its kill does not count (the outcome rule).
     if (
-      plan.history.spinFirst &&
+      plan.history.tests.length === 2 &&
+      plan.history.tests.every((t) => t.loops === 30_000) &&
       cli.report?.results?.some((r) => r.outcome === `timeout`)
     )
-      states.add(`a spin in an owner ahead of a kill in another timed out`)
+      states.add(`a kill past the work budget in a later owner does not count`)
     if (tornRead && cli.reported)
       states.add(`a capture row read while the worker wrote it`)
     if (cli.exit === 0 && !plan.consoleOutput)
@@ -3566,7 +3569,7 @@ const required = [
   `a slow owner's kill reported as when it did not wait`,
   `a slow kill past fifteen seconds killed`,
   `a copy waiting on a timer killed`,
-  `a spin in an owner ahead of a kill in another timed out`,
+  `a kill past the work budget in a later owner does not count`,
   `a hang in one owner and a survivor in another timed out`,
   `confirmations past a mutant's budget timed out`,
   `a heartbeat named a busy mutant`,
@@ -3699,7 +3702,7 @@ const separate = [
   `a slow owner's kill reported as when it did not wait`,
   `a slow kill past fifteen seconds killed`,
   `a copy waiting on a timer killed`,
-  `a spin in an owner ahead of a kill in another timed out`,
+  `a kill past the work budget in a later owner does not count`,
   // The config and contexts states have constructed histories of their own.
   `a config that --config names ran`,
   `a package with no config ran`,
@@ -5095,14 +5098,15 @@ oracleProperty({
         }),
       },
       // Constructed histories added by the deterministic-cuts change follow.
-      // An owner whose copy spins (a count) ends the mutant's copies before a
-      // later owner's test that would kill it: the outcome is a timeout.
+      // Owner a's copy makes 30,000 extra calls (under its budget), and so does
+      // owner b's, which would kill. Together they pass the work budget, so b's
+      // kill does not count: the mutant is a timeout by count.
       {
-        name: `a spin in an owner ahead of a kill in another`,
-        enters: [`a spin in an owner ahead of a kill in another timed out`],
+        name: `a kill past the work budget in a later owner`,
+        enters: [`a kill past the work budget in a later owner does not count`],
         build: (generated) => ({
           ...generated,
-          functions: [[{ kind: `until`, quote: `'` }]],
+          functions: [[{ kind: `if`, op: `>`, k: 4, not: false, quote: `'` }]],
           containers: [],
           overloads: [],
           owners: [`both`],
@@ -5117,8 +5121,13 @@ oracleProperty({
           wholeFile: `none`,
           template: false,
           tests: [
-            { ...judging(`a`, `fixed seed`, 1), fn: 0 },
-            { ...judging(`b`, `fixed seed`, 1), fn: 0 },
+            {
+              ...judging(`a`, `fixed seed`, 7),
+              fn: 0,
+              judges: false,
+              loops: 30_000,
+            },
+            { ...judging(`b`, `fixed seed`, 7), fn: 0, loops: 30_000 },
           ],
           witness: false,
           authored: null,
@@ -5133,7 +5142,6 @@ oracleProperty({
           concurrentStart: false,
           contexts: 1,
           steps: null,
-          spinFirst: true,
         }),
       },
       // A slow kill whose test waits 16 s where its output differs, past
