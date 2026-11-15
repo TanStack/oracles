@@ -303,15 +303,20 @@ export const partitions = {
         'a stale authored mutant and a reformat',
         'a failing owner under a config that --config names',
       ]),
-      // 134 s, 101 s, 27 s, and 15 s.
+      // Both halves of `every outcome class` (134 s and 155 s on the CI runner),
+      // a second daemon check (101 s), and two small units. The second half
+      // is named here: `every outcome class` alone matches the first half only,
+      // and the second would fall into the rest (shard 3).
       2: anyOf([
         'every outcome class',
+        'every outcome class, the warm and abort stops',
         'a second daemon check of the budget witness',
         'a declaration fault: brokenVitest',
         'an edit that changed the cold result after a hang replaced the only context',
       ]),
-      // The rest: the edit sequence through the daemon (95 s), brokenOwner
-      // (83 s), generated (23 s), the lazy module (12 s), and small units.
+      // The rest: noTypescript (174 s on the CI runner), the edit sequence
+      // through the daemon (94 s), brokenOwner (83 s), generated (23 s), the
+      // lazy module (12 s), and small units.
       3: rest,
     },
   },
