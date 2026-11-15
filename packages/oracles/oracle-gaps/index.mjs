@@ -356,23 +356,22 @@ function startLog(out) {
  * releases it once the overlapping run or the stop it sent has been observed, so
  * the outcome does not depend on wall-clock timing. Inert unless set.
  */
+// A hold that never releases is a driver fault. The run keeps the exit code its
+// done line already stated: the streams stay as the done line left them, and the
+// failure is the driver's, through the `.unreleased` marker beside the hold file.
 function holdUntil() {
   const file = process.env.ORACLE_GAPS_TEST_HOLD_UNTIL
-  if (file !== undefined) waitForFile(file, `the hold`)
+  if (file === undefined) return
+  try {
+    waitForFile(file, `the hold`)
+  } catch {
+    writeFileSync(`${file}.unreleased`, ``)
+  }
 }
 function exitWhenFlushed(code) {
   process.stdout.write(``, () =>
     process.stderr.write(``, () => {
-      try {
-        holdUntil()
-      } catch (error) {
-        // A hold that never releases is a failed test: the run exits nonzero.
-        process.stderr.write(
-          `oracle-gaps: internal error, ${error.message}\n`,
-          () => process.exit(1),
-        )
-        return
-      }
+      holdUntil()
       process.exit(code)
     }),
   )
@@ -484,6 +483,13 @@ function superviseRun(out) {
       },
     },
   )
+  // A test that kills this supervisor reads the child's pid beside the started
+  // marker (ORACLE_GAPS_TEST_STARTED), to see the child exit (the watchdog).
+  if (process.env.ORACLE_GAPS_TEST_STARTED !== undefined)
+    writeFileSync(
+      `${process.env.ORACLE_GAPS_TEST_STARTED}.child`,
+      `${child.pid}\n`,
+    )
   child.on(`message`, (message) => {
     if (message === `ending`) ending = true
   })

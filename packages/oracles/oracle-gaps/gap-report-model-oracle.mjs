@@ -913,6 +913,9 @@ const drawn = fc.record({
   // A stream log that becomes a directory right after the note (review of #57,
   // F1): constructed only, and taken back as the constant false.
   logLost: fc.constant(false),
+  // A supervised check whose supervisor is killed (POSIX; review of #57, F7):
+  // constructed only, and taken back as the constant false.
+  supervisorDeath: fc.constant(false),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -973,9 +976,16 @@ const histories = drawn.map(
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
     const reset =
-      history.claimScenario === false && history.logLost === false
+      history.claimScenario === false &&
+      history.logLost === false &&
+      history.supervisorDeath === false
         ? value
-        : { ...history, claimScenario: false, logLost: false }
+        : {
+            ...history,
+            claimScenario: false,
+            logLost: false,
+            supervisorDeath: false,
+          }
     const taken =
       reset.tornRows === false ? reset : { ...reset, tornRows: false }
     const later = (history.steps ?? []).filter((step) =>
@@ -3055,6 +3065,7 @@ function resolveHistory(history) {
     // coordinator's decision on the claim rules).
     claimScenario: history.claimScenario ?? false,
     logLost: history.logLost ?? false,
+    supervisorDeath: history.supervisorDeath ?? false,
     spawnOnStart: history.spawnOnStart === true,
     onlyRun: history.onlyRun === true,
     pragma: history.pragma === true,

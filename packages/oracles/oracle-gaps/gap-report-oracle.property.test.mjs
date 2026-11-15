@@ -841,8 +841,12 @@ async function stoppedRun(
   if (!abort) child.kill(signal)
   // The `after` stop is sent while the exit is held; the hold is released now.
   if (after) writeFileSync(join(pids, `after-release`), ``)
+  // The hold beside the release file is marked when the CLI could not release it.
+  const unreleased = join(pids, `after-release.unreleased`)
   const ended = await Promise.race([exit, sleep(30_000).then(() => false)])
   await sleep(1000)
+  if (existsSync(unreleased))
+    throw new Error(`the stop's hold was never released`)
   const alive = readdirSync(pids)
     .filter((name) => /^\d+$/.test(name))
     .map(Number)
@@ -1140,6 +1144,61 @@ async function unwritableLogRuns(dir, files, how, ending) {
 const pidFree = (value) =>
   JSON.parse(JSON.stringify(value).replaceAll(/pid \d+/g, `pid <pid>`))
 
+/**
+ * Runs a supervised check and SIGKILLs its supervisor once the child is running
+ * (the child's pid is read from the started marker's `.child` file). The child's
+ * watchdog (index.mjs) ends its group within a tick of losing its supervisor, so
+ * the child must be gone within 5 s. The supervisor's own claim is left as a
+ * SIGKILL leaves it: a stale claim, which the next run refuses (the stale-claim
+ * histories). POSIX only: win32 has no supervisor until #79 (platform-scoped reach).
+ */
+async function supervisorDeathRuns(dir, files, how) {
+  const { args } = cliArgs(dir, files, { ...how, outName: `out-death` })
+  const started = join(dir, `death-started`)
+  const supervisor = spawn(process.execPath, args, {
+    cwd: repo,
+    env: { ...cleanEnv(), ORACLE_GAPS_TEST_STARTED: started },
+    stdio: [`ignore`, `pipe`, `pipe`],
+  })
+  let hasEnded = false
+  const exited = new Promise((resolvePromise) => {
+    supervisor.on(`close`, (code, signal) => {
+      hasEnded = true
+      resolvePromise({ code, signal })
+    })
+  })
+  const timer = setTimeout(() => supervisor.kill(`SIGKILL`), 60_000)
+  try {
+    for (
+      let waited = 0;
+      !existsSync(`${started}.child`) && !hasEnded;
+      waited += 1
+    ) {
+      if (waited > 3000)
+        throw new Error(`the supervisor never started its child`)
+      await sleep(10)
+    }
+    if (!existsSync(`${started}.child`))
+      return { childGone: true, supervisorSignal: undefined, ended: true }
+    const childPid = Number(readFileSync(`${started}.child`, `utf8`))
+    supervisor.kill(`SIGKILL`)
+    const { signal } = await exited
+    let childGone = false
+    for (let waited = 0; waited < 5000; waited += 50) {
+      try {
+        process.kill(childPid, 0)
+      } catch {
+        childGone = true
+        break
+      }
+      await sleep(50)
+    }
+    return { childGone, supervisorSignal: signal, ended: false }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 async function overlappingRuns(dir, files, how) {
   writeFixture(dir, files)
   const before = new Set(filesUnder(dir))
@@ -1201,6 +1260,9 @@ async function overlappingRuns(dir, files, how) {
   const secondStatus = await second.status
   writeFileSync(releaseFile, ``)
   const firstStatus = await first.status
+  // A hold the CLI could not release is a driver fault, not an ending.
+  if (existsSync(`${releaseFile}.unreleased`))
+    throw new Error(`the overlap hold was never released`)
   const ended = readRun(
     dir,
     out,
@@ -2226,6 +2288,10 @@ async function driver(plan, observe) {
       observe(`claimScenario`, claim)
       states.add(claimStateOf[claim.scenario])
     }
+    if (plan.supervisorDeath && process.platform !== `win32`) {
+      observe(`supervisorDeath`, await supervisorDeathRuns(dir, files, how))
+      states.add(`a supervised child exits when its supervisor is killed`)
+    }
     if (plan.logLost) {
       observe(
         `unwritableLog`,
@@ -2934,6 +3000,15 @@ function check(plan, observations, expected) {
         `ownership`,
       )
   }
+  const death = observations.find(
+    (o) => o.checkpoint === `supervisorDeath`,
+  )?.value
+  if (death !== undefined && !death.childGone)
+    return violation(
+      `supervisorDeath`,
+      `the supervised child outlived its supervisor, which was killed with SIGKILL`,
+      `output namespace`,
+    )
   const lost = observations.find((o) => o.checkpoint === `unwritableLog`)?.value
   if (lost !== undefined) {
     // The stream log became a directory after the note. Whatever ends the run,
@@ -4107,6 +4182,7 @@ const required = [
   `a start refuses a stale claim`,
   `a start refuses an empty claim`,
   `a start refuses an unreadable claim`,
+  `a supervised child exits when its supervisor is killed`,
   `a stream log lost after its note, then stopped`,
   `a stream log lost after its note, then completed`,
   `a stop as the CLI starts`,
@@ -4290,6 +4366,7 @@ const ownHistoryStates = [
   `a start refuses a stale claim`,
   `a start refuses an empty claim`,
   `a start refuses an unreadable claim`,
+  `a supervised child exits when its supervisor is killed`,
   `a stream log lost after its note, then stopped`,
   `a stream log lost after its note, then completed`,
   `a stop as the CLI starts`,
@@ -5973,6 +6050,35 @@ oracleProperty({
           logBlocked: false,
           overlap: false,
           claimScenario: `unreadable`,
+        }),
+      },
+      {
+        // A supervised check whose supervisor is killed with SIGKILL: its child exits
+        // within the watchdog's tick, so no run's process outlives its CLI (POSIX).
+        name: `a supervised child exits when its supervisor is killed`,
+        enters: [`a supervised child exits when its supervisor is killed`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          wholeFile: `none`,
+          witness: false,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+          ordinary: false,
+          budget: `two`,
+          outMode: `explicit`,
+          logBlocked: false,
+          overlap: false,
+          supervisorDeath: true,
         }),
       },
     ]),
