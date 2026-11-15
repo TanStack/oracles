@@ -52,9 +52,11 @@ export function change(result) {
  * and again in the summary.
  */
 export function gapLine(result) {
+  // A timeout names the cut that ended it (classify.mjs `outcomeOf`).
+  const cut = result.outcome === `timeout` ? ` (cause: ${result.detail})` : ``
   return streamLine(
     `gap`,
-    `${kindOf(result)} L${result.line ?? `?`} ${result.id} ${change(result)}`,
+    `${kindOf(result)} L${result.line ?? `?`} ${result.id} ${change(result)}${cut}`,
   )
 }
 

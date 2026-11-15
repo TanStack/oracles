@@ -972,7 +972,12 @@ export default async (env) => {
       forceCancel(context)
       span(`run`, started, { ...profiled, timedOut: true })
       rmSync(capture, { force: true })
-      return { file, timedOut: true, seconds, ...(spun ? { spin: true } : {}) }
+      return {
+        file,
+        timedOut: true,
+        seconds,
+        cause: spun ? `spin` : `backstop`,
+      }
     }
     // The result also lists test modules from earlier runs, with their old
     // results. Only this run's file counts.
@@ -1011,7 +1016,7 @@ export default async (env) => {
       return {
         file,
         timedOut: true,
-        spin: true,
+        cause: `spin`,
         seconds,
         inputs: importsOf(file, modules, closing),
         readAt: closing.readAt,
@@ -1200,6 +1205,10 @@ export default async (env) => {
     let current = 0
     let copyStarted = Date.now()
     let timer
+    // The cut that ended the running copy, if the watchdog cut it off, and how
+    // long the copy had run then.
+    let cutCause
+    let cutMs
     const beat = heartbeat()
     // Each poll counts itself, after it has read the capture (the hold in
     // capture-setup.mjs waits for two of these).
@@ -1218,12 +1227,18 @@ export default async (env) => {
           items[current].file,
           copyStarted,
         )
-        if (
-          idle.has(copies[current]) ||
-          Date.now() - (spunAt.get(copies[current]) ?? Infinity) > IDLE_MS ||
-          Date.now() - copyStarted > items[current].limitMs
-        )
+        // The cut that ends the copy, in this order: a spin past the call
+        // budget (a count), no progress (a state), then the backstop (a clock).
+        const copy = copies[current]
+        if (Date.now() - (spunAt.get(copy) ?? Infinity) > IDLE_MS)
+          cutCause = `spin`
+        else if (idle.has(copy)) cutCause = `no progress`
+        else if (Date.now() - copyStarted > items[current].limitMs)
+          cutCause = `backstop`
+        if (cutCause !== undefined) {
+          cutMs = Date.now() - copyStarted
           return resolve(undefined)
+        }
         timer = setTimeout(poll, 50)
       }
       timer = setTimeout(poll, 50)
@@ -1263,7 +1278,7 @@ export default async (env) => {
     const spunUnit = (item) => ({
       file: item.file,
       timedOut: true,
-      spin: true,
+      cause: `spin`,
       seconds,
     })
     try {
@@ -1317,8 +1332,8 @@ export default async (env) => {
             }
           }),
           timedOutAt: current,
-          idle: idle.has(copies[current]),
-          spin: spun.has(copies[current]),
+          cause: cutCause,
+          cutMs,
         }
       }
       // Errors outside any test cannot be attributed to one copy, so the
@@ -1654,6 +1669,22 @@ export default async (env) => {
     // units found so far, whether a request must still run; a request that
     // need not run, gets no unit; a copy that skipped its tests gets a
     // skipped marker, which its caller runs again (runOwners).
+    // A profile row for one copy (ORACLE_GAPS_PROFILE): its mutant, its file's
+    // measured time, its limit, the cause that ended it or `completed`, and its
+    // duration.
+    const copyRow = (request, { cause, durationMs }) =>
+      appendFileSync(
+        profileFile,
+        `${JSON.stringify({
+          kind: `copy`,
+          mutant: request.label,
+          file: baseOf(request.file),
+          cause,
+          fileMs: Math.round((fileSeconds.get(request.file) ?? 0) * 1000),
+          limitMs: request.limitMs,
+          durationMs,
+        })}\n`,
+      )
     async function unitsBatch(slot, requests, needed = () => true) {
       const index = indexOf.get(slot.context)
       const got = new Array(requests.length)
@@ -1691,17 +1722,29 @@ export default async (env) => {
           // A skipped copy keeps its marker, so the caller can run it again.
           got[rest[k].i] = u
           if (u.skipped) return
-          if (u.spin) evidence.spin += 1
+          if (u.cause === `spin`) evidence.spin += 1
           remember(rest[k].id, u, batch.inputs[k])
           evidence.computed += 1
         })
+        // Per-copy rows for ORACLE_GAPS_PROFILE: each copy's cut or completion,
+        // with its file's measured time and its limit, to see what a cut was.
+        if (profileFile)
+          batch.units.forEach((u, k) => {
+            if (u === undefined || u.skipped) return
+            copyRow(rest[k], {
+              cause: u.cause ?? `completed`,
+              durationMs: Math.round(u.seconds * 1000),
+            })
+          })
         if (batch.timedOutAt === undefined) break
         // A copy cut off by its backstop, for idleness, or for spinning is a
         // timeout as it stands: no clock decides a kill (deterministic cuts).
         const hung = rest[batch.timedOutAt]
+        if (profileFile)
+          copyRow(hung, { cause: batch.cause, durationMs: batch.cutMs })
         evidence.cut += 1
-        if (batch.idle) evidence.idle += 1
-        if (batch.spin) evidence.spin += 1
+        if (batch.cause === `no progress`) evidence.idle += 1
+        if (batch.cause === `spin`) evidence.spin += 1
         await replace(slot)
         // A count or state cut (a spin, or no progress) is a timeout for its
         // copy alone; only a wall-clock cut ends the mutant's copies (cutByTime).
@@ -1711,8 +1754,7 @@ export default async (env) => {
             file: hung.file,
             timedOut: true,
             seconds: hung.limitMs / 1000,
-            ...(batch.spin ? { spin: true } : {}),
-            ...(batch.idle ? { idle: true } : {}),
+            cause: batch.cause,
           },
           batch.inputs[batch.timedOutAt],
         )
@@ -1736,7 +1778,7 @@ export default async (env) => {
         limitMs: r.limitMs,
         callBudget: r.callBudget,
       })
-      if (u.spin) evidence.spin += 1
+      if (u.cause === `spin`) evidence.spin += 1
       if (u.timedOut) await replace(slot)
       return u
     }
@@ -1775,7 +1817,7 @@ export default async (env) => {
     // copy is never charged, and it ends the mutant's copies (the outcome rule,
     // register 2026-11-14, `Deterministic cuts, outcome rule`).
     const cutByTime = (unit) =>
-      (unit.timedOut && !unit.spin && !unit.idle) ||
+      unit.cause === `backstop` ||
       (unit.tests ?? []).some(
         (test) =>
           test.state === `failed` && /Test timed out/.test(test.message),
@@ -2176,7 +2218,12 @@ export default async (env) => {
           work += workOf(got[i])
           if (work > budget) {
             evidence.budget += 1
-            st.units.push({ file: request.file, timedOut: true, seconds: 0 })
+            st.units.push({
+              file: request.file,
+              timedOut: true,
+              seconds: 0,
+              cause: `work budget`,
+            })
             break
           }
           st.units.push(got[i])

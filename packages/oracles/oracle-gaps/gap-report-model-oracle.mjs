@@ -147,6 +147,11 @@ const PAIR_LOOPS = 30_000
 // owner files' unmutated work, in site evaluations. The floor is the copies'
 // call budget, so two copies that each stay inside theirs can pass it.
 const WORK_FLOOR = 100_000
+// The least call budget a copy gets (check.mjs CALL_FLOOR): site evaluations in
+// one copy's runs before it counts as a loop that never ends. A file's budget
+// is a hundred times the most its unmutated tests did, if more. Past it, the
+// copy is cut by count (a spin) and charged nothing (the outcome rule, item 4).
+const CALL_FLOOR = 100_000
 // A mutant's budget for the runs that confirm its cut-off copies, which the
 // driver passes (`--mutant-limit`): one slow owner's confirmation fits it
 // (SLOW_MS), and two of `w_slowpair`'s do not. Ten times the fixture's
@@ -4186,12 +4191,16 @@ function slowedFiles(plan, tests, sites, active) {
   return slowed
 }
 
+// The timeout cause that each kind of cut names (the CLI's `cause`, `backstop`,
+// `spin` and `no progress`; `work budget` is the mutant's own count).
+const CUT_CAUSE = { wall: `backstop`, count: `spin`, state: `no progress` }
+
 /**
  * A mutant's kind from its owner tests' runs. An operator mutant's
  * confirming runs share its budget (`budgeted`); an authored mutant's runs
  * are each final at the full limit, so it has no confirmations to budget.
  */
-function judge(plan, tests, sites, active, { budgeted = true } = {}) {
+function judge(plan, tests, sites, active, { budgeted = true, detail } = {}) {
   const runs = runsOf(plan, tests, sites, active)
   // A file's tests run in order, and a kill (a behavioral verdict on a
   // reproducible route) stops the file. A hang before that cuts the file's
@@ -4199,6 +4208,9 @@ function judge(plan, tests, sites, active, { budgeted = true } = {}) {
   // earlier verdicts. A kill in another file still decides (a kill outranks
   // a timeout); failing that, the mutant is a timeout.
   const hung = new Set()
+  // The cause of a timeout: the first cut in the order the copies run, which
+  // the CLI names on the mutant's timeout (`detail.cause`).
+  let cut
   // Only a wall-clock cut (the backstop) ends the owner files after it. A count
   // or a state cut (a spin, or no progress) ends its own copy only (the outcome
   // rule, 2026-11-14, as refined: the next owner's copy still runs).
@@ -4210,27 +4222,29 @@ function judge(plan, tests, sites, active, { budgeted = true } = {}) {
   // larger of WORK_FLOOR and ten times the owner files' unmutated work, where
   // a file's unmutated work is its most-working test's.
   const files = [...new Set(runs.map((r) => r.t.file))]
-  const unmutated = files.reduce(
-    (sum, file) =>
-      sum +
-      Math.max(
-        0,
-        ...runs.filter((r) => r.t.file === file).map((r) => r.before),
-      ),
-    0,
-  )
+  // A file's most-working unmutated test, in site evaluations.
+  const mostBefore = (file) =>
+    Math.max(0, ...runs.filter((r) => r.t.file === file).map((r) => r.before))
+  const unmutated = files.reduce((sum, file) => sum + mostBefore(file), 0)
   const workBudget = Math.max(WORK_FLOOR, 10 * unmutated)
   const counted = new Set()
   let spent = 0
   let exhausted = false
   for (const file of files) {
     let work = 0
+    const callBudget = Math.max(CALL_FLOOR, 100 * mostBefore(file))
     for (const r of runs.filter((x) => x.t.file === file)) {
-      if (r.hang) hung.add(file)
+      // A copy whose runs pass its call budget is cut by count, where the run
+      // goes past it (the CLI's spin row).
+      const spun = !r.hang && work + r.work > callBudget
+      if (r.hang || spun) {
+        hung.add(file)
+        cut ??= CUT_CAUSE[spun ? `count` : r.cut]
+      }
       if (r.hang && r.cut === `wall`) wallHung.add(file)
       // A cut copy records no work (its calls are not rows the CLI keeps).
-      work += r.hang ? 0 : r.work
-      if (r.hang || killsIn(r)) break
+      work += r.hang || spun ? 0 : r.work
+      if (r.hang || spun || killsIn(r)) break
     }
     // A copy cut by a clock ends the mutant's copies here: no later copy runs.
     if (wallHung.has(file)) {
@@ -4239,6 +4253,7 @@ function judge(plan, tests, sites, active, { budgeted = true } = {}) {
     }
     if (budgeted && spent + work > workBudget) {
       exhausted = true
+      cut ??= `work budget`
       break
     }
     spent += work
@@ -4251,7 +4266,10 @@ function judge(plan, tests, sites, active, { budgeted = true } = {}) {
     )
   const reproducible = verdicts(`reproducible`)
   if (reproducible.some((law) => law !== `reach agreement`)) return `killed`
-  if (hung.size > 0 || exhausted) return `timeout`
+  if (hung.size > 0 || exhausted) {
+    if (detail) detail.cause = cut
+    return `timeout`
+  }
   // No wall-clock budget decides here (maintainer decision, deterministic
   // cuts, option A, 2026-11-14): a slow copy runs to its end, and the mutant
   // budget is a work count (above). The wall-clock backstops report a gap no
@@ -4593,6 +4611,12 @@ function model(plan) {
     `indeterminate`,
     `unreached`,
   ])
+  // A timeout's cause: the cut that the copies ran into first (`judge`).
+  const causeOf = (tests, active, options) => {
+    const detail = {}
+    judge(plan, tests, sites, active, { ...options, detail })
+    return detail.cause
+  }
   const mutants = sites.map((site) => {
     const kind = site.probe
       ? undefined
@@ -4609,6 +4633,10 @@ function model(plan) {
       ordinal: site.ordinal,
       probe: site.probe,
       kind,
+      cause:
+        kind === `timeout`
+          ? causeOf(ownerTests(site.fnId), { site: site.id })
+          : undefined,
       // A mutant whose run reaches a slow owner test keeps a copy busy for
       // SLOW_MS, so the CLI must name it in a heartbeat while it runs.
       heartbeat:
@@ -4644,6 +4672,10 @@ function model(plan) {
             ),
           ),
     line: a.applies ? a.line : undefined,
+    cause:
+      a.applies && owners(a.fn).size > 0
+        ? causeOf(ownerTests(a.fn), { authored: a.label }, { budgeted: false })
+        : undefined,
   }))
   const authored = authoredAll[0]?.kind
   const isGap = (kind) =>

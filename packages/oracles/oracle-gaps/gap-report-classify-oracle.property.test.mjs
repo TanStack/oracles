@@ -772,7 +772,8 @@ function failureOf(h, slot, tests, work = false) {
       laws: [...new Set(behavioral)].sort(),
       lawsMayBePart: true,
     })
-  if (timedOut) return decided({ outcome: `timeout` })
+  // A Vitest limit is a backstop cut: the timeout names it (classify.mjs).
+  if (timedOut) return decided({ outcome: `timeout`, detail: `backstop` })
   if (kills.length > 0)
     return naming(`agreement-only-kill`, verdictsIn(`reproducible`), {
       laws: [`reach agreement`],
@@ -1493,7 +1494,7 @@ const messages = {
   verdict: `Error: violation`,
   assertion: `AssertionError: expected [ 'a' ] to deeply equal [ 'b' ]`,
   crash: `TypeError: x.y is not a function`,
-  timeoutMessage: `Error: Test timed out in 15000ms.`,
+  timeoutMessage: `Error: Test timed out in 65000ms.`,
 }
 // The capture's comparison and the swap a comparison mutant states, as the
 // instrumented code evaluates them (capture-setup.mjs `cmp`).
@@ -1639,7 +1640,12 @@ function unitOf(h, fi, slot) {
   const f = h.files[fi]
   const under = (t) => t.under[slot]
   if (f.tests.some((t) => under(t).kind === `runTimeout`))
-    return { file: fileName(h, fi), timedOut: true, seconds: 1 }
+    return {
+      file: fileName(h, fi),
+      timedOut: true,
+      cause: `backstop`,
+      seconds: 1,
+    }
   const loadFailed = f.tests.some((t) => under(t).kind === `setupError`)
   const tests = loadFailed ? [] : f.tests
   return {
@@ -2265,8 +2271,14 @@ function check(h, observations, expected) {
     return violation(`classified`, `nothing was classified`, `completion`)
   // A kill names a non-empty part of its behavioral laws (the runner may
   // stop at the first); an agreement-only kill names reach agreement.
+  // A timeout names the cut that ended it (its `detail`, the cause).
   const view = (o) =>
-    JSON.stringify([o.outcome, o.class, o.testOutcome ?? null])
+    JSON.stringify([
+      o.outcome,
+      o.class,
+      o.testOutcome ?? null,
+      o.outcome === `timeout` ? o.detail : null,
+    ])
   for (const [mi, owed] of expected.outcomes.entries()) {
     const actual = got.outcomes[mi]
     const lawsFit =

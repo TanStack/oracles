@@ -1168,6 +1168,8 @@ function readRun(dir, out, status, stderr, cli, stdout) {
       outcome: r.outcome,
       class: r.class,
       laws: r.laws,
+      // The cut that ended a timeout (classify.mjs `outcomeOf`).
+      cause: r.outcome === `timeout` ? r.detail : undefined,
       probe: r.probeGuard === true,
       ordinaryOutcome: r.testOutcome !== undefined,
     })),
@@ -2620,6 +2622,14 @@ function check(plan, observations, expected) {
           : `classification`,
         { actual: got, expected: owed },
       )
+    // A timeout names the cut that ended it (its `detail`).
+    if (kind === `timeout` && got.cause !== owed.cause)
+      return violation(
+        `cli`,
+        `${site(got)}: its timeout is cut by ${got.cause}, owed ${owed.cause}`,
+        `classification`,
+        { actual: got, expected: owed },
+      )
   }
   // Each gap is streamed once as its mutant is judged (stream.mjs), and the
   // streamed gaps are the report's gaps, each once.
@@ -2688,6 +2698,13 @@ function check(plan, observations, expected) {
         `the authored mutant ${owed.id} is ${kind}, owed ${owed.kind}`,
         `authored mutants`,
         { actual: kind, expected: owed.kind },
+      )
+    if (kind === `timeout` && got.cause !== owed.cause)
+      return violation(
+        `cli`,
+        `the authored mutant ${owed.id} is cut by ${got.cause}, owed ${owed.cause}`,
+        `authored mutants`,
+        { actual: got.cause, expected: owed.cause },
       )
     if (owed.line !== undefined && got.line !== owed.line)
       return violation(

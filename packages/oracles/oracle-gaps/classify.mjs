@@ -53,10 +53,13 @@ export function outcomeOf(
   // run still decides; failing that, the mutant is `timeout`.
   const timedOutTest = (test) =>
     test.state === `failed` && /Test timed out/.test(test.message)
-  const timeout = units.some(
-    (unit) => unit.timedOut || (unit.tests ?? []).some(timedOutTest),
-  )
-    ? { outcome: `timeout`, detail: `run time limit` }
+  // The timeout's detail is the cause of the first cut in report order: the
+  // copy's `cause` (`backstop`, `spin`, `no progress`, or `work budget`).
+  const cut = [...units]
+    .sort((a, b) => byPath(a.file, b.file))
+    .find((unit) => unit.timedOut || (unit.tests ?? []).some(timedOutTest))
+  const timeout = cut
+    ? { outcome: `timeout`, detail: cut.timedOut ? cut.cause : `backstop` }
     : undefined
   const failures = []
   // By file path (report order, `inReportOrder`), in whatever order the
