@@ -769,6 +769,9 @@ const drawn = fc.record({
   }),
   // Who names the importer's function in an owns entry, if any.
   importer: fc.constantFrom(`none`, `a`, `b`),
+  // The batch whose run rejects (a test-only fault, see the constructed history at the end of the
+  // campaign): 0 is no fault. A constant draws nothing, so fixed seeds keep their histories.
+  rejectBatch: fc.constant(0),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -4450,7 +4453,7 @@ function model(plan) {
   return {
     configLines,
     // The batch whose run the model predicts rejects (a constructed fault): the run ends as an internal error.
-    rejectedBatch: plan.rejectBatch,
+    rejectedBatch: plan.rejectBatch > 0 ? plan.rejectBatch : undefined,
     baseline: baselineOf(plan),
     blocking: blockingOf(plan).filter((f) => !f.ordinary),
     replayed: blockingOf(plan).find((f) => f.replayed)?.replayed,

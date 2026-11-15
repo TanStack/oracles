@@ -1730,9 +1730,9 @@ async function driver(plan, observe) {
       budget: plan.budget,
       cli: plan.cliPath === `spaced` ? copy : here,
       ...configArgs(plan),
-      ...(plan.rejectBatch === undefined
-        ? {}
-        : { env: { ORACLE_GAPS_TEST_REJECT_BATCH: String(plan.rejectBatch) } }),
+      ...(plan.rejectBatch > 0
+        ? { env: { ORACLE_GAPS_TEST_REJECT_BATCH: String(plan.rejectBatch) } }
+        : {}),
     }
     const { replay, retention, ...cli } = runCli(dir, files, how)
     // How many units were computed or reused says how the result was
@@ -1743,7 +1743,7 @@ async function driver(plan, observe) {
     observe(`retention`, retention.filter(leftBehind).length)
     observe(`retentionKeys`, leftKeys(retention))
     // A rejected batch (a constructed fault) owes its own retention line, written after its copies retire.
-    if (plan.rejectBatch !== undefined) {
+    if (plan.rejectBatch > 0) {
       observe(
         `retentionLines:reject`,
         retention.some((line) => line.batch === plan.rejectBatch) ? 0 : 1,
