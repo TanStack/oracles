@@ -5019,7 +5019,7 @@ function oracleTestFile(plan, file) {
         // check alone stands between this copy and an idle cut.
         ...(t.timerWait
           ? [
-              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await new Promise((r) => setTimeout(r, ${t.timerWait.waitMs}))`,
+              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await new Promise((r) => setTimeout(r, ${t.timerWait.waitMs})${t.timerWait.unref ? `.unref()` : ``})`,
             ]
           : []),
         // A test that waits on I/O (a child process, about 3 s) where the

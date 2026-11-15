@@ -1950,6 +1950,8 @@ async function driver(plan, observe) {
       states.add(`a slow kill after a 16 s wait killed`)
     if (killed && plan.history.tests.some((t) => t.timerWait))
       states.add(`a copy waiting on a timer killed`)
+    if (killed && plan.history.tests.some((t) => t.timerWait?.unref))
+      states.add(`a copy waiting on an unref'd timer killed`)
     // A copy that waits past the history's backstop is cut off, and no later
     // owner runs, so the mutant is a timeout, not the later owner's kill.
     if (
@@ -3730,6 +3732,7 @@ const required = [
   `a slow owner's kill reported as when it did not wait`,
   `a slow kill after a 16 s wait killed`,
   `a copy waiting on a timer killed`,
+  `a copy waiting on an unref'd timer killed`,
   `a kill past the work budget in a later owner does not count`,
   `a backstop cut ends the copies ahead of a later kill`,
   `a hang in one owner and a survivor in another timed out`,
@@ -3862,6 +3865,7 @@ const separate = [
   `a slow owner's kill reported as when it did not wait`,
   `a slow kill after a 16 s wait killed`,
   `a copy waiting on a timer killed`,
+  `a copy waiting on an unref'd timer killed`,
   `a kill past the work budget in a later owner does not count`,
   `a backstop cut ends the copies ahead of a later kill`,
   // The config and contexts states have constructed histories of their own.
@@ -5506,6 +5510,21 @@ oracleProperty({
               ...judging(`a`, `fixed seed`, 7),
               fn: 0,
               timerWait: { waitMs: 3000 },
+            },
+          ]),
+      },
+      // The same wait on an unref'd timer: the timer is not listed among the
+      // process's active resources, so only the copy's own pending timers
+      // keep it busy (the held state, deterministic cuts, 2026-11-15).
+      {
+        name: `a copy waiting on an unref'd timer`,
+        enters: [`a copy waiting on an unref'd timer killed`],
+        build: (generated) =>
+          soloKill(generated, [
+            {
+              ...judging(`a`, `fixed seed`, 7),
+              fn: 0,
+              timerWait: { waitMs: 3000, unref: true },
             },
           ]),
       },
