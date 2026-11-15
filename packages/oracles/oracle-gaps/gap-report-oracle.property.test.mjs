@@ -4995,7 +4995,7 @@ oracleProperty({
           cliPath: `plain`,
           concurrentStart: false,
           contexts: 1,
-          tornRows: true,
+          tornRows: false,
           prePlugin: false,
           testRoot: true,
           configPlace: `discovered`,
