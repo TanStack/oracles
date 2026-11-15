@@ -1173,13 +1173,17 @@ function readRun(dir, out, status, stderr, cli, stdout) {
     ),
     lastLine: printed.at(-1) && namedScratch(printed.at(-1), scratch),
     // The stdout's own lines of the stream's kinds: the gap lines under
-    // their functions, as the stream prints them (law 15).
+    // their functions. A context's gap line is printed when its copies finish,
+    // so the order is timing: the stream is recorded as relations (law 15), and
+    // a gap line's place in the output is not judged.
     stdoutGaps: printed
       .filter((line) => streamedGap.test(line))
-      .map((line) => namedScratch(line, scratch)),
+      .map((line) => namedScratch(line, scratch))
+      .sort(),
     stderrGaps: lines
       .filter((line) => streamedGap.test(line))
-      .map((line) => namedScratch(line, scratch)),
+      .map((line) => namedScratch(line, scratch))
+      .sort(),
     baselineFiles: lines.flatMap((line) => {
       const file = line.match(
         /^oracle-gaps: baseline (?:pass|fail) (\S+)(?: \(ordinary\))?: /,

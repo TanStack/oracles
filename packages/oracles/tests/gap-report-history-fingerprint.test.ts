@@ -1,6 +1,8 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import fc from 'fast-check'
 import { describe, expect, test } from 'vitest'
@@ -76,27 +78,34 @@ describe(`the gap oracle's history grammar`, () => {
         `utf8`,
       ),
     ) as { constructed: Array<string> }
-    const listing = spawnSync(
-      `pnpm`,
-      [
-        `exec`,
-        `vitest`,
-        `list`,
-        `--json`,
-        `--config`,
-        `oracle-gaps/vitest.config.mjs`,
-        `gap-report-oracle`,
-      ],
-      {
-        cwd: fileURLToPath(new URL(`..`, import.meta.url)),
-        encoding: `utf8`,
-        maxBuffer: 64 * 1024 * 1024,
-      },
-    )
-    expect(listing.status).toBe(0)
-    const tests = JSON.parse(
-      listing.stdout.slice(listing.stdout.indexOf(`[`)),
-    ) as Array<{ name: string }>
+    // Vitest writes the listing to a file, so no package manager's stdout
+    // line can reach the JSON (as pr-shards.mjs does).
+    const dir = mkdtempSync(join(tmpdir(), `constructed-order-`))
+    let tests: Array<{ name: string }>
+    try {
+      const file = join(dir, `list.json`)
+      const listing = spawnSync(
+        `pnpm`,
+        [
+          `exec`,
+          `vitest`,
+          `list`,
+          `--json=${file}`,
+          `--config`,
+          `oracle-gaps/vitest.config.mjs`,
+          `gap-report-oracle`,
+        ],
+        {
+          cwd: fileURLToPath(new URL(`..`, import.meta.url)),
+          encoding: `utf8`,
+          maxBuffer: 64 * 1024 * 1024,
+        },
+      )
+      expect(listing.status, listing.stderr).toBe(0)
+      tests = JSON.parse(readFileSync(file, `utf8`)) as Array<{ name: string }>
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
     const unit = `oracle-gaps.report > fixed seed ${FIXED_SEED}: `
     const current = tests
       .map(({ name }) => name)
