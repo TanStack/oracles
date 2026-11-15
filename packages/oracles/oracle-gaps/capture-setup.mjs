@@ -50,7 +50,6 @@ const run =
 const real = (globalThis.__oracleGapsReal ??= {
   setInterval: globalThis.setInterval,
   now: Date.now.bind(Date),
-  use: performance.eventLoopUtilization.bind(performance),
   keys: Object.keys,
   getPrototypeOf: Object.getPrototypeOf,
   getOwnPropertyDescriptor: Object.getOwnPropertyDescriptor,
@@ -64,7 +63,6 @@ const real = (globalThis.__oracleGapsReal ??= {
 })
 const realInterval = real.setInterval
 const realNow = real.now
-const realUse = real.use
 
 // A wrapper keeps every own property of the function it wraps, such as
 // `util.promisify.custom`, so `util.promisify(setTimeout)` still resolves
@@ -1027,15 +1025,17 @@ function finishTest(context) {
 
 const thisFile = globalThis.__vitest_worker__?.filepath
 
-// I/O and idleness (maintainer decision, 2026-11-07). Each test's row says
-// whether the test ever had an I/O handle open: anything but the runner's
-// own channel, stdio, and timers. A copy given `idleMs` (a file whose
-// unmutated tests did no I/O) is idle when no counted timer is pending, no
-// more timers are listed than when its test began (which covers timers made
-// outside the wrappers, such as `node:timers/promises`), nothing but the
-// channel and stdio is open, and its event loop is under 5% busy. After
-// `idleMs` of that it writes an idle row, and the batch's watchdog cuts it
-// off as a hang. A late sample means the thread was busy.
+// I/O and idleness (maintainer decision, 2026-11-07; state only, 2026-11-15).
+// Each test's row says whether the test ever had an I/O handle open: anything
+// but the runner's own channel, stdio, and timers. A copy given `idleMs` (a
+// file whose unmutated tests did no I/O) is idle, by state alone, when no
+// counted timer is due within its horizon, no more timers are listed than
+// when its test began (which covers timers made outside the wrappers, such as
+// `node:timers/promises`), and nothing but the channel and stdio is open. A
+// busy synchronous or microtask loop blocks this sampler, so it cannot look
+// idle; it ends by its call budget or the backstop. After `idleMs` of that
+// state it writes an idle row, and the batch's watchdog cuts it off as no
+// progress.
 const quiet = new Set([
   `MessagePort`,
   `PipeWrap`,
@@ -1049,8 +1049,6 @@ let sawIo = false
 if (state.capture) {
   let baseTimers
   let since
-  let last
-  let use = realUse()
   let reported = false
   beforeEach(() => {
     if (continuing) return
@@ -1066,10 +1064,6 @@ if (state.capture) {
   })
   realInterval(() => {
     const now = realNow()
-    const late = last !== undefined && now - last > 150
-    last = now
-    const used = realUse(use)
-    use = realUse()
     if (baseTimers === undefined || reported) return
     const kinds = process.getActiveResourcesInfo()
     const io = kinds.some((kind) => !quiet.has(kind))
@@ -1079,13 +1073,7 @@ if (state.capture) {
     // a timeout at the limit anyway (a collection's five-minute GC timer).
     const horizon = now + (state.idleHorizonMs ?? Infinity)
     const timerDue = [...pending.values()].some((due) => due <= horizon)
-    if (
-      late ||
-      io ||
-      used.utilization > 0.05 ||
-      timerDue ||
-      timersListed(kinds) > baseTimers
-    ) {
+    if (io || timerDue || timersListed(kinds) > baseTimers) {
       since = undefined
       return
     }
