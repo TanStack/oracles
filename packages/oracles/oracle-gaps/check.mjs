@@ -595,6 +595,9 @@ export default async (env) => {
   }
   // The contexts that are open (warmed and not yet closed): the replaced ones must leave it.
   const openContexts = new Set()
+  // Slots between closing their context and opening the next: their open count is one short, for the
+  // retention law's identity (open + replacing === contexts.length), which holds at every batch boundary.
+  let replacing = 0
   const closeContext = (context) => {
     openContexts.delete(context)
     return context.close().finally(() => allowListeners(-1))
@@ -1421,7 +1424,7 @@ export default async (env) => {
       staleIndexed: [...indexOf].filter(([c, i]) => contexts[i] !== c).length,
       staleSpecs: [...contextSpecs.keys()].filter((c) => !contexts.includes(c))
         .length,
-      staleOpen: openContexts.size - contexts.length,
+      staleOpen: openContexts.size + replacing - contexts.length,
       filesMap: filesMap.size,
       pathsSet: pathsSet.size,
       idMap: idMap.size,
@@ -1952,12 +1955,14 @@ export default async (env) => {
     // it stops the worker.
     const replace = async (slot) => {
       const started = Date.now()
+      replacing += 1
       await Promise.race([
         closeContext(slot.context).catch(() => undefined),
         sleep(10_000),
       ])
       const replaced = slot.context
       const next = await warmContext(settings, slot.index)
+      replacing -= 1
       const specs = await specsOf(next)
       // One synchronous step: the replaced context leaves every map keyed by it and the new one joins them,
       // with the contexts array, so no reader (and no measurement) sees the registry and the array disagree.
