@@ -4067,7 +4067,6 @@ function judge(plan, tests, sites, active, { budgeted = true } = {}) {
   // earlier verdicts. A kill in another file still decides (a kill outranks
   // a timeout); failing that, the mutant is a timeout.
   const hung = new Set()
-  const slowed = new Map()
   // The mutant's work budget (G1): its owner files' copies are counted in
   // their order, each copy's work being the site evaluations of its runs up
   // to a hang or a kill. A copy past the budget is a timeout, and so is every
@@ -4091,7 +4090,6 @@ function judge(plan, tests, sites, active, { budgeted = true } = {}) {
   for (const file of files) {
     let work = 0
     for (const r of runs.filter((x) => x.t.file === file)) {
-      if (r.slowed) slowed.set(file, r.t.slowMs ?? SLOW_MS)
       if (r.hang) hung.add(file)
       work += r.work
       if (r.hang || killsIn(r)) break
@@ -4103,9 +4101,7 @@ function judge(plan, tests, sites, active, { budgeted = true } = {}) {
     spent += work
     counted.add(file)
   }
-  const live = runs.filter(
-    (r) => counted.has(r.t.file) && !hung.has(r.t.file),
-  )
+  const live = runs.filter((r) => counted.has(r.t.file) && !hung.has(r.t.file))
   const verdicts = (route) =>
     live.flatMap((r) =>
       r.verdicts.filter((v) => v.route === route).map((v) => v.law),
@@ -4113,20 +4109,10 @@ function judge(plan, tests, sites, active, { budgeted = true } = {}) {
   const reproducible = verdicts(`reproducible`)
   if (reproducible.some((law) => law !== `reach agreement`)) return `killed`
   if (hung.size > 0 || exhausted) return `timeout`
-  // The runs that confirm a mutant's cut-off copies share its budget
-  // (`--mutant-limit`, MUTANT_LIMIT_MS here; maintainer disposition G1,
-  // 2026-11-11). Under two budgets, a slow owner file is cut at its first
-  // budget and confirmed alone, and its confirmation takes longer than the
-  // time its slow test waits. When the confirmations of every slow owner
-  // file do not fit the budget together, one is cut, and the mutant is a
-  // timeout; a kill still decides first. Under one budget no copy is
-  // confirmed, so the budget never binds.
-  if (
-    budgeted &&
-    plan.budget === `two` &&
-    [...slowed.values()].reduce((sum, ms) => sum + ms, 0) >= MUTANT_LIMIT_MS
-  )
-    return `timeout`
+  // No wall-clock budget decides here (maintainer decision, deterministic
+  // cuts, option A, 2026-11-14): a slow copy runs to its end, and the mutant
+  // budget is a work count (above). The wall-clock backstops report a gap no
+  // history here reaches, so a slow owner's wait never makes a timeout.
   if (reproducible.length > 0) return `agreement-only-kill`
   if (verdicts(`random`).length > 0) return `random-only-kill`
   if (verdicts(`unknown`).length > 0) return `unregistered-kill`
@@ -4862,7 +4848,7 @@ function oracleTestFile(plan, file) {
         : []),
       t.asProp
         ? `  fcTest.prop([fcv.integer({ min: 0, max: 10 })], { numRuns: 20, seed: 1 })('${testName(t, index)}', async (n) => {`
-        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || t.timed || lazyGated(plan, file, t) ? `async ` : ``}() => {`,
+        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || t.busy || t.timed || lazyGated(plan, file, t) ? `async ` : ``}() => {`,
       ...partsOf(t).flatMap(campaign),
       `  })`,
       `})`,
