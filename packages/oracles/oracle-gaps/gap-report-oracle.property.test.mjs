@@ -1135,6 +1135,10 @@ async function unwritableLogRuns(dir, files, how, ending) {
   }
 }
 
+/** A copy of `value` in which each refusal's pid is `<pid>`: a pid differs between runs. */
+const pidFree = (value) =>
+  JSON.parse(JSON.stringify(value).replaceAll(/pid \d+/g, `pid <pid>`))
+
 async function overlappingRuns(dir, files, how) {
   writeFixture(dir, files)
   const before = new Set(filesUnder(dir))
@@ -1220,9 +1224,11 @@ async function overlappingRuns(dir, files, how) {
     cli: { ...ended, replay, strayWrites: strays(dir, before) },
     overlap: {
       exit: refused.exit,
-      ending: refused.ending,
-      stream: refused.stream,
-      stdoutStream: refused.stdoutStream,
+      // The first run's pid is its own; the refusal names it, and a pid differs
+      // between two runs, so only the pid's place is observed.
+      ending: pidFree(refused.ending),
+      stream: pidFree(refused.stream),
+      stdoutStream: pidFree(refused.stdoutStream),
     },
   }
 }
