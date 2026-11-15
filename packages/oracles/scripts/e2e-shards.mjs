@@ -143,6 +143,12 @@ export const shards = {
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-3': [
+    `fixed seed 20261105: a daemon pause that cannot engage`,
+    `random seed: a daemon pause that cannot engage`,
+    `determinism: constructed history: a daemon pause that cannot engage`,
+    `fixed seed 20261105: a reset check after its warm daemon was replaced`,
+    `random seed: a reset check after its warm daemon was replaced`,
+    `determinism: constructed history: a reset check after its warm daemon was replaced`,
     `fixed seed 20261105: a config fault in a run that owns nothing`,
     `fixed seed 20261105: a declaration fault: brokenOwner`,
     `fixed seed 20261105: a declaration fault: configThrows`,
@@ -215,6 +221,9 @@ export const shards = {
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-5': [
+    `fixed seed 20261105: every outcome class, the warm and abort stops`,
+    `random seed: every outcome class, the warm and abort stops`,
+    `determinism: constructed history: every outcome class, the warm and abort stops`,
     `fixed seed 20261105: an edit sequence through the daemon`,
     `fixed seed 20261105: ordinary tests left out by default`,
     `fixed seed 20261105: two authored mutants`,

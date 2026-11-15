@@ -839,7 +839,7 @@ export default async (env) => {
       for (const path of paths) {
         const hash = servedHash(path, index)
         if (served.get(path) === hash) continue
-        context.invalidateFile(path)
+        context.invalidateFile(posix(path))
         // Its next transform records the text it then serves.
         globalThis.__oracleGapsLoads[index]?.delete(path)
         served.set(path, hash)
@@ -1555,7 +1555,7 @@ export default async (env) => {
         const read = served.get(path) ?? hash
         // The context may hold other text than the path's text now.
         if (read !== now || hash !== now) {
-          context.invalidateFile(path)
+          context.invalidateFile(posix(path))
           loads?.delete(path)
         }
         if (hash !== now) stable = false
