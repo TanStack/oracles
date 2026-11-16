@@ -443,12 +443,18 @@ const hit = (id) => {
   if (inTest) calls += 1
   if (spun || (state.callBudget && calls > state.callBudget)) spin()
 }
+// The test a cut ends and the route it registered: a spin or no progress is
+// a verdict of a built-in law on that route (M, 2026-11-16, "Spin, no
+// progress and the work budget are kills").
+function cutTest() {
+  return { key: currentTask && testKey(currentTask), route }
+}
 function spin() {
   if (!spun) {
     spun = true
     appendFileSync(
       state.capture,
-      `${JSON.stringify({ file: thisFile, spin: true })}\n`,
+      `${JSON.stringify({ file: thisFile, spin: true, ...cutTest() })}\n`,
     )
   }
   throw new Error(
@@ -1175,7 +1181,7 @@ if (state.capture) {
       writeWhole(join(runnerTimers, `idle-${process.pid}-${threadId}`), ``)
     appendFileSync(
       state.capture,
-      `${JSON.stringify({ file: thisFile, idle: true })}\n`,
+      `${JSON.stringify({ file: thisFile, idle: true, ...cutTest() })}\n`,
     )
   }, 50).unref()
 }

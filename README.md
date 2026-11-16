@@ -42,15 +42,17 @@ agent.
   test's own I/O is pending, while timers and I/O the runner keeps for itself,
   such as Vitest's task-update timer or a write that forwards the test's
   console output, do not count); or by the backstop, when it runs past `--hang-limit` (60 s by default) plus
-  3 s per second of its file's unmutated time (`backstop`). A spin or no
-  progress ends only its own copy, and a backstop ends the mutant's later
-  copies. The copies of one mutant share a work budget, counted in site
-  evaluations and not in time: the larger of 100,000 and ten times their owner
-  files' unmutated work. Past it, the mutant is a `timeout`. A timeout names
-  its cause in `results.json` (`detail`) and on its gap line, as
-  `(cause: <cause>)`, where the cause is the first cut in owner order, or
-  `work budget`. A kill in another owner decides a mutant unless a backstop
-  ended its copies first. `--first-limit` and `--mutant-limit` are retired:
+  3 s per second of its file's unmutated time (`backstop`). A spin and no
+  progress are kills: the built-in law `bounded work` or `no progress` fails
+  on the route of the test that was running, so on a reproducible route the
+  mutant is `killed`, and on another route the next owner's copy still runs.
+  The copies of one mutant share a work budget, counted in site evaluations
+  and not in time: the larger of 100,000 and ten times their owner files'
+  unmutated work. The copy whose work passes it fails `bounded work` on the
+  routes of its tests that did that work, and no later copy runs. Only the
+  backstop is a gap: the mutant is a `timeout`, with `(cause: backstop)` on
+  its gap line and `detail` in `results.json`, and no later copy runs. A kill
+  in an earlier owner still decides. `--first-limit` and `--mutant-limit` are retired:
   they are checked and noted, and change nothing.
 
   The report, on stdout and in `summary.md`, leads with the baseline: each

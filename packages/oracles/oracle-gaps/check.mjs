@@ -92,6 +92,16 @@ const sha1 = (text) => createHash(`sha1`).update(text).digest(`hex`)
 // a hang (capture-setup.mjs). The longest idle stretch measured in correct
 // tests was 51 ms (79,180 test runs, 2026-11-07), so this is ten times that.
 const IDLE_MS = 500
+// The test a spin or no progress ended, from its cut row (capture-setup.mjs),
+// with the route it registered, under its original file's key (`map`): the
+// built-in law (bounded work or no progress) judges it on that route (M,
+// 2026-11-16, "Spin, no progress and the work budget are kills").
+const cutVerdicts = (row, map = (key) => key) => [
+  {
+    test: row?.key && map(row.key).split(` > `).slice(1).join(` > `),
+    route: row?.route,
+  },
+]
 // The least call budget a copy gets (capture-setup.mjs): mutation-helper calls
 // in one test before it counts as a loop that never ends. A file's budget is
 // a hundred times the most calls any of its unmutated tests made, if more.
@@ -934,8 +944,11 @@ export default async (env) => {
     // A run past its call budget (capture-setup.mjs) is cut off once it has
     // had IDLE_MS to end on its own, as in a batch.
     const spinRow = () =>
-      existsSync(capture) &&
-      readFileSync(capture, `utf8`).includes(`"spin":true`)
+      existsSync(capture)
+        ? readFileSync(capture, `utf8`)
+            .split(`\n`)
+            .find((line) => line.includes(`"spin":true`))
+        : undefined
     let spunAt
     const beat = heartbeat()
     // A run with no time limit (an unmutated one) only beats.
@@ -957,7 +970,8 @@ export default async (env) => {
     clearTimeout(timer)
     clearTimeout(poller)
     const seconds = (Date.now() - started) / 1000
-    // A run that spun is a timeout as it stands, even one that then ended.
+    // A run that spun fails bounded work as it stands, even one that then
+    // ended.
     const spun = spinRow()
     const profiled = {
       file: baseOf(file),
@@ -979,6 +993,7 @@ export default async (env) => {
         timedOut: true,
         seconds,
         cause: spun ? `spin` : `backstop`,
+        ...(spun ? { builtIn: cutVerdicts(JSON.parse(spun)) } : {}),
       }
     }
     // The result also lists test modules from earlier runs, with their old
@@ -1008,7 +1023,7 @@ export default async (env) => {
         .filter(Boolean)) {
         const row = JSON.parse(line)
         // A closing row marks the end of a file for a batch's watchdog.
-        if (!row.closed && !row.idle) rows.push([row.key, row])
+        if (!row.closed && !row.idle && !row.spin) rows.push([row.key, row])
         if (row.closed && row.file === file) closing = row
       }
       rmSync(capture)
@@ -1019,6 +1034,7 @@ export default async (env) => {
         file,
         timedOut: true,
         cause: `spin`,
+        builtIn: cutVerdicts(JSON.parse(spun)),
         seconds,
         inputs: importsOf(file, modules, closing),
         readAt: closing.readAt,
@@ -1182,6 +1198,8 @@ export default async (env) => {
     // at once (capture-setup.mjs).
     const idle = new Set()
     const spun = new Set()
+    // Each cut copy's spin or idle row: the test it ended and its route.
+    const cutRows = new Map()
     // When each copy's spin row was first seen. The budget's throw usually
     // ends the loop and the copy finishes on its own; a copy still running
     // IDLE_MS after it spun swallowed the throw and is cut off.
@@ -1194,11 +1212,16 @@ export default async (env) => {
         if (line.includes(`"started":true`))
           at = Math.max(at, copies.indexOf(JSON.parse(line).file))
         if (line.includes(`"closed":true`)) closed.add(JSON.parse(line).file)
-        if (line.includes(`"idle":true`)) idle.add(JSON.parse(line).file)
+        if (line.includes(`"idle":true`)) {
+          const row = JSON.parse(line)
+          idle.add(row.file)
+          cutRows.set(row.file, row)
+        }
         if (line.includes(`"spin":true`)) {
-          const file = JSON.parse(line).file
-          spun.add(file)
-          if (!spunAt.has(file)) spunAt.set(file, Date.now())
+          const row = JSON.parse(line)
+          spun.add(row.file)
+          cutRows.set(row.file, row)
+          if (!spunAt.has(row.file)) spunAt.set(row.file, Date.now())
         }
       }
       if (closed.has(copies[at])) at += 1
@@ -1267,7 +1290,10 @@ export default async (env) => {
           )
           if (copy && row.skipped) skipped.add(copy)
           if (copy && row.closed) closings.set(copy, row)
-          if (copy && row.spin) spun.add(copy)
+          if (copy && row.spin) {
+            spun.add(copy)
+            cutRows.set(copy, row)
+          }
           if (copy && !row.closed && !row.idle && !row.spin && !row.started)
             rows.get(copy).push(row)
         }
@@ -1275,12 +1301,13 @@ export default async (env) => {
     }
     const skippedUnit = (item) => ({ file: item.file, skipped: true })
     // A copy that ran past its call budget, even one whose throw ended the
-    // loop and let it finish, is a timeout as it stands (a count, not a
+    // loop and let it finish, fails bounded work as it stands (a count, not a
     // clock).
-    const spunUnit = (item) => ({
+    const spunUnit = (item, copy) => ({
       file: item.file,
       timedOut: true,
       cause: `spin`,
+      builtIn: cutVerdicts(cutRows.get(copy), keyFor(copy, item.file)),
       seconds,
     })
     try {
@@ -1304,7 +1331,7 @@ export default async (env) => {
           units: items.slice(0, current).map((item, i) => {
             if (!closed.has(copies[i])) return undefined
             if (skipped.has(copies[i])) return skippedUnit(item)
-            if (spun.has(copies[i])) return spunUnit(item)
+            if (spun.has(copies[i])) return spunUnit(item, copies[i])
             const map = keyFor(copies[i], item.file)
             const own = rows
               .get(copies[i])
@@ -1335,6 +1362,14 @@ export default async (env) => {
           }),
           timedOutAt: current,
           cause: cutCause,
+          ...(cutCause === `backstop`
+            ? {}
+            : {
+                builtIn: cutVerdicts(
+                  cutRows.get(copies[current]),
+                  keyFor(copies[current], items[current].file),
+                ),
+              }),
           cutMs,
         }
       }
@@ -1348,7 +1383,7 @@ export default async (env) => {
         units: items.map((item, i) => {
           const copy = copies[i]
           if (skipped.has(copy)) return skippedUnit(item)
-          if (spun.has(copy)) return spunUnit(item)
+          if (spun.has(copy)) return spunUnit(item, copy)
           const map = keyFor(copy, item.file)
           const modules = result.testModules.filter((m) => m.moduleId === copy)
           return {
@@ -1748,7 +1783,7 @@ export default async (env) => {
         if (batch.cause === `no progress`) evidence.idle += 1
         if (batch.cause === `spin`) evidence.spin += 1
         await replace(slot)
-        // A count or state cut (a spin, or no progress) is a timeout for its
+        // A count or state cut (a spin, or no progress) is a built-in kill for its
         // copy alone; only a wall-clock cut ends the mutant's copies (cutByTime).
         settle(
           hung,
@@ -1757,6 +1792,7 @@ export default async (env) => {
             timedOut: true,
             seconds: hung.limitMs / 1000,
             cause: batch.cause,
+            ...(batch.builtIn ? { builtIn: batch.builtIn } : {}),
           },
           batch.inputs[batch.timedOutAt],
         )
@@ -2078,7 +2114,7 @@ export default async (env) => {
       for (const [key, row] of rows) if (row.io) ioFiles.add(fileOf(key))
     // Each file's call budget: a hundred times the most mutation-helper calls
     // any of its unmutated tests made, and at least CALL_FLOOR. A copy past it
-    // is spinning (capture-setup.mjs) and is a timeout as it stands.
+    // is spinning (capture-setup.mjs) and fails bounded work as it stands.
     const mostCalls = new Map()
     for (const [key, calls] of baseline.work)
       mostCalls.set(
@@ -2192,8 +2228,9 @@ export default async (env) => {
       for (const st of active) {
         const files = filesOf(st)
         // The mutant's copies in their files' order, judged by count: each copy's
-        // work is added, and once the sum passes the work budget, that copy and
-        // every later one is a timeout, so a kill among them does not count.
+        // work is added, and once the sum passes the work budget, that copy's
+        // own verdicts do not count and no later copy runs: that copy fails
+        // bounded work instead (below).
         const budget = workBudgetOf(files)
         let work = 0
         for (const [i, request] of requests.entries()) {
@@ -2212,13 +2249,16 @@ export default async (env) => {
               `${st.mutant.id}: ${relative(request.file)} has no unit and no earlier kill`,
             )
           }
-          // A copy cut by a clock or its count is a timeout, uncharged, and no
+          // A copy cut by the backstop is a timeout, uncharged, and no
           // later copy runs (the outcome rule).
           if (cutByTime(got[i])) {
             st.units.push(got[i])
             break
           }
           work += workOf(got[i])
+          // The copy whose work passes the budget fails bounded work on the
+          // routes of its tests that did counted work; its own verdicts do not
+          // count, and no later copy runs.
           if (work > budget) {
             evidence.budget += 1
             st.units.push({
@@ -2226,6 +2266,15 @@ export default async (env) => {
               timedOut: true,
               seconds: 0,
               cause: `work budget`,
+              builtIn: (got[i].rows ?? [])
+                .filter(
+                  ([key, row]) =>
+                    baseline.work.has(key) && (row.calls ?? 0) > 0,
+                )
+                .map(([key, row]) => ({
+                  test: key.split(` > `).slice(1).join(` > `),
+                  route: row.route,
+                })),
             })
             break
           }
