@@ -297,11 +297,17 @@ export const partitions = {
     // select exactly these.
     previously: `fixed seed`,
     shards: {
-      // 261 s, 25 s, and a small unit.
+      // 261 s, 25 s, and small units: #57's last constructed histories sit
+      // here, since the rest (shard 3) is near its 10-minute limit.
       1: anyOf([
         'an edit sequence over the witness module',
         'a stale authored mutant and a reformat',
         'a failing owner under a config that --config names',
+        'a stop before the CLI starts',
+        'a stop by SIGTERM as the CLI starts',
+        'an unsupervised run stopped while a worker spun',
+        'a start refuses a dangling claim',
+        'a supervised check with no ps on its PATH',
       ]),
       // Both halves of `every outcome class` (134 s and 155 s on the CI runner),
       // a second daemon check (101 s), and two small units. The second half
@@ -590,6 +596,9 @@ export const partitions = {
         'two starts race for a stale claim',
         'a start refuses a stale claim',
         'a stream log lost after its note, then stopped',
+        'a stop before the CLI starts',
+        'a stop by SIGTERM as the CLI starts',
+        'a start refuses a dangling claim',
       ]),
       10: anyOf([
         'an edit that changed the cold result after a hang replaced the only context',
@@ -605,6 +614,8 @@ export const partitions = {
         'a reset check after its warm daemon was replaced',
         'a stream log lost after its note, then completed',
         'a supervised child exits when its supervisor is killed',
+        'an unsupervised run stopped while a worker spun',
+        'a supervised check with no ps on its PATH',
       ]),
     },
   },

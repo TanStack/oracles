@@ -496,6 +496,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import {
   cpSync,
   existsSync,
+  lstatSync,
   statSync,
   mkdirSync,
   mkdtempSync,
@@ -591,6 +592,18 @@ const cleanEnv = () => ({
   ),
   ORACLE_GAPS_HEARTBEAT_MS: String(HEARTBEAT_MS),
 })
+// A PATH that names no command (`psMissing`): a supervised run must need no
+// external command, such as `ps`, which a slim container lacks and whose
+// BusyBox form has no `-p` (review of #57, A7). The CLI, Vitest's workers and
+// the fixture's processes all start through process.execPath, so nothing else
+// reads PATH. POSIX only: win32 runs no supervisor (until #79), and its PATH
+// also finds the system's libraries.
+let emptyPath
+const pathEnv = (how) => {
+  if (how.psMissing !== true || process.platform === `win32`) return {}
+  emptyPath ??= mkdtempSync(join(realpathSync(tmpdir()), `gap-no-ps-`))
+  return { PATH: emptyPath }
+}
 
 /**
  * The CLI's arguments for one run of a fixture: cold, or through the daemon
@@ -824,6 +837,7 @@ function runCli(dir, files, how = {}) {
     env: {
       ...cleanEnv(),
       ORACLE_GAPS_TEST_RETENTION: hook,
+      ...pathEnv(how),
       ...how.env,
       ...(how.unsupervised === true
         ? { ORACLE_GAPS_TEST_UNSUPERVISED: `1` }
@@ -881,6 +895,28 @@ const strays = (dir, before, own, running = false) =>
   )
 
 /**
+ * Writes the driver's preload for a stop before the CLI's first statement into
+ * `dir`, and returns its path: it marks `mark`, then waits (60 s at most, then
+ * fails loudly) for a release that the driver never writes.
+ */
+function writePreload(dir, mark) {
+  const path = join(dir, `hold.cjs`)
+  writeFileSync(
+    path,
+    [
+      `const { existsSync, writeFileSync } = require('node:fs')`,
+      `writeFileSync(${JSON.stringify(mark)}, '')`,
+      `for (let waited = 0; !existsSync(${JSON.stringify(`${mark}.release`)}); waited += 10) {`,
+      `  if (waited >= 60000) throw new Error('the hold before the CLI started was not ended by a stop within 60 s')`,
+      `  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10)`,
+      `}`,
+      ``,
+    ].join(`\n`),
+  )
+  return path
+}
+
+/**
  * A run that the driver stops by `signal` while the stop witness's test
  * spins (law 13). The CLI runs only the witness's mutants (`ids`), with
  * Vitest's workers in `pool`, in one context. Once the spinning test has
@@ -909,8 +945,9 @@ async function stoppedRun(
   ids,
   { signal, pool, when, delay = 0, onStart = false },
 ) {
-  // `spawn`: the signal comes as the CLI starts, once its own code runs (a
-  // signal during Node's own start has no handler yet; Limits of #57).
+  // `spawn`: the signal comes as the CLI starts, while the CLI is held there:
+  // after its started marker (`onStart`), or before its first statement (the
+  // driver's preload, below).
   const atSpawn = when === `spawn`
   const after = when === `after`
   const warm = when === `warm`
@@ -942,13 +979,35 @@ async function stoppedRun(
   // the lines already in the file.
   const hook = hookOf(dir)
   const earlierLines = retentionLinesOf(hook).length
-  const base = { ...cleanEnv(), ORACLE_GAPS_TEST_RETENTION: hook }
+  const base = {
+    ...cleanEnv(),
+    ORACLE_GAPS_TEST_RETENTION: hook,
+    ...pathEnv(how),
+    // A constructed history that runs unsupervised (`unsupervised`): the path
+    // win32 takes, so its stop is the unsupervised run's own stopped line on
+    // POSIX too (ORACLE_GAPS_TEST_UNSUPERVISED).
+    ...(how.unsupervised === true
+      ? { ORACLE_GAPS_TEST_UNSUPERVISED: `1` }
+      : {}),
+  }
+  // The driver's hold before the CLI's first statement (a spawn stop without
+  // `onStart`, POSIX): a preload writes its marker and waits for a release that
+  // never comes, so a signal sent once the marker exists lands before any CLI
+  // code runs, and its default action ends the process (outcome a of the
+  // spawn-delay law). The preload is the driver's, not the CLI's: it stands for
+  // a slow start of Node itself. Its wait fails loudly after 60 s. win32 cannot
+  // deliver a signal, so there the spawn stop is the test stop file alone.
+  const preStart = atSpawn && !onStart && !win
+  const heldPath = join(pids, `held`)
+  const preload = preStart ? writePreload(pids, heldPath) : undefined
   const env = {
     ...(atSpawn ? { ORACLE_GAPS_TEST_STARTED: startedPath } : {}),
-    // The constructed witness pauses after the marker, so the signal it sends
-    // on seeing the marker lands inside the pause (review F2).
+    // The constructed witness holds the CLI after its marker until the CLI has
+    // kept the stop the driver sends on seeing the marker (or, on win32, until
+    // the test stop file exists), so the stop lands during the CLI's loads,
+    // whatever the load on the machine (review of #57, A4).
     ...(atSpawn && onStart
-      ? { ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED: `200` }
+      ? { ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED: `1` }
       : {}),
     ...(after
       ? {
@@ -962,11 +1021,11 @@ async function stoppedRun(
           : { ...base, GAP_STOP_DIR: pids }),
   }
   if (win) env.ORACLE_GAPS_TEST_STOP = stopFile
-  const child = spawn(process.execPath, args, {
-    cwd: repo,
-    env,
-    stdio: [`ignore`, `pipe`, `pipe`],
-  })
+  const child = spawn(
+    process.execPath,
+    preload === undefined ? args : [`--require`, preload, ...args],
+    { cwd: repo, env, stdio: [`ignore`, `pipe`, `pipe`] },
+  )
   let stdout = ``
   let stderr = ``
   child.stdout.on(`data`, (chunk) => {
@@ -1019,16 +1078,18 @@ async function stoppedRun(
     given === undefined ? undefined : relative(dir, given),
     true,
   )
-  // A spawn stop signals after its drawn delay, or, when it waits for the
-  // started marker, at once once the marker exists (event-driven, 30 s cap).
-  if (atSpawn && onStart)
+  // A spawn stop waits for its hold's marker (event-driven, 30 s cap), then
+  // its drawn delay, and then signals. The hold, not the delay, decides where
+  // the stop lands: a hold released by time would end before a long delay.
+  const holdMark = onStart ? startedPath : preStart ? heldPath : undefined
+  if (atSpawn && holdMark !== undefined)
     for (
       let waited = 0;
-      !existsSync(startedPath) && waited < 30_000;
+      !existsSync(holdMark) && !exited && waited < 30_000;
       waited += 1
     )
       await sleep(1)
-  else if (atSpawn) await sleep(delay)
+  if (atSpawn) await sleep(delay)
   if (!abort) {
     if (win) writeFileSync(stopFile, ``)
     else child.kill(signal)
@@ -1061,6 +1122,17 @@ async function stoppedRun(
       // It ended meanwhile.
     }
   if (!ended) child.kill(`SIGKILL`)
+  // Whether the CLI wrote its started marker before the signal (outcomes a and
+  // b), whether the driver's hold before it was reached, and whether the
+  // supervisor had started its run's child (its pid beside the marker): a stop
+  // the CLI kept during its loads ends it before any child starts.
+  const startMarks = atSpawn
+    ? {
+        started: existsSync(startedPath),
+        held: preStart ? existsSync(heldPath) : undefined,
+        childStarted: existsSync(`${startedPath}.child`),
+      }
+    : {}
   rmSync(pids, { recursive: true, force: true })
   rmSync(stopFile, { force: true })
   const out = given ?? chosenOut(stdout) ?? join(dir, `no-output`)
@@ -1072,9 +1144,9 @@ async function stoppedRun(
   const result = {
     // The signal the CLI took: the hook's SIGINT on win32.
     signal: win ? `SIGINT` : signal,
-    // Whether the CLI wrote its started marker before the signal (outcomes a and b).
-    started: atSpawn ? existsSync(startedPath) : undefined,
+    ...startMarks,
     stdoutLength: stdout.length,
+    stderrLength: stderr.length,
     pool,
     spun,
     ended,
@@ -1191,29 +1263,40 @@ const claimStateOf = {
   stale: `a start refuses a stale claim`,
   empty: `a start refuses an empty claim`,
   unreadable: `a start refuses an unreadable claim`,
+  dangling: `a start refuses a dangling claim`,
 }
 
 /**
  * Runs a claim scenario (the maintainer's decision, "Stale claims refuse; no
  * takeover"): a run.pid that names a dead pid (`stale`), an empty run.pid
- * (`empty`), or two starts at once on a dead pid's claim (`race`). Every start
- * refuses and names its cause and its claim, writes no note and no log, and
- * leaves run.pid as it was. A start that never ends is killed after 30 s, and
- * its outcome is other.
+ * (`empty`), a run.pid that is a directory (`unreadable`) or a link to no file
+ * (`dangling`, which exists for a link and is missing for a read), or two starts
+ * at once on a dead pid's claim (`race`). Every start refuses and names its
+ * cause and its claim, writes no note, no log and no report, and leaves run.pid
+ * as it was. A start that never ends is killed after 30 s, and its outcome is
+ * other. The claim lives in a directory that `--out` names: a default output
+ * directory is new for every run, so no claim can be there before it.
  */
 async function claimScenarioRuns(dir, files, how, scenario) {
-  const { args, out } = cliArgs(dir, files, { ...how, outName: `out-claim` })
+  const { args, out } = cliArgs(dir, files, {
+    ...how,
+    outMode: `explicit`,
+    outName: `out-claim`,
+  })
   mkdirSync(out, { recursive: true })
   const claim = join(out, `run.pid`)
   // The claim's text, or none: an unreadable claim is a directory, which no
-  // read can take.
+  // read can take, and a dangling claim is a link to a file that is not there.
   const written = {
     empty: ``,
     race: `999999\n`,
     stale: `999999\n`,
     unreadable: undefined,
+    dangling: undefined,
   }[scenario]
-  if (written === undefined) mkdirSync(claim)
+  const gone = join(out, `gone.pid`)
+  if (scenario === `dangling`) symlinkSync(gone, claim, `file`)
+  else if (written === undefined) mkdirSync(claim)
   else writeFileSync(claim, written)
   // Every start this driver spawns, so a failure here never leaves one running.
   const children = []
@@ -1271,7 +1354,10 @@ async function claimScenarioRuns(dir, files, how, scenario) {
     claimKept:
       scenario === `unreadable`
         ? existsSync(claim) && statSync(claim).isDirectory()
-        : existsSync(claim) && readFileSync(claim, `utf8`) === written,
+        : scenario === `dangling`
+          ? lstatSync(claim, { throwIfNoEntry: false })?.isSymbolicLink() ===
+              true && !existsSync(gone)
+          : existsSync(claim) && readFileSync(claim, `utf8`) === written,
     otherFiles: readdirSync(out).filter((name) => name !== `run.pid`),
   }
 }
@@ -1285,7 +1371,12 @@ async function claimScenarioRuns(dir, files, how, scenario) {
  * once the supervisor runs, so the stop is taken by an event, not a timer.
  */
 async function unwritableLogRuns(dir, files, how, ending) {
-  const { args, out } = cliArgs(dir, files, { ...how, outName: `out-lost` })
+  // The driver swaps the log it names, so the run names its `--out`.
+  const { args, out } = cliArgs(dir, files, {
+    ...how,
+    outMode: `explicit`,
+    outName: `out-lost`,
+  })
   const marker = join(dir, `lost-at-note`)
   const release = join(dir, `release-lost`)
   const stopFile = join(dir, `stop-lost`)
@@ -1555,7 +1646,12 @@ async function runClisAtOnce(dir, files, hows, outs = []) {
       const hook = hookOf(dir)
       const child = spawn(process.execPath, args, {
         cwd: repo,
-        env: { ...cleanEnv(), ...how.env, ORACLE_GAPS_TEST_RETENTION: hook },
+        env: {
+          ...cleanEnv(),
+          ...pathEnv(how),
+          ...how.env,
+          ORACLE_GAPS_TEST_RETENTION: hook,
+        },
         stdio: [`ignore`, `pipe`, `pipe`],
       })
       // Both streams, as runCli reads them: law 15 judges each run's lines,
@@ -2098,6 +2194,7 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       seed: state.seed,
       outMode: plan.outMode,
       unsupervised: plan.unsupervised,
+      psMissing: plan.psMissing,
       cli: step === `otherInstall` ? otherCli() : copy,
       ordinary: plan.ordinary,
       sources: sourceArgument(plan, `${dir}.link`),
@@ -2658,6 +2755,7 @@ async function driver(plan, observe) {
       outMode: plan.outMode,
       logBlocked: plan.logBlocked,
       unsupervised: plan.unsupervised,
+      psMissing: plan.psMissing,
       cli: plan.cliPath === `spaced` ? copy : here,
       ...configArgs(plan),
       ...(plan.rejectBatch > 0
@@ -2774,6 +2872,9 @@ async function driver(plan, observe) {
     }
     if (plan.outMode === `default`)
       states.add(`a run with the default output directory`)
+    // The cold run is supervised off win32, and its PATH named no command.
+    if (plan.psMissing && process.platform !== `win32` && cli.exit === 0)
+      states.add(`a supervised check with no ps on its PATH`)
     if (plan.logBlocked && cli.exit === 2)
       states.add(`a stream log that cannot be written`)
     if (overlapping && overlapping.overlap.exit === 2)
@@ -2879,8 +2980,18 @@ async function driver(plan, observe) {
           states.add(`a stop signal after the completed line`)
           continue
         }
+        // A spawn stop's state is the hold it landed in: before the CLI's
+        // first statement (the driver's preload), or during the CLI's loads,
+        // which the CLI kept, so its supervisor started no child (POSIX) and
+        // the stopped line follows the note.
         if (stop.when === `spawn`) {
-          states.add(`a stop as the CLI starts`)
+          if (run.started === false && run.held === true)
+            states.add(`a stop before the CLI starts`)
+          if (run.started === true && run.childStarted === false) {
+            states.add(`a stop as the CLI starts`)
+            if (run.signal === `SIGTERM`)
+              states.add(`a stop by SIGTERM as the CLI starts`)
+          }
           continue
         }
         if (stop.when === `warm`) {
@@ -2892,6 +3003,10 @@ async function driver(plan, observe) {
           continue
         }
         states.add(`a run stopped by ${stopped.signal} while a worker spun`)
+        // The unsupervised run writes its own stopped line (stopNow): every
+        // run on win32, and the constructed unsupervised history on POSIX.
+        if (plan.unsupervised || process.platform === `win32`)
+          states.add(`an unsupervised run stopped while a worker spun`)
         states.add(
           `a stopped run whose workers are ${stop.pool === `forks` ? `child processes` : `threads`}`,
         )
@@ -3506,6 +3621,8 @@ function check(plan, observations, expected) {
     const cause = {
       empty: `run.pid in <out> does not name a pid`,
       unreadable: `run.pid in <out> can't be read`,
+      // A link to no file is a claim that no read can take.
+      dangling: `run.pid in <out> can't be read`,
       race: `run.pid names pid 999999, which is not running`,
       stale: `run.pid names pid 999999, which is not running`,
     }[claim.scenario]
@@ -3943,15 +4060,33 @@ function check(plan, observations, expected) {
         `stopping`,
         { actual: value.survivors, expected: 0 },
       )
+    // The spawn-delay law (review of #57; C 2026-11-13 under P10): a stop
+    // that lands before the CLI's first statement (no started marker) is
+    // outcome (a): nothing on either stream, no stream log, and an exit by the
+    // signal. Every other stop is outcome (b), judged below.
+    if (value.spun && value.started === false) {
+      if (
+        value.stdoutLength === 0 &&
+        value.stderrLength === 0 &&
+        !value.log.exists &&
+        value.exit !== 0
+      )
+        continue
+      return violation(
+        `stopped`,
+        `a stop before the CLI started left output or a log (${how})`,
+        `greppable stream`,
+      )
+    }
     // A stopped run ends both streams with its stopped line, and one that
-    // had printed its completed line ends as it completed (law 15). On win32
-    // the driver's stop is child.kill, which is TerminateProcess, so the run is
-    // killed like SIGKILL and no done line is owed (register, "Windows stops",
-    // C 2026-11-13). An abort is the run's own end, which is judged as before.
-    const owesDone = process.platform !== `win32` || value.when === `abort`
-    const ends = value.spun
-      ? endsBreach(value, { doneOwed: owesDone })
-      : undefined
+    // had printed its completed line ends as it completed (law 15), on every
+    // platform (C 2026-11-13, "Stop window on every platform"). Every stop
+    // the driver sends on win32 goes through the CLI's test stop hook and is
+    // taken as a SIGINT, so a done line is owed there too. The one stop that
+    // owes none is a SIGKILL-equivalent, which no history sends here: a
+    // win32 child.kill is TerminateProcess (C 2026-11-13, "Windows stops";
+    // L1). An abort is the run's own end, which is judged as before.
+    const ends = value.spun ? endsBreach(value) : undefined
     if (ends)
       return violation(
         `stopped`,
@@ -3971,7 +4106,7 @@ function check(plan, observations, expected) {
         `the run stopped while its config warmed reported a refusal`,
         `greppable stream`,
       )
-    if (value.spun && owesDone && !value.stream.last.startsWith(owedEnd))
+    if (value.spun && !value.stream.last.startsWith(owedEnd))
       return violation(
         `stopped`,
         `the stopped run's last line is ${JSON.stringify(value.stream.last)}, not ${owedEnd}`,
@@ -4031,13 +4166,6 @@ const owesNote = (expected) => !expected.refused?.arguments
 function streamBreach(checkpoint, run, expected, plan) {
   const breach = (difference, extra) =>
     violation(checkpoint, difference, `greppable stream`, extra)
-  // The spawn-delay law (review of #57): a stop before the CLI started (no
-  // started marker) is outcome (a): no output, no log, the exit by signal.
-  // Once the marker exists, the outcome is (b) in full.
-  if (run.started === false)
-    return run.stdoutLength === 0 && !run.log.exists && run.exit !== 0
-      ? undefined
-      : breach(`a stop before the CLI started left output or a log`)
   const ends = endsBreach(run, { checked: owesNote(expected) })
   if (ends) return breach(ends.difference, ends.extra)
   if (run.stream.mutantBeforeVerdict)
@@ -4202,7 +4330,7 @@ const showsCode = (shown, text) => {
  * 3 error, and a signal's code stopped). With `checked`, the run started a
  * check, so its first line names its stream log. Undefined when it holds.
  */
-function endsBreach(run, { checked = true, doneOwed = true } = {}) {
+function endsBreach(run, { checked = true } = {}) {
   const streams = [
     [`stderr`, run.stream],
     [`stdout`, run.stdoutStream],
@@ -4235,9 +4363,6 @@ function endsBreach(run, { checked = true, doneOwed = true } = {}) {
         difference: `the run wrote a line on ${where} that is not a line of the stream: ${stream.strays[0]}`,
         extra: { actual: stream.strays, expected: [] },
       }
-  // A run whose done line is not owed (a stop sent by child.kill on win32) is
-  // judged on everything above: its note, its log, and its results.
-  if (!doneOwed) return undefined
   for (const [where, stream] of streams)
     if (stream.dones !== 1 || !stream.last.startsWith(`oracle-gaps: done `))
       return {
@@ -5000,6 +5125,21 @@ const posixSupervision =
   process.platform === `win32`
     ? []
     : [`a supervised child exits when its supervisor is killed`]
+// A supervised check with no `ps` on its PATH (review of #57, A7) exists only
+// where a supervisor does, for the same reason (#79).
+const posixPs =
+  process.platform === `win32`
+    ? []
+    : [`a supervised check with no ps on its PATH`]
+// The spawn stops that need a signal delivered to the CLI's process: SIGTERM,
+// and a stop before the CLI's first statement, whose only witness is a signal's
+// default action. win32 cannot deliver a signal to a Node process (its kill is
+// TerminateProcess, a SIGKILL-equivalent that owes no line, L1), so these
+// states are POSIX only (register "Platform-scoped reach (#73)").
+const posixStarts =
+  process.platform === `win32`
+    ? []
+    : [`a stop before the CLI starts`, `a stop by SIGTERM as the CLI starts`]
 const required = [
   // Reached only by the constructed history of the disarmed pause (see there).
   `a daemon pause that did not engage`,
@@ -5018,6 +5158,10 @@ const required = [
   `a run with the default output directory`,
   `a stop with the default output directory`,
   `a daemon check with the default output directory`,
+  `a start refuses a dangling claim`,
+  `an unsupervised run stopped while a worker spun`,
+  ...posixStarts,
+  ...posixPs,
   `killed by a second owner`,
   `killed`,
   `random-only kill`,
@@ -5203,6 +5347,10 @@ const ownHistoryStates = [
   `a run with the default output directory`,
   `a stop with the default output directory`,
   `a daemon check with the default output directory`,
+  `a start refuses a dangling claim`,
+  `an unsupervised run stopped while a worker spun`,
+  ...posixStarts,
+  ...posixPs,
 ]
 const separate = [
   ...ownHistoryStates,
@@ -5364,6 +5512,8 @@ const withDeclaration = (constructed) =>
         overlap: false,
         spawnStop: false,
         stopWitness: false,
+        claimScenario: false,
+        psMissing: false,
         declaration: index % 2 === 0 ? `wrapper` : `oracleProperty`,
         ownerless: false,
         owners: [`a`, ...generated.owners.slice(1)],
@@ -6919,8 +7069,10 @@ oracleProperty({
           logBlocked: false,
           overlap: false,
           spawnStop: true,
-          // The signal waits for the CLI's started marker, so it lands during
-          // the loads of a CLI that loads before it installs its handlers.
+          // The CLI is held after its started marker until it has kept the
+          // signal, so the signal lands during the loads, before the
+          // supervisor's own handlers, whatever the machine's load. Its signal
+          // and the driver's wait before it are drawn.
           spawnOnStart: true,
           budget: `two`,
         }),
@@ -7214,6 +7366,161 @@ oracleProperty({
           concurrentStart: false,
           unsupervised: true,
           budget: `two`,
+        }),
+      },
+      {
+        // A stop that lands before the CLI's first statement (outcome a of the
+        // spawn-delay law): the driver holds Node's start in a preload of its
+        // own and signals once the preload has run. No CLI code has run, so
+        // the run writes nothing at all: no line, no log (C 2026-11-13 under
+        // P10, flagged for the maintainer). POSIX only (posixStarts): on win32
+        // the stop is the test stop file, taken after the note.
+        name: `a stop before the CLI starts`,
+        enters: posixStarts.filter(
+          (state) => state === `a stop before the CLI starts`,
+        ),
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          wholeFile: `none`,
+          witness: false,
+          stopWitness: true,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+          ordinary: false,
+          budget: `two`,
+          outMode: `explicit`,
+          spawnStop: true,
+          spawnOnStart: false,
+        }),
+      },
+      {
+        // A SIGTERM as the CLI starts, held as "a stop as the CLI starts" is:
+        // the stopped line names SIGTERM and follows the note (POSIX only, as
+        // win32 cannot deliver SIGTERM; posixStarts).
+        name: `a stop by SIGTERM as the CLI starts`,
+        enters: posixStarts.filter(
+          (state) => state === `a stop by SIGTERM as the CLI starts`,
+        ),
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          wholeFile: `none`,
+          witness: false,
+          stopWitness: true,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+          ordinary: false,
+          budget: `two`,
+          outMode: `explicit`,
+          spawnStop: true,
+          spawnOnStart: true,
+          spawnSignal: `SIGTERM`,
+        }),
+      },
+      {
+        // A run stopped while a worker spins, unsupervised (the test-only hook
+        // ORACLE_GAPS_TEST_UNSUPERVISED): the path every win32 run takes, where
+        // the run's own process writes its stopped line (stopNow). On POSIX the
+        // signal reaches that process itself; on win32 the test stop hook does.
+        name: `an unsupervised run stopped while a worker spun`,
+        enters: [`an unsupervised run stopped while a worker spun`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          wholeFile: `none`,
+          witness: false,
+          stopWitness: true,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+          ordinary: false,
+          budget: `two`,
+          outMode: `explicit`,
+          unsupervised: true,
+          stopRuns: [{ signal: `SIGINT`, pool: `threads`, when: `run` }],
+        }),
+      },
+      {
+        // A run.pid that is a link to no file: the link exists, so the claim
+        // cannot be taken, and no read finds a pid in it, so every start
+        // refuses as for an unreadable claim and writes nothing beside it,
+        // not even its report (review of #57, A5).
+        name: `a start refuses a dangling claim`,
+        enters: [`a start refuses a dangling claim`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          wholeFile: `none`,
+          witness: false,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+          ordinary: false,
+          budget: `two`,
+          outMode: `explicit`,
+          claimScenario: `dangling`,
+        }),
+      },
+      {
+        // A supervised check whose PATH names no command: the supervised run
+        // must need no `ps`, which a slim container lacks and whose BusyBox
+        // form has no `-p` (review of #57, A7). POSIX only (posixPs).
+        name: `a supervised check with no ps on its PATH`,
+        enters: posixPs,
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          wholeFile: `none`,
+          witness: false,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+          ordinary: false,
+          budget: `two`,
+          psMissing: true,
         }),
       },
     ]),

@@ -702,7 +702,11 @@ const drawn = fc.record({
           // warms its config (`warm`, re-review N1). Or no signal: a test
           // aborts the run's process (`abort`, as a V8 out-of-memory abort
           // does; the coordinator's decision of 2026-11-12 on P10).
-          when: fc.constantFrom(`run`, `run`, `after`, `warm`, `abort`),
+          // `after` switches the test-only hold ORACLE_GAPS_TEST_HOLD_UNTIL,
+          // so only a constructed history sets it (the maintainer's decision
+          // "Randomness wins for new fields": a drawn field never switches a
+          // test-only hook); the take-back drops it (drawnStops).
+          when: fc.constantFrom(`run`, `run`, `warm`, `abort`),
         }),
         { minLength: 1, maxLength: 5 },
       ),
@@ -860,41 +864,96 @@ const drawn = fc.record({
   // The batch whose run rejects: a constructed-only field (0 is no fault). Only the constructed history at
   // the end of the campaign sets it; the take-back below returns it to 0 (the generator rule, extended).
   rejectBatch: fc.constant(0),
-  // The fields below that a constructed history sets (outMode, logBlocked,
-  // overlap, stopWitness, spawnStop, spawnSignal, spawnDelay, spawnOnStart) are
-  // constructed only: a drawn record holds their neutral value, which draws
-  // nothing, so generated histories keep the runs they had (the generator rule,
-  // 2026-11-14). The take-back maps a constructed value to the neutral one
+  // #57's fields (maintainer decision "Randomness wins for new fields",
+  // 2026-11-16): a field that changes what a history runs is drawn, and only a
+  // field that switches a test-only hook stays a constant that constructed
+  // histories set (overlap, spawnStop, spawnOnStart, logLost, supervisorDeath,
+  // unsupervised). The take-back maps those back to their neutral values
   // (constructedNeutral).
   // Where the run writes: `--out` names (`explicit`), or the directory the
-  // CLI picks when `--out` is left out (`default`, args.mjs).
-  outMode: fc.constant(`explicit`),
-  // The run's stream log cannot be written (constructed only).
-  logBlocked: fc.constant(false),
-  // A second run on the first run's output directory (constructed only).
+  // CLI picks when `--out` is left out (`default`, args.mjs), whose stream
+  // log, results, and done line must still agree (law 15).
+  outMode: fc.constantFrom(`explicit`, `explicit`, `explicit`, `default`),
+  // The run's `<out>/stream.log` is a directory, so the log cannot be written
+  // (a problem the author can fix: the run refuses before it checks).
+  logBlocked: fc.constantFrom(
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+  ),
+  // A second run on the first run's output directory while the first is live
+  // (ORACLE_GAPS_TEST_HOLD_UNTIL holds the first): constructed only.
   overlap: fc.constant(false),
-  // The stop witness alone (`w_stop`), constructed only.
-  stopWitness: fc.constant(false),
-  // A stop sent as the CLI spawns, constructed only.
+  // The stop witness alone (`w_stop`), which a run the driver stops needs. A
+  // field of its own, so the witness options above keep their weights.
+  stopWitness: fc.constantFrom(
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+  ),
+  // A stop sent as the CLI starts (ORACLE_GAPS_TEST_STARTED): constructed only.
   spawnStop: fc.constant(false),
-  // The signal and delay of a spawn stop, constructed only.
-  spawnSignal: fc.constant(`SIGINT`),
-  spawnDelay: fc.constant(0),
+  // The signal of a spawn stop, and how long the driver waits, once the CLI is
+  // held at its start, before it sends it (0 to 300 ms). A held start makes the
+  // outcome independent of the wait; a hold released by time would end before
+  // a long wait.
+  spawnSignal: fc.constantFrom(`SIGINT`, `SIGINT`, `SIGTERM`),
+  spawnDelay: fc.integer({ min: 0, max: 300 }),
+  // Where a spawn stop is held: after the CLI's started marker
+  // (ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED), or, when false, before the CLI's
+  // first statement (the driver's own preload). Constructed only.
   spawnOnStart: fc.constant(false),
-  // A claim scenario (`race`, `stale`, `empty` or `unreadable`, review of #57)
-  // is constructed only. A constant draws nothing, so generated histories never
-  // run the claim driver, and `histories` takes a constructed scenario back as
-  // this constant.
-  claimScenario: fc.constant(false),
-  // A stream log that becomes a directory right after the note (review of #57,
-  // F1): constructed only, and taken back as the constant false.
+  // A claim that every start must refuse (the maintainer's decision "Stale
+  // claims refuse; no takeover"): two racing starts on a dead pid's claim
+  // (`race`), one start on it (`stale`), or one on an empty (`empty`),
+  // unreadable (`unreadable`), or dangling-link (`dangling`) claim.
+  claimScenario: fc.constantFrom(
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    `race`,
+    `stale`,
+    `empty`,
+    `unreadable`,
+    `dangling`,
+  ),
+  // A stream log that becomes a directory right after the note
+  // (ORACLE_GAPS_TEST_PAUSE_AT=note): constructed only.
   logLost: fc.constant(false),
-  // A supervised check whose supervisor is killed (POSIX; review of #57, F7):
-  // constructed only, and taken back as the constant false.
+  // A supervised check whose supervisor is killed (ORACLE_GAPS_TEST_PAUSE_AT=child,
+  // POSIX): constructed only.
   supervisorDeath: fc.constant(false),
   // A POSIX check run unsupervised, the path win32 takes (the test-only hook
   // ORACLE_GAPS_TEST_UNSUPERVISED). Constructed only: a drawn record holds false.
   unsupervised: fc.constant(false),
+  // The runs' PATH holds no `ps` (a slim container, or BusyBox's `ps`, which
+  // has no `-p`): the supervised run needs no external command (POSIX; review
+  // of #57, A7).
+  psMissing: fc.constantFrom(false, false, false, false, false, false, true),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -952,15 +1011,9 @@ const keepsSteps = (history) => {
 // The neutral value of each constructed-only field: a drawn record holds it, and
 // the take-back maps a constructed history back to it (the generator rule, 2026-11-14).
 const constructedNeutral = {
-  outMode: `explicit`,
-  logBlocked: false,
   overlap: false,
-  stopWitness: false,
   spawnStop: false,
-  spawnSignal: `SIGINT`,
-  spawnDelay: 0,
   spawnOnStart: false,
-  claimScenario: false,
   logLost: false,
   supervisorDeath: false,
   unsupervised: false,
@@ -968,6 +1021,17 @@ const constructedNeutral = {
   testRoot: `none`,
   loadPlugin: false,
 }
+// The stops a drawn record can hold: every stop but a constructed `after` one.
+const drawnWhens = [`run`, `warm`, `abort`]
+const drawnStops = (history) =>
+  (history.stopRuns ?? []).every((stop) => drawnWhens.includes(stop.when))
+    ? history
+    : {
+        ...history,
+        stopRuns: history.stopRuns.filter((stop) =>
+          drawnWhens.includes(stop.when),
+        ),
+      }
 const histories = drawn.map(
   (history) => (keepsSteps(history) ? history : { ...history, steps: null }),
   (value) => {
@@ -986,7 +1050,9 @@ const histories = drawn.map(
     )
       ? value
       : { ...history, ...constructedNeutral }
-    const taken = reset
+    // A constructed stop after the completed line (`after`) is no drawn stop,
+    // so it is dropped (drawnStops).
+    const taken = drawnStops(reset)
     const later = (history.steps ?? []).filter((step) =>
       laterEdits.includes(step),
     )
@@ -3075,16 +3141,18 @@ function resolveHistory(history) {
     spawnStop: history.spawnStop === true,
     spawnSignal: history.spawnSignal ?? `SIGINT`,
     spawnDelay: history.spawnDelay ?? 0,
-    // A claim that a start must refuse: two racing starts on a dead pid's claim
-    // (`race`), one start on it (`stale`), or one on an empty (`empty`) or
-    // unreadable (`unreadable`) claim. Only constructed histories set it, so generated
-    // histories keep their fixed-seed draws and run no claim driver (P4, the
-    // coordinator's decision on the claim rules).
-    claimScenario: history.claimScenario ?? false,
+    // A claim that every start must refuse (`claimScenario` above). The claim
+    // is read after the arguments, so a run whose arguments refuse
+    // (`outsideSource`) refuses for them first, and draws no claim.
+    claimScenario:
+      (history.fault ?? `none`) === `outsideSource`
+        ? false
+        : (history.claimScenario ?? false),
     logLost: history.logLost ?? false,
     supervisorDeath: history.supervisorDeath ?? false,
     unsupervised: history.unsupervised === true,
     spawnOnStart: history.spawnOnStart === true,
+    psMissing: history.psMissing === true,
     onlyRun: history.onlyRun === true,
     pragma: history.pragma === true,
     cliPath: history.cliPath ?? `plain`,
