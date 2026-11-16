@@ -442,6 +442,23 @@ async function serve(pkg) {
           queue = queue.then(() => shutdown(connection, { restart: true }))
           return
         }
+        // Test-only (ORACLE_GAPS_TEST_PAUSE_AT=daemon-check): once the arm file
+        // exists (ORACLE_GAPS_TEST_PAUSE_ARM), the first check waits here,
+        // before it runs, until the file ORACLE_GAPS_TEST_PAUSE_RELEASE names
+        // exists, so its CLI hears nothing until the test releases it. This
+        // daemon's pid goes to ORACLE_GAPS_TEST_PAUSE_MARK. Once.
+        const pauseMark = process.env.ORACLE_GAPS_TEST_PAUSE_MARK
+        const release = process.env.ORACLE_GAPS_TEST_PAUSE_RELEASE
+        if (
+          process.env.ORACLE_GAPS_TEST_PAUSE_AT === `daemon-check` &&
+          pauseMark !== undefined &&
+          release !== undefined &&
+          (armMark === undefined || existsSync(armMark)) &&
+          !existsSync(pauseMark)
+        ) {
+          writeMark(pauseMark, `${process.pid}`)
+          while (!existsSync(release)) await sleep(50)
+        }
         const stderr = []
         let stdout = ``
         let failed

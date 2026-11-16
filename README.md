@@ -140,7 +140,8 @@ agent.
     pid to: `daemon-reply` holds a daemon's reply after the check, and
     `daemon-read` holds its first connection unread, once `ORACLE_GAPS_TEST_PAUSE_ARM`
     names an existing file (`daemon-reply` too, when `ORACLE_GAPS_TEST_PAUSE_ARM`
-    is set). The test kills the process by that pid, so no signal
+    is set). `daemon-check` holds a daemon's first armed check before it runs,
+    until the file `ORACLE_GAPS_TEST_PAUSE_RELEASE` names exists. The test kills the process by that pid, so no signal
     is needed to pause on win32. Both marks are written whole (a temp file, then
     a rename), and the test parses the pid as a positive integer before it sends
     any signal.
