@@ -506,10 +506,7 @@ export async function openSession(pkg) {
   // So is a variable that the CLI set (ORACLE_GAPS_STATE, which names each
   // check's output). A read that comes after its warm ended, from work the
   // warm left behind, is a hook's read, so the global inputs stay those of
-  // the warm itself. So is what a later warm reads that the first did not
-  // (a context that replaces one cut off by a hang): the global inputs are
-  // those of the session's first check (`warmed`), and stay one set.
-  let warmed = false
+  // the warm itself.
   const warmReads = new Map()
   const hookReads = new Map()
   const wrote = new Set()
@@ -517,14 +514,8 @@ export async function openSession(pkg) {
   watchReads((key, write) => {
     const at = reading.getStore()
     if (write && key.startsWith(`env:`)) wrote.add(key)
-    const reads = at?.hook || at?.done || warmed ? hookReads : warmReads
-    if (
-      at === undefined ||
-      key === at.module ||
-      reads.has(key) ||
-      warmReads.has(key)
-    )
-      return
+    const reads = at?.hook || at?.done ? hookReads : warmReads
+    if (at === undefined || key === at.module || reads.has(key)) return
     if (write) wrote.add(key)
     else if (!wrote.has(key))
       reads.set(key, key.startsWith(`fs:`) ? fileHash(key.slice(3)) : null)
@@ -1734,7 +1725,6 @@ export default async (env) => {
         options.mutantLimit,
       ]),
     )
-    warmed = true
     // How the evidence was produced: units reused and computed, runs cut off
     // at their time limit or for idleness (of them, `idle`), items rerun
     // after a cut-off batch, and mutants that changed no value and so needed
