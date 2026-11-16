@@ -6034,9 +6034,11 @@ oracleProperty({
       // of them"). File b's verdict also waits on one gate input, and the
       // one edit flips only that input from `open` to `shut`: the cold run
       // then reports b's mutant as a survivor, and the daemon must not
-      // reuse a kill that read the open gate (law 9). One history per kind
-      // of input, appended last, so the histories before them keep their
-      // seeds' samples.
+      // reuse a kill that read the open gate (law 9). A second check with
+      // nothing changed then computes nothing (the `unchanged reuse` law), so
+      // a daemon that never reuses, which equals a cold run trivially, fails
+      // too. One history per kind of input, appended last, so the histories
+      // before them keep their seeds' samples.
       ...[
         // A file in the package that the test reads, written back with its
         // size and modification time, as `cp -p` leaves it: the daemon must
@@ -6073,6 +6075,7 @@ oracleProperty({
         enters: [
           `edit inputGate changed the cold result`,
           `an edit to the ${inputRead} gate input changed the cold result`,
+          `an unchanged check through the daemon computed nothing`,
           ...(keepStamp
             ? [
                 `an edit that kept a file's size and modification time changed the cold result`,
@@ -6115,7 +6118,7 @@ oracleProperty({
           keepStamp,
           laterSteps: NO_LATER_STEPS,
           inputSteps: NO_INPUT_STEPS,
-          steps: [`inputGate`],
+          steps: [`inputGate`, `recheck`],
         }),
       })),
     ]),
