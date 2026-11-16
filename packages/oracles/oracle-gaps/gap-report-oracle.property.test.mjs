@@ -269,10 +269,15 @@
  *    process serves the package. The daemon runs one check at a time, so of
  *    two checks at once on one state, the one it runs second reuses every
  *    run the first stored and computes none that was not cut off (where no
- *    test reads the clock). Which of the two it runs first is a race
- *    between two processes, outside the contract: the pair is recorded by
- *    what each check did, the check that computed first, never by which
- *    process started first (issue #82).
+ *    test reads the clock), by the CLI's own count of runs that ended
+ *    without a cut. Which of the two it runs first is a race between two
+ *    processes, outside the contract: the pair is recorded by what each
+ *    check did, the check that computed first and ties by their records,
+ *    never by which process started first (issue #82). The constructed edit
+ *    sequence holds each pair in the daemon together, through a test-only
+ *    hold released by the daemon's count of accepted requests, so its reach
+ *    names a measured overlap, not two processes' timing. A completed check
+ *    through the daemon names its own report in its done line.
  * 10. **The runner runs the package as Vitest does.** From any install path
  *    (one with a space and `#` included), for any spelling of `--source`
  *    (`./`, a redundant segment, an absolute path through a symbolic link
@@ -1092,9 +1097,48 @@ function filesUnder(root, within = ``) {
 // of the repository), so a package, and a workspace dependency in it, keeps
 // nothing of a run.
 
-/** How many runs a check computed that its time limit did not cut off. */
-const computedRuns = (run) =>
-  (run.evidence?.computed ?? 0) - (run.evidence?.cut ?? 0)
+/**
+ * How many runs a check computed that ended without a cut: the CLI's own
+ * count (`evidence.ran`). `computed - cut` counts cut events, not cut runs:
+ * a cut copy that is confirmed adds a cut and no computed run, so the
+ * difference can go below zero and hide a run computed again (review of
+ * #126, F3).
+ */
+const computedRuns = (run) => run.evidence?.ran ?? 0
+
+/**
+ * What law 9 records of one check through the daemon: its exit, refusal,
+ * ending, report, and stream (law 15): both streams' lines, and the stdout's
+ * gap lines in sorted order (an order is not part of the contract), judged
+ * against its own results.json, and the first line of a failure, for the
+ * message (readRun has named the scratch package and CLI copy in it).
+ */
+const checkRecord = (run) => ({
+  exit: run.exit,
+  refusal: run.refusal,
+  ending: run.ending,
+  report: run.report,
+  stream: run.stream,
+  stdoutStream: run.stdoutStream,
+  stdoutGaps: [...run.stdoutGaps].sort(),
+  stderr: run.stderr?.split(`\n`)[0],
+})
+
+/**
+ * Two checks at once, by role: the daemon's earlier check, which computed
+ * more runs, first. Checks that computed as many are ordered by their
+ * records, so the order is total and no tie falls back on which process the
+ * driver started first (review of #126, F6).
+ */
+const byRole = (a, b) => {
+  const work = computedRuns(b) - computedRuns(a)
+  if (work !== 0) return work
+  const [ra, rb] = [
+    JSON.stringify(checkRecord(a)),
+    JSON.stringify(checkRecord(b)),
+  ]
+  return ra < rb ? -1 : ra > rb ? 1 : 0
+}
 
 /**
  * Runs the CLI several times at once on one state of the fixture. `outs`
@@ -1166,6 +1210,23 @@ function namedScratch(text, names) {
   return named
     .replaceAll(/\.oracle-gaps-\d+/g, `.oracle-gaps-<pid>`)
     .replaceAll(/session-\d+/g, `session-<pid>`)
+}
+
+// A run's own output directory, `out`, named `<package>/<out>` in each
+// spelling the stack may use, wherever it is a whole path: not followed by
+// a character that continues a directory's name (a word character, `-`, or
+// a `.` before one).
+function namedOut(text, out) {
+  if (out === undefined) return text
+  let named = text
+  for (const spelling of new Set([pathToFileURL(out).href, out, posix(out)])) {
+    const escaped = spelling.replaceAll(/[.*+?^${}()|[\]\\]/g, `\\$&`)
+    named = named.replaceAll(
+      new RegExp(`${escaped}(?![\\w-]|\\.\\w)`, `g`),
+      `<package>/<out>`,
+    )
+  }
+  return named
 }
 
 /** What one run of the CLI reported, from its exit status and its files. */
@@ -1240,8 +1301,11 @@ function readRun(dir, out, status, stderr, cli, stdout) {
     [dir, `<package>`],
   ]
   const named = status === 0 ? undefined : namedScratch(`${stderr}`, scratch)
-  // The stream's names: the run's own output directory as `<out>` too.
-  const ownOut = [...scratch, [out, `<package>/<out>`]]
+  // The stream's names: the run's own output directory as `<out>` too, and
+  // only as a whole path segment, so a sibling whose name it begins
+  // (`out-daemon-2-3` beside `out-daemon-2`) keeps its own name (review of
+  // #126, F4).
+  const namedStream = (text) => namedScratch(namedOut(text, out), scratch)
   let results
   let report
   let summary = ``
@@ -1321,12 +1385,10 @@ function readRun(dir, out, status, stderr, cli, stdout) {
     // race (issue #82), so the name the driver gave a check is no part of
     // the trace, while a line that names another run's directory still
     // shows it.
-    stream: streamOf(lines, (text) => namedScratch(text, ownOut)),
+    stream: streamOf(lines, namedStream),
     // The stdout's lines, judged as the stderr's are (review of #46, F1 and
     // F2): every line of either stream is a line of the stream.
-    stdoutStream: streamOf(`${stdout ?? ``}`.split(`\n`), (text) =>
-      namedScratch(text, ownOut),
-    ),
+    stdoutStream: streamOf(`${stdout ?? ``}`.split(`\n`), namedStream),
     // The output directory the run was given, as the trace names it: the
     // final line names its report there.
     outDir: namedScratch(out, scratch),
@@ -1599,14 +1661,35 @@ async function incremental(dir, plan, cli, copy, observe, states) {
     // as the daemon's earlier check, and the other is the later one. Each is
     // still judged in full, and a test's console output (the `note test
     // output` line) belongs to the check that ran the test (issue #82).
+    //
+    // A plan may hold the two in the daemon at once (`holdOverlap`, the
+    // test-only hold ORACLE_GAPS_TEST_HOLD_OVERLAP): the first check the
+    // daemon runs waits until the daemon has accepted the second request, a
+    // count, never a time (R57). The hold pins the overlap, not the order:
+    // either check may still be the one the daemon runs first. The daemon
+    // writes the count to the mark when it releases the hold.
+    const overlapMark =
+      twice && plan.holdOverlap
+        ? join(mkdtempSync(join(realpathSync(tmpdir()), `gap-overlap-`)), `n`)
+        : undefined
+    const hold = overlapMark
+      ? { env: { ORACLE_GAPS_TEST_HOLD_OVERLAP: overlapMark } }
+      : {}
     const [daemon, ...others] = twice
       ? (
           await runClisAtOnce(dir, files, [
-            { ...how, daemon: true },
-            { ...how, daemon: true, outName: `out-daemon-2` },
+            { ...how, daemon: true, ...hold },
+            { ...how, daemon: true, outName: `out-daemon-2`, ...hold },
           ])
-        ).sort((a, b) => computedRuns(b) - computedRuns(a))
+        ).sort(byRole)
       : await daemonChecks(step, files, how)
+    // Whether the daemon held its first check until it had accepted both.
+    const heldTogether =
+      overlapMark !== undefined &&
+      existsSync(overlapMark) &&
+      Number(readFileSync(overlapMark, `utf8`)) >= 2
+    if (overlapMark)
+      rmSync(dirname(overlapMark), { recursive: true, force: true })
     if (!cold.has(key)) cold.set(key, runCli(dir, files, how))
     const coldRun = cold.get(key)
     // A check through the daemon of a state that nothing changed reuses
@@ -1681,34 +1764,26 @@ async function incremental(dir, plan, cli, copy, observe, states) {
           // between two runs of one history.
           stderr: coldRun.exit === 3 ? coldRun.stderr : undefined,
         },
-        daemon: {
-          exit: run.exit,
-          refusal: run.refusal,
-          ending: run.ending,
-          report: run.report,
-          // The stream through the daemon (law 15): both streams' lines,
-          // and the stdout's gap lines, in sorted order (an order is not
-          // part of the contract), judged against its own results.json.
-          stream: run.stream,
-          stdoutStream: run.stdoutStream,
-          stdoutGaps: [...run.stdoutGaps].sort(),
-          // The first line of a failure, for the message; readRun has named
-          // the scratch package and CLI copy in it.
-          stderr: run.stderr?.split(`\n`)[0],
-        },
+        daemon: checkRecord(run),
       })
     }
     if (twice && step === `start`)
       states.add(`two checks started the daemon at once`)
-    // The daemon's earlier check of two at once computed runs, and the later
-    // one reused them: the state in which the order of the two matters.
+    // Two checks held in the daemon at once, the earlier of which computed
+    // runs and the later reused them: the state in which the order of the
+    // two matters, and in which a daemon that served an overlapping request
+    // from anything but the earlier check's store would compute again. The
+    // overlap is the hold's count, not a reading of two processes' timing.
     if (
       twice &&
+      heldTogether &&
       computedRuns(daemon) > 0 &&
       laterComputed === 0 &&
       (others[0].evidence?.reused ?? 0) > 0
     )
-      states.add(`of two checks at once, one computed and the other reused`)
+      states.add(
+        `of two checks held in the daemon at once, one computed and the other reused`,
+      )
     if (
       daemonConfigFaults.includes(plan.fault) &&
       daemon.exit === 2 &&
@@ -2998,6 +3073,18 @@ function check(plan, observations, expected) {
         `greppable stream`,
         ends.extra,
       )
+    // A completed check through the daemon names its own report in its
+    // done line: the summary in the output directory its CLI was given,
+    // which the trace names `<out>` (readRun), never another check's.
+    if (
+      daemon.exit === 0 &&
+      !daemon.stream.last.endsWith(` report <package>/<out>/summary.md`)
+    )
+      return violation(
+        `incremental`,
+        `through the daemon at ${value.step}, the done line ${JSON.stringify(daemon.stream.last)} does not name the check's own report, <package>/<out>/summary.md`,
+        `greppable stream`,
+      )
     // The check that a mid-run edit overlapped streams as any check does.
     const duringEnds = value.midrun && endsBreach(value.midrun.during)
     if (duringEnds)
@@ -4211,7 +4298,7 @@ const incrementalStates = [
   `a check after the OS cleaned the daemon's state`,
   `two checks started the daemon at once`,
   `the daemon ran from a path with a space and #`,
-  `of two checks at once, one computed and the other reused`,
+  `of two checks held in the daemon at once, one computed and the other reused`,
 ]
 // Law 9's states that a constructed history of their own reaches, not the
 // edit sequence: the mid-run edit, and an edit to data a test reads through
@@ -4811,8 +4898,11 @@ oracleProperty({
           fault: `none`,
           stability: `none`,
           // Two checks at once start the daemon, from a CLI installed under
-          // a path with a space and `#`.
+          // a path with a space and `#`. Each pair of checks at once is held
+          // in the daemon together (`holdOverlap`), so the later request
+          // arrives while the earlier check is in flight, by a count.
           concurrentStart: true,
+          holdOverlap: true,
           cliPath: `spaced`,
           native: `none`,
           laterSteps: NO_LATER_STEPS,

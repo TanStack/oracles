@@ -860,6 +860,13 @@ const drawn = fc.record({
   // The batch whose run rejects: a constructed-only field (0 is no fault). Only the constructed history at
   // the end of the campaign sets it; the take-back below returns it to 0 (the generator rule, extended).
   rejectBatch: fc.constant(0),
+  // Whether two checks at once are held to overlap in the daemon (the
+  // test-only hold ORACLE_GAPS_TEST_HOLD_OVERLAP, issue #82): the first check
+  // a daemon serves waits until it has accepted a second request. A hook is
+  // never switched on by a drawn field, so the constant draws nothing and
+  // only the constructed edit sequence through the daemon sets it; the
+  // take-back below returns it to false.
+  holdOverlap: fc.constant(false),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -932,6 +939,7 @@ const histories = drawn.map(
         pauseEngages: true,
         warmReplaced: false,
         rejectBatch: 0,
+        holdOverlap: false,
       }
     const earlier = history.steps.filter((step) => !laterEdits.includes(step))
     return {
@@ -939,6 +947,7 @@ const histories = drawn.map(
       pauseEngages: true,
       warmReplaced: false,
       rejectBatch: 0,
+      holdOverlap: false,
       steps: earlier.length > 0 ? earlier : null,
       laterSteps: later,
     }
@@ -2969,6 +2978,8 @@ function resolveHistory(history) {
     ordinary: history.ordinary === true,
     // The batch whose run rejects (a test-only fault; 0 is none).
     rejectBatch: history.rejectBatch ?? 0,
+    // Whether two checks at once are held to overlap in the daemon.
+    holdOverlap: history.holdOverlap === true,
     // An `owns` key in an assertion's arguments, in the ordinary file: its
     // assertion form and whether its list is a literal, or none.
     matcherOwns: history.matcherOwns ?? `none`,
