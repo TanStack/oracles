@@ -85,7 +85,8 @@ export function keepProperties(from, to) {
 
 /**
  * Watches this process's reads from now on: each read calls `record(key)`
- * with the input's key, and each write of a file `record(key, true)`, the
+ * with the input's key, and each write of a file or a variable
+ * `record(key, true)`, the
  * `record` of the latest call. The wrappers are
  * installed once per process. A file's path is the path rule's (paths.mjs),
  * and the runner's own files are left out. An ES module's
@@ -148,7 +149,10 @@ export function watchReads(record) {
       return Reflect.ownKeys(env)
     },
     // A write goes to the environment itself, which keeps its own rules
-    // (a value is a string).
-    set: (env, name, value) => Reflect.set(env, name, value),
+    // (a value is a string). A variable the reader set is its own output.
+    set(env, name, value) {
+      if (typeof name === `string`) record(`env:${name}`, true)
+      return Reflect.set(env, name, value)
+    },
   })
 }

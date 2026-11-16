@@ -503,25 +503,38 @@ export async function openSession(pkg) {
   // module it serves is that module's own text, the module's input already.
   // A file that the session wrote there before it read it, such as the
   // config Vite bundles into a temporary file, is the session's own output.
+  // So is a variable that the CLI set (ORACLE_GAPS_STATE, which names each
+  // check's output). A read that comes after its warm ended, from work the
+  // warm left behind, is a hook's read, so the global inputs stay those of
+  // the warm itself.
   const warmReads = new Map()
   const hookReads = new Map()
   const wrote = new Set()
   const reading = new AsyncLocalStorage()
   watchReads((key, write) => {
     const at = reading.getStore()
-    const reads = at?.hook ? hookReads : warmReads
+    if (write && key.startsWith(`env:`)) wrote.add(key)
+    const reads = at?.hook || at?.done ? hookReads : warmReads
     if (at === undefined || key === at.module || reads.has(key)) return
     if (write) wrote.add(key)
     else if (!wrote.has(key))
       reads.set(key, key.startsWith(`fs:`) ? fileHash(key.slice(3)) : null)
   })
+  // Runs `work` as a warm under `reading`.
+  const warming = async (work) => {
+    const at = {}
+    try {
+      return await reading.run(at, work)
+    } finally {
+      at.done = true
+    }
+  }
   globalThis.__oracleGapsPluginHooks = (plugins) =>
     pluginHooks(plugins, reading)
   const requireTarget = createRequire(join(pkg, `package.json`))
   let createVitest
   try {
-    ;({ createVitest } = await reading.run(
-      {},
+    ;({ createVitest } = await warming(
       () => import(pathToFileURL(requireTarget.resolve(`vitest/node`)).href),
     ))
   } catch (error) {
@@ -810,7 +823,7 @@ export default async (env) => {
   // A context warms under `reading` (see warmReads): what its config, Vite,
   // and Vitest read while it warms is a global input.
   function warmContext(settings, index) {
-    return reading.run({}, () => warmIn(settings, index))
+    return warming(() => warmIn(settings, index))
   }
   async function warmIn(settings, index) {
     await fromConfig(index, settings.config, warmProbe())
