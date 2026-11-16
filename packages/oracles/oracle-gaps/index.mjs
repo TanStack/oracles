@@ -621,9 +621,13 @@ async function checkCold(options) {
 async function checkThroughDaemon(options) {
   const { codeIdentity } = await import(`./check.mjs`)
   const { received, requestDaemon } = await import(`./daemon.mjs`)
+  // A run without `--out` names its directory per call (args.mjs), so the daemon
+  // would name another one than this run's stream log is in. The request
+  // carries the directory this run named.
+  const argv = process.argv.slice(2)
   const reply = await requestDaemon(
     options.pkg,
-    process.argv.slice(2),
+    argv.includes(`--out`) ? argv : [...argv, `--out`, options.out],
     codeIdentity(),
   )
   if (reply.stderr) writeStream(reply.stderr)
