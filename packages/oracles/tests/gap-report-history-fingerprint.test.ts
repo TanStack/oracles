@@ -18,25 +18,22 @@ import { drawn, histories } from '../oracle-gaps/gap-report-model-oracle.mjs'
 // list; no earlier line changes. It guards the fields' draws, not the
 // resolved plans: a new field may still change what a plan does (the plan
 // takes `laterSteps` after a history's steps). The default fixed-seed
-// campaign draws 2 histories, and those resolve as on main.
+// campaign draws 2 histories, and those resolve as on main. Under M
+// "Randomness wins" (2026-11-16) a new field that changes what runs is drawn,
+// so the fields after it shift: the PR that adds it records the lists anew
+// and reports the fixed seed's reach states lost and gained (#99 drew the
+// deterministic-cuts fields).
 const FIXED_SEED = 20261105
 const DRAWS = 500
-// The constructed-only test fields (deterministic-cuts change, 2026-11-14):
-// constants in every drawn test record, which no generated history sets. A
-// test's record hashes without them, so its line is main's, and each one is
+// The constructed-only test fields: constants in every drawn test record,
+// which no generated history sets. Since M "Randomness wins" (2026-11-16)
+// only a field that switches a test-only hook stays one (`pendingIo`); the
+// deterministic-cuts fields `slowMs`, `loops`, `timerWait` and `pulse` are
+// drawn, and their draws shifted the later fields' lines (recorded anew). A
+// test's record hashes without the constructed fields, and each one is
 // recorded as its own line after the others, with its neutral value checked.
-const CONSTRUCTED_TEST_FIELDS = [
-  `slowMs`,
-  `loops`,
-  `timerWait`,
-  `pulse`,
-  `pendingIo`,
-]
+const CONSTRUCTED_TEST_FIELDS = [`pendingIo`]
 const NEUTRAL_TEST_VALUES: Record<string, unknown> = {
-  slowMs: 3000,
-  loops: 0,
-  timerWait: null,
-  pulse: false,
   pendingIo: null,
 }
 type Sample = Record<string, unknown>

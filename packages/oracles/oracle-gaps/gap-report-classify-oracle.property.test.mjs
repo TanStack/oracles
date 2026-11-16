@@ -727,6 +727,24 @@ function boundBelow(before, after) {
 const CUT_LAW = { runSpin: `bounded work`, runIdle: `no progress` }
 // The kinds that end a file's run, so that it ran none of its tests.
 const ENDS_RUN = [`setupError`, `runTimeout`, ...Object.keys(CUT_LAW)]
+// What cut file `fi`'s run under the mutant in `slot`: the backstop (a run
+// that timed out, or Vitest's own limit in a file that loaded and that no cut
+// by count or state ended first), the built-in law of its first test cut by
+// count or by state, or a spin whose count could follow the clock (a test
+// whose row is clocked), which kills nothing and is a gap (M, 2026-11-16,
+// "Count-only kills").
+function cutOf(h, fi, slot) {
+  const kinds = h.files[fi].tests.map((t) => t.under[slot].kind)
+  if (kinds.includes(`runTimeout`)) return { gap: `backstop` }
+  const first = h.files[fi].tests.find((t) => CUT_LAW[t.under[slot].kind])
+  if (first)
+    return first.under[slot].kind === `runSpin` && first.clocked !== `none`
+      ? { gap: `spin` }
+      : { law: CUT_LAW[first.under[slot].kind], t: first }
+  if (kinds.includes(`timeoutMessage`) && !kinds.includes(`setupError`))
+    return { gap: `backstop` }
+  return {}
+}
 
 // Laws 2 to 4 over the tests that judge a mutant, read from each test's
 // effect in the mutant's slot: the failure's outcome, if a failure decides,
@@ -736,30 +754,17 @@ const ENDS_RUN = [`setupError`, `runTimeout`, ...Object.keys(CUT_LAW)]
 // at a kill reads no work.
 function failureOf(h, slot, tests, work = false) {
   const under = ({ t }) => t.under[slot].kind
-  // A test that Vitest's own limit ended is a backstop, as a cut run is,
-  // in a file that loaded and that no cut by count or state ended first (a
-  // cut copy records nothing).
-  const timedOut = tests.some(
-    (x) =>
-      under(x) === `runTimeout` ||
-      (under(x) === `timeoutMessage` &&
-        !h.files[x.fi].tests.some((t) =>
-          [`setupError`, ...Object.keys(CUT_LAW)].includes(t.under[slot].kind),
-        )),
-  )
+  // The first gap cut in report order names a timeout's cause.
+  const files = [...new Set(tests.map((x) => x.fi))]
+  const timedOut = files.map((fi) => cutOf(h, fi, slot).gap).find(Boolean)
   const setup = tests.some((x) => under(x) === `setupError`)
   const ran = tests.filter(
     (x) =>
       !h.files[x.fi].tests.some((t) => ENDS_RUN.includes(t.under[slot].kind)),
   )
   // The test whose copy a cut by count or by state ended, one per file (the
-  // first), in a file whose run no backstop ended.
-  const cut = tests.filter(
-    (x) =>
-      CUT_LAW[under(x)] &&
-      !h.files[x.fi].tests.some((t) => t.under[slot].kind === `runTimeout`) &&
-      h.files[x.fi].tests.find((t) => CUT_LAW[t.under[slot].kind]) === x.t,
-  )
+  // first), in a file whose run no backstop ended, when it kills.
+  const cut = tests.filter((x) => cutOf(h, x.fi, slot).t === x.t)
   const failing = ran.filter(
     (x) =>
       !x.t.flaky &&
@@ -797,8 +802,8 @@ function failureOf(h, slot, tests, work = false) {
       laws: [...new Set(behavioral)].sort(),
       lawsMayBePart: true,
     })
-  // A Vitest limit is a backstop cut: the timeout names it (classify.mjs).
-  if (timedOut) return decided({ outcome: `timeout`, detail: `backstop` })
+  // A gap cut: the timeout names the first (classify.mjs).
+  if (timedOut) return decided({ outcome: `timeout`, detail: timedOut })
   if (kills.length > 0)
     return naming(`agreement-only-kill`, verdictsIn(`reproducible`), {
       laws: [`reach agreement`],
@@ -1137,27 +1142,14 @@ function operandsSeen(h, mi, owners) {
 function ordinaryOutcome(h, mi, files) {
   const tests = files.flatMap((fi) => h.files[fi].tests.map((t) => ({ t, fi })))
   const under = ({ t }) => t.under[mi].kind
-  // A test that Vitest's own limit ended is a backstop, as a cut run is,
-  // in a file that loaded and that no cut by count or state ended first (a
-  // cut copy records nothing).
-  const timedOut = tests.some(
-    (x) =>
-      under(x) === `runTimeout` ||
-      (under(x) === `timeoutMessage` &&
-        !h.files[x.fi].tests.some((t) =>
-          [`setupError`, ...Object.keys(CUT_LAW)].includes(t.under[mi].kind),
-        )),
-  )
+  // A gap cut in any of the files (the backstop, or a spin that could follow
+  // the clock).
+  const timedOut = files.some((fi) => cutOf(h, fi, mi).gap)
   const ran = tests.filter(
     (x) =>
       !h.files[x.fi].tests.some((t) => ENDS_RUN.includes(t.under[mi].kind)),
   )
-  const cut = tests.filter(
-    (x) =>
-      CUT_LAW[under(x)] &&
-      !h.files[x.fi].tests.some((t) => t.under[mi].kind === `runTimeout`) &&
-      h.files[x.fi].tests.find((t) => CUT_LAW[t.under[mi].kind]) === x.t,
-  )
+  const cut = tests.filter((x) => cutOf(h, x.fi, mi).t === x.t)
   const failing = [
     ...ran.filter((x) =>
       [`verdict`, `assertion`, `crash`, `timeoutMessage`].includes(under(x)),
@@ -1697,7 +1689,14 @@ function unitOf(h, fi, slot) {
       timedOut: true,
       cause: under(f.tests[cutAt]).kind === `runSpin` ? `spin` : `no progress`,
       seconds: 1,
-      builtIn: [{ test: nameOf(h, fi, cutAt), route: f.tests[cutAt].route }],
+      // A spin whose test's row is clocked names no test (check.mjs).
+      ...(cutOf(h, fi, slot).gap
+        ? {}
+        : {
+            builtIn: [
+              { test: nameOf(h, fi, cutAt), route: f.tests[cutAt].route },
+            ],
+          }),
     }
   const loadFailed = f.tests.some((t) => under(t).kind === `setupError`)
   const tests = loadFailed ? [] : f.tests
@@ -2020,6 +2019,12 @@ async function driver(h, observe) {
       units.some((u) => u.builtIn !== undefined)
     )
       states.add(`a random-only kill by a built-in law`)
+    // A spin whose count could follow the clock: a gap, not a kill.
+    if (
+      result.outcome === `timeout` &&
+      units.some((u) => u.cause === `spin` && u.builtIn === undefined)
+    )
+      states.add(`a spin whose count could follow the clock timed out`)
     // The work law's states (laws 3 and 5): a kill by a work bound, alone
     // or beside a changed value that would otherwise be not-judged, a work
     // bound on the random campaign, and survivors whose work rose under a
@@ -3258,6 +3263,7 @@ const required = [
   `killed by bounded work`,
   `killed by no progress`,
   `a random-only kill by a built-in law`,
+  `a spin whose count could follow the clock timed out`,
   `owners declared against file order name another first changed test`,
   `baseline records against file order name another first changed test`,
   `a mutant run's records against the baseline's name another first changed test`,
@@ -3479,6 +3485,11 @@ const constructed = [
     {
       effect: { kind: `runIdle` },
     },
+  ),
+  single(
+    `a clocked copy cut by its call count`,
+    [`a spin whose count could follow the clock timed out`],
+    { test: { clocked: `timer` }, effect: { kind: `runSpin` } },
   ),
   single(
     `a copy cut by no progress in the random campaign`,

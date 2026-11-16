@@ -425,15 +425,31 @@ const testCase = fc.record({
   // Only a witness waits on a timer, sleeps, reads the clock, or waits a
   // turn: its work could follow the clock.
   timed: fc.constant(false),
-  // The constructed-only fields (see `histories`): a witness's wait where its
-  // output differs, its repeated calls, its load, a repeating timer kept due
-  // while a hang waits, and what else is pending while it waits (`pendingIo`:
-  // the test's own I/O, the runner's write, or the runner's timer). A
-  // generated test has the neutral values, which change nothing.
-  slowMs: fc.constant(SLOW_MS),
-  loops: fc.constant(0),
-  timerWait: fc.constant(null),
-  pulse: fc.constant(false),
+  // The deterministic-cuts fields, drawn (M, 2026-11-16, "Randomness wins"),
+  // appended last: a slow test's wait (only a witness is slow), the extra
+  // calls a test makes where its output differs, a timer it waits on there
+  // (rare, since each wait costs real time on every mutant that changes its
+  // output), and a repeating timer kept due while a hang waits (rare, since
+  // such a hang runs to the backstop). Each set holds the values the
+  // constructed histories use. A test that loops declares no work bound
+  // (`resolve`), since the model judges no work in a generated test.
+  slowMs: fc.constantFrom(SLOW_MS, 16_000),
+  loops: fc.constantFrom(0, 0, 0, 0, 0, 0, 0, 30_000),
+  timerWait: fc.oneof(
+    { arbitrary: fc.constant(null), weight: 15 },
+    {
+      arbitrary: fc.record({
+        waitMs: fc.constantFrom(600, 3000),
+        unref: fc.boolean(),
+      }),
+      weight: 1,
+    },
+  ),
+  pulse: fc.constantFrom(false, false, false, false, false, false, false, true),
+  // What else is pending while a test waits (`pendingIo`: its own I/O, the
+  // runner's write, or the runner's timer). Each value switches a test-only
+  // hook, so it stays a constant that only constructed histories set (the
+  // hook exception of "Randomness wins").
   pendingIo: fc.constant(null),
 })
 // Law 9's edits. Each content edit changes what some evidence depends on:
@@ -879,9 +895,10 @@ const drawn = fc.record({
   // with a sync read (\`LOAD_PLUGIN\`, review of #103). Only a constructed
   // history sets it; \`histories\` takes it back as this constant.
   loadPlugin: fc.constant(false),
-  // A constructed history's backstop (`--hang-limit`), which no generated
-  // history sets: null is the full limit. Recorded by the canary as well.
-  hangMs: fc.constant(null),
+  // The history's backstop (`--hang-limit`), drawn (M, 2026-11-16, "Randomness
+  // wins"): null is the full limit, and a longer one moves no copy into the
+  // backstop band. The constructed backstop of 2 s is taken back as null.
+  hangMs: fc.constantFrom(null, null, null, 40_000),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -927,16 +944,22 @@ const keepsSteps = (history) => {
 // its drawn constant (as `claimScenario` does): a shrink is torn-row-free and
 // runs with the package as the config's root. A constructed history may set
 // `slowTwin`, which no generated history draws, and which is taken back
-// without it. Its tests may set the constructed-only fields `slowMs`, `loops`,
-// `timerWait`, `pulse` and `pendingIo`, which the drawn test record holds at
-// neutral values (the generator rule, 2026-11-14).
+// without it. Its tests may set `pendingIo`, a hook switch the drawn test
+// record holds at null, a clock path (`timed`, drawn as false), and a timer
+// wait written without `unref`, which is taken back as a ref'd one.
 const takenBack = (t) => ({
   ...t,
+  // A constructed test's clock path (the clocked spin) is not drawn.
+  timed: false,
   slow: false,
-  slowMs: SLOW_MS,
-  loops: 0,
-  timerWait: null,
-  pulse: false,
+  // A constructed test may leave a drawn field out: it holds the neutral
+  // value.
+  slowMs: t.slowMs ?? SLOW_MS,
+  loops: t.loops ?? 0,
+  pulse: t.pulse ?? false,
+  timerWait: t.timerWait
+    ? { waitMs: t.timerWait.waitMs, unref: t.timerWait.unref === true }
+    : null,
   pendingIo: null,
 })
 const histories = drawn.map(
@@ -948,14 +971,14 @@ const histories = drawn.map(
       )
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
-    // A constructed backstop (`hangMs`) comes back as the drawn constant (null).
+    // A constructed backstop outside the drawn set (`hangMs`) comes back as null.
     const { slowTwin, hangMs, ...drawnValue } =
       /** @type {Record<string, unknown>} */ (value)
     const tests = /** @type {Record<string, unknown>[]} */ (drawnValue.tests)
     const plain =
       /** @type {{ witness: unknown, steps: unknown[] | null, tornRows: unknown, testRoot: unknown, loadPlugin: unknown }} */ ({
         ...drawnValue,
-        hangMs: null,
+        hangMs: hangMs === 40_000 ? hangMs : null,
         tests: tests.map(takenBack),
       })
     // Take-back into the drawn language: a disarmed pause (pauseEngages false,
@@ -2897,7 +2920,7 @@ function resolveHistory(history) {
       // its input is a multiple of 3: derived from the plan, not drawn, so
       // the grammar's generated histories, and their cost, stay those of
       // the grammar without the work law.
-      work: t.work ?? (t.input % 3 === 0 ? 1 : null),
+      work: t.work ?? (t.input % 3 === 0 && !t.loops ? 1 : null),
     })),
     ...functions.flatMap((fn) =>
       fn.generated ? [] : fn.tests.map((t) => ({ ...t, fn: t.fn ?? fn.id })),
@@ -4073,6 +4096,12 @@ function runsOf(plan, tests, sites, active) {
   return tests
     .filter((t) => !t.flaky)
     .map((t) => {
+      // Whether the test had read the clock, made a timer, or held I/O open
+      // when its run was cut (`clocked`): a wait where an earlier campaign's
+      // output changed, or a clock path before production (`timed`). Its count
+      // could then depend on time, so a spin there is no kill (M, 2026-11-16,
+      // "Count-only kills").
+      let waited = false
       let changedAny = false
       let slowed = false
       const found = []
@@ -4102,6 +4131,8 @@ function runsOf(plan, tests, sites, active) {
         const backstopMs = plan.history.hangMs ?? FULL_LIMIT_MS
         if (changed && t.slow && (t.slowMs ?? SLOW_MS) > backstopMs + 6000)
           return {
+            clocked: clockFirst(t) || waited,
+            rowClocked: clockFirst(t) || waited || (changed && waitsIn(t)),
             t,
             route,
             hang: true,
@@ -4123,6 +4154,8 @@ function runsOf(plan, tests, sites, active) {
           (t.pendingIo === `runner` || t.pendingIo === `runnerTimer`)
         )
           return {
+            clocked: clockFirst(t) || waited,
+            rowClocked: clockFirst(t) || waited || (changed && waitsIn(t)),
             t,
             route,
             hang: true,
@@ -4135,6 +4168,8 @@ function runsOf(plan, tests, sites, active) {
         // A loop that never ends cuts the file's run off, as a hang does.
         if (mutated.spun)
           return {
+            clocked: clockFirst(t) || waited,
+            rowClocked: clockFirst(t) || waited || (changed && waitsIn(t)),
             t,
             route,
             hang: true,
@@ -4148,6 +4183,8 @@ function runsOf(plan, tests, sites, active) {
         slowed ||= changed && (t.slow || t.ioWait)
         if (mutated.threw)
           return {
+            clocked: clockFirst(t) || waited,
+            rowClocked: clockFirst(t) || waited || (changed && waitsIn(t)),
             t,
             route,
             crash: true,
@@ -4162,6 +4199,8 @@ function runsOf(plan, tests, sites, active) {
         // so only the backstop cuts it (a wall-clock cut).
         if (changed && t.hangs)
           return {
+            clocked: clockFirst(t) || waited,
+            rowClocked: clockFirst(t) || waited || (changed && waitsIn(t)),
             t,
             route,
             hang: true,
@@ -4178,6 +4217,8 @@ function runsOf(plan, tests, sites, active) {
           })
           if (t.judgeBy !== `soft`)
             return {
+              clocked: clockFirst(t) || waited,
+              rowClocked: clockFirst(t) || waited || (changed && waitsIn(t)),
               t,
               route,
               verdicts: found,
@@ -4187,6 +4228,7 @@ function runsOf(plan, tests, sites, active) {
               before,
             }
         }
+        if (changed && waitsIn(t)) waited = true
       }
       // A test that passed: its route is the last one it registered, and
       // its work is judged against the bound it declared. An authored
@@ -4202,6 +4244,8 @@ function runsOf(plan, tests, sites, active) {
         [`reproducible`, `random`].includes(route) &&
         (!t.timed || t.timed === `turn`)
       return {
+        clocked: clockFirst(t) || waited,
+        rowClocked: clockFirst(t) || waited,
         t,
         route,
         verdicts:
@@ -4219,6 +4263,13 @@ function runsOf(plan, tests, sites, active) {
       }
     })
 }
+
+// Whether a test reads the clock or makes a timer before it runs production
+// (`timed`, except a turn, which waits no time), and whether it waits on a
+// timer or on I/O where its output changed.
+const clockFirst = (t) => Boolean(t.timed) && t.timed !== `turn`
+const waitsIn = (t) =>
+  Boolean(t.slow || t.timerWait || t.ioWait || t.pendingIo === `test`)
 
 // A kill: a behavioral verdict on a reproducible route.
 const killsIn = (r) =>
@@ -4285,6 +4336,10 @@ function judge(plan, tests, sites, active, { budgeted = true, detail } = {}) {
   const hung = new Set()
   const builtIns = []
   let wallCut = false
+  // The cause of a timeout, the first gap cut in owner order: the backstop,
+  // or a spin whose count could depend on time (M, 2026-11-16, "Count-only
+  // kills"), which ends its copy as a gap and lets the next owner run.
+  let gapCause
   // The mutant's work budget (G1): its owner files' copies are counted in
   // their order, each copy's work being the site evaluations of its runs up
   // to a cut or a kill. The copy whose work passes the budget fails bounded
@@ -4304,31 +4359,45 @@ function judge(plan, tests, sites, active, { budgeted = true, detail } = {}) {
     let work = 0
     const callBudget = Math.max(CALL_FLOOR, 100 * mostBefore(file))
     let builtIn
+    let countGap = false
     for (const r of runs.filter((x) => x.t.file === file)) {
-      // A copy whose runs pass its call budget is cut by count, where the run
-      // goes past it (the CLI's spin row).
-      const spun = !r.hang && work + r.work > callBudget
+      // A test whose calls pass its call budget is cut by count, where the
+      // run goes past it (the CLI's spin row; the budget is per test).
+      const spun = !r.hang && r.work > callBudget
+      const byCount = spun || (r.hang && r.cut === `count`)
       if (r.hang && r.cut === `wall`) wallCut = true
+      // A count that could depend on time kills nothing: a gap.
+      else if (byCount && r.clocked) countGap = true
       else if (r.hang || spun)
         builtIn = {
           route: r.route,
-          law: spun || r.cut === `count` ? `bounded work` : `no progress`,
+          law: byCount ? `bounded work` : `no progress`,
         }
       if (r.hang || spun) {
         hung.add(file)
         break
       }
-      work += r.work
+      // Only a count that does not depend on time is charged to the budget.
+      work += r.rowClocked ? 0 : r.work
       if (killsIn(r)) break
     }
-    if (wallCut) break
+    if (wallCut) {
+      gapCause ??= `backstop`
+      break
+    }
+    if (countGap) {
+      gapCause ??= `spin`
+      continue
+    }
     if (builtIn) {
       builtIns.push(builtIn)
       if (builtIn.route === `reproducible`) break
       continue
     }
     if (budgeted && spent + work > workBudget) {
-      for (const r of runs.filter((x) => x.t.file === file && x.work > 0))
+      for (const r of runs.filter(
+        (x) => x.t.file === file && x.work > 0 && !x.rowClocked,
+      ))
         builtIns.push({ route: r.route, law: `bounded work` })
       break
     }
@@ -4350,8 +4419,8 @@ function judge(plan, tests, sites, active, { budgeted = true, detail } = {}) {
         reproducible.find((law) => BUILT_IN.includes(law)) ?? null
     return `killed`
   }
-  if (wallCut) {
-    if (detail) detail.cause = `backstop`
+  if (gapCause) {
+    if (detail) detail.cause = gapCause
     return `timeout`
   }
   // No wall-clock budget decides here (maintainer decision, deterministic

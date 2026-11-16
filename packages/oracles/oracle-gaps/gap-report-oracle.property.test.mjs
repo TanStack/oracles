@@ -2037,6 +2037,14 @@ async function driver(plan, observe) {
       )
     )
       states.add(`a copy beside the runner's pending timer cut as no progress`)
+    // A spin whose test read the clock first is a timeout by its spin.
+    if (
+      plan.history.tests.some((t) => t.timed === `clock`) &&
+      cli.report?.results?.some(
+        (r) => r.outcome === `timeout` && r.detail === `spin`,
+      )
+    )
+      states.add(`a spin whose count could follow the clock timed out`)
     // A copy that waits past the history's backstop is cut off, and no later
     // owner runs, so the mutant is a timeout, not the later owner's kill.
     if (
@@ -4148,6 +4156,7 @@ const required = [
   `a copy waiting on I/O it opened killed`,
   `a copy beside the runner's pending write cut as no progress`,
   `a copy beside the runner's pending timer cut as no progress`,
+  `a spin whose count could follow the clock timed out`,
   `a hang in one owner and a survivor in another killed by no progress`,
   `a mutant's copies past its work budget killed by bounded work`,
   `a heartbeat named a busy mutant`,
@@ -4290,6 +4299,7 @@ const separate = [
   `a copy waiting on I/O it opened killed`,
   `a copy beside the runner's pending write cut as no progress`,
   `a copy beside the runner's pending timer cut as no progress`,
+  `a spin whose count could follow the clock timed out`,
   // The config and contexts states have constructed histories of their own.
   `a config that --config names ran`,
   ...Object.values(testRootStates),
@@ -6130,6 +6140,21 @@ oracleProperty({
               pendingIo: `runnerTimer`,
             },
           ]),
+      },
+      // Count-only kills (M, 2026-11-16): a copy whose test reads the clock
+      // before it runs production, and then spins past its call budget in
+      // instrumented code (the until loop without its push), could have a
+      // count that follows the clock, so the spin kills nothing: the mutant is
+      // a timeout whose cause is the spin, a gap.
+      {
+        name: `a clocked copy that spins`,
+        enters: [`a spin whose count could follow the clock timed out`],
+        build: (generated) => ({
+          ...soloKill(generated, [
+            { ...judging(`a`, `fixed seed`, 1), fn: 0, timed: `clock` },
+          ]),
+          functions: [[{ kind: `until`, quote: `'` }]],
+        }),
       },
     ]),
   },
