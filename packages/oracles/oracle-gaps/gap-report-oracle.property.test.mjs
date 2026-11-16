@@ -1120,9 +1120,15 @@ function readRun(dir, out, status, stderr, cli, stdout) {
     stdoutGaps: printed
       .filter((line) => line.startsWith(`oracle-gaps: gap `))
       .map((line) => namedScratch(line, scratch)),
+    // The stderr's gap lines, as a sorted multiset: streamed lines are live
+    // progress, and their order between runs is not part of the contract (C,
+    // "Progress lines in determinism", and the C entry under P10 and P11), so
+    // two runs of one history record one list. A line printed twice stays
+    // twice.
     stderrGaps: lines
       .filter((line) => streamedGap.test(line))
-      .map((line) => namedScratch(line, scratch)),
+      .map((line) => namedScratch(line, scratch))
+      .sort(),
     baselineFiles: lines.flatMap((line) => {
       const file = line.match(
         /^oracle-gaps: baseline (?:pass|fail) (\S+)(?: \(ordinary\))?: /,
