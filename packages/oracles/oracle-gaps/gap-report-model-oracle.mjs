@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { createRequire } from 'node:module'
-import { dirname, join } from 'node:path'
+import { dirname, join, posix as posixPath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import fc from 'fast-check'
 
@@ -5374,19 +5374,26 @@ const LOAD_PLUGIN = `{ name: 'gap-own-load', load(id) { const path = id.split('?
 // The config's own plugin that reads the gate file (`inputRead`
 // `pluginConfig` or `pluginTransform`) and writes its word in place of
 // `__GAP_INPUT_GATE__` in each test file it transforms. It finds the file
-// under the root Vite resolved, so it reads the package's file wherever the
-// config lies. `pluginConfig` reads it once, when the config resolves;
-// `pluginTransform` reads it in each transform.
-const GATE_READ = `JSON.parse(readGate(root + '/tests/plugin-gate.json', 'utf8')).gate`
+// from the config's own location (`gatePath`), not from a root, which a
+// config's test root moves. `pluginConfig` reads it once, when the config
+// resolves; `pluginTransform` reads it in each transform.
+const GATE_READ = `JSON.parse(readGate(gatePath, 'utf8')).gate`
 const gatePlugin = (plan) =>
-  `(() => { let root; let gate; return { name: 'gap-input-gate', configResolved(resolved) { root = resolved.root${plan.inputRead === `pluginConfig` ? `; gate = ${GATE_READ}` : ``} }, transform(code, id) { return id.split('?')[0].endsWith('.test.ts') ? code.replaceAll('__GAP_INPUT_GATE__', JSON.stringify(${plan.inputRead === `pluginConfig` ? `gate` : GATE_READ})) : undefined } } })()`
+  `(() => { let gate; return { name: 'gap-input-gate', configResolved() { ${plan.inputRead === `pluginConfig` ? `gate = ${GATE_READ}` : ``} }, transform(code, id) { return id.split('?')[0].endsWith('.test.ts') ? code.replaceAll('__GAP_INPUT_GATE__', JSON.stringify(${plan.inputRead === `pluginConfig` ? `gate` : GATE_READ})) : undefined } } })()`
+// The gate file's path from a config at `configPath` (in the package, or in
+// its parent, where the package is the directory `pkg`).
+const gateFromConfig = (configPath) =>
+  posixPath.relative(
+    posixPath.dirname(posixPath.join(`/pkg`, configPath)),
+    `/pkg/tests/plugin-gate.json`,
+  )
 
 /**
  * The text of the package's config, in its syntax (`configOf`), with the
  * fault, the top-level await, or the `require` calls the plan holds. `test`
  * is the config's `test` object.
  */
-function configText(plan, test) {
+function configText(plan, test, configPath = plan.configPath) {
   const commonjs = plan.configSyntax === `cjs`
   const plugins = [
     ...(plan.prePlugin ? [PRE_PLUGIN] : []),
@@ -5421,11 +5428,15 @@ function configText(plan, test) {
     // Only an ES module config has the load plugin (its constructed history).
     ...(plan.loadPlugin ? [`import { readFileSync } from 'node:fs'`] : []),
     ...(pluginGated(plan)
-      ? [
-          commonjs
-            ? `const { readFileSync: readGate } = require('node:fs')`
-            : `import { readFileSync as readGate } from 'node:fs'`,
-        ]
+      ? commonjs
+        ? [
+            `const { readFileSync: readGate } = require('node:fs')`,
+            `const gatePath = require('node:path').join(__dirname, '${gateFromConfig(configPath)}')`,
+          ]
+        : [
+            `import { readFileSync as readGate } from 'node:fs'`,
+            `const gatePath = new URL('${gateFromConfig(configPath)}', import.meta.url)`,
+          ]
       : []),
     ...(plan.fault === `configThrows`
       ? [`throw new Error('the fixture config broke')`]
@@ -5611,6 +5622,7 @@ function fixtureFiles(plan, state = initialState(plan)) {
           [altConfigPath(plan)]: configText(
             plan,
             test.replace(`'tests/**/*.test.ts'`, `'tests/a.test.ts'`),
+            altConfigPath(plan),
           ),
         }
       : {}),
