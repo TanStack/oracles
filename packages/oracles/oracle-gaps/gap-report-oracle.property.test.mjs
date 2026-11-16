@@ -1679,6 +1679,9 @@ async function incremental(dir, plan, cli, copy, observe, states) {
           // Whether its daemon held the check's reply and nothing ended it
           // while the CLI ran (`heldReply`).
           held: run.held === true,
+          // Whether a daemon wrote into that run's --out after its CLI fell
+          // back (`heldReply`).
+          rewritten: run.rewritten === true,
         },
       })
     }
@@ -1819,23 +1822,32 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       [join(copy, `index.mjs`), `--stop-daemon`, `--package`, dir],
       { cwd: repo, encoding: `utf8`, timeout: 60_000, env: cleanEnv() },
     )
-  // A check through a daemon that stops answering: the daemon holds its
-  // reply (`daemon-reply`) and lives on until the CLI has ended. A warm check
+  // A check through a daemon that stops answering: the daemon holds the
+  // check before it runs (`daemon-check`), so it has written nothing into the
+  // run's --out, and hears nothing until the driver releases it. A warm check
   // starts the daemon with the pause disarmed (ORACLE_GAPS_TEST_PAUSE_ARM), so
   // the held check reaches a daemon whose session is open; then the pause is
   // armed. The held check's CLI waits 3 s (ORACLE_GAPS_TEST_WAIT_MS), as for
   // the other holds, so its bound on a daemon that sends nothing comes early,
   // and it writes no wait mark, so nothing pauses it there. Each call's
   // backstop (120 s) ends a CLI that never ends, and the incremental check
-  // reports the stopped run as no cold fallback. The driver waits for the
-  // pause, then kills the daemon: the release, never by time. The state needs
-  // the pause, the CLI's completed run, and its note that the check runs cold.
+  // reports the stopped run as no cold fallback. Once the CLI has ended, the
+  // driver poisons the run's results.json, releases the daemon (a file, never
+  // the clock), and runs one more check through the daemon, which a released
+  // daemon serves only after the check it held. A results.json that is no
+  // longer the poison was written by the abandoned check (merge gate F2), so
+  // the run's printed summary no longer matches its --out; and since the
+  // daemon wrote nothing before the fallback, only a real cold check gives the
+  // run its report (F7). The state needs the pause, the CLI's completed run,
+  // its note that the check runs cold, and the poison kept.
   async function heldReply(files, how, marks, pauseMark) {
     const armMark = join(marks, `armed`)
+    const release = join(marks, `release`)
     const pause = {
-      ORACLE_GAPS_TEST_PAUSE_AT: `daemon-reply`,
+      ORACLE_GAPS_TEST_PAUSE_AT: `daemon-check`,
       ORACLE_GAPS_TEST_PAUSE_MARK: pauseMark,
       ORACLE_GAPS_TEST_PAUSE_ARM: armMark,
+      ORACLE_GAPS_TEST_PAUSE_RELEASE: release,
     }
     const [warmRun] = await runClisAtOnce(dir, files, [
       {
@@ -1855,32 +1867,40 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       }),
     )
     writeFileSync(armMark, ``)
-    const [run] = await runClisAtOnce(dir, files, [
-      {
-        ...how,
-        daemon: true,
-        env: { ...pause, ORACLE_GAPS_TEST_WAIT_MS: `3000` },
-        backstopMs: 120_000,
-      },
-    ])
+    const outs = []
+    const [run] = await runClisAtOnce(
+      dir,
+      files,
+      [
+        {
+          ...how,
+          daemon: true,
+          env: { ...pause, ORACLE_GAPS_TEST_WAIT_MS: `3000` },
+          backstopMs: 120_000,
+        },
+      ],
+      outs,
+    )
     let pid
     for (let waited = 0; pid === undefined; waited += 20) {
       pid = pidOf(pauseMark)
       if (pid !== undefined) break
       if (waited >= 60_000)
         throw new Error(
-          `oracle-gaps.report: a held reply saw no daemon pause within 60 s`,
+          `oracle-gaps.report: a held check saw no daemon pause within 60 s`,
         )
       await new Promise((r) => setTimeout(r, 20))
     }
-    const heldOn = isAlive(pid)
-    if (heldOn) process.kill(pid, `SIGKILL`)
-    if (heldOn && !(await waitGone(pid)))
-      throw new Error(`oracle-gaps.report: the held daemon ${pid} did not end`)
+    const results = join(outs[0], `results.json`)
+    const poison = `{"poison":"written by the driver after the CLI ended"}\n`
+    writeFileSync(results, poison)
+    writeFileSync(release, ``)
+    runCli(dir, files, { ...how, daemon: true, outName: `out-released` })
+    run.rewritten = readFileSync(results, `utf8`) !== poison
     rmSync(marks, { recursive: true, force: true })
-    run.held = heldOn
+    run.held = true
     if (
-      heldOn &&
+      !run.rewritten &&
       run.exit === 0 &&
       run.reported &&
       run.stream.notes.some((note) => coldFallbackNote.test(note))
@@ -2947,6 +2967,12 @@ function incrementalCheck(observations) {
     // A check whose daemon stopped answering (`heldReply`) ends as a cold run
     // does (R39: a cold fallback is not a failure): the CLI's own bound on a
     // daemon that sends nothing ends its wait, and it checks cold.
+    if (daemon.rewritten)
+      return violation(
+        `incremental`,
+        `after ${step}, the daemon ran the check whose CLI had fallen back to a cold check, and wrote into that run's --out`,
+        `cold fallback`,
+      )
     if (daemon.held && daemon.exit !== cold.exit)
       return violation(
         `incremental`,
