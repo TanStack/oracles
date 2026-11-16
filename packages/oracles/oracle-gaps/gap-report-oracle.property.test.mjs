@@ -2977,16 +2977,16 @@ function incrementalCheck(observations) {
     // A check whose daemon stopped answering (`heldReply`) ends as a cold run
     // does (R39: a cold fallback is not a failure): the CLI's own bound on a
     // daemon that sends nothing ends its wait, and it checks cold.
-    if (daemon.rewritten)
-      return violation(
-        `incremental`,
-        `after ${step}, the daemon ran the check whose CLI had fallen back to a cold check, and wrote into that run's --out`,
-        `cold fallback`,
-      )
     if (daemon.held && daemon.exit !== cold.exit)
       return violation(
         `incremental`,
-        `after ${step}, the daemon held the check's reply and the CLI did not fall back to a cold check: it exited ${daemon.exit}${daemon.exit > 128 ? ` when the driver's backstop stopped it` : ``}, and the cold run exited ${cold.exit}`,
+        `after ${step}, the daemon held the check and the CLI did not fall back to a cold check: it exited ${daemon.exit}${daemon.exit > 128 ? ` when the driver's backstop stopped it` : ``}, and the cold run exited ${cold.exit}`,
+        `cold fallback`,
+      )
+    if (daemon.rewritten)
+      return violation(
+        `incremental`,
+        `after ${step}, the daemon ran the check after its CLI had ended, and wrote into that run's --out`,
         `cold fallback`,
       )
     if (
