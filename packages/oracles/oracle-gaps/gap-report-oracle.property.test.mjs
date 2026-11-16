@@ -1623,16 +1623,19 @@ function readRunIn(dir, out, status, stderr, cli, stdout, derived) {
     .filter((line, i, all) => all.slice(i).some(Boolean))
   const blank = printed.indexOf(``)
   return {
-    lead: (blank < 0 ? printed : printed.slice(0, blank)).map((line) =>
-      namedScratch(line, scratch),
-    ),
+    // The gap lines are not in the lead: their order is live progress, not outcome
+    // (C, 2026-11-13), and they are compared as a set in stdoutGaps.
+    lead: (blank < 0 ? printed : printed.slice(0, blank))
+      .filter((line) => !line.startsWith(`oracle-gaps: gap `))
+      .map((line) => namedScratch(line, scratch)),
     lastLine: printed.at(-1) && namedScratch(printed.at(-1), scratch),
     // The stdout's own lines of the gap kind: the gap lines under their
     // functions, as the stream prints them (law 15). Every line of the kind
     // is kept, so a line that does not read as a gap is judged, not lost.
     stdoutGaps: printed
       .filter((line) => line.startsWith(`oracle-gaps: gap `))
-      .map((line) => namedScratch(line, scratch)),
+      .map((line) => namedScratch(line, scratch))
+      .sort(),
     stderrGaps: lines
       .filter((line) => streamedGap.test(line))
       .map((line) => namedScratch(line, scratch)),
