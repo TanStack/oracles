@@ -38,6 +38,16 @@
  *   fast-check itself, never through the framework. A unit that fails ran that stream up to its
  *   first failure, then its shrinks. The random units of a property run the one seed it logged: the
  *   seed of the replay environment in a seeded run, and a drawn seed in a seedless run.
+ * - `constructed independence` (maintainer decision, 2026-11-16, review of #121, F2): at a fixed
+ *   seed, the generated histories a campaign runs do not depend on its constructed list, its
+ *   length or its contents, and each constructed history runs as declared, independently of the
+ *   generated draw. So appending a constructed history keeps every fixed seed's histories, which
+ *   the decisions register's generator rules assume. Judged on an appended pair: two properties
+ *   alike except that the second's constructed list is the first's with one history appended. At
+ *   each fixed seed, and at the seeded run's random seed, the `generated` unit and the unit of each
+ *   constructed history of the shorter list run the same histories in the same order in both, up
+ *   to the shorter list's first failure, and the appended history's own unit runs. The law
+ *   compares the two properties' own logs, so it holds without the model's streams.
  * - `verdict`: a test fails with a violation of law L exactly when its first
  *   failing history violates L, whatever values the history holds (a bigint,
  *   a Map, NaN, or -0 too). Within one history a driver error decides
@@ -2860,8 +2870,12 @@ const timeoutReceivingKinds = [
 const timeoutReceivingStates = timeoutReceivingKinds.map(
   (kind) => `timeout-input-${kind}` as const,
 )
+// Law `constructed independence`: the required states of an appended pair.
+const appendedStates = [`appended-to-empty-list`, `appended-to-listed`] as const
 const frameworkStates = [
   ...timeoutReceivingStates,
+  ...appendedStates,
+  `appended-pair-whole-stream`,
   `timeout-presentation-equivalence`,
   `timeout-continuation-cut`,
   // A slow spec that fails to load, in a plan that presents timeouts: the
@@ -3905,6 +3919,41 @@ function frameworkReach(
     )
   )
     reached.add(`timeout-continuation-cut`)
+  // Law `constructed independence` compared a pair: both specs loaded, the
+  // shorter list's `generated` unit ran at its first fixed seed, and the
+  // appended history's unit ran. The shorter list is empty or holds some
+  // constructed histories; a `generated` unit that ran its whole stream
+  // without a failure compares every history it drew.
+  for (const pair of appendedPairs(plan, expected)) {
+    const [seed] = fixedSeedsOf(pair.listed)
+    const ran = (spec: SyntheticSpec, unit: string) =>
+      (run?.log ?? [])
+        .filter((entry) => entry.test === `${spec.id} > ${unit}`)
+        .map((entry) => entry.history)
+    const generated = ran(pair.listed, fixedUnit(seed!, `generated`))
+    if (
+      !run?.files[pair.listed.id]?.loaded ||
+      !run.files[pair.appended.id]?.loaded ||
+      generated.length === 0 ||
+      ran(
+        pair.appended,
+        fixedUnit(seed!, pair.appended.constructed.at(-1)!.name),
+      ).length === 0
+    )
+      continue
+    reached.add(
+      pair.listed.constructed.length === 0
+        ? `appended-to-empty-list`
+        : `appended-to-listed`,
+    )
+    if (
+      generated.every(
+        (history) =>
+          !failsUnit(pair.listed, fixedUnit(seed!, `generated`), history),
+      )
+    )
+      reached.add(`appended-pair-whole-stream`)
+  }
   return reached
 }
 
@@ -6005,6 +6054,84 @@ const comparedRun = (
       }
 }
 
+// Law `constructed independence`. Two specs of one plan are an appended pair
+// when the second is the first with one constructed history appended to its
+// list: the same seed, runs, and every other part, whatever the appended
+// history holds and whichever states it adds to the declaration. The relation
+// is structural, so it holds for any suite that draws such a pair, not only
+// for the constructed histories that build one. A slow spec is left out, as
+// law `units` leaves it out: its driver runs on after its test timed out.
+type AppendedPair = { listed: SyntheticSpec; appended: SyntheticSpec }
+const withoutList = ({
+  id: _id,
+  constructed: _constructed,
+  states: _states,
+  ...rest
+}: SyntheticSpec) => JSON.stringify(rest)
+function appendedPairs(
+  plan: Plan,
+  expected: ReturnType<typeof suiteModel>,
+): Array<AppendedPair> {
+  const runs = plan.specs.filter(
+    (spec) =>
+      spec.source.kind === `generated` &&
+      !spec.slow &&
+      expected.get(spec.id)!.loads,
+  )
+  return runs.flatMap((listed) =>
+    runs
+      .filter(
+        (appended) =>
+          appended.constructed.length === listed.constructed.length + 1 &&
+          JSON.stringify(appended.constructed.slice(0, -1)) ===
+            JSON.stringify(listed.constructed) &&
+          withoutList(appended) === withoutList(listed),
+      )
+      .map((appended) => ({ listed, appended })),
+  )
+}
+// What an appended pair ran, judged without the model's streams. At each
+// fixed seed, and at the seeded child run's random seed, the `generated` unit
+// and the unit of each constructed history of the shorter list ran at least
+// one history in both specs, and the same histories in the same order, up to
+// the shorter list's first failure (shrinks are not compared). The appended
+// history's own unit ran too. Returns the first difference, or undefined.
+function appendedDifference(
+  { listed, appended }: AppendedPair,
+  log: ReadonlyArray<LogEntry>,
+): { unit: string; listed: unknown; appended: unknown } | undefined {
+  const ran = (spec: SyntheticSpec, unit: string) =>
+    log
+      .filter((entry) => entry.test === `${spec.id} > ${unit}`)
+      .map((entry) => entry.history)
+  const names = unitNames(listed)
+  const shared = [
+    ...fixedSeedsOf(listed).flatMap((seed) =>
+      names.map((name) => fixedUnit(seed, name)),
+    ),
+    ...names.map(randomUnit),
+  ]
+  for (const unit of shared) {
+    const before = ran(listed, unit)
+    const first = before.findIndex((history) =>
+      failsUnit(listed, unit, history),
+    )
+    const cut = first < 0 ? before.length : first + 1
+    const after = ran(appended, unit)
+    const compared = first < 0 ? after : after.slice(0, cut)
+    if (
+      before.length === 0 ||
+      JSON.stringify(before.slice(0, cut)) !== JSON.stringify(compared)
+    )
+      return { unit, listed: before.slice(0, cut), appended: compared }
+  }
+  const own = appended.constructed.at(-1)!.name
+  for (const seed of fixedSeedsOf(appended))
+    if (ran(appended, fixedUnit(seed, own)).length === 0)
+      return { unit: fixedUnit(seed, own), listed: null, appended: [] }
+  return undefined
+}
+
 // Model law `replay-config`: the first error of the drawn replay
 // environment, in the order the law states, or none.
 function environmentError(plan: Plan): string | undefined {
@@ -6574,6 +6701,19 @@ function checkSuite(
         `host-scope`,
         `fixture import changed host seed selection or receiving-child repeatability: ${JSON.stringify(scope ?? null)}, owed ${JSON.stringify(expected.hostScope)}`,
         `host RNG scope`,
+      )
+  }
+  // Law `constructed independence`: appending a constructed history changes
+  // no history that the shorter list's campaigns ran. The comparison is
+  // between the two specs' own logs, so it needs no model stream.
+  for (const pair of appendedPairs(plan, expected)) {
+    const difference = appendedDifference(pair, run.log)
+    if (difference)
+      return violation(
+        `run`,
+        `${pair.appended.id} "${difference.unit}" ran ${JSON.stringify(difference.appended)} with one constructed history appended to the list of ${pair.listed.id}, which ran ${JSON.stringify(difference.listed)}`,
+        `constructed independence`,
+        { actual: difference.appended, expected: difference.listed },
       )
   }
   for (const spec of plan.specs) {
@@ -8143,6 +8283,54 @@ const unitWitnessSuite = (
   environment: null,
   ...options,
 })
+// Law `constructed independence`: a pair of drafts, the second the first with
+// one constructed history appended. The first draft's seed, runs, list, and
+// naming come from the generated suite, so random seeds vary them; a drawn
+// list is kept to the ordinary items, so each of its histories enters the
+// state of its first item. The appended history's prefix comes from the
+// suite's first fixed history, and it enters a state in some suites only, so
+// the pair's declared states differ in those. An enumerated first draft
+// gives the pair a generated source of its own.
+const ordinaryPrefix = (history: SyntheticHistory | undefined, or: number) => {
+  const items = (history ?? []).slice(0, 2).map((entry) => Math.abs(entry) % 3)
+  return items.length > 0 ? items : [or]
+}
+const appendedPairSuite = (generated: Suite, listed: boolean): Suite => {
+  const base = generated.drafts[0]!
+  const tail = base.clock ? 1 : 2
+  const constructed = listed
+    ? (base.constructed.length > 0
+        ? base.constructed
+        : [{ prefix: [tail], enters: [] }]
+      ).map(({ prefix }) => {
+        const items = ordinaryPrefix(prefix, tail)
+        return { prefix: items, enters: [`saw-${items[0]}`] }
+      })
+    : []
+  const first = generatedDraft({
+    source:
+      base.source.kind === `generated`
+        ? base.source
+        : { kind: `generated`, runs: 3, seed: 20 + tail },
+    constructed,
+    constructedNames:
+      base.constructedNames === `prefixed` ? `prefixed` : `indexed`,
+    secondSeed: base.secondSeed,
+    isolatedPlans: base.isolatedPlans,
+    reachVia: base.reachVia,
+  })
+  const prefix = ordinaryPrefix(base.fixed[0]?.history, tail)
+  return unitWitnessSuite([
+    first,
+    {
+      ...first,
+      constructed: [
+        ...constructed,
+        { prefix, enters: base.isolatedPlans ? [`saw-${prefix[0]}`] : [] },
+      ],
+    },
+  ])
+}
 const mainUnitRequiredConstructed: Array<{
   name: string
   enters: ReadonlyArray<(typeof mainUnitRequiredStates)[number]>
@@ -8334,9 +8522,11 @@ oracleProperty({
       `bound-calibration`,
       `bound-calibration-registration-error`,
       `bound-constructed-driver`,
+      ...appendedStates,
     ],
     measured: frameworkStates.filter(
       (state) =>
+        !appendedStates.some((required) => required === state) &&
         state !== `timeout-presentation-equivalence` &&
         state !== `timeout-continuation-cut` &&
         !timeoutReceivingStates.some((required) => required === state) &&
@@ -9091,6 +9281,13 @@ oracleProperty({
         name: `selector own keys with inherited ${kind}`,
         enters: [`bound-selector-prototype-${kind}` as const],
         build: (generated: Suite) => selectorPrototypeSuite(generated, kind),
+      })),
+      // Law `constructed independence`, after an empty list and after a
+      // drawn one (maintainer decision, 2026-11-16).
+      ...([false, true] as const).map((listed) => ({
+        name: `appended constructed history after ${listed ? `a drawn list` : `none`}`,
+        enters: [listed ? `appended-to-listed` : `appended-to-empty-list`],
+        build: (generated: Suite) => appendedPairSuite(generated, listed),
       })),
     ],
     fixed: [
