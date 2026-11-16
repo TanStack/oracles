@@ -117,13 +117,17 @@ function alive(pid) {
 }
 
 /**
- * Serves a copy of a test file (runBatch) to Vitest's own read of it. Each
- * copy exists only in memory, and Vitest reads every test file in its main
- * process to find its per-file pragmas (`@vitest-environment`,
- * `@module-tag`; cli-api's `promises.readFile(filepath)`, which gives "" for
- * a file that is not there), so a copy would run in the config's default
- * environment instead of its file's. The read of a copy's path returns its
- * text; any other read is Node's own.
+ * Serves a copy of a test file (runBatch) to every read of its path in this
+ * process, the one place a copy's text is served from. Each copy exists only
+ * in memory. Vitest reads every test file in its main process to find its
+ * per-file pragmas (`@vitest-environment`, `@module-tag`; cli-api's
+ * `promises.readFile(filepath)`, which gives "" for a file that is not
+ * there), so a copy would otherwise run in the config's default environment
+ * instead of its file's. Vite loads the copy through the same read: no plugin
+ * resolves a copy, so Vite keeps the absolute path that Vitest imports it by
+ * as its id. A copy that a plugin resolved, Vite would name from its root,
+ * the config's test root, and import again by that name (issue #101). The
+ * read of a copy's path returns its text; any other read is Node's own.
  */
 let copiesServed = false
 function serveCopies() {
@@ -133,9 +137,7 @@ function serveCopies() {
   promises.readFile = function (path, options, ...rest) {
     const text =
       typeof path === `string`
-        ? globalThis.__oracleGapsCopies?.get(
-            path.replaceAll(String.fromCharCode(92), '/'),
-          )
+        ? globalThis.__oracleGapsCopies?.get(posix(path))
         : undefined
     if (text === undefined) return readFile.call(this, path, options, ...rest)
     const encoded =
@@ -517,25 +519,14 @@ export default async (env) => {
   const loaded = typeof base === 'function' ? await base(env) : await base
   if (loaded === null || typeof loaded !== 'object')
     throw new Error(${JSON.stringify(`${config ?? `the config`}: config must export or return an object.`)})
-  // A path as copies are keyed: on Windows, forward slashes and an uppercase
-  // drive letter (paths.mjs \`posix\`); on POSIX, as it is.
-  const spelled = (path) => process.platform !== 'win32' ? path : path.replaceAll(String.fromCharCode(92), '/').replace(/^[a-z]:/, (drive) => drive.toUpperCase())
   const merged = mergeConfig(loaded, {
   plugins: [{
     name: 'oracle-gaps-schemata',
     enforce: 'pre',
-    // A copy of a test file (runBatch) exists only here, so no other Vitest
-    // run finds it. Vitest names a module by its path from the package, or,
-    // when the test root is a directory of the package (test.root), from that
-    // root (globalThis.__oracleGapsRoots, issue #101). A workspace dependency
-    // loads from its one-file bundle (workspaceBundles).
+    // A workspace dependency loads from its one-file bundle
+    // (workspaceBundles). A copy of a test file is not resolved here, and
+    // Vite reads it through serveCopies.
     resolveId(source) {
-      const copies = globalThis.__oracleGapsCopies
-      const root = globalThis.__oracleGapsRoots?.[${index}] ?? ''
-      for (const path of [source, ${JSON.stringify(pkg)} + source, root + source]) {
-        const copy = spelled(path)
-        if (copies?.has(copy)) return copy
-      }
       return globalThis.__oracleGapsBundles?.get(source)
     },
     // Each module this context transforms, so a run is stored under the
@@ -553,8 +544,6 @@ export default async (env) => {
       const at = id.indexOf('?')
       if (at >= 0 && [...new URLSearchParams(id.slice(at + 1)).keys()].every((key) => ['raw', 'url', 'worker', 'sharedworker', 'inline'].includes(key))) return undefined
       const path = at < 0 ? id : id.slice(0, at)
-      const copy = globalThis.__oracleGapsCopies?.get(spelled(path))
-      if (copy !== undefined) return copy
       // This context's authored patch, or else the instrumented source of the
       // current check, both set by the runner in this process.
       try {
@@ -573,10 +562,6 @@ export default async (env) => {
     )
   }
   globalThis.__oracleGapsServe = []
-  // Per context: the root that Vitest names its modules from (the test root,
-  // which a config sets as `test.root`), set once the context has resolved it
-  // (warmContext). A copy's id is named from that root (issue #101).
-  globalThis.__oracleGapsRoots = []
   // Per context: the hash of each module's text when it last transformed it.
   globalThis.__oracleGapsLoads = []
   // The text of each copy of a test file that a batch runs, by its path.
@@ -771,7 +756,6 @@ export default async (env) => {
         throw error
       }),
     )
-    globalThis.__oracleGapsRoots[index] = context.getRootProject().config.root
     // Vitest 3 calls this step `init`; Vitest 4 renamed it `standalone`.
     await fromConfig(
       index,
@@ -1095,8 +1079,8 @@ export default async (env) => {
   async function runBatch(context, out, items, seed) {
     const capture = join(out, `run-${process.pid}-${++runCounter}.jsonl`)
     // Each copy is named beside its file, so that its imports resolve as the
-    // file's do, and the wrapper's plugin serves its text: nothing is
-    // written there.
+    // file's do, and serveCopies serves its text: nothing is written
+    // there.
     const copies = items.map((item) => {
       const copy = posix(
         join(
