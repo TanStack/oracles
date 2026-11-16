@@ -1898,6 +1898,9 @@ async function incremental(dir, plan, cli, copy, observe, states) {
         )
       await new Promise((r) => setTimeout(r, 20))
     }
+    // A CLI that never wrote its --out (it waited until the backstop) gets one
+    // here, so the poison still shows whether the daemon writes into it.
+    mkdirSync(outs[0], { recursive: true })
     const results = join(outs[0], `results.json`)
     const poison = `{"poison":"written by the driver after the CLI ended"}\n`
     writeFileSync(results, poison)
