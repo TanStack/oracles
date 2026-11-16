@@ -835,28 +835,48 @@ const drawn = fc.record({
       }),
     },
   ),
+  // Randomness wins for new fields (maintainer decision, 2026-11-16): a field
+  // that changes what a history runs is drawn, and only a field that switches
+  // a test-only hook on stays a constant that constructed histories set. Of
+  // the fields below, `tornRows` (ORACLE_GAPS_TEST_TORN_ROWS), `pauseEngages`
+  // (ORACLE_GAPS_TEST_PAUSE_AT, which the daemon steps arm unless it is false)
+  // and `rejectBatch` (ORACLE_GAPS_TEST_REJECT_BATCH) switch hooks, so each is
+  // a constant; `warmReplaced`, `testRoot` and `loadPlugin` choose a scenario
+  // or a fixture's shape, so each is drawn. Their draws come after every
+  // earlier field's, so the earlier fields keep their values; the histories
+  // that draw them run other code, so a fixed seed's histories shift.
+  //
   // A batch's closing row written in two halves (issue #83) is constructed
   // only: the constant draws nothing, so generated histories hold no row, and
   // `histories` takes a constructed one back as this constant (as
   // `claimScenario` does). Its neutral value is recorded by the canary.
   tornRows: fc.constant(false),
   // Whether the daemon's pause engages in the daemon steps (dieMidCheck and
-  // resetBeforeRead). Always true in drawn histories, so the seeds' histories are
-  // unchanged; only the constructed history "a daemon pause that cannot engage" sets
-  // it false.
+  // resetBeforeRead): false leaves the pause hook unset. Always true in drawn
+  // histories; only the constructed history "a daemon pause that cannot engage"
+  // sets it false.
   pauseEngages: fc.constant(true),
-  // Whether the warm daemon is replaced after the warm check (review of #73, B2).
-  // Only the constructed history of a replaced warm daemon sets it.
-  warmReplaced: fc.constant(false),
+  // Whether the warm daemon is stopped after the warm check of a
+  // `resetBeforeRead` step, so another daemon takes the reset (review of #73,
+  // B2). It acts only in that step.
+  warmReplaced: fc.boolean(),
   // Where the config's `test.root` sits (issue #101, `testRoots`): `none`, the
-  // package, or a shape that only a constructed history sets. The constant
-  // draws nothing, so generated histories keep their values; `histories`
-  // takes a constructed one back as this constant, as `tornRows` does.
-  testRoot: fc.constant(`none`),
+  // package, or one of four shapes. Only an ES module config that Vitest
+  // discovers sets one (`testRootOf`).
+  testRoot: fc.constantFrom(
+    `none`,
+    `none`,
+    `none`,
+    `none`,
+    `tests`,
+    `parent`,
+    `outside`,
+    `link`,
+  ),
   // Whether the config has a plugin whose own \`load\` reads each test file
-  // with a sync read (\`LOAD_PLUGIN\`, review of #103). Only a constructed
-  // history sets it; \`histories\` takes it back as this constant.
-  loadPlugin: fc.constant(false),
+  // with a sync read (\`LOAD_PLUGIN\`, review of #103). Only a config in ES
+  // module syntax has it (\`loadPluginOf\`).
+  loadPlugin: fc.constantFrom(false, false, false, true),
   // The batch whose run rejects: a constructed-only field (0 is no fault). Only the constructed history at
   // the end of the campaign sets it; the take-back below returns it to 0 (the generator rule, extended).
   rejectBatch: fc.constant(0),
@@ -900,29 +920,23 @@ const keepsSteps = (history) => {
 // steps (`laterStepsOf`). Taking a history back returns it unchanged,
 // except a constructed one whose `steps` hold a later edit, which the
 // steps grammar cannot draw: its later edits move to `laterSteps`. A
-// constructed history may also set `tornRows` (issue #83) or `testRoot`
-// (issue #101), which `drawn` cannot produce, so its take-back reads each as
-// its drawn constant (as `claimScenario` does): a shrink is torn-row-free and
-// runs with the package as the config's root.
+// constructed history may also set a hook's field (`tornRows`, issue #83;
+// `pauseEngages`; `rejectBatch`), which `drawn` cannot produce, so its
+// take-back reads each as its drawn constant (as `claimScenario` does): a
+// shrink is torn-row-free, keeps the pause armed, and rejects no batch. The
+// drawn fields (`warmReplaced`, `testRoot`, `loadPlugin`) come back as they
+// are.
 const histories = drawn.map(
   (history) => (keepsSteps(history) ? history : { ...history, steps: null }),
   (value) => {
     const history =
-      /** @type {{ witness: unknown, steps: unknown[] | null, tornRows: unknown, testRoot: unknown }} */ (
+      /** @type {{ witness: unknown, steps: unknown[] | null, tornRows: unknown }} */ (
         value
       )
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
-    // Take-back into the drawn language: a disarmed pause (pauseEngages false,
-    // only the constructed history sets it) comes back as engaged, and a
-    // rejected batch (rejectBatch, likewise) as none, so the arbitrary can
-    // shrink it. Neither is therefore kept by a shrink.
     const taken =
-      history.tornRows === false &&
-      history.testRoot === `none` &&
-      history.loadPlugin === false
-        ? value
-        : { ...history, tornRows: false, testRoot: `none`, loadPlugin: false }
+      history.tornRows === false ? value : { ...history, tornRows: false }
     const later = (history.steps ?? []).filter((step) =>
       laterEdits.includes(step),
     )
@@ -930,14 +944,12 @@ const histories = drawn.map(
       return {
         ...taken,
         pauseEngages: true,
-        warmReplaced: false,
         rejectBatch: 0,
       }
     const earlier = history.steps.filter((step) => !laterEdits.includes(step))
     return {
       ...taken,
       pauseEngages: true,
-      warmReplaced: false,
       rejectBatch: 0,
       steps: earlier.length > 0 ? earlier : null,
       laterSteps: later,
@@ -2418,6 +2430,40 @@ function configOf(history) {
   }
 }
 
+/**
+ * Where a history's config sets `test.root` (`testRoots`): its drawn shape
+ * where a shape applies, and the package (`none`) elsewhere. A shape's root
+ * is written from the config's own URL, so only an ES module config sets
+ * one, and only the config that Vitest discovers in the package: a config
+ * that `--config` names (and the `config` edit's second config, which it
+ * names) sits in `config/`, and a parent's config above the package, so the
+ * shape's paths would name other directories; a `projects` config nests its
+ * test options in a project.
+ */
+function testRootOf(history) {
+  const config = configOf(history)
+  const steps = [...(history.steps ?? []), ...laterStepsOf(history)]
+  return config.configFormat === `esm` &&
+    config.configPlace === `discovered` &&
+    history.fault !== `projects` &&
+    !steps.includes(`config`)
+    ? (history.testRoot ?? `none`)
+    : `none`
+}
+
+/**
+ * Whether a history's config has the load plugin (`LOAD_PLUGIN`): where it
+ * draws one and has a config whose syntax can import `readFileSync`.
+ */
+function loadPluginOf(history) {
+  const config = configOf(history)
+  return (
+    history.loadPlugin === true &&
+    config.configPlace !== `none` &&
+    config.configSyntax === `esm`
+  )
+}
+
 function resolveHistory(history) {
   let label = 0
   const containerOf = (index) => history.containers[index] ?? `free`
@@ -2977,11 +3023,10 @@ function resolveHistory(history) {
     tornRows: history.tornRows === true,
     ...configOf(history),
     configEnv: history.configEnv === true,
-    // Where the config's `test.root` sits (`testRoots`, issue #101): only a
-    // constructed history sets it, so a generated one runs with the package
-    // as the root.
-    testRoot: history.testRoot ?? `none`,
-    loadPlugin: history.loadPlugin === true,
+    // Where the config's `test.root` sits (`testRoots`, issue #101), and
+    // whether it has the load plugin, where each applies.
+    testRoot: testRootOf(history),
+    loadPlugin: loadPluginOf(history),
     native: history.native ?? `none`,
     // A prebuilt addon in the workspace dependency's build/Release
     // (`addRelease`).
@@ -5258,7 +5303,7 @@ function configText(plan, test) {
     ...(plan.testRoot === `none`
       ? []
       : [`import { fileURLToPath } from 'node:url'`]),
-    // Only an ES module config has the load plugin (its constructed history).
+    // Only a config in ES module syntax has the load plugin (`loadPluginOf`).
     ...(plan.loadPlugin ? [`import { readFileSync } from 'node:fs'`] : []),
     ...(plan.fault === `configThrows`
       ? [`throw new Error('the fixture config broke')`]
@@ -5326,8 +5371,9 @@ const parentModules = (plan, state) =>
  * init chunk's `vitest-environment-<name>` resolution), so under `parent` that
  * package lies in the root's node_modules (`environments`); every other shape
  * finds the package's own.
- * Only an ES module config sets a root (it reads its own URL), and only the
- * constructed histories set one, each as an ES module config.
+ * Only an ES module config that Vitest discovers sets a root (it reads its
+ * own URL; `testRootOf`). Generated histories draw the shape, and each shape
+ * also has a constructed history of its own.
  */
 const inTests = {
   root: `./tests`,

@@ -15,10 +15,14 @@ import { drawn, histories } from '../oracle-gaps/gap-report-model-oracle.mjs'
 // the histories that the oracle takes, after the grammar's own mapping, so
 // a mapping that folds a new field into an old one shows too. A new field
 // goes at the end of the grammar and gets its own line at the end of each
-// list; no earlier line changes. It guards the fields' draws, not the
+// list; no earlier line changes. A constant field that becomes drawn
+// (randomness wins for new fields, maintainer decision, 2026-11-16) changes
+// its own line and the lines of the fields drawn after it, and no earlier
+// one. It guards the fields' draws, not the
 // resolved plans: a new field may still change what a plan does (the plan
 // takes `laterSteps` after a history's steps). The default fixed-seed
-// campaign draws 2 histories, and those resolve as on main.
+// campaign draws 2 histories; since `warmReplaced`, `testRoot` and
+// `loadPlugin` are drawn, those resolve with these fields' draws.
 const FIXED_SEED = 20261105
 const DRAWS = 500
 
