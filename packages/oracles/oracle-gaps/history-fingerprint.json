@@ -56,7 +56,8 @@
     ["pauseEngages", "c93e2e40cd0c4b9f"],
     ["warmReplaced", "ed6866229ecc4969"],
     ["testRoot", "e18db063421a75f1"],
-    ["loadPlugin", "ed6866229ecc4969"]
+    ["loadPlugin", "ed6866229ecc4969"],
+    ["rejectBatch", "e5386ea9402dd268"]
   ],
   "histories": [
     ["functions", "66c0e9c56951c377"],
@@ -115,6 +116,7 @@
     ["pauseEngages", "c93e2e40cd0c4b9f"],
     ["warmReplaced", "ed6866229ecc4969"],
     ["testRoot", "e18db063421a75f1"],
-    ["loadPlugin", "ed6866229ecc4969"]
+    ["loadPlugin", "ed6866229ecc4969"],
+    ["rejectBatch", "e5386ea9402dd268"]
   ]
 }

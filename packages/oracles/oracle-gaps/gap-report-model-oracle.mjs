@@ -857,6 +857,9 @@ const drawn = fc.record({
   // with a sync read (\`LOAD_PLUGIN\`, review of #103). Only a constructed
   // history sets it; \`histories\` takes it back as this constant.
   loadPlugin: fc.constant(false),
+  // The batch whose run rejects: a constructed-only field (0 is no fault). Only the constructed history at
+  // the end of the campaign sets it; the take-back below returns it to 0 (the generator rule, extended).
+  rejectBatch: fc.constant(0),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -911,8 +914,9 @@ const histories = drawn.map(
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
     // Take-back into the drawn language: a disarmed pause (pauseEngages false,
-    // only the constructed history sets it) comes back as engaged, so the
-    // arbitrary can shrink it. The disarm is therefore not kept by a shrink.
+    // only the constructed history sets it) comes back as engaged, and a
+    // rejected batch (rejectBatch, likewise) as none, so the arbitrary can
+    // shrink it. Neither is therefore kept by a shrink.
     const taken =
       history.tornRows === false &&
       history.testRoot === `none` &&
@@ -923,12 +927,18 @@ const histories = drawn.map(
       laterEdits.includes(step),
     )
     if (later.length === 0)
-      return { ...taken, pauseEngages: true, warmReplaced: false }
+      return {
+        ...taken,
+        pauseEngages: true,
+        warmReplaced: false,
+        rejectBatch: 0,
+      }
     const earlier = history.steps.filter((step) => !laterEdits.includes(step))
     return {
       ...taken,
       pauseEngages: true,
       warmReplaced: false,
+      rejectBatch: 0,
       steps: earlier.length > 0 ? earlier : null,
       laterSteps: later,
     }
@@ -2957,6 +2967,8 @@ function resolveHistory(history) {
     // the test that aborts when the driver asks.
     aborts: (history.stopRuns ?? []).some((stop) => stop.when === `abort`),
     ordinary: history.ordinary === true,
+    // The batch whose run rejects (a test-only fault; 0 is none).
+    rejectBatch: history.rejectBatch ?? 0,
     // An `owns` key in an assertion's arguments, in the ordinary file: its
     // assertion form and whether its list is a literal, or none.
     matcherOwns: history.matcherOwns ?? `none`,
@@ -4595,6 +4607,8 @@ function model(plan) {
   const gaps = entries.map((e) => e.key)
   return {
     configLines,
+    // The batch whose run the model predicts rejects (a constructed fault): the run ends as an internal error.
+    rejectedBatch: plan.rejectBatch > 0 ? plan.rejectBatch : undefined,
     baseline: baselineOf(plan),
     blocking: blockingOf(plan).filter((f) => !f.ordinary),
     replayed: blockingOf(plan).find((f) => f.replayed)?.replayed,
