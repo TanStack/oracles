@@ -1010,16 +1010,7 @@ export default async (env) => {
       }
       rmSync(capture)
     }
-    // A run that spun ended, so its closing row names what it read (F-D).
-    if (spun)
-      return {
-        file,
-        timedOut: true,
-        spin: true,
-        seconds,
-        inputs: importsOf(file, modules, closing),
-        readAt: closing.readAt,
-      }
+    if (spun) return spunRun(file, seconds, modules, closing)
     const tests = modules.flatMap((module) =>
       [...module.children.allTests()].map((testCase) => {
         const testResult = testCase.result()
@@ -1061,6 +1052,22 @@ export default async (env) => {
         String(error?.message ?? error),
       ),
       rows,
+      inputs: importsOf(file, modules, closing),
+      readAt: closing.readAt,
+    }
+  }
+
+  /**
+   * The unit of a run that spun past its call budget, alone or in a batch:
+   * a timeout. It ended, so its closing row names what it read, which it is
+   * stored under (F-D).
+   */
+  function spunRun(file, seconds, modules, closing = {}) {
+    return {
+      file,
+      timedOut: true,
+      spin: true,
+      seconds,
       inputs: importsOf(file, modules, closing),
       readAt: closing.readAt,
     }
@@ -1273,18 +1280,6 @@ export default async (env) => {
         return rows
       }
       const skippedUnit = (item) => ({ file: item.file, skipped: true })
-      // A copy that ran past its call budget, even one whose throw ended the
-      // loop and let it finish, is a timeout as it stands (a count, not a
-      // clock: no confirming run). It ended, so its closing row names what
-      // it read, which it is stored under (F-D), as a spun run alone is.
-      const spunUnit = (item, closing) => ({
-        file: item.file,
-        timedOut: true,
-        spin: true,
-        seconds,
-        inputs: importsOf(item.file, [], closing),
-        readAt: closing?.readAt,
-      })
       if (result === undefined) {
         // Cancelled without waiting; the caller replaces the context (see
         // runUnit).
@@ -1305,8 +1300,11 @@ export default async (env) => {
           units: items.slice(0, current).map((item, i) => {
             if (!closed.has(copies[i])) return undefined
             if (skipped.has(copies[i])) return skippedUnit(item)
+            // A copy that ran past its call budget, even one whose throw
+            // ended the loop and let it finish, is a timeout as it stands (a
+            // count, not a clock: no confirming run).
             if (spun.has(copies[i]))
-              return spunUnit(item, closings.get(copies[i]))
+              return spunRun(item.file, seconds, [], closings.get(copies[i]))
             const map = keyFor(copies[i], item.file)
             const own = rows
               .get(copies[i])
@@ -1350,7 +1348,8 @@ export default async (env) => {
         units: items.map((item, i) => {
           const copy = copies[i]
           if (skipped.has(copy)) return skippedUnit(item)
-          if (spun.has(copy)) return spunUnit(item, closings.get(copy))
+          if (spun.has(copy))
+            return spunRun(item.file, seconds, [], closings.get(copy))
           const map = keyFor(copy, item.file)
           const modules = result.testModules.filter((m) => m.moduleId === copy)
           return {
