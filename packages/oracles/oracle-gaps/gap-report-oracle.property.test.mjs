@@ -1930,6 +1930,8 @@ async function incremental(dir, plan, cli, copy, observe, states) {
     const runs = await running
     // The daemon the driver killed, once it is dead: its lines are its own.
     if (killed && !isAlive(pid)) runs[0].killed = pid
+    if (runs[0].retention.some((line) => line.pid === runs[0].killed))
+      states.add(`a killed daemon's retention lines were judged as its own`)
     rmSync(marks, { recursive: true, force: true })
     // Each label needs its pause's observation: a kill the driver sent and saw
     // through (gone), and the CLI's report of the check. A label without a pause
@@ -3847,6 +3849,8 @@ const incrementalStates = [
     .map((edit) => `edit ${edit} changed the cold result`),
   `a check whose daemon died during it`,
   `a check whose daemon held it past the CLI's wait, then died`,
+  // The retention law's second writer: lines of a daemon the driver killed.
+  `a killed daemon's retention lines were judged as its own`,
   `a warm daemon's connection was reset`,
   `a check whose connection was reset`,
   `a check after a daemon crash`,
