@@ -427,9 +427,9 @@ const testCase = fc.record({
   timed: fc.constant(false),
   // The constructed-only fields (see `histories`): a witness's wait where its
   // output differs, its repeated calls, its load, a repeating timer kept due
-  // while a hang waits, and whose I/O is pending while it waits (`pendingIo`,
-  // the test's own or the runner's). A generated test has the neutral values,
-  // which change nothing.
+  // while a hang waits, and what else is pending while it waits (`pendingIo`:
+  // the test's own I/O, the runner's write, or the runner's timer). A
+  // generated test has the neutral values, which change nothing.
   slowMs: fc.constant(SLOW_MS),
   loops: fc.constant(0),
   timerWait: fc.constant(null),
@@ -4112,10 +4112,15 @@ function runsOf(plan, tests, sites, active) {
           }
         // A test that writes to the console and then waits on a timer due past
         // its horizon, while the runner's own write is pending (`pendingIo:
-        // 'runner'`), cannot make progress of its own: the runner's I/O is not
-        // the test's, so the copy is idle and cut as no progress, by state (M
-        // entry "Idle counts only the test's I/O", 2026-11-15).
-        if (changed && t.pendingIo === `runner`)
+        // 'runner'`) or its own interval runs (`'runnerTimer'`), cannot make
+        // progress of its own: the runner's I/O and timers are not the test's,
+        // and the test's timer is not due inside its horizon, so the copy is
+        // idle and cut as no progress, by state (M entry "Idle counts only the
+        // test's I/O", 2026-11-15; C, timers by ownership, 2026-11-16).
+        if (
+          changed &&
+          (t.pendingIo === `runner` || t.pendingIo === `runnerTimer`)
+        )
           return {
             t,
             route,
@@ -5097,6 +5102,14 @@ function oracleTestFile(plan, file) {
         ...(t.pendingIo === `runner`
           ? [
               `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) { console.log('waiting past the horizon'); await new Promise((r) => setTimeout(r, ${PAST_HORIZON_MS}).unref()) }`,
+            ]
+          : []),
+        // Where its output differs, a test that waits on a ref'd timer due long
+        // past its horizon, while the runner keeps its own interval running
+        // (ORACLE_GAPS_TEST_RUNNER_TIMER), as Vitest's task-update timer can be.
+        ...(t.pendingIo === `runnerTimer`
+          ? [
+              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await new Promise((r) => setTimeout(r, ${PAST_HORIZON_MS}))`,
             ]
           : []),
         // A test that waits on I/O (a child process, about 3 s) where the

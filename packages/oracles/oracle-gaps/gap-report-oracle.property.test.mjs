@@ -1896,8 +1896,10 @@ async function driver(plan, observe) {
       plan.history.tests.some((t) => t.pendingIo === owner)
     const samples = `${dir}.samples`
     const runnerWrites = `${dir}.runner-writes`
+    const runnerTimers = `${dir}.runner-timers`
     if (pendingIo(`test`)) mkdirSync(samples, { recursive: true })
     if (pendingIo(`runner`)) mkdirSync(runnerWrites, { recursive: true })
+    if (pendingIo(`runnerTimer`)) mkdirSync(runnerTimers, { recursive: true })
     const how = {
       ordinary: plan.ordinary,
       sources: sourceArgument(plan, `${dir}.link`),
@@ -1909,6 +1911,9 @@ async function driver(plan, observe) {
         ...(pendingIo(`test`) ? { ORACLE_GAPS_TEST_SAMPLES: samples } : {}),
         ...(pendingIo(`runner`)
           ? { ORACLE_GAPS_TEST_RUNNER_WRITE: runnerWrites }
+          : {}),
+        ...(pendingIo(`runnerTimer`)
+          ? { ORACLE_GAPS_TEST_RUNNER_TIMER: runnerTimers }
           : {}),
       },
     }
@@ -1924,6 +1929,9 @@ async function driver(plan, observe) {
     )
     const idleBesideRunnerWrite = pendingIo(`runner`)
       ? readdirSync(runnerWrites).length
+      : 0
+    const idleBesideRunnerTimer = pendingIo(`runnerTimer`)
+      ? readdirSync(runnerTimers).length
       : 0
     // The watchdog read a closing row while the worker wrote it: a hold
     // marks `reached` once two polls came after its first half. A hold that
@@ -2006,6 +2014,15 @@ async function driver(plan, observe) {
       )
     )
       states.add(`a copy beside the runner's pending write cut as no progress`)
+    // A copy went idle while the runner's own interval ran (its mark), its
+    // test waiting on a ref'd timer past its horizon: no progress.
+    if (
+      idleBesideRunnerTimer > 0 &&
+      cli.report?.results?.some(
+        (r) => r.outcome === `timeout` && r.detail === `no progress`,
+      )
+    )
+      states.add(`a copy beside the runner's pending timer cut as no progress`)
     // A copy that waits past the history's backstop is cut off, and no later
     // owner runs, so the mutant is a timeout, not the later owner's kill.
     if (
@@ -2477,6 +2494,7 @@ async function driver(plan, observe) {
     if (copy) rmSync(copy, { recursive: true, force: true })
     rmSync(`${dir}.samples`, { recursive: true, force: true })
     rmSync(`${dir}.runner-writes`, { recursive: true, force: true })
+    rmSync(`${dir}.runner-timers`, { recursive: true, force: true })
     removePath(`${dir}.link`)
     written.delete(dir)
     try {
@@ -4095,6 +4113,7 @@ const required = [
   `a backstop cut ends the copies ahead of a later kill`,
   `a copy waiting on I/O it opened killed`,
   `a copy beside the runner's pending write cut as no progress`,
+  `a copy beside the runner's pending timer cut as no progress`,
   `a hang in one owner and a survivor in another timed out`,
   `a mutant's copies past its work budget timed out`,
   `a heartbeat named a busy mutant`,
@@ -4232,6 +4251,7 @@ const separate = [
   `a backstop cut ends the copies ahead of a later kill`,
   `a copy waiting on I/O it opened killed`,
   `a copy beside the runner's pending write cut as no progress`,
+  `a copy beside the runner's pending timer cut as no progress`,
   // The config and contexts states have constructed histories of their own.
   `a config that --config names ran`,
   ...Object.values(testRootStates),
@@ -6048,6 +6068,25 @@ oracleProperty({
           ]),
           native: `gyp`,
         }),
+      },
+      // Timers by ownership (C, 2026-11-16, under both idle M entries): a copy
+      // whose test waits on a ref'd timer due long past its horizon, while the
+      // runner keeps its own 100 ms interval running through the test, as
+      // Vitest's task-update timer can be pending. Neither timer can let the
+      // test progress inside the horizon: the test's is due past it, and the
+      // runner's is not the test's. The mutant is a timeout by no progress.
+      {
+        name: `a copy beside the runner's pending timer`,
+        enters: [`a copy beside the runner's pending timer cut as no progress`],
+        build: (generated) =>
+          soloKill(generated, [
+            {
+              ...judging(`a`, `fixed seed`, 7),
+              fn: 0,
+              judges: false,
+              pendingIo: `runnerTimer`,
+            },
+          ]),
       },
     ]),
   },

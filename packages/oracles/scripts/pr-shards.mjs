@@ -585,6 +585,7 @@ export const partitions = {
         "a copy waiting on an unref'd timer",
         'a copy waiting on a pipe it opened',
         "a copy beside the runner's pending write",
+        "a copy beside the runner's pending timer",
         "a slow owner's kill and another owner's kill",
         'a backstop cut ends the copies ahead of a later kill',
         'a kill past the work budget in a later owner',

@@ -1101,10 +1101,16 @@ const timersListed = (kinds) =>
 // With ORACLE_GAPS_TEST_RUNNER_WRITE (a directory), the runner itself holds
 // one write pending through each test, on a local pipe whose reader never
 // reads, as a write that forwards output can stay pending on win32; a copy
-// that goes idle while it is pending marks the directory.
+// that goes idle while it is pending marks the directory. With
+// ORACLE_GAPS_TEST_RUNNER_TIMER (a directory), the runner itself keeps one
+// 100 ms interval through each test, made through the global setInterval as
+// Vitest's task-update timer is; a copy that goes idle while it runs marks the
+// directory.
 const samplesAt = process.env.ORACLE_GAPS_TEST_SAMPLES
 const runnerWrites = process.env.ORACLE_GAPS_TEST_RUNNER_WRITE
+const runnerTimers = process.env.ORACLE_GAPS_TEST_RUNNER_TIMER
 let held
+let heldTimer
 let sawIo = false
 if (state.capture) {
   let baseTimers
@@ -1147,6 +1153,16 @@ if (state.capture) {
         server.close()
       })
     })
+  if (runnerTimers)
+    beforeEach((context) => {
+      if (continuing) return
+      const timer = setInterval(() => {}, 100)
+      heldTimer = timer
+      context.onTestFinished(() => {
+        heldTimer = undefined
+        clearInterval(timer)
+      })
+    })
   realInterval(() => {
     const now = realNow()
     if (baseTimers === undefined || reported) return
@@ -1169,6 +1185,8 @@ if (state.capture) {
     reported = true
     if (held?.writableLength)
       writeWhole(join(runnerWrites, `idle-${process.pid}-${threadId}`), ``)
+    if (heldTimer)
+      writeWhole(join(runnerTimers, `idle-${process.pid}-${threadId}`), ``)
     appendFileSync(
       state.capture,
       `${JSON.stringify({ file: thisFile, idle: true })}\n`,

@@ -173,6 +173,10 @@ agent.
     reads, as a write that forwards a test's output can stay pending on
     win32. A copy that goes idle while that write is pending writes an
     `idle-<pid>-<threadId>` marker there.
+  - `ORACLE_GAPS_TEST_RUNNER_TIMER` names a directory. Through each test, the
+    runner itself keeps one 100 ms interval running, made through the global
+    `setInterval` as Vitest's task-update timer is. A copy that goes idle while
+    it runs writes an `idle-<pid>-<threadId>` marker there.
 
   A few endings print no done line, or one more line: a SIGKILL of the CLI,
   or a signal that comes while Node is still starting the CLI, before its
