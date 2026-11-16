@@ -80,48 +80,37 @@ const writeMark = (path, text) => {
   renameSync(temp, path)
 }
 
-// How often a CLI's watchdog counts a request's quiet: a poll in which the
-// daemon sent nothing.
-const POLL_MS = 100
-
 /**
  * Sends one request and settles with the daemon's reply. A check's request
- * (`bounded`) settles as `{ silent }` once its daemon has sent nothing for
- * WAIT_MS: the CLI's watchdog counts the polls in which no byte came, and a
- * daemon sends a beat (a newline) each time one of its checks makes
- * progress, so only a daemon that has stopped answering (or one phase of
- * its check, such as a session's start, that runs longer than the bound with
- * no progress) reaches it.
+ * (`bounded`) settles as `{ silent: true }` once its daemon has sent nothing
+ * for WAIT_MS of wall-clock time (the socket's own idle timeout). A daemon
+ * sends a beat (a newline) each time one of its checks makes progress, so
+ * only a daemon that has stopped answering (or one phase of its check, such
+ * as a session's start, that runs longer than the bound with no progress)
+ * reaches it. The bound changes the run's path, never its outcome: the CLI
+ * then checks cold (v21.2 R39, I15).
  */
 function send(pkg, message, bounded = false) {
   return new Promise((settle, reject) => {
-    // Test-only (ORACLE_GAPS_TEST_WAIT_MARK, a path): the watchdog's bound is
-    // a pause point. Once it is reached, the request writes the path and keeps
+    // Test-only (ORACLE_GAPS_TEST_WAIT_MARK, a path): the bound is a pause
+    // point. Once it is reached, the request writes the path and keeps
     // waiting, so a test acts on the CLI's wait rather than on the clock.
     const mark = process.env.ORACLE_GAPS_TEST_WAIT_MARK
-    let quiet = 0
-    const watchdog = !bounded
-      ? undefined
-      : setInterval(() => {
-          quiet += 1
-          if (quiet * POLL_MS < WAIT_MS) return
-          if (mark === undefined) return done({ silent: WAIT_MS / 1000 })
-          if (!existsSync(mark)) writeMark(mark, ``)
-        }, POLL_MS)
     const done = (value) => {
-      clearInterval(watchdog)
       socket.destroy()
       settle(value)
     }
-    const fail = (error) => {
-      clearInterval(watchdog)
-      reject(error)
-    }
+    const fail = reject
     const socket = connect(socketOf(pkg))
     let reply = ``
     socket.on(`connect`, () => socket.write(`${JSON.stringify(message)}\n`))
+    if (bounded) {
+      socket.setTimeout(WAIT_MS)
+      socket.on(`timeout`, () =>
+        mark === undefined ? done({ silent: true }) : writeMark(mark, ``),
+      )
+    }
     socket.on(`data`, (chunk) => {
-      quiet = 0
       reply += chunk
     })
     socket.on(`end`, () => {
@@ -171,6 +160,18 @@ function daemonLogTail(pkg) {
   }
 }
 
+/** Ends the daemon that holds the package's lock (its token starts with its pid). */
+function endDaemon(pkg) {
+  const pid = Number.parseInt(
+    readText(join(stateDirOf(pkg), `daemon.lock`)) ?? ``,
+  )
+  try {
+    if (pid > 0) process.kill(pid, `SIGKILL`)
+  } catch {
+    // It ended meanwhile.
+  }
+}
+
 /** Starts a daemon for the package, detached from this process. */
 function startDaemon(pkg) {
   mkdirSync(stateDirOf(pkg), { recursive: true })
@@ -189,8 +190,8 @@ function startDaemon(pkg) {
  * is waited for. It waits at most 60 s for a daemon to answer or start; the
  * time a daemon holds the request, queued or checking, is the check's and is
  * not counted while the daemon's checks make progress. A daemon that holds
- * it and sends nothing for that long has stopped answering, and the CLI gets
- * `{ silent }`, the seconds it waited, to check cold instead.
+ * it and sends nothing for that long has stopped answering: the CLI ends it
+ * and gets `{ silent }`, the seconds it waited, to check cold instead.
  */
 export async function requestDaemon(pkg, argv, code) {
   const began = Date.now()
@@ -207,8 +208,13 @@ export async function requestDaemon(pkg, argv, code) {
     try {
       reply = await send(pkg, { argv, cwd: process.cwd(), code }, true)
       held += Date.now() - sent
-      // A daemon that stopped answering: the CLI checks cold (R39).
-      if (reply.silent) return reply
+      // A daemon that stopped answering: the CLI ends it, so it writes no
+      // more into this run's --out, and checks cold (R39). The daemon that
+      // held the request listens on the socket, so it is the lock's holder.
+      if (reply.silent) {
+        endDaemon(pkg)
+        return { silent: WAIT_MS / 1000 }
+      }
     } catch (error) {
       if (!absent(error)) throw error
       // A daemon could not load or open its session since this CLI started
