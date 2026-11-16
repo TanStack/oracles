@@ -4356,7 +4356,7 @@ const reachesRun = (history) =>
 // law 12) before its done line: P10 prefixes every line the CLI writes,
 // and the register's ratified exemptions (2026-11-16) do not name an
 // internal error's lines. The kind is the done line's status word for
-// exit 3 (v21.1 I7).
+// exit 3 (v21.2 I7).
 const streamKinds = [
   `config`,
   `note`,

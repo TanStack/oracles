@@ -372,10 +372,11 @@
  *    (<signal>)` after a stop. An `error` line is an internal error's
  *    diagnostic, so a run has at most one, and none unless it exits 3 (P10,
  *    one diagnostic per failure). The law holds for every run, whatever its
- *    end: an internal error's lines are lines of the stream (P10 and v21.1
- *    I3, R10; the register's ratified exemptions of 2026-11-16 name the
- *    stdout summary, refusal blocks, indented baseline lines, and Node's own
- *    lines, and no other). A check through the daemon streams the same lines.
+ *    end: an internal error's lines are lines of the stream (P10 as amended
+ *    in v21.2, and v21.2 I3 and R10: the declared exempt lines are the
+ *    stdout summary, refusal blocks, indented baseline lines under a
+ *    prefixed head line, and Node's own lines, and no other; register
+ *    M-27, 2026-11-16). A check through the daemon streams the same lines.
  *
  * Authority: the maintainer's decisions in the gap-check design runs v11, v14,
  * and v19 (2026-11-04 and 2026-11-05; the design notes are kept by the project
@@ -2910,7 +2911,7 @@ function check(plan, observations, expected) {
       { actual: cli.configLines, expected: expected.configLines },
     )
   // Law 15 holds for every run, an internal error's included: its error line and its done line are lines of
-  // the stream (P10; v21.1 I3, I7, R10). The rest of a rejected batch's ending is judged below, after
+  // the stream (v21.2 P10, I3, I7, R10). The rest of a rejected batch's ending is judged below, after
   // retention.
   const stream = streamBreach(`cli`, cli, expected, plan)
   if (stream) return stream
