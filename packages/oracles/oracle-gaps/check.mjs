@@ -1793,7 +1793,11 @@ export default async (env) => {
       let stable = runPaths.length > 0
       // What the config's plugins have read so far, each with its hash from
       // its read: the run may have read through any of it (see hookReads).
-      const paths = [...new Set([...runPaths, ...hookReads.keys()])]
+      // A variable that the CLI set (`wrote`) is its own output, which a
+      // copy may read too (the harness's fallback read of ORACLE_GAPS_STATE).
+      const paths = [...new Set([...runPaths, ...hookReads.keys()])].filter(
+        (path) => !wrote.has(path),
+      )
       const readAt = { ...Object.fromEntries(hookReads), ...runReadAt }
       const inputs = paths.map((path) => {
         const now = servedHash(path, index)
