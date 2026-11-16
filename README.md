@@ -87,7 +87,9 @@ agent.
   no unmodified run to compare with, so there the bound judges nothing. The
   count does not see work without a site, such as a plain assignment, a
   `for...of` pass, or a builtin's own work, so a call to a builtin counts
-  once, whatever it costs. Where a shortcut's cost is in such a builtin
+  once, whatever it costs. Probe code is never work: a site in probe-only
+  code (the probe guard, a probe statement, or a probe helper) counts
+  nothing, so a mutant that only enters probe code does no extra work. Where a shortcut's cost is in such a builtin
   (`Object.defineProperty` and the like), make that cost an explicit
   observation of the driver, such as a count of those calls, and let a law
   judge it, in place of a very tight work bound. Work is counted per test, not per history: a

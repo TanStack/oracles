@@ -617,6 +617,7 @@ export const partitions = {
         'a package with no config',
         'a declaration fault: configThrows',
         'a reset check after its warm daemon was replaced',
+        "a probe branch under a generated test's work bound",
         'a stream log lost after its note, then completed',
         'a supervised child exits when its supervisor is killed',
         'an unsupervised run stopped after its note',
