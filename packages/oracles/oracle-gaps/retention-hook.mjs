@@ -1,7 +1,6 @@
-// The retention test hook of the gap CLI (packages/oracles/README.md, "Test
-// hooks"). check.mjs imports this module only when ORACLE_GAPS_TEST_RETENTION
-// or ORACLE_GAPS_TEST_REJECT_BATCH is set, so a normal run never loads it, and
-// the published package does not include it (package.json `files`).
+// The retention test hook of the gap CLI (the package README, "Test hooks").
+// check.mjs imports this module only when ORACLE_GAPS_TEST_RETENTION or
+// ORACLE_GAPS_TEST_REJECT_BATCH is set, so a normal run never loads it.
 //
 // The hook observes; it never changes an outcome (register: test-only hooks).
 // The one exception is the rejected-batch fault, which triggers the path a

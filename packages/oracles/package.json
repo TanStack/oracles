@@ -53,7 +53,6 @@
     "oracle-gaps",
     "!oracle-gaps/**/*.property.test.mjs",
     "!oracle-gaps/gap-report-model-oracle.mjs",
-    "!oracle-gaps/retention-hook.mjs",
     "!oracle-gaps/vitest.config.mjs",
     "!oracle-gaps/node_modules/**",
     "!oracle-gaps/.scratch-*",
