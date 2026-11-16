@@ -491,6 +491,9 @@ const earlierEdits = edits.filter((edit) => !laterEdits.includes(edit))
 // A history's no later edits, one value, so `histories` can take it back
 // (fc.constant takes back only its own reference).
 const NO_LATER_STEPS = Object.freeze([])
+// A history's no stop runs, one value for the same reason: a constructed
+// history whose stops are all constructed-only is taken back to it.
+const NO_STOPS = Object.freeze([])
 // The later edits a history takes after its steps: only one without the
 // witness module that has steps.
 const laterStepsOf = (history) =>
@@ -689,7 +692,7 @@ const drawn = fc.record({
   // spins (`w_stop`), each in a pool: Vitest's workers as child processes or
   // as threads. Each costs a run of its own, so few histories have one.
   stopRuns: fc.oneof(
-    { weight: 9, arbitrary: fc.constant([]) },
+    { weight: 9, arbitrary: fc.constant(NO_STOPS) },
     {
       weight: 1,
       arbitrary: fc.array(
@@ -1029,9 +1032,11 @@ const drawnStops = (history) =>
     ? history
     : {
         ...history,
-        stopRuns: history.stopRuns.filter((stop) =>
+        stopRuns: history.stopRuns.some((stop) =>
           drawnWhens.includes(stop.when),
-        ),
+        )
+          ? history.stopRuns.filter((stop) => drawnWhens.includes(stop.when))
+          : NO_STOPS,
       }
 const histories = drawn.map(
   (history) => (keepsSteps(history) ? history : { ...history, steps: null }),
