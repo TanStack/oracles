@@ -602,8 +602,6 @@ export default async (env) => {
     return lastServed.get(index)
   }
   const indexOf = new Map()
-  // The units the check's store holds, set by check() (its store's size).
-  let heldUnits = () => 0
   let contexts = []
   let contextsKey
   let contextsConfig
@@ -612,10 +610,17 @@ export default async (env) => {
   let seedVariable = `ORACLE_SEED`
   const contextSpecs = new Map()
   let runCounter = 0
-  // The current check's evidence, which runBatch counts its batches in (set by check).
-  let evidenceOf
-  // The output directory of the check being run (the test hook names each line with it).
-  let hookRun
+  // The retention test hook (retention-hook.mjs, README "Test hooks"): loaded
+  // only when one of its variables is set, so a normal run never loads it.
+  const hook =
+    process.env.ORACLE_GAPS_TEST_RETENTION ||
+    process.env.ORACLE_GAPS_TEST_REJECT_BATCH
+      ? (await import(`./retention-hook.mjs`)).retentionHook({
+          live: () => contexts,
+          indexOf,
+          contextSpecs,
+        })
+      : undefined
 
   // A context loads the package's own config through its wrapper, so an
   // error there is the author's: the run refuses, naming the config file
@@ -642,15 +647,8 @@ export default async (env) => {
     const limit = process.getMaxListeners()
     if (limit > 0) process.setMaxListeners(limit + count)
   }
-  // The contexts that are open (warmed and not yet closed): the replaced ones must leave it.
-  const openContexts = new Set()
-  // Slots between closing their context and opening the next: their open count is one short, for the
-  // retention law's identity (open + replacing === contexts.length), which holds at every batch boundary.
-  let replacing = 0
-  const closeContext = (context) => {
-    openContexts.delete(context)
-    return context.close().finally(() => allowListeners(-1))
-  }
+  const closeContext = (context) =>
+    context.close().finally(() => allowListeners(-1))
   // Vite's logger, writing each message as `oracle-gaps: note vite: …`.
   const viteNote = (message) => {
     for (const line of String(message)
@@ -795,7 +793,6 @@ export default async (env) => {
       )
     }
     lastServed.delete(index)
-    openContexts.add(context)
     return context
   }
   // A warm context caches the test files it found; a file added since the last check, such as a new oracle
@@ -808,9 +805,6 @@ export default async (env) => {
       map.set(spec.moduleId, [...(map.get(spec.moduleId) ?? []), spec])
     }
     return map
-  }
-  async function globSpecs(context) {
-    contextSpecs.set(context, await specsOf(context))
   }
   async function closeContexts() {
     await Promise.all(
@@ -1102,11 +1096,10 @@ export default async (env) => {
   let copyCounter = 0
   let holdCounter = 0
   async function runBatch(context, out, items, seed) {
-    evidenceOf.batches += 1
     const capture = join(out, `run-${process.pid}-${++runCounter}.jsonl`)
-    const before = process.env.ORACLE_GAPS_TEST_RETENTION
-      ? retentionTotals(context)
-      : undefined
+    // The retention hook's view of this batch: its own index, and the totals
+    // before it (retention-hook.mjs).
+    const observed = hook?.begin(context)
     // Each copy is named beside its file, so that its imports resolve as the
     // file's do, and the wrapper's plugin serves its text: nothing is
     // written there.
@@ -1171,19 +1164,13 @@ export default async (env) => {
     writeFileSync(join(out, `state.json`), JSON.stringify(state))
     const project = context.getRootProject()
     const started = Date.now()
-    // Test-only fault (ORACLE_GAPS_TEST_REJECT_BATCH=<n>, inert unless set): the n-th batch's run rejects,
-    // as a crash in Vitest would, so the CLI's rejection path runs (register: test-only hooks).
-    const running =
-      process.env.ORACLE_GAPS_TEST_REJECT_BATCH === String(evidenceOf.batches)
-        ? Promise.reject(
-            new Error(
-              `oracle-gaps test fault: batch ${evidenceOf.batches} rejected`,
-            ),
-          )
-        : context.runTestSpecifications(
-            copies.map((copy) => project.createSpecification(copy)),
-            false,
-          )
+    const run = context.runTestSpecifications(
+      copies.map((copy) => project.createSpecification(copy)),
+      false,
+    )
+    // Test-only fault (ORACLE_GAPS_TEST_REJECT_BATCH=<n>): the n-th batch's
+    // run rejects once its copies are in Vitest's state, as a crash would.
+    const running = hook ? hook.fault(observed, run) : run
     // The watchdog: each copy writes a starting row when its setup runs and
     // a closing row when it finishes, so the copy that is running is the
     // last that started, or the one after it once that one closed. A copy
@@ -1400,12 +1387,9 @@ export default async (env) => {
       // updates, so its state is not touched here. Its context is replaced
       // by the caller (replace), which closes it and drops its state.
       clearTimeout(timer)
-      if (raced && result === undefined)
-        retiredEntries(context, before, copies, true)
-      else {
-        retireCopies(context, copies)
-        retiredEntries(context, before, copies)
-      }
+      const cut = raced && result === undefined
+      if (!cut) retireCopies(context, copies)
+      await hook?.line(context, observed, copies, cut)
       rmSync(capture, { force: true })
     }
   }
@@ -1452,7 +1436,6 @@ export default async (env) => {
    */
   function retireModules(server, gone) {
     const environments = viteEnvironments(server)
-    let removed = 0
     for (const environment of environments) {
       const graph = environment.moduleGraph
       const {
@@ -1473,7 +1456,6 @@ export default async (env) => {
         )
       for (const copy of gone) {
         for (const mod of fileToModulesMap.get(copy) ?? []) {
-          removed += 1
           graph.invalidateModule(mod)
           for (const imported of mod.importedModules)
             imported.importers.delete(mod)
@@ -1488,7 +1470,6 @@ export default async (env) => {
         fileToModulesMap.delete(copy)
       }
     }
-    return removed
   }
 
   // Vite's environments, each with its module graph. A Vite that exposes none
@@ -1502,107 +1483,7 @@ export default async (env) => {
     return environments
   }
 
-  // Every structure a copy can leave state in, unfiltered: Vitest's state
-  // (filesMap, pathsSet, idMap, errorsSet, leakSet) and each Vite environment's
-  // module graph (its four maps, and the nodes that hold a transform).
-  function retentionTotals(context) {
-    const { filesMap, pathsSet, idMap, errorsSet, leakSet } = context.state
-    const totals = {
-      // The cold check's store: units it keeps for reuse (none, see evidence.mjs).
-      store: heldUnits(),
-      // Identities, not sizes: a registry entry is stale unless it names a live context at its own slot
-      // (indexOf), or a live context (contextSpecs). Open contexts (not closed) must be the live ones.
-      staleIndexed: [...indexOf].filter(([c, i]) => contexts[i] !== c).length,
-      staleSpecs: [...contextSpecs.keys()].filter((c) => !contexts.includes(c))
-        .length,
-      staleOpen: openContexts.size + replacing - contexts.length,
-      filesMap: filesMap.size,
-      pathsSet: pathsSet.size,
-      idMap: idMap.size,
-      errorsSet: errorsSet.size,
-      leakSet: leakSet.size,
-    }
-    for (const [name, environment] of Object.entries(
-      context.getRootProject().vite?.environments ?? {},
-    )) {
-      const graph = environment.moduleGraph
-      // Vite's keys are named `vite.<environment>.<map>`, so the law can tell them from Vitest's state.
-      totals[`vite.${name}.url`] = graph.urlToModuleMap.size
-      totals[`vite.${name}.id`] = graph.idToModuleMap.size
-      totals[`vite.${name}.etag`] = graph.etagToModuleMap.size
-      totals[`vite.${name}.file`] = graph.fileToModulesMap.size
-      totals[`vite.${name}.transformed`] = [
-        ...graph.idToModuleMap.values(),
-      ].filter((node) => node.transformResult != null).length
-    }
-    return totals
-  }
-
-  // The test hook (ORACLE_GAPS_TEST_RETENTION, a file path): after a run
-  // that settled and its copies are retired, one line holds each structure's
-  // total before the batch and after its retirement. The bounded-retention
-  // law reads it: every total returns to its size before the batch.
-  // Files, without their query, with more than one node in an environment's graph, outside the copies:
-  // a non-copy file is cached once, so each count must be 0 (the law's bound on originals).
-  function nonCopyDuplicates(context, owned) {
-    const dup = []
-    for (const environment of Object.values(
-      context.getRootProject().vite?.environments ?? {},
-    )) {
-      const perFile = new Map()
-      for (const node of environment.moduleGraph.idToModuleMap.values()) {
-        const file = node.id.split(`?`)[0]
-        if (owned.has(file)) continue
-        perFile.set(file, [...(perFile.get(file) ?? []), node.id])
-      }
-      // The one measured allowance: a source file's plain node and its ?raw node (the oracle reads source text
-      // with ?raw). One pair per file, not per batch (shard 1 on 270e6f4: the same pair in every batch line).
-      for (const [file, ids] of perFile)
-        if (
-          ids.length > 1 &&
-          !(
-            ids.length === 2 &&
-            ids.includes(file) &&
-            ids.includes(`${file}?raw`)
-          )
-        )
-          dup.push(
-            `${environment.name ?? `env`} ${file} ${ids.sort().join(` | `)}`,
-          )
-    }
-    return dup
-  }
-
-  function retiredEntries(context, before, copies, cut = false) {
-    const file = process.env.ORACLE_GAPS_TEST_RETENTION
-    if (!file) return
-    // A cut run is not retired (its context is replaced), so its line has no after: its before still
-    // names the stale totals the next batch starts from.
-    // Vite's graph also holds modules that are not copies (a source or harness file is cached on its
-    // first import, legitimately), so for Vite the law counts the copies' own nodes, which must be 0.
-    const owned = new Set(copies)
-    let copyNodes = 0
-    for (const environment of Object.values(
-      context.getRootProject().vite?.environments ?? {},
-    ))
-      for (const copy of owned)
-        copyNodes +=
-          environment.moduleGraph.fileToModulesMap.get(copy)?.size ?? 0
-    appendFileSync(
-      file,
-      `${JSON.stringify(cut ? { run: hookRun, pid: process.pid, batch: evidenceOf.batches, before, cut: true } : { run: hookRun, pid: process.pid, batch: evidenceOf.batches, before, after: retentionTotals(context), copyNodes, nonCopyDup: nonCopyDuplicates(context, owned).length })}\n`,
-    )
-  }
-
   async function check(options, store, log = console.error) {
-    hookRun = options.out
-    // The test hook names the process that runs the check (the CLI's supervised child, or a daemon): its
-    // retention lines are that process's, and the driver reads this file (observation only).
-    if (process.env.ORACLE_GAPS_TEST_RETENTION) {
-      mkdirSync(options.out, { recursive: true })
-      writeFileSync(join(options.out, `check.pid`), String(process.pid))
-    }
-    heldUnits = () => store.size?.() ?? 0
     const authored = options.mutants ? loadAuthored(options.mutants) : []
     seedVariable = `${options.envPrefix}_SEED`
     if (options.hangLimit > options.mutantLimit)
@@ -1614,6 +1495,7 @@ export default async (env) => {
       every: Number(process.env.ORACLE_GAPS_HEARTBEAT_MS ?? 30_000),
     }
     mkdirSync(options.out, { recursive: true })
+    hook?.check(options.out)
     // An earlier run's internal error; a completed check writes the other
     // files of an ending over the earlier ones (ending.mjs).
     rmSync(join(options.out, `error.log`), { force: true })
@@ -1663,6 +1545,7 @@ export default async (env) => {
       for (let i = 0; i < options.contexts; i += 1) {
         contexts.push(await warmContext(settings, i))
         indexOf.set(contexts.at(-1), i)
+        hook?.joined(contexts.at(-1))
       }
       contextsKey = JSON.stringify(settings)
       contextsConfig = configHash()
@@ -1670,6 +1553,7 @@ export default async (env) => {
     while (contexts.length < options.contexts) {
       contexts.push(await warmContext(settings, contexts.length))
       indexOf.set(contexts.at(-1), contexts.length - 1)
+      hook?.joined(contexts.at(-1))
     }
     endPhase(`warm contexts`, { contexts: contexts.length })
     // The run names the config its contexts loaded, before any refusal that
@@ -1680,7 +1564,8 @@ export default async (env) => {
         settings.config ?? `none, Vitest's default discovery`,
       ),
     )
-    for (const context of contexts) await globSpecs(context)
+    for (const context of contexts)
+      contextSpecs.set(context, await specsOf(context))
     endPhase(`find test files`)
 
     // 1. The static half (analysis.mjs): instrumented sources, mutants,
@@ -1739,10 +1624,7 @@ export default async (env) => {
       unchanged: 0,
       // Confirmations that a mutant's budget cut short or left no time.
       budget: 0,
-      // Every batch run (runBatch), cut or not: each writes one retention line.
-      batches: 0,
     }
-    evidenceOf = evidence
     // Each file's imports in its unmutated run. A run that timed out reports
     // none, so it is stored under these: a mutant changes no import.
     const fileInputs = new Map()
@@ -1801,7 +1683,10 @@ export default async (env) => {
       return stable ? inputs : undefined
     }
     const remember = (id, unit, inputs) => {
-      if (inputs) store.put(id, { inputs, unit })
+      if (!inputs) return
+      const entry = { inputs, unit }
+      hook?.stored(entry)
+      store.put(id, entry)
     }
     // A batch run in a slot's context, with the inputs to store each item
     // under: the modules its file's unmutated run read, and those its copy
@@ -2072,14 +1957,12 @@ export default async (env) => {
     // it stops the worker.
     const replace = async (slot) => {
       const started = Date.now()
-      replacing += 1
       await Promise.race([
         closeContext(slot.context).catch(() => undefined),
         sleep(10_000),
       ])
       const replaced = slot.context
       const next = await warmContext(settings, slot.index)
-      replacing -= 1
       const specs = await specsOf(next)
       // One synchronous step: the replaced context leaves every map keyed by it and the new one joins them,
       // with the contexts array, so no reader (and no measurement) sees the registry and the array disagree.
@@ -2089,6 +1972,7 @@ export default async (env) => {
       contextSpecs.set(next, specs)
       contexts[slot.index] = next
       slot.context = next
+      hook?.joined(next)
       span(`replace context`, started, { slot: slot.index })
     }
     // `after(index)` is more work for context `index` once its files ran.

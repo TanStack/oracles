@@ -61,10 +61,11 @@ const withVersion = (row, variant) =>
  * The store of a cold check. It keeps no unit: a cold run serves no lookup
  * (its evidence reports `reused` 0 on every klona run measured), so a unit
  * kept for reuse would only be retained, per mutant copy, for the whole run.
- * `size` counts what it holds, for the retention law (check.mjs).
+ * The retention law observes this through the entries' reachability
+ * (retention-hook.mjs), not through anything the store reports.
  */
 export function memoryStore() {
-  return { get: () => undefined, put: () => {}, size: () => 0 }
+  return { get: () => undefined, put: () => {} }
 }
 
 /**
