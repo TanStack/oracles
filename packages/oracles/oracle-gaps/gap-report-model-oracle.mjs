@@ -5289,6 +5289,10 @@ const parentModules = (plan, state) =>
  * outside it by its absolute path, so each shape names a copy of a test file
  * differently if the runner resolves it. Every shape names each test file by
  * its path in the package, so the model's keys are the same in all of them.
+ * Vitest resolves the package of a pragma's environment from the root (its
+ * init chunk's `vitest-environment-<name>` resolution), so under `parent` that
+ * package lies in the root's node_modules (`environments`); every other shape
+ * finds the package's own.
  * Only an ES module config sets a root (it reads its own URL), and only the
  * constructed histories set one, each as an ES module config.
  */
@@ -5304,6 +5308,7 @@ const testRoots = {
     root: `..`,
     include: `pkg/tests/**/*.test.ts`,
     setup: `./pkg/tests/setup.ts`,
+    environments: `../node_modules`,
   },
   outside: {
     root: `./src`,
@@ -5518,21 +5523,22 @@ function fixtureFiles(plan, state = initialState(plan)) {
       : {}),
     'tests/c.test.ts': ordinaryTestFile(plan),
     // The environment oracle file a's pragma names (`pragma`), a package
-    // as Vitest finds one (`vitest-environment-<name>`).
+    // as Vitest finds one (`vitest-environment-<name>`) from the test root.
     ...(plan.pragma
       ? {
-          'node_modules/vitest-environment-marked/package.json': `${JSON.stringify({ name: `vitest-environment-marked`, type: `module`, exports: `./index.js` })}\n`,
-          'node_modules/vitest-environment-marked/index.js': [
-            `export default {`,
-            `  name: 'marked',`,
-            `  viteEnvironment: 'ssr',`,
-            `  setup(global) {`,
-            `    global.__gapEnvironment = 'marked'`,
-            `    return { teardown() { delete global.__gapEnvironment } }`,
-            `  },`,
-            `}`,
-            ``,
-          ].join(`\n`),
+          [`${testRoot.environments ?? `node_modules`}/vitest-environment-marked/package.json`]: `${JSON.stringify({ name: `vitest-environment-marked`, type: `module`, exports: `./index.js` })}\n`,
+          [`${testRoot.environments ?? `node_modules`}/vitest-environment-marked/index.js`]:
+            [
+              `export default {`,
+              `  name: 'marked',`,
+              `  viteEnvironment: 'ssr',`,
+              `  setup(global) {`,
+              `    global.__gapEnvironment = 'marked'`,
+              `    return { teardown() { delete global.__gapEnvironment } }`,
+              `  },`,
+              `}`,
+              ``,
+            ].join(`\n`),
         }
       : {}),
     // A copy that a check which died left behind (the runner names its
