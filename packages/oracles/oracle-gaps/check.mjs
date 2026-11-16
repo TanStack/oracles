@@ -857,12 +857,15 @@ export default async (env) => {
   // and for how long, so that a long run never looks frozen. Its label is
   // its mutant's id, an authored mutant's `authored:<id>`, or `baseline`
   // for a run with no mutant. The interval is 30 s; the CLI's oracle
-  // shortens it (ORACLE_GAPS_HEARTBEAT_MS). Each check sets where it logs.
-  let pulse = { log: () => {}, every: 30_000 }
+  // shortens it (ORACLE_GAPS_HEARTBEAT_MS). Each check sets where it logs,
+  // and whom each poll of a running copy tells that the check progresses
+  // (`alive`: the daemon's beat to the CLIs that wait on it).
+  let pulse = { log: () => {}, alive: () => {}, every: 30_000 }
   function heartbeat() {
     let since
     let sent = 0
     return (label, file, started) => {
+      pulse.alive()
       if (started !== since) {
         since = started
         sent = 0
@@ -1485,7 +1488,7 @@ export default async (env) => {
     return environments
   }
 
-  async function check(options, store, log = console.error) {
+  async function check(options, store, log = console.error, alive = () => {}) {
     const authored = options.mutants ? loadAuthored(options.mutants) : []
     seedVariable = `${options.envPrefix}_SEED`
     if (options.hangLimit > options.mutantLimit)
@@ -1494,6 +1497,7 @@ export default async (env) => {
       )
     pulse = {
       log,
+      alive,
       every: Number(process.env.ORACLE_GAPS_HEARTBEAT_MS ?? 30_000),
     }
     mkdirSync(options.out, { recursive: true })

@@ -20,8 +20,10 @@
 // code (codeIdentity), which must be the daemon's; the reply is one line of
 // JSON with the summary a cold run would have printed and its log, or the
 // error that ended the check, which the CLI ends the run with as a cold run
-// does (ending.mjs). One check runs at a time. The daemon exits when asked,
-// or after 30 idle minutes.
+// does (ending.mjs). Until then, the daemon sends the CLI a beat (an empty
+// line) each time one of its checks makes progress; a CLI that hears nothing
+// for 60 s runs its check cold (R39). One check runs at a time. The daemon
+// exits when asked, or after 30 idle minutes.
 //
 // The CLI starts it: node daemon.mjs --package <dir>. Each check's evidence is
 // flushed to disk before the reply, so a daemon that is killed keeps what it
@@ -78,36 +80,55 @@ const writeMark = (path, text) => {
   renameSync(temp, path)
 }
 
-function send(pkg, message) {
+// How often a CLI's watchdog counts a request's quiet: a poll in which the
+// daemon sent nothing.
+const POLL_MS = 100
+
+/**
+ * Sends one request and settles with the daemon's reply. A check's request
+ * (`bounded`) settles as `{ silent }` once its daemon has sent nothing for
+ * WAIT_MS: the CLI's watchdog counts the polls in which no byte came, and a
+ * daemon sends a beat (a newline) each time one of its checks makes
+ * progress, so only a daemon that has stopped answering (or one phase of
+ * its check, such as a session's start, that runs longer than the bound with
+ * no progress) reaches it.
+ */
+function send(pkg, message, bounded = false) {
   return new Promise((settle, reject) => {
-    // Test-only (ORACLE_GAPS_TEST_WAIT_MARK, a path): this request has no timeout
-    // of its own. Here a timer starts when the request is sent and, if the reply
-    // has not come after WAIT_MS, writes the path, so a test acts on the CLI's
-    // wait rather than on the clock. The timer is cleared on every settle.
+    // Test-only (ORACLE_GAPS_TEST_WAIT_MARK, a path): the watchdog's bound is
+    // a pause point. Once it is reached, the request writes the path and keeps
+    // waiting, so a test acts on the CLI's wait rather than on the clock.
     const mark = process.env.ORACLE_GAPS_TEST_WAIT_MARK
-    const timer =
-      mark === undefined
-        ? undefined
-        : setTimeout(() => writeMark(mark, ``), WAIT_MS)
-    const resolvePromise = (value) => {
-      clearTimeout(timer)
+    let quiet = 0
+    const watchdog = !bounded
+      ? undefined
+      : setInterval(() => {
+          quiet += 1
+          if (quiet * POLL_MS < WAIT_MS) return
+          if (mark === undefined) return done({ silent: WAIT_MS / 1000 })
+          if (!existsSync(mark)) writeMark(mark, ``)
+        }, POLL_MS)
+    const done = (value) => {
+      clearInterval(watchdog)
+      socket.destroy()
       settle(value)
     }
     const fail = (error) => {
-      clearTimeout(timer)
+      clearInterval(watchdog)
       reject(error)
     }
     const socket = connect(socketOf(pkg))
     let reply = ``
     socket.on(`connect`, () => socket.write(`${JSON.stringify(message)}\n`))
     socket.on(`data`, (chunk) => {
+      quiet = 0
       reply += chunk
     })
     socket.on(`end`, () => {
       // A daemon that ends a connection unanswered has died, or is exiting.
-      if (reply === ``) return resolvePromise({ died: true })
+      if (reply.trim() === ``) return done({ died: true })
       try {
-        resolvePromise(JSON.parse(reply))
+        done(JSON.parse(reply))
       } catch (error) {
         fail(error)
       }
@@ -115,7 +136,7 @@ function send(pkg, message) {
     socket.on(`error`, (error) =>
       // A daemon that exits under a request resets its connection.
       [`ECONNRESET`, `EPIPE`].includes(error.code)
-        ? resolvePromise({ died: true })
+        ? done({ died: true })
         : fail(error),
     )
   })
@@ -167,7 +188,9 @@ function startDaemon(pkg) {
  * `failed`), or a fresh daemon in place of one that died; a closing daemon
  * is waited for. It waits at most 60 s for a daemon to answer or start; the
  * time a daemon holds the request, queued or checking, is the check's and is
- * not counted.
+ * not counted while the daemon's checks make progress. A daemon that holds
+ * it and sends nothing for that long has stopped answering, and the CLI gets
+ * `{ silent }`, the seconds it waited, to check cold instead.
  */
 export async function requestDaemon(pkg, argv, code) {
   const began = Date.now()
@@ -182,8 +205,10 @@ export async function requestDaemon(pkg, argv, code) {
     let reply
     const sent = Date.now()
     try {
-      reply = await send(pkg, { argv, cwd: process.cwd(), code })
+      reply = await send(pkg, { argv, cwd: process.cwd(), code }, true)
       held += Date.now() - sent
+      // A daemon that stopped answering: the CLI checks cold (R39).
+      if (reply.silent) return reply
     } catch (error) {
       if (!absent(error)) throw error
       // A daemon could not load or open its session since this CLI started
@@ -247,9 +272,10 @@ export async function stopDaemon(pkg) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-// How long a CLI waits for a daemon to start or to finish closing. The oracle
-// shortens it (ORACLE_GAPS_TEST_WAIT_MS, a test-only knob) to outlast it with a
-// paused daemon.
+// How long a CLI waits for a daemon to start or to finish closing, and for a
+// daemon that holds its check to send anything. The oracle shortens it
+// (ORACLE_GAPS_TEST_WAIT_MS, a test-only knob) to outlast it with a paused
+// daemon.
 const WAIT_MS = Number(process.env.ORACLE_GAPS_TEST_WAIT_MS ?? 60_000)
 // This daemon's lock token, which no other process can hold.
 const token = `${process.pid}:${randomUUID()}`
@@ -348,10 +374,23 @@ async function serve(pkg) {
   // written over several turns of the event loop.
   const reply = (connection, value) =>
     new Promise((resolvePromise) => {
+      waiting.delete(connection)
       connection.once(`close`, resolvePromise)
       connection.end(`${JSON.stringify(value)}\n`, resolvePromise)
     })
+  // The connections whose check waits for its reply, queued or checking. Each
+  // hears a beat (a newline) whenever a check makes progress (a streamed line
+  // or a poll of a running copy), so its CLI can tell a daemon that works
+  // from one that stopped answering (requestDaemon).
+  const waiting = new Set()
+  const beat = () => {
+    for (const connection of waiting)
+      if (connection.writable) connection.write(`\n`)
+  }
   const server = createServer((connection) => {
+    // A CLI that went away hears nothing more; its connection's error (a
+    // reset under a beat) is no daemon's failure.
+    connection.on(`error`, () => {})
     // Test-only (ORACLE_GAPS_TEST_PAUSE_AT=daemon-read): once the arm file named by
     // ORACLE_GAPS_TEST_PAUSE_ARM exists, the first connection is accepted and never
     // read; this daemon's pid goes to ORACLE_GAPS_TEST_PAUSE_MARK for the test,
@@ -382,6 +421,7 @@ async function serve(pkg) {
         queue = queue.then(() => shutdown(connection))
         return
       }
+      waiting.add(connection)
       queue = queue.then(async () => {
         clearTimeout(idle)
         // A request queued before the session failed hears why.
@@ -410,8 +450,14 @@ async function serve(pkg) {
           const options = parseArgs(message.argv, message.cwd)
           if (options.pkg !== pkg)
             throw new Error(`this daemon serves ${pkg}, not ${options.pkg}`)
-          stdout = await session.check(options, store, (line) =>
-            stderr.push(`${line}\n`),
+          stdout = await session.check(
+            options,
+            store,
+            (line) => {
+              stderr.push(`${line}\n`)
+              beat()
+            },
+            beat,
           )
           await store.flush()
           // A test-only pause (ORACLE_GAPS_TEST_PAUSE_AT=daemon-reply): the check
@@ -420,10 +466,13 @@ async function serve(pkg) {
           // ORACLE_GAPS_TEST_PAUSE_MARK, for the oracle to kill it by (no signal
           // pauses a process on win32). Once: a daemon the CLI restarts after this
           // one died inherits the variable, and must answer.
+          // With ORACLE_GAPS_TEST_PAUSE_ARM set, it holds only once that file
+          // exists, so a test can warm the daemon first.
           const mark = process.env.ORACLE_GAPS_TEST_PAUSE_MARK
           if (
             process.env.ORACLE_GAPS_TEST_PAUSE_AT === `daemon-reply` &&
             mark !== undefined &&
+            (armMark === undefined || existsSync(armMark)) &&
             !existsSync(mark)
           ) {
             writeMark(mark, `${process.pid}`)

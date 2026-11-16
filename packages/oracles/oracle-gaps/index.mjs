@@ -130,6 +130,7 @@ import { codeIdentity, openSession } from './check.mjs'
 import { received, requestDaemon, stopDaemon } from './daemon.mjs'
 import { endRun } from './ending.mjs'
 import { memoryStore } from './evidence.mjs'
+import { streamLine } from './stream.mjs'
 
 // How long the group has to end after a stop signal before it is killed.
 const STOP_GRACE_MS = 2000
@@ -296,13 +297,24 @@ async function checkCold(options) {
   }
 }
 
-/** The summary of a check run by the package's daemon. */
+/**
+ * The summary of a check run by the package's daemon, or, when the daemon
+ * stopped answering, of a cold check, after a note that names why (R39: a
+ * cold fallback is not a failure). A cold check reports what the daemon's
+ * would have (incremental equals cold).
+ */
 async function checkThroughDaemon(options) {
   const reply = await requestDaemon(
     options.pkg,
     process.argv.slice(2),
     codeIdentity(),
   )
+  if (reply.silent) {
+    process.stderr.write(
+      `${streamLine(`note`, `the package's daemon sent nothing for ${reply.silent} s; this check runs cold`)}\n`,
+    )
+    return checkCold(options)
+  }
   if (reply.stderr) process.stderr.write(reply.stderr)
   if (reply.failed) throw received(reply.failed)
   return reply.stdout
