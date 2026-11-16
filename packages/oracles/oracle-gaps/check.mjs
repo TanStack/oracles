@@ -191,7 +191,7 @@ function captureLines(capture, { partial = false } = {}) {
   const end = text.lastIndexOf(`\n`) + 1
   if (!partial && end !== text.length)
     throw new Error(
-      `oracle-gaps internal error: the capture ${capture} ends in a row with no newline after its run finished`,
+      `the capture ${capture} ends in a row with no newline after its run finished`,
     )
   return text.slice(0, end).split(`\n`).filter(Boolean)
 }

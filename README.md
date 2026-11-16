@@ -113,6 +113,7 @@ agent.
   | `summary`                                | `oracle-gaps: summary <run id>: 120 mutants, 98 killed, 12 gaps, 10 unowned (warnings). …`                                                                                                                                                                  |
   | `legend`                                 | `oracle-gaps: legend <class>: <what it means and what to do>`, once for each class of gap the run found                                                                                                                                                     |
   | `function`                               | `oracle-gaps: function fn <name> (<source>) (owners: <files>)`, the heading over that function's gap lines                                                                                                                                                  |
+  | `error`                                  | `oracle-gaps: error <message>: a bug in oracle-gaps, not in your oracle; its stack is in <path>/error.log`, once, before the done line of an internal error                                                                                                 |
   | `done` (last)                            | `oracle-gaps: done completed, 12 gaps, report <path>/summary.md` (`(provisional)` after the count when an oracle file failed), `oracle-gaps: done refused[, report <path>]`, `oracle-gaps: done error, log <path>`, or `oracle-gaps: done stopped (SIGINT)` |
 
   Only two kinds of line have no prefix: the lines indented under a failing
@@ -166,8 +167,9 @@ agent.
   SIGABRT), the CLI writes `oracle-gaps: done error, the run's process
 exited with <signal or code>` and exits 3; after an out-of-memory crash
   the line says to give Node more memory (`NODE_OPTIONS=--max-old-space-size=<MB>`)
-  or to run fewer `--contexts`. An internal error's own message lines
-  (`oracle-gaps internal error: …`) have no prefix. A config's syntax error
+  or to run fewer `--contexts`. An internal error prints one
+  `oracle-gaps: error` line with its message, and its stack goes to
+  `error.log`. A config's syntax error
   is refused with its first error; a syntax error in a module the config
   imports still lets esbuild print its own error block, which has no
   prefix.
