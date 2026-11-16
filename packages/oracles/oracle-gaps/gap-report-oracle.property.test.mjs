@@ -3839,6 +3839,9 @@ const staticStates = [
 const required = [
   // Reached only by the constructed history of the disarmed pause (see there).
   `a daemon pause that did not engage`,
+  // Reached by its own constructed history (see there): the fixed seeds'
+  // generated histories do not reach it.
+  `killed by a work bound in a generated function`,
   // Reached only by the constructed history of a replaced warm daemon (see there).
   `a warm daemon was replaced before the pause`,
   `killed by a second owner`,
@@ -4128,11 +4131,7 @@ oracleProperty({
     // of those seven histories, its law the first failure's.
     arbitrary: fc.limitShrink(histories, 6),
     states: [...required, ...posixStops, ...everyStops],
-    measured: [
-      ...staticStates,
-      `extra work in a generated function`,
-      `killed by a work bound in a generated function`,
-    ],
+    measured: [...staticStates, `extra work in a generated function`],
     runs: 2,
     fixedSeeds: [20261105],
     constructed: withDeclaration([
@@ -5456,6 +5455,45 @@ oracleProperty({
           fault: `none`,
           steps: [`resetBeforeRead`],
           warmReplaced: true,
+        }),
+      },
+      {
+        // A generated test's bound of 1 kills a mutant through work in probe
+        // code (#102): the elseIf `if (x < 0) report(); else out.push(...)`,
+        // whose if-true calls report() where the unmutated run pushes. The
+        // test passes on input 3 under every mutant (it judges nothing), so
+        // only its work bound can kill: report()'s call, its guard's `===`
+        // and `!==`, and its probe statement's three sites are more work than
+        // the push. Appended at the end of the list, so earlier histories'
+        // bases are unchanged.
+        name: `a generated test's work bound kills a probe branch`,
+        enters: [`killed by a work bound in a generated function`],
+        build: (generated) => ({
+          ...generated,
+          witness: false,
+          fault: `none`,
+          steps: null,
+          ordinary: false,
+          functions: [[{ kind: `elseIf`, op: `<`, k: 0, quote: `'` }]],
+          tests: [
+            {
+              ...generated.tests[0],
+              file: `a`,
+              route: `fixed seed`,
+              registered: true,
+              fn: 0,
+              input: 3,
+              judges: false,
+              flaky: false,
+              hangs: false,
+              slow: false,
+              ioWait: false,
+              stops: false,
+              draws: false,
+              shrinks: false,
+              then: null,
+            },
+          ],
         }),
       },
     ]),

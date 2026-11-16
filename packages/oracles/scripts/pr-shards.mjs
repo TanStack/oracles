@@ -586,6 +586,7 @@ export const partitions = {
         'a package with no config',
         'a declaration fault: configThrows',
         'a reset check after its warm daemon was replaced',
+        "a generated test's work bound kills a probe branch",
       ]),
     },
   },
