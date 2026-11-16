@@ -1240,6 +1240,8 @@ function readRun(dir, out, status, stderr, cli, stdout) {
     [dir, `<package>`],
   ]
   const named = status === 0 ? undefined : namedScratch(`${stderr}`, scratch)
+  // The stream's names: the run's own output directory as `<out>` too.
+  const ownOut = [...scratch, [out, `<package>/<out>`]]
   let results
   let report
   let summary = ``
@@ -1313,12 +1315,17 @@ function readRun(dir, out, status, stderr, cli, stdout) {
       line.startsWith(`oracle-gaps: config `),
     ),
     // The stream's grammar (law 15), recorded as relations so that a trace
-    // does not depend on the order in which contexts finished.
-    stream: streamOf(lines, (text) => namedScratch(text, scratch)),
+    // does not depend on the order in which contexts finished. The run's own
+    // output directory is named `<out>`, a relation: two checks at once are
+    // given two directories, and which of them the daemon runs first is a
+    // race (issue #82), so the name the driver gave a check is no part of
+    // the trace, while a line that names another run's directory still
+    // shows it.
+    stream: streamOf(lines, (text) => namedScratch(text, ownOut)),
     // The stdout's lines, judged as the stderr's are (review of #46, F1 and
     // F2): every line of either stream is a line of the stream.
     stdoutStream: streamOf(`${stdout ?? ``}`.split(`\n`), (text) =>
-      namedScratch(text, scratch),
+      namedScratch(text, ownOut),
     ),
     // The output directory the run was given, as the trace names it: the
     // final line names its report there.
