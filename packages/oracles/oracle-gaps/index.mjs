@@ -173,6 +173,8 @@ if (process.env.ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED !== undefined) {
 
 const { parseArgs, usage } = await import(`./args.mjs`)
 const { endRun, Refusal } = await import(`./ending.mjs`)
+// ending.mjs loads stream.mjs, so this import costs no load of its own.
+const { escapeControls } = await import(`./stream.mjs`)
 
 // How long the group has to end after a stop signal before it is killed.
 const STOP_GRACE_MS = 2000
@@ -372,7 +374,9 @@ function startLog(out) {
   streamLog = path
   // The log is named in forward slashes on win32 (the Windows paths rule); POSIX
   // paths are unchanged.
-  const note = `oracle-gaps: note log ${posix(path)}\n`
+  // A line break in the path is written as its escape: the note stays one line
+  // (the register's C entry "The internal-error line").
+  const note = `oracle-gaps: note log ${escapeControls(posix(path))}\n`
   process.stdout.write(note)
   writeStream(note)
   testPause(`note`)
