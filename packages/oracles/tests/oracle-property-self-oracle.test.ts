@@ -8666,6 +8666,11 @@ oracleProperty({
         state !== `registration-warning-policy`,
     ),
     runs: 3,
+    // One base per constructed history: each spawns real Vitest runs, and
+    // five bases took the shard of campaign units to 27 minutes on an
+    // Arclet, past the 10-minute CI limit (#122). Random seeds vary each
+    // one's base from run to run.
+    bases: 1,
     fixedSeeds: [1],
     constructed: [
       {

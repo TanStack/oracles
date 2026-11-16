@@ -4576,6 +4576,11 @@ oracleProperty({
       `a check that ran more than one batch`,
     ],
     runs: 2,
+    // One base per constructed history: each runs the CLI end to end, often
+    // for minutes, and five bases took a fixed-seed shard to 18 to 30
+    // minutes on an Arclet, past the 10-minute CI limit (#122). Random seeds
+    // vary each one's base from run to run.
+    bases: 1,
     fixedSeeds: [20261105],
     constructed: withDeclaration([
       {
