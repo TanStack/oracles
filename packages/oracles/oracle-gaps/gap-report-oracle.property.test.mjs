@@ -2763,12 +2763,15 @@ function check(plan, observations, expected) {
         `cli`,
         `${site(got)}: its timeout is cut by ${got.cause}, owed ${owed.cause}; DIAG ${(() => {
           try {
-            return require('node:fs')
+            return process
+              .getBuiltinModule('node:fs')
               .readFileSync(
-                require('node:path').join(
-                  require('node:os').tmpdir(),
-                  'dc-idle-diag.jsonl',
-                ),
+                process
+                  .getBuiltinModule('node:path')
+                  .join(
+                    process.getBuiltinModule('node:os').tmpdir(),
+                    'dc-idle-diag.jsonl',
+                  ),
                 'utf8',
               )
               .split('\n')
