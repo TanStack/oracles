@@ -1116,7 +1116,7 @@ async function runClisAtOnce(dir, files, hows, outs = []) {
         stderr += chunk
       })
       const status = await new Promise((resolvePromise) => {
-        const timer = setTimeout(() => child.kill(), 300_000)
+        const timer = setTimeout(() => child.kill(), how.backstopMs ?? 300_000)
         child.on(`close`, (code) => {
           clearTimeout(timer)
           resolvePromise(code)
@@ -1157,6 +1157,11 @@ function namedScratch(text, names) {
     .replaceAll(/\.oracle-gaps-\d+/g, `.oracle-gaps-<pid>`)
     .replaceAll(/session-\d+/g, `session-<pid>`)
 }
+
+// The note a CLI writes when its daemon sent nothing within its bound and the
+// check runs cold instead (R39: a cold fallback names its cause).
+const coldFallbackNote =
+  /^oracle-gaps: note the package's daemon sent nothing for \d+ s; this check runs cold/
 
 /** What one run of the CLI reported, from its exit status and its files. */
 // A gap line the CLI streams to stderr as its mutant is judged (stream.mjs):
@@ -1661,6 +1666,9 @@ async function incremental(dir, plan, cli, copy, observe, states) {
           // The first line of a failure, for the message; readRun has named
           // the scratch package and CLI copy in it.
           stderr: run.stderr?.split(`\n`)[0],
+          // Whether its daemon held the check's reply and nothing ended it
+          // while the CLI ran (`heldReply`).
+          held: run.held === true,
         },
       })
     }
@@ -1792,6 +1800,50 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       [join(copy, `index.mjs`), `--stop-daemon`, `--package`, dir],
       { cwd: repo, encoding: `utf8`, timeout: 60_000, env: cleanEnv() },
     )
+  // A check through a daemon that stops answering: the daemon holds its
+  // reply (`daemon-reply`) and lives on until the CLI has ended. The CLI's
+  // wait is shortened to 3 s (ORACLE_GAPS_TEST_WAIT_MS), as for the other
+  // holds, so its bound on a daemon that sends nothing comes early; the CLI
+  // writes no wait mark, so nothing pauses it there. The call's backstop
+  // (120 s) ends a CLI that never ends, and the incremental check reports its
+  // stopped run as no cold fallback. The daemon may reach its pause after the
+  // CLI has fallen back, so the driver waits for the pause, then kills the
+  // daemon: the release, never by time. The state needs the pause, the CLI's
+  // completed run, and its note that the check runs cold.
+  async function heldReply(files, how, marks, pauseMark) {
+    const env = {
+      ORACLE_GAPS_TEST_PAUSE_AT: `daemon-reply`,
+      ORACLE_GAPS_TEST_PAUSE_MARK: pauseMark,
+      ORACLE_GAPS_TEST_WAIT_MS: `3000`,
+    }
+    const [run] = await runClisAtOnce(dir, files, [
+      { ...how, daemon: true, env, backstopMs: 120_000 },
+    ])
+    let pid
+    for (let waited = 0; pid === undefined; waited += 20) {
+      pid = pidOf(pauseMark)
+      if (pid !== undefined) break
+      if (waited >= 60_000)
+        throw new Error(
+          `oracle-gaps.report: a held reply saw no daemon pause within 60 s`,
+        )
+      await new Promise((r) => setTimeout(r, 20))
+    }
+    const heldOn = isAlive(pid)
+    if (heldOn) process.kill(pid, `SIGKILL`)
+    if (heldOn && !(await waitGone(pid)))
+      throw new Error(`oracle-gaps.report: the held daemon ${pid} did not end`)
+    rmSync(marks, { recursive: true, force: true })
+    run.held = heldOn
+    if (
+      heldOn &&
+      run.exit === 0 &&
+      run.reported &&
+      run.stream.notes.some((note) => coldFallbackNote.test(note))
+    )
+      states.add(`a check whose daemon stopped answering ran cold`)
+    return [run]
+  }
   // One check through the daemon, with what the step does to the daemon
   // meanwhile: paused once the check has begun for longer than the CLI
   // waits for a daemon, then killed (`dieMidCheck`), or stopped and killed
@@ -1871,6 +1923,13 @@ async function incremental(dir, plan, cli, copy, observe, states) {
     const waitMark = join(marks, `waited`)
     const servedMark = join(marks, `served`)
     const mid = step === `dieMidCheck`
+    // A daemon that stops answering (`replyHeld`, the cold-fallback witness of
+    // R39): its reply is held at the daemon's `daemon-reply` pause and nothing
+    // ends it while the CLI runs, so the CLI owes a completed run by a bound of
+    // its own, a cold run's (law 9). The driver releases the daemon only after
+    // the CLI has ended, by killing it; a CLI that never ends is ended by the
+    // call's backstop, which fails loudly as a law-9 violation.
+    if (mid && plan.replyHeld) return heldReply(files, how, marks, pauseMark)
     // A plan may disarm the pause (a constructed history): then nothing engages.
     const pause =
       plan.pauseEngages === false
@@ -2781,6 +2840,15 @@ function incrementalCheck(observations) {
         `incremental`,
         `after ${step}, the daemon stored a run under the mid-run marker, a file in its own session directory`,
         `witness guard`,
+      )
+    // A check whose daemon stopped answering (`heldReply`) ends as a cold run
+    // does (R39: a cold fallback is not a failure): the CLI's own bound on a
+    // daemon that sends nothing ends its wait, and it checks cold.
+    if (daemon.held && daemon.exit !== cold.exit)
+      return violation(
+        `incremental`,
+        `after ${step}, the daemon held the check's reply and the CLI did not fall back to a cold check: it exited ${daemon.exit}${daemon.exit > 128 ? ` when the driver's backstop stopped it` : ``}, and the cold run exited ${cold.exit}`,
+        `cold fallback`,
       )
     if (
       daemon.exit !== cold.exit ||
@@ -4324,6 +4392,8 @@ const required = [
   `edit lazy changed the cold result`,
   `a lazy edit changed the cold result after a batch was cut off`,
   `a rejected batch retired its copies and logged them`,
+  // Reached only by the constructed history of a held reply (`heldReply`).
+  `a check whose daemon stopped answering ran cold`,
 ]
 // The faults the CLI analyzes anyway: a package's TypeScript is no input.
 const analyzedFaults = [`noTypescript`, `apiLessTypescript`]
@@ -4410,6 +4480,7 @@ const separate = [
   `edit lazy changed the cold result`,
   `a lazy edit changed the cold result after a batch was cut off`,
   `a rejected batch retired its copies and logged them`,
+  `a check whose daemon stopped answering ran cold`,
 ]
 // A stop by SIGTERM exists only where Node can deliver it: on win32 kill is
 // TerminateProcess, so there the stop law is judged by SIGINT (the test stop
@@ -5976,6 +6047,21 @@ oracleProperty({
           native: `none`,
           rejectBatch: 1,
         }),
+      },
+      {
+        // A daemon that stops answering (R39, the conformance check of #73): the
+        // daemon of the step's check holds its reply (`replyHeld`, the
+        // test-only `daemon-reply` pause) and nothing ends it while the CLI
+        // runs. The CLI owes a completed check, a cold run's, by its own bound
+        // on a daemon that sends nothing (`heldReply`).
+        name: `a check whose daemon stops answering`,
+        enters: [`a check whose daemon stopped answering ran cold`],
+        build: (generated) =>
+          oneOwnerHistory(generated, {
+            steps: [`dieMidCheck`],
+            laterSteps: NO_LATER_STEPS,
+            replyHeld: true,
+          }),
       },
     ]),
   },

@@ -880,6 +880,12 @@ const drawn = fc.record({
   // The batch whose run rejects: a constructed-only field (0 is no fault). Only the constructed history at
   // the end of the campaign sets it; the take-back below returns it to 0 (the generator rule, extended).
   rejectBatch: fc.constant(0),
+  // Whether the daemon of a `dieMidCheck` step holds its reply and lives on
+  // until the CLI has ended (the cold-fallback witness, R39). It switches the
+  // test-only `daemon-reply` pause on with no kill, so it is a constant that
+  // only the constructed history "a check whose daemon stops answering" sets;
+  // the take-back returns it to false.
+  replyHeld: fc.constant(false),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -921,9 +927,10 @@ const keepsSteps = (history) => {
 // except a constructed one whose `steps` hold a later edit, which the
 // steps grammar cannot draw: its later edits move to `laterSteps`. A
 // constructed history may also set a hook's field (`tornRows`, issue #83;
-// `pauseEngages`; `rejectBatch`), which `drawn` cannot produce, so its
-// take-back reads each as its drawn constant (as `claimScenario` does): a
-// shrink is torn-row-free, keeps the pause armed, and rejects no batch. The
+// `pauseEngages`; `rejectBatch`; `replyHeld`), which `drawn` cannot
+// produce, so its take-back reads each as its drawn constant (as
+// `claimScenario` does): a shrink is torn-row-free, keeps the pause armed,
+// rejects no batch, and holds no reply. The
 // drawn fields (`warmReplaced`, `testRoot`, `loadPlugin`) come back as they
 // are.
 const histories = drawn.map(
@@ -945,12 +952,14 @@ const histories = drawn.map(
         ...taken,
         pauseEngages: true,
         rejectBatch: 0,
+        replyHeld: false,
       }
     const earlier = history.steps.filter((step) => !laterEdits.includes(step))
     return {
       ...taken,
       pauseEngages: true,
       rejectBatch: 0,
+      replyHeld: false,
       steps: earlier.length > 0 ? earlier : null,
       laterSteps: later,
     }
@@ -2993,6 +3002,7 @@ function resolveHistory(history) {
     steps: [...(history.steps ?? []), ...laterStepsOf(history)],
     pauseEngages: history.pauseEngages !== false,
     warmReplaced: history.warmReplaced === true,
+    replyHeld: history.replyHeld === true,
     lazyGate: history.lazyGate === true,
     fsRead: history.fsRead ?? `none`,
     // Whether a step edits file b's helper during a check (`midrun`): then
