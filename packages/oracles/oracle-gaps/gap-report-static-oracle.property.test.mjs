@@ -129,6 +129,7 @@ import {
   refusalBreach,
   resolveHistory,
   removePath,
+  outsideOf,
   sourceArgument,
   caseless,
   writeFixture,
@@ -251,6 +252,7 @@ function defaultOutputsOf(dir, sources) {
       same: [outs[0] === outs[1], outs[0] === outs[2], outs[1] === outs[2]],
     }
   } finally {
+    rmSync(outsideOf(other), { recursive: true, force: true })
     rmSync(other, { recursive: true, force: true })
   }
 }
@@ -977,6 +979,7 @@ async function driver(plan, observe) {
   } finally {
     written.delete(dir)
     removePath(`${dir}.link`)
+    rmSync(outsideOf(dir), { recursive: true, force: true })
     rmSync(scratch, { recursive: true, force: true })
   }
 }

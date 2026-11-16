@@ -13,6 +13,7 @@ import {
   rmSync,
   symlinkSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -488,6 +489,11 @@ const edits = [
 // `laterSteps` (the generator rule: new draws go last).
 const laterEdits = [`fsData`, `midrun`]
 const earlierEdits = edits.filter((edit) => !laterEdits.includes(edit))
+// The edit of the gate input that file b's verdict reads (`inputRead`),
+// which flips it between `open` and `shut`. It is drawn in its own field
+// (`inputSteps`), after `laterSteps`, so the fields before it draw as they
+// did (the generator rule: new draws go last).
+const inputEdits = [`inputGate`]
 // A history's no later edits, one value, so `histories` can take it back
 // (fc.constant takes back only its own reference).
 const NO_LATER_STEPS = Object.freeze([])
@@ -496,6 +502,12 @@ const NO_LATER_STEPS = Object.freeze([])
 const laterStepsOf = (history) =>
   history.witness === false && history.steps != null
     ? (history.laterSteps ?? [])
+    : []
+// The input edits a history takes after its later edits, by the same rule.
+const NO_INPUT_STEPS = Object.freeze([])
+const inputStepsOf = (history) =>
+  history.witness === false && history.steps != null
+    ? (history.inputSteps ?? [])
     : []
 // The steps that act on the daemon and change no file.
 const daemonEvents = new Set([
@@ -860,6 +872,46 @@ const drawn = fc.record({
   // The batch whose run rejects: a constructed-only field (0 is no fault). Only the constructed history at
   // the end of the campaign sets it; the take-back below returns it to 0 (the generator rule, extended).
   rejectBatch: fc.constant(0),
+  // Every read is a daemon input (maintainer decision, 2026-11-16, "All of
+  // them"): a file a test reads through fs on any path, node_modules
+  // included; an environment variable a test reads; and what the config's
+  // own plugin reads. File b's verdicts also wait on one such gate input,
+  // which the `inputGate` edit flips between `open` and `shut` (law 9). The
+  // gate is a JSON file that the test reads with a sync read: in the
+  // package's tests (`inside`), beside the package and outside it
+  // (`outside`), or in a package under its node_modules (`module`); or the
+  // variable GAP_INPUT_GATE (`env`); or a file the config's own plugin
+  // reads, once when the config resolves (`pluginConfig`) or each time it
+  // transforms a test file (`pluginTransform`), and writes into the test's
+  // text. These fields change what a history runs, so they are drawn
+  // (maintainer decision, 2026-11-16, "Randomness wins"), and last.
+  inputRead: fc.constantFrom(
+    `none`,
+    `none`,
+    `none`,
+    `inside`,
+    `outside`,
+    `module`,
+    `env`,
+    `pluginConfig`,
+    `pluginTransform`,
+  ),
+  // Each write of a gate file keeps its size (`open` and `shut` have one
+  // length) and gets back one fixed modification time, as `cp -p`, `rsync
+  // -t`, or `touch -r` leave a file: a cache keyed by size and time cannot
+  // tell the two texts apart (D10; the TLA model's weakened-stamp run).
+  keepStamp: fc.constantFrom(false, false, false, true),
+  // The input edits, which follow a history's steps and later edits.
+  inputSteps: fc.oneof(
+    { weight: 3, arbitrary: fc.constant(NO_INPUT_STEPS) },
+    {
+      weight: 1,
+      arbitrary: fc.array(fc.constantFrom(...inputEdits), {
+        minLength: 1,
+        maxLength: 2,
+      }),
+    },
+  ),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -926,21 +978,28 @@ const histories = drawn.map(
     const later = (history.steps ?? []).filter((step) =>
       laterEdits.includes(step),
     )
-    if (later.length === 0)
+    // An input edit in `steps` moves to `inputSteps` in the same way.
+    const inputs = (history.steps ?? []).filter((step) =>
+      inputEdits.includes(step),
+    )
+    if (later.length === 0 && inputs.length === 0)
       return {
         ...taken,
         pauseEngages: true,
         warmReplaced: false,
         rejectBatch: 0,
       }
-    const earlier = history.steps.filter((step) => !laterEdits.includes(step))
+    const earlier = history.steps.filter(
+      (step) => !laterEdits.includes(step) && !inputEdits.includes(step),
+    )
     return {
       ...taken,
       pauseEngages: true,
       warmReplaced: false,
       rejectBatch: 0,
       steps: earlier.length > 0 ? earlier : null,
-      laterSteps: later,
+      ...(later.length > 0 ? { laterSteps: later } : {}),
+      ...(inputs.length > 0 ? { inputSteps: inputs } : {}),
     }
   },
 )
@@ -2944,11 +3003,25 @@ function resolveHistory(history) {
     template: history.template,
     fault: history.fault,
     stability: history.stability,
-    steps: [...(history.steps ?? []), ...laterStepsOf(history)],
+    steps: [
+      ...(history.steps ?? []),
+      ...laterStepsOf(history),
+      ...inputStepsOf(history),
+    ],
     pauseEngages: history.pauseEngages !== false,
     warmReplaced: history.warmReplaced === true,
     lazyGate: history.lazyGate === true,
     fsRead: history.fsRead ?? `none`,
+    // The gate input that file b's verdicts also wait on (`inputRead`), and
+    // whether each write of a gate file keeps its size and modification time
+    // (`keepStamp`).
+    // A plugin's gate needs a config to hold the plugin: with none, file b
+    // reads no gate.
+    inputRead:
+      pluginGated(history) && configOf(history).configPath === undefined
+        ? `none`
+        : (history.inputRead ?? `none`),
+    keepStamp: history.keepStamp === true,
     // Whether a step edits file b's helper during a check (`midrun`): then
     // file a loads the helper and holds the test that edits it.
     midrun: [...(history.steps ?? []), ...laterStepsOf(history)].includes(
@@ -4695,6 +4768,77 @@ const dataReads = {
   ],
 }
 
+// The gate input of file b's verdicts (`inputRead`): the variable that
+// `env` reads, and the file each other kind reads. A gate file holds
+// `open` or `shut`, two words of one length, so an edit keeps its size.
+const INPUT_GATE_VAR = `GAP_INPUT_GATE`
+const gateText = (open) =>
+  `${JSON.stringify({ gate: open ? `open` : `shut` })}\n`
+// The modification time, in seconds, that every write of a gate file gets
+// back under `keepStamp`.
+const GATE_STAMP = 1_700_000_000
+// A fixture path under the directory beside the package (`outsideOf`),
+// which is outside it; writeFixture places it there.
+const BESIDE = `<beside>/`
+/** The directory beside the package `dir` that holds its outside files. */
+const outsideOf = (dir) => `${dir}.outside`
+const gateFiles = {
+  inside: `tests/gate.json`,
+  outside: `${BESIDE}gate.json`,
+  module: `node_modules/gap-gate/gate.json`,
+  pluginConfig: `tests/plugin-gate.json`,
+  pluginTransform: `tests/plugin-gate.json`,
+}
+/** Whether the gate input is one that the config's own plugin reads. */
+const pluginGated = (history) =>
+  history.inputRead === `pluginConfig` ||
+  history.inputRead === `pluginTransform`
+// Whether a test's verdict waits on the gate input.
+const inputGated = (plan, file, t) =>
+  plan.inputRead !== `none` &&
+  file === `b` &&
+  t.judges &&
+  t.judgeBy === `verdict`
+// How file b reads its gate input, by each kind (`inputRead`). The outside
+// file lies in the directory beside the package, named by the package's
+// own directory with `.outside` after it. The plugin kinds read the text
+// that the config's plugin wrote in place of `__GAP_INPUT_GATE__`.
+const readGateFile = (path) =>
+  `const readInput = async () => ({ open: JSON.parse(readGate(${path}, 'utf8')).gate === 'open' })`
+const inputReads = {
+  inside: [
+    `import { readFileSync as readGate } from 'node:fs'`,
+    readGateFile(`new URL('./gate.json', import.meta.url)`),
+  ],
+  outside: [
+    `import { readFileSync as readGate } from 'node:fs'`,
+    `import { fileURLToPath as gatePackage } from 'node:url'`,
+    readGateFile(
+      `gatePackage(new URL('..', import.meta.url)).replace(/[\\\\/]+$/, '') + '.outside/gate.json'`,
+    ),
+  ],
+  module: [
+    `import { readFileSync as readGate } from 'node:fs'`,
+    readGateFile(
+      `new URL('../node_modules/gap-gate/gate.json', import.meta.url)`,
+    ),
+  ],
+  env: [
+    `const readInput = async () => ({ open: process.env.${INPUT_GATE_VAR} !== 'shut' })`,
+  ],
+  pluginConfig: [
+    `const readInput = async () => ({ open: __GAP_INPUT_GATE__ === 'open' })`,
+  ],
+  pluginTransform: [
+    `const readInput = async () => ({ open: __GAP_INPUT_GATE__ === 'open' })`,
+  ],
+}
+/** The variables a check of `state` runs with: the gate's, under `env`. */
+const inputEnv = (plan, state) =>
+  plan.inputRead === `env`
+    ? { [INPUT_GATE_VAR]: state.inputOpen ? `open` : `shut` }
+    : {}
+
 function oracleTestFile(plan, file) {
   const sites = sitesOf(plan)
   const entries = [
@@ -4792,6 +4936,9 @@ function oracleTestFile(plan, file) {
     `import * as sut from '../src/sut'`,
     ...(file === `b` ? [`import { strict } from './strict'`] : []),
     ...(file === `b` && plan.fsRead !== `none` ? dataReads[plan.fsRead] : []),
+    ...(file === `b` && plan.inputRead !== `none`
+      ? inputReads[plan.inputRead]
+      : []),
     ...stubs,
     // State that tests of this file share (the `w_shared` witness).
     `const shared = { value: 0 }`,
@@ -4950,7 +5097,7 @@ function oracleTestFile(plan, file) {
                 // A lazy gate is imported only where the output differs, so
                 // the unmutated run never loads it. It is open before any
                 // edit, so the model need not read it.
-                `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}${lazyGated(plan, file, t) ? ` && (await import('./lazy')).open` : ``}${fsGated(plan, file, t) ? ` && (await readData()).open` : ``}) {`,
+                `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}${lazyGated(plan, file, t) ? ` && (await import('./lazy')).open` : ``}${fsGated(plan, file, t) ? ` && (await readData()).open` : ``}${inputGated(plan, file, t) ? ` && (await readInput()).open` : ``}) {`,
                 `      g.__oracleVerdict?.({ property: 'fixture-${file}', law: '${t.law}', checkpoint: 'trace' })`,
                 `      throw new Error('violation')`,
                 `    }`,
@@ -4968,7 +5115,7 @@ function oracleTestFile(plan, file) {
         : []),
       t.asProp
         ? `  fcTest.prop([fcv.integer({ min: 0, max: 10 })], { numRuns: 20, seed: 1 })('${testName(t, index)}', async (n) => {`
-        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || t.timed || lazyGated(plan, file, t) || fsGated(plan, file, t) ? `async ` : ``}() => {`,
+        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || t.timed || lazyGated(plan, file, t) || fsGated(plan, file, t) || inputGated(plan, file, t) ? `async ` : ``}() => {`,
       ...partsOf(t).flatMap(campaign),
       `  })`,
       `})`,
@@ -5192,6 +5339,8 @@ const initialState = (plan) => ({
   lazyOpen: true,
   // What `tests/data.json` holds: whether file b's data gate is open.
   dataOpen: true,
+  // Whether file b's gate input reads `open` (`inputRead`).
+  inputOpen: true,
   // How many mid-run edits have landed (`midrun`).
   midruns: 0,
   seed: 1,
@@ -5222,6 +5371,16 @@ const PRE_PLUGIN = `{ name: 'gap-pre-rewrite', enforce: 'pre', transform(code, i
 // memory, so only the runner's own \`load\` can answer for it (review of #103).
 const LOAD_PLUGIN = `{ name: 'gap-own-load', load(id) { const path = id.split('?')[0]; return path.endsWith('.test.ts') ? readFileSync(path, 'utf8') : undefined } }`
 
+// The config's own plugin that reads the gate file (`inputRead`
+// `pluginConfig` or `pluginTransform`) and writes its word in place of
+// `__GAP_INPUT_GATE__` in each test file it transforms. It finds the file
+// under the root Vite resolved, so it reads the package's file wherever the
+// config lies. `pluginConfig` reads it once, when the config resolves;
+// `pluginTransform` reads it in each transform.
+const GATE_READ = `JSON.parse(readGate(root + '/tests/plugin-gate.json', 'utf8')).gate`
+const gatePlugin = (plan) =>
+  `(() => { let root; let gate; return { name: 'gap-input-gate', configResolved(resolved) { root = resolved.root${plan.inputRead === `pluginConfig` ? `; gate = ${GATE_READ}` : ``} }, transform(code, id) { return id.split('?')[0].endsWith('.test.ts') ? code.replaceAll('__GAP_INPUT_GATE__', JSON.stringify(${plan.inputRead === `pluginConfig` ? `gate` : GATE_READ})) : undefined } } })()`
+
 /**
  * The text of the package's config, in its syntax (`configOf`), with the
  * fault, the top-level await, or the `require` calls the plan holds. `test`
@@ -5232,6 +5391,7 @@ function configText(plan, test) {
   const plugins = [
     ...(plan.prePlugin ? [PRE_PLUGIN] : []),
     ...(plan.loadPlugin ? [LOAD_PLUGIN] : []),
+    ...(pluginGated(plan) ? [gatePlugin(plan)] : []),
   ]
   const config = `defineConfig(${
     { object: ``, function: `() => (`, async: `async () => (`, promise: `` }[
@@ -5260,6 +5420,13 @@ function configText(plan, test) {
       : [`import { fileURLToPath } from 'node:url'`]),
     // Only an ES module config has the load plugin (its constructed history).
     ...(plan.loadPlugin ? [`import { readFileSync } from 'node:fs'`] : []),
+    ...(pluginGated(plan)
+      ? [
+          commonjs
+            ? `const { readFileSync: readGate } = require('node:fs')`
+            : `import { readFileSync as readGate } from 'node:fs'`,
+        ]
+      : []),
     ...(plan.fault === `configThrows`
       ? [`throw new Error('the fixture config broke')`]
       : []),
@@ -5467,6 +5634,15 @@ function fixtureFiles(plan, state = initialState(plan)) {
     ...(plan.fsRead !== `none`
       ? { 'tests/data.json': `${JSON.stringify({ open: state.dataOpen })}\n` }
       : {}),
+    // The gate file, which under `keepStamp` gets back one modification
+    // time each time it is written.
+    ...(gateFiles[plan.inputRead] === undefined
+      ? {}
+      : {
+          [gateFiles[plan.inputRead]]: plan.keepStamp
+            ? { text: gateText(state.inputOpen), mtime: GATE_STAMP }
+            : gateText(state.inputOpen),
+        }),
     // A workspace dependency with module state, linked through node_modules.
     'deps/state-dep/package.json': manifest({
       name: `state-dep`,
@@ -5661,6 +5837,11 @@ function removePath(path) {
 // The paths each fixture directory holds, so a state that lacks a file of
 // the state before it removes that file.
 const written = new Map()
+// Where a fixture path lies: in the package, or beside it (`BESIDE`).
+const placeOf = (dir, path) =>
+  path.startsWith(BESIDE)
+    ? join(outsideOf(dir), path.slice(BESIDE.length))
+    : join(dir, path)
 function writeFixture(dir, files) {
   for (const sub of [
     `src`,
@@ -5674,14 +5855,17 @@ function writeFixture(dir, files) {
   if (!existsSync(join(dir, `node_modules/state-dep`)))
     symlinkSync(`../deps/state-dep`, join(dir, `node_modules/state-dep`), `dir`)
   for (const path of written.get(dir) ?? [])
-    if (!(path in files)) removePath(join(dir, path))
-  for (const [path, text] of Object.entries(files)) {
-    const at = join(dir, path)
+    if (!(path in files)) removePath(placeOf(dir, path))
+  for (const [path, value] of Object.entries(files)) {
+    const at = placeOf(dir, path)
     mkdirSync(dirname(at), { recursive: true })
+    // A file may name the modification time it gets back (`keepStamp`).
+    const text = typeof value?.text === `string` ? value.text : value
     // An unchanged file keeps its modification time, as in a real package.
     if (typeof text === `string`) {
       if (!existsSync(at) || readFileSync(at, `utf8`) !== text)
         writeFileSync(at, text)
+      if (value.mtime !== undefined) utimesSync(at, value.mtime, value.mtime)
     } else if (linkTarget(at) !== text.link) {
       // A link that a later state points elsewhere is replaced.
       removePath(at)
@@ -5758,6 +5942,7 @@ function applyEdit(state, edit) {
       : { ...state, strict: !state.strict, midruns: state.midruns + 1 }
   if (edit === `lazy`) return { ...state, lazyOpen: !state.lazyOpen }
   if (edit === `fsData`) return { ...state, dataOpen: !state.dataOpen }
+  if (edit === `inputGate`) return { ...state, inputOpen: !state.inputOpen }
   if (edit === `seed`) return { ...state, seed: state.seed === 1 ? 2 : 1 }
   if (edit === `config`) return { ...state, altConfig: !state.altConfig }
   // A seed no other step uses, so the check has fresh work to be killed in.
@@ -5978,6 +6163,10 @@ function readSummary(summary) {
 export {
   drawn,
   NO_LATER_STEPS,
+  NO_INPUT_STEPS,
+  inputEdits,
+  inputEnv,
+  outsideOf,
   MIDRUN_EDITORS,
   captureWitness,
   outsideRepository,

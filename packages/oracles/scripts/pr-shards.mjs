@@ -26,6 +26,16 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+// The constructed histories of the edits of each kind of daemon input
+// (gap-report-oracle.property.test.mjs).
+const daemonInputUnits = [
+  'an edit to a file in the package that keeps its size and modification time',
+  'an edit to a file outside the package that a test reads',
+  'an edit to a file under node_modules that a test reads',
+  'an edit to an environment variable that a test reads',
+  "an edit to a file the config's plugin reads when the config resolves",
+  "an edit to a file the config's plugin reads when it transforms a test",
+]
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
 const anyOf = (names) => `(?:${names.map(escape).join(`|`)})`
 const rest = Symbol(`rest`)
@@ -318,6 +328,10 @@ export const partitions = {
       // through the daemon (94 s), brokenOwner (83 s), generated (23 s), the
       // lazy module (12 s), and small units.
       3: rest,
+      // The edits of a daemon input that every read makes one (maintainer
+      // decision, 2026-11-16, "Every read is a daemon input"), one unit per
+      // kind of input.
+      4: anyOf(daemonInputUnits),
     },
   },
   'oracle-gaps-static-windows': {
@@ -543,6 +557,8 @@ export const partitions = {
         'a config whose test root holds no test file',
         'a config whose test root is a symbolic link',
         'a config whose plugin loads test files with a sync read',
+        daemonInputUnits[0],
+        daemonInputUnits[1],
       ]),
       7: anyOf([
         'a daemon pause that cannot engage',
@@ -567,6 +583,8 @@ export const partitions = {
         'an awaiting config in a package with no module type',
         'a declaration fault: configNoDefault',
         'a declaration fault: badEntry',
+        daemonInputUnits[2],
+        daemonInputUnits[3],
       ]),
       9: anyOf([
         'a lazy module loaded before a hang in the same batch',
@@ -579,6 +597,8 @@ export const partitions = {
         'a .ts config in a package with no module type that calls require',
         'ordinary tests left out by default',
         'a declaration fault: configNull',
+        daemonInputUnits[4],
+        daemonInputUnits[5],
       ]),
       10: anyOf([
         'an edit that changed the cold result after a hang replaced the only context',
