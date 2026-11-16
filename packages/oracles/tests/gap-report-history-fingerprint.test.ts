@@ -55,18 +55,7 @@ describe(`the gap oracle's history grammar`, () => {
       [`drawn`, drawn],
       [`histories`, histories],
     ] as const) {
-      // On win32 the histories the oracle takes stop nowhere (every stop there
-      // switches the test stop hook), so their stops are no draw: the lines
-      // are POSIX's, and the next test checks that win32's histories stop
-      // nowhere.
-      const current = fingerprints(arbitrary).map(
-        ([key, hash], i): [string, string] =>
-          process.platform === `win32` &&
-          kind === `histories` &&
-          key === `stopRuns`
-            ? (recorded[kind][i] ?? [key, hash])
-            : [key, hash],
-      )
+      const current = fingerprints(arbitrary)
       expect(current.slice(0, recorded[kind].length)).toEqual(recorded[kind])
       // A field added at the end is recorded at the end of the list too.
       expect(current.map(([key]) => key)).toEqual(
@@ -75,36 +64,44 @@ describe(`the gap oracle's history grammar`, () => {
     }
   })
 
-  // Randomness wins for new fields (maintainer decision, 2026-11-16): a field
-  // that changes what a history runs is drawn, except that no drawn field
-  // switches a test-only hook on. Each field below switches one (named beside
-  // it), so every history the oracle draws holds its neutral value, and no
-  // drawn stop switches one: a stop after the completed line holds the run's
-  // exit, a stop while the config warms waits at the warm probe, and on win32
-  // every stop goes through the test stop file. The list is written here, not
-  // read from the model, so a model that starts to draw one of them fails.
+  // Randomness wins for new fields (maintainer decision, 2026-11-16; v21.2
+  // R54, I16): a field that changes what a history runs is drawn, except that
+  // no drawn field switches a test-only hook on. The hooks are read off what
+  // the driver would set for a history, by value, here, not from the model,
+  // so a model that starts to draw one fails:
+  // - its constant hook fields hold their neutral values;
+  // - no step arms a daemon pause: `dieMidCheck` sets ORACLE_GAPS_TEST_PAUSE_AT
+  //   (daemon-reply), _PAUSE_MARK, _SERVED_MARK, _WAIT_MS and _WAIT_MARK, and
+  //   `resetBeforeRead` sets ORACLE_GAPS_TEST_PAUSE_AT (daemon-read),
+  //   _PAUSE_ARM and _SERVED_MARK; `pauseEngages` only disarms those, so it is
+  //   no neutral value of its own;
+  // - no stop switches a hook: a stop after the completed line holds the run's
+  //   exit (ORACLE_GAPS_TEST_HOLD_EXIT_MS), and a stop while the config warms
+  //   waits at the warm probe (ORACLE_GAPS_TEST_WARM_PROBE); on win32 the
+  //   driver runs a stop through the test stop file (ORACLE_GAPS_TEST_STOP)
+  //   only for a history that sets `hookStops`.
   // It reads `histories`, the histories the oracle takes, at three seeds.
   test(`draws no value that switches a test-only hook`, () => {
     const neutral: Record<string, unknown> = {
       tornRows: false, // ORACLE_GAPS_TEST_TORN_ROWS
-      pauseEngages: true, // ORACLE_GAPS_TEST_PAUSE_AT, armed by the daemon steps
       rejectBatch: 0, // ORACLE_GAPS_TEST_REJECT_BATCH
-      replyHeld: false, // ORACLE_GAPS_TEST_PAUSE_AT=daemon-reply, with no kill
+      replyHeld: false, // ORACLE_GAPS_TEST_PAUSE_AT=daemon-check, with a release
+      hookStops: false, // ORACLE_GAPS_TEST_STOP on win32
     }
-    const hookStops =
-      process.platform === `win32`
-        ? [`run`, `after`, `warm`, `abort`] // ORACLE_GAPS_TEST_STOP
-        : [
-            `after`, // ORACLE_GAPS_TEST_HOLD_EXIT_MS
-            `warm`, // ORACLE_GAPS_TEST_WARM_PROBE
-          ]
+    const hookSteps = [`dieMidCheck`, `resetBeforeRead`]
+    const hookStops = [`after`, `warm`]
     for (const seed of [FIXED_SEED, 1, 2]) {
       const samples = fc.sample(histories, { seed, numRuns: DRAWS }) as Array<
-        Record<string, unknown> & { stopRuns: Array<{ when: string }> }
+        Record<string, unknown> & {
+          steps: Array<string> | null
+          stopRuns: Array<{ when: string }>
+        }
       >
       for (const history of samples) {
         for (const [field, value] of Object.entries(neutral))
           expect([field, history[field]]).toEqual([field, value])
+        for (const step of history.steps ?? [])
+          expect(hookSteps).not.toContain(step)
         for (const stop of history.stopRuns)
           expect(hookStops).not.toContain(stop.when)
       }
