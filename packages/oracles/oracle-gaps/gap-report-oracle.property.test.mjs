@@ -1801,23 +1801,48 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       { cwd: repo, encoding: `utf8`, timeout: 60_000, env: cleanEnv() },
     )
   // A check through a daemon that stops answering: the daemon holds its
-  // reply (`daemon-reply`) and lives on until the CLI has ended. The CLI's
-  // wait is shortened to 3 s (ORACLE_GAPS_TEST_WAIT_MS), as for the other
-  // holds, so its bound on a daemon that sends nothing comes early; the CLI
-  // writes no wait mark, so nothing pauses it there. The call's backstop
-  // (120 s) ends a CLI that never ends, and the incremental check reports its
-  // stopped run as no cold fallback. The daemon may reach its pause after the
-  // CLI has fallen back, so the driver waits for the pause, then kills the
-  // daemon: the release, never by time. The state needs the pause, the CLI's
-  // completed run, and its note that the check runs cold.
+  // reply (`daemon-reply`) and lives on until the CLI has ended. A warm check
+  // starts the daemon with the pause disarmed (ORACLE_GAPS_TEST_PAUSE_ARM), so
+  // the held check reaches a daemon whose session is open; then the pause is
+  // armed. The held check's CLI waits 3 s (ORACLE_GAPS_TEST_WAIT_MS), as for
+  // the other holds, so its bound on a daemon that sends nothing comes early,
+  // and it writes no wait mark, so nothing pauses it there. Each call's
+  // backstop (120 s) ends a CLI that never ends, and the incremental check
+  // reports the stopped run as no cold fallback. The driver waits for the
+  // pause, then kills the daemon: the release, never by time. The state needs
+  // the pause, the CLI's completed run, and its note that the check runs cold.
   async function heldReply(files, how, marks, pauseMark) {
-    const env = {
+    const armMark = join(marks, `armed`)
+    const pause = {
       ORACLE_GAPS_TEST_PAUSE_AT: `daemon-reply`,
       ORACLE_GAPS_TEST_PAUSE_MARK: pauseMark,
-      ORACLE_GAPS_TEST_WAIT_MS: `3000`,
+      ORACLE_GAPS_TEST_PAUSE_ARM: armMark,
     }
+    const [warmRun] = await runClisAtOnce(dir, files, [
+      {
+        ...how,
+        daemon: true,
+        outName: `out-warm`,
+        env: pause,
+        backstopMs: 120_000,
+      },
+    ])
+    observe(
+      `retention:warm`,
+      retentionBreaches(warmRun.retention, {
+        checkPid: warmRun.checkPid,
+        complete: warmRun.reported,
+        cold: false,
+      }),
+    )
+    writeFileSync(armMark, ``)
     const [run] = await runClisAtOnce(dir, files, [
-      { ...how, daemon: true, env, backstopMs: 120_000 },
+      {
+        ...how,
+        daemon: true,
+        env: { ...pause, ORACLE_GAPS_TEST_WAIT_MS: `3000` },
+        backstopMs: 120_000,
+      },
     ])
     let pid
     for (let waited = 0; pid === undefined; waited += 20) {
@@ -1937,7 +1962,9 @@ async function incremental(dir, plan, cli, copy, observe, states) {
         : {
             ORACLE_GAPS_TEST_PAUSE_AT: mid ? `daemon-reply` : `daemon-read`,
             ORACLE_GAPS_TEST_PAUSE_MARK: pauseMark,
-            ORACLE_GAPS_TEST_PAUSE_ARM: armMark,
+            // The reset's pause waits for its arm, after the warm check; the
+            // reply's engages at once.
+            ...(mid ? {} : { ORACLE_GAPS_TEST_PAUSE_ARM: armMark }),
           }
     const env = {
       ...pause,
