@@ -8267,7 +8267,7 @@ const unitWitnessSuite = (
 // Law `constructed independence`: a pair of drafts, the second the first with
 // one constructed history appended. The first draft's seed, runs, list, and
 // naming come from the generated suite, so random seeds vary them; a drawn
-// list is kept to the ordinary items, so each of its histories enters the
+// list keeps its first history only, and only the ordinary items, so each of its histories enters the
 // state of its first item. The appended history's prefix comes from the
 // suite's first fixed history, and it enters a state in some suites only, so
 // the pair's declared states differ in those. An enumerated first draft
@@ -8281,7 +8281,9 @@ const appendedPairSuite = (generated: Suite, listed: boolean): Suite => {
   const tail = base.clock ? 1 : 2
   const constructed = listed
     ? (base.constructed.length > 0
-        ? base.constructed
+        ? // The draft grammar holds at most two constructed histories, and
+          // the appended draft adds one.
+          base.constructed.slice(0, 1)
         : [{ prefix: [tail], enters: [] }]
       ).map(({ prefix }) => {
         const items = ordinaryPrefix(prefix, tail)
@@ -8312,6 +8314,23 @@ const appendedPairSuite = (generated: Suite, listed: boolean): Suite => {
     },
   ])
 }
+// The first seed of the grammar's range (1 to 999) whose generated stream of
+// `runs` histories first fails under law `four`: its first history that holds
+// a 3, a 4, or a 6 holds a 4 first, as `verdictOf` judges a plain spec. The
+// seed is derived from the arbitrary, not written down, so a change in how a
+// campaign draws its `generated` stream moves the seed and keeps the state it
+// reaches (law `constructed independence` moved every stream once).
+const seedFailingUnderFour = (runs: number): number => {
+  const fails = (history: SyntheticHistory) =>
+    history.find((entry) => entry === 3 || entry === 4 || entry === 6)
+  for (let seed = 1; seed <= 999; seed++) {
+    const failing = fc
+      .sample(syntheticArbitrary, { seed, numRuns: runs })
+      .find((history) => fails(history) !== undefined)
+    if (failing && fails(failing) === 4) return seed
+  }
+  throw new Error(`no seed from 1 to 999 fails first under law four`)
+}
 const mainUnitRequiredConstructed: Array<{
   name: string
   enters: ReadonlyArray<(typeof mainUnitRequiredStates)[number]>
@@ -8325,7 +8344,11 @@ const mainUnitRequiredConstructed: Array<{
       return unitWitnessSuite(
         [
           generatedDraft({
-            source: { kind: `generated`, runs: 2, seed: 5 },
+            source: {
+              kind: `generated`,
+              runs: 2,
+              seed: seedFailingUnderFour(2),
+            },
             secondSeed: true,
             constructedNames: `prefixed`,
             constructed: [
@@ -10999,14 +11022,14 @@ oracleProperty({
         [`timeout`],
         generatedDraft({ timing: `slow`, fixed: [at([0])] }),
       ),
-      // Units (maintainer decision, 2026-11-11, option D). At seed 5, the
+      // Units (maintainer decision, 2026-11-11, option D). At the seed, the
       // generated unit's first failing history holds a 4 first, and the
       // constructed unit's history starts with a 3.
       fixedHistory(
         `each unit decides its own first failure`,
         [`unit-split-verdict`, `campaign-violation`, `replay-probe`],
         generatedDraft({
-          source: { kind: `generated`, runs: 2, seed: 5 },
+          source: { kind: `generated`, runs: 2, seed: seedFailingUnderFour(2) },
           constructed: [{ prefix: [3], enters: [] }],
         }),
       ),
