@@ -127,12 +127,12 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
   test-oracle-gaps-random:
-    name: Gap report end-to-end oracle (random seed, ${{ matrix.shard }}/3)
+    name: Gap report end-to-end oracle (random seed, ${{ matrix.shard }}/5)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4, 5]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -140,7 +140,7 @@ jobs:
           persist-credentials: false
       - name: Setup Tools
         uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
-      # The end-to-end oracle's random units, in three shards. Each run draws a
+      # The end-to-end oracle's random units, in five weighted shards. Each run draws a
       # fresh campaign seed (the ORACLE_SEED line in the log), and a failing
       # unit prints its Replay line. A counterexample is filed as an issue.
       - run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-random "$SHARD")"

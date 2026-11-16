@@ -324,12 +324,13 @@ export const partitions = {
   },
   // The end-to-end gap oracle's random units, which every pull request runs
   // (maintainer decision CI-1): each run draws a fresh campaign seed, and a
-  // counterexample prints its replay line. 38 units, measured on main at
-  // 35422e3 on one Arclet (8 vCPU Linux, one Vitest worker): 624 s in all.
-  // CI ran the random shards 1.7 times slower than the Arclet (9 min for a
-  // 312 s shard, in #90's first run), and a random unit's cost follows its
-  // seed. So the shards are three of about 208 s here, which is about 6 min
-  // in CI. The witness module's edit sequence alone is 178 s.
+  // counterexample prints its replay line. 52 units. Each unit's declared
+  // weight is its longest measured time across six pinned seeds (CI, PR #110
+  // and this branch's seed runs), taken from the reach-line times. The units
+  // are packed longest first into four weighted shards, and the fifth is the
+  // rest shard. The worst-case shard is 345 s of weight, under the 9-minute target in CI
+  // even when every unit takes its longest seed. A counterexample's shrink is
+  // not weighted, so a failing seed can exceed it (see #109).
   'oracle-gaps-random': {
     args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-oracle`],
     suite: `oracle-gaps.report`,
@@ -337,39 +338,63 @@ export const partitions = {
     // Every name is checked against the listed tests (partitionErrors).
     exactNames: true,
     shards: {
-      // 208 s here.
+      // 344 s of declared weight.
       1: anyOf([
         `an edit sequence over the witness module`,
-        `a declaration fault: noTypescript`,
-        `a lazy module loaded before a hang in the same batch`,
-        `a load failure beside a hang`,
-        `an ambiguous authored mutant`,
-        `a .ts config in a package with no module type that calls require`,
-        `an awaiting config in a package with no module type`,
-        `a declaration fault: configNull`,
-        `a declaration fault: configSyntax`,
-        `a declaration fault: missingSource`,
-        `a config fault in a run that owns nothing`,
-      ]),
-      // 208 s here.
-      2: anyOf([
-        `every outcome class`,
-        `an edit sequence through the daemon`,
-        `a declaration fault: brokenVitest`,
-        `an edit that changed the cold result after a hang replaced the only context`,
-        `an edit to a module that only mutated runs load`,
-        `a failing owner under a config that --config names`,
+        `an edit to data a test reads through fs (statDir)`,
+        `an edit to data a test reads through fs (callback)`,
+        `two batches each read a capture row while its worker wrote it`,
         `a failing owner under its parent's config`,
-        `a package whose parent directory has its config`,
         `a package with no config`,
+        `test.projects in a parent's config`,
+      ]),
+      // 344 s of declared weight.
+      2: anyOf([
+        `a declaration fault: configThrows`,
+        `an awaiting config in a package with no module type`,
+        `an edit during a check through the daemon`,
+        `a declaration fault: setupThrows`,
+        `an unchanged check through the daemon while a test reads a source through fs`,
+        `a failing owner under a config that --config names`,
         `ordinary tests left out by default`,
-        `a declaration fault: configNoDefault`,
-        `a declaration fault: badEntry`,
+        `a declaration fault: configNull`,
         `a declaration fault: projects`,
         `a declaration fault: outsideSource`,
       ]),
-      // The rest: 208 s here, and any unit added later.
-      3: rest,
+      // 344 s of declared weight.
+      3: anyOf([
+        `a declaration fault: noTypescript`,
+        `a reset check after its warm daemon was replaced`,
+        `generated`,
+        `a stale authored mutant and a reformat`,
+        `an edit that changed the cold result after a hang replaced the only context`,
+        `a test edits the data it read, during a check through the daemon`,
+        `an edit to data a test reads through fs (sync)`,
+        `an unchanged check through the daemon under a config's pre plugin`,
+        `a .ts config in a package with no module type that calls require`,
+        `a config that --config names`,
+        `a declaration fault: configSyntax`,
+        `a load failure beside a hang`,
+        `every outcome class`,
+        `a second daemon check of the budget witness`,
+      ]),
+      // 345 s of declared weight.
+      4: anyOf([
+        `every outcome class, the warm and abort stops`,
+        `an edit sequence through the daemon`,
+        `a daemon pause that cannot engage`,
+        `a lazy module loaded before a hang in the same batch`,
+        `a declaration fault: missingSource`,
+        `an edit to a module that only mutated runs load`,
+        `an ambiguous authored mutant`,
+        `a run with eleven contexts`,
+        `a .cjs config that calls require`,
+        `a declaration fault: configNoDefault`,
+        `a declaration fault: nonLiteral`,
+        `a config fault in a run that owns nothing`,
+      ]),
+      // The rest: 344 s of declared weight, and any unit added later.
+      5: rest,
     },
   },
   // The end-to-end gap oracle's determinism units, which pull requests run
