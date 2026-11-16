@@ -2272,6 +2272,18 @@ async function driver(plan, observe) {
       )
     )
       states.add(`a copy beside the runner's pending timer cut as no progress`)
+    // An authored mutant killed by no progress (its owner hung).
+    if (
+      plan.history.authored &&
+      plan.history.tests.some((t) => t.hangs) &&
+      cli.report?.results?.some(
+        (r) =>
+          r.authored &&
+          r.outcome === `killed` &&
+          r.laws?.includes(`no progress`),
+      )
+    )
+      states.add(`an authored mutant killed by no progress`)
     // A spin whose test read the clock first is a timeout by its spin.
     if (
       plan.history.tests.some((t) => t.timed === `clock`) &&
@@ -4491,6 +4503,7 @@ const required = [
   `a copy beside the runner's pending write cut as no progress`,
   `a copy beside the runner's pending timer cut as no progress`,
   `a spin whose count could follow the clock timed out`,
+  `an authored mutant killed by no progress`,
   `a hang in one owner and a survivor in another killed by no progress`,
   `a mutant's copies past its work budget killed by bounded work`,
   `a heartbeat named a busy mutant`,
@@ -4635,6 +4648,7 @@ const separate = [
   `a copy beside the runner's pending write cut as no progress`,
   `a copy beside the runner's pending timer cut as no progress`,
   `a spin whose count could follow the clock timed out`,
+  `an authored mutant killed by no progress`,
   // The config and contexts states have constructed histories of their own.
   `a config that --config names ran`,
   ...Object.values(testRootStates),
@@ -6522,6 +6536,20 @@ oracleProperty({
             { ...judging(`a`, `fixed seed`, 1), fn: 0, timed: `clock` },
           ]),
           functions: [[{ kind: `until`, quote: `'` }]],
+        }),
+      },
+      // An authored mutant whose owner test hangs where its output changed: its
+      // copy makes no progress, as an operator mutant's does, so it is killed
+      // by no progress on the test's route (v21.2 R50, which names no
+      // exception for an authored mutant), not cut by the backstop.
+      {
+        name: `an authored mutant whose owner hangs`,
+        enters: [`an authored mutant killed by no progress`],
+        build: (generated) => ({
+          ...soloKill(generated, [
+            { ...judging(`a`, `fixed seed`, 7), fn: 0, hangs: true },
+          ]),
+          authored: { stmt: 0, kind: `apply` },
         }),
       },
     ]),

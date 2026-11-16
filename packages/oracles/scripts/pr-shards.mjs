@@ -588,6 +588,7 @@ export const partitions = {
         "a copy beside the runner's pending write",
         "a copy beside the runner's pending timer",
         'a clocked copy that spins',
+        'an authored mutant whose owner hangs',
         "a slow owner's kill and another owner's kill",
         'a backstop cut ends the copies ahead of a later kill',
         'a kill past the work budget in a later owner',
