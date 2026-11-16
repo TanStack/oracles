@@ -491,6 +491,8 @@ const earlierEdits = edits.filter((edit) => !laterEdits.includes(edit))
 // A history's no later edits, one value, so `histories` can take it back
 // (fc.constant takes back only its own reference).
 const NO_LATER_STEPS = Object.freeze([])
+// A history's no stop runs, likewise.
+const NO_STOPS = Object.freeze([])
 // The later edits a history takes after its steps: only one without the
 // witness module that has steps.
 const laterStepsOf = (history) =>
@@ -689,7 +691,7 @@ const drawn = fc.record({
   // spins (`w_stop`), each in a pool: Vitest's workers as child processes or
   // as threads. Each costs a run of its own, so few histories have one.
   stopRuns: fc.oneof(
-    { weight: 9, arbitrary: fc.constant([]) },
+    { weight: 9, arbitrary: fc.constant(NO_STOPS) },
     {
       weight: 1,
       arbitrary: fc.array(
@@ -942,17 +944,45 @@ const keepsSteps = (history) => {
 // rejects no batch, and holds no reply. The
 // drawn fields (`warmReplaced`, `testRoot`, `loadPlugin`) come back as they
 // are.
+// A drawn stop run never switches a test-only hook either (randomness wins,
+// 2026-11-16: no drawn field switches a hook on). A stop after the completed
+// line holds the run's exit (ORACLE_GAPS_TEST_HOLD_EXIT_MS), a stop while the
+// config warms waits at the warm probe (ORACLE_GAPS_TEST_WARM_PROBE), and on
+// win32 every stop goes through the test stop file (ORACLE_GAPS_TEST_STOP),
+// since no signal reaches a Node process there. So a drawn history's stops
+// are the plain ones, a stop while the witness spins (`after` and `warm`
+// become `run`), and on win32 it has none; only constructed histories (the
+// halves of `every outcome class`) stop with a hook. The map reads the same
+// draws, so no field's draws move. Taking a constructed history back reads
+// its hook stops the same way, so a shrink keeps none.
+const plainStops = (stopRuns) =>
+  process.platform === `win32` || stopRuns.length === 0
+    ? NO_STOPS
+    : stopRuns.some((stop) => stop.when === `after` || stop.when === `warm`)
+      ? stopRuns.map((stop) =>
+          stop.when === `after` || stop.when === `warm`
+            ? { ...stop, when: `run` }
+            : stop,
+        )
+      : stopRuns
 const histories = drawn.map(
-  (history) => (keepsSteps(history) ? history : { ...history, steps: null }),
+  (history) => {
+    const kept = keepsSteps(history) ? history : { ...history, steps: null }
+    const stopRuns = plainStops(kept.stopRuns)
+    return stopRuns === kept.stopRuns ? kept : { ...kept, stopRuns }
+  },
   (value) => {
     const history =
-      /** @type {{ witness: unknown, steps: unknown[] | null, tornRows: unknown }} */ (
+      /** @type {{ witness: unknown, steps: unknown[] | null, tornRows: unknown, stopRuns: Array<{ when: string }> }} */ (
         value
       )
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
+    const stopRuns = plainStops(history.stopRuns ?? NO_STOPS)
     const taken =
-      history.tornRows === false ? value : { ...history, tornRows: false }
+      history.tornRows === false && stopRuns === history.stopRuns
+        ? value
+        : { ...history, tornRows: false, stopRuns }
     const later = (history.steps ?? []).filter((step) =>
       laterEdits.includes(step),
     )
@@ -5012,8 +5042,9 @@ function oracleTestFile(plan, file) {
           : []),
         // Where the output differs and the data is open, a verdict test of
         // file b that reads the data spins on the function it tests
-        // (`spinData`), so the capture's call budget cuts its copy.
-        ...(plan.spinData && fsGated(plan, file, t)
+        // (`spinData`), so the capture's call budget cuts its copy. A flaky
+        // test does not: the model leaves flaky tests out.
+        ...(plan.spinData && fsGated(plan, file, t) && !t.flaky
           ? [
               `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)} && (await readData()).open) for (;;) ${callFor(t.fn)}(${part.input}, [])`,
             ]

@@ -63,4 +63,40 @@ describe(`the gap oracle's history grammar`, () => {
       )
     }
   })
+
+  // Randomness wins for new fields (maintainer decision, 2026-11-16): a field
+  // that changes what a history runs is drawn, except that no drawn field
+  // switches a test-only hook on. Each field below switches one (named beside
+  // it), so every history the oracle draws holds its neutral value, and no
+  // drawn stop switches one: a stop after the completed line holds the run's
+  // exit, a stop while the config warms waits at the warm probe, and on win32
+  // every stop goes through the test stop file. The list is written here, not
+  // read from the model, so a model that starts to draw one of them fails.
+  // It reads `histories`, the histories the oracle takes, at three seeds.
+  test(`draws no value that switches a test-only hook`, () => {
+    const neutral: Record<string, unknown> = {
+      tornRows: false, // ORACLE_GAPS_TEST_TORN_ROWS
+      pauseEngages: true, // ORACLE_GAPS_TEST_PAUSE_AT, armed by the daemon steps
+      rejectBatch: 0, // ORACLE_GAPS_TEST_REJECT_BATCH
+      replyHeld: false, // ORACLE_GAPS_TEST_PAUSE_AT=daemon-reply, with no kill
+    }
+    const hookStops =
+      process.platform === `win32`
+        ? [`run`, `after`, `warm`, `abort`] // ORACLE_GAPS_TEST_STOP
+        : [
+            `after`, // ORACLE_GAPS_TEST_HOLD_EXIT_MS
+            `warm`, // ORACLE_GAPS_TEST_WARM_PROBE
+          ]
+    for (const seed of [FIXED_SEED, 1, 2]) {
+      const samples = fc.sample(histories, { seed, numRuns: DRAWS }) as Array<
+        Record<string, unknown> & { stopRuns: Array<{ when: string }> }
+      >
+      for (const history of samples) {
+        for (const [field, value] of Object.entries(neutral))
+          expect([field, history[field]]).toEqual([field, value])
+        for (const stop of history.stopRuns)
+          expect(hookStops).not.toContain(stop.when)
+      }
+    }
+  })
 })
