@@ -310,8 +310,8 @@ export const partitions = {
         'a supervised check with no ps on its PATH',
       ]),
       // Every part of `every outcome class` (the first half took 134 s on the CI
-      // runner, and the warm and abort stops, together 155 s, are now two
-      // histories), a second daemon check (101 s), and two small units. The
+      // runner; the warm and abort stops are two small histories over the stop
+      // witness alone), a second daemon check (101 s), and two small units. The
       // stop parts are named here: `every outcome class` alone matches the
       // first half only, and the others would fall into the rest (shard 3).
       2: anyOf([
