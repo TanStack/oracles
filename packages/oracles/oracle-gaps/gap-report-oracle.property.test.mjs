@@ -2954,6 +2954,8 @@ async function driver(plan, observe) {
             warnings: cli.warnings,
             stream: cli.stream,
             stdoutStream: cli.stdoutStream,
+            // Its stream log (law 15): the note that names it, and its lines.
+            log: cli.log,
             outDir: cli.outDir,
             errorLog: cli.ending?.errorLog,
             stackFrames: cli.ending?.stackFrames,
@@ -4389,9 +4391,17 @@ function streamBreach(checkpoint, run, expected, plan) {
  * forward slashes (the Windows paths rule, register 2026-11-13); POSIX paths
  * are used unchanged.
  */
+// The note names the log as every line of the stream names a path: forward
+// slashes on win32, and each control character, a line break included, as its
+// `\uXXXX` escape, so the note stays one line (the register's C entry "The
+// internal-error line", 2026-11-16).
 const logNoteOf = (run) => {
-  const outDir =
+  const outDir = (
     process.platform === `win32` ? run.outDir.replaceAll(`\\`, `/`) : run.outDir
+  ).replace(
+    /[\u0000-\u001f\u007f\u2028\u2029]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, `0`)}`,
+  )
   return `oracle-gaps: note log ${outDir}/stream.log`
 }
 
