@@ -23,6 +23,7 @@
 //
 // In a mutant run, fast-check stops a property at its first failure instead
 // of shrinking it: a kill needs one failing history, not the smallest one.
+import { createHook } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
 import { once } from 'node:events'
 import fs, { appendFileSync, readFileSync } from 'node:fs'
@@ -891,12 +892,10 @@ const SEP = process.platform === `win32` ? `[\\\\/]` : `/`
 const machinery = new RegExp(
   `${SEP}node_modules${SEP}(?:vitest|@vitest|fast-check|@fast-check|tinypool|tinyspy|chai|@tanstack${SEP}oracles)${SEP}|${SEP}packages${SEP}oracles${SEP}src${SEP}`,
 )
-function fromTest() {
-  const limit = Error.stackTraceLimit
-  Error.stackTraceLimit = 50
-  const stack = String(new Error().stack)
-  Error.stackTraceLimit = limit
-  return stack
+// Whether a stack names the test's or production's code: a frame outside
+// Node, this file, and the machinery.
+const namesTest = (stack) =>
+  String(stack)
     .split(`\n`)
     .slice(1)
     .some((frame) => {
@@ -910,6 +909,12 @@ function fromTest() {
         !machinery.test(file)
       )
     })
+function fromTest() {
+  const limit = Error.stackTraceLimit
+  Error.stackTraceLimit = 50
+  const stack = new Error().stack
+  Error.stackTraceLimit = limit
+  return namesTest(stack)
 }
 globalThis.__oracleGapsClock = () => {
   if (inTest && !clocked && fromTest()) clocked = true
@@ -1029,24 +1034,64 @@ function finishTest(context) {
 
 const thisFile = globalThis.__vitest_worker__?.filepath
 
-// I/O and idleness (maintainer decision, 2026-11-07; state only, 2026-11-15).
-// Each test's row says whether the test ever had an I/O handle open: anything
-// but the runner's own channel, stdio, and timers. A copy given `idleMs` (a
-// file whose unmutated tests did no I/O) is idle, by state alone, when no
-// counted timer is due within its horizon, no more timers are listed than
-// when its test began (which covers timers made outside the wrappers, such as
-// `node:timers/promises`), and nothing but the channel and stdio is open. A
+// I/O and idleness (maintainer decision, 2026-11-07; state only, 2026-11-15;
+// only the test's I/O, 2026-11-15). Each test's row says whether the test had
+// I/O of its own active: a handle or request that the test's or production's
+// code started, never one the runner made for itself (its channel, stdio, a
+// write that forwards the test's console output). A copy given `idleMs` (a
+// file whose unmutated tests had no I/O of their own) is idle, by state alone,
+// when no counted timer is due within its horizon, no more timers are listed
+// than when its test began (which covers timers made outside the wrappers,
+// such as `node:timers/promises`), and none of its test's I/O is active. A
 // busy synchronous or microtask loop blocks this sampler, so it cannot look
 // idle; it ends by its call budget or the backstop. After `idleMs` of that
 // state it writes an idle row, and the batch's watchdog cuts it off as no
 // progress.
-const quiet = new Set([
-  `MessagePort`,
-  `PipeWrap`,
-  `TTYWrap`,
-  `Timeout`,
-  `Immediate`,
-])
+//
+// Who started each handle and request is recorded once per worker, when Node
+// makes it: the test, when the test's or production's code is on the stack
+// then (`namesTest`), or when the resource that triggered it is the test's.
+// Node triggers a write by the stream it writes to, so the runner's write on
+// its own channel is the runner's even when a test's console.log led to it.
+// The stack is read only when the sampler meets the resource, or when the
+// resource triggers another. Promises are not recorded.
+const startedBy = (globalThis.__oracleGapsStartedBy ??= (() => {
+  const records = new WeakMap()
+  const live = new Map()
+  createHook({
+    init(id, type, trigger, resource) {
+      if (type === `PROMISE`) return
+      const parent = live.get(trigger)
+      const record = {}
+      if (parent !== undefined && owned(parent)) record.test = true
+      else {
+        const limit = Error.stackTraceLimit
+        Error.stackTraceLimit = 50
+        Error.captureStackTrace(record)
+        Error.stackTraceLimit = limit
+      }
+      live.set(id, record)
+      records.set(resource, record)
+    },
+    destroy(id) {
+      live.delete(id)
+    },
+    trackPromises: false,
+  }).enable()
+  return records
+})())
+function owned(record) {
+  return (record.test ??= namesTest(record.stack))
+}
+// Node lists a handle by its owner (a socket, a child process), and records
+// the handle itself.
+const testsIo = () =>
+  [...process._getActiveRequests(), ...process._getActiveHandles()].some(
+    (resource) => {
+      const record = startedBy.get(resource) ?? startedBy.get(resource?._handle)
+      return record !== undefined && owned(record)
+    },
+  )
 const timersListed = (kinds) =>
   kinds.filter((kind) => kind === `Timeout` || kind === `Immediate`).length
 // Test-only hooks for the CLI's own oracle, not for users. With
@@ -1108,7 +1153,7 @@ if (state.capture) {
     if (samplesAt)
       writeWhole(join(samplesAt, `${process.pid}-${threadId}`), `${++samples}`)
     const kinds = process.getActiveResourcesInfo()
-    const io = kinds.some((kind) => !quiet.has(kind))
+    const io = testsIo()
     sawIo ||= io
     // A timer due after the copy's full time limit cannot end its wait in
     // time, so it does not keep the copy busy: a test waiting on it would be

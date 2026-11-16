@@ -2067,9 +2067,10 @@ export default async (env) => {
           valueChanges.get(file).add(number)
       }
     const unmutatedUnits = new Map(first.units.map((u) => [u.file, u]))
-    // Files whose unmutated tests had an I/O handle open (a socket, a child
-    // process, file I/O): a test there may wait on something outside the
-    // worker, so no copy of it is cut for idleness (capture-setup.mjs).
+    // Files whose unmutated tests had I/O of their own open (a socket, a child
+    // process, file I/O, never the runner's): a test there may wait on
+    // something outside the worker, so no copy of it is cut for idleness
+    // (capture-setup.mjs).
     const ioFiles = new Set()
     for (const rows of [first.rows, second.rows])
       for (const [key, row] of rows) if (row.io) ioFiles.add(fileOf(key))

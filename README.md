@@ -37,8 +37,10 @@ agent.
   copies prints none, and a check through `--daemon` prints its heartbeats
   only when the check ends. No wall-clock limit decides an outcome. A copy
   is cut in one of three ways: by its call count, when it runs past its
-  call budget (`spin`); by its state, when it makes no progress (`no progress`);
-  or by the backstop, when it runs past `--hang-limit` (60 s by default) plus
+  call budget (`spin`); by its state, when it makes no progress (`no progress`:
+  no timer is due before its backstop, and none of its test's own I/O is
+  pending, while I/O the runner makes for itself, such as forwarding the
+  test's console output, does not count); or by the backstop, when it runs past `--hang-limit` (60 s by default) plus
   3 s per second of its file's unmutated time (`backstop`). A spin or no
   progress ends only its own copy, and a backstop ends the mutant's later
   copies. The copies of one mutant share a work budget, counted in site
