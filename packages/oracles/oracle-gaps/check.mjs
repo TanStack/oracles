@@ -1701,6 +1701,9 @@ export default async (env) => {
         ]
           .sort()
           .map((file) => [file, hashOf(file)]),
+        // What Vitest, Vite, and the config read while Vitest loaded and the
+        // contexts warmed (warmReads), each by its value now.
+        [...warmReads.keys()].sort().map((key) => [key, servedHash(key)]),
         process.version,
         options.seed ?? null,
         settings,
