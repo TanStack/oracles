@@ -4352,7 +4352,11 @@ const reachesRun = (history) =>
 // (`summary`), one directive per gap class (`legend`), and each function's
 // heading over its gap lines (`function`) (the coordinator's decision of
 // 2026-11-12 on review F1: every line of either stream is a line of the
-// stream).
+// stream). An internal error says so on a line of its own kind (`error`,
+// law 12) before its done line: P10 prefixes every line the CLI writes,
+// and the register's ratified exemptions (2026-11-16) do not name an
+// internal error's lines. The kind is the done line's status word for
+// exit 3 (v21.1 I7).
 const streamKinds = [
   `config`,
   `note`,
@@ -4364,6 +4368,7 @@ const streamKinds = [
   `summary`,
   `legend`,
   `function`,
+  `error`,
   `done`,
 ]
 // The one decisive baseline line, before any mutant runs: every oracle
@@ -5802,9 +5807,13 @@ function applyEdit(state, edit) {
 // files. Arguments the CLI cannot parse know their output directory only
 // when they name it (`--out`).
 //
-// An internal error is a bug in the CLI. It exits 3, says so, and keeps the
-// stack in an error.log rather than on stderr. No legal history reaches one,
-// so this law's check judges refusals only (see each oracle's limits).
+// An internal error is a bug in the CLI. It exits 3, says so in one
+// `oracle-gaps: error` line, and keeps the stack in an error.log rather
+// than on stderr. No legal history reaches one; the end-to-end oracle's
+// constructed rejected-batch history (a test-only fault) reaches it, and
+// that oracle judges its exit, its one error line, its error.log, the
+// absence of stack frames on stderr, and the stream law (law 15) on both
+// streams. This check judges refusals only (see each oracle's limits).
 
 /**
  * What a run that ended without completing printed and wrote, as the
