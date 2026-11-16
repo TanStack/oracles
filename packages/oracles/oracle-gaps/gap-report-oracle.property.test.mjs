@@ -2772,11 +2772,14 @@ async function driver(plan, observe) {
     }
     if (cli.mutants.some((m) => m.outcome === `setup-error`)) {
       states.add(`a setup error`)
+      // Beside a hang in the same batch, which is a kill by no progress now
+      // (M, 2026-11-16), so a watchdog that charged the hang to the copy that
+      // failed to load would still show.
       if (
         plan.budget === `one` &&
-        cli.mutants.some((m) => m.outcome === `timeout`)
+        cli.mutants.some((m) => m.laws?.includes(`no progress`))
       )
-        states.add(`a setup error beside a timeout under one budget`)
+        states.add(`a setup error beside a hang under one budget`)
     }
     if (plan.ordinary && cli.mutants.some((m) => m.ordinaryOutcome))
       states.add(`ordinary tests run when asked`)
@@ -4526,7 +4529,7 @@ const required = [
   `an uncalled function in an owned function is a gap`,
   `the CLI ran from a path with a space and #`,
   `a setup error`,
-  `a setup error beside a timeout under one budget`,
+  `a setup error beside a hang under one budget`,
   `refused projects`,
   `refused outsideSource`,
   `a refused run whose package lies inside the CLI's directory`,
@@ -4595,7 +4598,7 @@ const separate = [
   `two authored mutants judged apart`,
   `a package with a prebuilt addon deep in its tree ran in child processes`,
   `a setup error`,
-  `a setup error beside a timeout under one budget`,
+  `a setup error beside a hang under one budget`,
   `stale authored mutant`,
   `ambiguous authored mutant`,
   `a config refusal through the daemon`,
@@ -4906,11 +4909,12 @@ oracleProperty({
         // mutants and so the same batch, a mutant whose owner test in file
         // b then hangs. Under one budget a run past it is final, so a
         // watchdog that charges b's hang to the copy that failed to load
-        // reports that mutant as a timeout instead of a setup error.
+        // reports that mutant as killed by no progress instead of a setup
+        // error.
         name: `a load failure beside a hang`,
         enters: [
           `a setup error`,
-          `a setup error beside a timeout under one budget`,
+          `a setup error beside a hang under one budget`,
           `a completed run whose tests wrote nothing`,
         ],
         build: (generated) => ({

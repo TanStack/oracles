@@ -4374,8 +4374,10 @@ function judge(plan, tests, sites, active, { budgeted = true, detail } = {}) {
     let countGap = false
     for (const r of runs.filter((x) => x.t.file === file)) {
       // A test whose calls pass its call budget is cut by count, where the
-      // run goes past it (the CLI's spin row; the budget is per test).
-      const spun = !r.hang && r.work > callBudget
+      // run goes past it (the CLI's spin row; the budget is per test). An
+      // authored mutant's copy is not instrumented, so it counts no calls and
+      // never spins.
+      const spun = !r.hang && active?.site !== undefined && r.work > callBudget
       const byCount = spun || (r.hang && r.cut === `count`)
       if (r.hang && r.cut === `wall`) wallCut = true
       // A count that could depend on time kills nothing: a gap.
