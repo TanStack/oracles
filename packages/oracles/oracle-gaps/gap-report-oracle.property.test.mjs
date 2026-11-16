@@ -1521,6 +1521,8 @@ async function incremental(dir, plan, cli, copy, observe, states) {
   let replacedOnly = false
   // Whether the daemon's last check cut a batch off.
   let cutBefore = false
+  // Whether the daemon's last check stored a run that spun (`spinData`).
+  let spunBefore = false
   // Whether the daemon stored a run under the mid-run marker.
   let markerStored = false
   // How many runs the daemon computed in a check of a state that nothing
@@ -1773,6 +1775,14 @@ async function incremental(dir, plan, cli, copy, observe, states) {
         states.add(
           `an edit to data read through ${plan.fsRead} changed the cold result`,
         )
+      // The daemon's previous check stored runs of file b's copies that read
+      // the data and spun (`spinData`), a file that b's unmutated run never
+      // reads: the runner must store each such run under the inputs it read
+      // (F-D), so the edit makes the daemon compute it again (law 9).
+      if (step === `fsData` && plan.spinData && spunBefore)
+        states.add(
+          `an edit to data that only a spun copy read changed the cold result`,
+        )
       // The daemon's previous check cut a run off, so the only context, which
       // ran every file, was replaced. Whether the replacement read the edited
       // file again is not observed; the constructed history's order makes it
@@ -1791,6 +1801,7 @@ async function incremental(dir, plan, cli, copy, observe, states) {
         )
     }
     cutBefore = (daemon.evidence?.cut ?? 0) > 0
+    spunBefore = (daemon.evidence?.spin ?? 0) > 0
     replacedOnly = plan.contexts === 1 && cutBefore
     previous = coldRun
   }
@@ -4421,6 +4432,9 @@ const required = [
   `a rejected batch retired its copies and logged them`,
   // Reached only by the constructed history of a held reply (`heldReply`).
   `a check whose daemon stopped answering ran cold`,
+  // Gated by its constructed history; generated histories reach it when
+  // they draw `spinData` with an fs read and the data's edit.
+  `an edit to data that only a spun copy read changed the cold result`,
 ]
 // The faults the CLI analyzes anyway: a package's TypeScript is no input.
 const analyzedFaults = [`noTypescript`, `apiLessTypescript`]
@@ -4508,6 +4522,7 @@ const separate = [
   `a lazy edit changed the cold result after a batch was cut off`,
   `a rejected batch retired its copies and logged them`,
   `a check whose daemon stopped answering ran cold`,
+  `an edit to data that only a spun copy read changed the cold result`,
 ]
 // A stop by SIGTERM exists only where Node can deliver it: on win32 kill is
 // TerminateProcess, so there the stop law is judged by SIGINT (the test stop
@@ -6089,6 +6104,53 @@ oracleProperty({
             laterSteps: NO_LATER_STEPS,
             replyHeld: true,
           }),
+      },
+      {
+        // F-D of #55's third review, which landed with no RED and no mutant
+        // (D50): a spun run is stored under the inputs it read. File b's
+        // verdict test reads the data only where its output differs, and,
+        // while the data is open, spins there (`spinData`), so each mutated
+        // copy that changes the output reads a file that b's unmutated run
+        // never reads, and its call budget cuts it. The edit closes the data:
+        // the cold run then reports those mutants unjudged, and a daemon that
+        // stored the spun runs under b's known inputs only would reuse them.
+        name: `an edit to data that only a spun copy reads`,
+        enters: [
+          `an edit to data that only a spun copy read changed the cold result`,
+        ],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`b`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          derived: null,
+          dotGen: false,
+          dataOwners: [],
+          exportOwners: [],
+          importer: `none`,
+          wholeFile: `none`,
+          template: false,
+          tests: [{ ...judging(`b`, `fixed seed`, 1), fn: 0 }],
+          witness: false,
+          authored: null,
+          secondAuthored: false,
+          fault: `none`,
+          stability: `none`,
+          ordinary: false,
+          native: `none`,
+          boot: false,
+          cliPath: `plain`,
+          concurrentStart: false,
+          lazyGate: false,
+          fsRead: `sync`,
+          spinData: true,
+          laterSteps: NO_LATER_STEPS,
+          steps: [`fsData`],
+        }),
       },
     ]),
   },

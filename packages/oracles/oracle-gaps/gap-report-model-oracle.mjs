@@ -886,6 +886,15 @@ const drawn = fc.record({
   // only the constructed history "a check whose daemon stops answering" sets;
   // the take-back returns it to false.
   replyHeld: fc.constant(false),
+  // Whether file b's verdict tests that read `tests/data.json` (`fsRead`)
+  // spin on the function they test, where its output differs and the data
+  // is open, in place of judging: a mutated copy then reads a file that its
+  // file's unmutated run never reads, and its call budget cuts it (a spin).
+  // An edit that closes the data makes those copies end unjudged, so a run
+  // stored under fewer inputs than it read would be reused stale (F-D of
+  // #55's third review: a spun run is stored under the inputs it read).
+  // Drawn: it shapes the fixture's tests and switches no hook.
+  spinData: fc.constantFrom(false, false, false, true),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -3005,6 +3014,7 @@ function resolveHistory(history) {
     replyHeld: history.replyHeld === true,
     lazyGate: history.lazyGate === true,
     fsRead: history.fsRead ?? `none`,
+    spinData: history.spinData === true,
     // Whether a step edits file b's helper during a check (`midrun`): then
     // file a loads the helper and holds the test that edits it.
     midrun: [...(history.steps ?? []), ...laterStepsOf(history)].includes(
@@ -4135,6 +4145,11 @@ function runsOf(plan, tests, sites, active) {
         // A test that hangs where another would judge never ends.
         if (changed && t.hangs)
           return { t, route, hang: true, verdicts: found, changed: true }
+        // A verdict test of file b that reads the data spins there instead,
+        // while the data is open, which it is before any edit (`spinData`):
+        // a loop that never ends, as above.
+        if (changed && plan.spinData && fsGated(plan, t.file, t))
+          return { t, route, hang: true, verdicts: found, changed: true }
         if (changed && t.judges) {
           found.push({
             route,
@@ -4993,6 +5008,14 @@ function oracleTestFile(plan, file) {
         ...(t.hangs && !t.flaky
           ? [
               `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await new Promise(() => {})`,
+            ]
+          : []),
+        // Where the output differs and the data is open, a verdict test of
+        // file b that reads the data spins on the function it tests
+        // (`spinData`), so the capture's call budget cuts its copy.
+        ...(plan.spinData && fsGated(plan, file, t)
+          ? [
+              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)} && (await readData()).open) for (;;) ${callFor(t.fn)}(${part.input}, [])`,
             ]
           : []),
         ...(!t.judges

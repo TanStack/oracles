@@ -58,7 +58,8 @@
     ["testRoot", "8f4dfb34f4e51863"],
     ["loadPlugin", "1b19291d29a6e2b2"],
     ["rejectBatch", "e5386ea9402dd268"],
-    ["replyHeld", "ed6866229ecc4969"]
+    ["replyHeld", "ed6866229ecc4969"],
+    ["spinData", "ca71b56b0d55db6d"]
   ],
   "histories": [
     ["functions", "66c0e9c56951c377"],
@@ -119,6 +120,7 @@
     ["testRoot", "8f4dfb34f4e51863"],
     ["loadPlugin", "1b19291d29a6e2b2"],
     ["rejectBatch", "e5386ea9402dd268"],
-    ["replyHeld", "ed6866229ecc4969"]
+    ["replyHeld", "ed6866229ecc4969"],
+    ["spinData", "ca71b56b0d55db6d"]
   ]
 }
