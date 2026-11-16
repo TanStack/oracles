@@ -125,7 +125,7 @@
 // CLI's modules load (review of #57, P1): a signal during the loads is kept
 // and acted on once the stream log's note is written, so a stop as the CLI starts still
 // leaves the note and one done line. Only Node's own start is before them.
-import { execFileSync, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import {
   appendFileSync,
   existsSync,
@@ -152,12 +152,24 @@ process.on(`SIGTERM`, keepEarly)
 // tell a stop that came before the CLI started from one that came during its loads.
 if (process.env.ORACLE_GAPS_TEST_STARTED)
   writeFileSync(process.env.ORACLE_GAPS_TEST_STARTED, ``)
-// A test-only pause after the marker (ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED, ms):
-// it blocks this thread synchronously, so a stop sent during it lands before the
-// handlers below are installed (the widened witness of review F2). Inert unless set.
-const pauseMs = Number(process.env.ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED ?? 0)
-if (pauseMs > 0)
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, pauseMs)
+// A test-only hold after the marker (ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED): the
+// CLI waits there until it has kept a stop (keepEarly), or until the test stop
+// file exists (win32, ORACLE_GAPS_TEST_STOP), so a stop a test sends on seeing the
+// marker lands before the handlers below are installed, whatever the load. The
+// stop releases the hold, never the time; a hold with no stop within 60 s fails
+// loudly. Inert unless set.
+if (process.env.ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED !== undefined) {
+  const stopFile = process.env.ORACLE_GAPS_TEST_STOP
+  for (
+    let waited = 0;
+    early === undefined && !(stopFile !== undefined && existsSync(stopFile));
+    waited += 10
+  ) {
+    if (waited >= 60_000)
+      throw new Error(`the hold after the started marker saw no stop in 60 s`)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
 
 const { parseArgs, usage } = await import(`./args.mjs`)
 const { endRun, Refusal } = await import(`./ending.mjs`)
@@ -241,12 +253,9 @@ function claimOut(out) {
         if (error.code !== `EEXIST`) throw claimCannotWrite(out, claim, error)
         const holder = readHolder(claim)
         if (holder === undefined && attempt < 3) continue
-        if (holder === undefined)
-          throw new Refusal(
-            `run.pid in ${posix(out)} keeps changing`,
-            `rerun the check; if no run uses ${posix(out)}, delete ${posix(claim)}`,
-          )
-        throw heldRefusal(out, claim, holder)
+        // A claim that the link finds and no read does (a link to no file, or
+        // one released and retaken on every try) can't be read.
+        throw heldRefusal(out, claim, holder ?? UNREADABLE)
       }
     }
   } finally {
@@ -554,28 +563,13 @@ function signalGroup(group, signal) {
 function watchSupervisor(supervisor) {
   // Only a process that leads its own group kills it: an inherited variable
   // (a test's child, say) must not name a group this process does not lead. A
-  // group that cannot be read fails the run: the watchdog would not be armed.
-  const group = groupOf(process.pid)
-  if (group === undefined)
-    throw new Error(
-      `the run cannot read its process group, so it cannot arm its supervisor watchdog`,
-    )
-  if (group !== process.pid) return
+  // group whose id is this process's pid exists only while this process leads
+  // it, so a signal 0 to it tells, with no external command (no `ps`, which a
+  // slim container lacks; review of #57, A7).
+  if (!signalGroup(process.pid, 0)) return
   setInterval(() => {
     if (process.ppid !== supervisor) process.kill(-process.pid, `SIGKILL`)
   }, 1000).unref()
-}
-/** The process group of `pid` (POSIX, through ps); undefined when unknown. */
-function groupOf(pid) {
-  try {
-    return Number(
-      execFileSync(`ps`, [`-o`, `pgid=`, `-p`, String(pid)], {
-        encoding: `utf8`,
-      }).trim(),
-    )
-  } catch {
-    return undefined
-  }
 }
 /**
  * A test-only stop (ORACLE_GAPS_TEST_STOP, #58): once the named file exists, the

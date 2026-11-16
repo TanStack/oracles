@@ -145,9 +145,11 @@ agent.
   - `ORACLE_GAPS_TEST_STARTED` names a file that the CLI writes as its first
     project statement, before any project module loads, so a test can tell a stop
     that came before the CLI started from one that came during its loads.
-  - `ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED` (milliseconds) blocks the CLI for that
-    long right after the started file is written, so a stop sent on seeing the
-    file lands inside the pause.
+  - `ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED` (any value) holds the CLI right after
+    the started file is written until the CLI has kept a stop signal (or, with
+    `ORACLE_GAPS_TEST_STOP`, until that file exists), so a stop sent on seeing
+    the file lands during the CLI's loads. The stop releases the hold, not a
+    time; a hold that sees no stop within 60 s fails the run loudly.
   - `ORACLE_GAPS_TEST_PAUSE_AT` names one point at which the CLI holds: `note`
     (after the note line is written, before the check starts), and `child` (a
     supervised child, before it writes anything; it waits on timers, so its
