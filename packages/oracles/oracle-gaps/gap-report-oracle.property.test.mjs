@@ -1885,7 +1885,8 @@ async function driver(plan, observe) {
     // (`pendingIo: 'test'`), and the runner's own pending write beside a test
     // that can make no progress (`pendingIo: 'runner'`): each hook's directory
     // sits beside the package, and the runner's marks each copy that went idle
-    // while its write was pending.
+    // while its write was pending. Every run of the history sets the hooks (its
+    // partial run, twin and stability rerun too), since the test needs them.
     const pendingIo = (owner) =>
       plan.history.tests.some((t) => t.pendingIo === owner)
     const samples = `${dir}.samples`
@@ -1899,22 +1900,26 @@ async function driver(plan, observe) {
       hangMs: plan.history.hangMs,
       cli: plan.cliPath === `spaced` ? copy : here,
       ...configArgs(plan),
-    }
-    const { replay, ...cli } = runCli(dir, files, {
-      ...how,
       env: {
-        ...(plan.tornRows ? { ORACLE_GAPS_TEST_TORN_ROWS: tornPolls } : {}),
         ...(pendingIo(`test`) ? { ORACLE_GAPS_TEST_SAMPLES: samples } : {}),
         ...(pendingIo(`runner`)
           ? { ORACLE_GAPS_TEST_RUNNER_WRITE: runnerWrites }
           : {}),
       },
-    })
+    }
+    const { replay, ...cli } = runCli(
+      dir,
+      files,
+      plan.tornRows
+        ? {
+            ...how,
+            env: { ...how.env, ORACLE_GAPS_TEST_TORN_ROWS: tornPolls },
+          }
+        : how,
+    )
     const idleBesideRunnerWrite = pendingIo(`runner`)
       ? readdirSync(runnerWrites).length
       : 0
-    rmSync(samples, { recursive: true, force: true })
-    rmSync(runnerWrites, { recursive: true, force: true })
     // The watchdog read a closing row while the worker wrote it: a hold
     // marks `reached` once two polls came after its first half. A hold that
     // waited 60 s with no poll marks `unreached`, and the witness fails
@@ -2461,6 +2466,8 @@ async function driver(plan, observe) {
     for (const state of states) observe(`reach`, state)
   } finally {
     if (copy) rmSync(copy, { recursive: true, force: true })
+    rmSync(`${dir}.samples`, { recursive: true, force: true })
+    rmSync(`${dir}.runner-writes`, { recursive: true, force: true })
     removePath(`${dir}.link`)
     written.delete(dir)
     try {
