@@ -1636,9 +1636,12 @@ function readRunIn(dir, out, status, stderr, cli, stdout, derived) {
       .filter((line) => line.startsWith(`oracle-gaps: gap `))
       .map((line) => namedScratch(line, scratch))
       .sort(),
+    // The streamed gap lines on stderr, as a sorted set: their order is live
+    // progress, not outcome (C, 2026-11-13), and each line is kept.
     stderrGaps: lines
       .filter((line) => streamedGap.test(line))
-      .map((line) => namedScratch(line, scratch)),
+      .map((line) => namedScratch(line, scratch))
+      .sort(),
     baselineFiles: lines.flatMap((line) => {
       const file = line.match(
         /^oracle-gaps: baseline (?:pass|fail) (\S+)(?: \(ordinary\))?: /,
