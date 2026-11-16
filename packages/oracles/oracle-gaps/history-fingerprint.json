@@ -61,7 +61,8 @@
     ["replyHeld", "ed6866229ecc4969"],
     ["spinData", "ca71b56b0d55db6d"],
     ["siblingDir", "efebc6f9d344ecbf"],
-    ["hookStops", "ed6866229ecc4969"]
+    ["hookStops", "ed6866229ecc4969"],
+    ["spinThrows", "a15c94f07e10bd07"]
   ],
   "histories": [
     ["functions", "66c0e9c56951c377"],
@@ -125,6 +126,7 @@
     ["replyHeld", "ed6866229ecc4969"],
     ["spinData", "ca71b56b0d55db6d"],
     ["siblingDir", "efebc6f9d344ecbf"],
-    ["hookStops", "ed6866229ecc4969"]
+    ["hookStops", "ed6866229ecc4969"],
+    ["spinThrows", "a15c94f07e10bd07"]
   ]
 }

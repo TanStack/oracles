@@ -909,6 +909,13 @@ const drawn = fc.record({
   // only the halves of `every outcome class` set, so no drawn history
   // switches that hook on, and the history is the same on every platform.
   hookStops: fc.constant(false),
+  // Whether a copy that spins on open data (`spinData`) first schedules an
+  // error that fires after its test has ended: an error outside any test,
+  // which Vitest cannot give to one copy, so the CLI runs each copy of that
+  // batch alone (runAlone), and the spun copy's unit comes from a run alone
+  // (merge gate F4). The outcomes stay the batch's. Drawn: it shapes the
+  // fixture's tests and switches no hook.
+  spinThrows: fc.constantFrom(false, false, false, true),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -3074,6 +3081,7 @@ function resolveHistory(history) {
     spinData: history.spinData === true,
     siblingDir: history.siblingDir === true,
     hookStops: history.hookStops === true,
+    spinThrows: history.spinThrows === true,
     // Whether a step edits file b's helper during a check (`midrun`): then
     // file a loads the helper and holds the test that edits it.
     midrun: [...(history.steps ?? []), ...laterStepsOf(history)].includes(
@@ -5077,7 +5085,14 @@ function oracleTestFile(plan, file) {
         // test does not: the model leaves flaky tests out.
         ...(plan.spinData && fsGated(plan, file, t) && !t.flaky
           ? [
-              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)} && (await readData()).open) for (;;) ${callFor(t.fn)}(${part.input}, [])`,
+              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)} && (await readData()).open) {`,
+              ...(plan.spinThrows
+                ? [
+                    `      setTimeout(() => { throw new Error('a spinning copy threw outside its test') })`,
+                  ]
+                : []),
+              `      for (;;) ${callFor(t.fn)}(${part.input}, [])`,
+              `    }`,
             ]
           : []),
         ...(!t.judges
