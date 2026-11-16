@@ -559,12 +559,6 @@ export interface ConstructedHistory<THistory> {
   name: string
   enters: ReadonlyArray<string>
   build: (generated: THistory) => THistory
-  /**
-   * Takes a built history back to a generated one, so fast-check can shrink
-   * it (its `.map` unmapper). Without it the history is outside the
-   * arbitrary's language, and the framework refuses it.
-   */
-  unbuild?: (built: THistory) => THistory
 }
 
 /**
@@ -1788,10 +1782,7 @@ function buildConstruction<THistory>(
       { cause: error },
     )
   }
-  // The history is taken back through its unbuild mapping (when it has one): a constructed value may
-  // lie outside the generator's language only where its take-back is inside it.
-  const takenBack = construction.unbuild?.(history) ?? history
-  if (!arbitrary.canShrinkWithoutContext(takenBack))
+  if (!arbitrary.canShrinkWithoutContext(history))
     throw untakeable(id, `constructed history "${construction.name}" built`)
   return history
 }
@@ -2407,18 +2398,10 @@ function generatedTests<THistory, TExpected, TPlan>(
       ? source.arbitrary
       : fc.oneof(
           { arbitrary: source.arbitrary, weight: constructions.length },
-          ...constructions.map((construction) => {
-            const unbuild = construction.unbuild
-            return {
-              arbitrary:
-                unbuild === undefined
-                  ? source.arbitrary.map(construction.build)
-                  : source.arbitrary.map(construction.build, (built: unknown) =>
-                      unbuild(built as THistory),
-                    ),
-              weight: 1,
-            }
-          }),
+          ...constructions.map((construction) => ({
+            arbitrary: source.arbitrary.map(construction.build),
+            weight: 1,
+          })),
         )
   for (const construction of constructions) {
     const undeclared = construction.enters.filter(

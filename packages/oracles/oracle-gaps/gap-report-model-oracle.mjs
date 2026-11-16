@@ -849,7 +849,7 @@ const drawn = fc.record({
   // Only the constructed history of a replaced warm daemon sets it.
   warmReplaced: fc.constant(false),
   // The batch whose run rejects: a constructed-only field (0 is no fault). Only the constructed history at
-  // the end of the campaign sets it, through its unbuild mapping (the generator rule).
+  // the end of the campaign sets it; the take-back below returns it to 0 (the generator rule, extended).
   rejectBatch: fc.constant(0),
 })
 
@@ -904,20 +904,27 @@ const histories = drawn.map(
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
     // Take-back into the drawn language: a disarmed pause (pauseEngages false,
-    // only the constructed history sets it) comes back as engaged, so the
-    // arbitrary can shrink it. The disarm is therefore not kept by a shrink.
+    // only the constructed history sets it) comes back as engaged, and a
+    // rejected batch (rejectBatch, likewise) as none, so the arbitrary can
+    // shrink it. Neither is therefore kept by a shrink.
     const taken =
       history.tornRows === false ? value : { ...history, tornRows: false }
     const later = (history.steps ?? []).filter((step) =>
       laterEdits.includes(step),
     )
     if (later.length === 0)
-      return { ...taken, pauseEngages: true, warmReplaced: false }
+      return {
+        ...taken,
+        pauseEngages: true,
+        warmReplaced: false,
+        rejectBatch: 0,
+      }
     const earlier = history.steps.filter((step) => !laterEdits.includes(step))
     return {
       ...taken,
       pauseEngages: true,
       warmReplaced: false,
+      rejectBatch: 0,
       steps: earlier.length > 0 ? earlier : null,
       laterSteps: later,
     }
