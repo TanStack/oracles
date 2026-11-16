@@ -6111,6 +6111,11 @@ oracleProperty({
         ],
         build: (generated) => ({
           ...generated,
+          // Its lazy gate sits in file b's verdict, which a test that spins on
+          // open data never reaches: a random seed's base drew `spinData`
+          // (2026-11-16) and lost "a lazy edit changed the cold result after
+          // a batch was cut off", which this history gates (merge gate F6).
+          spinData: false,
           functions: [
             [{ kind: `push`, quote: `'` }],
             [{ kind: `if`, op: `>`, k: 4, not: false, quote: `'` }],
