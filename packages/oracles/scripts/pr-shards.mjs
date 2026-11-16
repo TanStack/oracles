@@ -569,6 +569,7 @@ export const partitions = {
         'a declaration fault: configNoDefault',
         'a declaration fault: badEntry',
         'an edit to data that only a spun copy reads',
+        "a refused run beside the CLI's directory, under a name that extends it",
       ]),
       9: anyOf([
         'a lazy module loaded before a hang in the same batch',

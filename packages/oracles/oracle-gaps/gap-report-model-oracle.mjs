@@ -897,6 +897,13 @@ const drawn = fc.record({
   // #55's third review: a spun run is stored under the inputs it read).
   // Drawn: it shapes the fixture's tests and switches no hook.
   spinData: fc.constantFrom(false, false, false, true),
+  // Where a package that lies in this repository is placed: beside the CLI's
+  // own files (`.scratch-*` in its directory), or in a directory beside the
+  // CLI's directory whose name extends that directory's name
+  // (`oracle-gaps-sibling-*`), so a plain prefix test of its path reads it
+  // as inside the CLI's directory when it is not (#73, fix class 2). Drawn:
+  // it places the fixture and switches no hook.
+  siblingDir: fc.constantFrom(false, false, false, true),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -3045,6 +3052,7 @@ function resolveHistory(history) {
     lazyGate: history.lazyGate === true,
     fsRead: history.fsRead ?? `none`,
     spinData: history.spinData === true,
+    siblingDir: history.siblingDir === true,
     // Whether a step edits file b's helper during a check (`midrun`): then
     // file a loads the helper and holds the test that edits it.
     midrun: [...(history.steps ?? []), ...laterStepsOf(history)].includes(
