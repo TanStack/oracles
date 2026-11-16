@@ -932,6 +932,7 @@ export default async (env) => {
     context.getRootProject?.().provide(`oracleGaps`, state)
     writeFileSync(join(out, `state.json`), JSON.stringify(state))
     const started = Date.now()
+    clearErrors(context)
     const running = context.runTestSpecifications(
       contextSpecs.get(context).get(file) ?? [],
       false,
@@ -1182,6 +1183,7 @@ export default async (env) => {
     writeFileSync(join(out, `state.json`), JSON.stringify(state))
     const project = context.getRootProject()
     const started = Date.now()
+    clearErrors(context)
     const run = context.runTestSpecifications(
       copies.map((copy) => project.createSpecification(copy)),
       false,
@@ -1432,6 +1434,8 @@ export default async (env) => {
       throw new Error(
         `oracle-gaps: this Vitest keeps no filesMap, idMap, or pathsSet in its state, so a check cannot retire its copies`,
       )
+    // The batch's errors outside any test are plain data in its units now.
+    clearErrors(context)
     const gone = new Set(copies)
     for (const [id, task] of idMap)
       if (gone.has(task.file?.filepath ?? task.filepath)) idMap.delete(id)
@@ -1440,6 +1444,20 @@ export default async (env) => {
       pathsSet.delete(copy)
     }
     retireModules(context.getRootProject().vite, gone)
+  }
+
+  /**
+   * Drops the errors outside any test that Vitest's state holds. Vitest keeps
+   * them across runs (its own CLI clears them per run), so a run that does
+   * not start without them reads an earlier run's errors as its own (its
+   * batch then runs alone), and a batch that keeps them retains them.
+   */
+  function clearErrors(context) {
+    if (typeof context.state?.clearErrors !== `function`)
+      throw new Error(
+        `oracle-gaps: this Vitest's state has no clearErrors, so a run cannot tell its own errors outside any test`,
+      )
+    context.state.clearErrors()
   }
 
   /**
