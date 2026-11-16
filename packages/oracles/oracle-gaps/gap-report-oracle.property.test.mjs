@@ -4397,13 +4397,19 @@ calibrations.push(
   {
     name: `a stdout gap line names another cause`,
     law: `greppable stream`,
+    // A timeout is now only a backstop or a spin that could follow the clock,
+    // which no generated history is likely to print, so the calibration runs
+    // the clocked spin's history, whose timeout line names `spin`.
+    history: { constructed: `a clocked copy that spins` },
     // A timeout's line whose cause is another cut than results.json's
     // `detail`: the line still reads, so only the cause comparison rejects it.
     corrupt: corruptCli((cli) => {
+      // A run that did not complete (a rejected batch) records no gap lines.
+      if (cli.exit !== 0 || cli.stdoutGaps === undefined) return undefined
       const at = cli.stdoutGaps.findIndex((line) =>
         / \(cause: [^()]+\)$/.test(line),
       )
-      if (cli.exit !== 0 || at < 0) return undefined
+      if (at < 0) return undefined
       const recaused = cli.stdoutGaps[at].replace(
         / \(cause: ([^()]+)\)$/,
         (_, cause) =>
