@@ -187,6 +187,29 @@ jobs:
         uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
       - run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-determinism 1)"
         working-directory: packages/oracles
+  # MEASUREMENT ONLY (scratch branch, not for merge): each random shard under
+  # pinned campaign seeds, to size the random shards against P12.
+  measure-random-seeds:
+    name: measure random ${{ matrix.shard }}/3 seed ${{ matrix.seed }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+        seed: [-972199262, 333199054, -1269403528, -1659558018, 1835238112, -330614923]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Tools
+        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
+      - run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-random "$SHARD")"
+        working-directory: packages/oracles
+        env:
+          SHARD: ${{ matrix.shard }}
+          ORACLE_SEED: ${{ matrix.seed }}
   test-vitest-5:
     name: Test on Vitest 5 (${{ matrix.suite }})
     # The package's vitest peer range includes 5; this job is the evidence.
