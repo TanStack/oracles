@@ -904,6 +904,11 @@ const drawn = fc.record({
   // as inside the CLI's directory when it is not (#73, fix class 2). Drawn:
   // it places the fixture and switches no hook.
   siblingDir: fc.constantFrom(false, false, false, true),
+  // Whether the driver runs this history's stops on win32, where every stop
+  // goes through the test stop file (ORACLE_GAPS_TEST_STOP): a constant that
+  // only the halves of `every outcome class` set, so no drawn history
+  // switches that hook on, and the history is the same on every platform.
+  hookStops: fc.constant(false),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -951,32 +956,44 @@ const keepsSteps = (history) => {
 // rejects no batch, and holds no reply. The
 // drawn fields (`warmReplaced`, `testRoot`, `loadPlugin`) come back as they
 // are.
-// A drawn stop run never switches a test-only hook either (randomness wins,
-// 2026-11-16: no drawn field switches a hook on). A stop after the completed
-// line holds the run's exit (ORACLE_GAPS_TEST_HOLD_EXIT_MS), a stop while the
-// config warms waits at the warm probe (ORACLE_GAPS_TEST_WARM_PROBE), and on
-// win32 every stop goes through the test stop file (ORACLE_GAPS_TEST_STOP),
-// since no signal reaches a Node process there. So a drawn history's stops
-// are the plain ones, a stop while the witness spins (`after` and `warm`
-// become `run`), and on win32 it has none; only constructed histories (the
-// halves of `every outcome class`) stop with a hook. The map reads the same
-// draws, so no field's draws move. Taking a constructed history back reads
-// its hook stops the same way, so a shrink keeps none.
+// A drawn history never switches a test-only hook either (randomness wins,
+// 2026-11-16; v21.2 I16). Two steps arm a daemon pause: `dieMidCheck` holds
+// the daemon's reply (ORACLE_GAPS_TEST_PAUSE_AT=daemon-reply, with the wait
+// and served marks) and `resetBeforeRead` holds its connection unread
+// (daemon-read), so a drawn history takes neither; the constructed histories
+// that gate their states take them. A stop after the completed line holds the
+// run's exit (ORACLE_GAPS_TEST_HOLD_EXIT_MS) and a stop while the config warms
+// waits at the warm probe (ORACLE_GAPS_TEST_WARM_PROBE), so a drawn history's
+// stops are stops while the witness spins (`after` and `warm` become `run`).
+// On win32 every stop goes through the test stop file; the driver runs a
+// stop there only for a history that sets `hookStops`, so the histories are
+// the same on every platform (v21.2 R4). The maps read the same draws, so no
+// field's draws move. Taking a constructed history back reads its hook steps
+// and stops the same way, so a shrink keeps none.
+const hookSteps = new Set([`dieMidCheck`, `resetBeforeRead`])
+const plainSteps = (steps) => {
+  if (steps == null || !steps.some((step) => hookSteps.has(step))) return steps
+  const kept = steps.filter((step) => !hookSteps.has(step))
+  return kept.length > 0 ? kept : null
+}
 const plainStops = (stopRuns) =>
-  process.platform === `win32` || stopRuns.length === 0
-    ? NO_STOPS
-    : stopRuns.some((stop) => stop.when === `after` || stop.when === `warm`)
-      ? stopRuns.map((stop) =>
-          stop.when === `after` || stop.when === `warm`
-            ? { ...stop, when: `run` }
-            : stop,
-        )
+  stopRuns.some((stop) => stop.when === `after` || stop.when === `warm`)
+    ? stopRuns.map((stop) =>
+        stop.when === `after` || stop.when === `warm`
+          ? { ...stop, when: `run` }
+          : stop,
+      )
+    : stopRuns.length === 0
+      ? NO_STOPS
       : stopRuns
 const histories = drawn.map(
   (history) => {
     const kept = keepsSteps(history) ? history : { ...history, steps: null }
+    const steps = plainSteps(kept.steps)
     const stopRuns = plainStops(kept.stopRuns)
-    return stopRuns === kept.stopRuns ? kept : { ...kept, stopRuns }
+    return steps === kept.steps && stopRuns === kept.stopRuns
+      ? kept
+      : { ...kept, steps, stopRuns }
   },
   (value) => {
     const history =
@@ -986,26 +1003,29 @@ const histories = drawn.map(
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
     const stopRuns = plainStops(history.stopRuns ?? NO_STOPS)
+    const steps = plainSteps(history.steps)
     const taken =
-      history.tornRows === false && stopRuns === history.stopRuns
+      history.tornRows === false &&
+      stopRuns === history.stopRuns &&
+      steps === history.steps
         ? value
-        : { ...history, tornRows: false, stopRuns }
-    const later = (history.steps ?? []).filter((step) =>
-      laterEdits.includes(step),
-    )
+        : { ...history, tornRows: false, stopRuns, steps }
+    const later = (steps ?? []).filter((step) => laterEdits.includes(step))
     if (later.length === 0)
       return {
         ...taken,
         pauseEngages: true,
         rejectBatch: 0,
         replyHeld: false,
+        hookStops: false,
       }
-    const earlier = history.steps.filter((step) => !laterEdits.includes(step))
+    const earlier = steps.filter((step) => !laterEdits.includes(step))
     return {
       ...taken,
       pauseEngages: true,
       rejectBatch: 0,
       replyHeld: false,
+      hookStops: false,
       steps: earlier.length > 0 ? earlier : null,
       laterSteps: later,
     }
@@ -3053,6 +3073,7 @@ function resolveHistory(history) {
     fsRead: history.fsRead ?? `none`,
     spinData: history.spinData === true,
     siblingDir: history.siblingDir === true,
+    hookStops: history.hookStops === true,
     // Whether a step edits file b's helper during a check (`midrun`): then
     // file a loads the helper and holds the test that edits it.
     midrun: [...(history.steps ?? []), ...laterStepsOf(history)].includes(

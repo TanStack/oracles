@@ -2348,8 +2348,13 @@ async function driver(plan, observe) {
     // observation holds counts, which no name or order changes: how many
     // session directories the package has once the run ended, and how many
     // of them the previous stopped run had left.
+    // On win32 every stop goes through the CLI's test stop file
+    // (ORACLE_GAPS_TEST_STOP), so it runs only for a history that sets
+    // `hookStops`: a drawn history switches no hook on (v21.2 I16).
+    const stops =
+      process.platform === `win32` && !plan.hookStops ? [] : plan.stopRuns
     if (cli.exit === 0 && stopIds.length > 0)
-      for (const stop of plan.stopRuns) {
+      for (const stop of stops) {
         const { retention, checkPid, ...run } = await stoppedRun(
           dir,
           files,
@@ -4767,6 +4772,8 @@ oracleProperty({
           pragma: true,
           // Stopped while the stop witness spins, once by each signal and
           // in each pool (law 13).
+          // Its stops switch hooks: on win32 the test stop file.
+          hookStops: true,
           stopRuns: [
             { signal: `SIGTERM`, pool: `forks`, when: `run` },
             { signal: `SIGINT`, pool: `threads`, when: `run` },
@@ -6038,6 +6045,8 @@ oracleProperty({
           boot: false,
           budget: `two`,
           pragma: false,
+          // Its stops switch hooks: on win32 the test stop file.
+          hookStops: true,
           stopRuns: [
             { signal: `SIGINT`, pool: `threads`, when: `warm` },
             { signal: `SIGINT`, pool: `threads`, when: `abort` },
