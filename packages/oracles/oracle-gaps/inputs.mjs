@@ -15,7 +15,7 @@
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
-import { resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { posix } from './paths.mjs'
 
@@ -26,9 +26,18 @@ const reads = [
   [fs, [`readFileSync`, `readFile`, `existsSync`, `statSync`]],
   [fs.promises, [`readFile`, `stat`]],
 ]
+// The calls that write a file's text. A file that a reader wrote before it
+// reads it holds the reader's own output, which follows from the reader's
+// other inputs, so that read is no input: a test's temporary file, or the
+// config that Vite bundles into a temporary file and then imports.
+const writes = [
+  [fs, [`writeFileSync`, `writeFile`, `appendFileSync`, `appendFile`]],
+  [fs.promises, [`writeFile`, `appendFile`]],
+]
 const original = (globalThis.__oracleGapsOriginalFs ??= {
   readFileSync: fs.readFileSync,
   statSync: fs.statSync,
+  realpathSync: fs.realpathSync.native,
 })
 const sha1 = (data) => createHash(`sha1`).update(data).digest(`hex`)
 
@@ -76,7 +85,8 @@ export function keepProperties(from, to) {
 
 /**
  * Watches this process's reads from now on: each read calls `record(key)`
- * with the input's key, the `record` of the latest call. The wrappers are
+ * with the input's key, and each write of a file `record(key, true)`, the
+ * `record` of the latest call. The wrappers are
  * installed once per process. A file's path is the path rule's (paths.mjs),
  * and the runner's own files are left out. An ES module's
  * `import { readFileSync } from 'node:fs'` reads the wrappers too.
@@ -85,8 +95,8 @@ export function watchReads(record) {
   globalThis.__oracleGapsRecord = record
   if (globalThis.__oracleGapsWatching) return
   globalThis.__oracleGapsWatching = true
-  record = (key) => globalThis.__oracleGapsRecord(key)
-  const watched = (target) => {
+  record = (key, write) => globalThis.__oracleGapsRecord(key, write)
+  const watched = (target, write) => {
     let path
     try {
       if (target instanceof URL) path = fileURLToPath(target)
@@ -95,17 +105,32 @@ export function watchReads(record) {
     } catch {
       return
     }
-    if (path !== undefined && !isRunnerFile(posix(path)))
-      record(`fs:${posix(path)}`)
+    if (path === undefined || isRunnerFile(posix(path))) return
+    record(`fs:${posix(path)}`, write)
+    // A written file is also known by its directory's real path, which a
+    // later read through a link, or an import by its real URL, names.
+    if (write)
+      try {
+        record(
+          `fs:${posix(join(original.realpathSync(dirname(path)), basename(path)))}`,
+          write,
+        )
+      } catch {
+        // No directory to write in: the write fails as it would.
+      }
   }
-  for (const [owner, names] of reads)
-    for (const name of names) {
-      const read = owner[name]
-      owner[name] = keepProperties(read, function (target, ...rest) {
-        watched(target)
-        return read.call(this, target, ...rest)
-      })
-    }
+  for (const [calls, write] of [
+    [reads, false],
+    [writes, true],
+  ])
+    for (const [owner, names] of calls)
+      for (const name of names) {
+        const call = owner[name]
+        owner[name] = keepProperties(call, function (target, ...rest) {
+          watched(target, write)
+          return call.call(this, target, ...rest)
+        })
+      }
   syncBuiltinESMExports()
   // A variable read by name, a test of whether it is set, and a listing of
   // the names, which reads the set of names.

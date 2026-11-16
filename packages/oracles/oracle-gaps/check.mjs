@@ -244,6 +244,7 @@ function pluginHooks(option, reading) {
       const id = at === undefined ? undefined : args[at]
       return reading.run(
         {
+          hook: true,
           module:
             typeof id === `string`
               ? `fs:${posix(id.split(`?`)[0])}`
@@ -490,21 +491,29 @@ export async function openSession(pkg) {
       `Reinstall @tanstack/oracles, which depends on TypeScript 5.`,
     )
   // What Vitest, the config, and the config's own plugins read in this
-  // process (`reading`: while Vitest loads, while each context warms, and in
-  // each hook of the config's plugins, pluginHooks). Every plugin input is a
-  // daemon input (maintainer decision, 2026-11-16, "All of them"): each is
-  // an input of every unit that settles after it was read, with its hash
-  // from that read (settleIn), and a daemon whose session input changed is
-  // replaced (inputsChanged, daemon.mjs), since a plugin or a module may
-  // keep what it read. A load or transform hook's read of the module it
-  // serves is that module's own text, which is the module's input already.
-  const sessionReads = new Map()
+  // process (`reading`): every plugin input is a daemon input (maintainer
+  // decision, 2026-11-16, "All of them"). What Vitest and Vite read while
+  // Vitest loads and while a context warms (`warmReads`, some hundred files
+  // and variables) is a global input of every unit (globalKey). What a hook
+  // of the config's own plugins reads (`hookReads`, pluginHooks), at any
+  // time, is an input of every unit that settles after it, with its hash
+  // from that read (settleIn). A daemon whose session read a file that has
+  // changed since is replaced (inputsChanged, daemon.mjs), since a plugin or
+  // a module may keep what it read. A load or transform hook's read of the
+  // module it serves is that module's own text, the module's input already.
+  // A file that the session wrote there before it read it, such as the
+  // config Vite bundles into a temporary file, is the session's own output.
+  const warmReads = new Map()
+  const hookReads = new Map()
+  const wrote = new Set()
   const reading = new AsyncLocalStorage()
-  watchReads((key) => {
-    const hook = reading.getStore()
-    if (hook === undefined || key === hook.module || sessionReads.has(key))
-      return
-    sessionReads.set(key, key.startsWith(`fs:`) ? fileHash(key.slice(3)) : null)
+  watchReads((key, write) => {
+    const at = reading.getStore()
+    const reads = at?.hook ? hookReads : warmReads
+    if (at === undefined || key === at.module || reads.has(key)) return
+    if (write) wrote.add(key)
+    else if (!wrote.has(key))
+      reads.set(key, key.startsWith(`fs:`) ? fileHash(key.slice(3)) : null)
   })
   globalThis.__oracleGapsPluginHooks = (plugins) =>
     pluginHooks(plugins, reading)
@@ -798,8 +807,8 @@ export default async (env) => {
     await new Promise((resolve) => service.on(`exit`, resolve))
     throw new Error(`The service was stopped`)
   }
-  // A context warms under `reading` (see sessionReads): what its config,
-  // Vite, and Vitest read while it warms is a session input.
+  // A context warms under `reading` (see warmReads): what its config, Vite,
+  // and Vitest read while it warms is a global input.
   function warmContext(settings, index) {
     return reading.run({}, () => warmIn(settings, index))
   }
@@ -828,6 +837,10 @@ export default async (env) => {
           teardownTimeout: settings.testTimeout,
           typecheck: { enabled: false },
           coverage: { enabled: false },
+          // The runner orders the files itself (KeepOrder), so Vitest's
+          // results cache, which it reads when a context warms and writes
+          // after each run, would only be an input that every run changes.
+          cache: false,
           // Vitest 5 caches transformed modules on disk by default, keyed by
           // the file, not by what this runner's plugin serves for it, so a
           // patched or instrumented source could come back as an earlier text.
@@ -1752,10 +1765,10 @@ export default async (env) => {
       const served = servedBy(index)
       const loads = globalThis.__oracleGapsLoads[index]
       let stable = runPaths.length > 0
-      // The session's inputs so far, each with its hash from its read: a
-      // run may have read through any of them (see sessionReads).
-      const paths = [...new Set([...runPaths, ...sessionReads.keys()])]
-      const readAt = { ...Object.fromEntries(sessionReads), ...runReadAt }
+      // What the config's plugins have read so far, each with its hash from
+      // its read: the run may have read through any of it (see hookReads).
+      const paths = [...new Set([...runPaths, ...hookReads.keys()])]
+      const readAt = { ...Object.fromEntries(hookReads), ...runReadAt }
       const inputs = paths.map((path) => {
         const now = servedHash(path, index)
         const hash =
@@ -2714,12 +2727,12 @@ export default async (env) => {
   }
 
   /**
-   * Whether a file the session read (sessionReads) holds other text now: a
+   * Whether a file the session read (warmReads, hookReads) holds other text now: a
    * daemon then serves no more checks, since a plugin or a module may keep
    * what it read (daemon.mjs).
    */
   const inputsChanged = () =>
-    [...sessionReads].some(
+    [...warmReads, ...hookReads].some(
       ([key, hash]) => key.startsWith(`fs:`) && fileHash(key.slice(3)) !== hash,
     )
   return { check, close, inputsChanged }

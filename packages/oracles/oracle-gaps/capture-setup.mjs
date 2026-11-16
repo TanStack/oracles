@@ -277,11 +277,14 @@ function appendClosingRow(row) {
 // (law 9). A file keeps its hash from the copy's first read of it, so the
 // run is stored under the text it read and not under an edit that lands
 // later in the run (review of #55, F1). A variable's hash is the runner's,
-// from the environment it gives the check (check.mjs, servedHash).
+// from the environment it gives the check (check.mjs, servedHash). A file
+// the copy wrote before it read it is its own output, no input.
 globalThis.__oracleGapsReads = new Map()
-watchReads((key) => {
+const wrote = new Set()
+watchReads((key, write) => {
   const reads = globalThis.__oracleGapsReads
-  if (!reads.has(key))
+  if (write) wrote.add(key)
+  else if (!reads.has(key) && !wrote.has(key))
     reads.set(key, key.startsWith(`fs:`) ? fileHash(key.slice(3)) : null)
 })
 // A test's own writes to the process's stdout and stderr (a debugging
