@@ -874,7 +874,10 @@ async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
     pool: abort ? `threads` : pool,
   })
   // The retention hook is set on every stop, so a stopped run's completed batches are judged too.
+  // Every stop of a history writes under out-stop, so this run's lines are the ones appended after
+  // the lines already in the file.
   const hook = hookOf(dir)
+  const earlierLines = retentionLinesOf(hook).length
   const base = { ...cleanEnv(), ORACLE_GAPS_TEST_RETENTION: hook }
   const env = after
     ? { ...base, ORACLE_GAPS_TEST_HOLD_EXIT_MS: `500` }
@@ -976,9 +979,9 @@ async function stoppedRun(dir, files, how, ids, { signal, pool, when }) {
     strayWhileRunning,
     when: when ?? `run`,
     // The batches this run completed, each with its retention line (the hook above).
-    retention: retentionLinesOf(hook).filter(
-      (line) => line.run === join(dir, `out-stop`),
-    ),
+    retention: retentionLinesOf(hook)
+      .slice(earlierLines)
+      .filter((line) => line.run === join(dir, `out-stop`)),
     checkPid: checkPidOf(join(dir, `out-stop`)),
     // Whether a refusal's block reached stderr: a stop is never a refusal.
     refused: stderr.split(`\n`).some((line) => line.startsWith(`refused: `)),
