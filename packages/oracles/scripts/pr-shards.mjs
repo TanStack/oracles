@@ -297,11 +297,18 @@ export const partitions = {
     // select exactly these.
     previously: `fixed seed`,
     shards: {
-      // 261 s, 25 s, and a small unit.
+      // 261 s, 25 s, and a small unit; with #99 (measured on the pool at
+      // 9ecef3f, where shard 3 took 480 s against 197 s and 217 s, and 12:31
+      // on CI), also noTypescript (56 s on the pool), the daemon pause that
+      // cannot engage (35 s) and the reset check after a warm daemon was
+      // replaced (14 s).
       1: anyOf([
         'an edit sequence over the witness module',
         'a stale authored mutant and a reformat',
         'a failing owner under a config that --config names',
+        'a declaration fault: noTypescript',
+        'a daemon pause that cannot engage',
+        'a reset check after its warm daemon was replaced',
       ]),
       // Both halves of `every outcome class` (134 s and 155 s on the CI runner),
       // a second daemon check (101 s), and two small units. The second half
@@ -313,10 +320,11 @@ export const partitions = {
         'a second daemon check of the budget witness',
         'a declaration fault: brokenVitest',
         'an edit that changed the cold result after a hang replaced the only context',
+        'a declaration fault: brokenOwner',
+        'a slow kill after a 16 s wait',
       ]),
-      // The rest: noTypescript (174 s on the CI runner), the edit sequence
-      // through the daemon (94 s), brokenOwner (83 s), generated (23 s), the
-      // lazy module (12 s), and small units.
+      // The rest: the edit sequence through the daemon (71 s on the pool),
+      // generated (42 s), the lazy module (10 s), and small units.
       3: rest,
     },
   },
