@@ -443,11 +443,17 @@ const hit = (id) => {
   if (inTest) calls += 1
   if (spun || (state.callBudget && calls > state.callBudget)) spin()
 }
-// The test a cut ends and the route it registered: a spin or no progress is
-// a verdict of a built-in law on that route (M, 2026-11-16, "Spin, no
-// progress and the work budget are kills").
+// The test a cut ends, the route it registered, and whether its count could
+// have followed the clock by then: a spin or no progress is a verdict of a
+// built-in law on that route (M, 2026-11-16, "Spin, no progress and the work
+// budget are kills"), and a spin only when its count could not (M, 2026-11-16,
+// "Count-only kills").
 function cutTest() {
-  return { key: currentTask && testKey(currentTask), route }
+  return {
+    key: currentTask && testKey(currentTask),
+    route,
+    ...(clocked || sawIo ? { clocked: true } : {}),
+  }
 }
 function spin() {
   if (!spun) {

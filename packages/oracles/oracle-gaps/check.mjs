@@ -95,13 +95,18 @@ const IDLE_MS = 500
 // The test a spin or no progress ended, from its cut row (capture-setup.mjs),
 // with the route it registered, under its original file's key (`map`): the
 // built-in law (bounded work or no progress) judges it on that route (M,
-// 2026-11-16, "Spin, no progress and the work budget are kills").
-const cutVerdicts = (row, map = (key) => key) => [
-  {
-    test: row?.key && map(row.key).split(` > `).slice(1).join(` > `),
-    route: row?.route,
-  },
-]
+// 2026-11-16, "Spin, no progress and the work budget are kills"). A spin whose
+// count could have followed the clock judges nothing and stays a gap (M,
+// 2026-11-16, "Count-only kills"): no verdicts.
+const cutVerdicts = (row, map = (key) => key, spin = false) =>
+  spin && row?.clocked
+    ? undefined
+    : [
+        {
+          test: row?.key && map(row.key).split(` > `).slice(1).join(` > `),
+          route: row?.route,
+        },
+      ]
 // The least call budget a copy gets (capture-setup.mjs): mutation-helper calls
 // in one test before it counts as a loop that never ends. A file's budget is
 // a hundred times the most calls any of its unmutated tests made, if more.
@@ -993,7 +998,9 @@ export default async (env) => {
         timedOut: true,
         seconds,
         cause: spun ? `spin` : `backstop`,
-        ...(spun ? { builtIn: cutVerdicts(JSON.parse(spun)) } : {}),
+        ...(spun
+          ? { builtIn: cutVerdicts(JSON.parse(spun), undefined, true) }
+          : {}),
       }
     }
     // The result also lists test modules from earlier runs, with their old
@@ -1034,7 +1041,7 @@ export default async (env) => {
         file,
         timedOut: true,
         cause: `spin`,
-        builtIn: cutVerdicts(JSON.parse(spun)),
+        builtIn: cutVerdicts(JSON.parse(spun), undefined, true),
         seconds,
         inputs: importsOf(file, modules, closing),
         readAt: closing.readAt,
@@ -1307,7 +1314,7 @@ export default async (env) => {
       file: item.file,
       timedOut: true,
       cause: `spin`,
-      builtIn: cutVerdicts(cutRows.get(copy), keyFor(copy, item.file)),
+      builtIn: cutVerdicts(cutRows.get(copy), keyFor(copy, item.file), true),
       seconds,
     })
     try {
@@ -1368,6 +1375,7 @@ export default async (env) => {
                 builtIn: cutVerdicts(
                   cutRows.get(copies[current]),
                   keyFor(copies[current], items[current].file),
+                  cutCause === `spin`,
                 ),
               }),
           cutMs,
@@ -1868,7 +1876,8 @@ export default async (env) => {
         ? 0
         : (unit.rows ?? []).reduce(
             (sum, [key, row]) =>
-              sum + (baseline.work.has(key) ? (row.calls ?? 0) : 0),
+              sum +
+              (baseline.work.has(key) && !row.clocked ? (row.calls ?? 0) : 0),
             0,
           )
     // A run cut off is still running, so its context is replaced; closing
@@ -2269,7 +2278,9 @@ export default async (env) => {
               builtIn: (got[i].rows ?? [])
                 .filter(
                   ([key, row]) =>
-                    baseline.work.has(key) && (row.calls ?? 0) > 0,
+                    baseline.work.has(key) &&
+                    !row.clocked &&
+                    (row.calls ?? 0) > 0,
                 )
                 .map(([key, row]) => ({
                   test: key.split(` > `).slice(1).join(` > `),

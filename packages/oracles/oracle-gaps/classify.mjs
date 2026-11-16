@@ -64,13 +64,13 @@ export function outcomeOf(
   // another run still decides; failing that, the mutant is `timeout`.
   const timedOutTest = (test) =>
     test.state === `failed` && /Test timed out/.test(test.message)
-  // The timeout's detail is the cause of the first backstop cut in report
-  // order: the copy's `cause`, `backstop`.
+  // The timeout's detail is the cause of the first gap cut in report order:
+  // the backstop, or a spin whose count could follow the clock (`spin`).
   const cut = [...units]
     .sort((a, b) => byPath(a.file, b.file))
     .find(
       (unit) =>
-        (unit.timedOut && !BUILT_IN[unit.cause]) ||
+        (unit.timedOut && !(BUILT_IN[unit.cause] && unit.builtIn?.length)) ||
         (unit.tests ?? []).some(timedOutTest),
     )
   const timeout = cut
@@ -82,9 +82,10 @@ export function outcomeOf(
   for (const unit of [...units].sort((a, b) => byPath(a.file, b.file))) {
     // A copy cut by its call count or by no progress, and the copy whose
     // work passed the mutant's work budget, record nothing of their own: each
-    // test the cut names fails the built-in law on its route.
+    // test the cut names fails the built-in law on its route. A spin whose
+    // count could follow the clock names none, and is a timeout (a gap).
     if (unit.timedOut) {
-      for (const v of BUILT_IN[unit.cause] ? (unit.builtIn ?? [{}]) : []) {
+      for (const v of BUILT_IN[unit.cause] ? (unit.builtIn ?? []) : []) {
         const route = routeOf(v.route)
         failures.push({
           test: v.test ?? `(unnamed test)`,
