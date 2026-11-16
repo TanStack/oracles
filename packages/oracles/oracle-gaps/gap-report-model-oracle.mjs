@@ -4539,7 +4539,12 @@ const reachesRun = (history) =>
 // (`summary`), one directive per gap class (`legend`), and each function's
 // heading over its gap lines (`function`) (the coordinator's decision of
 // 2026-11-12 on review F1: every line of either stream is a line of the
-// stream).
+// stream). An internal error says so on a line of its own kind (`error`,
+// law 12) before its done line: P10 prefixes every line the CLI writes,
+// and its declared exempt lines (v21.2 P10 and I3) do not name an internal
+// error's lines. The kind is the done line's status word for exit 3 (v21.2
+// I7), and the line's form is the register's C entry "The internal-error
+// line" (2026-11-16).
 const streamKinds = [
   `config`,
   `note`,
@@ -4551,6 +4556,7 @@ const streamKinds = [
   `summary`,
   `legend`,
   `function`,
+  `error`,
   `done`,
 ]
 // The one decisive baseline line, before any mutant runs: every oracle
@@ -5983,16 +5989,24 @@ function applyEdit(state, edit) {
 // exits 2 and prints one block on stderr with no stack frames: `refused:
 // <cause>`, then `fix: <directive>`. The directive is one next step, and it
 // offers no way around the fix (no "ignore it", no "mark it equivalent").
-// When the run knows its output directory, the block ends with `output:
-// <dir>`, and the directory holds a results.json, `{ status: "refused",
-// cause, directive }`, whose cause and directive are the block's, and a
-// summary.md, and no error.log: every ending removes the other ending's
+// When the run knows its output directory, its done line names the
+// directory's summary.md (`done refused, report <dir>/summary.md`), and the
+// directory holds a results.json, `{ status: "refused", cause, directive
+// }`, whose cause and directive are the block's, and a summary.md, and no
+// error.log: every ending removes the other ending's
 // files. Arguments the CLI cannot parse know their output directory only
 // when they name it (`--out`).
 //
-// An internal error is a bug in the CLI. It exits 3, says so, and keeps the
-// stack in an error.log rather than on stderr. No legal history reaches one,
-// so this law's check judges refusals only (see each oracle's limits).
+// An internal error is a bug in the CLI. It exits 3, says so in one
+// `oracle-gaps: error` line on stderr and none on stdout, with the line
+// breaks of its message and of its log's path escaped, and keeps the stack
+// in an error.log rather than on stderr (the register's C entry "The
+// internal-error line", 2026-11-16). No legal history reaches one; the
+// end-to-end oracle's constructed rejected-batch history (a test-only
+// fault) reaches it, and that oracle judges its exit, its error line, its
+// error.log, the absence of stack frames on stderr, and the stream law (law
+// 15) on both streams. This check judges refusals only (see each oracle's
+// limits).
 
 /**
  * What a run that ended without completing printed and wrote, as the

@@ -162,8 +162,12 @@ export function retentionHook(session) {
     fault(batch, running) {
       return batch.index + 1 === rejected
         ? running.then(() => {
+            // Its message holds a line break and, after it, a line that
+            // reads as a done line: the ending must keep the message on its
+            // one error line (the register's C entry "The internal-error
+            // line"), so the oracle sees a message that is not escaped.
             throw new Error(
-              `oracle-gaps test fault: batch ${batch.index + 1} rejected`,
+              `oracle-gaps test fault: batch ${batch.index + 1} rejected\noracle-gaps: done completed, 0 gaps, report forged`,
             )
           })
         : running
