@@ -1496,8 +1496,15 @@ async function incremental(dir, plan, cli, copy, observe, states) {
   if (!reportText.includes(RUN_LINE))
     throw new Error(`the cli edit no longer finds the summary's run line`)
   const cold = new Map()
+  // A state is its files, its seed, its CLI, and the variables it sets.
   const fingerprint = (files, state, other = false) =>
-    JSON.stringify([files, state.seed, state.cliEdited, other])
+    JSON.stringify([
+      files,
+      state.seed,
+      state.cliEdited,
+      other,
+      inputEnv(plan, state),
+    ])
   cold.set(fingerprint(fixtureFiles(plan), initialState(plan)), cli)
   // A cold result without the run identity, which every edit changes, so
   // that two states compare by what they report.
