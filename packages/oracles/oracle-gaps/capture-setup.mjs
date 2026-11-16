@@ -80,48 +80,12 @@ function keepProperties(from, to) {
   return to
 }
 
-// The timers that code in this worker has pending, counted where they are
-// made, each with when it is next due: Node's resource list does not
-// reliably show one entry per timer.
-// The wrappers are installed once per worker, before any test file loads, so
-// a timer a module makes when it loads is counted too. Vitest's own timers
-// are not: it took the real functions before this file ran. Fake timers
-// install over the wrappers and give them back.
-const pending = (globalThis.__oracleGapsPendingTimers ??= (() => {
-  const handles = new Map()
-  const wrap = (make, clear, once, timed) => {
-    globalThis[make.name] = keepProperties(make, function (callback, ...rest) {
-      if (typeof callback !== `function`) return make(callback, ...rest)
-      // An immediate is due at once; a timer or interval after its delay.
-      const delay = make === globalThis.setImmediate ? 0 : Number(rest[0]) || 0
-      const handle = make(
-        function (...args) {
-          if (once) handles.delete(handle)
-          else handles.set(handle, real.now() + delay)
-          return callback.apply(this, args)
-        },
-        ...rest,
-      )
-      handles.set(handle, real.now() + delay)
-      // The copy now running hears of a timer or an interval: a test that
-      // made one can do work that follows the clock, as a polling or a
-      // deadline loop does (classify.mjs). An immediate waits a turn, not a
-      // time, as the framework's `withinTurns` does.
-      if (timed) globalThis.__oracleGapsClock?.()
-      return handle
-    })
-    globalThis[clear.name] = function (handle) {
-      handles.delete(handle)
-      return clear(handle)
-    }
-  }
-  wrap(globalThis.setTimeout, globalThis.clearTimeout, true, true)
-  wrap(globalThis.setInterval, globalThis.clearInterval, false, true)
-  wrap(globalThis.setImmediate, globalThis.clearImmediate, true, false)
-  return handles
-})())
-// The other paths to the clock, wrapped once per worker as the timers are,
-// each telling the copy now running (`__oracleGapsClock`): a read of
+// The paths to the clock, wrapped once per worker, before any test file
+// loads, each telling the copy now running (`__oracleGapsClock`): a timer or
+// an interval of the global functions (a test that made one can do work that
+// follows the clock, as a polling or a deadline loop does, classify.mjs; an
+// immediate waits a turn, not a time, as the framework's `withinTurns` does,
+// so it is not told); a read of
 // `Date.now`, `new Date()` or `Date()` with no argument, `performance.now`,
 // `performance.eventLoopUtilization`, `process.hrtime`, `process.uptime`,
 // `os.uptime`, and `Temporal.Now`; a timer of `node:timers` or
@@ -138,6 +102,8 @@ if (!globalThis.__oracleGapsClocks) {
       globalThis.__oracleGapsClock?.()
       return read.apply(this, args)
     })
+  globalThis.setTimeout = told(globalThis.setTimeout)
+  globalThis.setInterval = told(globalThis.setInterval)
   const RealDate = Date
   RealDate.now = told(RealDate.now)
   const TrackedDate = new Proxy(RealDate, {
@@ -883,14 +849,15 @@ globalThis.__oracleWorkBound = (ratio) => {
 // it made a real timer or interval by any path, or read the clock (the
 // wrappers above), or held I/O open (`sawIo`). A read counts when any frame
 // of its stack is the test's or production's: a read whose every frame is
-// the test runner's, fast-check's, the oracle framework's (its shrink
+// the test runner's (Vitest's, or Vite's module runner, which evaluates this
+// file and the test files), fast-check's, the oracle framework's (its shrink
 // budget), Node's, or this file's does not, while a user's read through a
 // spy (tinyspy's frame first) still does.
 let clocked = false
 // A backslash separates only on win32 (on POSIX it is a name's character).
 const SEP = process.platform === `win32` ? `[\\\\/]` : `/`
 const machinery = new RegExp(
-  `${SEP}node_modules${SEP}(?:vitest|@vitest|fast-check|@fast-check|tinypool|tinyspy|chai|@tanstack${SEP}oracles)${SEP}|${SEP}packages${SEP}oracles${SEP}src${SEP}`,
+  `${SEP}node_modules${SEP}(?:vitest|@vitest|vite|fast-check|@fast-check|tinypool|tinyspy|chai|@tanstack${SEP}oracles)${SEP}|${SEP}packages${SEP}oracles${SEP}src${SEP}`,
 )
 // Whether a stack names the test's or production's code: a frame outside
 // Node, this file, and the machinery.
@@ -1040,21 +1007,25 @@ const thisFile = globalThis.__vitest_worker__?.filepath
 // code started, never one the runner made for itself (its channel, stdio, a
 // write that forwards the test's console output). A copy given `idleMs` (a
 // file whose unmutated tests had no I/O of their own) is idle, by state alone,
-// when no counted timer is due within its horizon, no more timers are listed
-// than when its test began (which covers timers made outside the wrappers,
-// such as `node:timers/promises`), and none of its test's I/O is active. A
+// when none of its test's timers is due within its horizon and none of its
+// test's I/O is active (C, timers by ownership, 2026-11-16): a timer the
+// runner keeps (Vitest's task-update or test-limit timer) never counts, and
+// one the test made counts by any path (the globals, `node:timers`,
+// `node:timers/promises`), ref'd or not. A
 // busy synchronous or microtask loop blocks this sampler, so it cannot look
 // idle; it ends by its call budget or the backstop. After `idleMs` of that
 // state it writes an idle row, and the batch's watchdog cuts it off as no
 // progress.
 //
-// Who started each handle and request is recorded once per worker, when Node
+// Who started each timer, handle and request is recorded once per worker, when Node
 // makes it: the test, when the test's or production's code is on the stack
 // then (`namesTest`), or when the resource that triggered it is the test's.
 // Node triggers a write by the stream it writes to, so the runner's write on
 // its own channel is the runner's even when a test's console.log led to it.
 // The stack is read only when the sampler meets the resource, or when the
 // resource triggers another. Promises are not recorded.
+// Each live timer and immediate, with its record.
+const liveTimers = (globalThis.__oracleGapsTimers ??= new Map())
 const startedBy = (globalThis.__oracleGapsStartedBy ??= (() => {
   const records = new WeakMap()
   const live = new Map()
@@ -1072,9 +1043,12 @@ const startedBy = (globalThis.__oracleGapsStartedBy ??= (() => {
       }
       live.set(id, record)
       records.set(resource, record)
+      if (type === `Timeout` || type === `Immediate`)
+        liveTimers.set(id, [resource, record])
     },
     destroy(id) {
       live.delete(id)
+      liveTimers.delete(id)
     },
     trackPromises: false,
   }).enable()
@@ -1092,8 +1066,16 @@ const testsIo = () =>
       return record !== undefined && owned(record)
     },
   )
-const timersListed = (kinds) =>
-  kinds.filter((kind) => kind === `Timeout` || kind === `Immediate`).length
+// Whether a timer of the test's is due within `horizon` ms of `now`, both in
+// the timers' own clock: an immediate is due at once, and a timer at its
+// start plus its delay (its next run, for an interval).
+const testsTimerDue = (now, horizon) =>
+  [...liveTimers.values()].some(
+    ([timer, record]) =>
+      owned(record) &&
+      (timer._idleStart === undefined ||
+        timer._idleStart + timer._idleTimeout - now <= horizon),
+  )
 // Test-only hooks for the CLI's own oracle, not for users. With
 // ORACLE_GAPS_TEST_SAMPLES (a directory), the sampler writes how many times
 // it has judged the running test to `<pid>-<threadId>` there, so a witness
@@ -1113,13 +1095,13 @@ let held
 let heldTimer
 let sawIo = false
 if (state.capture) {
-  let baseTimers
+  let testing = false
   let since
   let reported = false
   let samples = 0
   beforeEach(() => {
     if (continuing) return
-    baseTimers = timersListed(process.getActiveResourcesInfo())
+    testing = true
     since = undefined
     sawIo = false
     samples = 0
@@ -1127,7 +1109,7 @@ if (state.capture) {
   beforeEach((context) => {
     if (continuing) return
     context.onTestFinished(() => {
-      baseTimers = undefined
+      testing = false
     })
   })
   if (runnerWrites)
@@ -1163,20 +1145,24 @@ if (state.capture) {
         clearInterval(timer)
       })
     })
-  realInterval(() => {
+  realInterval(function () {
     const now = realNow()
-    if (baseTimers === undefined || reported) return
+    if (!testing || reported) return
     if (samplesAt)
       writeWhole(join(samplesAt, `${process.pid}-${threadId}`), `${++samples}`)
-    const kinds = process.getActiveResourcesInfo()
     const io = testsIo()
     sawIo ||= io
     // A timer due after the copy's full time limit cannot end its wait in
     // time, so it does not keep the copy busy: a test waiting on it would be
     // a timeout at the limit anyway (a collection's five-minute GC timer).
-    const horizon = now + (state.idleHorizonMs ?? Infinity)
-    const timerDue = [...pending.values()].some((due) => due <= horizon)
-    if (io || timerDue || timersListed(kinds) > baseTimers) {
+    // The timers' clock now is this interval's own due time.
+    if (
+      io ||
+      testsTimerDue(
+        this._idleStart + this._idleTimeout,
+        state.idleHorizonMs ?? Infinity,
+      )
+    ) {
       since = undefined
       return
     }
