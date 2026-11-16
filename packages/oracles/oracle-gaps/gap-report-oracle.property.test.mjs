@@ -353,6 +353,14 @@
  *    mutant runs: `oracle-gaps: baseline all <n> oracle files pass`, or
  *    `oracle-gaps: baseline <k> of <n> oracle files failed (provisional)`.
  *    The stdout's baseline, blocked, and gap lines carry the same prefixes.
+ *    The stdout lists each gap the run reports in its results.json on
+ *    exactly one gap line, under that gap's id, with the gap's kind, line,
+ *    and change, and lists no gap line that results.json does not report
+ *    (P10, one diagnostic per failure). The law compares the stdout with the
+ *    run's own report, by id: whether the report's gaps are the owed ones
+ *    is the classification and report completeness laws' question, so a
+ *    mutant the model owes another outcome is named there, at its site, not
+ *    counted here as a missing or extra line.
  *    The run's last line is its done line: `completed, <n> gaps[
  *    (provisional)], report <its summary.md>` on stdout, `refused[, report
  *    <its summary.md>]` after a refusal's block, or `stopped (<signal>)`
@@ -532,6 +540,7 @@ import {
   endingOf,
   refusalBreach,
   readSummary,
+  readCodeSpan,
   removePath,
   sourceArgument,
   outsideRepository,
@@ -1112,10 +1121,11 @@ function readRun(dir, out, status, stderr, cli, stdout) {
       namedScratch(line, scratch),
     ),
     lastLine: printed.at(-1) && namedScratch(printed.at(-1), scratch),
-    // The stdout's own lines of the stream's kinds: the gap lines under
-    // their functions, as the stream prints them (law 15).
+    // The stdout's own lines of the gap kind: the gap lines under their
+    // functions, as the stream prints them (law 15). Every line of the kind
+    // is kept, so a line that does not read as a gap is judged, not lost.
     stdoutGaps: printed
-      .filter((line) => streamedGap.test(line))
+      .filter((line) => line.startsWith(`oracle-gaps: gap `))
       .map((line) => namedScratch(line, scratch)),
     stderrGaps: lines
       .filter((line) => streamedGap.test(line))
@@ -1209,6 +1219,12 @@ function readRun(dir, out, status, stderr, cli, stdout) {
       line: r.line,
       operator: r.operator,
       authored: r.authored === true,
+      // The change a gap line shows (law 15): the code and its replacement,
+      // or an authored mutant's intent and author.
+      original: r.original,
+      replacement: r.replacement,
+      intent: r.intent,
+      author: r.author,
       outcome: r.outcome,
       class: r.class,
       laws: r.laws,
@@ -2800,6 +2816,13 @@ function check(plan, observations, expected) {
         },
       },
     )
+  // Law 15's gap lines on stdout, judged once the report is: the stdout
+  // repeats the run's own results.json, each gap on one line under its id.
+  // A mutant whose outcome differs from the model's is named above, at its
+  // site (classification), and not counted here as a missing or extra line.
+  const lines = stdoutGapBreach(cli)
+  if (lines)
+    return violation(`cli`, lines.difference, `greppable stream`, lines.extra)
   // Law 13, and law 10's namespace while a run runs: a stopped run had
   // written nothing beside its output directory and the package's
   // `.oracle-gaps` (where Vitest's include could find it), and once the CLI
@@ -2909,8 +2932,8 @@ function check(plan, observations, expected) {
  * line under a baseline failure, a refusal's block, or a line Node writes
  * for the process. A run that judges mutants prints its one decisive
  * baseline line before any gap line, count of judged mutants, or heartbeat
- * that names a mutant, and its stdout prints each gap once, on a line of
- * the gap kind. The ends of a run (`oracle-gaps: done …`) are judged with
+ * that names a mutant. The stdout's gap lines are judged after the report
+ * (stdoutGapBreach). The ends of a run (`oracle-gaps: done …`) are judged with
  * the lead (completed), the refusal law (refused), and the stop law
  * (stopped). `run` is a run as readRun records it, observed at
  * `checkpoint`.
@@ -2954,11 +2977,109 @@ function streamBreach(checkpoint, run, expected, plan) {
       `the stream's decisive baseline lines are ${JSON.stringify(run.stream.verdicts)}, owed ${JSON.stringify([verdict])}`,
       { actual: run.stream.verdicts, expected: [verdict] },
     )
-  if (run.stdoutGaps.length !== expected.gaps.length)
-    return breach(
-      `the stdout has ${run.stdoutGaps.length} gap lines for ${expected.gaps.length} gaps: ${JSON.stringify(run.stdoutGaps)}; the stderr has ${JSON.stringify(run.stderrGaps)}`,
-    )
   return undefined
+}
+
+/**
+ * Law 15's gap lines on stdout, judged against the run's own results.json:
+ * each gap it reports has exactly one gap line, which names its id, and
+ * there is no other gap line. A result is a gap when it is neither a probe
+ * guard nor `killed` or `unowned`, as the model counts gaps (every survivor
+ * is a gap, P5). A line reads as `oracle-gaps: gap <kind> L<line> <id>
+ * <change>`, and it shows the gap's kind (its class, or its outcome), its
+ * line (`?` when the mutant never applied), and its change: two code spans
+ * around ` → `, the code and its replacement, or the intent's span and
+ * ` (authored by <author>)`. A span shows its code on one line, with each
+ * run of whitespace as one space, whole or cut and ended with `...`; the
+ * cut's length is the printer's choice. The comparison is by id, so a run
+ * that prints one gap twice and drops another breaks it, though its count
+ * holds. Whether results.json reports the owed gaps is not judged here:
+ * the classification law names a mutant the model owes another outcome.
+ * Undefined when it holds.
+ */
+function stdoutGapBreach(run) {
+  const reported = run.mutants.filter(
+    (m) => !m.probe && ![`killed`, `unowned`].includes(m.class ?? m.outcome),
+  )
+  const byId = new Map(reported.map((m) => [m.id, m]))
+  const lined = new Set()
+  for (const line of run.stdoutGaps) {
+    const read = readGapLine(line)
+    if (read === undefined)
+      return {
+        difference: `the stdout's gap line ${JSON.stringify(line)} does not read as a kind, a line, an id, and a change`,
+      }
+    const gap = byId.get(read.id)
+    if (gap === undefined)
+      return {
+        difference: `the stdout has a gap line for ${read.id}, which results.json does not report as a gap: ${JSON.stringify(line)}`,
+      }
+    if (lined.has(read.id))
+      return {
+        difference: `the stdout has two gap lines for ${read.id}: ${JSON.stringify(run.stdoutGaps.filter((l) => readGapLine(l)?.id === read.id))}`,
+      }
+    lined.add(read.id)
+    const owed = {
+      kind: gap.class ?? gap.outcome,
+      line: gap.line === undefined ? `?` : String(gap.line),
+    }
+    const shows = gap.authored
+      ? read.intent !== undefined &&
+        showsCode(read.intent, gap.intent) &&
+        read.author === gap.author
+      : read.original !== undefined &&
+        showsCode(read.original, gap.original) &&
+        showsCode(read.replacement, gap.replacement)
+    if (read.kind !== owed.kind || read.line !== owed.line || !shows)
+      return {
+        difference: `the stdout's gap line for ${read.id} is ${JSON.stringify(line)}, and results.json reports it as ${owed.kind} at line ${owed.line}, changing ${JSON.stringify(gap.authored ? gap.intent : `${gap.original} → ${gap.replacement}`)}`,
+        extra: { actual: line, expected: { ...owed, id: read.id } },
+      }
+  }
+  const unlined = reported.filter((m) => !lined.has(m.id)).map((m) => m.id)
+  if (unlined.length > 0)
+    return {
+      difference: `results.json reports ${unlined.length} gaps that the stdout has no gap line for: ${unlined.join(`, `)}`,
+      extra: { actual: run.stdoutGaps, expected: reported.map((m) => m.id) },
+    }
+  return undefined
+}
+
+/**
+ * A gap line's fields, read from its text as an agent reads it: its kind,
+ * line, id, and change. Undefined when the line does not read so.
+ */
+function readGapLine(line) {
+  const head = line.match(/^oracle-gaps: gap ([\w-]+) L(\d+|\?) (\S+) (.*)$/)
+  if (!head) return undefined
+  const [, kind, at, id, change] = head
+  const first = readCodeSpan(change)
+  if (!first) return undefined
+  const authored = first.after.match(/^ \(authored by (.*)\)$/)
+  if (authored)
+    return { kind, line: at, id, intent: first.code, author: authored[1] }
+  if (!first.after.startsWith(` → `)) return undefined
+  const second = readCodeSpan(first.after.slice(` → `.length))
+  if (!second || second.after !== ``) return undefined
+  return {
+    kind,
+    line: at,
+    id,
+    original: first.code,
+    replacement: second.code,
+  }
+}
+
+// Whether a span's code shows `text` on one line: each run of whitespace as
+// one space, whole, or cut and ended with `...`.
+const showsCode = (shown, text) => {
+  const flat = String(text).replace(/\s+/g, ` `)
+  return (
+    shown === flat ||
+    (shown.endsWith(`...`) &&
+      shown.length - 3 < flat.length &&
+      flat.startsWith(shown.slice(0, -3)))
+  )
 }
 
 /**
@@ -3455,6 +3576,35 @@ calibrations.push(
       ...cli,
       stream: { ...cli.stream, dones: 2 },
     })),
+  },
+  // Law 15's gap lines on stdout against results.json, by id: a printer
+  // that prints one gap twice and drops another keeps the count of lines,
+  // and one that prints a gap under its id with another line number keeps
+  // the ids. A count of lines sees neither.
+  {
+    name: `the stdout prints one gap twice and drops another`,
+    law: `greppable stream`,
+    corrupt: corruptCli((cli) =>
+      cli.exit !== 0 || cli.stdoutGaps.length < 2
+        ? undefined
+        : {
+            ...cli,
+            stdoutGaps: [cli.stdoutGaps[0], ...cli.stdoutGaps.slice(0, -1)],
+          },
+    ),
+  },
+  {
+    name: `a stdout gap line gives another line than results.json`,
+    law: `greppable stream`,
+    corrupt: corruptCli((cli) => {
+      const [first, ...rest] = cli.stdoutGaps
+      if (cli.exit !== 0 || first === undefined) return undefined
+      const moved = first.replace(
+        /^(oracle-gaps: gap \S+ L)(\d+|\?) /,
+        (_, head, at) => `${head}${at === `?` ? 1 : Number(at) + 1} `,
+      )
+      return { ...cli, stdoutGaps: [moved, ...rest] }
+    }),
   },
   {
     name: `a refusal through the daemon drops the cold run's notes`,

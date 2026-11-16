@@ -5786,6 +5786,31 @@ function refusalBreach(ending, { cause, outKnown }) {
 }
 
 /**
+ * The code span that `text` opens with, read as Markdown reads one: it opens
+ * with a run of backticks and ends at the next run of exactly that length,
+ * and one space of padding on each side is dropped. A fence that a backtick
+ * in the code can close is therefore read as shorter code. Gives the code
+ * and the text after the span, or undefined when `text` opens no span.
+ */
+function readCodeSpan(text) {
+  const fence = text.match(/^`+/)?.[0]
+  if (!fence) return undefined
+  const rest = text.slice(fence.length)
+  const close = [...rest.matchAll(/`+/g)].find(
+    (run) => run[0].length === fence.length,
+  )
+  if (!close) return undefined
+  const content = rest.slice(0, close.index)
+  return {
+    code:
+      content.startsWith(` `) && content.endsWith(` `)
+        ? content.slice(1, -1)
+        : content,
+    after: rest.slice(close.index + fence.length),
+  }
+}
+
+/**
  * The summary's counts, gap keys, unowned keys, and each listed gap's kind
  * and line, read from its text as the author reads it.
  */
@@ -5794,23 +5819,8 @@ function readSummary(summary) {
     /^(\d+) mutants \((\d+) authored\)\. (\d+) killed by a law on a reproducible route, .*?\*\*(\d+) gaps\*\*/m,
   )
   const probe = summary.match(/ (\d+) mutants of state-probe code/)
-  // A key is read as Markdown reads a code span: it opens with a run of
-  // backticks and ends at the next run of exactly that length, and one
-  // space of padding on each side is dropped. A fence that a backtick in
-  // the key can close is therefore read as a shorter key.
-  const codeSpanAt = (text) => {
-    const fence = text.match(/^`+/)?.[0]
-    if (!fence) return undefined
-    const rest = text.slice(fence.length)
-    const close = [...rest.matchAll(/`+/g)].find(
-      (run) => run[0].length === fence.length,
-    )
-    if (!close) return undefined
-    const content = rest.slice(0, close.index)
-    return content.startsWith(` `) && content.endsWith(` `)
-      ? content.slice(1, -1)
-      : content
-  }
+  // A key is read as a code span (readCodeSpan).
+  const codeSpanAt = (text) => readCodeSpan(text)?.code
   const keysAfter = (label) =>
     summary.split(`\n`).flatMap((line) => {
       const at = line.match(new RegExp(`^ *- ${label}: `))
@@ -5858,6 +5868,7 @@ export {
   endingOf,
   refusalBreach,
   readSummary,
+  readCodeSpan,
   SOURCE,
   LIB,
   RUNES,

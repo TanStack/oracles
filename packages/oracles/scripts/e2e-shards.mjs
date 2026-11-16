@@ -254,6 +254,9 @@ export const shards = {
     `calibration: a stopped run ends without its done line`,
     `calibration: a raw line reaches the stdout`,
     `calibration: a run ends with two done lines`,
+    // Law 15's stdout gap lines against results.json (not yet measured).
+    `calibration: the stdout prints one gap twice and drops another`,
+    `calibration: a stdout gap line gives another line than results.json`,
     // The witness module's edit sequence (option M): about 97 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
     `random seed: an edit sequence over the witness module`,
