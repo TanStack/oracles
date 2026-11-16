@@ -1,3 +1,4 @@
+import { tmpdir } from 'node:os'
 // Test-side harness for the gap report.
 //
 // It does three jobs inside every test worker:
@@ -1068,11 +1069,11 @@ if (state.capture) {
     if (baseTimers === undefined || reported) return
     const kinds = process.getActiveResourcesInfo()
     const io = kinds.some((kind) => !quiet.has(kind))
-    if (baseTimers !== undefined && diagLines < 8) {
+    if (baseTimers !== undefined && diagLines < 40) {
       diagLines += 1
-      const timers = [...pending.values()].length
-      process.stderr.write(
-        `DIAGIDLE ${thisFile} ${JSON.stringify({ kinds, base: baseTimers, listed: timersListed(kinds), pendingTimers: timers, due: [...pending.values()].map((d) => Math.round(d - now)), io, since: since === undefined ? null : now - since })}\n`,
+      appendFileSync(
+        join(tmpdir(), `dc-idle-diag.jsonl`),
+        `${JSON.stringify({ file: thisFile, kinds, base: baseTimers, listed: timersListed(kinds), due: [...pending.values()].map((d) => Math.round(d - now)), io, since: since === undefined ? null : now - since })}\n`,
       )
     }
     sawIo ||= io

@@ -2761,7 +2761,24 @@ function check(plan, observations, expected) {
     if (kind === `timeout` && got.cause !== owed.cause)
       return violation(
         `cli`,
-        `${site(got)}: its timeout is cut by ${got.cause}, owed ${owed.cause}`,
+        `${site(got)}: its timeout is cut by ${got.cause}, owed ${owed.cause}; DIAG ${(() => {
+          try {
+            return require('node:fs')
+              .readFileSync(
+                require('node:path').join(
+                  require('node:os').tmpdir(),
+                  'dc-idle-diag.jsonl',
+                ),
+                'utf8',
+              )
+              .split('\n')
+              .filter(Boolean)
+              .slice(0, 12)
+              .join(' | ')
+          } catch (e) {
+            return 'none'
+          }
+        })()}`,
         `classification`,
         { actual: got, expected: owed },
       )
