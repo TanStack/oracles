@@ -5284,14 +5284,22 @@ const parentModules = (plan, state) =>
  * names it. `outside` is a directory of the package that holds no test file,
  * so the test files lie outside the root. `link` is `tests`, where the
  * package's `tests` is a symbolic link to the directory that holds them
- * (`linkedTests`), so the root's path is a link's. The ids Vitest gives a
- * copy differ by shape: from the root for a file inside it, and absolute for
- * one outside it. Every shape names each test file by its path in the
- * package, so the model's keys are the same in all of them.
+ * (`linkedTests`), so the root's path is a link's. Vite names a module that
+ * a plugin resolves inside its root by its path from the root, and one
+ * outside it by its absolute path, so each shape names a copy of a test file
+ * differently if the runner resolves it. Every shape names each test file by
+ * its path in the package, so the model's keys are the same in all of them.
+ * Only an ES module config sets a root (it reads its own URL), and only the
+ * constructed histories set one, each as an ES module config.
  */
+const inTests = {
+  root: `./tests`,
+  include: `**/*.test.ts`,
+  setup: `./setup.ts`,
+}
 const testRoots = {
   none: { include: `tests/**/*.test.ts`, setup: `./tests/setup.ts` },
-  tests: { root: `./tests`, include: `**/*.test.ts`, setup: `./setup.ts` },
+  tests: inTests,
   parent: {
     root: `..`,
     include: `pkg/tests/**/*.test.ts`,
@@ -5302,7 +5310,7 @@ const testRoots = {
     include: `../tests/**/*.test.ts`,
     setup: `../tests/setup.ts`,
   },
-  link: { root: `./tests`, include: `**/*.test.ts`, setup: `./setup.ts` },
+  link: inTests,
 }
 
 // The directory that the package's `tests` links to under the `link` test
