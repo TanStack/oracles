@@ -538,6 +538,9 @@ export const partitions = {
         'a declaration fault: projects',
         'a declaration fault: outsideSource',
         'a config whose test root is a subdirectory that holds the tests',
+        'a config whose test root is above the package',
+        'a config whose test root holds no test file',
+        'a config whose test root is a symbolic link',
       ]),
       7: anyOf([
         'a daemon pause that cannot engage',
