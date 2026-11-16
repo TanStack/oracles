@@ -568,6 +568,7 @@ export const partitions = {
         'a declaration fault: badEntry',
         'a stop with the default output directory',
         'a daemon check with the default output directory',
+        'a daemon check with the default output directory, unsupervised',
       ]),
       9: anyOf([
         'a lazy module loaded before a hang in the same batch',

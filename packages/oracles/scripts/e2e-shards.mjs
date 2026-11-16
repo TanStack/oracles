@@ -43,6 +43,7 @@ export const shards = {
   'e2e-1': [
     `fixed seed 20261105: a stop with the default output directory`,
     `fixed seed 20261105: a daemon check with the default output directory`,
+    `fixed seed 20261105: a daemon check with the default output directory, unsupervised`,
     `fixed seed 20261105: a stream log that cannot be written`,
     `fixed seed 20261105: two runs on one output directory`,
     `fixed seed 20261105: a .cjs config that calls require`,
@@ -171,6 +172,7 @@ export const shards = {
     `determinism: constructed history: a stop as the CLI starts`,
     `random seed: a stop with the default output directory`,
     `random seed: a daemon check with the default output directory`,
+    `random seed: a daemon check with the default output directory, unsupervised`,
     `random seed: a stream log that cannot be written`,
     `random seed: two runs on one output directory`,
     `fixed seed 20261105: a config fault in a run that owns nothing`,
@@ -261,6 +263,7 @@ export const shards = {
     `determinism: constructed history: every outcome class, the warm and abort stops`,
     `determinism: constructed history: a stop with the default output directory`,
     `determinism: constructed history: a daemon check with the default output directory`,
+    `determinism: constructed history: a daemon check with the default output directory, unsupervised`,
     `determinism: constructed history: a stream log that cannot be written`,
     `determinism: constructed history: two runs on one output directory`,
     `fixed seed 20261105: an edit sequence through the daemon`,
