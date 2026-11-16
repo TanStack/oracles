@@ -1450,6 +1450,10 @@ oracleProperty({
     arbitrary: argumentHistories,
     states: required,
     runs: 40,
+    // Three bases per constructed history: each runs the CLI on a fixture
+    // package, and five bases took the larger fixed-seed shard from 116 s to
+    // 530 s on an Arclet, close to the 10-minute CI limit (#122).
+    bases: 3,
     fixedSeeds: [20261105],
     constructed: withDeclaration([
       {
