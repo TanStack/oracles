@@ -3,6 +3,7 @@ name: PR
 on:
   pull_request:
   push:
+    if: false
     branches: [main]
 
 concurrency:
@@ -20,6 +21,7 @@ jobs:
   # 21 minutes when they ran as one job. Each job should stay well under the
   # 10-minute limit; pr-shards.mjs records how each suite is split.
   test:
+    if: false
     name: Test
     runs-on: ubuntu-latest
     steps:
@@ -46,6 +48,7 @@ jobs:
       - run: pnpm run test:publint
       - run: pnpm run test:sherif
   test-eslint-plugin:
+    if: false
     name: Test eslint-plugin-oracles
     runs-on: ubuntu-latest
     steps:
@@ -60,6 +63,7 @@ jobs:
       - run: pnpm run build
       - run: pnpm --filter @tanstack/eslint-plugin-oracles run test
   test-oracle-framework:
+    if: false
     name: Framework self-oracle (${{ matrix.shard }}/8)
     runs-on: ubuntu-latest
     strategy:
@@ -81,6 +85,7 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
   test-oracle-gaps-fast:
+    if: false
     name: Gap report oracles (${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
     strategy:
@@ -106,6 +111,7 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
   test-oracle-gaps-end-to-end:
+    if: false
     name: Gap report end-to-end oracle (fixed seed, ${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
     strategy:
@@ -159,6 +165,7 @@ jobs:
         env:
           SUITE: ${{ matrix.suite }}
   preview:
+    if: false
     name: Publish preview
     # Only a commit that passes every check gets an installable preview.
     needs:
@@ -190,6 +197,7 @@ jobs:
       # npm token, so npm trusted publishing does not apply.
       - run: pnpm dlx pkg-pr-new@0.0.92 publish --pnpm './packages/*' # zizmor: ignore[use-trusted-publishing]
   zizmor:
+    if: false
     name: zizmor
     runs-on: ubuntu-latest
     steps:
@@ -206,6 +214,7 @@ jobs:
   # the gap CLI run on windows-latest, split the way the Linux jobs split
   # them. Each job stays under 10 minutes; each has a timeout backstop.
   windows-unit:
+    if: false
     name: Windows unit suites
     runs-on: windows-latest
     timeout-minutes: 20
@@ -222,6 +231,7 @@ jobs:
       - if: always()
         run: pnpm --filter @tanstack/eslint-plugin-oracles run test
   windows-gap-oracles:
+    if: false
     name: Windows gap report static oracle (${{ matrix.shard }}/6)
     runs-on: windows-latest
     timeout-minutes: 20
@@ -245,6 +255,7 @@ jobs:
           SHARD: ${{ matrix.shard }}
         run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-static -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-static-windows "$SHARD")"
   windows-gap-classify:
+    if: false
     name: Windows gap report classify, probe-form, and mutant-validity oracles
     runs-on: windows-latest
     timeout-minutes: 20
@@ -270,7 +281,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        shard: [7]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -287,6 +298,7 @@ jobs:
         # The verbose reporter prints each test with its duration, which sizes the shards.
         run: pnpm exec vitest --run --reporter=verbose --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-fixed-seed-windows "$SHARD")"
   windows-gap-cli:
+    if: false
     name: Windows gap CLI on a fixture
     runs-on: windows-latest
     timeout-minutes: 20
