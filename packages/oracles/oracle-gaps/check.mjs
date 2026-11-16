@@ -127,8 +127,11 @@ function alive(pid) {
  * process to find its per-file pragmas (`@vitest-environment`,
  * `@module-tag`; cli-api's `promises.readFile(filepath)`, which gives "" for
  * a file that is not there), so a copy would run in the config's default
- * environment instead of its file's. The read of a copy's path returns its
- * text; any other read is Node's own.
+ * environment instead of its file's. The wrapper's plugin serves the copy to
+ * Vite, by the absolute path that Vitest imports it by: no plugin resolves a
+ * copy, since Vite would name a resolved copy from its root, the config's
+ * test root, and import it again by that name (issue #101). The read of a
+ * copy's path returns its text; any other read is Node's own.
  */
 let copiesServed = false
 function serveCopies() {
@@ -138,9 +141,7 @@ function serveCopies() {
   promises.readFile = function (path, options, ...rest) {
     const text =
       typeof path === `string`
-        ? globalThis.__oracleGapsCopies?.get(
-            path.replaceAll(String.fromCharCode(92), '/'),
-          )
+        ? globalThis.__oracleGapsCopies?.get(posix(path))
         : undefined
     if (text === undefined) return readFile.call(this, path, options, ...rest)
     const encoded =
@@ -505,6 +506,8 @@ export async function openSession(pkg) {
       wrapper,
       `import { realpathSync } from 'node:fs'
 import { mergeConfig } from 'vitest/config'
+// The path rule beside this wrapper, by which copies are keyed.
+import { posix } from './paths.mjs'
 ${
   config
     ? `import * as config from ${JSON.stringify(specifierOf(home, join(pkg, config)))}
@@ -526,14 +529,11 @@ export default async (env) => {
   plugins: [{
     name: 'oracle-gaps-schemata',
     enforce: 'pre',
-    // A copy of a test file (runBatch) exists only here, so no other Vitest
-    // run finds it; Vite names a file in the package by its path from the
-    // package. A workspace dependency loads from its one-file bundle
-    // (workspaceBundles).
+    // A workspace dependency loads from its one-file bundle
+    // (workspaceBundles). A copy of a test file is not resolved here, so
+    // Vite keeps the absolute path that Vitest imports it by, and \`load\`
+    // serves it.
     resolveId(source) {
-      const copies = globalThis.__oracleGapsCopies
-      for (const path of [source, ${JSON.stringify(pkg)} + source])
-        if (copies?.has(path.replaceAll(String.fromCharCode(92), '/'))) return path
       return globalThis.__oracleGapsBundles?.get(source)
     },
     // Each module this context transforms, so a run is stored under the
@@ -551,7 +551,9 @@ export default async (env) => {
       const at = id.indexOf('?')
       if (at >= 0 && [...new URLSearchParams(id.slice(at + 1)).keys()].every((key) => ['raw', 'url', 'worker', 'sharedworker', 'inline'].includes(key))) return undefined
       const path = at < 0 ? id : id.slice(0, at)
-      const copy = globalThis.__oracleGapsCopies?.get(path.replaceAll(String.fromCharCode(92), '/'))
+      // A copy of a test file (runBatch) exists only in memory, so this
+      // plugin, which loads before the config's own, answers for it.
+      const copy = globalThis.__oracleGapsCopies?.get(posix(path))
       if (copy !== undefined) return copy
       // This context's authored patch, or else the instrumented source of the
       // current check, both set by the runner in this process.
