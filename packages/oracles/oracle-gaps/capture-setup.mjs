@@ -434,13 +434,15 @@ const active = state.mutant
 // comparison, a logical operator, an `if`, and each pass of a loop's
 // condition count, and code with no site (a plain assignment, a `for...of`
 // pass, a builtin's own work, code outside the instrumented sources) counts
-// nothing.
+// nothing. Probe code is never work (maintainer decision, 2026-11-16): a
+// probe-only site (check.mjs `probeSites`) counts nothing either.
 let calls = 0
 let spun = false
+const probeOnly = new Set(state.probeSites)
 const hit = (id) => {
   ;(inTest ? hits : background).add(id)
   historyHits?.add(id)
-  if (inTest) calls += 1
+  if (inTest && !probeOnly.has(id)) calls += 1
   if (spun || (state.callBudget && calls > state.callBudget)) spin()
 }
 // The test a cut ends, the route it registered, and whether its count could

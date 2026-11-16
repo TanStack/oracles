@@ -8,10 +8,12 @@
 //
 // Every line the CLI writes for a check starts with `oracle-gaps: ` and
 // then its kind: `config`, `note`, `baseline`, `blocked`, `progress`, `gap`,
-// `busy`, or `done` (the maintainer's request of 2026-11-12: an agent acts
-// on the results as they stream, and one `grep '^oracle-gaps: '` finds
-// them, on stdout and stderr alike). Only the indented lines under a
-// baseline failure, and a refusal's `refused:` and `fix:` block, are not.
+// `busy`, `error` (an internal error, ending.mjs), or `done` (the
+// maintainer's request of 2026-11-12: an agent acts on the results as they
+// stream, and one `grep '^oracle-gaps: '` finds them, on stdout and stderr
+// alike). Only the indented lines under a baseline failure, a refusal's
+// `refused:` and `fix:` block, `--help`'s usage text, and what Node, V8,
+// esbuild, or Vite print are not.
 
 /** A line of the stream: its kind after the prefix, then its text. */
 export const streamLine = (kind, text) => `oracle-gaps: ${kind} ${text}`
