@@ -172,6 +172,9 @@ agent.
   - `ORACLE_GAPS_TEST_SERVED_MARK` names a file the daemon writes its pid to
     after it answers a check, so a test can tell which daemon served an
     earlier check (the warm daemon that a later check's pause must match).
+  - `ORACLE_GAPS_TEST_UNSUPERVISED` runs a POSIX check unsupervised, the path win32
+    takes (no supervisor writes the run's `--out`), so the daemon request of a run
+    that names no directory is reached on every platform.
   - `ORACLE_GAPS_INTERNAL_SUPERVISED` is set by a supervisor for the child it
     starts (its own pid). It is internal, not a user setting: the child kills its
     own process group only when the supervisor that started it has gone and the

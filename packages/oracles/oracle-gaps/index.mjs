@@ -661,7 +661,11 @@ function endWith(error, out) {
 const main =
   import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
 // Windows has no process groups: there the run is the CLI's own process.
-const supervised = process.platform !== `win32`
+// A test-only hook (ORACLE_GAPS_TEST_UNSUPERVISED) runs a POSIX check unsupervised,
+// the path win32 takes, so the oracle reaches it on every platform.
+const supervised =
+  process.platform !== `win32` &&
+  process.env.ORACLE_GAPS_TEST_UNSUPERVISED === undefined
 const supervisor = process.env.ORACLE_GAPS_INTERNAL_SUPERVISED
 
 // Set once the note is written (the unsupervised run has started).

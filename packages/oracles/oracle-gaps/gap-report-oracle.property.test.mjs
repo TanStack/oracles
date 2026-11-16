@@ -672,7 +672,16 @@ function runCli(dir, files, how = {}) {
     encoding: `utf8`,
     timeout: 300_000,
     maxBuffer: 64 * 1024 * 1024,
-    env: { ...cleanEnv(), ...how.env },
+    // A daemon check that names no directory runs unsupervised, as on win32, so
+    // the POSIX oracle reaches the state the win32 supervisor never produces: the
+    // daemon request without `--out` (ORACLE_GAPS_TEST_UNSUPERVISED, index.mjs).
+    env: {
+      ...cleanEnv(),
+      ...how.env,
+      ...(how.daemon && how.outMode === `default`
+        ? { ORACLE_GAPS_TEST_UNSUPERVISED: `1` }
+        : {}),
+    },
   })
   const run = readRun(
     dir,
