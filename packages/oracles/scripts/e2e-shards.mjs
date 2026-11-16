@@ -285,6 +285,7 @@ export const shards = {
     `calibration: the stdout drops a gap line`,
     `calibration: a stdout gap line shows another change`,
     `calibration: a stdout gap line names another kind`,
+    `calibration: a stdout gap line names another cause`,
     `calibration: a stdout gap line does not read as a gap`,
     `calibration: the stdout has a gap line for a mutant that is not a gap`,
     `calibration: a check through the daemon drops a gap line`,
