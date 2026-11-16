@@ -254,9 +254,16 @@ export const shards = {
     `calibration: a stopped run ends without its done line`,
     `calibration: a raw line reaches the stdout`,
     `calibration: a run ends with two done lines`,
-    // Law 15's stdout gap lines against results.json (not yet measured).
+    // Law 15's stdout gap lines against results.json, one calibration per
+    // rejection, about 60 s each locally (one worker, light load).
     `calibration: the stdout prints one gap twice and drops another`,
     `calibration: a stdout gap line gives another line than results.json`,
+    `calibration: the stdout drops a gap line`,
+    `calibration: a stdout gap line shows another change`,
+    `calibration: a stdout gap line names another kind`,
+    `calibration: a stdout gap line does not read as a gap`,
+    `calibration: the stdout has a gap line for a mutant that is not a gap`,
+    `calibration: a check through the daemon drops a gap line`,
     // The witness module's edit sequence (option M): about 97 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
     `random seed: an edit sequence over the witness module`,
