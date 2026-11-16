@@ -502,7 +502,7 @@ import { delimiter, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import fc from 'fast-check'
 import { socketOf, stateDirOf } from './daemon.mjs'
-import { isWithin, posix, realPathOf } from './paths.mjs'
+import { posix, realPathOf } from './paths.mjs'
 import { oracleProperty, pass, violation } from '../src/oracle-property.ts'
 
 import {
@@ -2299,7 +2299,7 @@ async function driver(plan, observe) {
     // A refused run's output is recorded with its scratch paths named, and
     // this package lies inside the CLI's directory: the case in which the
     // naming order decides whether a random name stays in the trace.
-    if (cli.exit !== 0 && dir !== how.cli && isWithin(how.cli, dir))
+    if (cli.exit !== 0 && dir !== how.cli && dir.startsWith(how.cli))
       states.add(`a refused run whose package lies inside the CLI's directory`)
     // A failing owner's replay printed in a package whose config only
     // `--config` names, beside a discovered config that includes no test.
