@@ -239,6 +239,11 @@ export const shards = {
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-5': [
+    // A probe branch under a generated test's work bound (about 3 s each on
+    // an Arclet for the fixed-seed and random units).
+    `fixed seed 20261105: a probe branch under a generated test's work bound`,
+    `random seed: a probe branch under a generated test's work bound`,
+    `determinism: constructed history: a probe branch under a generated test's work bound`,
     `fixed seed 20261105: every outcome class, the warm and abort stops`,
     `random seed: every outcome class, the warm and abort stops`,
     `determinism: constructed history: every outcome class, the warm and abort stops`,
