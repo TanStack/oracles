@@ -9,16 +9,21 @@
 // units, the ownership, and the options. A cold run computes every unit. The
 // daemon keeps each unit in its evidence store with the hash of every module
 // the run imported, as Vitest reports them, and of what was served for each
-// instrumented or patched source; a stored unit is reused only while every
-// one of those hashes is unchanged. So a check through the daemon reports
-// what a cold run reports (the CLI oracle's law 9). Not covered: a file a
-// test reads through `fs`, an environment variable other than the seed, and
-// a new file that changes how an unchanged import resolves.
+// instrumented or patched source, and of every other read the run made: a
+// file its tests read through `fs` on any path, a variable they read, and
+// what the config and its plugins read in this process (inputs.mjs; every
+// read is a daemon input, maintainer decision, 2026-11-16). A stored unit is
+// reused only while every one of those hashes is unchanged. So a check
+// through the daemon reports what a cold run reports (the CLI oracle's law
+// 9). Not covered: a read through another fs API than those inputs.mjs
+// watches, one from a worker thread or a child process that a test starts,
+// and a new file that changes how an unchanged import resolves.
 //
 // A unit's identity also carries the global inputs: this CLI's own files,
 // the harness, the Vite config and the files it loads, the package's
 // manifest and the lockfile, the Node version, and the options that change a
 // run (the seed, the test timeout, and bail).
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
@@ -73,6 +78,7 @@ import {
   specifierOf,
 } from './paths.mjs'
 import { stateDirOf } from './evidence.mjs'
+import { envHash, fileHash, watchReads } from './inputs.mjs'
 import {
   baselineOf,
   blockedOr,
@@ -161,6 +167,7 @@ const ownFiles = [
   `stream.mjs`,
   `authored.mjs`,
   `capture-setup.mjs`,
+  `inputs.mjs`,
   `paths.mjs`,
   `evidence.mjs`,
   `daemon.mjs`,
@@ -214,10 +221,52 @@ class KeepOrder {
   }
 }
 
-/** Hashes of files by content, memoized by size and modification time. */
+/**
+ * The config's own plugins, with each hook run under `reading` (openSession),
+ * so what a hook reads is a session input. A `load` or `transform` hook
+ * names the module it serves. A plugin is wrapped once; a hook is a function
+ * or an object with a `handler`, as Vite takes it.
+ */
+const hooked = new WeakSet()
+function pluginHooks(option, reading) {
+  if (Array.isArray(option))
+    return option.map((plugin) => pluginHooks(plugin, reading))
+  if (typeof option?.then === `function`)
+    return option.then((plugin) => pluginHooks(plugin, reading))
+  if (option === null || typeof option !== `object` || hooked.has(option))
+    return option
+  hooked.add(option)
+  for (const [name, hook] of Object.entries(option)) {
+    const handler = typeof hook === `function` ? hook : hook?.handler
+    if (typeof handler !== `function`) continue
+    const at = { load: 0, transform: 1 }[name]
+    const watched = function (...args) {
+      const id = at === undefined ? undefined : args[at]
+      return reading.run(
+        {
+          module:
+            typeof id === `string`
+              ? `fs:${posix(id.split(`?`)[0])}`
+              : undefined,
+        },
+        () => handler.apply(this, args),
+      )
+    }
+    option[name] =
+      typeof hook === `function` ? watched : { ...hook, handler: watched }
+  }
+  return option
+}
+
+/**
+ * Hashes of files by content, memoized by size and modification time for
+ * one check (`forget`, which each check calls first): an edit between two
+ * checks that keeps a file's size and modification time, as `cp -p` leaves
+ * it, is still seen (D10; the TLA model's weakened-stamp run).
+ */
 function fileHashes() {
   const memo = new Map()
-  return (path) => {
+  const hashOf = (path) => {
     let stat
     try {
       stat = statSync(path)
@@ -240,6 +289,8 @@ function fileHashes() {
     memo.set(path, { stamp, hash })
     return hash
   }
+  hashOf.forget = () => memo.clear()
+  return hashOf
 }
 
 /** The lockfile that pins the package's dependencies, if any. */
@@ -438,11 +489,31 @@ export async function openSession(pkg) {
       `the TypeScript this CLI depends on (${ts.version}) has no compiler API`,
       `Reinstall @tanstack/oracles, which depends on TypeScript 5.`,
     )
+  // What Vitest, the config, and the config's own plugins read in this
+  // process (`reading`: while Vitest loads, while each context warms, and in
+  // each hook of the config's plugins, pluginHooks). Every plugin input is a
+  // daemon input (maintainer decision, 2026-11-16, "All of them"): each is
+  // an input of every unit that settles after it was read, with its hash
+  // from that read (settleIn), and a daemon whose session input changed is
+  // replaced (inputsChanged, daemon.mjs), since a plugin or a module may
+  // keep what it read. A load or transform hook's read of the module it
+  // serves is that module's own text, which is the module's input already.
+  const sessionReads = new Map()
+  const reading = new AsyncLocalStorage()
+  watchReads((key) => {
+    const hook = reading.getStore()
+    if (hook === undefined || key === hook.module || sessionReads.has(key))
+      return
+    sessionReads.set(key, key.startsWith(`fs:`) ? fileHash(key.slice(3)) : null)
+  })
+  globalThis.__oracleGapsPluginHooks = (plugins) =>
+    pluginHooks(plugins, reading)
   const requireTarget = createRequire(join(pkg, `package.json`))
   let createVitest
   try {
-    ;({ createVitest } = await import(
-      pathToFileURL(requireTarget.resolve(`vitest/node`)).href
+    ;({ createVitest } = await reading.run(
+      {},
+      () => import(pathToFileURL(requireTarget.resolve(`vitest/node`)).href),
     ))
   } catch (error) {
     throw new Refusal(
@@ -480,7 +551,9 @@ export async function openSession(pkg) {
   writeFileSync(join(home, `host`), hostname())
   const harness = join(home, `capture-setup.mjs`)
   copyFileSync(join(here, `capture-setup.mjs`), harness)
-  // The harness imports the path rule beside it (capture-setup.mjs).
+  // The harness imports the input rule and the path rule beside it
+  // (capture-setup.mjs).
+  copyFileSync(join(here, `inputs.mjs`), join(home, `inputs.mjs`))
   copyFileSync(join(here, `paths.mjs`), join(home, `paths.mjs`))
   // One wrapper config per context, over the package's own config (a path
   // relative to the package, or undefined for none). Each serves its own
@@ -520,6 +593,8 @@ export default async (env) => {
   const loaded = typeof base === 'function' ? await base(env) : await base
   if (loaded === null || typeof loaded !== 'object')
     throw new Error(${JSON.stringify(`${config ?? `the config`}: config must export or return an object.`)})
+  // The config's own plugins, whose hooks' reads are inputs (check.mjs, pluginHooks).
+  if (loaded.plugins !== undefined) loaded.plugins = globalThis.__oracleGapsPluginHooks(loaded.plugins)
   const merged = mergeConfig(loaded, {
   plugins: [{
     name: 'oracle-gaps-schemata',
@@ -585,6 +660,8 @@ export default async (env) => {
   // module by the text that its context serves.
   const servedHash = (path, index) => {
     if (path.startsWith(`fs:`)) return hashOf(path.slice(3))
+    // A variable by its value in the environment this check runs under.
+    if (path.startsWith(`env:`)) return envHash(path.slice(4))
     const text =
       globalThis.__oracleGapsServe[index]?.get(path) ??
       globalThis.__oracleGapsSchemata.get(path)
@@ -721,7 +798,12 @@ export default async (env) => {
     await new Promise((resolve) => service.on(`exit`, resolve))
     throw new Error(`The service was stopped`)
   }
-  async function warmContext(settings, index) {
+  // A context warms under `reading` (see sessionReads): what its config,
+  // Vite, and Vitest read while it warms is a session input.
+  function warmContext(settings, index) {
+    return reading.run({}, () => warmIn(settings, index))
+  }
+  async function warmIn(settings, index) {
     await fromConfig(index, settings.config, warmProbe())
     writeWrapper(index, settings.config)
     // A context that fails to open gives its listener allowance back: one
@@ -1486,6 +1568,8 @@ export default async (env) => {
   }
 
   async function check(options, store, log = console.error) {
+    // Each check hashes every input from its text (fileHashes).
+    hashOf.forget()
     const authored = options.mutants ? loadAuthored(options.mutants) : []
     seedVariable = `${options.envPrefix}_SEED`
     if (options.hangLimit > options.mutantLimit)
@@ -1663,11 +1747,15 @@ export default async (env) => {
     // its context's transform of it, or else its hash at the start, or now.
     // A path that changed while the run ran is invalidated, and the run is
     // not stored (undefined); nor is a run with no known input.
-    function settleIn(context, started, paths, readAt = {}) {
+    function settleIn(context, started, runPaths, runReadAt = {}) {
       const index = indexOf.get(context)
       const served = servedBy(index)
       const loads = globalThis.__oracleGapsLoads[index]
-      let stable = paths.length > 0
+      let stable = runPaths.length > 0
+      // The session's inputs so far, each with its hash from its read: a
+      // run may have read through any of them (see sessionReads).
+      const paths = [...new Set([...runPaths, ...sessionReads.keys()])]
+      const readAt = { ...Object.fromEntries(sessionReads), ...runReadAt }
       const inputs = paths.map((path) => {
         const now = servedHash(path, index)
         const hash =
@@ -2625,7 +2713,16 @@ export default async (env) => {
     rmSync(home, { recursive: true, force: true })
   }
 
-  return { check, close }
+  /**
+   * Whether a file the session read (sessionReads) holds other text now: a
+   * daemon then serves no more checks, since a plugin or a module may keep
+   * what it read (daemon.mjs).
+   */
+  const inputsChanged = () =>
+    [...sessionReads].some(
+      ([key, hash]) => key.startsWith(`fs:`) && fileHash(key.slice(3)) !== hash,
+    )
+  return { check, close, inputsChanged }
 }
 
 /**
