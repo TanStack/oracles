@@ -543,6 +543,7 @@ export const partitions = {
         'a config whose test root holds no test file',
         'a config whose test root is a symbolic link',
         'a config whose plugin loads test files with a sync read',
+        'a check whose daemon stops answering',
       ]),
       7: anyOf([
         'a daemon pause that cannot engage',
@@ -567,6 +568,7 @@ export const partitions = {
         'an awaiting config in a package with no module type',
         'a declaration fault: configNoDefault',
         'a declaration fault: badEntry',
+        'an edit to data that only a spun copy reads',
       ]),
       9: anyOf([
         'a lazy module loaded before a hang in the same batch',
