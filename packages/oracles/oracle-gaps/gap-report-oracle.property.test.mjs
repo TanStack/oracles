@@ -6868,39 +6868,6 @@ oracleProperty({
         }),
       },
       {
-        // The second half of `every outcome class` (review of #73, P12): the warm and
-        // abort stop runs, over a base that enters only their states. Its stops and
-        // states are the other half of the original's; the union is checked by the
-        // framework's reach over both halves.
-        name: `every outcome class, the warm and abort stops`,
-        enters: stopsSecond,
-        build: (generated) => ({
-          ...generated,
-          witness: `capture`,
-          wholeFile: `none`,
-          fault: `none`,
-          authored: { stmt: 0, kind: `apply` },
-          stability: `insertGuard`,
-          steps: null,
-          ordinary: true,
-          configEnv: false,
-          native: `none`,
-          setupGlobal: false,
-          depSubpath: false,
-          unbuiltDep: false,
-          sourceSpelling: `plain`,
-          cliPath: `plain`,
-          boot: false,
-          budget: `two`,
-          pragma: false,
-          stopRuns: [
-            { signal: `SIGINT`, pool: `threads`, when: `warm` },
-            { signal: `SIGINT`, pool: `threads`, when: `abort` },
-          ],
-          consoleOutput: true,
-        }),
-      },
-      {
         // A warm daemon replaced before the pause (review of #73, B2): the warm
         // check is served by one daemon, which is then stopped, so the paused
         // check's daemon is another. The reset label needs the daemon that
@@ -7564,6 +7531,65 @@ oracleProperty({
           ordinary: false,
           budget: `two`,
           psMissing: true,
+        }),
+      },
+      {
+        // The second half of `every outcome class` (review of #73, P12) is split
+        // in two (P12: each Windows job under 9 minutes), each over the same base,
+        // which enters only its stop's state: the warm stop here, the abort stop
+        // below. With the first half, the union is checked by the framework's
+        // reach over every part (stopsSecond).
+        name: `every outcome class, the warm stop`,
+        enters: [`a stop signal while the config warms`],
+        build: (generated) => ({
+          ...generated,
+          witness: `capture`,
+          wholeFile: `none`,
+          fault: `none`,
+          authored: { stmt: 0, kind: `apply` },
+          stability: `insertGuard`,
+          steps: null,
+          ordinary: true,
+          configEnv: false,
+          native: `none`,
+          setupGlobal: false,
+          depSubpath: false,
+          unbuiltDep: false,
+          sourceSpelling: `plain`,
+          cliPath: `plain`,
+          boot: false,
+          budget: `two`,
+          pragma: false,
+          stopRuns: [{ signal: `SIGINT`, pool: `threads`, when: `warm` }],
+          consoleOutput: true,
+        }),
+      },
+      {
+        // The abort stop of the second half of `every outcome class` (see the
+        // warm stop above): a test of file a aborts the run's process.
+        name: `every outcome class, the abort stop`,
+        enters: [`a run whose process aborted`],
+        build: (generated) => ({
+          ...generated,
+          witness: `capture`,
+          wholeFile: `none`,
+          fault: `none`,
+          authored: { stmt: 0, kind: `apply` },
+          stability: `insertGuard`,
+          steps: null,
+          ordinary: true,
+          configEnv: false,
+          native: `none`,
+          setupGlobal: false,
+          depSubpath: false,
+          unbuiltDep: false,
+          sourceSpelling: `plain`,
+          cliPath: `plain`,
+          boot: false,
+          budget: `two`,
+          pragma: false,
+          stopRuns: [{ signal: `SIGINT`, pool: `threads`, when: `abort` }],
+          consoleOutput: true,
         }),
       },
     ]),

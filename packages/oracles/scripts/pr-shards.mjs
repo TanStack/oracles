@@ -309,13 +309,15 @@ export const partitions = {
         'a start refuses a dangling claim',
         'a supervised check with no ps on its PATH',
       ]),
-      // Both halves of `every outcome class` (134 s and 155 s on the CI runner),
-      // a second daemon check (101 s), and two small units. The second half
-      // is named here: `every outcome class` alone matches the first half only,
-      // and the second would fall into the rest (shard 3).
+      // Every part of `every outcome class` (the first half took 134 s on the CI
+      // runner, and the warm and abort stops, together 155 s, are now two
+      // histories), a second daemon check (101 s), and two small units. The
+      // stop parts are named here: `every outcome class` alone matches the
+      // first half only, and the others would fall into the rest (shard 3).
       2: anyOf([
         'every outcome class',
-        'every outcome class, the warm and abort stops',
+        'every outcome class, the warm stop',
+        'every outcome class, the abort stop',
         'a second daemon check of the budget witness',
         'a declaration fault: brokenVitest',
         'an edit that changed the cold result after a hang replaced the only context',
@@ -534,8 +536,11 @@ export const partitions = {
       1: anyOf(['an edit sequence over the witness module']),
       2: anyOf(['every outcome class']),
       3: anyOf(['a declaration fault: noTypescript']),
-      4: anyOf(['every outcome class, the warm and abort stops']),
-      5: anyOf(['an edit sequence through the daemon']),
+      4: anyOf(['every outcome class, the warm stop']),
+      5: anyOf([
+        'an edit sequence through the daemon',
+        'every outcome class, the abort stop',
+      ]),
       6: anyOf([
         'a batch whose run rejects',
         'a second daemon check of the budget witness',
