@@ -2906,8 +2906,11 @@ async function driver(plan, observe) {
     // The cold run is supervised off win32, and its PATH named no command.
     if (plan.psMissing && process.platform !== `win32` && cli.exit === 0)
       states.add(`a supervised check with no ps on its PATH`)
-    if (plan.logBlocked && cli.exit === 2)
-      states.add(`a stream log that cannot be written`)
+    // A blocked log refuses the run before its check starts, and only an
+    // argument refusal comes before it (the model's `refusal`).
+    const logRefused =
+      plan.logBlocked && plan.fault !== `outsideSource` && cli.exit === 2
+    if (logRefused) states.add(`a stream log that cannot be written`)
     if (overlapping && overlapping.overlap.exit === 2)
       states.add(`two runs on one output directory`)
     if (tornRead && cli.reported)
@@ -3046,8 +3049,9 @@ async function driver(plan, observe) {
         )
       }
     // Each kind of declaration fault is its own state, so each refusal has
-    // a history that depends on it.
-    if (plan.fault !== `none` && cli.exit !== 0)
+    // a history that depends on it. A run its blocked log refused never
+    // reached its fault.
+    if (plan.fault !== `none` && cli.exit !== 0 && !logRefused)
       states.add(`refused ${plan.fault}`)
     // A failing owner and a throwing setup file block mutants (law 14).
     if (

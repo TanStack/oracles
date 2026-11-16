@@ -4398,17 +4398,26 @@ const ownsNothing = (plan) =>
 const BROKEN_SUITE = `broken (b.*) $x it's`
 
 function refusal(plan) {
+  // The stages of a run decide which refusal comes first (P10 as amended in
+  // v21.2, R10): the arguments, before any check starts; then the stream log,
+  // which the run opens before its first line (the maintainer's decision of
+  // 2026-11-12); then the check itself, whatever it would find.
+  // A `--source` outside the package is an argument the CLI refuses before
+  // it starts a check (the argument rules that the static oracle judges),
+  // so its stdout has no line that names a stream log.
+  if (plan.fault === `outsideSource`)
+    return { cause: `outside the package`, arguments: true }
+  // A stream log that cannot be written is refused before the check starts
+  // (the CLI opens the log before its first line, index.mjs), so its stdout
+  // owes its done line alone.
+  if (plan.logBlocked === true)
+    return { cause: `the stream log`, arguments: true }
   // A Vitest that does not load, and a config the runner cannot honor, refuse
   // the run rather than leave every mutant unreached (maintainer decision,
   // 2026-11-08).
   if (plan.fault === `brokenVitest`) return { cause: `vitest`, runtime: true }
   if (plan.fault === `projects`)
     return { cause: `test.projects`, runtime: true }
-  // A stream log that cannot be written is refused before the check starts
-  // (the CLI opens the log before its first line, index.mjs), so its stdout
-  // owes its done line alone.
-  if (plan.logBlocked === true)
-    return { cause: `the stream log`, arguments: true }
   if (plan.fault === `badEntry`) return { cause: `${SOURCE}#nope` }
   // An owns entry that names a missing file (a test file's declaration) is
   // found by the analysis, after the check has started, so this refusal
@@ -4416,11 +4425,6 @@ function refusal(plan) {
   // is not a file of the package, is the static oracle's `absentSource`.
   if (plan.fault === `missingSource`) return { cause: `src/missing.ts` }
   if (plan.fault === `nonLiteral`) return { cause: `b.test.ts` }
-  // A `--source` outside the package is an argument the CLI refuses before
-  // it starts a check (the argument rules that the static oracle judges),
-  // so its stdout has no line that names a stream log.
-  if (plan.fault === `outsideSource`)
-    return { cause: `outside the package`, arguments: true }
   // The analysis reads the test files that the package's Vitest config
   // includes (index.mjs, step 2), so a config that does not load is named
   // before anything the analysis would find. The cause names the config
