@@ -259,6 +259,12 @@ export type SyntheticSpec = {
     | { kind: `enumerated`; histories: ReadonlyArray<SyntheticHistory> }
   /** A second fixed seed, ten times the first, whose text the first's extends. */
   secondSeed?: boolean
+  /**
+   * The bases each constructed history runs (the property's `bases`); absent
+   * leaves the framework's default. 0 and 1.5 are not whole numbers of at
+   * least 1, so they fail the load.
+   */
+  bases?: number
   /** Required states; each must be entered by a constructed history. */
   states: ReadonlyArray<string>
   constructed: ReadonlyArray<{
@@ -1481,6 +1487,7 @@ export function syntheticProperty(spec: SyntheticSpec): void {
           .filter((state) => !spec.states.includes(state))
           .map(declare),
         runs: spec.source.runs,
+        ...(spec.bases === undefined ? {} : { bases: spec.bases }),
         fixedSeeds: [
           spec.source.seed,
           ...(spec.secondSeed ? [spec.source.seed * 10] : []),
