@@ -1046,6 +1046,7 @@ const quiet = new Set([
 const timersListed = (kinds) =>
   kinds.filter((kind) => kind === `Timeout` || kind === `Immediate`).length
 let sawIo = false
+let diagLines = 0
 if (state.capture) {
   let baseTimers
   let since
@@ -1067,6 +1068,13 @@ if (state.capture) {
     if (baseTimers === undefined || reported) return
     const kinds = process.getActiveResourcesInfo()
     const io = kinds.some((kind) => !quiet.has(kind))
+    if (baseTimers !== undefined && diagLines < 8) {
+      diagLines += 1
+      const timers = [...pending.values()].length
+      process.stderr.write(
+        `DIAGIDLE ${thisFile} ${JSON.stringify({ kinds, base: baseTimers, listed: timersListed(kinds), pendingTimers: timers, due: [...pending.values()].map((d) => Math.round(d - now)), io, since: since === undefined ? null : now - since })}\n`,
+      )
+    }
     sawIo ||= io
     // A timer due after the copy's full time limit cannot end its wait in
     // time, so it does not keep the copy busy: a test waiting on it would be
