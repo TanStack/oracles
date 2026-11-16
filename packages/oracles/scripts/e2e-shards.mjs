@@ -194,6 +194,11 @@ export const shards = {
     `fixed seed 20261105: a batch whose run rejects`,
     `random seed: a batch whose run rejects`,
     `determinism: constructed history: a batch whose run rejects`,
+    // The stream calibrations: two runs of the rejected batch each.
+    `calibration: a V8 fatal block beside our own line with no prefix`,
+    `calibration: a traced warning's frames beside our own line with no prefix`,
+    `calibration: an esbuild block beside our own line with no prefix`,
+    `calibration: our own indented line with no prefix`,
     `random seed: a .ts config in a package with no module type that calls require`,
     `random seed: a declaration fault: configThrows`,
     `random seed: a declaration fault: noTypescript`,

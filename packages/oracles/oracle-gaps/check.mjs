@@ -60,6 +60,7 @@ import {
 import {
   baselineLines,
   blockedLines,
+  escapeControls,
   gapLine,
   progressLine,
   streamLine,
@@ -198,7 +199,7 @@ function captureLines(capture, { partial = false } = {}) {
   const end = text.lastIndexOf(`\n`) + 1
   if (!partial && end !== text.length)
     throw new Error(
-      `oracle-gaps internal error: the capture ${capture} ends in a row with no newline after its run finished`,
+      `the capture ${capture} ends in a row with no newline after its run finished`,
     )
   return text.slice(0, end).split(`\n`).filter(Boolean)
 }
@@ -2732,7 +2733,12 @@ export default async (env) => {
       }),
     )
     if (existsSync(testOutput) && statSync(testOutput).size > 0)
-      log(streamLine(`note`, `test output in ${testOutput}`))
+      log(
+        streamLine(
+          `note`,
+          `test output in ${escapeControls(posix(testOutput))}`,
+        ),
+      )
     return renderStdout({
       results,
       run: runIdentity,
@@ -2741,7 +2747,7 @@ export default async (env) => {
       baseline: baselineFiles,
       config: options.config,
       paths: {
-        report: posix(join(options.out, `summary.md`)),
+        report: escapeControls(posix(join(options.out, `summary.md`))),
         results: join(options.out, `results.json`),
         out: options.out,
       },
