@@ -2606,6 +2606,11 @@ export default async (env) => {
               mutant: -1,
               select: null,
               limitMs: limitFor(file),
+              // An authored copy makes no progress as an operator copy does
+              // (v21.2 R50): idle detection where no unmutated test of the
+              // file did I/O. It counts no calls, so it has no call budget.
+              idleMs: ioFiles.has(file) ? null : IDLE_MS,
+              idleHorizonMs: limitFor(file),
               stopOnKill: true,
               ignore: ignoredIn(file),
             },
