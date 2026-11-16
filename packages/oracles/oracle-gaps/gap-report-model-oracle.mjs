@@ -1703,9 +1703,10 @@ const witness = [
       judging(`a`, `fixed seed`, 7, { judgesShared: true }),
     ],
   },
-  // Hangs. A test that hangs where it would judge cuts its file's run off
-  // at the time limit. Alone, the mutant is a timeout; a kill in another
-  // owner still decides, and a survivor in another owner does not.
+  // Hangs. A test that hangs where it would judge makes no progress: its copy
+  // is idle by state, and the built-in law no progress kills the mutant on the
+  // test's route (M, 2026-11-16). Owner a's copy runs first, so a's hang
+  // decides beside another owner's kill or survivor alike.
   // A module imported through a query is loaded by Vite as written: the
   // owner's test reads it with `?raw` and must see the module's own text,
   // which the instrumented copy does not change. The judging test kills the
@@ -1772,7 +1773,7 @@ const witness = [
   },
   // Slow in both owners, and judged by neither: each owner's copy makes
   // 30,000 more calls, and the two copies together pass the work budget, so
-  // the mutant is a timeout by count, not a survivor.
+  // the built-in law bounded work kills the mutant (M, 2026-11-16).
   {
     id: `w_slowpair`,
     owners: PAIR_FILES,
@@ -4258,36 +4259,39 @@ function slowedFiles(plan, tests, sites, active) {
   return slowed
 }
 
-// The timeout cause that each kind of cut names (the CLI's `cause`, `backstop`,
-// `spin` and `no progress`; `work budget` is the mutant's own count).
-const CUT_CAUSE = { wall: `backstop`, count: `spin`, state: `no progress` }
+// The built-in law that each cut by count or by state fails (M, 2026-11-16,
+// "Spin, no progress and the work budget are kills", restoring v21.1 K1 and
+// P3): a spin past the call budget, and a copy whose work passes the
+// mutant's work budget, fail bounded work; a copy idle by state fails no
+// progress. Only a wall-clock cut (the backstop) is a gap, a `timeout`.
+const BUILT_IN = [`bounded work`, `no progress`]
 
 /**
  * A mutant's kind from its owner tests' runs. An operator mutant's copies
  * share its work budget (`budgeted`); an authored mutant's copies are judged
- * alone, with no budget.
+ * alone, with no budget. `detail` receives a timeout's cause and, for a kill,
+ * the built-in law that decided it (`builtIn`, null for a behavioral law).
  */
 function judge(plan, tests, sites, active, { budgeted = true, detail } = {}) {
   const runs = runsOf(plan, tests, sites, active)
   // A file's tests run in order, and a kill (a behavioral verdict on a
-  // reproducible route) stops the file. A hang before that cuts the file's
-  // run off, and a run that was cut off records nothing, not even its
-  // earlier verdicts. A kill in another file still decides (a kill outranks
-  // a timeout); failing that, the mutant is a timeout.
+  // reproducible route) stops the file. A cut copy records nothing, not even
+  // its earlier verdicts. A cut by count or by state is a verdict of a
+  // built-in law on the route of the test that was running, so it kills on a
+  // reproducible route and decides the mutant; on another route the next
+  // owner's copy still runs. A wall-clock cut (the backstop) ends the owner
+  // files after it, and the mutant is a timeout unless a copy before it
+  // killed.
   const hung = new Set()
-  // The cause of a timeout: the first cut in the order the copies run, which
-  // the CLI names on the mutant's timeout (`detail.cause`).
-  let cut
-  // Only a wall-clock cut (the backstop) ends the owner files after it. A count
-  // or a state cut (a spin, or no progress) ends its own copy only (the outcome
-  // rule, 2026-11-14, as refined: the next owner's copy still runs).
-  const wallHung = new Set()
+  const builtIns = []
+  let wallCut = false
   // The mutant's work budget (G1): its owner files' copies are counted in
   // their order, each copy's work being the site evaluations of its runs up
-  // to a hang or a kill. A copy past the budget is a timeout, and so is every
-  // copy after it, so a kill among them does not count. The budget is the
-  // larger of WORK_FLOOR and ten times the owner files' unmutated work, where
-  // a file's unmutated work is its most-working test's.
+  // to a cut or a kill. The copy whose work passes the budget fails bounded
+  // work on the routes of its tests that did work, its own verdicts do not
+  // count, and no later copy runs. The budget is the larger of WORK_FLOOR and
+  // ten times the owner files' unmutated work, where a file's unmutated work
+  // is its most-working test's.
   const files = [...new Set(runs.map((r) => r.t.file))]
   // A file's most-working unmutated test, in site evaluations.
   const mostBefore = (file) =>
@@ -4296,45 +4300,58 @@ function judge(plan, tests, sites, active, { budgeted = true, detail } = {}) {
   const workBudget = Math.max(WORK_FLOOR, 10 * unmutated)
   const counted = new Set()
   let spent = 0
-  let exhausted = false
   for (const file of files) {
     let work = 0
     const callBudget = Math.max(CALL_FLOOR, 100 * mostBefore(file))
+    let builtIn
     for (const r of runs.filter((x) => x.t.file === file)) {
       // A copy whose runs pass its call budget is cut by count, where the run
       // goes past it (the CLI's spin row).
       const spun = !r.hang && work + r.work > callBudget
+      if (r.hang && r.cut === `wall`) wallCut = true
+      else if (r.hang || spun)
+        builtIn = {
+          route: r.route,
+          law: spun || r.cut === `count` ? `bounded work` : `no progress`,
+        }
       if (r.hang || spun) {
         hung.add(file)
-        cut ??= CUT_CAUSE[spun ? `count` : r.cut]
+        break
       }
-      if (r.hang && r.cut === `wall`) wallHung.add(file)
-      // A cut copy records no work (its calls are not rows the CLI keeps).
-      work += r.hang || spun ? 0 : r.work
-      if (r.hang || spun || killsIn(r)) break
+      work += r.work
+      if (killsIn(r)) break
     }
-    // A copy cut by a clock ends the mutant's copies here: no later copy runs.
-    if (wallHung.has(file)) {
-      exhausted = true
-      break
+    if (wallCut) break
+    if (builtIn) {
+      builtIns.push(builtIn)
+      if (builtIn.route === `reproducible`) break
+      continue
     }
     if (budgeted && spent + work > workBudget) {
-      exhausted = true
-      cut ??= `work budget`
+      for (const r of runs.filter((x) => x.t.file === file && x.work > 0))
+        builtIns.push({ route: r.route, law: `bounded work` })
       break
     }
     spent += work
     counted.add(file)
   }
-  const live = runs.filter((r) => counted.has(r.t.file) && !hung.has(r.t.file))
+  const live = [
+    ...runs.filter((r) => counted.has(r.t.file) && !hung.has(r.t.file)),
+    ...builtIns.map((v) => ({ route: v.route, verdicts: [v], changed: true })),
+  ]
   const verdicts = (route) =>
     live.flatMap((r) =>
       r.verdicts.filter((v) => v.route === route).map((v) => v.law),
     )
   const reproducible = verdicts(`reproducible`)
-  if (reproducible.some((law) => law !== `reach agreement`)) return `killed`
-  if (hung.size > 0 || exhausted) {
-    if (detail) detail.cause = cut
+  if (reproducible.some((law) => law !== `reach agreement`)) {
+    if (detail)
+      detail.builtIn =
+        reproducible.find((law) => BUILT_IN.includes(law)) ?? null
+    return `killed`
+  }
+  if (wallCut) {
+    if (detail) detail.cause = `backstop`
     return `timeout`
   }
   // No wall-clock budget decides here (maintainer decision, deterministic
@@ -4678,11 +4695,12 @@ function model(plan) {
     `indeterminate`,
     `unreached`,
   ])
-  // A timeout's cause: the cut that the copies ran into first (`judge`).
-  const causeOf = (tests, active, options) => {
+  // A timeout's cause (the backstop), and the built-in law of a kill that one
+  // decided (`judge`).
+  const detailOf = (tests, active, options) => {
     const detail = {}
     judge(plan, tests, sites, active, { ...options, detail })
-    return detail.cause
+    return detail
   }
   const mutants = sites.map((site) => {
     const kind = site.probe
@@ -4702,7 +4720,11 @@ function model(plan) {
       kind,
       cause:
         kind === `timeout`
-          ? causeOf(ownerTests(site.fnId), { site: site.id })
+          ? detailOf(ownerTests(site.fnId), { site: site.id }).cause
+          : undefined,
+      builtIn:
+        kind === `killed`
+          ? detailOf(ownerTests(site.fnId), { site: site.id }).builtIn
           : undefined,
       // A mutant whose run reaches a slow owner test keeps a copy busy for
       // SLOW_MS, so the CLI must name it in a heartbeat while it runs.
@@ -4741,7 +4763,8 @@ function model(plan) {
     line: a.applies ? a.line : undefined,
     cause:
       a.applies && owners(a.fn).size > 0
-        ? causeOf(ownerTests(a.fn), { authored: a.label }, { budgeted: false })
+        ? detailOf(ownerTests(a.fn), { authored: a.label }, { budgeted: false })
+            .cause
         : undefined,
   }))
   const authored = authoredAll[0]?.kind

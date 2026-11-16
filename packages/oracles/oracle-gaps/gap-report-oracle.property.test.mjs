@@ -1223,6 +1223,14 @@ function readRun(dir, out, status, stderr, cli, stdout) {
       laws: r.laws,
       // The cut that ended a timeout (classify.mjs `outcomeOf`).
       cause: r.outcome === `timeout` ? r.detail : undefined,
+      // The built-in law of a kill that a cut by count or state decided
+      // (bounded work or no progress), null for a behavioral law.
+      builtIn:
+        r.outcome === `killed`
+          ? ((r.laws ?? []).find((law) =>
+              [`bounded work`, `no progress`].includes(law),
+            ) ?? null)
+          : undefined,
       probe: r.probeGuard === true,
       ordinaryOutcome: r.testOutcome !== undefined,
     })),
@@ -2012,11 +2020,11 @@ async function driver(plan, observe) {
     if (killed && pendingIo(`test`))
       states.add(`a copy waiting on I/O it opened killed`)
     // A copy went idle while the runner's own write was pending (its mark),
-    // and the mutant is a timeout by no progress, not a backstop gap.
+    // and the mutant is killed by no progress, not a backstop gap.
     if (
       idleBesideRunnerWrite > 0 &&
       cli.report?.results?.some(
-        (r) => r.outcome === `timeout` && r.detail === `no progress`,
+        (r) => r.outcome === `killed` && r.laws?.includes(`no progress`),
       )
     )
       states.add(`a copy beside the runner's pending write cut as no progress`)
@@ -2025,7 +2033,7 @@ async function driver(plan, observe) {
     if (
       idleBesideRunnerTimer > 0 &&
       cli.report?.results?.some(
-        (r) => r.outcome === `timeout` && r.detail === `no progress`,
+        (r) => r.outcome === `killed` && r.laws?.includes(`no progress`),
       )
     )
       states.add(`a copy beside the runner's pending timer cut as no progress`)
@@ -2037,13 +2045,20 @@ async function driver(plan, observe) {
     )
       states.add(`a backstop cut ends the copies ahead of a later kill`)
     // Two owners that each make 30,000 extra calls: the second owner's copy
-    // passes the work budget, and its kill does not count (the outcome rule).
+    // passes the work budget, so its own kill does not count, and it fails
+    // bounded work instead (M, 2026-11-16).
     if (
       plan.history.tests.length === 2 &&
       plan.history.tests.every((t) => t.loops === 30_000) &&
-      cli.report?.results?.some((r) => r.outcome === `timeout`)
+      cli.report?.results?.some(
+        (r) =>
+          r.outcome === `killed` &&
+          JSON.stringify(r.laws) === JSON.stringify([`bounded work`]),
+      )
     )
-      states.add(`a kill past the work budget in a later owner does not count`)
+      states.add(
+        `a kill past the work budget in a later owner is a bounded-work kill`,
+      )
     if (tornRead && cli.reported)
       states.add(`a capture row read while the worker wrote it`)
     if (cli.exit === 0 && !plan.consoleOutput)
@@ -2342,14 +2357,18 @@ async function driver(plan, observe) {
         states.add(`a copy waiting on I/O killed, not cut for idleness`)
       if (m.function === `w_slowkill` && m.outcome === `killed`)
         states.add(`a slow kill killed`)
-      if (m.function === `w_hang` && m.outcome === `timeout`)
-        states.add(`a hang alone timed out`)
+      if (m.function === `w_hang` && m.laws?.includes(`no progress`))
+        states.add(`a hang alone killed by no progress`)
       if (m.function === `w_hangkill` && m.outcome === `killed`)
         states.add(`a hang in one owner and a kill in another killed`)
-      if (m.function === `w_hangsurvive` && m.outcome === `timeout`)
-        states.add(`a hang in one owner and a survivor in another timed out`)
-      if (m.function === `w_slowpair` && m.outcome === `timeout`)
-        states.add(`a mutant's copies past its work budget timed out`)
+      if (m.function === `w_hangsurvive` && m.laws?.includes(`no progress`))
+        states.add(
+          `a hang in one owner and a survivor in another killed by no progress`,
+        )
+      if (m.function === `w_slowpair` && m.laws?.includes(`bounded work`))
+        states.add(
+          `a mutant's copies past its work budget killed by bounded work`,
+        )
       if (cli.heartbeats.some((beat) => beat.label === m.id))
         states.add(`a heartbeat named a busy mutant`)
       const named = {
@@ -2864,6 +2883,15 @@ function check(plan, observations, expected) {
       return violation(
         `cli`,
         `${site(got)}: its timeout is cut by ${got.cause}, owed ${owed.cause}`,
+        `classification`,
+        { actual: got, expected: owed },
+      )
+    // A kill names the built-in law that decided it, or none for a behavioral
+    // law (M, 2026-11-16, "Spin, no progress and the work budget are kills").
+    if (kind === `killed` && got.builtIn !== owed.builtIn)
+      return violation(
+        `cli`,
+        `${site(got)}: killed by ${got.builtIn ?? `a behavioral law`}, owed ${owed.builtIn ?? `a behavioral law`}`,
         `classification`,
         { actual: got, expected: owed },
       )
@@ -4109,19 +4137,19 @@ const required = [
   `a shrinking calibration passes under a mutant`,
   `a workspace dependency's state judged fresh`,
   `each owner's value change killed its own mutant`,
-  `a hang alone timed out`,
+  `a hang alone killed by no progress`,
   `a hang in one owner and a kill in another killed`,
   `a slow owner's kill reported as when it did not wait`,
   `a slow kill after a 16 s wait killed`,
   `a copy waiting on a timer killed`,
   `a copy waiting on an unref'd timer killed`,
-  `a kill past the work budget in a later owner does not count`,
+  `a kill past the work budget in a later owner is a bounded-work kill`,
   `a backstop cut ends the copies ahead of a later kill`,
   `a copy waiting on I/O it opened killed`,
   `a copy beside the runner's pending write cut as no progress`,
   `a copy beside the runner's pending timer cut as no progress`,
-  `a hang in one owner and a survivor in another timed out`,
-  `a mutant's copies past its work budget timed out`,
+  `a hang in one owner and a survivor in another killed by no progress`,
+  `a mutant's copies past its work budget killed by bounded work`,
   `a heartbeat named a busy mutant`,
   `a run stopped by SIGINT while a worker spun`,
   `a stop signal after the completed line`,
@@ -4249,11 +4277,15 @@ const separate = [
   `a refused run whose package lies inside the CLI's directory`,
   // The deterministic-cuts states have constructed histories of their own, so
   // no history that names every state (`every outcome class`) must enter them.
+  // A timeout is now only a backstop cut (M, 2026-11-16: spin, no progress and
+  // the work budget are kills), which the witness module has no copy for; the
+  // backstop history enters it.
+  `timeout`,
   `a slow owner's kill reported as when it did not wait`,
   `a slow kill after a 16 s wait killed`,
   `a copy waiting on a timer killed`,
   `a copy waiting on an unref'd timer killed`,
-  `a kill past the work budget in a later owner does not count`,
+  `a kill past the work budget in a later owner is a bounded-work kill`,
   `a backstop cut ends the copies ahead of a later kill`,
   `a copy waiting on I/O it opened killed`,
   `a copy beside the runner's pending write cut as no progress`,
@@ -4269,7 +4301,7 @@ const separate = [
   `an awaiting config in a package with no module type ran`,
   `a .cjs or .cts config that calls require ran`,
   `a .js or .ts config in a package with no module type that calls require ran`,
-  `a mutant's copies past its work budget timed out`,
+  `a mutant's copies past its work budget killed by bounded work`,
   `a second daemon check of the budget witness's state`,
   `a run with eleven contexts`,
   `a failing owner replayed under a config that --config names`,
@@ -4502,7 +4534,7 @@ oracleProperty({
         name: `a second daemon check of the budget witness`,
         enters: [
           `a second daemon check of the budget witness's state`,
-          `a mutant's copies past its work budget timed out`,
+          `a mutant's copies past its work budget killed by bounded work`,
         ],
         build: (generated) => ({
           ...generated,
@@ -5904,7 +5936,10 @@ oracleProperty({
       // not run: the mutant is a backstop gap (a timeout), never a kill.
       {
         name: `a backstop cut ends the copies ahead of a later kill`,
-        enters: [`a backstop cut ends the copies ahead of a later kill`],
+        enters: [
+          `a backstop cut ends the copies ahead of a later kill`,
+          `timeout`,
+        ],
         build: (generated) => ({
           ...generated,
           functions: [[{ kind: `if`, op: `>`, k: 4, not: false, quote: `'` }]],
@@ -5951,7 +5986,9 @@ oracleProperty({
       // kill does not count: the mutant is a timeout by count.
       {
         name: `a kill past the work budget in a later owner`,
-        enters: [`a kill past the work budget in a later owner does not count`],
+        enters: [
+          `a kill past the work budget in a later owner is a bounded-work kill`,
+        ],
         build: (generated) => ({
           ...generated,
           functions: [[{ kind: `if`, op: `>`, k: 4, not: false, quote: `'` }]],
