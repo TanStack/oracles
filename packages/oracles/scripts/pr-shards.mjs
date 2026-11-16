@@ -531,6 +531,7 @@ export const partitions = {
       4: anyOf(['every outcome class, the warm and abort stops']),
       5: anyOf(['an edit sequence through the daemon']),
       6: anyOf([
+        'a batch whose run rejects',
         'a second daemon check of the budget witness',
         'a declaration fault: missingSource',
         'a config fault in a run that owns nothing',
