@@ -3624,10 +3624,12 @@ function interpret(plan, fnId, x, sites, active) {
   const trace = []
   const reached = new Set()
   // The run's work: one for each site evaluation, as the capture counts a
-  // test's `calls` (capture-setup.mjs), which a work bound judges.
+  // test's `calls` (capture-setup.mjs), which a work bound judges. Probe code
+  // is never work (maintainer decision, 2026-11-16): a probe-only site's
+  // evaluation counts nothing.
   let work = 0
   const reach = (id) => {
-    work += 1
+    if (!sites[id].probe) work += 1
     reached.add(id)
   }
   const outcomes = []
@@ -3639,31 +3641,6 @@ function interpret(plan, fnId, x, sites, active) {
   const helperPush = sites.find((s) => s.role === `helperPush`)
   const isActive = (site) =>
     site !== undefined && active?.site !== undefined && active.site === site.id
-  // Probe code has sites too, and the work law counts every site evaluation
-  // (the Limits: "work is the capture's count of site evaluations per
-  // test"), so a run that probes does work there. Under test, NODE_ENV is
-  // not 'production': a guard declaration, `typeof process === 'undefined' ?
-  // false : process.env.NODE_ENV !== 'production'`, evaluates its `===` and
-  // its `!==` and not its `false`, and a probe statement, `probing &&
-  // hook(name, condition)`, evaluates all three of its sites. No judged
-  // mutant is a probe site, so probe code runs as it does unmutated.
-  const probeSites = (fn, line) =>
-    sites.filter((s) => s.fnId === fn && s.line === line)
-  const declared = (fn, line) => {
-    const [same, , differs] = probeSites(fn, line)
-    reach(same.id)
-    reach(differs.id)
-  }
-  const probed = (fn, line) => {
-    for (const site of probeSites(fn, line)) reach(site.id)
-  }
-  // A call of the preamble's `report()`: its call site, its guard's
-  // declaration, and its probe statement.
-  const report = (fn, line) => {
-    reach(probeSites(fn, line).find((s) => s.operator === `delete-call`).id)
-    declared(`report`, 10)
-    probed(`report`, 11)
-  }
   const condition = (stmt) => {
     for (const role of [`true`, `false`, `not`, `swap`])
       if (siteOf(stmt, role)) reach(siteOf(stmt, role).id)
@@ -3711,19 +3688,8 @@ function interpret(plan, fnId, x, sites, active) {
   }
   const run = (id, object = { tag: `a` }) => {
     const fn = plan.functions.find((f) => f.id === id)
-    if (fn.guardLine !== undefined) declared(fn.id, fn.guardLine)
     for (const stmt of fn.body) {
       if (stmt.kind === `push`) write(stmt)
-      if (stmt.kind === `guard`) probed(fn.id, stmt.line)
-      // A helper call: its call site, then `report`'s body, or
-      // `reportTwice`'s two calls of `report()`.
-      if (stmt.kind === `helperCall` && stmt.helper === `report`)
-        report(fn.id, stmt.line)
-      if (stmt.kind === `helperCall` && stmt.helper === `reportTwice`) {
-        reach(probeSites(fn.id, stmt.line)[0].id)
-        report(`reportTwice`, 14)
-        report(`reportTwice`, 15)
-      }
       // The condition runs before each pass; a forced-false condition runs
       // none, and `<=` runs one more.
       if (stmt.kind === `loop`)
@@ -3944,11 +3910,8 @@ function interpret(plan, fnId, x, sites, active) {
         reach(site.id)
         if (!isActive(site)) run(`W7.prime`, object)
       }
-      if (stmt.kind === `if` && condition(stmt)) write(stmt)
-      if (stmt.kind === `mixed` && condition(stmt)) {
-        probed(fn.id, stmt.line + 1)
+      if ((stmt.kind === `if` || stmt.kind === `mixed`) && condition(stmt))
         write(stmt)
-      }
       // A shortcut for speed: an early return that pushes what the loop
       // below it would count up to, for every input it takes.
       if (stmt.kind === `shortcut`) {
@@ -3990,15 +3953,8 @@ function interpret(plan, fnId, x, sites, active) {
           }
         }
       }
-      if (stmt.kind === `elseIf`) {
-        if (condition(stmt)) report(fn.id, stmt.line)
-        else write(stmt)
-      }
-      if (stmt.kind === `probeIf` && condition(stmt)) report(fn.id, stmt.line)
-      if (stmt.kind === `probeBlock` && condition(stmt)) {
-        report(fn.id, stmt.line + 1)
-        probed(fn.id, stmt.line + 2)
-      }
+      if (stmt.kind === `elseIf` && !condition(stmt)) write(stmt)
+      if (stmt.kind === `probeIf` || stmt.kind === `probeBlock`) condition(stmt)
       if (stmt.kind === `throwIf` && condition(stmt)) throw new Error(`boom`)
       if (stmt.kind === `oldProbe`) {
         // `devBuild()` is true under test, so the guard holds and the probe
@@ -4045,8 +4001,6 @@ function interpret(plan, fnId, x, sites, active) {
           run(stmt.to, object)
         } else if (stmt.kind !== `mixedHelperCall`) run(stmt.to)
         else {
-          declared(`reportAndPush`, 18)
-          probed(`reportAndPush`, 19)
           reach(helperPush.id)
           if (!isActive(helperPush)) trace.push(`h`)
         }
