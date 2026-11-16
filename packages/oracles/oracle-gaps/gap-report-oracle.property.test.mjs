@@ -1977,7 +1977,7 @@ async function driver(plan, observe) {
     if (
       idleBesideRunnerWrite > 0 &&
       cli.report?.results?.some(
-        (r) => r.outcome === `timeout` && r.cause === `no progress`,
+        (r) => r.outcome === `timeout` && r.detail === `no progress`,
       )
     )
       states.add(`a copy beside the runner's pending write cut as no progress`)
