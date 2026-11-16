@@ -2643,7 +2643,16 @@ async function driver(plan, observe) {
       states.add(`stability rerun`)
     }
     if (plan.steps.length > 0)
-      await incremental(dir, plan, cli, copy, observe, states)
+      // The first cold run keeps its retention lines and check pid: law 9's
+      // cold result of the first state is this run (incremental).
+      await incremental(
+        dir,
+        plan,
+        { ...cli, retention, checkPid },
+        copy,
+        observe,
+        states,
+      )
     for (const state of states) observe(`reach`, state)
   } finally {
     if (copy) rmSync(copy, { recursive: true, force: true })
