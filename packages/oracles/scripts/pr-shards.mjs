@@ -578,6 +578,8 @@ export const partitions = {
       // budget, the twin and the timer) are short, except the 16 s wait.
       10: anyOf([
         "a copy waiting on an unref'd timer",
+        'a copy waiting on a pipe it opened',
+        "a copy beside the runner's pending write",
         "a slow owner's kill and another owner's kill",
         'a backstop cut ends the copies ahead of a later kill',
         'a kill past the work budget in a later owner',

@@ -1866,6 +1866,17 @@ async function driver(plan, observe) {
     // and holds each batch's count and its witness markers.
     const tornPolls = `${dir}.torn-polls`
     if (plan.tornRows) mkdirSync(tornPolls, { recursive: true })
+    // A test that holds its own I/O open for a count of the sampler's samples
+    // (`pendingIo: 'test'`), and the runner's own pending write beside a test
+    // that can make no progress (`pendingIo: 'runner'`): each hook's directory
+    // sits beside the package, and the runner's marks each copy that went idle
+    // while its write was pending.
+    const pendingIo = (owner) =>
+      plan.history.tests.some((t) => t.pendingIo === owner)
+    const samples = `${dir}.samples`
+    const runnerWrites = `${dir}.runner-writes`
+    if (pendingIo(`test`)) mkdirSync(samples, { recursive: true })
+    if (pendingIo(`runner`)) mkdirSync(runnerWrites, { recursive: true })
     const how = {
       ordinary: plan.ordinary,
       sources: sourceArgument(plan, `${dir}.link`),
@@ -1874,16 +1885,21 @@ async function driver(plan, observe) {
       cli: plan.cliPath === `spaced` ? copy : here,
       ...configArgs(plan),
     }
-    const { replay, ...cli } = runCli(
-      dir,
-      files,
-      plan.tornRows
-        ? {
-            ...how,
-            env: { ORACLE_GAPS_TEST_TORN_ROWS: tornPolls },
-          }
-        : how,
-    )
+    const { replay, ...cli } = runCli(dir, files, {
+      ...how,
+      env: {
+        ...(plan.tornRows ? { ORACLE_GAPS_TEST_TORN_ROWS: tornPolls } : {}),
+        ...(pendingIo(`test`) ? { ORACLE_GAPS_TEST_SAMPLES: samples } : {}),
+        ...(pendingIo(`runner`)
+          ? { ORACLE_GAPS_TEST_RUNNER_WRITE: runnerWrites }
+          : {}),
+      },
+    })
+    const idleBesideRunnerWrite = pendingIo(`runner`)
+      ? readdirSync(runnerWrites).length
+      : 0
+    rmSync(samples, { recursive: true, force: true })
+    rmSync(runnerWrites, { recursive: true, force: true })
     // The watchdog read a closing row while the worker wrote it: a hold
     // marks `reached` once two polls came after its first half. A hold that
     // waited 60 s with no poll marks `unreached`, and the witness fails
@@ -1952,6 +1968,19 @@ async function driver(plan, observe) {
       states.add(`a copy waiting on a timer killed`)
     if (killed && plan.history.tests.some((t) => t.timerWait?.unref))
       states.add(`a copy waiting on an unref'd timer killed`)
+    // A copy that read a pipe it opened, past the idle window by count, was
+    // kept busy by that read alone, and its kill decided.
+    if (killed && pendingIo(`test`))
+      states.add(`a copy waiting on I/O it opened killed`)
+    // A copy went idle while the runner's own write was pending (its mark),
+    // and the mutant is a timeout by no progress, not a backstop gap.
+    if (
+      idleBesideRunnerWrite > 0 &&
+      cli.report?.results?.some(
+        (r) => r.outcome === `timeout` && r.cause === `no progress`,
+      )
+    )
+      states.add(`a copy beside the runner's pending write cut as no progress`)
     // A copy that waits past the history's backstop is cut off, and no later
     // owner runs, so the mutant is a timeout, not the later owner's kill.
     if (
@@ -3735,6 +3764,8 @@ const required = [
   `a copy waiting on an unref'd timer killed`,
   `a kill past the work budget in a later owner does not count`,
   `a backstop cut ends the copies ahead of a later kill`,
+  `a copy waiting on I/O it opened killed`,
+  `a copy beside the runner's pending write cut as no progress`,
   `a hang in one owner and a survivor in another timed out`,
   `a mutant's copies past its work budget timed out`,
   `a heartbeat named a busy mutant`,
@@ -3868,6 +3899,8 @@ const separate = [
   `a copy waiting on an unref'd timer killed`,
   `a kill past the work budget in a later owner does not count`,
   `a backstop cut ends the copies ahead of a later kill`,
+  `a copy waiting on I/O it opened killed`,
+  `a copy beside the runner's pending write cut as no progress`,
   // The config and contexts states have constructed histories of their own.
   `a config that --config names ran`,
   `a package with no config ran`,
@@ -5527,6 +5560,45 @@ oracleProperty({
               timerWait: { waitMs: 3000, unref: true },
             },
           ]),
+      },
+      // Idle counts only the test's I/O (M entry, 2026-11-15). A copy whose
+      // test reads a pipe it opened, the stdout of a child it unrefs, is busy
+      // while the read is pending, and nothing else keeps it busy: the read is
+      // released by a count of the sampler's samples past the idle window, not
+      // by a time. The mutant is killed.
+      {
+        name: `a copy waiting on a pipe it opened`,
+        enters: [`a copy waiting on I/O it opened killed`],
+        build: (generated) =>
+          soloKill(generated, [
+            {
+              ...judging(`a`, `fixed seed`, 7),
+              fn: 0,
+              pendingIo: `test`,
+            },
+          ]),
+      },
+      // A copy whose test writes to the console and then waits on an unref'd
+      // timer due long past its horizon, while the runner holds its own write
+      // pending through the test, as Vitest's forwarded output can be on
+      // win32: the runner's write is not the test's I/O, so the copy is idle
+      // and the mutant is a timeout by no progress, not a backstop gap. The
+      // package has a native addon, so its tests run in child processes, whose
+      // output Vitest forwards over their IPC channel, as on Windows shard 7.
+      {
+        name: `a copy beside the runner's pending write`,
+        enters: [`a copy beside the runner's pending write cut as no progress`],
+        build: (generated) => ({
+          ...soloKill(generated, [
+            {
+              ...judging(`a`, `fixed seed`, 7),
+              fn: 0,
+              judges: false,
+              pendingIo: `runner`,
+            },
+          ]),
+          native: `gyp`,
+        }),
       },
     ]),
   },

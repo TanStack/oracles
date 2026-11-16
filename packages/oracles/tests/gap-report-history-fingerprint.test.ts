@@ -25,12 +25,19 @@ const DRAWS = 500
 // constants in every drawn test record, which no generated history sets. A
 // test's record hashes without them, so its line is main's, and each one is
 // recorded as its own line after the others, with its neutral value checked.
-const CONSTRUCTED_TEST_FIELDS = [`slowMs`, `loops`, `timerWait`, `pulse`]
+const CONSTRUCTED_TEST_FIELDS = [
+  `slowMs`,
+  `loops`,
+  `timerWait`,
+  `pulse`,
+  `pendingIo`,
+]
 const NEUTRAL_TEST_VALUES: Record<string, unknown> = {
   slowMs: 3000,
   loops: 0,
   timerWait: null,
   pulse: false,
+  pendingIo: null,
 }
 type Sample = Record<string, unknown>
 

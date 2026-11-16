@@ -24,10 +24,14 @@
 // In a mutant run, fast-check stops a property at its first failure instead
 // of shrinking it: a kill needs one failing history, not the smallest one.
 import { createHash } from 'node:crypto'
+import { once } from 'node:events'
 import fs, { appendFileSync, readFileSync } from 'node:fs'
 import { createRequire, syncBuiltinESMExports } from 'node:module'
+import { connect, createServer } from 'node:net'
+import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { threadId } from 'node:worker_threads'
 import { afterAll, beforeEach, chai, expect, inject, vi } from 'vitest'
 import { posix, writeWhole } from './paths.mjs'
 
@@ -1045,16 +1049,29 @@ const quiet = new Set([
 ])
 const timersListed = (kinds) =>
   kinds.filter((kind) => kind === `Timeout` || kind === `Immediate`).length
+// Test-only hooks for the CLI's own oracle, not for users. With
+// ORACLE_GAPS_TEST_SAMPLES (a directory), the sampler writes how many times
+// it has judged the running test to `<pid>-<threadId>` there, so a witness
+// can hold its own I/O open for a count of samples rather than for a time.
+// With ORACLE_GAPS_TEST_RUNNER_WRITE (a directory), the runner itself holds
+// one write pending through each test, on a local pipe whose reader never
+// reads, as a write that forwards output can stay pending on win32; a copy
+// that goes idle while it is pending marks the directory.
+const samplesAt = process.env.ORACLE_GAPS_TEST_SAMPLES
+const runnerWrites = process.env.ORACLE_GAPS_TEST_RUNNER_WRITE
+let held
 let sawIo = false
 if (state.capture) {
   let baseTimers
   let since
   let reported = false
+  let samples = 0
   beforeEach(() => {
     if (continuing) return
     baseTimers = timersListed(process.getActiveResourcesInfo())
     since = undefined
     sawIo = false
+    samples = 0
   })
   beforeEach((context) => {
     if (continuing) return
@@ -1062,9 +1079,34 @@ if (state.capture) {
       baseTimers = undefined
     })
   })
+  if (runnerWrites)
+    beforeEach(async (context) => {
+      if (continuing) return
+      const name = `oracle-gaps-${process.pid}-${threadId}-${(globalThis.__oracleGapsHolds = (globalThis.__oracleGapsHolds ?? 0) + 1)}`
+      const server = createServer({ pauseOnConnect: true }).listen(
+        process.platform === `win32`
+          ? `\\\\.\\pipe\\${name}`
+          : join(tmpdir(), `${name}.sock`),
+      )
+      await once(server, `listening`)
+      const accepted = once(server, `connection`)
+      const client = connect(server.address())
+      await once(client, `connect`)
+      const [peer] = await accepted
+      client.write(Buffer.alloc(1 << 22))
+      held = client
+      context.onTestFinished(() => {
+        held = undefined
+        client.destroy()
+        peer.destroy()
+        server.close()
+      })
+    })
   realInterval(() => {
     const now = realNow()
     if (baseTimers === undefined || reported) return
+    if (samplesAt)
+      writeWhole(join(samplesAt, `${process.pid}-${threadId}`), `${++samples}`)
     const kinds = process.getActiveResourcesInfo()
     const io = kinds.some((kind) => !quiet.has(kind))
     sawIo ||= io
@@ -1080,6 +1122,8 @@ if (state.capture) {
     since ??= now
     if (!state.idleMs || now - since < state.idleMs) return
     reported = true
+    if (held?.writableLength)
+      writeWhole(join(runnerWrites, `idle-${process.pid}-${threadId}`), ``)
     appendFileSync(
       state.capture,
       `${JSON.stringify({ file: thisFile, idle: true })}\n`,

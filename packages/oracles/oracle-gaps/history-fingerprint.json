@@ -59,7 +59,8 @@
     ["tests.slowMs", "33494e17be1a5ba5"],
     ["tests.loops", "4bc867dd43aad13c"],
     ["tests.timerWait", "02f66613e9490d15"],
-    ["tests.pulse", "04378653193a64e7"]
+    ["tests.pulse", "04378653193a64e7"],
+    ["tests.pendingIo", "02f66613e9490d15"]
   ],
   "histories": [
     ["functions", "66c0e9c56951c377"],
@@ -121,6 +122,7 @@
     ["tests.slowMs", "33494e17be1a5ba5"],
     ["tests.loops", "4bc867dd43aad13c"],
     ["tests.timerWait", "02f66613e9490d15"],
-    ["tests.pulse", "04378653193a64e7"]
+    ["tests.pulse", "04378653193a64e7"],
+    ["tests.pendingIo", "02f66613e9490d15"]
   ]
 }

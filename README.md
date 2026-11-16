@@ -162,6 +162,15 @@ agent.
     watchdog has polled twice. The directory holds a `.begun` marker per batch and
     a `.reached` or `.unreached` marker per hold (`.unreached` after 60 s with no
     two polls).
+  - `ORACLE_GAPS_TEST_SAMPLES` names a directory where each worker's idle
+    sampler writes, to `<pid>-<threadId>`, how many times it has judged the
+    running test. A witness holds its own I/O open until that count rises, so
+    the hold is a count and not a time.
+  - `ORACLE_GAPS_TEST_RUNNER_WRITE` names a directory. Through each test, the
+    runner itself holds one write pending on a local pipe whose reader never
+    reads, as a write that forwards a test's output can stay pending on
+    win32. A copy that goes idle while that write is pending writes an
+    `idle-<pid>-<threadId>` marker there.
 
   A few endings print no done line, or one more line: a SIGKILL of the CLI,
   or a signal that comes while Node is still starting the CLI, before its

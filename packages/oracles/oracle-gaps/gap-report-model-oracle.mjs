@@ -134,6 +134,14 @@ const caseless = existsSync(fileURLToPath(import.meta.url).toUpperCase())
 const FULL_LIMIT_MS = 20000
 // How long a slow test waits, in real milliseconds, where its output differs.
 const SLOW_MS = 3000
+// The `pendingIo: 'test'` witness's child (run with `node -e`, given the
+// sampler's count file): it writes to its stdout once the count has risen by
+// 20, and gives up after 60 s, a backstop that leaves the read pending, so the
+// witness then fails loudly.
+const SAMPLE_HOLD = `const read = () => { try { return Number(require('fs').readFileSync(process.argv[1], 'utf8')) } catch { return 0 } }; const from = read(); setInterval(() => { if (read() >= from + 20) process.stdout.write('go', () => process.exit(0)) }, 10); setTimeout(() => process.exit(1), 60000)`
+// A wait long past any copy's horizon (the full limit and 3 s per second of
+// the file's time).
+const PAST_HORIZON_MS = 600_000
 // The calls that each copy of `w_slowpair` makes beyond its first: its test
 // calls the function this many more times where its output differs. A call
 // evaluates two or three instrumented sites, so a copy makes 60,000 to 90,000
@@ -418,13 +426,15 @@ const testCase = fc.record({
   // turn: its work could follow the clock.
   timed: fc.constant(false),
   // The constructed-only fields (see `histories`): a witness's wait where its
-  // output differs, its repeated calls, its load, and a repeating timer kept
-  // due while a hang waits. A generated test has the neutral values, which
-  // change nothing.
+  // output differs, its repeated calls, its load, a repeating timer kept due
+  // while a hang waits, and whose I/O is pending while it waits (`pendingIo`,
+  // the test's own or the runner's). A generated test has the neutral values,
+  // which change nothing.
   slowMs: fc.constant(SLOW_MS),
   loops: fc.constant(0),
   timerWait: fc.constant(null),
   pulse: fc.constant(false),
+  pendingIo: fc.constant(null),
 })
 // Law 9's edits. Each content edit changes what some evidence depends on:
 // a test file, a source statement, the source's line numbers, an owns list,
@@ -907,9 +917,9 @@ const keepsSteps = (history) => {
 // take-back reads it as the drawn constant `false` (as `claimScenario` does): a
 // shrink is torn-row-free. A constructed history may set `slowTwin`, which no
 // generated history draws, and which is taken back without it. Its tests may
-// set the constructed-only fields `slowMs`, `loops`, `timerWait` and `pulse`,
-// which the drawn test record holds at neutral values (the generator rule,
-// 2026-11-14).
+// set the constructed-only fields `slowMs`, `loops`, `timerWait`, `pulse` and
+// `pendingIo`, which the drawn test record holds at neutral values (the
+// generator rule, 2026-11-14).
 const takenBack = (t) => ({
   ...t,
   slow: false,
@@ -917,6 +927,7 @@ const takenBack = (t) => ({
   loops: 0,
   timerWait: null,
   pulse: false,
+  pendingIo: null,
 })
 const histories = drawn.map(
   (history) => (keepsSteps(history) ? history : { ...history, steps: null }),
@@ -4080,6 +4091,22 @@ function runsOf(plan, tests, sites, active) {
             work: after,
             before,
           }
+        // A test that writes to the console and then waits on a timer due past
+        // its horizon, while the runner's own write is pending (`pendingIo:
+        // 'runner'`), cannot make progress of its own: the runner's I/O is not
+        // the test's, so the copy is idle and cut as no progress, by state (M
+        // entry "Idle counts only the test's I/O", 2026-11-15).
+        if (changed && t.pendingIo === `runner`)
+          return {
+            t,
+            route,
+            hang: true,
+            cut: 'state',
+            verdicts: found,
+            changed: true,
+            work: after,
+            before,
+          }
         // A loop that never ends cuts the file's run off, as a hang does.
         if (mutated.spun)
           return {
@@ -4850,8 +4877,16 @@ function oracleTestFile(plan, file) {
     ...(plan.tests.some((t) => t.file === file && t.shrinks)
       ? [`import fc from 'fast-check'`]
       : []),
-    ...(plan.tests.some((t) => t.file === file && (t.ioWait || t.stops))
+    ...(plan.tests.some(
+      (t) => t.file === file && (t.ioWait || t.stops || t.pendingIo === `test`),
+    )
       ? [`import { spawn } from 'node:child_process'`]
+      : []),
+    ...(plan.tests.some((t) => t.file === file && t.pendingIo === `test`)
+      ? [
+          `import { join as samplesPath } from 'node:path'`,
+          `import { threadId } from 'node:worker_threads'`,
+        ]
       : []),
     ...(plan.tests.some((t) => t.file === file && t.timed === `sleep`)
       ? [`import { setTimeout as sleep } from 'node:timers/promises'`]
@@ -5024,6 +5059,27 @@ function oracleTestFile(plan, file) {
               `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await new Promise((r) => setTimeout(r, ${t.timerWait.waitMs})${t.timerWait.unref ? `.unref()` : ``})`,
             ]
           : []),
+        // Where its output differs, a test that reads a pipe it opened: the
+        // stdout of a child it unrefs, so that only the read is active. The
+        // child writes once the copy's sampler has judged the test 20 more
+        // times (ORACLE_GAPS_TEST_SAMPLES), a count of samples at least 50 ms
+        // apart, past the 500 ms idle window, so the state is held by a count
+        // and not by a time. A copy that wrongly goes idle stops its sampler's
+        // count, so the read never ends and the copy is cut. The test then
+        // judges as usual.
+        ...(t.pendingIo === `test`
+          ? [
+              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await new Promise((r) => { const child = spawn(process.execPath, ['-e', ${JSON.stringify(SAMPLE_HOLD)}, samplesPath(process.env.ORACLE_GAPS_TEST_SAMPLES ?? '', \`\${process.pid}-\${threadId}\`)], { stdio: ['ignore', 'pipe', 'ignore'] }); child.unref(); child.stdout.once('data', r) })`,
+            ]
+          : []),
+        // Where its output differs, a test that writes to the console and then
+        // waits on an unref'd timer due long past its horizon, while the
+        // runner holds its own write pending (ORACLE_GAPS_TEST_RUNNER_WRITE).
+        ...(t.pendingIo === `runner`
+          ? [
+              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) { console.log('waiting past the horizon'); await new Promise((r) => setTimeout(r, ${PAST_HORIZON_MS}).unref()) }`,
+            ]
+          : []),
         // A test that waits on I/O (a child process, about 3 s) where the
         // output differs, then judges as usual.
         ...(t.ioWait
@@ -5090,7 +5146,7 @@ function oracleTestFile(plan, file) {
         : []),
       t.asProp
         ? `  fcTest.prop([fcv.integer({ min: 0, max: 10 })], { numRuns: 20, seed: 1 })('${testName(t, index)}', async (n) => {`
-        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || t.timerWait || t.timed || lazyGated(plan, file, t) || fsGated(plan, file, t) ? `async ` : ``}() => {`,
+        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || t.timerWait || t.pendingIo || t.timed || lazyGated(plan, file, t) || fsGated(plan, file, t) ? `async ` : ``}() => {`,
       ...partsOf(t).flatMap(campaign),
       `  })`,
       `})`,
