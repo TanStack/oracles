@@ -610,6 +610,10 @@ export default async (env) => {
   // The name of the seed variable that the framework reads (`${envPrefix}_SEED`),
   // set by each check and carried in each run's state (capture-setup.mjs).
   let seedVariable = `ORACLE_SEED`
+  // The probe-only sites (each one's number), set by each check and carried
+  // in each run's state: probe code is never work (maintainer decision,
+  // 2026-11-16), so the capture counts no call there (capture-setup.mjs).
+  let probeSites = []
   const contextSpecs = new Map()
   let runCounter = 0
   // The retention test hook (retention-hook.mjs, README "Test hooks"): loaded
@@ -918,6 +922,7 @@ export default async (env) => {
       capture,
       seed,
       seedVariable,
+      probeSites,
       stopOnKill,
       ignore,
       callBudget,
@@ -1169,6 +1174,7 @@ export default async (env) => {
       capture,
       seed,
       seedVariable,
+      probeSites,
       units,
       hold,
     }
@@ -1585,6 +1591,7 @@ export default async (env) => {
       options.sources,
       [...contextSpecs.get(contexts[0]).keys()],
     )
+    probeSites = mutants.filter((m) => m.probeGuard).map((m) => m.number)
     const previous = [...globalThis.__oracleGapsSchemata.keys()]
     globalThis.__oracleGapsSchemata = instrumented
     invalidateChanged(

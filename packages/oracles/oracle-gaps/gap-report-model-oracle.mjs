@@ -3731,10 +3731,12 @@ function interpret(plan, fnId, x, sites, active) {
   const trace = []
   const reached = new Set()
   // The run's work: one for each site evaluation, as the capture counts a
-  // test's `calls` (capture-setup.mjs), which a work bound judges.
+  // test's `calls` (capture-setup.mjs), which a work bound judges. Probe code
+  // is never work (maintainer decision, 2026-11-16): a probe-only site's
+  // evaluation counts nothing.
   let work = 0
   const reach = (id) => {
-    work += 1
+    if (!sites[id].probe) work += 1
     reached.add(id)
   }
   const outcomes = []
