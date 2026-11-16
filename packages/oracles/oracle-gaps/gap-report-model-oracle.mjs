@@ -842,7 +842,7 @@ const drawn = fc.record({
   // A batch's closing row written in two halves (issue #83) is constructed
   // only: the constant draws nothing, so generated histories hold no row, and
   // `histories` takes a constructed one back as this constant (as
-  // `claimScenario` does). Its neutral value is recorded by the canary.
+  // `logLost` does). Its neutral value is recorded by the canary.
   tornRows: fc.constant(false),
   // Whether the daemon's pause engages in the daemon steps (dieMidCheck and
   // resetBeforeRead). Always true in drawn histories, so the seeds' histories are
@@ -993,20 +993,21 @@ const keepsSteps = (history) => {
 // `budgetSteps` (the review of the gap CLI's runtime fixes, 2026-11-12,
 // P1-a: the budget witness only in its own histories). The map is its own
 // inverse on the histories it keeps, so fast-check takes every one of them
-// back and shrinks it. A constructed claim scenario (`claimScenario`) and a
-// constructed stream log loss (`logLost`) are not values `drawn` can produce, so
-// their take-back reads them as the drawn constant `false` (a shrink of such a
-// counterexample is claim-free and log-intact: the constructed history stays the
-// counterexample for its law). A constructed history may also set `tornRows`
+// back and shrinks it. A constructed value of a field that switches a
+// test-only hook (a stream log loss, `logLost`, for one) is not a value `drawn`
+// can produce, so its take-back reads it as the drawn constant (a shrink of
+// such a counterexample is log-intact: the constructed history stays the
+// counterexample for its law), and so is a constructed stop after the
+// completed line (`drawnStops`). A constructed history may also set `tornRows`
 // (issue #83), which `drawn` cannot produce, so its take-back reads it as the
-// drawn constant `false` (as `claimScenario` does): a shrink is torn-row-free.
+// drawn constant `false`: a shrink is torn-row-free.
 // A history is drawn as on main; the plan takes its later edits after its
 // steps (`laterStepsOf`). Taking a history back returns it unchanged,
 // except a constructed one whose `steps` hold a later edit, which the
 // steps grammar cannot draw: its later edits move to `laterSteps`. A
 // constructed history may also set `tornRows` (issue #83) or `testRoot`
 // (issue #101), which `drawn` cannot produce, so its take-back reads each as
-// its drawn constant (as `claimScenario` does): a shrink is torn-row-free and
+// its drawn constant (as `logLost` does): a shrink is torn-row-free and
 // runs with the package as the config's root.
 // The neutral value of each constructed-only field: a drawn record holds it, and
 // the take-back maps a constructed history back to it (the generator rule, 2026-11-14).
