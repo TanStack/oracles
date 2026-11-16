@@ -243,8 +243,8 @@ function claimOut(out) {
         if (holder === undefined && attempt < 3) continue
         if (holder === undefined)
           throw new Refusal(
-            `run.pid in ${out} keeps changing`,
-            `rerun the check; if no run uses ${out}, delete ${posix(claim)}`,
+            `run.pid in ${posix(out)} keeps changing`,
+            `rerun the check; if no run uses ${posix(out)}, delete ${posix(claim)}`,
           )
         throw heldRefusal(out, claim, holder)
       }
@@ -256,8 +256,8 @@ function claimOut(out) {
 /** The refusal for a `run.pid` that cannot be written: the claim's own cause. */
 function claimCannotWrite(out, claim, error) {
   return new Refusal(
-    `run.pid in ${out} cannot be written (${error.code ?? error.message})`,
-    `if no run uses ${out}, delete ${posix(claim)}, or pass --out a directory whose run.pid can be written`,
+    `run.pid in ${posix(out)} cannot be written (${error.code ?? error.message})`,
+    `if no run uses ${posix(out)}, delete ${posix(claim)}, or pass --out a directory whose run.pid can be written`,
   )
 }
 /** The refusal for a `run.pid` that holds its directory or cannot be read. */
@@ -265,22 +265,22 @@ function heldRefusal(out, claim, holder) {
   const refusal =
     holder === UNREADABLE
       ? new Refusal(
-          `run.pid in ${out} can't be read`,
-          `if no run uses ${out}, delete ${posix(claim)}`,
+          `run.pid in ${posix(out)} can't be read`,
+          `if no run uses ${posix(out)}, delete ${posix(claim)}`,
         )
       : holder > 0 && alive(holder)
         ? new Refusal(
-            `another run (pid ${holder}) is using ${out}`,
+            `another run (pid ${holder}) is using ${posix(out)}`,
             `If no run is using it, delete ${posix(claim)}; otherwise pass --out a directory no run is using.`,
           )
         : holder > 0
           ? new Refusal(
               `run.pid names pid ${holder}, which is not running`,
-              `if no run uses ${out}, delete ${posix(claim)}`,
+              `if no run uses ${posix(out)}, delete ${posix(claim)}`,
             )
           : new Refusal(
-              `run.pid in ${out} does not name a pid`,
-              `if no run uses ${out}, delete ${posix(claim)}`,
+              `run.pid in ${posix(out)} does not name a pid`,
+              `if no run uses ${posix(out)}, delete ${posix(claim)}`,
             )
   refusal.reportless = true
   return refusal
@@ -624,10 +624,9 @@ async function checkThroughDaemon(options) {
   // A run without `--out` names its directory per call (args.mjs), so the daemon
   // would name another one than this run's stream log is in. The request
   // carries the directory this run named.
-  const argv = process.argv.slice(2)
   const reply = await requestDaemon(
     options.pkg,
-    argv.includes(`--out`) ? argv : [...argv, `--out`, options.out],
+    [...process.argv.slice(2), `--out`, options.out],
     codeIdentity(),
   )
   if (reply.stderr) writeStream(reply.stderr)

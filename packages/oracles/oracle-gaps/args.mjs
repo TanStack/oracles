@@ -93,10 +93,6 @@ export function parseArgs(argv, cwd = process.cwd()) {
 }
 
 /**
- * The options of parsed arguments `args`, or the refusal of the first that
- * breaks the usage text.
- */
-/**
  * The output directory a run with `args` writes to: the `--out` it names, or,
  * when it names none, the default directory of its package (optionsOf). A refusal
  * that comes before the package is known has none.
@@ -107,6 +103,10 @@ function outDirOf(args, cwd) {
   const pkg = realPathOf(resolve(cwd, args.package))
   return resolve(cwd, join(stateDirOf(pkg), `out`, runName()))
 }
+/**
+ * The options of parsed arguments `args`, or the refusal of the first that
+ * breaks the usage text.
+ */
 function optionsOf(args, cwd) {
   if (args.help) return { help: true }
   if (!args.package)
