@@ -1564,7 +1564,8 @@ function readRunIn(dir, out, status, stderr, cli, stdout, derived) {
     results = report.results
     summary = readFileSync(join(out, `summary.md`), `utf8`)
     reportState = `read`
-  } catch {
+  } catch (error) {
+    if (status === 0) { let daemonLines = ""; try { daemonLines = readFileSync(join(realpathSync.native(tmpdir()), "oracle-gaps-daemon-diag.jsonl"), "utf8") } catch (e) { daemonLines = String(e.code) } let listing; try { listing = readdirSync(out) } catch (e) { listing = String(e.code) } console.error("OBSERVER-DIAG " + JSON.stringify({ out, tmp: realpathSync.native(tmpdir()), error: String(error.code ?? error.message), listing, daemonLines })) }
     // A run that wrote no report is recorded by its exit status and output.
   }
   // Each streamed gap, by its key: a line whose id names no reported mutant

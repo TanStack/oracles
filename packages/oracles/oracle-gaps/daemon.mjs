@@ -417,6 +417,7 @@ async function serve(pkg) {
             stderr.push(`${line}\n`),
           )
           await store.flush()
+          { const { appendFileSync, existsSync: ex, readdirSync: rd } = await import("node:fs"); const { tmpdir: td } = await import("node:os"); const { join: jn } = await import("node:path"); const rp = realpathSync.native(td()); let listing = []; try { listing = rd(options.out) } catch (e) { listing = String(e.code) } appendFileSync(jn(rp, "oracle-gaps-daemon-diag.jsonl"), JSON.stringify({ pid: process.pid, argvOut: message.argv[message.argv.indexOf("--out") + 1], resolvedOut: options.out, tmp: rp, exists: ex(jn(options.out, "results.json")), listing }) + "\n") }
           // A test-only pause (ORACLE_GAPS_TEST_PAUSE_AT=daemon-reply): the check
           // is done and its reply is held, so the CLI waits as it would for a
           // daemon that is slow and dies. The pause writes this daemon's pid to
