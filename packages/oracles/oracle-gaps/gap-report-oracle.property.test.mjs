@@ -266,7 +266,13 @@
  *    addon was added into an existing build/Release or a scoped one into
  *    an existing scope directory each report
  *    what the cold run reports; once `--stop-daemon` returns, no daemon
- *    process serves the package.
+ *    process serves the package. The daemon runs one check at a time, so of
+ *    two checks at once on one state, the one it runs second reuses every
+ *    run the first stored and computes none that was not cut off (where no
+ *    test reads the clock). Which of the two it runs first is a race
+ *    between two processes, outside the contract: the pair is recorded by
+ *    what each check did, the check that computed first, never by which
+ *    process started first (issue #82).
  * 10. **The runner runs the package as Vitest does.** From any install path
  *    (one with a space and `#` included), for any spelling of `--source`
  *    (`./`, a redundant segment, an absolute path through a symbolic link
@@ -940,6 +946,10 @@ function filesUnder(root, within = ``) {
 // nothing of a run.
 const OWN_WRITES = [`out`, `out-daemon`, `out-stop`, `out-only`]
 
+/** How many runs a check computed that its time limit did not cut off. */
+const computedRuns = (run) =>
+  (run.evidence?.computed ?? 0) - (run.evidence?.cut ?? 0)
+
 /** Runs the CLI several times at once on one state of the fixture. */
 async function runClisAtOnce(dir, files, hows) {
   writeFixture(dir, files)
@@ -1413,11 +1423,23 @@ async function incremental(dir, plan, cli, copy, observe, states) {
     // The daemon's checks run before the cold run: a daemon's state must not
     // depend on a cold run between its checks (a session fixed while
     // requests keep coming, `fixSession`).
+    //
+    // Two checks at once reach one daemon, which runs one check at a time,
+    // in the order their requests reach it. That order is a race between
+    // two processes and no part of the contract (daemon.mjs: "One check runs
+    // at a time"), so either check may be the one the daemon runs first. The
+    // pair is recorded by what each check did, not by which process the
+    // driver started first: the check that computed more runs comes first,
+    // as the daemon's earlier check, and the other is the later one. Each is
+    // still judged in full, and a test's console output (the `note test
+    // output` line) belongs to the check that ran the test (issue #82).
     const [daemon, ...others] = twice
-      ? await runClisAtOnce(dir, files, [
-          { ...how, daemon: true },
-          { ...how, daemon: true, outName: `out-daemon-2` },
-        ])
+      ? (
+          await runClisAtOnce(dir, files, [
+            { ...how, daemon: true },
+            { ...how, daemon: true, outName: `out-daemon-2` },
+          ])
+        ).sort((a, b) => computedRuns(b) - computedRuns(a))
       : await daemonChecks(step, files, how)
     if (!cold.has(key)) cold.set(key, runCli(dir, files, how))
     const coldRun = cold.get(key)
@@ -1426,15 +1448,20 @@ async function incremental(dir, plan, cli, copy, observe, states) {
     // reused while its inputs are unchanged), so where no test reads the
     // clock it computes no run that was not cut off (third and fourth
     // reviews of #55, F-A and F-A2). The incremental check judges the count.
+    // The later of two checks at once is such a check: nothing changed
+    // after the daemon's earlier check of the same state, whose evidence is
+    // stored before it replies. So one of the two computes and the other
+    // reuses, whichever order the daemon took them in.
+    const reuseOwed = plan.tests.every((t) => !t.flaky)
     unchangedComputed =
-      step === `recheck` && plan.tests.every((t) => !t.flaky)
-        ? (daemon.evidence?.computed ?? 0) - (daemon.evidence?.cut ?? 0)
-        : undefined
+      step === `recheck` && reuseOwed ? computedRuns(daemon) : undefined
+    const laterComputed =
+      twice && reuseOwed ? computedRuns(others[0]) : undefined
     for (const [i, run] of [daemon, ...others].entries())
       observe(`incremental`, {
         step: i === 0 ? step : `${step} (a second check at once)`,
         markerStored,
-        unchangedComputed: i === 0 ? unchangedComputed : undefined,
+        unchangedComputed: i === 0 ? unchangedComputed : laterComputed,
         midrun:
           i === 0 && step === `midrun` && midrunChecks
             ? {
@@ -1487,6 +1514,15 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       })
     if (twice && step === `start`)
       states.add(`two checks started the daemon at once`)
+    // The daemon's earlier check of two at once computed runs, and the later
+    // one reused them: the state in which the order of the two matters.
+    if (
+      twice &&
+      computedRuns(daemon) > 0 &&
+      laterComputed === 0 &&
+      (others[0].evidence?.reused ?? 0) > 0
+    )
+      states.add(`of two checks at once, one computed and the other reused`)
     if (
       daemonConfigFaults.includes(plan.fault) &&
       daemon.exit === 2 &&
@@ -2474,7 +2510,7 @@ function incrementalCheck(observations) {
     if (value.unchangedComputed > 0)
       return violation(
         `incremental`,
-        `the check through the daemon of a state that nothing changed computed ${value.unchangedComputed} runs that were not cut off, owed none`,
+        `the check through the daemon at ${step}, of a state that nothing changed, computed ${value.unchangedComputed} runs that were not cut off, owed none`,
         `unchanged reuse`,
       )
     // A witness guard, not a law-9 requirement: the mid-run marker sits in
@@ -3812,6 +3848,7 @@ const incrementalStates = [
   `a check after the OS cleaned the daemon's state`,
   `two checks started the daemon at once`,
   `the daemon ran from a path with a space and #`,
+  `of two checks at once, one computed and the other reused`,
 ]
 // Law 9's states that a constructed history of their own reaches, not the
 // edit sequence: the mid-run edit, and an edit to data a test reads through
