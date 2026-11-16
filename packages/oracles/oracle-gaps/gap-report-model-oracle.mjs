@@ -4064,15 +4064,16 @@ function runsOf(plan, tests, sites, active) {
         }
         // A wait past the history's backstop (its `hangMs`, else the full limit)
         // and a margin of 6 s for three seconds per second of a one-test file
-        // (the file's time is under 2 s) is a backstop cut: the file's run is cut
-        // off, as a hang is, with no clock decision in the verdicts.
+        // (the file's time is under 2 s) is past the copy's horizon: its timer is
+        // not due inside it, so the copy is idle and cut as no progress, by state
+        // (M entry, 2026-11-15). Its outcome does not depend on load.
         const backstopMs = plan.history.hangMs ?? FULL_LIMIT_MS
         if (changed && t.slow && (t.slowMs ?? SLOW_MS) > backstopMs + 6000)
           return {
             t,
             route,
             hang: true,
-            cut: 'wall',
+            cut: 'state',
             verdicts: found,
             changed: true,
             work: after,
