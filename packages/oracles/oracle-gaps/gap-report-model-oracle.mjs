@@ -848,6 +848,15 @@ const drawn = fc.record({
   // Whether the warm daemon is replaced after the warm check (review of #73, B2).
   // Only the constructed history of a replaced warm daemon sets it.
   warmReplaced: fc.constant(false),
+  // Where the config's `test.root` sits (issue #101, `testRoots`): `none`, the
+  // package, or a shape that only a constructed history sets. The constant
+  // draws nothing, so generated histories keep their values; `histories`
+  // takes a constructed one back as this constant, as `tornRows` does.
+  testRoot: fc.constant(`none`),
+  // Whether the config has a plugin whose own \`load\` reads each test file
+  // with a sync read (\`LOAD_PLUGIN\`, review of #103). Only a constructed
+  // history sets it; \`histories\` takes it back as this constant.
+  loadPlugin: fc.constant(false),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -888,14 +897,15 @@ const keepsSteps = (history) => {
 // steps (`laterStepsOf`). Taking a history back returns it unchanged,
 // except a constructed one whose `steps` hold a later edit, which the
 // steps grammar cannot draw: its later edits move to `laterSteps`. A
-// constructed history may also set `tornRows` (issue #83), which `drawn`
-// cannot produce, so its take-back reads it as the drawn constant `false`
-// (as `claimScenario` does): a shrink is torn-row-free.
+// constructed history may also set `tornRows` (issue #83) or `testRoot`
+// (issue #101), which `drawn` cannot produce, so its take-back reads each as
+// its drawn constant (as `claimScenario` does): a shrink is torn-row-free and
+// runs with the package as the config's root.
 const histories = drawn.map(
   (history) => (keepsSteps(history) ? history : { ...history, steps: null }),
   (value) => {
     const history =
-      /** @type {{ witness: unknown, steps: unknown[] | null, tornRows: unknown }} */ (
+      /** @type {{ witness: unknown, steps: unknown[] | null, tornRows: unknown, testRoot: unknown }} */ (
         value
       )
     if (!keepsSteps(history))
@@ -904,7 +914,11 @@ const histories = drawn.map(
     // only the constructed history sets it) comes back as engaged, so the
     // arbitrary can shrink it. The disarm is therefore not kept by a shrink.
     const taken =
-      history.tornRows === false ? value : { ...history, tornRows: false }
+      history.tornRows === false &&
+      history.testRoot === `none` &&
+      history.loadPlugin === false
+        ? value
+        : { ...history, tornRows: false, testRoot: `none`, loadPlugin: false }
     const later = (history.steps ?? []).filter((step) =>
       laterEdits.includes(step),
     )
@@ -2951,6 +2965,11 @@ function resolveHistory(history) {
     tornRows: history.tornRows === true,
     ...configOf(history),
     configEnv: history.configEnv === true,
+    // Where the config's `test.root` sits (`testRoots`, issue #101): only a
+    // constructed history sets it, so a generated one runs with the package
+    // as the root.
+    testRoot: history.testRoot ?? `none`,
+    loadPlugin: history.loadPlugin === true,
     native: history.native ?? `none`,
     // A prebuilt addon in the workspace dependency's build/Release
     // (`addRelease`).
@@ -5231,6 +5250,12 @@ const altConfigPath = (plan) =>
 // package that it transforms, keeping what the module does.
 const PRE_PLUGIN = `{ name: 'gap-pre-rewrite', enforce: 'pre', transform(code, id) { const path = id.split('?')[0]; return /\\.(ts|js|mjs)$/.test(path) && !path.includes('/node_modules/') ? code + '\\n// rewritten by a pre plugin\\n' : undefined } }`
 
+// The config's own plugin with a \`load\` hook (\`loadPlugin\`): it loads each
+// test file itself, with a sync read of its path, as a plugin that reads a
+// module's source does. The runner's copy of a test file exists only in
+// memory, so only the runner's own \`load\` can answer for it (review of #103).
+const LOAD_PLUGIN = `{ name: 'gap-own-load', load(id) { const path = id.split('?')[0]; return path.endsWith('.test.ts') ? readFileSync(path, 'utf8') : undefined } }`
+
 /**
  * The text of the package's config, in its syntax (`configOf`), with the
  * fault, the top-level await, or the `require` calls the plan holds. `test`
@@ -5238,6 +5263,10 @@ const PRE_PLUGIN = `{ name: 'gap-pre-rewrite', enforce: 'pre', transform(code, i
  */
 function configText(plan, test) {
   const commonjs = plan.configSyntax === `cjs`
+  const plugins = [
+    ...(plan.prePlugin ? [PRE_PLUGIN] : []),
+    ...(plan.loadPlugin ? [LOAD_PLUGIN] : []),
+  ]
   const config = `defineConfig(${
     { object: ``, function: `() => (`, async: `async () => (`, promise: `` }[
       plan.config
@@ -5246,7 +5275,7 @@ function configText(plan, test) {
     plan.fault === `projects`
       ? `{ projects: [{ test: { name: 'unit', ...${test} } }] }`
       : test
-  }${plan.prePlugin ? `, plugins: [${PRE_PLUGIN}]` : ``} }${plan.config === `object` || plan.config === `promise` ? `` : `)`})`
+  }${plugins.length > 0 ? `, plugins: [${plugins.join(`, `)}]` : ``} }${plan.config === `object` || plan.config === `promise` ? `` : `)`})`
   // A promise of the config, a null default, or a config cut off mid-object.
   const body =
     plan.fault === `configNull`
@@ -5260,6 +5289,11 @@ function configText(plan, test) {
     commonjs
       ? `const { defineConfig } = require('vitest/config')`
       : `import { defineConfig } from 'vitest/config'`,
+    ...(plan.testRoot === `none`
+      ? []
+      : [`import { fileURLToPath } from 'node:url'`]),
+    // Only an ES module config has the load plugin (its constructed history).
+    ...(plan.loadPlugin ? [`import { readFileSync } from 'node:fs'`] : []),
     ...(plan.fault === `configThrows`
       ? [`throw new Error('the fixture config broke')`]
       : []),
@@ -5307,6 +5341,54 @@ const parentModules = (plan, state) =>
     ? `../node_modules`
     : `node_modules`
 
+/**
+ * Where a config's `test.root` sits (issue #101), as a path from the config,
+ * with the test files' glob and the setup file as Vitest reads them: relative
+ * to that root. `none` sets no root, so the root is the package. `tests` is
+ * the directory that holds the tests, as the repository's own oracle-gaps
+ * config sets it. `parent` is the directory above the package, which the
+ * driver places in a directory `pkg` of its scratch directory, so the glob
+ * names it. `outside` is a directory of the package that holds no test file,
+ * so the test files lie outside the root. `link` is `tests`, where the
+ * package's `tests` is a symbolic link to the directory that holds them
+ * (`linkedTests`), so the root's path is a link's. Vite names a module that
+ * a plugin resolves inside its root by its path from the root, and one
+ * outside it by its absolute path, so each shape names a copy of a test file
+ * differently if the runner resolves it. Every shape names each test file by
+ * its path in the package, so the model's keys are the same in all of them.
+ * Vitest resolves the package of a pragma's environment from the root (its
+ * init chunk's `vitest-environment-<name>` resolution), so under `parent` that
+ * package lies in the root's node_modules (`environments`); every other shape
+ * finds the package's own.
+ * Only an ES module config sets a root (it reads its own URL), and only the
+ * constructed histories set one, each as an ES module config.
+ */
+const inTests = {
+  root: `./tests`,
+  include: `**/*.test.ts`,
+  setup: `./setup.ts`,
+}
+const testRoots = {
+  none: { include: `tests/**/*.test.ts`, setup: `./tests/setup.ts` },
+  tests: inTests,
+  parent: {
+    root: `..`,
+    include: `pkg/tests/**/*.test.ts`,
+    setup: `./pkg/tests/setup.ts`,
+    environments: `../node_modules`,
+  },
+  outside: {
+    root: `./src`,
+    include: `../tests/**/*.test.ts`,
+    setup: `../tests/setup.ts`,
+  },
+  link: inTests,
+}
+
+// The directory that the package's `tests` links to under the `link` test
+// root.
+const linkedTests = `tests-target`
+
 function fixtureFiles(plan, state = initialState(plan)) {
   const manifest = (fields) =>
     `${JSON.stringify({ private: true, type: `module`, ...fields })}\n`
@@ -5317,11 +5399,18 @@ function fixtureFiles(plan, state = initialState(plan)) {
       : `${JSON.stringify({ private: true, ...fields })}\n`
   // A symbolic link, as a package manager links a workspace package.
   const link = (target) => ({ link: target })
-  const test = `{ include: ${
+  // The config's test root, and the test files' glob and the setup file,
+  // which Vitest reads relative to it (`testRoots`, issue #101).
+  const testRoot = testRoots[plan.testRoot]
+  const testRootOption =
+    testRoot.root === undefined
+      ? ``
+      : `root: fileURLToPath(new URL('${testRoot.root}', import.meta.url)), `
+  const test = `{ ${testRootOption}include: ${
     plan.configEnv
-      ? `process.env.VITEST === 'true' && process.env.TEST === 'true' && process.env.NODE_ENV === 'test' ? ['tests/**/*.test.ts'] : []`
-      : `['tests/**/*.test.ts']`
-  }${plan.setupGlobal || plan.fault === `setupThrows` ? `, setupFiles: ['./tests/setup.ts']` : ``} }`
+      ? `process.env.VITEST === 'true' && process.env.TEST === 'true' && process.env.NODE_ENV === 'test' ? ['${testRoot.include}'] : []`
+      : `['${testRoot.include}']`
+  }${plan.setupGlobal || plan.fault === `setupThrows` ? `, setupFiles: ['${testRoot.setup}']` : ``} }`
   // A history that installs a scoped addon later declares it from the
   // start, beside a scoped package already installed in its scope.
   const scoped = plan.steps.includes(`addScopedAddon`)
@@ -5501,21 +5590,22 @@ function fixtureFiles(plan, state = initialState(plan)) {
       : {}),
     'tests/c.test.ts': ordinaryTestFile(plan),
     // The environment oracle file a's pragma names (`pragma`), a package
-    // as Vitest finds one (`vitest-environment-<name>`).
+    // as Vitest finds one (`vitest-environment-<name>`) from the test root.
     ...(plan.pragma
       ? {
-          'node_modules/vitest-environment-marked/package.json': `${JSON.stringify({ name: `vitest-environment-marked`, type: `module`, exports: `./index.js` })}\n`,
-          'node_modules/vitest-environment-marked/index.js': [
-            `export default {`,
-            `  name: 'marked',`,
-            `  viteEnvironment: 'ssr',`,
-            `  setup(global) {`,
-            `    global.__gapEnvironment = 'marked'`,
-            `    return { teardown() { delete global.__gapEnvironment } }`,
-            `  },`,
-            `}`,
-            ``,
-          ].join(`\n`),
+          [`${testRoot.environments ?? `node_modules`}/vitest-environment-marked/package.json`]: `${JSON.stringify({ name: `vitest-environment-marked`, type: `module`, exports: `./index.js` })}\n`,
+          [`${testRoot.environments ?? `node_modules`}/vitest-environment-marked/index.js`]:
+            [
+              `export default {`,
+              `  name: 'marked',`,
+              `  viteEnvironment: 'ssr',`,
+              `  setup(global) {`,
+              `    global.__gapEnvironment = 'marked'`,
+              `    return { teardown() { delete global.__gapEnvironment } }`,
+              `  },`,
+              `}`,
+              ``,
+            ].join(`\n`),
         }
       : {}),
     // A copy that a check which died left behind (the runner names its
@@ -5567,7 +5657,18 @@ function fixtureFiles(plan, state = initialState(plan)) {
         intent: `pushes a different label`,
         author: `gap-report oracle`,
       })
-  return files
+  if (plan.testRoot !== `link`) return files
+  // The `link` test root: the files of `tests` live in `linkedTests`, and
+  // `tests` links to it.
+  return Object.fromEntries([
+    ...Object.entries(files).map(([path, text]) => [
+      path.startsWith(`tests/`)
+        ? `${linkedTests}/${path.slice(`tests/`.length)}`
+        : path,
+      text,
+    ]),
+    [`tests`, link(linkedTests)],
+  ])
 }
 
 /**
@@ -5602,7 +5703,8 @@ function writeFixture(dir, files) {
     `deps/state-dep`,
     `node_modules`,
   ])
-    mkdirSync(join(dir, sub), { recursive: true })
+    // A directory that the state links elsewhere is the link's.
+    if (!(sub in files)) mkdirSync(join(dir, sub), { recursive: true })
   if (!existsSync(join(dir, `node_modules/state-dep`)))
     symlinkSync(`../deps/state-dep`, join(dir, `node_modules/state-dep`), `dir`)
   for (const path of written.get(dir) ?? [])
