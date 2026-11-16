@@ -1,0 +1,49 @@
+name: measure-main-replay
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # SCRATCH (not for merge): replay the four random counterexamples on main's code.
+  replay-main:
+    name: replay ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: "-972199262 every outcome class"
+            seed: "-972199262"
+            path: "0:1"
+            unit: "random seed: every outcome class"
+          - label: "333199054 an ambiguous authored mutant"
+            seed: "333199054"
+            path: "0:0:0:0:0:0:0"
+            unit: "random seed: an ambiguous authored mutant"
+          - label: "-1659558018 setupThrows"
+            seed: "-1659558018"
+            path: "0:0:0:0:0:0:0"
+            unit: "random seed: a declaration fault: setupThrows"
+          - label: "-1269403528 brokenOwner"
+            seed: "-1269403528"
+            path: "0"
+            unit: "random seed: a declaration fault: brokenOwner"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Tools
+        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
+      - run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "$TPAT" --reporter=default
+        working-directory: packages/oracles
+        env:
+          ORACLE_SEED: ${{ matrix.seed }}
+          ORACLE_PATH: ${{ matrix.path }}
+          ORACLE_PROPERTY: oracle-gaps.report
+          ORACLE_UNIT: ${{ matrix.unit }}
+          TPAT: "^oracle-gaps\\.report(?: | > )${{ matrix.unit }}$"
