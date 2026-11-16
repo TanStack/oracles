@@ -682,13 +682,13 @@ function runCli(dir, files, how = {}) {
     encoding: `utf8`,
     timeout: 300_000,
     maxBuffer: 64 * 1024 * 1024,
-    // A daemon check that names no directory runs unsupervised, as on win32, so
-    // the POSIX oracle reaches the state the win32 supervisor never produces: the
-    // daemon request without `--out` (ORACLE_GAPS_TEST_UNSUPERVISED, index.mjs).
+    // A constructed history that runs unsupervised (`unsupervised`): the path
+    // win32 takes, so the POSIX oracle reaches the daemon request that names no
+    // directory (ORACLE_GAPS_TEST_UNSUPERVISED, index.mjs).
     env: {
       ...cleanEnv(),
       ...how.env,
-      ...(how.daemon && how.outMode === `default`
+      ...(how.unsupervised === true
         ? { ORACLE_GAPS_TEST_UNSUPERVISED: `1` }
         : {}),
     },
@@ -1907,6 +1907,7 @@ async function incremental(dir, plan, cli, copy, observe, states) {
     const how = {
       seed: state.seed,
       outMode: plan.outMode,
+      unsupervised: plan.unsupervised,
       cli: step === `otherInstall` ? otherCli() : copy,
       ordinary: plan.ordinary,
       sources: sourceArgument(plan, `${dir}.link`),
@@ -2416,6 +2417,7 @@ async function driver(plan, observe) {
       budget: plan.budget,
       outMode: plan.outMode,
       logBlocked: plan.logBlocked,
+      unsupervised: plan.unsupervised,
       cli: plan.cliPath === `spaced` ? copy : here,
       ...configArgs(plan),
     }
@@ -6347,6 +6349,7 @@ oracleProperty({
           steps: [`test`],
           ordinary: false,
           outMode: `default`,
+          concurrentStart: false,
           budget: `two`,
         }),
       },
@@ -6641,6 +6644,38 @@ oracleProperty({
           logBlocked: false,
           overlap: false,
           supervisorDeath: true,
+        }),
+      },
+      {
+        // The same check, run unsupervised: the path win32 takes, where no
+        // supervisor writes the run's `--out`. The daemon request names no
+        // directory, so the CLI and the daemon name two (the fix's RED on POSIX).
+        name: `a daemon check with the default output directory, unsupervised`,
+        enters: [
+          `a run with the default output directory`,
+          `a daemon check with the default output directory`,
+        ],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          wholeFile: `none`,
+          witness: false,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: [`test`],
+          ordinary: false,
+          outMode: `default`,
+          concurrentStart: false,
+          unsupervised: true,
+          budget: `two`,
         }),
       },
     ]),

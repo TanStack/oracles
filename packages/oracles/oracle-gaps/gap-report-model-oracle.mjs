@@ -848,71 +848,27 @@ const drawn = fc.record({
   // Whether the warm daemon is replaced after the warm check (review of #73, B2).
   // Only the constructed history of a replaced warm daemon sets it.
   warmReplaced: fc.constant(false),
-  // Where the run writes: the output directory `--out` names (`explicit`), or
-  // the one the CLI picks when `--out` is left out (`default`, args.mjs), whose
-  // stream log, results, and done line must still agree (law 15).
-  outMode: fc.constantFrom(`explicit`, `explicit`, `explicit`, `default`),
-  // The run's `<out>/stream.log` is a directory, so the log cannot be written
-  // (a problem the author can fix: the run refuses before it checks).
-  logBlocked: fc.constantFrom(
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    true,
-  ),
-  // A second run starts on the first run's output directory while the first
-  // is live (the coordinator's decision of 2026-11-13 on F4): the second
-  // refuses, and the first's stream log stays its own.
-  overlap: fc.constantFrom(
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    true,
-  ),
-  // The stop witness alone (`w_stop`), which a run the driver stops needs. A
-  // field of its own, so the witness options above keep their weights.
-  stopWitness: fc.constantFrom(
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    true,
-  ),
-  // A stop sent as soon as the CLI spawns, before its own run has started (P1:
-  // the note is written before the child exists, so the stopped line follows
-  // it). The driver adds this stop to the run's stops.
-  spawnStop: fc.constantFrom(
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    true,
-  ),
-  // The signal of a spawn stop and when it lands, 0 to 150 ms after the CLI
-  // spawns (the spawn-delay law, review of #57).
-  spawnSignal: fc.constantFrom(`SIGINT`, `SIGINT`, `SIGTERM`),
-  spawnDelay: fc.integer({ min: 0, max: 150 }),
-  spawnOnStart: fc.constantFrom(false, false, false, true),
+  // The fields below that a constructed history sets (outMode, logBlocked,
+  // overlap, stopWitness, spawnStop, spawnSignal, spawnDelay, spawnOnStart) are
+  // constructed only: a drawn record holds their neutral value, which draws
+  // nothing, so generated histories keep the runs they had (the generator rule,
+  // 2026-11-14). The take-back maps a constructed value to the neutral one
+  // (constructedNeutral).
+  // Where the run writes: `--out` names (`explicit`), or the directory the
+  // CLI picks when `--out` is left out (`default`, args.mjs).
+  outMode: fc.constant(`explicit`),
+  // The run's stream log cannot be written (constructed only).
+  logBlocked: fc.constant(false),
+  // A second run on the first run's output directory (constructed only).
+  overlap: fc.constant(false),
+  // The stop witness alone (`w_stop`), constructed only.
+  stopWitness: fc.constant(false),
+  // A stop sent as the CLI spawns, constructed only.
+  spawnStop: fc.constant(false),
+  // The signal and delay of a spawn stop, constructed only.
+  spawnSignal: fc.constant(`SIGINT`),
+  spawnDelay: fc.constant(0),
+  spawnOnStart: fc.constant(false),
   // A claim scenario (`race`, `stale`, `empty` or `unreadable`, review of #57)
   // is constructed only. A constant draws nothing, so generated histories never
   // run the claim driver, and `histories` takes a constructed scenario back as
@@ -924,6 +880,9 @@ const drawn = fc.record({
   // A supervised check whose supervisor is killed (POSIX; review of #57, F7):
   // constructed only, and taken back as the constant false.
   supervisorDeath: fc.constant(false),
+  // A POSIX check run unsupervised, the path win32 takes (the test-only hook
+  // ORACLE_GAPS_TEST_UNSUPERVISED). Constructed only: a drawn record holds false.
+  unsupervised: fc.constant(false),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -974,6 +933,22 @@ const keepsSteps = (history) => {
 // steps (`laterStepsOf`). Taking a history back returns it unchanged, except a
 // constructed one whose `steps` hold a later edit, which the steps grammar
 // cannot draw: its later edits move to `laterSteps`.
+// The neutral value of each constructed-only field: a drawn record holds it, and
+// the take-back maps a constructed history back to it (the generator rule, 2026-11-14).
+const constructedNeutral = {
+  outMode: `explicit`,
+  logBlocked: false,
+  overlap: false,
+  stopWitness: false,
+  spawnStop: false,
+  spawnSignal: `SIGINT`,
+  spawnDelay: 0,
+  spawnOnStart: false,
+  claimScenario: false,
+  logLost: false,
+  supervisorDeath: false,
+  unsupervised: false,
+}
 const histories = drawn.map(
   (history) => (keepsSteps(history) ? history : { ...history, steps: null }),
   (value) => {
@@ -986,17 +961,11 @@ const histories = drawn.map(
     // Take-back into the drawn language: a disarmed pause (pauseEngages false,
     // only the constructed history sets it) comes back as engaged, so the
     // arbitrary can shrink it. The disarm is therefore not kept by a shrink.
-    const reset =
-      history.claimScenario === false &&
-      history.logLost === false &&
-      history.supervisorDeath === false
-        ? value
-        : {
-            ...history,
-            claimScenario: false,
-            logLost: false,
-            supervisorDeath: false,
-          }
+    const reset = Object.entries(constructedNeutral).every(
+      ([field, neutral]) => history[field] === neutral,
+    )
+      ? value
+      : { ...history, ...constructedNeutral }
     const taken =
       reset.tornRows === false ? reset : { ...reset, tornRows: false }
     const later = (history.steps ?? []).filter((step) =>
@@ -3082,6 +3051,7 @@ function resolveHistory(history) {
     claimScenario: history.claimScenario ?? false,
     logLost: history.logLost ?? false,
     supervisorDeath: history.supervisorDeath ?? false,
+    unsupervised: history.unsupervised === true,
     spawnOnStart: history.spawnOnStart === true,
     onlyRun: history.onlyRun === true,
     pragma: history.pragma === true,
