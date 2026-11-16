@@ -541,6 +541,7 @@ export const partitions = {
         'a config whose test root is above the package',
         'a config whose test root holds no test file',
         'a config whose test root is a symbolic link',
+        'a config whose plugin loads test files with a sync read',
       ]),
       7: anyOf([
         'a daemon pause that cannot engage',

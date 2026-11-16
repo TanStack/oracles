@@ -853,6 +853,10 @@ const drawn = fc.record({
   // draws nothing, so generated histories keep their values; `histories`
   // takes a constructed one back as this constant, as `tornRows` does.
   testRoot: fc.constant(`none`),
+  // Whether the config has a plugin whose own \`load\` reads each test file
+  // with a sync read (\`LOAD_PLUGIN\`, review of #103). Only a constructed
+  // history sets it; \`histories\` takes it back as this constant.
+  loadPlugin: fc.constant(false),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -910,9 +914,11 @@ const histories = drawn.map(
     // only the constructed history sets it) comes back as engaged, so the
     // arbitrary can shrink it. The disarm is therefore not kept by a shrink.
     const taken =
-      history.tornRows === false && history.testRoot === `none`
+      history.tornRows === false &&
+      history.testRoot === `none` &&
+      history.loadPlugin === false
         ? value
-        : { ...history, tornRows: false, testRoot: `none` }
+        : { ...history, tornRows: false, testRoot: `none`, loadPlugin: false }
     const later = (history.steps ?? []).filter((step) =>
       laterEdits.includes(step),
     )
@@ -2963,6 +2969,7 @@ function resolveHistory(history) {
     // constructed history sets it, so a generated one runs with the package
     // as the root.
     testRoot: history.testRoot ?? `none`,
+    loadPlugin: history.loadPlugin === true,
     native: history.native ?? `none`,
     // A prebuilt addon in the workspace dependency's build/Release
     // (`addRelease`).
@@ -5195,6 +5202,12 @@ const altConfigPath = (plan) =>
 // package that it transforms, keeping what the module does.
 const PRE_PLUGIN = `{ name: 'gap-pre-rewrite', enforce: 'pre', transform(code, id) { const path = id.split('?')[0]; return /\\.(ts|js|mjs)$/.test(path) && !path.includes('/node_modules/') ? code + '\\n// rewritten by a pre plugin\\n' : undefined } }`
 
+// The config's own plugin with a \`load\` hook (\`loadPlugin\`): it loads each
+// test file itself, with a sync read of its path, as a plugin that reads a
+// module's source does. The runner's copy of a test file exists only in
+// memory, so only the runner's own \`load\` can answer for it (review of #103).
+const LOAD_PLUGIN = `{ name: 'gap-own-load', load(id) { const path = id.split('?')[0]; return path.endsWith('.test.ts') ? readFileSync(path, 'utf8') : undefined } }`
+
 /**
  * The text of the package's config, in its syntax (`configOf`), with the
  * fault, the top-level await, or the `require` calls the plan holds. `test`
@@ -5202,6 +5215,10 @@ const PRE_PLUGIN = `{ name: 'gap-pre-rewrite', enforce: 'pre', transform(code, i
  */
 function configText(plan, test) {
   const commonjs = plan.configSyntax === `cjs`
+  const plugins = [
+    ...(plan.prePlugin ? [PRE_PLUGIN] : []),
+    ...(plan.loadPlugin ? [LOAD_PLUGIN] : []),
+  ]
   const config = `defineConfig(${
     { object: ``, function: `() => (`, async: `async () => (`, promise: `` }[
       plan.config
@@ -5210,7 +5227,7 @@ function configText(plan, test) {
     plan.fault === `projects`
       ? `{ projects: [{ test: { name: 'unit', ...${test} } }] }`
       : test
-  }${plan.prePlugin ? `, plugins: [${PRE_PLUGIN}]` : ``} }${plan.config === `object` || plan.config === `promise` ? `` : `)`})`
+  }${plugins.length > 0 ? `, plugins: [${plugins.join(`, `)}]` : ``} }${plan.config === `object` || plan.config === `promise` ? `` : `)`})`
   // A promise of the config, a null default, or a config cut off mid-object.
   const body =
     plan.fault === `configNull`
@@ -5227,6 +5244,8 @@ function configText(plan, test) {
     ...(plan.testRoot === `none`
       ? []
       : [`import { fileURLToPath } from 'node:url'`]),
+    // Only an ES module config has the load plugin (its constructed history).
+    ...(plan.loadPlugin ? [`import { readFileSync } from 'node:fs'`] : []),
     ...(plan.fault === `configThrows`
       ? [`throw new Error('the fixture config broke')`]
       : []),
