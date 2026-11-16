@@ -170,9 +170,15 @@
  *   constructed histories make reach required: a state that random histories
  *   reach is measured, never gated. So every state in `states` must be named
  *   by a constructed history, and a state the property only measures is
- *   declared in `measured` instead (ORC-015). Half of a campaign's generated
- *   histories are also constructed, so the histories after each required
- *   state are explored, not visited once.
+ *   declared in `measured` instead (ORC-015). The constructed histories and
+ *   the generated ones are independent streams: the `generated` unit draws
+ *   only from the arbitrary, and constructed history k builds from the
+ *   arbitrary's sample at the campaign's seed plus k. So at a fixed seed the
+ *   generated histories do not depend on the constructed list, its length or
+ *   its contents, and appending a constructed history changes no history that
+ *   a fixed seed ran before (maintainer decision, 2026-11-16). A random seed
+ *   builds each constructed history from a new sample, so the histories after
+ *   a required state vary from run to run.
  * - A **fixed history** is a named history, such as a fixed regression. It may
  *   name the states it `enters`, which its run must reach. Fixed and
  *   constructed histories must be histories the arbitrary can take back
@@ -2391,18 +2397,6 @@ function generatedTests<THistory, TExpected, TPlan>(
     throw new Error(
       `${id}: no constructed history enters ${unconstructed.join(`, `)}. A required state needs a constructed history; a state that is only counted belongs in \`measured\`.`,
     )
-  // Generated histories, half of them constructed. A constructed history
-  // shrinks through its generated input, as a mapped arbitrary does.
-  const arbitrary =
-    constructions.length === 0
-      ? source.arbitrary
-      : fc.oneof(
-          { arbitrary: source.arbitrary, weight: constructions.length },
-          ...constructions.map((construction) => ({
-            arbitrary: source.arbitrary.map(construction.build),
-            weight: 1,
-          })),
-        )
   for (const construction of constructions) {
     const undeclared = construction.enters.filter(
       (state) => declared !== undefined && !required.includes(state),
@@ -2570,9 +2564,12 @@ function generatedTests<THistory, TExpected, TPlan>(
         : timeout > 0
           ? started + timeout / 2
           : Infinity
+    // Every unit runs the property's own arbitrary: the `generated` unit
+    // draws from it alone, so the constructed list moves none of its
+    // histories, and a constructed unit's one history shrinks through it.
     const details = await fc.check(
       fc.asyncProperty(
-        arbitrary,
+        source.arbitrary,
         predicateFor(constructionOf, counts, shrinkUntil, rerun, violations),
       ),
       run,

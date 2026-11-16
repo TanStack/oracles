@@ -33,8 +33,9 @@
  * - `units` (maintainer decision, 2026-11-11, option D): a campaign's units run exactly the
  *   histories that the campaign ran, each in its own test. The constructed unit of history k, for
  *   seed S, runs one history: the construction built from the arbitrary's sample at seed S + k.
- *   The `generated` unit runs the stream that `fc.sample` draws from the property's arbitrary, with
- *   its constructed weighting, at seed S, for the property's `runs`. The model draws these with
+ *   The `generated` unit runs the stream that `fc.sample` draws from the property's arbitrary alone,
+ *   at seed S, for the property's `runs` (maintainer decision, 2026-11-16, which retired the
+ *   constructed weighting of option D's design). The model draws these with
  *   fast-check itself, never through the framework. A unit that fails ran that stream up to its
  *   first failure, then its shrinks. The random units of a property run the one seed it logged: the
  *   seed of the replay environment in a seeded run, and a drawn seed in a seedless run.
@@ -1734,15 +1735,10 @@ const unitOf = (test: string): { seed?: number; name: string } | undefined => {
 }
 // The histories a unit draws at `seed`, in order: a constructed unit its one
 // construction, built from seed + its index; the `generated` unit the stream
-// that fast-check samples from the property's arbitrary with its constructed
-// weighting (each constructed history weighs 1, and the language weighs their
-// count) for `runs` draws. Drawn with fast-check itself, never the framework.
-// The weighting restates how production composes its arbitrary, which the
-// design of option D authorizes the model to state (design-c-d.md, law
-// `units`: "the property's arbitrary (with its constructed weighting)"). It
-// is that composition, not a contract promise: the header promises only that
-// half of a campaign's generated histories are constructed, and a change to
-// the composition must change this model with it.
+// that fast-check samples from the property's arbitrary alone, for `runs`
+// draws. Drawn with fast-check itself, never the framework. The `generated`
+// stream names no constructed history (law `constructed independence`,
+// maintainer decision, 2026-11-16).
 function unitStream(
   spec: SyntheticSpec,
   seed: number,
@@ -1754,22 +1750,7 @@ function unitStream(
   )
   if (at >= 0)
     return [constructedAt(spec, spec.constructed[at]!.prefix, seed + at)]
-  const weighted =
-    spec.constructed.length === 0
-      ? syntheticArbitrary
-      : fc.oneof(
-          { arbitrary: syntheticArbitrary, weight: spec.constructed.length },
-          ...spec.constructed.map(({ prefix }) => ({
-            arbitrary: syntheticArbitrary.map((items) =>
-              [
-                ...prefix,
-                ...items.map((item) => (spec.isolatedPlans ? item % 3 : item)),
-              ].slice(0, 3),
-            ),
-            weight: 1,
-          })),
-        )
-  return fc.sample(weighted, { seed, numRuns: spec.source.runs })
+  return fc.sample(syntheticArbitrary, { seed, numRuns: spec.source.runs })
 }
 // The history each determinism unit runs twice: a generated source's fixed
 // histories, its constructed histories built from the first fixed seed, and
