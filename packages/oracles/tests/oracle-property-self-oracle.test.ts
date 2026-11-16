@@ -265,7 +265,9 @@
  * the e2e speed plan, with Q2: one seed per property per process, Q3: a
  * `${prefix}_UNIT` variable that requires `${prefix}_PROPERTY`, and Q4: a path
  * replay of a generated source without `UNIT` fails at registration, and
- * every replay line names its unit).
+ * every replay line names its unit); and the register's M entry of 2026-11-16, "N bases per
+ * constructed history" (v21.2 K18, with C-6 for appending at the end of the list), for laws
+ * `constructed independence`, `units`, and `campaign budget`.
  *
  * Limits: synthetic properties with histories of one to three integers, held
  * as an array, a bigint-tagged object, or a Map, one or two per run. An
@@ -9414,7 +9416,7 @@ oracleProperty({
         build: (generated: Suite) => selectorPrototypeSuite(generated, kind),
       })),
       // Law `constructed independence`, after an empty list and after a
-      // drawn one (maintainer decision, 2026-11-16).
+      // drawn one (register M, 2026-11-16, "N bases per constructed history").
       ...([false, true] as const).map((listed) => ({
         name: `appended constructed history after ${listed ? `a drawn list` : `none`}`,
         enters: [listed ? `appended-to-listed` : `appended-to-empty-list`],
