@@ -118,15 +118,21 @@ agent.
   | `error`                                  | `oracle-gaps: error <message>: a bug in oracle-gaps, not in your oracle; its stack is in <path>/error.log`, once, before the done line of an internal error                                                                                                 |
   | `done` (last)                            | `oracle-gaps: done completed, 12 gaps, report <path>/summary.md` (`(provisional)` after the count when an oracle file failed), `oracle-gaps: done refused[, report <path>]`, `oracle-gaps: done error, log <path>`, or `oracle-gaps: done stopped (SIGINT)` |
 
-  Only two kinds of line have no prefix: the lines indented under a failing
-  baseline file (`failing:`, `law:`, `counterexample:`, `replay:`), and a
-  refusal's `refused:` and `fix:` block on stderr. No line is blank. The
+  Only these lines have no prefix: the lines indented under a failing
+  baseline file (`failing:`, `law:`, `counterexample:`, `replay:`), a
+  refusal's `refused:` and `fix:` block on stderr, `--help`'s usage text,
+  and lines that Node, V8, esbuild, or Vite print on the CLI's streams
+  (a warning, V8's out-of-memory block, esbuild's error block). The CLI
+  writes no blank line of its own. A path in a line, such as the output
+  directory, prints a line break or another control character as its
+  `\uXXXX` escape, so it cannot end the line. The
   done line is the last line of both stdout and stderr, once each, for
   every ending, and its status matches the exit code. A test's own output
   to the process's stdout and stderr goes to `test-output.log` in the output
   directory, which a note names; `summary.md` holds the report for reading.
   A run through the daemon prints the same lines, at the end of its check.
-  `--help` is not a check, so its usage text has no prefix.
+  `--help` is not a check, so its usage text has no prefix and no done
+  line. `--stop-daemon` prints nothing.
 
   For contributors: the `ORACLE_GAPS_TEST_` environment variables are test-only
   hooks for the CLI's own oracle, not settings for users. Each is inert unless
@@ -170,11 +176,10 @@ agent.
 exited with <signal or code>` and exits 3; after an out-of-memory crash
   the line says to give Node more memory (`NODE_OPTIONS=--max-old-space-size=<MB>`)
   or to run fewer `--contexts`. An internal error prints one
-  `oracle-gaps: error` line with its message, and its stack goes to
-  `error.log`. A config's syntax error
+  `oracle-gaps: error` line with its message, its line breaks escaped,
+  and its stack goes to `error.log`. A config's syntax error
   is refused with its first error; a syntax error in a module the config
-  imports still lets esbuild print its own error block, which has no
-  prefix.
+  imports lets esbuild print its own error block before the refusal.
 
   Exit codes: 0 the check completed, whatever its gaps (its last line is
   `oracle-gaps: done completed, …`); 2 the run was refused, with `refused:`

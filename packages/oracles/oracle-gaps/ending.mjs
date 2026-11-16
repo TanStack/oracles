@@ -18,6 +18,12 @@ import { join } from 'node:path'
 import { posix, realPathOf } from './paths.mjs'
 import { escapeControls, streamLine } from './stream.mjs'
 
+// A path as a line of the stream shows it: in forward slashes, with a line
+// break or another control character as its escape, so that a path cannot
+// end its line or forge another (the register's C entry "The internal-error
+// line", 2026-11-16).
+const shown = (path) => escapeControls(posix(path))
+
 /** A problem the author can fix: its cause, and the one step that fixes it. */
 export class Refusal extends Error {
   constructor(cause, fix) {
@@ -45,7 +51,7 @@ export function endRun(error, out = error?.out) {
       results,
       `Refused: ${message}\n\nFix: ${error.fix}\n`,
     )
-      ? `oracle-gaps: done refused, report ${posix(join(out, `summary.md`))}`
+      ? `oracle-gaps: done refused, report ${shown(join(out, `summary.md`))}`
       : `oracle-gaps: done refused`
     return { exitCode: 2, stderr: `${[...block, done].join(`\n`)}\n`, done }
   }
@@ -56,11 +62,13 @@ export function endRun(error, out = error?.out) {
     log = join(realPathOf(tmpdir()), `oracle-gaps-error-${process.pid}.log`)
     writeFileSync(log, stack)
   }
-  const done = `oracle-gaps: done error, log ${posix(log)}`
+  const done = `oracle-gaps: done error, log ${shown(log)}`
+  // The message stays one line: its own line breaks print as escapes. A
+  // message that already names the CLI does not name it twice.
+  const said = escapeControls(message.replace(/^oracle-gaps: /, ``))
   return {
     exitCode: 3,
-    // The message stays one line: its own line breaks print as escapes.
-    stderr: `${streamLine(`error`, `${escapeControls(message)}: a bug in oracle-gaps, not in your oracle; its stack is in ${posix(log)}`)}\n${done}\n`,
+    stderr: `${streamLine(`error`, `${said}: a bug in oracle-gaps, not in your oracle; its stack is in ${shown(log)}`)}\n${done}\n`,
     done,
   }
 }
