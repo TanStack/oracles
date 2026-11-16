@@ -535,6 +535,7 @@ import {
   altConfigPath,
   initialState,
   fixtureFiles,
+  fixturePathOf,
   written,
   writeFixture,
   applyEdit,
@@ -1899,8 +1900,12 @@ async function incremental(dir, plan, cli, copy, observe, states) {
     // did not read (settleIn), so the next check, with nothing changed,
     // equals a cold run of the state after the edit.
     if (step === `midrun`) {
-      const target =
-        plan.midrunTarget === `data` ? `tests/data.json` : `tests/strict.ts`
+      // The edited file's key in the fixture's files (under the `link` test
+      // root, the tests' files live where `tests` links to).
+      const target = fixturePathOf(
+        plan,
+        plan.midrunTarget === `data` ? `tests/data.json` : `tests/strict.ts`,
+      )
       const after = files[target]
       const value = after.includes(`true`)
       // The marker goes in the running daemon's session directory, where
@@ -4853,6 +4858,11 @@ oracleProperty({
           concurrentStart: true,
           cliPath: `spaced`,
           native: `none`,
+          // Its reset step's warm label needs the warm daemon kept: with
+          // `warmReplaced` drawn (randomness wins, 2026-11-16), the fixed
+          // seed's base drew a replaced one and lost "a warm daemon's
+          // connection was reset", which this history gates.
+          warmReplaced: false,
           laterSteps: NO_LATER_STEPS,
           steps: [
             `helper`,

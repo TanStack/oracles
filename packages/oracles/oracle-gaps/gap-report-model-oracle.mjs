@@ -5433,6 +5433,14 @@ const testRoots = {
 // The directory that the package's `tests` links to under the `link` test
 // root.
 const linkedTests = `tests-target`
+/**
+ * Where a package path lies in the fixture's files: under the `link` test
+ * root, the files of `tests` live in `linkedTests`, and `tests` links there.
+ */
+const fixturePathOf = (plan, path) =>
+  plan.testRoot === `link` && path.startsWith(`tests/`)
+    ? `${linkedTests}/${path.slice(`tests/`.length)}`
+    : path
 
 function fixtureFiles(plan, state = initialState(plan)) {
   const manifest = (fields) =>
@@ -5707,9 +5715,7 @@ function fixtureFiles(plan, state = initialState(plan)) {
   // `tests` links to it.
   return Object.fromEntries([
     ...Object.entries(files).map(([path, text]) => [
-      path.startsWith(`tests/`)
-        ? `${linkedTests}/${path.slice(`tests/`.length)}`
-        : path,
+      fixturePathOf(plan, path),
       text,
     ]),
     [`tests`, link(linkedTests)],
@@ -6135,6 +6141,7 @@ export {
   AUTHORED,
   initialState,
   fixtureFiles,
+  fixturePathOf,
   written,
   writeFixture,
   applyEdit,
