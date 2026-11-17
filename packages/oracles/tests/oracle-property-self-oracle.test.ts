@@ -2975,6 +2975,7 @@ const appendedStates = [
   `constructed-default-bases`,
   `constructed-declared-bases`,
   `constructed-drawn-bases`,
+  `drawn-base-failure-replayed`,
 ] as const
 const frameworkStates = [
   ...timeoutReceivingStates,
@@ -4099,6 +4100,19 @@ function frameworkReach(
       if (drawnOf(spec) > 0) reached.add(`constructed-drawn-bases`)
     }
   }
+  // A drawn base's failure, reported with the run's seed, whose printed
+  // replay reproduced it under the same law.
+  for (const { checkpoint, value } of trace) {
+    if (checkpoint !== `replay`) continue
+    const probe = value as ProbeRun
+    if (
+      probe.original.drawnBase !== undefined &&
+      probe.failure?.law !== undefined &&
+      probe.failure.law === probe.original.law &&
+      (probe.ran?.length ?? 0) > 0
+    )
+      reached.add(`drawn-base-failure-replayed`)
+  }
   return reached
 }
 
@@ -4167,6 +4181,8 @@ type Failure = {
   violationRerun?: string
   /** A campaign unit's replay command, as printed. */
   replay?: string
+  /** A drawn base's report: the failing example's index and the run's seed. */
+  drawnBase?: { at: number; seed: number }
   /** Whether a law's failure prints the history's items. */
   showsHistory?: boolean
   /** Whether a model error quotes this machine's paths. */
@@ -4635,6 +4651,10 @@ function classify(
     ? /^Replay: (.*)$/m.exec(outer)?.[1]
     : undefined
   const history = /^History: (.*)$/m.exec(text)?.[1]
+  const drawnLine =
+    /^Drawn base: example (\d+) is base \d+ of constructed history ".*" drawn from the run's random seed (-?\d+)/m.exec(
+      outer,
+    )
   const law = /\(law: ([^)]+)\)/.exec(text)?.[1]
   const checkpoint = /violated at checkpoint "([^"]+)"/.exec(text)?.[1]
   const diagnosis = /was never reached/.test(text)
@@ -4656,6 +4676,11 @@ function classify(
   const kind = classifyKind(inner, text, outer)
   const callbackContext = reportedCallbackContext(text, candidates)
   return {
+    ...(drawnLine
+      ? {
+          drawnBase: { at: Number(drawnLine[1]), seed: Number(drawnLine[2]) },
+        }
+      : {}),
     kind,
     // Context rendering is not a deterministic difference; keep its decoded
     // actual identity while raw reports/sidecars retain the original text.
@@ -7379,6 +7404,28 @@ function checkSuite(
             `${spec.id} "${test.name}" failed and printed no \`-t\` rerun of itself`,
             `rerun`,
           )
+        // A fixed-seed unit whose failing example is a drawn base says so,
+        // with the run's seed, and its replay runs that seed.
+        const example = Number((failure.path ?? ``).split(`:`)[0])
+        const owesDrawn =
+          unit.seed !== undefined &&
+          unit.name !== `generated` &&
+          drawnOf(spec) > 0 &&
+          example >= basesOf(spec)
+        const replaySeed = /_SEED=(-?\d+)/.exec(failure.replay)?.[1]
+        if (
+          owesDrawn
+            ? failure.drawnBase?.at !== example ||
+              failure.drawnBase.seed !== loggedSeed ||
+              replaySeed !== `${loggedSeed}`
+            : failure.drawnBase !== undefined
+        )
+          return violation(
+            `run`,
+            `${spec.id} "${test.name}" failed at example ${example} and reported drawn base ${JSON.stringify(failure.drawnBase ?? null)} with replay seed ${replaySeed}; owed ${owesDrawn ? `drawn base ${example} of the run's seed ${loggedSeed}, replayed with it` : `no drawn base`}`,
+            `replay`,
+            { actual: failure.drawnBase ?? null, expected: owesDrawn },
+          )
         const owedLine =
           unit.seed === undefined ? failure.replay : failure.rerun
         if (
@@ -7690,8 +7737,21 @@ function checkSuite(
   for (const { checkpoint, probe } of probes) {
     const probed = probe.probed
     if (checkpoint === `replay`) {
+      // A fixed-seed unit's failing drawn base replays at the run's seed,
+      // the one its property logged; any other failure at its own seed.
+      const spec = plan.specs.find(({ id }) => id === probe.id)!
+      const target = unitOf(probe.target)
+      const example = Number((probe.original.path ?? ``).split(`:`)[0])
+      const drawnTarget =
+        target?.seed !== undefined &&
+        target.name !== `generated` &&
+        drawnOf(spec) > 0 &&
+        example >= basesOf(spec)
+      const runSeed = run.files[spec.id]!.tests.flatMap(
+        ({ seedLogs }) => seedLogs,
+      )[0]
       const owedVariables = {
-        [envName(`SEED`)]: String(probe.original.seed),
+        [envName(`SEED`)]: String(drawnTarget ? runSeed : probe.original.seed),
         [envName(`PATH`)]: probe.original.path,
         [envName(`PROPERTY`)]: probe.id,
         [envName(`UNIT`)]: probe.probed,
@@ -8544,6 +8604,53 @@ const drawnBasesSuite = (generated: Suite): Suite => {
       },
     ],
   }
+}
+// A campaign whose constructed history k passes on its fixed bases and fails,
+// under law three or four, on a base it draws from the seeded child run's
+// seed (`childSeed`), after histories that pass on every base. Its seed, k,
+// and numbers of bases are derived from the arbitrary, as
+// `seedFailingUnderFour` derives its seed, so the failing example is a drawn
+// base whatever the streams hold.
+const drawnFailureDraft = (reachVia: Draft[`reachVia`]): Draft => {
+  const built = (base: SyntheticHistory) => [0, ...base].slice(0, 3)
+  const firstStop = (history: SyntheticHistory) =>
+    history.find((entry) => entry === 3 || entry === 4 || entry === 6)
+  const sample = (seed: number, count: number) =>
+    fc.sample(syntheticArbitrary, { seed, numRuns: count }).map(built)
+  for (const bases of [1, 2, 3])
+    for (const drawnBases of [1, 2])
+      for (let failing = 0; failing < 3; failing++) {
+        // Each history's drawn bases, in order, at the run's seed.
+        const drawn = (index: number) =>
+          sample(childSeed + index, bases + drawnBases).slice(bases)
+        const passes = (histories: ReadonlyArray<SyntheticHistory>) =>
+          histories.every((history) => firstStop(history) === undefined)
+        const failingDrawn = drawn(failing)
+        const stopAt = failingDrawn.findIndex(
+          (history) => firstStop(history) !== undefined,
+        )
+        const stop = stopAt < 0 ? undefined : firstStop(failingDrawn[stopAt]!)
+        if (stop !== 3 && stop !== 4) continue
+        if (!Array.from({ length: failing }, (_, j) => drawn(j)).every(passes))
+          continue
+        for (let seed = 1; seed <= 999; seed++)
+          if (
+            Array.from({ length: failing + 1 }, (_, j) =>
+              sample(seed + j, bases),
+            ).every(passes)
+          )
+            return generatedDraft({
+              source: { kind: `generated`, runs: 2, seed },
+              bases,
+              drawnBases,
+              reachVia,
+              constructed: Array.from({ length: failing + 1 }, () => ({
+                prefix: [0],
+                enters: [],
+              })),
+            })
+      }
+  throw new Error(`no seed from 1 to 999 fails first on a drawn base`)
 }
 const mainUnitRequiredConstructed: Array<{
   name: string
@@ -9530,6 +9637,14 @@ oracleProperty({
         name: `constructed histories run drawn bases`,
         enters: [`constructed-drawn-bases`],
         build: (generated: Suite) => drawnBasesSuite(generated),
+      },
+      // A drawn base's failure names the run's seed and its index, and its
+      // printed replay, with that seed, reproduces it.
+      {
+        name: `a drawn base fails and replays with the run's seed`,
+        enters: [`drawn-base-failure-replayed`],
+        build: (generated: Suite) =>
+          unitWitnessSuite([drawnFailureDraft(generated.drafts[0]!.reachVia)]),
       },
     ],
     fixed: [
