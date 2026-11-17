@@ -428,7 +428,8 @@ const active = state.mutant
 // copy's budget (`callBudget`, from check.mjs: a hundred times the most calls
 // any unmutated test of the file made, and at least 100,000), the copy throws
 // from every helper call and writes a spin row, and the batch reports it as a
-// timeout. A count, unlike a clock, does not depend on load. It is also the
+// spin, which fails bounded work when its count cannot follow the clock
+// (check.mjs `countOnly`). A count, unlike a clock, does not depend on load. It is also the
 // test's work, which a work bound judges (classify.mjs): each site
 // evaluation counts once, so a call statement, a call whose value is used, a
 // comparison, a logical operator, an `if`, and each pass of a loop's

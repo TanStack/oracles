@@ -1851,7 +1851,8 @@ export default async (env) => {
     }
     // Units for many requests at once. Each is looked up first; the rest run
     // as one batch (runBatch). A batch cut off (a copy's backstop, idleness,
-    // or a spin) settles that copy as a timeout and reruns the rest in a fresh
+    // or a spin) settles that copy as cut, with its cause and the built-in
+    // verdict of a cut by count or state, and reruns the rest in a fresh
     // context; a batch with
     // errors outside any test runs its items alone. `needed` says, from the
     // units found so far, whether a request must still run; a request that
@@ -1929,7 +1930,8 @@ export default async (env) => {
           })
         if (batch.timedOutAt === undefined) break
         // A copy cut off by its backstop, for idleness, or for spinning is a
-        // timeout as it stands: no clock decides a kill (deterministic cuts).
+        // cut as it stands: a count or a state decides its built-in verdict, and
+        // no clock decides a kill (deterministic cuts).
         const hung = rest[batch.timedOutAt]
         if (profileFile)
           copyRow(hung, { cause: batch.cause, durationMs: batch.cutMs })

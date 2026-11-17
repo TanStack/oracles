@@ -390,6 +390,23 @@ export const shards = {
     // The witness module's edit sequence (option M): about 97 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
     `random seed: an edit sequence over the witness module`,
+    // The merge gate's histories for #99 (count-only kills, no progress per
+    // copy, the work budget's clocked rows, the unsupervised lost-log stop).
+    `fixed seed 20261105: a stream log lost after its note, then stopped, unsupervised`,
+    `random seed: a stream log lost after its note, then stopped, unsupervised`,
+    `determinism: constructed history: a stream log lost after its note, then stopped, unsupervised`,
+    `fixed seed 20261105: a heavy test that reads the clock after its work`,
+    `random seed: a heavy test that reads the clock after its work`,
+    `determinism: constructed history: a heavy test that reads the clock after its work`,
+    `fixed seed 20261105: a heavy test that reads the clock first`,
+    `random seed: a heavy test that reads the clock first`,
+    `determinism: constructed history: a heavy test that reads the clock first`,
+    `fixed seed 20261105: a hang in a file whose test does a short read`,
+    `random seed: a hang in a file whose test does a short read`,
+    `determinism: constructed history: a hang in a file whose test does a short read`,
+    `fixed seed 20261105: a clocked owner beside a counted one under the work budget`,
+    `random seed: a clocked owner beside a counted one under the work budget`,
+    `determinism: constructed history: a clocked owner beside a counted one under the work budget`,
   ],
 }
 
