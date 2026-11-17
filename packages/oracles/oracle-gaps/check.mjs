@@ -427,7 +427,7 @@ function isModuleConfig(pkg, config) {
  * Vitest contexts that later checks reuse. A cold run opens a session for one
  * check; the daemon keeps one open.
  */
-export async function openSession(pkg, progress = () => {}) {
+export async function openSession(pkg) {
   // The analysis reads with this CLI's own TypeScript, never the package's: a
   // TypeScript 7 package exposes its version and no compiler API. The CLI's
   // dependency is TypeScript 5, so a copy without the API is a broken install,
@@ -451,9 +451,6 @@ export async function openSession(pkg, progress = () => {}) {
       `Install a working Vitest in the package, so that vitest/node loads from it.`,
     )
   }
-  // Loading Vitest is a session start's long step: a daemon's waiting CLIs
-  // hear it as progress (the daemon's beat).
-  progress()
   // Each process uses its own harness files, so a cold run beside the daemon
   // cannot remove the daemon's.
   // Vitest's CLI sets these before it loads a config, and a config may read
@@ -867,13 +864,13 @@ export default async (env) => {
   // for a run with no mutant. The interval is 30 s; the CLI's oracle
   // shortens it (ORACLE_GAPS_HEARTBEAT_MS). Each check sets where it logs,
   // and whom each poll of a running copy tells that the check progresses
-  // (`alive`: the daemon's beat to the CLIs that wait on it).
-  let pulse = { log: () => {}, alive: () => {}, every: 30_000 }
+  // (`progress`: the daemon's beat to the CLIs that wait on it).
+  let pulse = { log: () => {}, progress: () => {}, every: 30_000 }
   function heartbeat() {
     let since
     let sent = 0
     return (label, file, started) => {
-      pulse.alive()
+      pulse.progress()
       if (started !== since) {
         since = started
         sent = 0
@@ -1517,7 +1514,19 @@ export default async (env) => {
     return environments
   }
 
-  async function check(options, store, log = console.error, alive = () => {}) {
+  async function check(
+    options,
+    store,
+    log = console.error,
+    progress = () => {},
+    gone = () => false,
+  ) {
+    // A check whose caller has gone (a daemon's CLI that checked cold) stops
+    // here and at each phase's end, before it writes more into its --out.
+    const stopIfGone = () => {
+      if (gone()) throw new Error(`the check's caller has gone`)
+    }
+    stopIfGone()
     const authored = options.mutants ? loadAuthored(options.mutants) : []
     seedVariable = `${options.envPrefix}_SEED`
     if (options.hangLimit > options.mutantLimit)
@@ -1526,7 +1535,7 @@ export default async (env) => {
       )
     pulse = {
       log,
-      alive,
+      progress,
       every: Number(process.env.ORACLE_GAPS_HEARTBEAT_MS ?? 30_000),
     }
     mkdirSync(options.out, { recursive: true })
@@ -1543,13 +1552,10 @@ export default async (env) => {
     if (profileFile) rmSync(profileFile, { force: true })
     const checkStarted = Date.now()
     let phase = Date.now()
-    // Each phase that ends, and each context that opens, is progress the
-    // daemon tells its waiting CLIs about (`alive`), so a slow but healthy
-    // start or analysis does not read as a daemon that stopped answering.
     const endPhase = (name, fields) => {
       span(`phase`, phase, { name, ...fields })
       phase = Date.now()
-      alive()
+      stopIfGone()
     }
     // The state file is the fallback for setups that cannot `inject`.
     process.env.ORACLE_GAPS_STATE = join(options.out, `state.json`)
@@ -1602,7 +1608,6 @@ export default async (env) => {
         contexts.push(await warmContext(settings, i))
         indexOf.set(contexts.at(-1), i)
         hook?.joined(contexts.at(-1))
-        alive()
       }
       contextsKey = JSON.stringify(settings)
       contextsConfig = configHash()
@@ -1611,7 +1616,6 @@ export default async (env) => {
       contexts.push(await warmContext(settings, contexts.length))
       indexOf.set(contexts.at(-1), contexts.length - 1)
       hook?.joined(contexts.at(-1))
-      alive()
     }
     endPhase(`warm contexts`, { contexts: contexts.length })
     // The run names the config its contexts loaded, before any refusal that

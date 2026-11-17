@@ -163,18 +163,6 @@ function daemonLogTail(pkg) {
   }
 }
 
-/** Ends the daemon that holds the package's lock (its token starts with its pid). */
-function endDaemon(pkg) {
-  const pid = Number.parseInt(
-    readText(join(stateDirOf(pkg), `daemon.lock`)) ?? ``,
-  )
-  try {
-    if (pid > 0) process.kill(pid, `SIGKILL`)
-  } catch {
-    // It ended meanwhile.
-  }
-}
-
 /** Starts a daemon for the package, detached from this process. */
 function startDaemon(pkg) {
   mkdirSync(stateDirOf(pkg), { recursive: true })
@@ -193,8 +181,8 @@ function startDaemon(pkg) {
  * is waited for. It waits at most 60 s for a daemon to answer or start; the
  * time a daemon holds the request, queued or checking, is the check's and is
  * not counted while the daemon's checks make progress. A daemon that holds
- * it and sends nothing for that long has stopped answering: the CLI ends it
- * and gets `{ silent }`, the seconds it waited, to check cold instead.
+ * it and sends nothing for that long has stopped answering, and the CLI gets
+ * `{ silent }`, the seconds it waited, to check cold instead.
  */
 export async function requestDaemon(pkg, argv, code) {
   const began = Date.now()
@@ -211,13 +199,9 @@ export async function requestDaemon(pkg, argv, code) {
     try {
       reply = await send(pkg, { argv, cwd: process.cwd(), code }, true)
       held += Date.now() - sent
-      // A daemon that stopped answering: the CLI ends it, so it writes no
-      // more into this run's --out, and checks cold (R39). The daemon that
-      // held the request listens on the socket, so it is the lock's holder.
-      if (reply.silent) {
-        endDaemon(pkg)
-        return { silent: WAIT_MS / 1000 }
-      }
+      // A daemon that stopped answering: the CLI checks cold (R39) and leaves
+      // it; the daemon drops the check once it sees the CLI gone.
+      if (reply.silent) return { silent: WAIT_MS / 1000 }
     } catch (error) {
       if (!absent(error)) throw error
       // A daemon could not load or open its session since this CLI started
@@ -492,14 +476,15 @@ async function serve(pkg) {
             close()
             throw error
           })
+          // A check whose CLI has gone (it ran the check cold) stops before it
+          // runs, or at its next phase, so it writes nothing more into that
+          // run's --out.
           stdout = await session.check(
             options,
             store,
-            (line) => {
-              stderr.push(`${line}\n`)
-              beat()
-            },
+            (line) => stderr.push(`${line}\n`),
             beat,
+            () => connection.destroyed,
           )
           await store.flush()
           // A test-only pause (ORACLE_GAPS_TEST_PAUSE_AT=daemon-reply): the check
@@ -565,7 +550,7 @@ async function serve(pkg) {
     ;({ parseArgs } = await import(`./args.mjs`))
     const { diskStore } = await import(`./evidence.mjs`)
     store = await diskStore(stateDirOf(pkg))
-    session = await check.openSession(pkg, beat)
+    session = await check.openSession(pkg)
   } catch (error) {
     // The requests already queued hear why, and the CLI that started this
     // daemon reads it from the error file, written before the lock is
