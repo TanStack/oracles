@@ -127,12 +127,12 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
   test-oracle-gaps-random:
-    name: Gap report end-to-end oracle (random seed, ${{ matrix.shard }}/5)
+    name: Gap report end-to-end oracle (random seed, ${{ matrix.shard }}/6)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5]
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -140,22 +140,24 @@ jobs:
           persist-credentials: false
       - name: Setup Tools
         uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
-      # The end-to-end oracle's random units, in five weighted shards. Each run draws a
-      # fresh campaign seed (the ORACLE_SEED line in the log), and a failing
-      # unit prints its Replay line. A counterexample is filed as an issue.
-      - run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-random "$SHARD")"
+      # The end-to-end oracle's random units, in six weighted shards. Each run
+      # draws a fresh campaign seed (the ORACLE_SEED line in the log), and a
+      # failing unit prints its Replay line and its history. A counterexample
+      # is replayed by its history on the base and filed as an issue (P4); one
+      # the base also fails does not block the pull request (the maintainer's
+      # phase-1 decision). The verbose reporter prints each unit's duration,
+      # which sizes the shards.
+      - run: pnpm exec vitest --run --reporter=verbose --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-random "$SHARD")"
         working-directory: packages/oracles
         env:
           SHARD: ${{ matrix.shard }}
   test-oracle-gaps-determinism:
-    name: Gap report end-to-end oracle (determinism, ${{ matrix.shard }}/5)
+    name: Gap report end-to-end oracle (determinism, ${{ matrix.shard }}/8)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # Shard 1 is the witness module's edit sequence, which runs in its own
-        # non-blocking job below (#106).
-        shard: [2, 3, 4, 5]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -163,30 +165,14 @@ jobs:
           persist-credentials: false
       - name: Setup Tools
         uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
-      # The end-to-end oracle's determinism units, in shards 2 to 5 (shard 1 is
-      # below), except the one excluded in pr-shards.mjs (#92). Each unit runs a
-      # history twice and compares the results and fixed lines; heartbeats are
-      # checked for shape.
-      - run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-determinism "$SHARD")"
+      # The end-to-end oracle's determinism units, in eight shards, the witness
+      # module's two halves among them (the maintainer's decision "#90 job
+      # stays blocking", 2026-11-16). Each unit runs a history twice and
+      # compares the results and fixed lines; heartbeats are checked for shape.
+      - run: pnpm exec vitest --run --reporter=verbose --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-determinism "$SHARD")"
         working-directory: packages/oracles
         env:
           SHARD: ${{ matrix.shard }}
-  # The witness module's edit sequence alone takes 10 to 11 minutes here,
-  # over P12's 10-minute budget. It is non-blocking and not a dependency of
-  # preview, so it still runs on every pull request until its cost is cut (#106).
-  test-oracle-gaps-witness:
-    name: Gap report end-to-end oracle (determinism, witness module; non-blocking, #106)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - name: Setup Tools
-        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
-      - run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-determinism 1)"
-        working-directory: packages/oracles
   test-vitest-5:
     name: Test on Vitest 5 (${{ matrix.suite }})
     # The package's vitest peer range includes 5; this job is the evidence.
