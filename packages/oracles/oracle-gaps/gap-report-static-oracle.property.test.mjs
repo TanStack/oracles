@@ -1275,29 +1275,41 @@ const corruptArguments = (change) => (trace) => {
   const value = { ...trace[index].value, ...change(trace[index].value) }
   return trace.map((o, i) => (i === index ? { ...o, value } : o))
 }
+// Each calibration names the history it corrupts (the framework's history
+// binding), so it runs that one history instead of searching the campaign's
+// histories for one its corruption applies to: a refusal's corruption needs a
+// refused run, which the search found only after a dozen other histories,
+// and the draws that #133's appended fields shift made that search longer
+// (review of #133, F6). The bound histories reach what each corruption needs:
+// a refusal, Svelte runes, owned mutants, a stability rerun, a derived class.
 const calibrations = [
   {
     name: `a refusal prints a stack trace, as a crash does`,
+    history: { constructed: `bad arguments: noPackage` },
     law: `report-shaped ending`,
     corrupt: corruptArguments(() => ({ stackFrames: true })),
   },
   {
     name: `a refusal exits 1, as a crash does`,
+    history: { constructed: `bad arguments: noPackage` },
     law: `report-shaped ending`,
     corrupt: corruptArguments(() => ({ exit: 1 })),
   },
   {
     name: `a refusal gives no fix`,
+    history: { constructed: `bad arguments: noPackage` },
     law: `report-shaped ending`,
     corrupt: corruptArguments(() => ({ fix: undefined, cause: undefined })),
   },
   {
     name: `a refusal ends without its done line`,
+    history: { constructed: `bad arguments: noPackage` },
     law: `report-shaped ending`,
     corrupt: corruptArguments(() => ({ done: undefined })),
   },
   {
     name: `a refusal's fix offers a way around it`,
+    history: { constructed: `bad arguments: noPackage` },
     law: `report-shaped ending`,
     corrupt: corruptArguments((v) => ({
       fix: `${v.fix} Or mark the mutant equivalent.`,
@@ -1305,11 +1317,13 @@ const calibrations = [
   },
   {
     name: `a refusal names another cause`,
+    history: { constructed: `bad arguments: noPackage` },
     law: `report-shaped ending`,
     corrupt: corruptArguments(() => ({ cause: `something went wrong` })),
   },
   {
     name: `a rune is moved from its place`,
+    history: { constructed: `every static state` },
     law: `rune placement`,
     corrupt: corrupt(`static`, (v) => {
       if (!v.runes?.includes(`= $`)) return false
@@ -1318,11 +1332,13 @@ const calibrations = [
   },
   {
     name: `a mutant is dropped`,
+    history: { constructed: `every static state` },
     law: `enumeration`,
     corrupt: corrupt(`static`, (v) => void v.mutants.shift()),
   },
   {
     name: `production code is marked as probe code`,
+    history: { constructed: `every static state` },
     law: `probe-only code`,
     corrupt: corrupt(`static`, (v) => {
       const m = v.mutants.find((x) => !x.probe)
@@ -1332,6 +1348,7 @@ const calibrations = [
   },
   {
     name: `an owned mutant is reported unowned`,
+    history: { constructed: `every static state` },
     law: `ownership`,
     corrupt: corrupt(`static`, (v) => {
       const m = v.mutants.find((x) => !x.probe && x.owned)
@@ -1341,6 +1358,7 @@ const calibrations = [
   },
   {
     name: `a derived class's super call is made conditional`,
+    history: { constructed: `a plain-parameter derived class` },
     law: `super unconditional`,
     corrupt: corrupt(`derived`, (v) => {
       const run = v.mutants[0]?.runs[0]
@@ -1352,6 +1370,7 @@ const calibrations = [
   },
   {
     name: `the instrumented derived class differs with no mutant active`,
+    history: { constructed: `a plain-parameter derived class` },
     law: `no-mutant behavior`,
     corrupt: corrupt(`derived`, (v) => {
       v.instrumented[0] = { error: `Must call super constructor` }
@@ -1359,6 +1378,7 @@ const calibrations = [
   },
   {
     name: `a key drops its statement`,
+    history: { constructed: `every static state` },
     law: `keys`,
     corrupt: corrupt(`static`, (v) => {
       v.mutants[0].key = v.mutants[0].key.slice(
@@ -1369,6 +1389,7 @@ const calibrations = [
   },
   {
     name: `an edit moves a key`,
+    history: { constructed: `every static state` },
     law: `key stability`,
     corrupt: (trace) => {
       const before = trace.find((o) => o.checkpoint === `static`)?.value
@@ -1847,5 +1868,8 @@ oracleProperty({
   driver,
   check,
   calibrations,
-  timeout: 120_000,
+  // A loud wall-clock backstop, not a budget (M-6): about twice the
+  // generated units' measured cost on CI (85 to 121 s), so a unit is never
+  // cut off by load before its verdict (review of #133, F6; #144).
+  timeout: 240_000,
 })
