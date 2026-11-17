@@ -480,6 +480,9 @@ export function instrument(ts, path, text, source, offset = 0) {
   const isProbeGuard = (node) =>
     isProbeOnly(node) || helpers.has(node) || isGuardDeclarator(node)
   let guarded = false
+  // Each `?.` site's id, by its node, so a later link of the same chain can
+  // name the link before it (see `innerLink`).
+  const chainIds = new Map()
 
   // An operand is an identifier or a numeric literal: its text reads the same
   // value wherever it appears. Anything else has no text here.
@@ -1176,6 +1179,7 @@ export function instrument(ts, path, text, source, offset = 0) {
         `.`,
         constant ? DEAD_CODE : undefined,
       )
+      chainIds.set(node, ids.chain)
     }
 
     const children = []
@@ -1240,7 +1244,7 @@ export function instrument(ts, path, text, source, offset = 0) {
           ? // The value is evaluated, and then dropped when the mutant is
             // active: element 1 of a one-element array is `undefined`.
             `${G}.v([(${value})][${G}.m(${ids.returned}) ? 1 : 0])`
-          : `${G}.chain(${ids.chain}, ${value})`
+          : `${G}.chain(${[ids.chain, value, innerLink(node.expression)].filter((part) => part !== undefined).join(`, `)})`
       return `${out.slice(0, at)}${replaced}${out.slice(at + value.length)}`
     }
     if (ids.call !== undefined) {
@@ -1251,6 +1255,17 @@ export function instrument(ts, path, text, source, offset = 0) {
       return `${out.slice(0, at)}${G}.m(${ids.call}) || ${call}${out.slice(at + call.length)}`
     }
     return out
+  }
+
+  // The id of the nearest earlier `?.` link of the chain that `receiver`
+  // ends, when that link is a site. The call that wraps a receiver ends the
+  // chain in the instrumented text, so the link's helper tells the next one
+  // when it short-circuited, and the next one then runs as a skipped link.
+  function innerLink(receiver) {
+    let link = receiver
+    while (ts.isOptionalChain(link) && link.questionDotToken === undefined)
+      link = link.expression
+    return ts.isOptionalChain(link) ? chainIds.get(link) : undefined
   }
 
   const code = emit(file)

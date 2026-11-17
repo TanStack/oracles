@@ -581,6 +581,8 @@ if (fc && process.env.ORACLE_GAPS_PROFILE) {
     prototype.run = counted
   }
 }
+// The `?.` site whose helper last saw its chain short-circuit (`chain`).
+let shortCircuited
 const swapped = {
   '===': `!==`,
   '!==': `===`,
@@ -638,10 +640,18 @@ globalThis.__oracleGaps = {
   // A plain read in place of `?.`: the object passes on, and when its
   // mutant is active a nullish one throws, as the plain read would. A
   // nullish object is where the mutant changes the site's completion (a
-  // throw where `?.` gives `undefined`), so it infects the site.
-  chain(id, value) {
+  // throw where `?.` gives `undefined`), so it infects the site. `inner`
+  // names the chain's earlier `?.` link: when that link short-circuited,
+  // JavaScript runs no later link, so this one neither infects nor throws.
+  // No code runs between a link that short-circuits and the next link's
+  // helper, so the last short-circuit is that link's exactly.
+  chain(id, value, inner) {
     hit(id)
+    const skipped = inner !== undefined && shortCircuited === inner
+    shortCircuited = undefined
     if (value !== undefined && value !== null) return value
+    shortCircuited = id
+    if (skipped) return value
     infect(id)
     if (id === active) throw new TypeError(`Cannot read properties of ${value}`)
     return value
