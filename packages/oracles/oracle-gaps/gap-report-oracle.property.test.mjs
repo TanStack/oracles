@@ -3413,6 +3413,14 @@ async function driver(plan, observe) {
         fn.body.map((s) => [`${fn.file}:${s.line}`, s.kind]),
       ),
     )
+    // The slow kill holds until a heartbeat names a mutant of its file
+    // (beatHold), so a cold run with the witness module has such a beat
+    // whatever the load (#84). Only the beat's presence is reach: which
+    // mutants beat, and so which one beats first, is progress (maintainer
+    // decision, 2026-11-14), so the state is entered here, before the
+    // mutants' own states, and not at the first mutant that beat.
+    if (cli.mutants.some((m) => cli.heartbeats.some((b) => b.label === m.id)))
+      states.add(`a heartbeat named a busy mutant`)
     for (const m of cli.mutants) {
       if (m.authored) {
         const others = cli.mutants.filter((x) => x.authored && x.key !== m.key)
@@ -3590,12 +3598,6 @@ async function driver(plan, observe) {
         states.add(`a hang in one owner and a survivor in another timed out`)
       if (m.function === `w_slowpair` && m.outcome === `timeout`)
         states.add(`confirmations past a mutant's budget timed out`)
-      // The slow kill holds until a heartbeat names a mutant of its file
-      // (beatHold), so a cold run with the witness module has such a beat
-      // whatever the load (#84). Only the beat's presence is reach; the set
-      // of beats is progress (maintainer decision, 2026-11-14).
-      if (cli.heartbeats.some((beat) => beat.label === m.id))
-        states.add(`a heartbeat named a busy mutant`)
       const named = {
         killed: `killed`,
         'random-only-kill': `random-only kill`,
