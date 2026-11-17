@@ -226,10 +226,12 @@ exited with <signal or code>` and exits 3; after an out-of-memory crash
   A check through the daemon (`--daemon`) runs in the daemon's process; stop
   it with `oracle-gaps --stop-daemon --package <dir>`. While a check waits or
   runs there, the daemon tells the CLI each time a check makes progress. A
-  daemon that sends nothing for 60 s has stopped answering: the CLI ends
-  it, prints `oracle-gaps: note the package's daemon sent nothing for 60 s;
-this check runs cold`, and runs the check in its own process, which
-  reports what the daemon would have. On Windows, which has no process groups, the run is not
+  daemon that sends nothing for 60 s has stopped answering: the CLI prints
+  `oracle-gaps: note the package's daemon sent nothing for 60 s; this check
+runs cold` and runs the check in its own process, which reports what the
+  daemon would have. The daemon keeps running: it drops the abandoned check
+  before it runs, or at its next phase, so it writes nothing more into that
+  run's output directory, and serves the next check. On Windows, which has no process groups, the run is not
   supervised.
 
   A check through the daemon reuses a run while its inputs are unchanged:
