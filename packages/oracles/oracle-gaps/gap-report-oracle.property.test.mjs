@@ -1128,7 +1128,8 @@ function filesUnder(root, within = ``) {
 
 /**
  * How many runs a check computed that ended without a cut: the CLI's own
- * count (`evidence.ran`). `computed - cut` counts cut events, not cut runs:
+ * count (`evidence.ran`), which it reports under the retention test hook
+ * that every run here sets. `computed - cut` counts cut events, not cut runs:
  * a cut copy that is confirmed adds a cut and no computed run, so the
  * difference can go below zero and hide a run computed again (review of
  * #126, F3).
@@ -4352,6 +4353,32 @@ calibrations.push(
       if (index < 0) return undefined
       const value = structuredClone(trace[index].value)
       value.daemon.stdoutGaps = value.daemon.stdoutGaps.slice(1)
+      return trace.map((o, i) => (i === index ? { ...o, value } : o))
+    },
+  },
+  // Through the daemon: a completed check whose done line names another
+  // check's report, on both streams alike, so that only the law that a
+  // check names its own report rejects it.
+  {
+    name: `a check through the daemon names another check's report`,
+    law: `greppable stream`,
+    history: {
+      constructed: `an unchanged check through the daemon under a config's pre plugin`,
+    },
+    corrupt: (trace) => {
+      const own = ` report <package>/<out>/summary.md`
+      const index = trace.findIndex(
+        (o) =>
+          o.checkpoint === `incremental` &&
+          o.value.daemon.exit === 0 &&
+          o.value.daemon.stream.last.endsWith(own),
+      )
+      if (index < 0) return undefined
+      const value = structuredClone(trace[index].value)
+      const other = (last) =>
+        last.replace(own, ` report <package>/out-daemon-2/summary.md`)
+      value.daemon.stream.last = other(value.daemon.stream.last)
+      value.daemon.stdoutStream.last = other(value.daemon.stdoutStream.last)
       return trace.map((o, i) => (i === index ? { ...o, value } : o))
     },
   },

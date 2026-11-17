@@ -292,6 +292,7 @@ export const shards = {
     `calibration: a stdout gap line does not read as a gap`,
     `calibration: the stdout has a gap line for a mutant that is not a gap`,
     `calibration: a check through the daemon drops a gap line`,
+    `calibration: a check through the daemon names another check's report`,
     // The witness module's edit sequence (option M): about 97 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
     `random seed: an edit sequence over the witness module`,
