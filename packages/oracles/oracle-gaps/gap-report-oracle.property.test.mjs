@@ -2232,6 +2232,9 @@ function readRunIn(dir, out, status, stderr, cli, stdout, derived) {
       function: r.function,
       line: r.line,
       operator: r.operator,
+      // The code the operator replaces (a comparison's or a logical
+      // operator's token, for a swap), which names the capture helper.
+      original: r.original,
       authored: r.authored === true,
       outcome: r.outcome,
       class: r.class,
