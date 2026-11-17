@@ -565,6 +565,10 @@ export const partitions = {
         'two runs on one output directory',
         'a stream log that cannot be written',
         'a start refuses an empty claim',
+        // The merge gate's no-progress and work-budget witnesses (CI at
+        // 864818be: this shard took 1:37, shard 10 5:08).
+        'a hang in a file whose test does a short read',
+        'a clocked owner beside a counted one under the work budget',
       ]),
       7: anyOf([
         'a daemon pause that cannot engage',
@@ -591,6 +595,9 @@ export const partitions = {
         'an awaiting config in a package with no module type',
         'a declaration fault: configNoDefault',
         'a declaration fault: badEntry',
+        // The merge gate's heavy-test witnesses (this shard took 2:32).
+        'a heavy test that reads the clock after its work',
+        'a heavy test that reads the clock first',
         'a stop with the default output directory',
         'a daemon check with the default output directory',
         'a daemon check with the default output directory, unsupervised',
@@ -609,6 +616,7 @@ export const partitions = {
         'two starts race for a stale claim',
         'a start refuses a stale claim',
         'a stream log lost after its note, then stopped',
+        'a stream log lost after its note, then stopped, unsupervised',
         'a stop before the CLI starts',
         'a stop by SIGTERM as the CLI starts',
         'a start refuses a dangling claim',
@@ -643,11 +651,6 @@ export const partitions = {
         'a supervised child exits when its supervisor is killed',
         'an unsupervised run stopped after its note',
         'a supervised check with no ps on its PATH',
-        'a stream log lost after its note, then stopped, unsupervised',
-        'a heavy test that reads the clock after its work',
-        'a heavy test that reads the clock first',
-        'a hang in a file whose test does a short read',
-        'a clocked owner beside a counted one under the work budget',
       ]),
     },
   },
