@@ -96,6 +96,7 @@ describe(`the gap oracle's history grammar`, () => {
       replyHeld: false, // ORACLE_GAPS_TEST_PAUSE_AT=daemon-check, with a release
       hookStops: false, // ORACLE_GAPS_TEST_STOP on win32
       slowStart: false, // ORACLE_GAPS_TEST_PAUSE_AT=daemon-warm, _BEAT_MARK
+      holdOverlap: false, // ORACLE_GAPS_TEST_HOLD_OVERLAP (#126)
     }
     const hookSteps = [`dieMidCheck`, `resetBeforeRead`]
     const hookStops = [`after`, `warm`]

@@ -979,6 +979,13 @@ const drawn = fc.record({
   // has no `-p`): the supervised run needs no external command (POSIX; review
   // of #57, A7).
   psMissing: fc.constantFrom(false, false, false, false, false, false, true),
+  // Whether two checks at once are held to overlap in the daemon (the
+  // test-only hold ORACLE_GAPS_TEST_HOLD_OVERLAP, issue #82): the first check
+  // a daemon serves waits until it has accepted a second request. A hook is
+  // never switched on by a drawn field, so the constant draws nothing and
+  // only the constructed edit sequence through the daemon sets it; the
+  // take-back below returns it to false.
+  holdOverlap: fc.constant(false),
   // Whether the daemon of a `dieMidCheck` step holds its reply and lives on
   // until the CLI has ended (the cold-fallback witness, R39). It switches the
   // test-only `daemon-reply` pause on with no kill, so it is a constant that
@@ -1090,6 +1097,7 @@ const constructedNeutral = {
   replyHeld: false,
   hookStops: false,
   slowStart: false,
+  holdOverlap: false,
 }
 // A drawn history never switches a test-only hook either (randomness wins,
 // 2026-11-16; v21.2 I16). Two steps arm a daemon pause: `dieMidCheck` holds
@@ -3226,6 +3234,8 @@ function resolveHistory(history) {
     ordinary: history.ordinary === true,
     // The batch whose run rejects (a test-only fault; 0 is none).
     rejectBatch: history.rejectBatch ?? 0,
+    // Whether two checks at once are held to overlap in the daemon.
+    holdOverlap: history.holdOverlap === true,
     // An `owns` key in an assertion's arguments, in the ordinary file: its
     // assertion form and whether its list is a literal, or none.
     matcherOwns: history.matcherOwns ?? `none`,
