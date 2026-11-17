@@ -636,11 +636,14 @@ globalThis.__oracleGaps = {
     return id === active ? !value : value
   },
   // A plain read in place of `?.`: the object passes on, and when its
-  // mutant is active a nullish one throws, as the plain read would.
+  // mutant is active a nullish one throws, as the plain read would. A
+  // nullish object is where the mutant changes the site's completion (a
+  // throw where `?.` gives `undefined`), so it infects the site.
   chain(id, value) {
     hit(id)
-    if (id === active && (value === undefined || value === null))
-      throw new TypeError(`Cannot read properties of ${value}`)
+    if (value !== undefined && value !== null) return value
+    infect(id)
+    if (id === active) throw new TypeError(`Cannot read properties of ${value}`)
     return value
   },
   // Records whether the condition was truthy or falsy, then applies a forced
