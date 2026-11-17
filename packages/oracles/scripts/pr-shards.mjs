@@ -587,6 +587,7 @@ export const partitions = {
         'an edit to data that only a spun copy reads',
         "a refused run beside the CLI's directory, under a name that extends it",
         'an edit to data that only a copy spun alone reads',
+        'a slow but healthy daemon start',
         'a stop with the default output directory',
         'a daemon check with the default output directory',
         'a daemon check with the default output directory, unsupervised',

@@ -75,7 +75,8 @@
     ["spinData", "4352e9616b999e5d"],
     ["siblingDir", "b30dea3f1825fc7c"],
     ["hookStops", "ed6866229ecc4969"],
-    ["spinThrows", "fbc4c4e88a554e03"]
+    ["spinThrows", "fbc4c4e88a554e03"],
+    ["slowStart", "ed6866229ecc4969"]
   ],
   "histories": [
     ["functions", "66c0e9c56951c377"],
@@ -153,6 +154,7 @@
     ["spinData", "4352e9616b999e5d"],
     ["siblingDir", "b30dea3f1825fc7c"],
     ["hookStops", "ed6866229ecc4969"],
-    ["spinThrows", "fbc4c4e88a554e03"]
+    ["spinThrows", "fbc4c4e88a554e03"],
+    ["slowStart", "ed6866229ecc4969"]
   ]
 }

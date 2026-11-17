@@ -95,6 +95,7 @@ describe(`the gap oracle's history grammar`, () => {
       rejectBatch: 0, // ORACLE_GAPS_TEST_REJECT_BATCH
       replyHeld: false, // ORACLE_GAPS_TEST_PAUSE_AT=daemon-check, with a release
       hookStops: false, // ORACLE_GAPS_TEST_STOP on win32
+      slowStart: false, // ORACLE_GAPS_TEST_PAUSE_AT=daemon-warm, _BEAT_MARK
     }
     const hookSteps = [`dieMidCheck`, `resetBeforeRead`]
     const hookStops = [`after`, `warm`]

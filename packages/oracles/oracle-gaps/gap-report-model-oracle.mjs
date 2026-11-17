@@ -865,7 +865,9 @@ const drawn = fc.record({
   pauseEngages: fc.constant(true),
   // Whether the warm daemon is stopped after the warm check of a
   // `resetBeforeRead` step, so another daemon takes the reset (review of #73,
-  // B2). It acts only in that step.
+  // B2). It acts only in that step, which arms a daemon pause and so only
+  // constructed histories take (`plainSteps`): a drawn value changes nothing
+  // a generated history runs.
   warmReplaced: fc.boolean(),
   // Where the config's `test.root` sits (issue #101, `testRoots`): `none`, the
   // package, or one of four shapes. Only an ES module config that Vitest
@@ -1011,6 +1013,12 @@ const drawn = fc.record({
   // (merge gate F4). The outcomes stay the batch's. Drawn: it shapes the
   // fixture's tests and switches no hook.
   spinThrows: fc.constantFrom(false, false, false, true),
+  // Whether the first check's daemon holds before it warms each context,
+  // until the test has seen the CLI hear a beat since the previous context
+  // (ORACLE_GAPS_TEST_PAUSE_AT=daemon-warm, with ORACLE_GAPS_TEST_BEAT_MARK):
+  // a slow but healthy start (merge gate D1). It switches test-only hooks on,
+  // so only the constructed history "a slow but healthy daemon start" sets it.
+  slowStart: fc.constant(false),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -1081,6 +1089,7 @@ const constructedNeutral = {
   rejectBatch: 0,
   replyHeld: false,
   hookStops: false,
+  slowStart: false,
 }
 // A drawn history never switches a test-only hook either (randomness wins,
 // 2026-11-16; v21.2 I16). Two steps arm a daemon pause: `dieMidCheck` holds
@@ -3196,6 +3205,7 @@ function resolveHistory(history) {
     siblingDir: history.siblingDir === true,
     hookStops: history.hookStops === true,
     spinThrows: history.spinThrows === true,
+    slowStart: history.slowStart === true,
     // Whether a step edits file b's helper during a check (`midrun`): then
     // file a loads the helper and holds the test that edits it.
     midrun: [...(history.steps ?? []), ...laterStepsOf(history)].includes(
