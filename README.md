@@ -225,7 +225,7 @@ exited with <signal or code>` and exits 3; after an out-of-memory crash
   signals the whole group, kills what is left 2 s later, and exits 130 or 143.
   A check through the daemon (`--daemon`) runs in the daemon's process; stop
   it with `oracle-gaps --stop-daemon --package <dir>`. While a check waits or
-  runs there, the daemon tells the CLI each time a check makes progress. A
+  runs there, the daemon tells the CLI whenever a running copy is polled. A
   daemon that sends nothing for 60 s has stopped answering: the CLI prints
   `oracle-gaps: note the package's daemon sent nothing for 60 s; this check
 runs cold` and runs the check in its own process, which reports what the

@@ -21,8 +21,9 @@
 // JSON with the summary a cold run would have printed and its log, or the
 // error that ended the check, which the CLI ends the run with as a cold run
 // does (ending.mjs). Until then, the daemon sends the CLI a beat (an empty
-// line) each time one of its checks makes progress; a CLI that hears nothing
-// for 60 s runs its check cold (R39). One check runs at a time. The daemon
+// line) each time it polls a running copy; a CLI that hears nothing for 60 s
+// runs its check cold (R39), and the daemon drops that check once it sees
+// the CLI gone. One check runs at a time. The daemon
 // exits when asked, or after 30 idle minutes.
 //
 // The CLI starts it: node daemon.mjs --package <dir>. Each check's evidence is
@@ -87,9 +88,9 @@ const writeMark = (path, text) => {
  * Sends one request and settles with the daemon's reply. A check's request
  * (`bounded`) settles as `{ silent: true }` once its daemon has sent nothing
  * for WAIT_MS of wall-clock time (the socket's own idle timeout). A daemon
- * sends a beat (a newline) each time one of its checks makes progress, so
- * only a daemon that has stopped answering (or one phase of its check, such
- * as a session's start, that runs longer than the bound with no progress)
+ * sends a beat (a newline) each time it polls a running copy, so only a
+ * daemon that has stopped answering, or a phase with no running copy (a
+ * session's start, a warm-up, the analysis) that runs longer than the bound,
  * reaches it. The bound changes the run's path, never its outcome: the CLI
  * then checks cold (v21.2 R39, I15).
  */
@@ -381,9 +382,9 @@ async function serve(pkg) {
       connection.end(`${JSON.stringify(value)}\n`, resolvePromise)
     })
   // The connections whose check waits for its reply, queued or checking. Each
-  // hears a beat (a newline) whenever a check makes progress (a streamed line
-  // or a poll of a running copy), so its CLI can tell a daemon that works
-  // from one that stopped answering (requestDaemon).
+  // hears a beat (a newline) whenever a check polls a running copy, so its
+  // CLI can tell a daemon that works from one that stopped answering
+  // (requestDaemon).
   const waiting = new Set()
   const beat = () => {
     for (const connection of waiting)
