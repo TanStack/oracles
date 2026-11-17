@@ -3016,6 +3016,7 @@ const appendedStates = [
   `constructed-declared-bases`,
   `constructed-drawn-bases`,
   `drawn-base-failure-replayed`,
+  `constructed-own-drawn-bases`,
 ] as const
 const frameworkStates = [
   ...timeoutReceivingStates,
@@ -4144,6 +4145,14 @@ function frameworkReach(
       )
       // A fixed-seed unit that also ran bases drawn from the run's seed.
       if (drawsAny(spec)) reached.add(`constructed-drawn-bases`)
+      // A history whose own drawnBases replaced the property's.
+      if (
+        spec.constructed.some(
+          ({ drawnBases }) =>
+            drawnBases !== undefined && drawnBases !== (spec.drawnBases ?? 0),
+        )
+      )
+        reached.add(`constructed-own-drawn-bases`)
     }
   }
   // A drawn base's failure, reported with the run's seed, whose printed
@@ -8702,6 +8711,29 @@ const drawnFailureDraft = (reachVia: Draft[`reachVia`]): Draft => {
       }
   throw new Error(`no seed from 1 to 999 fails first on a drawn base`)
 }
+// The suite of `drawnBasesSuite` whose first constructed history draws no
+// base and whose second draws one, against the property's one or two.
+const ownDrawnSuite = (generated: Suite): Suite => {
+  const withDrawn = drawnBasesSuite(generated)
+  const draft = withDrawn.drafts[0]!
+  const tail = generated.drafts[0]!.clock ? 1 : 2
+  return {
+    ...withDrawn,
+    drafts: [
+      {
+        ...draft,
+        constructed: [
+          { prefix: [0], enters: [`saw-0`], drawnBases: 0 },
+          {
+            prefix: [tail],
+            enters: [],
+            drawnBases: draft.drawnBases === 1 ? 0 : 1,
+          },
+        ],
+      },
+    ],
+  }
+}
 const mainUnitRequiredConstructed: Array<{
   name: string
   enters: ReadonlyArray<(typeof mainUnitRequiredStates)[number]>
@@ -9687,6 +9719,12 @@ oracleProperty({
         name: `constructed histories run drawn bases`,
         enters: [`constructed-drawn-bases`],
         build: (generated: Suite) => drawnBasesSuite(generated),
+      },
+      // A constructed history's own drawnBases replaces the property's.
+      {
+        name: `a constructed history declares its own drawn bases`,
+        enters: [`constructed-own-drawn-bases`],
+        build: (generated: Suite) => ownDrawnSuite(generated),
       },
       // A drawn base's failure names the run's seed and its index, and its
       // printed replay, with that seed, reproduces it.
