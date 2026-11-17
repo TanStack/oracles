@@ -306,6 +306,13 @@ export const shards = {
     `fixed seed 20261105: a value change at a ?. read and at a return`,
     `random seed: a value change at a ?. read and at a return`,
     `determinism: constructed history: a value change at a ?. read and at a return`,
+    // A ?. read of an object absent only at load: one small function.
+    `fixed seed 20261105: a ?. read of an object absent only at load`,
+    `random seed: a ?. read of an object absent only at load`,
+    `determinism: constructed history: a ?. read of an object absent only at load`,
+    // The filed history of a stale authored mutant's fourth base (about 12 s).
+    `fixed history: a filed base whose owner reads an absent object through ?.`,
+    `determinism: fixed history: a filed base whose owner reads an absent object through ?.`,
     `fixed seed 20261105: every outcome class, the warm stop`,
     `fixed seed 20261105: every outcome class, the abort stop`,
     `random seed: every outcome class, the warm stop`,

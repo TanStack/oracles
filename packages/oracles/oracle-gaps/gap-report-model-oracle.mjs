@@ -971,8 +971,22 @@ const drawn = fc.record({
   // in place of `?.` throws on either, where `?.` gives `undefined`. Drawn
   // last, so the earlier fields keep their draws (the generator rule).
   absentObjects: fc.array(fc.constantFrom(`undefined`, `null`), {
-    maxLength: 3,
+    maxLength: 5,
   }),
+  // How each `optional` statement, in order, reads its object: through
+  // `links` `?.` links (`o?.v`, `o?.a?.v`, `o?.a?.b?.v`), where the object at
+  // depth `level % links` (0 is `o` itself) is the one a falsy `x` leaves
+  // absent. A statement past the list's end reads one link. A plain read in
+  // place of one link throws only where that link's own object is absent: a
+  // link past an absent object is short-circuited, as JavaScript skips the
+  // rest of the chain. Drawn last (the generator rule).
+  optionalChains: fc.array(
+    fc.record({
+      links: fc.constantFrom(1, 1, 2, 3),
+      level: fc.nat({ max: 2 }),
+    }),
+    { maxLength: 5 },
+  ),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -2249,6 +2263,23 @@ const condText = (stmt) =>
 
 // The value an `optional` statement's object takes when `x` is falsy.
 const absentOf = (stmt) => stmt.absent ?? `undefined`
+// The site roles of an `optional` statement's field drops and links.
+const dropRole = (prop) => `drop${prop.toUpperCase()}`
+const chainRole = (link) => (link === 0 ? `chain` : `chain${link}`)
+// The property that each link of an `optional` statement reads, outermost
+// object first: `a`, then `b`, and `v` last.
+const linkProps = (stmt) => [...[`a`, `b`].slice(0, (stmt.links ?? 1) - 1), `v`]
+// The source of the object at depth `depth` of an `optional` statement: the
+// object a falsy `x` leaves absent at the statement's level.
+function optionalObject(stmt, depth = 0) {
+  const props = linkProps(stmt)
+  const value =
+    depth === props.length - 1
+      ? `'p${stmt.label}'`
+      : optionalObject(stmt, depth + 1)
+  const made = `{ ${props[depth]}: ${value} }`
+  return depth === (stmt.level ?? 0) ? `x ? ${made} : ${absentOf(stmt)}` : made
+}
 
 /** The source lines of one statement. */
 function renderStatement(stmt, callText) {
@@ -2377,8 +2408,10 @@ function renderStatement(stmt, callText) {
       return [`out.push(...loaded);`]
     case `optional`:
       return [
-        `const o${stmt.label} = x ? { v: 'p${stmt.label}' } : ${absentOf(stmt)};`,
-        `out.push(\`\${o${stmt.label}?.v}\`);`,
+        `const o${stmt.label} = ${optionalObject(stmt)};`,
+        `out.push(\`\${o${stmt.label}${linkProps(stmt)
+          .map((prop) => `?.${prop}`)
+          .join(``)}}\`);`,
       ]
     case `readData`:
       return [`out.push(${dataOf(stmt.shape).read});`]
@@ -2641,14 +2674,19 @@ function resolveHistory(history) {
         return { kind: `call`, to: target.id }
       return { kind: `push`, quote: `'` }
     })
-  // Each `optional` statement takes its absent object, in order.
+  // Each `optional` statement takes its absent object and its chain, in
+  // order. A history filed before either field existed reads `undefined` and
+  // one link (register M, "Replay by history").
   let optionals = 0
   for (const fn of generated)
-    fn.body = fn.body.map((stmt) =>
-      stmt.kind === `optional`
-        ? { ...stmt, absent: history.absentObjects[optionals++] ?? `undefined` }
-        : stmt,
-    )
+    fn.body = fn.body.map((stmt) => {
+      if (stmt.kind !== `optional`) return stmt
+      const chain = history.optionalChains?.[optionals]
+      const links = chain?.links ?? 1
+      const absent = history.absentObjects?.[optionals] ?? `undefined`
+      optionals += 1
+      return { ...stmt, absent, links, level: (chain?.level ?? 0) % links }
+    })
   const library = history.library.map((body, index) => ({
     id: `g${index}`,
     file: LIB,
@@ -3448,10 +3486,15 @@ function sitesOf(plan) {
       if (stmt.kind === `innerReturned`)
         at(`return-undefined`, `returned`, stmt.line, whole)
       // The object literal's field, then the push and its optional read.
+      // Each object's field, outermost first, then the push and its links,
+      // the last link first (the instrumenter numbers a node before its
+      // children, and a chain's last link holds the earlier ones).
       if (stmt.kind === `optional`) {
-        at(`field-drop`, `dropV`, stmt.line, stmt.lines[0])
+        for (const prop of linkProps(stmt))
+          at(`field-drop`, dropRole(prop), stmt.line, stmt.lines[0])
         at(`delete-call`, `push`, stmt.line + 1, stmt.lines[1])
-        at(`optional-chain`, `chain`, stmt.line + 1, stmt.lines[1])
+        for (let link = linkProps(stmt).length - 1; link >= 0; link -= 1)
+          at(`optional-chain`, chainRole(link), stmt.line + 1, stmt.lines[1])
       }
       // Two arrows on one line: each property's field drop, its call, and
       // the `+ 1` belong to the arrow whose text holds them; the push and
@@ -4024,27 +4067,45 @@ function interpret(plan, fnId, x, sites, active) {
           }
         }
       }
-      // `x` makes the object only when truthy, so the field drop is reached
-      // only then. A plain read in place of `?.` throws on no object,
-      // `undefined` or `null`, where `?.` gives `undefined`.
+      // The object at the statement's level exists only for a truthy `x`,
+      // so its fields, and those of the objects inside it, are reached only
+      // then; a dropped field leaves its property out. The read follows
+      // JavaScript's optional chain: at the first link whose object is
+      // absent (`undefined` or `null`), `?.` gives `undefined` for the whole
+      // chain and no later link runs, while a plain read in its place
+      // throws. A link past that one changes nothing.
       if (stmt.kind === `optional`) {
-        const drop = siteOf(stmt, `dropV`)
-        if (x) reach(drop.id)
-        const made = x
-          ? isActive(drop)
-            ? {}
-            : { v: `p${stmt.label}` }
-          : stmt.absent === `null`
-            ? null
-            : undefined
+        const props = linkProps(stmt)
+        const objectAt = (depth) => {
+          if (depth === stmt.level && !x)
+            return stmt.absent === `null` ? null : undefined
+          const drop = siteOf(stmt, dropRole(props[depth]))
+          reach(drop.id)
+          if (isActive(drop)) return {}
+          return {
+            [props[depth]]:
+              depth === props.length - 1
+                ? `p${stmt.label}`
+                : objectAt(depth + 1),
+          }
+        }
+        const made = objectAt(0)
         const site = siteOf(stmt, `push`)
         reach(site.id)
         if (!isActive(site)) {
-          const chain = siteOf(stmt, `chain`)
-          reach(chain.id)
-          if (isActive(chain) && (made === undefined || made === null))
-            throw new TypeError(`Cannot read properties of ${made}`)
-          trace.push(String(made?.v))
+          // Every link's switch runs before the chain does.
+          props.forEach((_, link) => reach(siteOf(stmt, chainRole(link)).id))
+          let value = made
+          for (const [link, prop] of props.entries()) {
+            if (value === undefined || value === null) {
+              if (isActive(siteOf(stmt, chainRole(link))))
+                throw new TypeError(`Cannot read properties of ${value}`)
+              value = undefined
+              break
+            }
+            value = value[prop]
+          }
+          trace.push(String(value))
         }
       }
       if (stmt.kind === `innerReturned`) reach(siteOf(stmt, `returned`).id)
@@ -6239,6 +6300,7 @@ function readSummary(summary) {
 
 export {
   drawn,
+  NO_STOPS,
   NO_LATER_STEPS,
   MIDRUN_EDITORS,
   captureWitness,
