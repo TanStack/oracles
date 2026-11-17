@@ -3145,6 +3145,14 @@ async function driver(plan, observe) {
         await unwritableLogRuns(dir, files, how, plan.logLost),
       )
       states.add(lostStateOf[plan.logLost])
+      // The unsupervised run writes its own stopped line (stopNow) into a log
+      // that can no longer take it: every win32 run, and the constructed
+      // unsupervised history on POSIX.
+      if (
+        plan.logLost === `stop` &&
+        (plan.unsupervised || process.platform === `win32`)
+      )
+        states.add(`an unsupervised run stopped after its stream log was lost`)
     }
     if (plan.outMode === `default`)
       states.add(`a run with the default output directory`)
@@ -5685,6 +5693,7 @@ const required = [
   `a daemon check with the default output directory`,
   `a start refuses a dangling claim`,
   `an unsupervised run stopped after its note`,
+  `an unsupervised run stopped after its stream log was lost`,
   ...posixStarts,
   ...posixPs,
   `killed by a second owner`,
@@ -5886,6 +5895,7 @@ const ownHistoryStates = [
   `a daemon check with the default output directory`,
   `a start refuses a dangling claim`,
   `an unsupervised run stopped after its note`,
+  `an unsupervised run stopped after its stream log was lost`,
   ...posixStarts,
   ...posixPs,
 ]
@@ -8441,6 +8451,40 @@ oracleProperty({
             { ...judging(`a`, `fixed seed`, 7), fn: 0, hangs: true },
           ]),
           authored: { stmt: 0, kind: `apply` },
+        }),
+      },
+      // The unsupervised stop after a lost stream log (the path every win32 run
+      // takes; ORACLE_GAPS_TEST_UNSUPERVISED on POSIX). The run's own process
+      // writes its stopped line (stopNow) to stdout, to stderr, and to a stream
+      // log that is now a directory. Once that stop has begun, nothing else ends
+      // the run (P10, v21.2 R10 and I7): the failed log write is no second
+      // ending, so each stream holds one done line, the stopped line.
+      {
+        name: `a stream log lost after its note, then stopped, unsupervised`,
+        enters: [`an unsupervised run stopped after its stream log was lost`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          wholeFile: `none`,
+          witness: false,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+          ordinary: false,
+          budget: `two`,
+          outMode: `explicit`,
+          logBlocked: false,
+          overlap: false,
+          logLost: `stop`,
+          unsupervised: true,
         }),
       },
     ]),
