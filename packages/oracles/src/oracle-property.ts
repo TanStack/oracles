@@ -91,10 +91,12 @@
  *   fast-check draws its generated histories independently of its examples,
  *   so the units of seed N run exactly the histories that the campaign ran.
  *   The random campaign registers `random seed: <name>` and `random seed:
- *   generated` in the same way. Its units share one seed per registration:
- *   the first random unit that runs selects it through
+ *   generated` in the same way. Its units share one seed per registration,
+ *   the run's random seed: the first unit that uses it selects it through
  *   `oraclePropertyOptions`, which reads the replay variables and logs the one
- *   `ORACLE_SEED` line (maintainer decision, 2026-11-11, Q2). Each unit keeps
+ *   `ORACLE_SEED` line (maintainer decision, 2026-11-11, Q2). That is the
+ *   first random unit, or, in a property with `drawnBases`, its first
+ *   fixed-seed constructed unit. Each unit keeps
  *   its campaign's route, decides its own first failure, shrinks on its own
  *   within its own timeout, and prints its own reach line, `<id> <unit> reach
  *   {...}`; a campaign's reach is the sum of its units' lines. A constructed
@@ -113,7 +115,9 @@
  *   ${prefix}_SEED=... ${prefix}_PATH=... ${prefix}_PROPERTY=... ${prefix}_UNIT=...
  *   vitest run -t '...'`, which names the random unit of its own name: a
  *   fixed-seed unit's replay runs that random unit with the fixed seed, which
- *   draws the same stream. Run with the project's test command in place of
+ *   draws the same stream. A fixed-seed unit whose failing example is a drawn
+ *   base names the run's random seed instead, at which the random unit runs
+ *   that base at the same index, and its report says which base it was. Run with the project's test command in place of
  *   `vitest run`, it runs only that unit and reproduces the counterexample. A
  *   failing random unit's violation prints the same command as its rerun
  *   line, and a failing fixed-seed unit prints `Rerun: -t '...'`, which reruns
@@ -175,7 +179,10 @@
  *   the generated ones are independent streams: the `generated` unit draws
  *   only from the arbitrary, and constructed history k builds from each of
  *   the first `bases` draws of the arbitrary's sample at the campaign's seed
- *   plus k. So at a fixed seed the generated histories do not depend on the
+ *   plus k, and then from `drawnBases` more draws, the ones after them in
+ *   the sample at the run's random seed plus k (register M, 2026-11-17,
+ *   "Random bases at today's cost for expensive oracles"), which vary from
+ *   run to run. So at a fixed seed the generated histories do not depend on the
  *   constructed list, its length or its contents, appending a constructed
  *   history changes no other constructed history's bases, and each
  *   constructed history is explored over `bases` histories, not visited once
@@ -615,6 +622,15 @@ export interface GeneratedHistories<THistory> {
    * 1; 5 when absent.
    */
   bases?: number
+  /**
+   * How many more bases each constructed history runs in each campaign,
+   * after its `bases` fixed ones: draws `bases` to `bases + drawnBases - 1`
+   * of the arbitrary's sample at the run's random seed (the seed the random
+   * units run and the `ORACLE_SEED` line logs) plus the history's index. So
+   * a costly property can keep one fixed base and still vary its others from
+   * run to run. A whole number of at least 0; 0 when absent.
+   */
+  drawnBases?: number
   fixed?: ReadonlyArray<FixedHistory<THistory>>
 }
 
@@ -2417,6 +2433,14 @@ function generatedTests<THistory, TExpected, TPlan>(
     throw new Error(
       `${id}: \`bases\` must be a whole number of at least 1, the number of bases each constructed history runs in a campaign; it is ${reportText(bases)}.`,
     )
+  // A costly property's constructed histories also draw bases from the run's
+  // random seed (register M, 2026-11-17, "Random bases at today's cost for
+  // expensive oracles").
+  const drawnBases = source.drawnBases ?? 0
+  if (!(Number.isInteger(drawnBases) && drawnBases >= 0))
+    throw new Error(
+      `${id}: \`drawnBases\` must be a whole number of at least 0, the number of bases each constructed history draws from the run's random seed; it is ${reportText(drawnBases)}.`,
+    )
   const required = (source.states ?? []).map(stateName)
   const constructions = source.constructed ?? []
   const declared = declaredOf(source)
@@ -2528,8 +2552,19 @@ function generatedTests<THistory, TExpected, TPlan>(
   // A constructed unit's histories: its construction over the first `bases`
   // draws of its own stream, the sample at seed + index, which neither the
   // generated draws nor the other constructed histories touch.
-  const constructedBases = (seed: number, index: number) =>
-    buildBases(id, source.arbitrary, constructions[index]!, seed + index, bases)
+  // Then its drawn bases: the following draws of the stream at the run's
+  // random seed + index, so the random unit, whose seed is the run's, runs
+  // them at the same indices, and a drawn base replays with that seed.
+  const constructedBases = (seed: number, index: number, runSeed: number) => {
+    const build = (at: number, count: number) =>
+      buildBases(id, source.arbitrary, constructions[index]!, at + index, count)
+    if (drawnBases === 0) return build(seed, bases)
+    if (seed === runSeed) return build(seed, bases + drawnBases)
+    return [
+      ...build(seed, bases),
+      ...build(runSeed, bases + drawnBases).slice(bases),
+    ]
+  }
   // Registration checks every fixed history, then the constructed histories
   // built from the first fixed seed (or seed 0 when there is none), so a
   // history that cannot shrink fails the load rather than a full run.
@@ -2542,6 +2577,12 @@ function generatedTests<THistory, TExpected, TPlan>(
 
   // A campaign's units: one per constructed history, then `generated`.
   const unitNames = [...constructedNames, `generated`]
+  // The run's random seed, selected and logged once, by the first unit that
+  // uses it: the first random unit, or a fixed-seed constructed unit that
+  // draws bases from it.
+  let randomParameters: ReturnType<typeof oraclePropertyOptions> | undefined
+  const runSeed = () =>
+    (randomParameters ??= oraclePropertyOptions(source.runs, id)).seed!
   /**
    * Runs one unit of a campaign whose parameters are `base`. A constructed
    * unit runs its bases, built from the campaign's seed, as examples with
@@ -2565,12 +2606,15 @@ function generatedTests<THistory, TExpected, TPlan>(
     const started = performance.now()
     const index = constructedNames.indexOf(unit)
     const constructionOf = new Map<THistory, ConstructedHistory<THistory>>()
+    // The run's random seed, when this fixed-seed unit draws bases from it.
+    let drawnFrom: number | undefined
     // fast-check reports a run's details itself; the replay witness is
     // recorded from them below.
     const { reporter: _reporter, asyncReporter: _asyncReporter, ...rest } = base
     let run: typeof rest = rest
     if (index >= 0) {
-      const histories = constructedBases(seed, index)
+      if (!random && drawnBases > 0) drawnFrom = runSeed()
+      const histories = constructedBases(seed, index, drawnFrom ?? seed)
       // fast-check passes example inputs by reference, which identifies them.
       for (const history of histories)
         constructionOf.set(history, constructions[index]!)
@@ -2615,12 +2659,21 @@ function generatedTests<THistory, TExpected, TPlan>(
     if (details.failed) {
       const report = await fc.asyncDefaultReportMessage(details)
       const path = details.counterexamplePath
+      // A fixed-seed unit's failing example past its fixed bases is a drawn
+      // base: the random unit of its name runs it at the same index with the
+      // run's seed, so the replay names that seed, and the report says so.
+      const at = path === null ? -1 : Number(path.split(`:`)[0])
+      const drawn = drawnFrom !== undefined && at >= bases
       const replay =
         path === null
           ? undefined
           : commandOf(
               [
-                [oracleEnvName(`SEED`), `${details.seed}`, false],
+                [
+                  oracleEnvName(`SEED`),
+                  `${drawn ? drawnFrom : details.seed}`,
+                  false,
+                ],
                 [oracleEnvName(`PATH`), `${path}`, false],
                 [oracleEnvName(`PROPERTY`), id, true],
                 [oracleEnvName(`UNIT`), replayed.name, true],
@@ -2639,6 +2692,11 @@ function generatedTests<THistory, TExpected, TPlan>(
       throw new Error(
         [
           report,
+          ...(drawn
+            ? [
+                `Drawn base: example ${at} is base ${at} of constructed history "${unit}" drawn from the run's random seed ${drawnFrom} (its ORACLE_SEED line), not from seed ${seed}. The counterexample above is its full history, and the Replay line runs it with the run's seed; a rerun draws other bases.`,
+              ]
+            : []),
           ...commandLines(`Rerun`, rerun),
           ...commandLines(`Replay`, replay),
         ].join(`\n`),
@@ -2671,7 +2729,6 @@ function generatedTests<THistory, TExpected, TPlan>(
   // that runs selects and logs it, and a replay reads that log line. A
   // replay of that seed rebuilds the same constructed histories, which the
   // replay path counts.
-  let randomParameters: ReturnType<typeof oraclePropertyOptions> | undefined
   const randomUnits = unitNames.map((unit): PropertyTest => ({
     name: `random seed: ${unit}`,
     route: `random seed`,

@@ -4790,11 +4790,16 @@ oracleProperty({
       `a check that ran more than one batch`,
     ],
     runs: 2,
-    // One base per constructed history: each runs the CLI end to end, often
-    // for minutes, and five bases took a fixed-seed shard to 18 to 30
-    // minutes on an Arclet, past the 10-minute CI limit (#122). Random seeds
-    // vary each one's base from run to run.
+    // One fixed base per constructed history, and one more drawn from the
+    // run's random seed, so each run explores another base at about today's
+    // cost (register M, 2026-11-17, "Random bases at today's cost for
+    // expensive oracles"). Each runs the CLI end to end, often for minutes:
+    // five fixed bases took a fixed-seed shard to 18 to 30 minutes on an
+    // Arclet (#122). Windows draws none: one history there already takes 9 to
+    // 12 minutes of its non-blocking job (#72), and a drawn base would pass
+    // the job's 20-minute timeout.
     bases: 1,
+    drawnBases: process.platform === `win32` ? 0 : 1,
     fixedSeeds: [20261105],
     constructed: withDeclaration([
       {
