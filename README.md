@@ -231,10 +231,14 @@ exited with <signal or code>` and exits 3; after an out-of-memory crash
   `fs/promises` `readFile` and `stat`), each by the content that the run
   read; the directories its tests list (`readdir`, `readdirSync`, `opendir`,
   `opendirSync`, and `fs/promises` `readdir` and `opendir`), each by its
-  entries' names and kinds; the environment variables
-  its tests read, by value, or all of them when a test lists them; and what
-  Vitest, the Vite config, and the config's own plugins read in the CLI's
-  process while it loads them and in each plugin hook. Each check hashes
+  entries' names and kinds; the environment variables its tests read, by
+  value, or all of them when a test lists them; and what Vitest, Vite, and
+  the config read in the CLI's process, while Vitest loads and the contexts
+  warm, and in each hook of every plugin, Vite's own (such as the
+  `tsconfig.json` that its esbuild plugin reads) and the config's alike. A
+  file that a reader wrote earlier in the check, before it read it, is its
+  own output and no input (maintainer decision, 2026-11-17); a file the
+  session wrote that is edited by hand afterwards is seen. Each check hashes
   every file input from its content, so an edit that keeps a file's size and
   modification time (`cp -p`, `rsync -t`, `touch -r`) is seen. A run that an
   edit overlapped, because a file changed after the run read it, is not
@@ -242,23 +246,28 @@ exited with <signal or code>` and exits 3; after an out-of-memory crash
   directory, not by its content.
 
   The daemon runs every check in the environment that the CLI asking for it
-  has. A check from another environment, or after a file that Vitest, the
-  config, or a plugin read has changed, stops the daemon and starts a new
-  one, which reads them again; the runs it stored are still reused where
-  their inputs are unchanged.
+  has. While a context warms, Vitest and Vite read every environment
+  variable by value, so a check from an environment that differs in any
+  variable, even one no test reads (`OLDPWD`, `SHLVL`, a terminal's session
+  id), starts a new daemon and runs every unit again, as a cold run does.
+  So does a check after a file that Vitest, the config, or a plugin read or
+  wrote has changed.
 
   These reads are no input yet, so an edit to the file alone does not rerun
   the tests that read it: a read from a worker thread or child process that
   the test starts (#143); a read through a file descriptor, after `open`,
   `openSync`, or the `fs/promises` `open` (#141); a link's target, or the
   rest of the stat family, `lstat`, `readlink`, `realpath`, `access`, the
-  callback `stat`, and `exists` (#142); and `glob`, `globSync`, `copyFile`,
+  callback `stat`, and `exists` (#142); `glob`, `globSync`, `copyFile`,
   `copyFileSync`, `cp`, `cpSync`, `openAsBlob`, `statfs`, and the
-  `fs/promises` `glob`, `copyFile`, `cp`, and `statfs`. Run the check cold
-  (without `--daemon`) after an edit to a file read that way. A later
-  release records all of them except `watch` and `watchFile`, which wait for
-  future changes and stay no input (maintainer decision, 2026-11-13, with
-  `watchFile` in the family of `watch`).
+  `fs/promises` `glob`, `copyFile`, `cp`, and `statfs` (#152); the
+  module-level reads of a test file whose tests are all skipped (#153); and
+  the earlier content of a file that a test appends to, partly writes, or
+  fails to write, then reads (#154). Run the check cold (without `--daemon`)
+  after an edit to a file read that way. A later release records all of
+  them except `watch` and `watchFile`, which wait for future changes and
+  stay no input (maintainer decision, 2026-11-13, with `watchFile` in the
+  family of `watch`).
 
 - `packages/eslint-plugin-oracles` (`@tanstack/eslint-plugin-oracles`): the
   `oracle/*` lint rules. The rules recognize the framework by its package
