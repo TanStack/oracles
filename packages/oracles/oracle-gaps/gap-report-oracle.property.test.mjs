@@ -2826,7 +2826,8 @@ async function incremental(dir, plan, cli, copy, observe, states) {
     const pid = await heldPid(warm, `a slow warm-up`)
     if (afterFallback(run, files, how, { out: outs[0], pid, release, served }))
       states.add(`a slow warm-up was served by the daemon`)
-    rmSync(marks, { recursive: true, force: true })
+    // The marks stay: the daemon keeps the hold's variables for every later
+    // check, and its existing mark keeps it from holding again.
     return [run]
   }
   // A check through a daemon that stops answering: the daemon holds the
