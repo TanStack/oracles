@@ -2748,7 +2748,7 @@ async function incremental(dir, plan, cli, copy, observe, states) {
     )
   // What a fallback leaves (`heldReply`, `slowStart`): once the CLI has ended,
   // whether the daemon that held its check still runs; the driver then
-  // poisons the run's results.json, releases the daemon (a file, never the
+  // poisons the run's --out, releases the daemon (a file, never the
   // clock), and runs one more check through the daemon. A results.json that
   // is no longer the poison was written by the abandoned check (merge gate
   // F2), so the run's printed summary no longer matches its --out; and the
@@ -2757,13 +2757,17 @@ async function incremental(dir, plan, cli, copy, observe, states) {
   function afterFallback(run, files, how, { out, pid, release, served }) {
     run.daemonEnded = !isAlive(pid)
     mkdirSync(out, { recursive: true })
-    const results = join(out, `results.json`)
+    // The poison: the run's results.json, and an error.log, which a check
+    // removes as it starts (a completed cold run leaves none).
+    const poisoned = [join(out, `results.json`), join(out, `error.log`)]
     const poison = `{"poison":"written by the driver after the CLI ended"}\n`
-    writeFileSync(results, poison)
+    for (const path of poisoned) writeFileSync(path, poison)
     rmSync(served, { force: true })
     writeFileSync(release, ``)
     runCli(dir, files, { ...how, daemon: true, outName: `out-released` })
-    run.rewritten = readFileSync(results, `utf8`) !== poison
+    run.rewritten = poisoned.some(
+      (path) => !existsSync(path) || readFileSync(path, `utf8`) !== poison,
+    )
     run.held = true
     return (
       !run.daemonEnded &&
