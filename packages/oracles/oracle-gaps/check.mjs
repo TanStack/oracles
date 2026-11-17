@@ -427,7 +427,7 @@ function isModuleConfig(pkg, config) {
  * Vitest contexts that later checks reuse. A cold run opens a session for one
  * check; the daemon keeps one open.
  */
-export async function openSession(pkg) {
+export async function openSession(pkg, alive = () => {}) {
   // The analysis reads with this CLI's own TypeScript, never the package's: a
   // TypeScript 7 package exposes its version and no compiler API. The CLI's
   // dependency is TypeScript 5, so a copy without the API is a broken install,
@@ -451,6 +451,9 @@ export async function openSession(pkg) {
       `Install a working Vitest in the package, so that vitest/node loads from it.`,
     )
   }
+  // Loading Vitest is a session start's long step: a daemon's waiting CLIs
+  // hear it as progress (`alive`, the daemon's beat).
+  alive()
   // Test-only (ORACLE_GAPS_TEST_PAUSE_AT=daemon-warm): once Vitest has
   // loaded, the session writes <ORACLE_GAPS_TEST_PAUSE_MARK>.session and holds
   // until <ORACLE_GAPS_TEST_PAUSE_RELEASE>.session exists, so a test can hold a

@@ -572,7 +572,7 @@ async function serve(pkg) {
       writeMark(`${startMark}.open`, ``)
       while (!existsSync(`${startRelease}.open`)) await sleep(50)
     }
-    session = await check.openSession(pkg)
+    session = await check.openSession(pkg, beat)
   } catch (error) {
     // The requests already queued hear why, and the CLI that started this
     // daemon reads it from the error file, written before the lock is
