@@ -559,6 +559,7 @@ import {
   doneLine,
   push,
   judging,
+  HEAVY_CALLS,
   witness,
   resolveHistory,
   probeHelpers,
@@ -2995,7 +2996,8 @@ async function driver(plan, observe) {
     const tornPolls = `${dir}.torn-polls`
     if (plan.tornRows) mkdirSync(tornPolls, { recursive: true })
     // A test that holds its own I/O open for a count of the sampler's samples
-    // (`pendingIo: 'test'`), and the runner's own pending write beside a test
+    // (`pendingIo: 'test'`, or `'short'` before production in every run), and
+    // the runner's own pending write beside a test
     // that can make no progress (`pendingIo: 'runner'`): each hook's directory
     // sits beside the package, and the runner's marks each copy that went idle
     // while its write was pending. Every run of the history sets the hooks (its
@@ -3005,7 +3007,8 @@ async function driver(plan, observe) {
     const samples = `${dir}.samples`
     const runnerWrites = `${dir}.runner-writes`
     const runnerTimers = `${dir}.runner-timers`
-    if (pendingIo(`test`)) mkdirSync(samples, { recursive: true })
+    const sampled = pendingIo(`test`) || pendingIo(`short`)
+    if (sampled) mkdirSync(samples, { recursive: true })
     if (pendingIo(`runner`)) mkdirSync(runnerWrites, { recursive: true })
     if (pendingIo(`runnerTimer`)) mkdirSync(runnerTimers, { recursive: true })
     const how = {
@@ -3023,7 +3026,7 @@ async function driver(plan, observe) {
         ...(plan.rejectBatch > 0
           ? { ORACLE_GAPS_TEST_REJECT_BATCH: String(plan.rejectBatch) }
           : {}),
-        ...(pendingIo(`test`) ? { ORACLE_GAPS_TEST_SAMPLES: samples } : {}),
+        ...(sampled ? { ORACLE_GAPS_TEST_SAMPLES: samples } : {}),
         ...(pendingIo(`runner`)
           ? { ORACLE_GAPS_TEST_RUNNER_WRITE: runnerWrites }
           : {}),
@@ -3210,6 +3213,53 @@ async function driver(plan, observe) {
       )
     )
       states.add(`a spin whose count could follow the clock timed out`)
+    // Count-only kills (M, 2026-11-16) judge a test's count as a whole: a heavy
+    // test that reads the clock only after its work has clocked unmutated rows,
+    // so its copy's spin, which comes before that read, is a gap.
+    if (
+      plan.history.tests.some((t) => t.timed === `after`) &&
+      cli.report?.results?.some(
+        (r) => r.outcome === `timeout` && r.detail === `spin`,
+      )
+    )
+      states.add(
+        `a spin of a test that reads the clock after its work timed out`,
+      )
+    // A heavy test that reads the clock first: its copies' call budget is a
+    // hundred times its unmutated work (G6), so a copy past CALL_FLOOR and
+    // inside that budget runs to its end and is killed by its own law.
+    if (
+      plan.history.heavy > 0 &&
+      plan.history.tests.some((t) => t.timed === `clock`) &&
+      cli.report?.results?.some(
+        (r) => r.outcome === `killed` && !r.laws?.includes(`bounded work`),
+      )
+    )
+      states.add(
+        `a heavy clocked test's copy past the call floor killed by its law`,
+      )
+    // Two owners that each make 30,000 extra calls, the first of them clocked:
+    // only the second's count is charged, which stays inside the work budget,
+    // so the mutant is judged by its owners' laws, and neither judges.
+    if (
+      plan.history.tests.length === 2 &&
+      plan.history.tests.every((t) => t.loops === 30_000) &&
+      plan.history.tests.some((t) => t.timed === `clock`) &&
+      cli.report?.results?.some((r) => r.class === `not-judged`)
+    )
+      states.add(`a clocked owner's work left out of the work budget`)
+    // A file whose test does a short read of its own before production, in
+    // every run: its copy that hangs is still idle by state, and is killed by
+    // no progress (v21.2 R50, R51).
+    if (
+      pendingIo(`short`) &&
+      cli.report?.results?.some(
+        (r) => r.outcome === `killed` && r.laws?.includes(`no progress`),
+      )
+    )
+      states.add(
+        `a hang in a file whose test did a short read killed by no progress`,
+      )
     // A copy that waits past the history's backstop is cut off, and no later
     // owner runs, so the mutant is a timeout, not the later owner's kill.
     if (
@@ -5932,6 +5982,10 @@ const required = [
   `a copy beside the runner's pending timer cut as no progress`,
   `a spin whose count could follow the clock timed out`,
   `an authored mutant killed by no progress`,
+  `a spin of a test that reads the clock after its work timed out`,
+  `a heavy clocked test's copy past the call floor killed by its law`,
+  `a clocked owner's work left out of the work budget`,
+  `a hang in a file whose test did a short read killed by no progress`,
   `a hang in one owner and a survivor in another killed by no progress`,
   `a mutant's copies past its work budget killed by bounded work`,
   `a heartbeat named a busy mutant`,
@@ -6102,6 +6156,10 @@ const separate = [
   `a copy beside the runner's pending timer cut as no progress`,
   `a spin whose count could follow the clock timed out`,
   `an authored mutant killed by no progress`,
+  `a spin of a test that reads the clock after its work timed out`,
+  `a heavy clocked test's copy past the call floor killed by its law`,
+  `a clocked owner's work left out of the work budget`,
+  `a hang in a file whose test did a short read killed by no progress`,
   // The config and contexts states have constructed histories of their own.
   `a config that --config names ran`,
   ...Object.values(testRootStates),
@@ -8482,6 +8540,8 @@ oracleProperty({
           concurrentStart: false,
           contexts: 1,
           steps: null,
+          // Its work budget decides its state, so its tests make no heavy calls.
+          heavy: 0,
         }),
       },
       // A slow kill whose test waits 16 s where its output differs: no
@@ -8647,6 +8707,136 @@ oracleProperty({
           overlap: false,
           logLost: `stop`,
           unsupervised: true,
+        }),
+      },
+      // Count-only kills (M, 2026-11-16) judge a test's count as a whole (v21.1
+      // R19a): a test that reads the clock anywhere in its run has a count that
+      // could follow the clock. This heavy test (HEAVY_CALLS more calls of the
+      // until loop, about 110,000 site evaluations) reads it only after its
+      // work. Its copies' call budget is still a hundred times its unmutated
+      // work (G6), counted over every unmutated test; a copy that spins does
+      // so before the clock read, and it is a gap, not a bounded-work kill.
+      // The test judges nothing, so a copy that does a third more work (the
+      // loop's `<=`) is not judged, and no copy is killed by count.
+      {
+        name: `a heavy test that reads the clock after its work`,
+        enters: [
+          `a spin of a test that reads the clock after its work timed out`,
+        ],
+        build: (generated) => ({
+          ...soloKill(generated, [
+            {
+              ...judging(`a`, `fixed seed`, 1),
+              fn: 0,
+              judges: false,
+              timed: `after`,
+            },
+          ]),
+          functions: [[{ kind: `until`, quote: `'` }]],
+          heavy: HEAVY_CALLS,
+        }),
+      },
+      // The same heavy test, reading the clock before its work and judging.
+      // Its copies' call budget is a hundred times its unmutated work, not
+      // CALL_FLOOR: a copy that does a third more work (past 100,000 site
+      // evaluations) runs to its end and is killed by the test's law, and only
+      // the copy that spins forever is a gap.
+      {
+        name: `a heavy test that reads the clock first`,
+        enters: [
+          `a heavy clocked test's copy past the call floor killed by its law`,
+        ],
+        build: (generated) => ({
+          ...soloKill(generated, [
+            {
+              ...judging(`a`, `fixed seed`, 1),
+              fn: 0,
+              timed: `clock`,
+            },
+          ]),
+          functions: [[{ kind: `until`, quote: `'` }]],
+          heavy: HEAVY_CALLS,
+        }),
+      },
+      // No progress is decided per copy, by state and the test's own I/O (v21.2
+      // R50, R51; M entries "Idle is decided by state only" and "Idle counts
+      // only the test's I/O"), never per file. The test reads a pipe it opened
+      // before it runs production, in every run, for two of the sampler's
+      // samples (a count), so its unmutated rows record I/O of its own. Its
+      // copy that hangs where the output changed has no I/O open then, so it
+      // is idle and killed by no progress, not cut by the backstop.
+      {
+        name: `a hang in a file whose test does a short read`,
+        enters: [
+          `a hang in a file whose test did a short read killed by no progress`,
+        ],
+        build: (generated) =>
+          soloKill(generated, [
+            {
+              ...judging(`a`, `fixed seed`, 7),
+              fn: 0,
+              hangs: true,
+              pendingIo: `short`,
+            },
+          ]),
+      },
+      // The work budget charges only counts that cannot follow the clock (M,
+      // 2026-11-16, "Count-only kills"; v21.2 G6). Owner a's copy reads the
+      // clock first and makes 30,000 extra calls, and owner b's makes 30,000
+      // too: the two together would pass the work budget, but a's count is
+      // charged nothing, so b's copy stays inside it, and the mutant that
+      // forces the if false is judged by the owners' laws: neither judges, so
+      // it is not judged. (The mutant that deletes the push makes each copy
+      // pass its call budget alone: a's spin is clocked, a gap, and b's kills.)
+      {
+        name: `a clocked owner beside a counted one under the work budget`,
+        enters: [`a clocked owner's work left out of the work budget`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `if`, op: `>`, k: 4, not: false, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`both`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          derived: null,
+          dotGen: false,
+          dataOwners: [],
+          exportOwners: [],
+          importer: `none`,
+          wholeFile: `none`,
+          template: false,
+          tests: [
+            {
+              ...judging(`a`, `fixed seed`, 7),
+              fn: 0,
+              judges: false,
+              timed: `clock`,
+              loops: 30_000,
+            },
+            {
+              ...judging(`b`, `fixed seed`, 7),
+              fn: 0,
+              judges: false,
+              loops: 30_000,
+            },
+          ],
+          witness: false,
+          authored: null,
+          secondAuthored: false,
+          fault: `none`,
+          stability: `none`,
+          ordinary: false,
+          native: `none`,
+          boot: false,
+          budget: `two`,
+          cliPath: `plain`,
+          concurrentStart: false,
+          contexts: 1,
+          steps: null,
+          // Its work budget decides its state, so its tests make no heavy calls.
+          heavy: 0,
         }),
       },
     ]),

@@ -134,11 +134,21 @@ const caseless = existsSync(fileURLToPath(import.meta.url).toUpperCase())
 const FULL_LIMIT_MS = 20000
 // How long a slow test waits, in real milliseconds, where its output differs.
 const SLOW_MS = 3000
-// The `pendingIo: 'test'` witness's child (run with `node -e`, given the
-// sampler's count file): it writes to its stdout once the count has risen by
-// 20, and gives up after 60 s, a backstop that leaves the read pending, so the
-// witness then fails loudly.
-const SAMPLE_HOLD = `const read = () => { try { return Number(require('fs').readFileSync(process.argv[1], 'utf8')) } catch { return 0 } }; const from = read(); setInterval(() => { if (read() >= from + 20) process.stdout.write('go', () => process.exit(0)) }, 10); setTimeout(() => process.exit(1), 60000)`
+// The `pendingIo: 'test'` and `'short'` witnesses' child (run with `node -e`,
+// given the sampler's count file and a count): it writes to its stdout once
+// the count has risen by that many samples, and gives up after 60 s, a
+// backstop that leaves the read pending, so the witness then fails loudly.
+const SAMPLE_HOLD = `const read = () => { try { return Number(require('fs').readFileSync(process.argv[1], 'utf8')) } catch { return 0 } }; const from = read(); setInterval(() => { if (read() >= from + Number(process.argv[2])) process.stdout.write('go', () => process.exit(0)) }, 10); setTimeout(() => process.exit(1), 60000)`
+// How many of the sampler's samples each pipe read holds: the `test` witness's
+// read waits past the 500 ms idle window, and a `short` read only two samples,
+// so the sampler sees it once or twice.
+const SAMPLES_HELD = { test: 20, short: 2 }
+// The calls a heavy test (`heavy`) makes before each campaign's own call, with
+// the same input, in every run: its unmutated work is then that many calls'
+// more. The `until` function evaluates about eleven sites a call, so a heavy
+// test of it does about 110,000, past CALL_FLOOR: its copies' call budget is
+// a hundred times that (G6), and a copy that does a third more is inside it.
+const HEAVY_CALLS = 10_000
 // A wait long past any copy's horizon (the full limit and 3 s per second of
 // the file's time).
 const PAST_HORIZON_MS = 600_000
@@ -1006,6 +1016,32 @@ const drawn = fc.record({
   // wins"): null is the full limit, and a longer one moves no copy into the
   // backstop band. The constructed backstop of 2 s is taken back as null.
   hangMs: fc.constantFrom(null, null, null, 40_000),
+  // Whether each of the history's own tests calls its function HEAVY_CALLS
+  // more times before each campaign's call (`heavy`; `resolve` gives it to
+  // each test of `tests`, never to the witness module's), so that its
+  // unmutated work passes CALL_FLOOR and its copies' call budget is its own
+  // hundred times (G6, under M "Count-only kills", 2026-11-16). Drawn, rarely
+  // (M, 2026-11-16, "Randomness wins"), and appended last (C-6), so every
+  // earlier field keeps its draws. A constructed history whose work budget
+  // decides its state sets it to 0.
+  heavy: fc.constantFrom(
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    HEAVY_CALLS,
+  ),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -3076,6 +3112,8 @@ function resolveHistory(history) {
       // the grammar's generated histories, and their cost, stay those of
       // the grammar without the work law.
       work: t.work ?? (t.input % 3 === 0 && !t.loops ? 1 : null),
+      // The history's heavy calls (`heavy`), for its own tests only.
+      heavy: history.heavy ?? 0,
     })),
     ...functions.flatMap((fn) =>
       fn.generated ? [] : fn.tests.map((t) => ({ ...t, fn: t.fn ?? fn.id })),
@@ -4287,11 +4325,14 @@ function runsOf(plan, tests, sites, active) {
   return tests
     .filter((t) => !t.flaky)
     .map((t) => {
-      // Whether the test had read the clock, made a timer, or held I/O open
-      // when its run was cut (`clocked`): a wait where an earlier campaign's
-      // output changed, or a clock path before production (`timed`). Its count
-      // could then depend on time, so a spin there is no kill (M, 2026-11-16,
-      // "Count-only kills").
+      // Whether the test's count could follow the clock when its run was cut
+      // (`clocked`): it reads the clock, makes a timer, or does I/O of its own
+      // anywhere in its run (`readsClock`, before production or after it), or
+      // it waited where an earlier campaign's output changed. Its count could
+      // then depend on time, so a spin there is no kill (M, 2026-11-16,
+      // "Count-only kills"): the call budget and the spin judge the test's
+      // count as a whole, and a clock read after the spin point still makes
+      // the unmutated count one that the clock could move (v21.1 R19a).
       let waited = false
       let changedAny = false
       let slowed = false
@@ -4301,6 +4342,9 @@ function runsOf(plan, tests, sites, active) {
       // calls no production code, so it does none.
       let before = 0
       let after = 0
+      // A heavy test (`heavy`) calls its function HEAVY_CALLS more times before
+      // each campaign's own call, in every run.
+      const extra = heavyIn(t) ? t.heavy : 0
       for (const part of partsOf(t)) {
         const base = interpret(plan, t.fn, part.input, sites)
         const mutated = interpret(plan, t.fn, part.input, sites, active)
@@ -4310,8 +4354,8 @@ function runsOf(plan, tests, sites, active) {
         // Where the output differs, a `loops` witness calls the function that
         // many more times, so its work is the call's work once per call.
         if (!t.judgesShared) {
-          before += base.work
-          after += mutated.work * (1 + (changed ? (t.loops ?? 0) : 0))
+          before += base.work * (1 + extra)
+          after += mutated.work * (1 + extra + (changed ? (t.loops ?? 0) : 0))
         }
         // A wait past the history's backstop (its `hangMs`, else the full limit)
         // and a margin of 6 s for three seconds per second of a one-test file
@@ -4322,8 +4366,8 @@ function runsOf(plan, tests, sites, active) {
         const backstopMs = plan.history.hangMs ?? FULL_LIMIT_MS
         if (changed && t.slow && (t.slowMs ?? SLOW_MS) > backstopMs + 6000)
           return {
-            clocked: clockFirst(t) || waited,
-            rowClocked: clockFirst(t) || waited || (changed && waitsIn(t)),
+            clocked: readsClock(t) || waited,
+            rowClocked: readsClock(t) || waited || (changed && waitsIn(t)),
             t,
             route,
             hang: true,
@@ -4345,8 +4389,8 @@ function runsOf(plan, tests, sites, active) {
           (t.pendingIo === `runner` || t.pendingIo === `runnerTimer`)
         )
           return {
-            clocked: clockFirst(t) || waited,
-            rowClocked: clockFirst(t) || waited || (changed && waitsIn(t)),
+            clocked: readsClock(t) || waited,
+            rowClocked: readsClock(t) || waited || (changed && waitsIn(t)),
             t,
             route,
             hang: true,
@@ -4359,8 +4403,8 @@ function runsOf(plan, tests, sites, active) {
         // A loop that never ends cuts the file's run off, as a hang does.
         if (mutated.spun)
           return {
-            clocked: clockFirst(t) || waited,
-            rowClocked: clockFirst(t) || waited || (changed && waitsIn(t)),
+            clocked: readsClock(t) || waited,
+            rowClocked: readsClock(t) || waited || (changed && waitsIn(t)),
             t,
             route,
             hang: true,
@@ -4374,8 +4418,8 @@ function runsOf(plan, tests, sites, active) {
         slowed ||= changed && (t.slow || t.ioWait)
         if (mutated.threw)
           return {
-            clocked: clockFirst(t) || waited,
-            rowClocked: clockFirst(t) || waited || (changed && waitsIn(t)),
+            clocked: readsClock(t) || waited,
+            rowClocked: readsClock(t) || waited || (changed && waitsIn(t)),
             t,
             route,
             crash: true,
@@ -4390,8 +4434,8 @@ function runsOf(plan, tests, sites, active) {
         // so only the backstop cuts it (a wall-clock cut).
         if (changed && t.hangs)
           return {
-            clocked: clockFirst(t) || waited,
-            rowClocked: clockFirst(t) || waited || (changed && waitsIn(t)),
+            clocked: readsClock(t) || waited,
+            rowClocked: readsClock(t) || waited || (changed && waitsIn(t)),
             t,
             route,
             hang: true,
@@ -4408,8 +4452,8 @@ function runsOf(plan, tests, sites, active) {
           })
           if (t.judgeBy !== `soft`)
             return {
-              clocked: clockFirst(t) || waited,
-              rowClocked: clockFirst(t) || waited || (changed && waitsIn(t)),
+              clocked: readsClock(t) || waited,
+              rowClocked: readsClock(t) || waited || (changed && waitsIn(t)),
               t,
               route,
               verdicts: found,
@@ -4433,10 +4477,10 @@ function runsOf(plan, tests, sites, active) {
         found.length === 0 &&
         active?.site !== undefined &&
         [`reproducible`, `random`].includes(route) &&
-        (!t.timed || t.timed === `turn`)
+        !readsClock(t)
       return {
-        clocked: clockFirst(t) || waited,
-        rowClocked: clockFirst(t) || waited,
+        clocked: readsClock(t) || waited,
+        rowClocked: readsClock(t) || waited,
         t,
         route,
         verdicts:
@@ -4455,12 +4499,21 @@ function runsOf(plan, tests, sites, active) {
     })
 }
 
-// Whether a test reads the clock or makes a timer before it runs production
-// (`timed`, except a turn, which waits no time), and whether it waits on a
-// timer or on I/O where its output changed.
-const clockFirst = (t) => Boolean(t.timed) && t.timed !== `turn`
+// Whether a test's count could follow the clock in every run: it reads the
+// clock or makes a timer (`timed`, except a turn, which waits no time),
+// before it runs production or after it (`after`), or does I/O of its own
+// before production (`pendingIo: 'short'`, a pipe read). And whether it waits
+// on a timer or on I/O where its output changed.
+const readsClock = (t) =>
+  (Boolean(t.timed) && t.timed !== `turn`) || t.pendingIo === `short`
 const waitsIn = (t) =>
   Boolean(t.slow || t.timerWait || t.ioWait || t.pendingIo === `test`)
+// Whether a test makes its heavy calls (`heavy`): a test that calls
+// production on its own input, once per run (a test.prop runs its body many
+// times, and the shared-state witness calls it only after another test, so
+// neither is heavy).
+const heavyIn = (t) =>
+  Boolean(t.heavy) && !t.judgesShared && !t.readsShared && !t.asProp
 
 // A kill: a behavioral verdict on a reproducible route.
 const killsIn = (r) =>
@@ -5214,11 +5267,19 @@ function oracleTestFile(plan, file) {
       ? [`import fc from 'fast-check'`]
       : []),
     ...(plan.tests.some(
-      (t) => t.file === file && (t.ioWait || t.stops || t.pendingIo === `test`),
+      (t) =>
+        t.file === file &&
+        (t.ioWait ||
+          t.stops ||
+          t.pendingIo === `test` ||
+          t.pendingIo === `short`),
     )
       ? [`import { spawn } from 'node:child_process'`]
       : []),
-    ...(plan.tests.some((t) => t.file === file && t.pendingIo === `test`)
+    ...(plan.tests.some(
+      (t) =>
+        t.file === file && (t.pendingIo === `test` || t.pendingIo === `short`),
+    )
       ? [
           `import { join as samplesPath } from 'node:path'`,
           `import { threadId } from 'node:worker_threads'`,
@@ -5304,8 +5365,9 @@ function oracleTestFile(plan, file) {
         ...(t.registered && t.work !== null
           ? [`    g.__oracleWorkBound?.(${t.work})`]
           : []),
-        // A test that waits on a timer before it runs production.
-        ...(t.timed
+        // A test that waits on a timer before it runs production (a test that
+        // reads the clock `after` its work does so below).
+        ...(t.timed && t.timed !== `after`
           ? [
               {
                 timer: `    if ((await promisify(setTimeout)(0, 'v')) !== 'v') throw new Error('promisify(setTimeout) lost its value')`,
@@ -5321,6 +5383,20 @@ function oracleTestFile(plan, file) {
                 loopdelay: `    { const delay = monitorEventLoopDelay(); delay.enable(); delay.disable() }`,
                 turn: `    await new Promise((r) => setImmediate(r))`,
               }[t.timed],
+            ]
+          : []),
+        // A short read of a pipe the test opened, before it runs production,
+        // in every run: held for two of the sampler's samples (a count), so
+        // the test's unmutated rows record I/O of its own.
+        ...(t.pendingIo === `short`
+          ? [
+              `    await new Promise((r) => { const child = spawn(process.execPath, ['-e', ${JSON.stringify(SAMPLE_HOLD)}, samplesPath(process.env.ORACLE_GAPS_TEST_SAMPLES ?? '', \`\${process.pid}-\${threadId}\`), '${SAMPLES_HELD.short}'], { stdio: ['ignore', 'pipe', 'ignore'] }); child.unref(); child.stdout.once('data', r) })`,
+            ]
+          : []),
+        // A heavy test's calls before its own (`heavy`), in every run.
+        ...(heavyIn(t)
+          ? [
+              `    for (let h${i} = 0; h${i} < ${t.heavy}; h${i} += 1) ${callFor(t.fn)}(${part.input}, [])`,
             ]
           : []),
         `    const ${out}: Array<string> = []`,
@@ -5386,6 +5462,14 @@ function oracleTestFile(plan, file) {
               `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) for (let k${i} = 0; k${i} < ${t.loops}; k${i} += 1) ${callFor(t.fn)}(${part.input}, [])`,
             ]
           : []),
+        // A test that reads the clock only after its work (`after`), in every
+        // run it reaches here: its unmutated rows are clocked, while a copy
+        // that spins before this line never reads it.
+        ...(t.timed === `after`
+          ? [
+              `    if (Date.now() < 0) throw new Error('the clock reads before 1970')`,
+            ]
+          : []),
         // Where its output differs, a test that waits on one timer due well
         // inside its horizon. Nothing else keeps it busy: no load is in the test
         // (a loaded variant would be a CPU hog outside the worker), so the timer
@@ -5405,7 +5489,7 @@ function oracleTestFile(plan, file) {
         // judges as usual.
         ...(t.pendingIo === `test`
           ? [
-              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await new Promise((r) => { const child = spawn(process.execPath, ['-e', ${JSON.stringify(SAMPLE_HOLD)}, samplesPath(process.env.ORACLE_GAPS_TEST_SAMPLES ?? '', \`\${process.pid}-\${threadId}\`)], { stdio: ['ignore', 'pipe', 'ignore'] }); child.unref(); child.stdout.once('data', r) })`,
+              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await new Promise((r) => { const child = spawn(process.execPath, ['-e', ${JSON.stringify(SAMPLE_HOLD)}, samplesPath(process.env.ORACLE_GAPS_TEST_SAMPLES ?? '', \`\${process.pid}-\${threadId}\`), '${SAMPLES_HELD.test}'], { stdio: ['ignore', 'pipe', 'ignore'] }); child.unref(); child.stdout.once('data', r) })`,
             ]
           : []),
         // Where its output differs, a test that writes to the console and then
@@ -6572,6 +6656,7 @@ export {
   kill,
   push,
   judging,
+  HEAVY_CALLS,
   witness,
   probeText,
   guardText,
