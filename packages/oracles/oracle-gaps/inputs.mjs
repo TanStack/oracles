@@ -20,11 +20,15 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { posix } from './paths.mjs'
 
-// The calls that read a file, and those that test whether it exists and
-// what it is. Each is taken once per process, before a wrapper replaces it,
-// so hashing a file is not itself a read.
+// The calls that read a file (a stream's too, by the whole file), and those
+// that test whether it exists and what it is. Each is taken once per
+// process, before a wrapper replaces it, so hashing a file is not itself a
+// read.
 const reads = [
-  [fs, [`readFileSync`, `readFile`, `existsSync`, `statSync`]],
+  [
+    fs,
+    [`readFileSync`, `readFile`, `createReadStream`, `existsSync`, `statSync`],
+  ],
   [fs.promises, [`readFile`, `stat`]],
 ]
 // The calls that list a directory.

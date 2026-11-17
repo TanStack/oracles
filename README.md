@@ -227,8 +227,11 @@ exited with <signal or code>` and exits 3; after an out-of-memory crash
   Every read is an input (maintainer decision, 2026-11-16): the modules the
   run loaded; the files its tests read through `fs` on any path, inside the
   package or outside it, `node_modules` included (`readFileSync`,
-  `readFile`, `existsSync`, `statSync`, and `fs/promises` `readFile` and
-  `stat`), each by the content that the run read; the environment variables
+  `readFile`, `createReadStream`, `existsSync`, `statSync`, and
+  `fs/promises` `readFile` and `stat`), each by the content that the run
+  read; the directories its tests list (`readdir`, `readdirSync`, `opendir`,
+  `opendirSync`, and `fs/promises` `readdir` and `opendir`), each by its
+  entries' names and kinds; the environment variables
   its tests read, by value, or all of them when a test lists them; and what
   Vitest, the Vite config, and the config's own plugins read in the CLI's
   process while it loads them and in each plugin hook. Each check hashes
@@ -246,15 +249,12 @@ exited with <signal or code>` and exits 3; after an out-of-memory crash
 
   These reads are no input yet, so an edit to the file alone does not rerun
   the tests that read it: a read from a worker thread or child process that
-  the test starts; and a read through any `fs` or `fs/promises` function
-  other than the six above, or through one of those six given a file
-  descriptor. That catch-all includes, for example, `readdir`, `opendir`,
-  `glob`, `globSync`, `createReadStream`, `realpath`, `lstat`, `access`,
-  `open`, `read`, `readSync`, `readv`, `fstat`, `fstatSync`, `copyFile`,
-  `copyFileSync`, `cp`, `cpSync`, `openAsBlob`, `statfs`, `readlink`, the
-  callback `stat`, `exists`, `watch`, and `watchFile`, and the `fs/promises`
-  `readdir`, `opendir`, `glob`, `lstat`, `realpath`, `readlink`, `access`,
-  `open`, `copyFile`, `cp`, `statfs`, and `watch`. Run the check cold
+  the test starts (#143); a read through a file descriptor, after `open`,
+  `openSync`, or the `fs/promises` `open` (#141); a link's target, or the
+  rest of the stat family, `lstat`, `readlink`, `realpath`, `access`, the
+  callback `stat`, and `exists` (#142); and `glob`, `globSync`, `copyFile`,
+  `copyFileSync`, `cp`, `cpSync`, `openAsBlob`, `statfs`, and the
+  `fs/promises` `glob`, `copyFile`, `cp`, and `statfs`. Run the check cold
   (without `--daemon`) after an edit to a file read that way. A later
   release records all of them except `watch` and `watchFile`, which wait for
   future changes and stay no input (maintainer decision, 2026-11-13, with
