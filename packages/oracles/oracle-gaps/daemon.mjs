@@ -343,6 +343,15 @@ async function serve(pkg) {
   let parseArgs
   let idle
   let watch
+  // Test-only (ORACLE_GAPS_TEST_HOLD_OVERLAP, a path): the first check this
+  // daemon runs waits until it has accepted a second check request
+  // (overlap-hold.mjs, loaded only when the variable is set).
+  const overlap =
+    process.env.ORACLE_GAPS_TEST_HOLD_OVERLAP === undefined
+      ? undefined
+      : (await import(`./overlap-hold.mjs`)).overlapHold(
+          process.env.ORACLE_GAPS_TEST_HOLD_OVERLAP,
+        )
   // Requests wait until the session is open.
   let opened
   let queue = new Promise((resolvePromise) => {
@@ -397,6 +406,7 @@ async function serve(pkg) {
         queue = queue.then(() => shutdown(connection))
         return
       }
+      overlap?.accepted()
       queue = queue.then(async () => {
         clearTimeout(idle)
         // A request queued before the session failed hears why.
@@ -435,6 +445,12 @@ async function serve(pkg) {
           const options = parseArgs(message.argv, message.cwd)
           if (options.pkg !== pkg)
             throw new Error(`this daemon serves ${pkg}, not ${options.pkg}`)
+          // The hold's backstop fails this check and closes the daemon, so
+          // its socket and lock are released.
+          await overlap?.hold().catch((error) => {
+            close()
+            throw error
+          })
           stdout = await session.check(options, store, (line) =>
             stderr.push(`${line}\n`),
           )
