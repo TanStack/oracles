@@ -6,15 +6,23 @@
 // `refused: <cause>` and `fix: <one directive>`, and, when the run knows its
 // output directory, writes the refusal there as results.json and summary.md
 // and names its report there in its last line, `oracle-gaps: done refused`.
-// Any other error is a bug in the CLI. It exits 3,
-// says so, and keeps its stack in error.log, in the output directory when
-// the run knows one. Each ending replaces the files of another ending that
-// an earlier run left in the directory (check.mjs removes error.log when a
-// check completes).
+// Any other error is a bug in the CLI. It exits 3, says so in one
+// `oracle-gaps: error` line, and keeps its stack in error.log, in the
+// output directory when the run knows one. Every line an ending prints is
+// a line of the stream (stream.mjs) or of the refusal block. Each ending
+// replaces the files of another ending that an earlier run left in the
+// directory (check.mjs removes error.log when a check completes).
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { posix, realPathOf } from './paths.mjs'
+import { escapeControls, streamLine } from './stream.mjs'
+
+// A path as a line of the stream shows it: in forward slashes, with a line
+// break or another control character as its escape, so that a path cannot
+// end its line or forge another (the register's C entry "The internal-error
+// line", 2026-11-16).
+const shown = (path) => escapeControls(posix(path))
 
 /** A problem the author can fix: its cause, and the one step that fixes it. */
 export class Refusal extends Error {
@@ -38,12 +46,14 @@ export function endRun(error, out = error?.out) {
     // The last line says the run refused, and where its report is once the
     // run knows its output directory (the stream's done line, stream.mjs);
     // it ends stdout too (index.mjs).
+    // A reportless refusal (another run uses the directory) writes nothing
+    // there: the directory's files are the other run's.
     const done = write(
-      out,
+      error.reportless ? undefined : out,
       results,
       `Refused: ${message}\n\nFix: ${error.fix}\n`,
     )
-      ? `oracle-gaps: done refused, report ${posix(join(out, `summary.md`))}`
+      ? `oracle-gaps: done refused, report ${shown(join(out, `summary.md`))}`
       : `oracle-gaps: done refused`
     return { exitCode: 2, stderr: `${[...block, done].join(`\n`)}\n`, done }
   }
@@ -54,10 +64,13 @@ export function endRun(error, out = error?.out) {
     log = join(realPathOf(tmpdir()), `oracle-gaps-error-${process.pid}.log`)
     writeFileSync(log, stack)
   }
-  const done = `oracle-gaps: done error, log ${posix(log)}`
+  const done = `oracle-gaps: done error, log ${shown(log)}`
+  // The message stays one line: its own line breaks print as escapes. A
+  // message that already names the CLI does not name it twice.
+  const said = escapeControls(message.replace(/^oracle-gaps: /, ``))
   return {
     exitCode: 3,
-    stderr: `oracle-gaps internal error: ${message}\nThis is a bug in oracle-gaps, not in your oracle. Its stack is in ${posix(log)}.\n${done}\n`,
+    stderr: `${streamLine(`error`, `${said}: a bug in oracle-gaps, not in your oracle; its stack is in ${shown(log)}`)}\n${done}\n`,
     done,
   }
 }

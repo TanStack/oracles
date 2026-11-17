@@ -14,3 +14,19 @@ Show me what oracle testing with @tanstack/oracles can find in this repository.
 3. Read node_modules/@tanstack/oracles/skills/oracles-explore/SKILL.md in full,
    and follow it. Use <sha> wherever a skill asks for the commit to pin.
 ```
+
+## Test hooks
+
+`ORACLE_GAPS_TEST_RETENTION` (a file path, unset in normal use) makes the gap CLI append one JSON line per mutant batch it runs, however the batch ends: settled, cut off, or rejected. It only observes: it never changes an outcome. The e2e oracle reads it to check bounded retention. The hook's code is in `oracle-gaps/retention-hook.mjs`, which the CLI loads only when this variable or `ORACLE_GAPS_TEST_REJECT_BATCH` is set, so a normal run never loads it.
+
+Under the hook, each check also writes `check.pid` (the id of the process that runs the check: the CLI's supervised child, or a daemon) into its `--out` directory, after the CLI creates that directory. Each line has:
+
+- `run`: the check's `--out` path.
+- `pid`: the id of the process that wrote the line. The oracle compares it with `check.pid`.
+- `batch`: the batch's own index within its check, from 0, taken when the batch starts.
+- `before`: Vitest's and Vite's structure sizes before the batch, and the `stale*` counts. `staleIndexed` and `staleSpecs` count registry entries that name no live context. `staleOpen` counts contexts that left the live array and that Vitest has not started to close (its own close state). All three must be 0.
+- `held`: how many of the entries the check gave its store are still reachable after a full garbage collection, which the hook runs before it writes the line. A cold check's store keeps none, so this must be 0 there. A daemon's store keeps its entries by design.
+- For a settled or rejected batch: `after` (the sizes after its copies are retired), `copyNodes` (Vite module nodes that still name a copy, must be 0), and `nonCopyDup` (non-copy files with more than one module node in an environment, must be 0 beyond the measured plain-plus-`?raw` pair).
+- For a cut batch: `cut: true` and no `after`. Its context is replaced, not retired.
+
+`ORACLE_GAPS_TEST_REJECT_BATCH` (a batch number from 1, unset in normal use) makes the gap CLI's n-th batch run reject, as a crash in Vitest would. Its message holds a line break and a line after it that reads as a done line, so the CLI's ending must keep the message on its one error line. It is a test-only fault: the batch's run completes, so its copies are in Vitest's and Vite's state, and then the run's promise rejects, which takes the same path a real crash takes. The run then ends as an internal error: exit 3, the done error line, and `error.log` in its output directory. The batch's copies are still retired and its retention line is still written.

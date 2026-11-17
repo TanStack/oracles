@@ -491,6 +491,9 @@ const earlierEdits = edits.filter((edit) => !laterEdits.includes(edit))
 // A history's no later edits, one value, so `histories` can take it back
 // (fc.constant takes back only its own reference).
 const NO_LATER_STEPS = Object.freeze([])
+// A history's no stop runs, one value for the same reason: a constructed
+// history whose stops are all constructed-only is taken back to it.
+const NO_STOPS = Object.freeze([])
 // The later edits a history takes after its steps: only one without the
 // witness module that has steps.
 const laterStepsOf = (history) =>
@@ -689,7 +692,7 @@ const drawn = fc.record({
   // spins (`w_stop`), each in a pool: Vitest's workers as child processes or
   // as threads. Each costs a run of its own, so few histories have one.
   stopRuns: fc.oneof(
-    { weight: 9, arbitrary: fc.constant([]) },
+    { weight: 9, arbitrary: fc.constant(NO_STOPS) },
     {
       weight: 1,
       arbitrary: fc.array(
@@ -702,7 +705,11 @@ const drawn = fc.record({
           // warms its config (`warm`, re-review N1). Or no signal: a test
           // aborts the run's process (`abort`, as a V8 out-of-memory abort
           // does; the coordinator's decision of 2026-11-12 on P10).
-          when: fc.constantFrom(`run`, `run`, `after`, `warm`, `abort`),
+          // `after` switches the test-only hold ORACLE_GAPS_TEST_HOLD_UNTIL,
+          // so only a constructed history sets it (the maintainer's decision
+          // "Randomness wins for new fields": a drawn field never switches a
+          // test-only hook); the take-back drops it (drawnStops).
+          when: fc.constantFrom(`run`, `run`, `warm`, `abort`),
         }),
         { minLength: 1, maxLength: 5 },
       ),
@@ -838,7 +845,7 @@ const drawn = fc.record({
   // A batch's closing row written in two halves (issue #83) is constructed
   // only: the constant draws nothing, so generated histories hold no row, and
   // `histories` takes a constructed one back as this constant (as
-  // `claimScenario` does). Its neutral value is recorded by the canary.
+  // `logLost` does). Its neutral value is recorded by the canary.
   tornRows: fc.constant(false),
   // Whether the daemon's pause engages in the daemon steps (dieMidCheck and
   // resetBeforeRead). Always true in drawn histories, so the seeds' histories are
@@ -848,6 +855,108 @@ const drawn = fc.record({
   // Whether the warm daemon is replaced after the warm check (review of #73, B2).
   // Only the constructed history of a replaced warm daemon sets it.
   warmReplaced: fc.constant(false),
+  // Where the config's `test.root` sits (issue #101, `testRoots`): `none`, the
+  // package, or a shape that only a constructed history sets. The constant
+  // draws nothing, so generated histories keep their values; `histories`
+  // takes a constructed one back as this constant, as `tornRows` does.
+  testRoot: fc.constant(`none`),
+  // Whether the config has a plugin whose own \`load\` reads each test file
+  // with a sync read (\`LOAD_PLUGIN\`, review of #103). Only a constructed
+  // history sets it; \`histories\` takes it back as this constant.
+  loadPlugin: fc.constant(false),
+  // The batch whose run rejects: a constructed-only field (0 is no fault). Only the constructed history at
+  // the end of the campaign sets it; the take-back below returns it to 0 (the generator rule, extended).
+  rejectBatch: fc.constant(0),
+  // #57's fields (maintainer decision "Randomness wins for new fields",
+  // 2026-11-16): a field that changes what a history runs is drawn, and only a
+  // field that switches a test-only hook stays a constant that constructed
+  // histories set (overlap, spawnStop, spawnOnStart, logLost, supervisorDeath,
+  // unsupervised). The take-back maps those back to their neutral values
+  // (constructedNeutral).
+  // Where the run writes: `--out` names (`explicit`), or the directory the
+  // CLI picks when `--out` is left out (`default`, args.mjs), whose stream
+  // log, results, and done line must still agree (law 15).
+  outMode: fc.constantFrom(`explicit`, `explicit`, `explicit`, `default`),
+  // The run's `<out>/stream.log` is a directory, so the log cannot be written
+  // (a problem the author can fix: the run refuses before it checks).
+  logBlocked: fc.constantFrom(
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+  ),
+  // A second run on the first run's output directory while the first is live
+  // (ORACLE_GAPS_TEST_HOLD_UNTIL holds the first): constructed only.
+  overlap: fc.constant(false),
+  // The stop witness alone (`w_stop`), which a run the driver stops needs. A
+  // field of its own, so the witness options above keep their weights.
+  stopWitness: fc.constantFrom(
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+  ),
+  // A stop sent as the CLI starts (ORACLE_GAPS_TEST_STARTED): constructed only.
+  spawnStop: fc.constant(false),
+  // The signal of a spawn stop, and how long the driver waits, once the CLI is
+  // held at its start, before it sends it (0 to 300 ms). A held start makes the
+  // outcome independent of the wait; a hold released by time would end before
+  // a long wait.
+  spawnSignal: fc.constantFrom(`SIGINT`, `SIGINT`, `SIGTERM`),
+  spawnDelay: fc.integer({ min: 0, max: 300 }),
+  // Where a spawn stop is held: after the CLI's started marker
+  // (ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED), or, when false, before the CLI's
+  // first statement (the driver's own preload). Constructed only.
+  spawnOnStart: fc.constant(false),
+  // A claim that every start must refuse (the maintainer's decision "Stale
+  // claims refuse; no takeover"): two racing starts on a dead pid's claim
+  // (`race`), one start on it (`stale`), or one on an empty (`empty`),
+  // unreadable (`unreadable`), or dangling-link (`dangling`) claim.
+  claimScenario: fc.constantFrom(
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    `race`,
+    `stale`,
+    `empty`,
+    `unreadable`,
+    `dangling`,
+  ),
+  // A stream log that becomes a directory right after the note
+  // (ORACLE_GAPS_TEST_PAUSE_AT=note): constructed only.
+  logLost: fc.constant(false),
+  // A supervised check whose supervisor is killed (ORACLE_GAPS_TEST_PAUSE_AT=child,
+  // POSIX): constructed only.
+  supervisorDeath: fc.constant(false),
+  // A POSIX check run unsupervised, the path win32 takes (the test-only hook
+  // ORACLE_GAPS_TEST_UNSUPERVISED). Constructed only: a drawn record holds false.
+  unsupervised: fc.constant(false),
+  // The runs' PATH holds no `ps` (a slim container, or BusyBox's `ps`, which
+  // has no `-p`): the supervised run needs no external command (POSIX; review
+  // of #57, A7).
+  psMissing: fc.constantFrom(false, false, false, false, false, false, true),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -859,6 +968,10 @@ const drawn = fc.record({
 // nothing changed, which reuses the confirmations that the first check ran.
 const witnessSteps = [`test`, `helper`, `revert`]
 const budgetSteps = [`recheck`]
+// The stop witness alone takes no steps, so it counts only where the history
+// has none; a history with steps and the field is a legal history without it.
+const stopsOnly = (history) =>
+  history.stopWitness === true && history.steps === null
 const keepsSteps = (history) => {
   if (history.witness === false || history.steps === null) return true
   const kept = history.witness === `budget` ? budgetSteps : witnessSteps
@@ -883,38 +996,85 @@ const keepsSteps = (history) => {
 // `budgetSteps` (the review of the gap CLI's runtime fixes, 2026-11-12,
 // P1-a: the budget witness only in its own histories). The map is its own
 // inverse on the histories it keeps, so fast-check takes every one of them
-// back and shrinks it.
+// back and shrinks it. A constructed value of a field that switches a
+// test-only hook (a stream log loss, `logLost`, for one) is not a value `drawn`
+// can produce, so its take-back reads it as the drawn constant (a shrink of
+// such a counterexample is log-intact: the constructed history stays the
+// counterexample for its law), and so is a constructed stop after the
+// completed line (`drawnStops`). A constructed history may also set `tornRows`
+// (issue #83), which `drawn` cannot produce, so its take-back reads it as the
+// drawn constant `false`: a shrink is torn-row-free.
 // A history is drawn as on main; the plan takes its later edits after its
 // steps (`laterStepsOf`). Taking a history back returns it unchanged,
 // except a constructed one whose `steps` hold a later edit, which the
 // steps grammar cannot draw: its later edits move to `laterSteps`. A
-// constructed history may also set `tornRows` (issue #83), which `drawn`
-// cannot produce, so its take-back reads it as the drawn constant `false`
-// (as `claimScenario` does): a shrink is torn-row-free.
+// constructed history may also set `tornRows` (issue #83) or `testRoot`
+// (issue #101), which `drawn` cannot produce, so its take-back reads each as
+// its drawn constant (as `logLost` does): a shrink is torn-row-free and
+// runs with the package as the config's root.
+// The neutral value of each constructed-only field: a drawn record holds it, and
+// the take-back maps a constructed history back to it (the generator rule, 2026-11-14).
+const constructedNeutral = {
+  overlap: false,
+  spawnStop: false,
+  spawnOnStart: false,
+  logLost: false,
+  supervisorDeath: false,
+  unsupervised: false,
+  tornRows: false,
+  testRoot: `none`,
+  loadPlugin: false,
+}
+// The stops a drawn record can hold: every stop but a constructed `after` one.
+const drawnWhens = [`run`, `warm`, `abort`]
+const drawnStops = (history) =>
+  (history.stopRuns ?? []).every((stop) => drawnWhens.includes(stop.when))
+    ? history
+    : {
+        ...history,
+        stopRuns: history.stopRuns.some((stop) =>
+          drawnWhens.includes(stop.when),
+        )
+          ? history.stopRuns.filter((stop) => drawnWhens.includes(stop.when))
+          : NO_STOPS,
+      }
 const histories = drawn.map(
   (history) => (keepsSteps(history) ? history : { ...history, steps: null }),
   (value) => {
     const history =
-      /** @type {{ witness: unknown, steps: unknown[] | null, tornRows: unknown }} */ (
+      /** @type {{ witness: unknown, steps: unknown[] | null, tornRows: unknown, testRoot: unknown, loadPlugin: unknown, claimScenario: unknown, logLost: unknown }} */ (
         value
       )
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
     // Take-back into the drawn language: a disarmed pause (pauseEngages false,
-    // only the constructed history sets it) comes back as engaged, so the
-    // arbitrary can shrink it. The disarm is therefore not kept by a shrink.
-    const taken =
-      history.tornRows === false ? value : { ...history, tornRows: false }
+    // only the constructed history sets it) comes back as engaged, and a
+    // rejected batch (rejectBatch, likewise) as none, so the arbitrary can
+    // shrink it. Neither is therefore kept by a shrink.
+    const reset = Object.entries(constructedNeutral).every(
+      ([field, neutral]) => history[field] === neutral,
+    )
+      ? value
+      : { ...history, ...constructedNeutral }
+    // A constructed stop after the completed line (`after`) is no drawn stop,
+    // so it is dropped (drawnStops).
+    const taken = drawnStops(reset)
     const later = (history.steps ?? []).filter((step) =>
       laterEdits.includes(step),
     )
     if (later.length === 0)
-      return { ...taken, pauseEngages: true, warmReplaced: false }
+      return {
+        ...taken,
+        pauseEngages: true,
+        warmReplaced: false,
+        rejectBatch: 0,
+      }
     const earlier = history.steps.filter((step) => !laterEdits.includes(step))
     return {
       ...taken,
       pauseEngages: true,
       warmReplaced: false,
+      rejectBatch: 0,
       steps: earlier.length > 0 ? earlier : null,
       laterSteps: later,
     }
@@ -2574,7 +2734,7 @@ function resolveHistory(history) {
     ...exported,
     ...importer,
     ...dotGen,
-    ...(history.witness
+    ...(history.witness || stopsOnly(history)
       ? witness
           .filter(
             (w) =>
@@ -2582,6 +2742,7 @@ function resolveHistory(history) {
               // so only histories of the `budget` mode carry it.
               (history.witness === true && w.id !== `w_slowpair`) ||
               (history.witness === `capture` && captureWitness.has(w.id)) ||
+              (stopsOnly(history) && w.id === `w_stop`) ||
               (history.witness === `budget` && w.id === `w_slowpair`),
           )
           .map((w) => ({
@@ -2943,6 +3104,8 @@ function resolveHistory(history) {
     // the test that aborts when the driver asks.
     aborts: (history.stopRuns ?? []).some((stop) => stop.when === `abort`),
     ordinary: history.ordinary === true,
+    // The batch whose run rejects (a test-only fault; 0 is none).
+    rejectBatch: history.rejectBatch ?? 0,
     // An `owns` key in an assertion's arguments, in the ordinary file: its
     // assertion form and whether its list is a literal, or none.
     matcherOwns: history.matcherOwns ?? `none`,
@@ -2951,6 +3114,11 @@ function resolveHistory(history) {
     tornRows: history.tornRows === true,
     ...configOf(history),
     configEnv: history.configEnv === true,
+    // Where the config's `test.root` sits (`testRoots`, issue #101): only a
+    // constructed history sets it, so a generated one runs with the package
+    // as the root.
+    testRoot: history.testRoot ?? `none`,
+    loadPlugin: history.loadPlugin === true,
     native: history.native ?? `none`,
     // A prebuilt addon in the workspace dependency's build/Release
     // (`addRelease`).
@@ -2960,7 +3128,37 @@ function resolveHistory(history) {
     depSubpath: history.depSubpath === true,
     unbuiltDep: history.unbuiltDep === true,
     budget: history.budget ?? `two`,
+    outMode: history.outMode ?? `explicit`,
+    // Both name the run's `--out` directory before it starts, so they need
+    // an explicit one (a default directory is chosen by the CLI).
+    logBlocked:
+      history.logBlocked === true && outModeOf(history) === `explicit`,
+    // A second run needs a live first run, which has its note and stream log.
+    // A blocked log refuses the first run before it is live, and a refusing
+    // fault (an argument, declaration, or config fault) ends it before its note
+    // too, so the overlap is generated only for a run that reaches its check
+    // (decision of 2026-11-13, review of #57: O1 and O2).
+    overlap:
+      history.overlap === true &&
+      outModeOf(history) === `explicit` &&
+      history.logBlocked !== true &&
+      (history.fault ?? `none`) === `none`,
     stopRuns: history.stopRuns ?? [],
+    spawnStop: history.spawnStop === true,
+    spawnSignal: history.spawnSignal ?? `SIGINT`,
+    spawnDelay: history.spawnDelay ?? 0,
+    // A claim that every start must refuse (`claimScenario` above). The claim
+    // is read after the arguments, so a run whose arguments refuse
+    // (`outsideSource`) refuses for them first, and draws no claim.
+    claimScenario:
+      (history.fault ?? `none`) === `outsideSource`
+        ? false
+        : (history.claimScenario ?? false),
+    logLost: history.logLost ?? false,
+    supervisorDeath: history.supervisorDeath ?? false,
+    unsupervised: history.unsupervised === true,
+    spawnOnStart: history.spawnOnStart === true,
+    psMissing: history.psMissing === true,
     onlyRun: history.onlyRun === true,
     pragma: history.pragma === true,
     cliPath: history.cliPath ?? `plain`,
@@ -3605,10 +3803,12 @@ function interpret(plan, fnId, x, sites, active) {
   const trace = []
   const reached = new Set()
   // The run's work: one for each site evaluation, as the capture counts a
-  // test's `calls` (capture-setup.mjs), which a work bound judges.
+  // test's `calls` (capture-setup.mjs), which a work bound judges. Probe code
+  // is never work (maintainer decision, 2026-11-16): a probe-only site's
+  // evaluation counts nothing.
   let work = 0
   const reach = (id) => {
-    work += 1
+    if (!sites[id].probe) work += 1
     reached.add(id)
   }
   const outcomes = []
@@ -4188,6 +4388,20 @@ const ownsNothing = (plan) =>
 const BROKEN_SUITE = `broken (b.*) $x it's`
 
 function refusal(plan) {
+  // The stages of a run decide which refusal comes first (P10 as amended in
+  // v21.2, R10): the arguments, before any check starts; then the stream log,
+  // which the run opens before its first line (the maintainer's decision of
+  // 2026-11-12); then the check itself, whatever it would find.
+  // A `--source` outside the package is an argument the CLI refuses before
+  // it starts a check (the argument rules that the static oracle judges),
+  // so its stdout has no line that names a stream log.
+  if (plan.fault === `outsideSource`)
+    return { cause: `outside the package`, arguments: true }
+  // A stream log that cannot be written is refused before the check starts
+  // (the CLI opens the log before its first line, index.mjs), so its stdout
+  // owes its done line alone.
+  if (plan.logBlocked === true)
+    return { cause: `the stream log`, arguments: true }
   // A Vitest that does not load, and a config the runner cannot honor, refuse
   // the run rather than leave every mutant unreached (maintainer decision,
   // 2026-11-08).
@@ -4195,9 +4409,12 @@ function refusal(plan) {
   if (plan.fault === `projects`)
     return { cause: `test.projects`, runtime: true }
   if (plan.fault === `badEntry`) return { cause: `${SOURCE}#nope` }
+  // An owns entry that names a missing file (a test file's declaration) is
+  // found by the analysis, after the check has started, so this refusal
+  // owes the stream log's note. The argument-stage case, a `--source` that
+  // is not a file of the package, is the static oracle's `absentSource`.
   if (plan.fault === `missingSource`) return { cause: `src/missing.ts` }
   if (plan.fault === `nonLiteral`) return { cause: `b.test.ts` }
-  if (plan.fault === `outsideSource`) return { cause: `outside the package` }
   // The analysis reads the test files that the package's Vitest config
   // includes (index.mjs, step 2), so a config that does not load is named
   // before anything the analysis would find. The cause names the config
@@ -4296,6 +4513,7 @@ const declarationFaults = [
   `nonLiteral`,
   `outsideSource`,
 ]
+const outModeOf = (history) => history.outMode ?? `explicit`
 const reachesRun = (history) =>
   !declarationFaults.includes(history.fault ?? `none`)
 
@@ -4309,7 +4527,12 @@ const reachesRun = (history) =>
 // (`summary`), one directive per gap class (`legend`), and each function's
 // heading over its gap lines (`function`) (the coordinator's decision of
 // 2026-11-12 on review F1: every line of either stream is a line of the
-// stream).
+// stream). An internal error says so on a line of its own kind (`error`,
+// law 12) before its done line: P10 prefixes every line the CLI writes,
+// and its declared exempt lines (v21.2 P10 and I3) do not name an internal
+// error's lines. The kind is the done line's status word for exit 3 (v21.2
+// I7), and the line's form is the register's C entry "The internal-error
+// line" (2026-11-16).
 const streamKinds = [
   `config`,
   `note`,
@@ -4321,6 +4544,7 @@ const streamKinds = [
   `summary`,
   `legend`,
   `function`,
+  `error`,
   `done`,
 ]
 // The one decisive baseline line, before any mutant runs: every oracle
@@ -4348,21 +4572,22 @@ function model(plan) {
   // fault, a Vitest that does not load, a config that does not load, and a
   // config that defines test.projects, which a loaded context shows. Every
   // other run names it once, refused or not.
-  const configLines = [
-    `outsideSource`,
-    `brokenVitest`,
-    `configThrows`,
-    `configNoDefault`,
-    `configNull`,
-    `configSyntax`,
-    `projects`,
-  ].includes(plan.fault)
-    ? []
-    : [
-        plan.configPath === undefined
-          ? `oracle-gaps: config none, Vitest's default discovery`
-          : `oracle-gaps: config ${plan.configPath}`,
-      ]
+  const configLines =
+    [
+      `outsideSource`,
+      `brokenVitest`,
+      `configThrows`,
+      `configNoDefault`,
+      `configNull`,
+      `configSyntax`,
+      `projects`,
+    ].includes(plan.fault) || plan.logBlocked === true
+      ? []
+      : [
+          plan.configPath === undefined
+            ? `oracle-gaps: config none, Vitest's default discovery`
+            : `oracle-gaps: config ${plan.configPath}`,
+        ]
   if (refused) return { refused, configLines }
   const sites = sitesOf(plan)
   const owners = ownersOf(plan)
@@ -4553,6 +4778,8 @@ function model(plan) {
   const gaps = entries.map((e) => e.key)
   return {
     configLines,
+    // The batch whose run the model predicts rejects (a constructed fault): the run ends as an internal error.
+    rejectedBatch: plan.rejectBatch > 0 ? plan.rejectBatch : undefined,
     baseline: baselineOf(plan),
     blocking: blockingOf(plan).filter((f) => !f.ordinary),
     replayed: blockingOf(plan).find((f) => f.replayed)?.replayed,
@@ -5162,6 +5389,12 @@ const altConfigPath = (plan) =>
 // package that it transforms, keeping what the module does.
 const PRE_PLUGIN = `{ name: 'gap-pre-rewrite', enforce: 'pre', transform(code, id) { const path = id.split('?')[0]; return /\\.(ts|js|mjs)$/.test(path) && !path.includes('/node_modules/') ? code + '\\n// rewritten by a pre plugin\\n' : undefined } }`
 
+// The config's own plugin with a \`load\` hook (\`loadPlugin\`): it loads each
+// test file itself, with a sync read of its path, as a plugin that reads a
+// module's source does. The runner's copy of a test file exists only in
+// memory, so only the runner's own \`load\` can answer for it (review of #103).
+const LOAD_PLUGIN = `{ name: 'gap-own-load', load(id) { const path = id.split('?')[0]; return path.endsWith('.test.ts') ? readFileSync(path, 'utf8') : undefined } }`
+
 /**
  * The text of the package's config, in its syntax (`configOf`), with the
  * fault, the top-level await, or the `require` calls the plan holds. `test`
@@ -5169,6 +5402,10 @@ const PRE_PLUGIN = `{ name: 'gap-pre-rewrite', enforce: 'pre', transform(code, i
  */
 function configText(plan, test) {
   const commonjs = plan.configSyntax === `cjs`
+  const plugins = [
+    ...(plan.prePlugin ? [PRE_PLUGIN] : []),
+    ...(plan.loadPlugin ? [LOAD_PLUGIN] : []),
+  ]
   const config = `defineConfig(${
     { object: ``, function: `() => (`, async: `async () => (`, promise: `` }[
       plan.config
@@ -5177,7 +5414,7 @@ function configText(plan, test) {
     plan.fault === `projects`
       ? `{ projects: [{ test: { name: 'unit', ...${test} } }] }`
       : test
-  }${plan.prePlugin ? `, plugins: [${PRE_PLUGIN}]` : ``} }${plan.config === `object` || plan.config === `promise` ? `` : `)`})`
+  }${plugins.length > 0 ? `, plugins: [${plugins.join(`, `)}]` : ``} }${plan.config === `object` || plan.config === `promise` ? `` : `)`})`
   // A promise of the config, a null default, or a config cut off mid-object.
   const body =
     plan.fault === `configNull`
@@ -5191,6 +5428,11 @@ function configText(plan, test) {
     commonjs
       ? `const { defineConfig } = require('vitest/config')`
       : `import { defineConfig } from 'vitest/config'`,
+    ...(plan.testRoot === `none`
+      ? []
+      : [`import { fileURLToPath } from 'node:url'`]),
+    // Only an ES module config has the load plugin (its constructed history).
+    ...(plan.loadPlugin ? [`import { readFileSync } from 'node:fs'`] : []),
     ...(plan.fault === `configThrows`
       ? [`throw new Error('the fixture config broke')`]
       : []),
@@ -5238,6 +5480,54 @@ const parentModules = (plan, state) =>
     ? `../node_modules`
     : `node_modules`
 
+/**
+ * Where a config's `test.root` sits (issue #101), as a path from the config,
+ * with the test files' glob and the setup file as Vitest reads them: relative
+ * to that root. `none` sets no root, so the root is the package. `tests` is
+ * the directory that holds the tests, as the repository's own oracle-gaps
+ * config sets it. `parent` is the directory above the package, which the
+ * driver places in a directory `pkg` of its scratch directory, so the glob
+ * names it. `outside` is a directory of the package that holds no test file,
+ * so the test files lie outside the root. `link` is `tests`, where the
+ * package's `tests` is a symbolic link to the directory that holds them
+ * (`linkedTests`), so the root's path is a link's. Vite names a module that
+ * a plugin resolves inside its root by its path from the root, and one
+ * outside it by its absolute path, so each shape names a copy of a test file
+ * differently if the runner resolves it. Every shape names each test file by
+ * its path in the package, so the model's keys are the same in all of them.
+ * Vitest resolves the package of a pragma's environment from the root (its
+ * init chunk's `vitest-environment-<name>` resolution), so under `parent` that
+ * package lies in the root's node_modules (`environments`); every other shape
+ * finds the package's own.
+ * Only an ES module config sets a root (it reads its own URL), and only the
+ * constructed histories set one, each as an ES module config.
+ */
+const inTests = {
+  root: `./tests`,
+  include: `**/*.test.ts`,
+  setup: `./setup.ts`,
+}
+const testRoots = {
+  none: { include: `tests/**/*.test.ts`, setup: `./tests/setup.ts` },
+  tests: inTests,
+  parent: {
+    root: `..`,
+    include: `pkg/tests/**/*.test.ts`,
+    setup: `./pkg/tests/setup.ts`,
+    environments: `../node_modules`,
+  },
+  outside: {
+    root: `./src`,
+    include: `../tests/**/*.test.ts`,
+    setup: `../tests/setup.ts`,
+  },
+  link: inTests,
+}
+
+// The directory that the package's `tests` links to under the `link` test
+// root.
+const linkedTests = `tests-target`
+
 function fixtureFiles(plan, state = initialState(plan)) {
   const manifest = (fields) =>
     `${JSON.stringify({ private: true, type: `module`, ...fields })}\n`
@@ -5248,11 +5538,18 @@ function fixtureFiles(plan, state = initialState(plan)) {
       : `${JSON.stringify({ private: true, ...fields })}\n`
   // A symbolic link, as a package manager links a workspace package.
   const link = (target) => ({ link: target })
-  const test = `{ include: ${
+  // The config's test root, and the test files' glob and the setup file,
+  // which Vitest reads relative to it (`testRoots`, issue #101).
+  const testRoot = testRoots[plan.testRoot]
+  const testRootOption =
+    testRoot.root === undefined
+      ? ``
+      : `root: fileURLToPath(new URL('${testRoot.root}', import.meta.url)), `
+  const test = `{ ${testRootOption}include: ${
     plan.configEnv
-      ? `process.env.VITEST === 'true' && process.env.TEST === 'true' && process.env.NODE_ENV === 'test' ? ['tests/**/*.test.ts'] : []`
-      : `['tests/**/*.test.ts']`
-  }${plan.setupGlobal || plan.fault === `setupThrows` ? `, setupFiles: ['./tests/setup.ts']` : ``} }`
+      ? `process.env.VITEST === 'true' && process.env.TEST === 'true' && process.env.NODE_ENV === 'test' ? ['${testRoot.include}'] : []`
+      : `['${testRoot.include}']`
+  }${plan.setupGlobal || plan.fault === `setupThrows` ? `, setupFiles: ['${testRoot.setup}']` : ``} }`
   // A history that installs a scoped addon later declares it from the
   // start, beside a scoped package already installed in its scope.
   const scoped = plan.steps.includes(`addScopedAddon`)
@@ -5432,21 +5729,22 @@ function fixtureFiles(plan, state = initialState(plan)) {
       : {}),
     'tests/c.test.ts': ordinaryTestFile(plan),
     // The environment oracle file a's pragma names (`pragma`), a package
-    // as Vitest finds one (`vitest-environment-<name>`).
+    // as Vitest finds one (`vitest-environment-<name>`) from the test root.
     ...(plan.pragma
       ? {
-          'node_modules/vitest-environment-marked/package.json': `${JSON.stringify({ name: `vitest-environment-marked`, type: `module`, exports: `./index.js` })}\n`,
-          'node_modules/vitest-environment-marked/index.js': [
-            `export default {`,
-            `  name: 'marked',`,
-            `  viteEnvironment: 'ssr',`,
-            `  setup(global) {`,
-            `    global.__gapEnvironment = 'marked'`,
-            `    return { teardown() { delete global.__gapEnvironment } }`,
-            `  },`,
-            `}`,
-            ``,
-          ].join(`\n`),
+          [`${testRoot.environments ?? `node_modules`}/vitest-environment-marked/package.json`]: `${JSON.stringify({ name: `vitest-environment-marked`, type: `module`, exports: `./index.js` })}\n`,
+          [`${testRoot.environments ?? `node_modules`}/vitest-environment-marked/index.js`]:
+            [
+              `export default {`,
+              `  name: 'marked',`,
+              `  viteEnvironment: 'ssr',`,
+              `  setup(global) {`,
+              `    global.__gapEnvironment = 'marked'`,
+              `    return { teardown() { delete global.__gapEnvironment } }`,
+              `  },`,
+              `}`,
+              ``,
+            ].join(`\n`),
         }
       : {}),
     // A copy that a check which died left behind (the runner names its
@@ -5498,7 +5796,18 @@ function fixtureFiles(plan, state = initialState(plan)) {
         intent: `pushes a different label`,
         author: `gap-report oracle`,
       })
-  return files
+  if (plan.testRoot !== `link`) return files
+  // The `link` test root: the files of `tests` live in `linkedTests`, and
+  // `tests` links to it.
+  return Object.fromEntries([
+    ...Object.entries(files).map(([path, text]) => [
+      path.startsWith(`tests/`)
+        ? `${linkedTests}/${path.slice(`tests/`.length)}`
+        : path,
+      text,
+    ]),
+    [`tests`, link(linkedTests)],
+  ])
 }
 
 /**
@@ -5533,7 +5842,8 @@ function writeFixture(dir, files) {
     `deps/state-dep`,
     `node_modules`,
   ])
-    mkdirSync(join(dir, sub), { recursive: true })
+    // A directory that the state links elsewhere is the link's.
+    if (!(sub in files)) mkdirSync(join(dir, sub), { recursive: true })
   if (!existsSync(join(dir, `node_modules/state-dep`)))
     symlinkSync(`../deps/state-dep`, join(dir, `node_modules/state-dep`), `dir`)
   for (const path of written.get(dir) ?? [])
@@ -5658,16 +5968,24 @@ function applyEdit(state, edit) {
 // exits 2 and prints one block on stderr with no stack frames: `refused:
 // <cause>`, then `fix: <directive>`. The directive is one next step, and it
 // offers no way around the fix (no "ignore it", no "mark it equivalent").
-// When the run knows its output directory, the block ends with `output:
-// <dir>`, and the directory holds a results.json, `{ status: "refused",
-// cause, directive }`, whose cause and directive are the block's, and a
-// summary.md, and no error.log: every ending removes the other ending's
+// When the run knows its output directory, its done line names the
+// directory's summary.md (`done refused, report <dir>/summary.md`), and the
+// directory holds a results.json, `{ status: "refused", cause, directive
+// }`, whose cause and directive are the block's, and a summary.md, and no
+// error.log: every ending removes the other ending's
 // files. Arguments the CLI cannot parse know their output directory only
 // when they name it (`--out`).
 //
-// An internal error is a bug in the CLI. It exits 3, says so, and keeps the
-// stack in an error.log rather than on stderr. No legal history reaches one,
-// so this law's check judges refusals only (see each oracle's limits).
+// An internal error is a bug in the CLI. It exits 3, says so in one
+// `oracle-gaps: error` line on stderr and none on stdout, with the line
+// breaks of its message and of its log's path escaped, and keeps the stack
+// in an error.log rather than on stderr (the register's C entry "The
+// internal-error line", 2026-11-16). No legal history reaches one; the
+// end-to-end oracle's constructed rejected-batch history (a test-only
+// fault) reaches it, and that oracle judges its exit, its error line, its
+// error.log, the absence of stack frames on stderr, and the stream law (law
+// 15) on both streams. This check judges refusals only (see each oracle's
+// limits).
 
 /**
  * What a run that ended without completing printed and wrote, as the
@@ -5724,8 +6042,13 @@ function endingOf(exit, stderr, out, name = (text) => text, stdout = ``) {
  * The first way a run's ending breaks the refusal law, or undefined. The
  * cause must name `cause`; with `outKnown`, the run knew its output
  * directory, so the block names it and the directory holds the refusal.
+ * `logNote` is the line that names the run's stream log, owed first on
+ * stdout when the run refused after it started a check, and undefined for
+ * a refusal of its arguments, before any check (the maintainer's decision
+ * of 2026-11-12 that every run that starts a check names its stream log
+ * first).
  */
-function refusalBreach(ending, { cause, outKnown }) {
+function refusalBreach(ending, { cause, outKnown, defaultOut, logNote }) {
   if (ending.exit !== 2) return `the refusal exited ${ending.exit}, not 2`
   if (ending.stackFrames) return `the refusal printed a stack trace`
   if (ending.cause === undefined)
@@ -5744,13 +6067,35 @@ function refusalBreach(ending, { cause, outKnown }) {
     !/^refused(?:, report .+)?$/.test(ending.done)
   )
     return `the refusal's last line is not \`oracle-gaps: done refused\``
-  // The done line ends stdout too, as its only line.
-  if (
-    ending.stdout.length !== 1 ||
-    ending.stdout[0] !== `oracle-gaps: done ${ending.done}`
-  )
-    return `the refusal's stdout is ${JSON.stringify(ending.stdout)}, not its done line`
+  // The done line ends stdout too, as its only line after the line that
+  // names the stream log, if the run started a check.
+  const owedStdout = [
+    ...(logNote === undefined ? [] : [logNote]),
+    `oracle-gaps: done ${ending.done}`,
+  ]
+  if (JSON.stringify(ending.stdout) !== JSON.stringify(owedStdout))
+    return `the refusal's stdout is ${JSON.stringify(ending.stdout)}, not ${JSON.stringify(owedStdout)}`
   if (!outKnown) return undefined
+  if (defaultOut) {
+    // The CLI chose the directory (args.mjs, the default rule): the report is
+    // in `<state>/oracle-gaps-<key>/out/<run name>`, and a run that logged its
+    // note names the same directory. The rule's shape is judged here, not the
+    // directory's name.
+    const report = /^refused, report (.+)\/summary\.md$/.exec(ending.done)?.[1]
+    if (
+      report === undefined ||
+      !/(^<default out>|^<out>|oracle-gaps-[^/\s]+\/out\/\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f]{8})$/.test(
+        report,
+      )
+    )
+      return `the refusal does not name its report in the default output directory: done ${ending.done}`
+    if (
+      logNote !== undefined &&
+      logNote !== `oracle-gaps: note log ${report}/stream.log`
+    )
+      return `the refusal's report is not in the directory its stream log names: ${logNote}`
+    return undefined
+  }
   if (!ending.namesOutput)
     return `the refusal does not name its report in its output directory: done ${ending.done}`
   const { written } = ending
@@ -5765,6 +6110,31 @@ function refusalBreach(ending, { cause, outKnown }) {
 }
 
 /**
+ * The code span that `text` opens with, read as Markdown reads one: it opens
+ * with a run of backticks and ends at the next run of exactly that length,
+ * and one space of padding on each side is dropped. A fence that a backtick
+ * in the code can close is therefore read as shorter code. Gives the code
+ * and the text after the span, or undefined when `text` opens no span.
+ */
+function readCodeSpan(text) {
+  const fence = text.match(/^`+/)?.[0]
+  if (!fence) return undefined
+  const rest = text.slice(fence.length)
+  const close = [...rest.matchAll(/`+/g)].find(
+    (run) => run[0].length === fence.length,
+  )
+  if (!close) return undefined
+  const content = rest.slice(0, close.index)
+  return {
+    code:
+      content.startsWith(` `) && content.endsWith(` `)
+        ? content.slice(1, -1)
+        : content,
+    after: rest.slice(close.index + fence.length),
+  }
+}
+
+/**
  * The summary's counts, gap keys, unowned keys, and each listed gap's kind
  * and line, read from its text as the author reads it.
  */
@@ -5773,23 +6143,8 @@ function readSummary(summary) {
     /^(\d+) mutants \((\d+) authored\)\. (\d+) killed by a law on a reproducible route, .*?\*\*(\d+) gaps\*\*/m,
   )
   const probe = summary.match(/ (\d+) mutants of state-probe code/)
-  // A key is read as Markdown reads a code span: it opens with a run of
-  // backticks and ends at the next run of exactly that length, and one
-  // space of padding on each side is dropped. A fence that a backtick in
-  // the key can close is therefore read as a shorter key.
-  const codeSpanAt = (text) => {
-    const fence = text.match(/^`+/)?.[0]
-    if (!fence) return undefined
-    const rest = text.slice(fence.length)
-    const close = [...rest.matchAll(/`+/g)].find(
-      (run) => run[0].length === fence.length,
-    )
-    if (!close) return undefined
-    const content = rest.slice(0, close.index)
-    return content.startsWith(` `) && content.endsWith(` `)
-      ? content.slice(1, -1)
-      : content
-  }
+  // A key is read as a code span (readCodeSpan).
+  const codeSpanAt = (text) => readCodeSpan(text)?.code
   const keysAfter = (label) =>
     summary.split(`\n`).flatMap((line) => {
       const at = line.match(new RegExp(`^ *- ${label}: `))
@@ -5837,6 +6192,7 @@ export {
   endingOf,
   refusalBreach,
   readSummary,
+  readCodeSpan,
   SOURCE,
   LIB,
   RUNES,

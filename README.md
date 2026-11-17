@@ -87,7 +87,9 @@ agent.
   no unmodified run to compare with, so there the bound judges nothing. The
   count does not see work without a site, such as a plain assignment, a
   `for...of` pass, or a builtin's own work, so a call to a builtin counts
-  once, whatever it costs. Where a shortcut's cost is in such a builtin
+  once, whatever it costs. Probe code is never work: a site in probe-only
+  code (the probe guard, a probe statement, or a probe helper) counts
+  nothing, so a mutant that only enters probe code does no extra work. Where a shortcut's cost is in such a builtin
   (`Object.defineProperty` and the like), make that cost an explicit
   observation of the driver, such as a count of those calls, and let a law
   judge it, in place of a very tight work bound. Work is counted per test, not per history: a
@@ -113,34 +115,63 @@ agent.
   | `summary`                                | `oracle-gaps: summary <run id>: 120 mutants, 98 killed, 12 gaps, 10 unowned (warnings). …`                                                                                                                                                                  |
   | `legend`                                 | `oracle-gaps: legend <class>: <what it means and what to do>`, once for each class of gap the run found                                                                                                                                                     |
   | `function`                               | `oracle-gaps: function fn <name> (<source>) (owners: <files>)`, the heading over that function's gap lines                                                                                                                                                  |
+  | `error`                                  | `oracle-gaps: error <message>: a bug in oracle-gaps, not in your oracle; its stack is in <path>/error.log`, once, before the done line of an internal error                                                                                                 |
   | `done` (last)                            | `oracle-gaps: done completed, 12 gaps, report <path>/summary.md` (`(provisional)` after the count when an oracle file failed), `oracle-gaps: done refused[, report <path>]`, `oracle-gaps: done error, log <path>`, or `oracle-gaps: done stopped (SIGINT)` |
 
-  Only two kinds of line have no prefix: the lines indented under a failing
-  baseline file (`failing:`, `law:`, `counterexample:`, `replay:`), and a
-  refusal's `refused:` and `fix:` block on stderr. No line is blank. The
+  Only these lines have no prefix: the lines indented under a failing
+  baseline file (`failing:`, `law:`, `counterexample:`, `replay:`), a
+  refusal's `refused:` and `fix:` block on stderr, `--help`'s usage text,
+  and lines that Node, V8, esbuild, or Vite print on the CLI's streams
+  (a warning, V8's out-of-memory block, esbuild's error block). The CLI
+  writes no blank line of its own. A path in a line, such as the output
+  directory, prints a line break or another control character as its
+  `\uXXXX` escape, so it cannot end the line. The
   done line is the last line of both stdout and stderr, once each, for
   every ending, and its status matches the exit code. A test's own output
   to the process's stdout and stderr goes to `test-output.log` in the output
   directory, which a note names; `summary.md` holds the report for reading.
   A run through the daemon prints the same lines, at the end of its check.
-  `--help` is not a check, so its usage text has no prefix.
+  The first line of a check, on both streams, is
+  `oracle-gaps: note log <out>/stream.log`: the run writes its stderr lines
+  to that file too, in order, so a check started in the background can be
+  read there while it runs and after it ends. A cold run's lines reach the
+  file as they are printed; a run through `--daemon` prints its lines at the
+  end of its check, so the file fills then.
+  `--help` is not a check, so its usage text has no prefix and no done
+  line. `--stop-daemon` prints nothing.
 
   For contributors: the `ORACLE_GAPS_TEST_` environment variables are test-only
   hooks for the CLI's own oracle, not settings for users. Each is inert unless
   set, and none changes an outcome by itself.
-  - `ORACLE_GAPS_TEST_HOLD_EXIT_MS` holds the run's exit after its done line.
+  - `ORACLE_GAPS_TEST_HOLD_UNTIL` names a file: after its done line the run keeps
+    its exit, and its output claim, until the file exists, so a test can send a
+    stop or start a second run before the run ends. A hold the CLI cannot
+    release is marked by a `<file>.unreleased` file.
   - `ORACLE_GAPS_TEST_WARM_PROBE` makes the first config warm-up wait where a
     stop signal can reach it.
   - `ORACLE_GAPS_TEST_STOP` names a file whose appearance makes the CLI take a
     stop as a SIGINT would (the win32 stop, which has no signal to deliver).
-  - `ORACLE_GAPS_TEST_PAUSE_AT` names one point at which the CLI blocks, with
-    `ORACLE_GAPS_TEST_PAUSE_MARK` naming a file the blocked process writes its
-    pid to: `daemon-reply` holds a daemon's reply after the check, and
-    `daemon-read` holds its first connection unread, once `ORACLE_GAPS_TEST_PAUSE_ARM`
-    names an existing file. The test kills the process by that pid, so no signal
-    is needed to pause on win32. Both marks are written whole (a temp file, then
-    a rename), and the test parses the pid as a positive integer before it sends
-    any signal.
+  - `ORACLE_GAPS_TEST_STARTED` names a file that the CLI writes as its first
+    project statement, before any project module loads, so a test can tell a stop
+    that came before the CLI started from one that came during its loads.
+  - `ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED` (any value) holds the CLI right after
+    the started file is written until the CLI has kept a stop signal (or, with
+    `ORACLE_GAPS_TEST_STOP`, until that file exists), so a stop sent on seeing
+    the file lands during the CLI's loads. The stop releases the hold, not a
+    time; a hold that sees no stop within 60 s fails the run loudly.
+  - `ORACLE_GAPS_TEST_PAUSE_AT` names one point at which the CLI holds: `note`
+    (after the note line is written, before the check starts), and `child` (a
+    supervised child, before it writes anything; it waits on timers, so its
+    orphan watchdog keeps running). A hold at `note` blocks synchronously. At
+    either point the CLI writes the file `ORACLE_GAPS_TEST_PAUSE_MARKER` (when
+    set) and waits until the file `ORACLE_GAPS_TEST_PAUSE_UNTIL` exists.
+  - `ORACLE_GAPS_TEST_PAUSE_MARK` and `ORACLE_GAPS_TEST_PAUSE_ARM` (daemon points):
+    `ORACLE_GAPS_TEST_PAUSE_AT` also names `daemon-reply` (holds a daemon's reply
+    after the check) and `daemon-read` (holds its first connection unread, once
+    `ORACLE_GAPS_TEST_PAUSE_ARM` names an existing file). The blocked process
+    writes its pid to `ORACLE_GAPS_TEST_PAUSE_MARK`, whole (a temp file, then a
+    rename), and the test parses the pid as a positive integer before it sends
+    any signal, so no signal is needed to pause on win32.
   - `ORACLE_GAPS_TEST_WAIT_MARK` names a file a request writes when its reply has
     not come `ORACLE_GAPS_TEST_WAIT_MS` after it was sent. A request has no
     timeout of its own: this timer starts with the request, and is cleared when
@@ -152,6 +183,13 @@ agent.
   - `ORACLE_GAPS_TEST_SERVED_MARK` names a file the daemon writes its pid to
     after it answers a check, so a test can tell which daemon served an
     earlier check (the warm daemon that a later check's pause must match).
+  - `ORACLE_GAPS_TEST_UNSUPERVISED` runs a POSIX check unsupervised, the path win32
+    takes (no supervisor writes the run's `--out`), so the daemon request of a run
+    that names no directory is reached on every platform.
+  - `ORACLE_GAPS_INTERNAL_SUPERVISED` is set by a supervisor for the child it
+    starts (its own pid). It is internal, not a user setting: the child kills its
+    own process group only when the supervisor that started it has gone and the
+    child leads that group.
   - `ORACLE_GAPS_TEST_TORN_ROWS` names a directory where each batch's watchdog
     counts its polls, and a batch's closing row is held half written until the
     watchdog has polled twice. The directory holds a `.begun` marker per batch and
@@ -166,11 +204,11 @@ agent.
   SIGABRT), the CLI writes `oracle-gaps: done error, the run's process
 exited with <signal or code>` and exits 3; after an out-of-memory crash
   the line says to give Node more memory (`NODE_OPTIONS=--max-old-space-size=<MB>`)
-  or to run fewer `--contexts`. An internal error's own message lines
-  (`oracle-gaps internal error: …`) have no prefix. A config's syntax error
+  or to run fewer `--contexts`. An internal error prints one
+  `oracle-gaps: error` line with its message, its line breaks escaped,
+  and its stack goes to `error.log`. A config's syntax error
   is refused with its first error; a syntax error in a module the config
-  imports still lets esbuild print its own error block, which has no
-  prefix.
+  imports lets esbuild print its own error block before the refusal.
 
   Exit codes: 0 the check completed, whatever its gaps (its last line is
   `oracle-gaps: done completed, …`); 2 the run was refused, with `refused:`
