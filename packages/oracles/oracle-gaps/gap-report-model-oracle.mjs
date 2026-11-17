@@ -1020,12 +1020,16 @@ const drawn = fc.record({
   // (merge gate F4). The outcomes stay the batch's. Drawn: it shapes the
   // fixture's tests and switches no hook.
   spinThrows: fc.constantFrom(false, false, false, true),
-  // Whether the first check's daemon holds before it warms each context,
-  // until the test has seen the CLI hear a beat since the previous context
-  // (ORACLE_GAPS_TEST_PAUSE_AT=daemon-warm, with ORACLE_GAPS_TEST_BEAT_MARK):
-  // a slow but healthy start (merge gate D1). It switches test-only hooks on,
+  // Whether the first check's daemon holds before it warms its contexts
+  // until its CLI has fallen back (ORACLE_GAPS_TEST_PAUSE_AT=daemon-warm): a
+  // slow but healthy warm-up (merge gate D1). It switches a test-only hook on,
   // so only the constructed history "a slow but healthy daemon start" sets it.
   slowStart: fc.constant(false),
+  // Whether a warm daemon's checks run under a 3 s bound
+  // (ORACLE_GAPS_TEST_WAIT_MS): the witness that a daemon that works tells its
+  // CLI so (its beats). It switches a test-only knob, so only the constructed
+  // history "a check through the daemon that works past the bound" sets it.
+  shortWait: fc.constant(false),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -1098,6 +1102,7 @@ const constructedNeutral = {
   hookStops: false,
   slowStart: false,
   holdOverlap: false,
+  shortWait: false,
 }
 // A drawn history never switches a test-only hook either (randomness wins,
 // 2026-11-16; v21.2 I16). Two steps arm a daemon pause: `dieMidCheck` holds
@@ -1142,7 +1147,7 @@ const histories = drawn.map(
   },
   (value) => {
     const history =
-      /** @type {{ witness: unknown, steps: unknown[] | null, stopRuns: Array<{ when: string }> } & Record<string, unknown>} */ (
+      /** @type {{ witness: unknown, steps: unknown[] | null, stopRuns: Array<{ when: string }>, tests: Array<{ slow: unknown, slowMs?: unknown }> } & Record<string, unknown>} */ (
         value
       )
     if (!keepsSteps(history))
@@ -1154,10 +1159,17 @@ const histories = drawn.map(
       : { ...history, ...constructedNeutral }
     const stopRuns = plainStops(history.stopRuns ?? NO_STOPS)
     const steps = plainSteps(history.steps)
+    // A constructed slow test (a wait where the output differs, seconds of
+    // real time) is read as the drawn one, which never waits.
+    const tests = history.tests.some((test) => test.slow)
+      ? history.tests.map(({ slowMs, ...test }) => ({ ...test, slow: false }))
+      : history.tests
     const taken =
-      stopRuns === history.stopRuns && steps === history.steps
+      stopRuns === history.stopRuns &&
+      steps === history.steps &&
+      tests === history.tests
         ? reset
-        : { ...reset, stopRuns, steps }
+        : { ...reset, stopRuns, steps, tests }
     const later = (steps ?? []).filter((step) => laterEdits.includes(step))
     if (later.length === 0) return taken
     const earlier = steps.filter((step) => !laterEdits.includes(step))
@@ -3214,6 +3226,7 @@ function resolveHistory(history) {
     hookStops: history.hookStops === true,
     spinThrows: history.spinThrows === true,
     slowStart: history.slowStart === true,
+    shortWait: history.shortWait === true,
     // Whether a step edits file b's helper during a check (`midrun`): then
     // file a loads the helper and holds the test that edits it.
     midrun: [...(history.steps ?? []), ...laterStepsOf(history)].includes(

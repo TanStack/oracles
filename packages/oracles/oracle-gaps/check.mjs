@@ -454,24 +454,6 @@ export async function openSession(pkg, progress = () => {}) {
   // Loading Vitest is a session start's long step: a daemon's waiting CLIs
   // hear it as progress (the daemon's beat).
   progress()
-  // Test-only (ORACLE_GAPS_TEST_PAUSE_AT=daemon-warm): once Vitest has
-  // loaded, the session writes <ORACLE_GAPS_TEST_PAUSE_MARK>.session and holds
-  // until <ORACLE_GAPS_TEST_PAUSE_RELEASE>.session exists, so a test can hold a
-  // slow session start. Inert unless set.
-  {
-    const mark = process.env.ORACLE_GAPS_TEST_PAUSE_MARK
-    const release = process.env.ORACLE_GAPS_TEST_PAUSE_RELEASE
-    if (
-      process.env.ORACLE_GAPS_TEST_PAUSE_AT === `daemon-warm` &&
-      mark !== undefined &&
-      release !== undefined &&
-      !existsSync(`${mark}.session`)
-    ) {
-      writeWhole(`${mark}.session`, ``)
-      while (!existsSync(`${release}.session`))
-        await new Promise((resolve) => setTimeout(resolve, 50))
-    }
-  }
   // Each process uses its own harness files, so a cold run beside the daemon
   // cannot remove the daemon's.
   // Vitest's CLI sets these before it loads a config, and a config may read
@@ -747,27 +729,7 @@ export default async (env) => {
     await new Promise((resolve) => service.on(`exit`, resolve))
     throw new Error(`The service was stopped`)
   }
-  // Test-only (ORACLE_GAPS_TEST_PAUSE_AT=daemon-warm): before it warms context
-  // `index` the first time, the session writes <ORACLE_GAPS_TEST_PAUSE_MARK>.<index>
-  // and waits until <ORACLE_GAPS_TEST_PAUSE_RELEASE>.<index> exists, so a test
-  // can hold a slow but healthy start; the test releases it, never the clock.
-  // Inert unless set.
-  async function warmHold(index) {
-    const mark = process.env.ORACLE_GAPS_TEST_PAUSE_MARK
-    const release = process.env.ORACLE_GAPS_TEST_PAUSE_RELEASE
-    if (
-      process.env.ORACLE_GAPS_TEST_PAUSE_AT !== `daemon-warm` ||
-      mark === undefined ||
-      release === undefined ||
-      existsSync(`${mark}.${index}`)
-    )
-      return
-    writeWhole(`${mark}.${index}`, ``)
-    while (!existsSync(`${release}.${index}`))
-      await new Promise((resolve) => setTimeout(resolve, 50))
-  }
   async function warmContext(settings, index) {
-    await warmHold(index)
     await fromConfig(index, settings.config, warmProbe())
     writeWrapper(index, settings.config)
     // A context that fails to open gives its listener allowance back: one
@@ -1610,6 +1572,23 @@ export default async (env) => {
     // the CLI's streams (review of #46, F7).
     if (settings.config !== undefined)
       await fromConfig(0, settings.config, configParses(settings.config))
+    // Test-only (ORACLE_GAPS_TEST_PAUSE_AT=daemon-warm): the first check holds
+    // here, before it warms its contexts, until the file
+    // ORACLE_GAPS_TEST_PAUSE_RELEASE names exists; its pid goes to
+    // ORACLE_GAPS_TEST_PAUSE_MARK. So a test can make a healthy warm-up slow,
+    // released by the test, never by time. Inert unless set; once.
+    const warmMark = process.env.ORACLE_GAPS_TEST_PAUSE_MARK
+    const warmRelease = process.env.ORACLE_GAPS_TEST_PAUSE_RELEASE
+    if (
+      process.env.ORACLE_GAPS_TEST_PAUSE_AT === `daemon-warm` &&
+      warmMark !== undefined &&
+      warmRelease !== undefined &&
+      !existsSync(warmMark)
+    ) {
+      writeWhole(warmMark, `${process.pid}`)
+      while (!existsSync(warmRelease))
+        await new Promise((resolve) => setTimeout(resolve, 50))
+    }
     // Contexts are warmed again when their settings or the Vite config they
     // loaded changed.
     const configHash = () =>

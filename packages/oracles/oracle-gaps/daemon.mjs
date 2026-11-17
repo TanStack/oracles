@@ -31,7 +31,6 @@
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import {
-  appendFileSync,
   existsSync,
   linkSync,
   mkdirSync,
@@ -114,14 +113,8 @@ function send(pkg, message, bounded = false) {
         mark === undefined ? done({ silent: true }) : writeMark(mark, ``),
       )
     }
-    // Test-only (ORACLE_GAPS_TEST_BEAT_MARK, a path): each line the request
-    // hears, a beat or its reply, appends one byte there, so a test can count
-    // what the CLI heard. It only observes.
-    const beatMark = process.env.ORACLE_GAPS_TEST_BEAT_MARK
     socket.on(`data`, (chunk) => {
       reply += chunk
-      if (beatMark !== undefined)
-        appendFileSync(beatMark, String(chunk).replace(/[^\n]/g, ``))
     })
     socket.on(`end`, () => {
       // A daemon that ends a connection unanswered has died, or is exiting.
@@ -572,22 +565,6 @@ async function serve(pkg) {
     ;({ parseArgs } = await import(`./args.mjs`))
     const { diskStore } = await import(`./evidence.mjs`)
     store = await diskStore(stateDirOf(pkg))
-    // Test-only (ORACLE_GAPS_TEST_PAUSE_AT=daemon-warm, as in check.mjs): once
-    // a request waits, the daemon writes <ORACLE_GAPS_TEST_PAUSE_MARK>.open
-    // before it opens its session and holds there until
-    // <ORACLE_GAPS_TEST_PAUSE_RELEASE>.open exists, so a test can hold a slow
-    // start with a request waiting. Inert unless set.
-    const startMark = process.env.ORACLE_GAPS_TEST_PAUSE_MARK
-    const startRelease = process.env.ORACLE_GAPS_TEST_PAUSE_RELEASE
-    if (
-      process.env.ORACLE_GAPS_TEST_PAUSE_AT === `daemon-warm` &&
-      startMark !== undefined &&
-      startRelease !== undefined
-    ) {
-      while (waiting.size === 0) await sleep(50)
-      writeMark(`${startMark}.open`, ``)
-      while (!existsSync(`${startRelease}.open`)) await sleep(50)
-    }
     session = await check.openSession(pkg, beat)
   } catch (error) {
     // The requests already queued hear why, and the CLI that started this

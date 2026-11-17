@@ -2426,6 +2426,11 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       ...configArgs(plan),
       // After the `config` edit, `--config` names the second config.
       ...(state.altConfig ? { config: altConfigPath(plan) } : {}),
+      // A warm daemon's check under a 3 s bound (`shortWait`): one that works
+      // longer tells its CLI so, by its beats.
+      ...(plan.shortWait && step !== `start`
+        ? { env: { ORACLE_GAPS_TEST_WAIT_MS: `3000` } }
+        : {}),
     }
     // The first check may be two at once, which must reach one daemon, and
     // so are the two after a crash.
@@ -2565,13 +2570,25 @@ async function incremental(dir, plan, cli, copy, observe, states) {
           // Whether a daemon wrote into that run's --out after its CLI fell
           // back (`heldReply`).
           rewritten: run.rewritten === true,
-          // Whether a slow but healthy start fell back (`slowStart`).
-          slowFellBack: run.slowStart?.fellBack === true,
+          // Whether the daemon that held the check had ended by the time
+          // its CLI had (`afterFallback`).
+          daemonEnded: run.daemonEnded === true,
         },
       })
     }
     if (twice && step === `start`)
       states.add(`two checks started the daemon at once`)
+    // A warm daemon's check under the short bound that ran a copy past it
+    // (`shortWait`) and did not fall back.
+    if (
+      plan.shortWait &&
+      step !== `start` &&
+      daemon.reported &&
+      (daemon.evidence?.computed ?? 0) > 0 &&
+      !daemon.stream.notes.some((note) => coldFallbackNote.test(note)) &&
+      plan.tests.some((t) => t.slow)
+    )
+      states.add(`a check through the daemon worked past its CLI's bound`)
     // Two checks held in the daemon at once, the earlier of which computed
     // runs and the later reused them: the state in which the order of the
     // two matters, and in which a daemon that served an overlapping request
@@ -2729,84 +2746,83 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       [join(copy, `index.mjs`), `--stop-daemon`, `--package`, dir],
       { cwd: repo, encoding: `utf8`, timeout: 60_000, env: cleanEnv() },
     )
-  // A slow but healthy start (merge gate D1): the first check's fresh daemon
-  // holds once its request waits, before it loads its session, and then
-  // before it warms each context (`daemon-warm`); the driver releases context
-  // k only once the CLI has heard a beat since the release before it (the
-  // daemon's own start for context 0, context k - 1 after that) (ORACLE_GAPS_TEST_BEAT_MARK counts what the CLI hears), so a
-  // daemon that tells its CLI about each context it opened never goes quiet
-  // for the CLI's bound (3 s, ORACLE_GAPS_TEST_WAIT_MS), however long the
-  // start takes. The release is the driver's, by that count, never by time; a
-  // beat that never comes is waited for until the CLI ends (its bound ends its
-  // wait and the daemon, then it checks cold) or a 60 s backstop. The check
-  // must not fall back, and the next check (`recheck`) must reuse what this
-  // daemon stored (the unchanged-reuse law).
+  // What a fallback leaves (`heldReply`, `slowStart`): once the CLI has ended,
+  // whether the daemon that held its check still runs; the driver then
+  // poisons the run's results.json, releases the daemon (a file, never the
+  // clock), and runs one more check through the daemon. A results.json that
+  // is no longer the poison was written by the abandoned check (merge gate
+  // F2), so the run's printed summary no longer matches its --out; and the
+  // daemon that held the check must serve that next check (its served mark):
+  // a fallback leaves a healthy daemon to serve later checks (delta 3).
+  function afterFallback(run, files, how, { out, pid, release, served }) {
+    run.daemonEnded = !isAlive(pid)
+    mkdirSync(out, { recursive: true })
+    const results = join(out, `results.json`)
+    const poison = `{"poison":"written by the driver after the CLI ended"}\n`
+    writeFileSync(results, poison)
+    rmSync(served, { force: true })
+    writeFileSync(release, ``)
+    runCli(dir, files, { ...how, daemon: true, outName: `out-released` })
+    run.rewritten = readFileSync(results, `utf8`) !== poison
+    run.held = true
+    return (
+      !run.daemonEnded &&
+      !run.rewritten &&
+      pidOf(served) === pid &&
+      run.exit === 0 &&
+      run.reported &&
+      run.stream.notes.some((note) => coldFallbackNote.test(note))
+    )
+  }
+  // A pid a test mark holds, waited for: the hold has happened. Its backstop
+  // fails loudly (R57).
+  async function heldPid(mark, what) {
+    for (let waited = 0; ; waited += 20) {
+      const pid = pidOf(mark)
+      if (pid !== undefined) return pid
+      if (waited >= 60_000)
+        throw new Error(
+          `oracle-gaps.report: ${what} saw no daemon pause within 60 s`,
+        )
+      await new Promise((r) => setTimeout(r, 20))
+    }
+  }
+  // A slow but healthy warm-up (merge gate D1, delta 3): the first check's
+  // fresh daemon holds before it warms its contexts (`daemon-warm`) until the
+  // driver releases it, after the CLI has ended. The CLI's bound (3 s,
+  // ORACLE_GAPS_TEST_WAIT_MS) runs out, it checks cold, and it leaves the
+  // daemon running. Released, the daemon warms its contexts and must drop the
+  // check whose CLI has gone before it writes that run's --out, then serve
+  // the next check (afterFallback).
   async function slowStart(files, how) {
     const marks = mkdtempSync(join(realpathSync(tmpdir()), `gap-warm-`))
     const warm = join(marks, `warm`)
     const release = join(marks, `release`)
-    const beats = join(marks, `beats`)
-    const heard = () => {
-      try {
-        return readFileSync(beats, `utf8`).length
-      } catch {
-        return 0
-      }
-    }
-    let finished = false
-    const running = runClisAtOnce(dir, files, [
-      {
-        ...how,
-        daemon: true,
-        env: {
-          ORACLE_GAPS_TEST_PAUSE_AT: `daemon-warm`,
-          ORACLE_GAPS_TEST_PAUSE_MARK: warm,
-          ORACLE_GAPS_TEST_PAUSE_RELEASE: release,
-          ORACLE_GAPS_TEST_BEAT_MARK: beats,
-          ORACLE_GAPS_TEST_WAIT_MS: `3000`,
+    const served = join(marks, `served`)
+    const outs = []
+    const [run] = await runClisAtOnce(
+      dir,
+      files,
+      [
+        {
+          ...how,
+          daemon: true,
+          env: {
+            ORACLE_GAPS_TEST_PAUSE_AT: `daemon-warm`,
+            ORACLE_GAPS_TEST_PAUSE_MARK: warm,
+            ORACLE_GAPS_TEST_PAUSE_RELEASE: release,
+            ORACLE_GAPS_TEST_SERVED_MARK: served,
+            ORACLE_GAPS_TEST_WAIT_MS: `3000`,
+          },
+          backstopMs: 120_000,
         },
-        backstopMs: 120_000,
-      },
-    ])
-    running.then(() => {
-      finished = true
-    })
-    const until = async (ready) => {
-      for (let waited = 0; !finished && !ready(); waited += 20) {
-        if (waited >= 60_000) return
-        await new Promise((r) => setTimeout(r, 20))
-      }
-    }
-    // The daemon's own start: once the check's request waits, the daemon
-    // holds before it opens its session; the driver releases it at once, so
-    // the request waits through the session's start.
-    await until(() => existsSync(`${warm}.open`))
-    writeFileSync(`${release}.open`, ``)
-    // The session's start: it holds once Vitest has loaded, and the driver
-    // releases it only once the CLI has heard the beat that loading sent.
-    await until(() => existsSync(`${warm}.session`))
-    await until(() => heard() > 0)
-    writeFileSync(`${release}.session`, ``)
-    let before = 0
-    let held = 0
-    for (let k = 0; !finished; k += 1) {
-      await until(() => existsSync(`${warm}.${k}`))
-      if (!existsSync(`${warm}.${k}`)) break
-      held += 1
-      // Before each context, a beat since the last release: the session's
-      // start, or the context before it.
-      await until(() => heard() > before)
-      before = heard()
-      writeFileSync(`${release}.${k}`, ``)
-    }
-    const [run] = await running
-    rmSync(marks, { recursive: true, force: true })
-    run.slowStart = {
-      held,
-      fellBack: run.stream.notes.some((note) => coldFallbackNote.test(note)),
-    }
-    if (held > 1 && !run.slowStart.fellBack && run.reported)
+      ],
+      outs,
+    )
+    const pid = await heldPid(warm, `a slow warm-up`)
+    if (afterFallback(run, files, how, { out: outs[0], pid, release, served }))
       states.add(`a slow warm-up was served by the daemon`)
+    rmSync(marks, { recursive: true, force: true })
     return [run]
   }
   // A check through a daemon that stops answering: the daemon holds the
@@ -2830,11 +2846,13 @@ async function incremental(dir, plan, cli, copy, observe, states) {
   async function heldReply(files, how, marks, pauseMark) {
     const armMark = join(marks, `armed`)
     const release = join(marks, `release`)
+    const served = join(marks, `served`)
     const pause = {
       ORACLE_GAPS_TEST_PAUSE_AT: `daemon-check`,
       ORACLE_GAPS_TEST_PAUSE_MARK: pauseMark,
       ORACLE_GAPS_TEST_PAUSE_ARM: armMark,
       ORACLE_GAPS_TEST_PAUSE_RELEASE: release,
+      ORACLE_GAPS_TEST_SERVED_MARK: served,
     }
     const [warmRun] = await runClisAtOnce(dir, files, [
       {
@@ -2868,34 +2886,10 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       ],
       outs,
     )
-    let pid
-    for (let waited = 0; pid === undefined; waited += 20) {
-      pid = pidOf(pauseMark)
-      if (pid !== undefined) break
-      if (waited >= 60_000)
-        throw new Error(
-          `oracle-gaps.report: a held check saw no daemon pause within 60 s`,
-        )
-      await new Promise((r) => setTimeout(r, 20))
-    }
-    // A CLI that never wrote its --out (it waited until the backstop) gets one
-    // here, so the poison still shows whether the daemon writes into it.
-    mkdirSync(outs[0], { recursive: true })
-    const results = join(outs[0], `results.json`)
-    const poison = `{"poison":"written by the driver after the CLI ended"}\n`
-    writeFileSync(results, poison)
-    writeFileSync(release, ``)
-    runCli(dir, files, { ...how, daemon: true, outName: `out-released` })
-    run.rewritten = readFileSync(results, `utf8`) !== poison
-    rmSync(marks, { recursive: true, force: true })
-    run.held = true
-    if (
-      !run.rewritten &&
-      run.exit === 0 &&
-      run.reported &&
-      run.stream.notes.some((note) => coldFallbackNote.test(note))
-    )
+    const pid = await heldPid(pauseMark, `a held check`)
+    if (afterFallback(run, files, how, { out: outs[0], pid, release, served }))
       states.add(`a check whose daemon stopped answering ran cold`)
+    rmSync(marks, { recursive: true, force: true })
     return [run]
   }
   // One check through the daemon, with what the step does to the daemon
@@ -4058,10 +4052,21 @@ function incrementalCheck(observations, expected, plan) {
     // A check whose daemon stopped answering (`heldReply`) ends as a cold run
     // does (R39: a cold fallback is not a failure): the CLI's own bound on a
     // daemon that sends nothing ends its wait, and it checks cold.
-    if (daemon.slowFellBack)
+    if (daemon.daemonEnded)
       return violation(
         `incremental`,
-        `after ${step}, the CLI ended a daemon that was starting its session or warming its contexts, and checked cold: the daemon told it nothing between steps`,
+        `after ${step}, the daemon that held the check had ended when its CLI fell back to a cold check; a fallback leaves the daemon to serve later checks`,
+        `cold fallback`,
+      )
+    // A daemon that works tells its CLI so (its beats), so a check through a
+    // working daemon never falls back, however long it runs (`shortWait`).
+    if (
+      !daemon.held &&
+      daemon.stream.notes.some((note) => coldFallbackNote.test(note))
+    )
+      return violation(
+        `incremental`,
+        `after ${step}, the CLI fell back to a cold check while its daemon was working`,
         `cold fallback`,
       )
     if (daemon.held && daemon.exit !== cold.exit)
@@ -6024,6 +6029,7 @@ const required = [
   `a refused run whose package lies beside the CLI's directory, under a name that extends it`,
   `an edit to data that only a copy spun alone read changed the cold result`,
   `a slow warm-up was served by the daemon`,
+  `a check through the daemon worked past its CLI's bound`,
 ]
 // The faults the CLI analyzes anyway: a package's TypeScript is no input.
 const analyzedFaults = [`noTypescript`, `apiLessTypescript`]
@@ -6139,6 +6145,7 @@ const separate = [
   `a refused run whose package lies beside the CLI's directory, under a name that extends it`,
   `an edit to data that only a copy spun alone read changed the cold result`,
   `a slow warm-up was served by the daemon`,
+  `a check through the daemon worked past its CLI's bound`,
 ]
 // A stop by SIGTERM exists only where Node can deliver it: on win32 kill is
 // TerminateProcess, so there the stop law is judged by SIGINT (the test stop
@@ -8474,18 +8481,41 @@ oracleProperty({
         }),
       },
       {
-        // A slow but healthy daemon start (merge gate D1): four contexts, each
-        // held until the CLI has heard the daemon's beat for the one before
-        // (`slowStart`). The check must not fall back, and the second check,
-        // with nothing changed, must reuse what the daemon stored.
+        // A slow but healthy warm-up (merge gate D1, delta 3): the first
+        // check's daemon holds before it warms its contexts until its CLI has
+        // fallen back cold (`slowStart`). The daemon must stay, drop that
+        // check before it writes the run's --out, and serve the next check.
         name: `a slow but healthy daemon start`,
         enters: [`a slow warm-up was served by the daemon`],
         build: (generated) =>
           oneOwnerHistory(generated, {
             contexts: 4,
-            steps: [`recheck`],
+            steps: [`seed`],
             laterSteps: NO_LATER_STEPS,
             slowStart: true,
+          }),
+      },
+      {
+        // A check through a warm daemon that works past its CLI's bound (3 s,
+        // `shortWait`): a slow kill's confirming run waits 10 s where the
+        // output differs. The daemon's beats while the copy runs keep the CLI
+        // waiting: it must not fall back (the beat's witness, delta 3).
+        name: `a check through the daemon that works past the bound`,
+        enters: [`a check through the daemon worked past its CLI's bound`],
+        build: (generated) =>
+          oneOwnerHistory(generated, {
+            tests: [
+              {
+                ...judging(`a`, `fixed seed`, 7, {
+                  slow: true,
+                  slowMs: 10_000,
+                }),
+                fn: 0,
+              },
+            ],
+            steps: [`seed`],
+            laterSteps: NO_LATER_STEPS,
+            shortWait: true,
           }),
       },
     ]),

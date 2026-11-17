@@ -588,6 +588,7 @@ export const partitions = {
         "a refused run beside the CLI's directory, under a name that extends it",
         'an edit to data that only a copy spun alone reads',
         'a slow but healthy daemon start',
+        'a check through the daemon that works past the bound',
         'a stop with the default output directory',
         'a daemon check with the default output directory',
         'a daemon check with the default output directory, unsupervised',
