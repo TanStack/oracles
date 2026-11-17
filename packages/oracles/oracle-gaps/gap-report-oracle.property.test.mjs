@@ -8350,14 +8350,15 @@ oracleProperty({
                 { kind: `optional` },
               ],
             ],
-            // `o4?.a?.v` with `o4` absent, so the second link is
-            // short-circuited; `o5?.a?.b?.v` with `o5.a` absent, so its second
-            // link throws under its mutant and its third is short-circuited.
+            // `o4?.a?.b?.v` with `o4` absent, so its second and third links
+            // are short-circuited (the third through the second);
+            // `o5?.a?.b?.v` with `o5.a` absent, so its second link throws
+            // under its mutant and its third is short-circuited.
             absentObjects: [`undefined`, `null`, `undefined`, `null`],
             optionalChains: [
               { links: 1, level: 0 },
               { links: 1, level: 0 },
-              { links: 2, level: 0 },
+              { links: 3, level: 0 },
               { links: 3, level: 1 },
             ],
             tests: [{ ...judging(`a`, `fixed seed`, 0), fn: 0 }],
