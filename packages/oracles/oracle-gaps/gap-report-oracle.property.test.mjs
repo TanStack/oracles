@@ -5415,6 +5415,7 @@ const inputKinds = [
   `pluginTransform`,
   `listing`,
   `opendir`,
+  `stream`,
 ]
 // Law 9's states that a constructed history of their own reaches, not the
 // edit sequence: the mid-run edit, and an edit to data a test reads through
@@ -7975,6 +7976,9 @@ oracleProperty({
           `opendir`,
           false,
         ],
+        // The package's gate file read through a stream, written back with
+        // its size and modification time.
+        [`an edit to a file a test reads through a stream`, `stream`, true],
       ].map(([name, inputRead, keepStamp]) => ({
         name,
         enters: [

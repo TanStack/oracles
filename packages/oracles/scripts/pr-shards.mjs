@@ -37,6 +37,7 @@ const daemonInputUnits = [
   "an edit to a file the config's plugin reads when it transforms a test",
   'an edit to a directory listing that a test reads',
   'an edit to a directory a test reads through opendir',
+  'an edit to a file a test reads through a stream',
 ]
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
 const anyOf = (names) => `(?:${names.map(escape).join(`|`)})`
@@ -628,6 +629,7 @@ export const partitions = {
         daemonInputUnits[5],
         daemonInputUnits[6],
         daemonInputUnits[7],
+        daemonInputUnits[8],
       ]),
       10: anyOf([
         'an edit that changed the cold result after a hang replaced the only context',

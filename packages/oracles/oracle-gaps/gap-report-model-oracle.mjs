@@ -983,7 +983,8 @@ const drawn = fc.record({
   // text; or the listing of a directory of the package's tests, which holds
   // one empty file named `open` or `shut`, read by `readdirSync`
   // (`listing`) or by `opendirSync` (`opendir`): the edit renames that file,
-  // so no file's text changes. These fields change what a history runs, so
+  // so no file's text changes; or the package's gate file read through a
+  // stream (`stream`, createReadStream). These fields change what a history runs, so
   // they are drawn (maintainer decision, 2026-11-16, "Randomness wins"), and
   // last.
   inputRead: fc.constantFrom(
@@ -998,6 +999,7 @@ const drawn = fc.record({
     `pluginTransform`,
     `listing`,
     `opendir`,
+    `stream`,
   ),
   // Each write of a gate file keeps its size (`open` and `shut` have one
   // length) and gets back one fixed modification time, as `cp -p`, `rsync
@@ -4984,6 +4986,7 @@ const BESIDE = `<beside>/`
 const outsideOf = (dir) => `${dir}.outside`
 const gateFiles = {
   inside: `tests/gate.json`,
+  stream: `tests/gate.json`,
   outside: `${BESIDE}gate.json`,
   module: `node_modules/gap-gate/gate.json`,
   pluginConfig: `tests/plugin-gate.json`,
@@ -5031,6 +5034,10 @@ const inputReads = {
   ],
   pluginTransform: [
     `const readInput = async () => ({ open: __GAP_INPUT_GATE__ === 'open' })`,
+  ],
+  stream: [
+    `import { createReadStream as streamGate } from 'node:fs'`,
+    `const readInput = async () => { const chunks: Array<Buffer> = []; for await (const chunk of streamGate(new URL('./gate.json', import.meta.url))) chunks.push(chunk as Buffer); return { open: JSON.parse(Buffer.concat(chunks).toString('utf8')).gate === 'open' } }`,
   ],
   listing: [
     `import { readdirSync as listGate } from 'node:fs'`,
