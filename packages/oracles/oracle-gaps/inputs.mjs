@@ -8,7 +8,8 @@
 // An input's key is `fs:<path>` for a file, hashed by its text (or as
 // `not a file`, or `missing`), `dir:<path>` for a directory's listing,
 // hashed by its entries' names and kinds, or `dirs:<path>` for a recursive
-// one, `env:<name>` for a variable, hashed by its value, or `env:*` for the
+// one, `stat:<path>` for a test of whether a path exists and what it is,
+// hashed by that, `env:<name>` for a variable, hashed by its value, or `env:*` for the
 // set of names, which code reads when it lists the environment. The harness (capture-setup.mjs) watches a test's reads in
 // its worker, and the session (check.mjs) watches what the config and its
 // plugins read in the CLI's process. Both files are copied beside the
@@ -20,16 +21,20 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { posix } from './paths.mjs'
 
-// The calls that read a file (a stream's too, by the whole file), and those
-// that test whether it exists and what it is. Each is taken once per
-// process, before a wrapper replaces it, so hashing a file is not itself a
-// read.
+// The calls that read a file (a stream's too, by the whole file). Each is
+// taken once per process, before a wrapper replaces it, so hashing a file is
+// not itself a read.
 const reads = [
-  [
-    fs,
-    [`readFileSync`, `readFile`, `createReadStream`, `existsSync`, `statSync`],
-  ],
-  [fs.promises, [`readFile`, `stat`]],
+  [fs, [`readFileSync`, `readFile`, `createReadStream`]],
+  [fs.promises, [`readFile`]],
+]
+// The calls that test whether a file exists and what it is: an input by its
+// existence and kind (G42's stat family), not by its text, so that Vite's
+// resolution, which stats each module it imports, does not make every
+// module's text an input of every run.
+const stats = [
+  [fs, [`existsSync`, `statSync`]],
+  [fs.promises, [`stat`]],
 ]
 // The calls that list a directory.
 const listings = [
@@ -92,9 +97,21 @@ function listingHash(path, recursive) {
 export const inputHash = (key) =>
   key.startsWith(`fs:`)
     ? fileHash(key.slice(3))
-    : key.startsWith(`dirs:`)
-      ? listingHash(key.slice(5), true)
-      : listingHash(key.slice(4), false)
+    : key.startsWith(`stat:`)
+      ? kindOf(key.slice(5))
+      : key.startsWith(`dirs:`)
+        ? listingHash(key.slice(5), true)
+        : listingHash(key.slice(4), false)
+
+/** A path's existence and kind now. */
+function kindOf(path) {
+  try {
+    const stat = original.statSync(path)
+    return stat.isFile() ? `file` : stat.isDirectory() ? `directory` : `other`
+  } catch {
+    return `missing`
+  }
+}
 
 /** A variable's input hash under `env`, or for `*`, that of its names. */
 export const envHash = (name, env = process.env) =>
@@ -148,7 +165,14 @@ export function watchReads(record) {
       return
     }
     if (path === undefined || isRunnerFile(posix(path))) return
-    const prefix = kind !== `list` ? `fs` : options?.recursive ? `dirs` : `dir`
+    const prefix =
+      kind === `stat`
+        ? `stat`
+        : kind !== `list`
+          ? `fs`
+          : options?.recursive
+            ? `dirs`
+            : `dir`
     record(`${prefix}:${posix(path)}`, write)
     // A written file is also known by its directory's real path, which a
     // later read through a link, or an import by its real URL, names.
@@ -164,6 +188,7 @@ export function watchReads(record) {
   }
   for (const [calls, kind] of [
     [reads, `read`],
+    [stats, `stat`],
     [listings, `list`],
     [writes, `write`],
   ])

@@ -697,8 +697,7 @@ export default async (env) => {
     // A variable by its value in the environment this check runs under, and
     // a directory by its listing now.
     if (path.startsWith(`env:`)) return envHash(path.slice(4))
-    if (path.startsWith(`dir:`) || path.startsWith(`dirs:`))
-      return inputHash(path)
+    if (/^(dir|dirs|stat):/.test(path)) return inputHash(path)
     const text =
       globalThis.__oracleGapsServe[index]?.get(path) ??
       globalThis.__oracleGapsSchemata.get(path)
