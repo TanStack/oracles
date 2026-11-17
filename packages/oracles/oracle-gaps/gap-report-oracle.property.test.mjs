@@ -2608,9 +2608,10 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       { cwd: repo, encoding: `utf8`, timeout: 60_000, env: cleanEnv() },
     )
   // A slow but healthy start (merge gate D1): the first check's fresh daemon
-  // holds before it warms each context (`daemon-warm`), and the driver
-  // releases context k only once the CLI has heard a beat since it released
-  // context k - 1 (ORACLE_GAPS_TEST_BEAT_MARK counts what the CLI hears), so a
+  // holds once its request waits, before it loads its session, and then
+  // before it warms each context (`daemon-warm`); the driver releases context
+  // k only once the CLI has heard a beat since the release before it (the
+  // daemon's own start for context 0, context k - 1 after that) (ORACLE_GAPS_TEST_BEAT_MARK counts what the CLI hears), so a
   // daemon that tells its CLI about each context it opened never goes quiet
   // for the CLI's bound (3 s, ORACLE_GAPS_TEST_WAIT_MS), however long the
   // start takes. The release is the driver's, by that count, never by time; a
@@ -2654,13 +2655,20 @@ async function incremental(dir, plan, cli, copy, observe, states) {
         await new Promise((r) => setTimeout(r, 20))
       }
     }
+    // The daemon's own start: once the check's request waits, the daemon
+    // holds before it loads its session; the driver releases it at once, so
+    // the request waits through the whole start.
+    await until(() => existsSync(`${warm}.open`))
+    writeFileSync(`${release}.open`, ``)
     let before = 0
     let held = 0
     for (let k = 0; !finished; k += 1) {
       await until(() => existsSync(`${warm}.${k}`))
       if (!existsSync(`${warm}.${k}`)) break
       held += 1
-      if (k > 0) await until(() => heard() > before)
+      // Before the first context, the beats of the daemon's own start; before
+      // each later one, the beat for the context before it.
+      await until(() => heard() > before)
       before = heard()
       writeFileSync(`${release}.${k}`, ``)
     }
@@ -2671,7 +2679,7 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       fellBack: run.stream.notes.some((note) => coldFallbackNote.test(note)),
     }
     if (held > 1 && !run.slowStart.fellBack && run.reported)
-      states.add(`a slow but healthy daemon start kept its daemon`)
+      states.add(`a slow warm-up was served by the daemon`)
     return [run]
   }
   // A check through a daemon that stops answering: the daemon holds the
@@ -5849,7 +5857,7 @@ const required = [
   `an edit to data that only a spun copy read changed the cold result`,
   `a refused run whose package lies beside the CLI's directory, under a name that extends it`,
   `an edit to data that only a copy spun alone read changed the cold result`,
-  `a slow but healthy daemon start kept its daemon`,
+  `a slow warm-up was served by the daemon`,
 ]
 // The faults the CLI analyzes anyway: a package's TypeScript is no input.
 const analyzedFaults = [`noTypescript`, `apiLessTypescript`]
@@ -5964,7 +5972,7 @@ const separate = [
   `an edit to data that only a spun copy read changed the cold result`,
   `a refused run whose package lies beside the CLI's directory, under a name that extends it`,
   `an edit to data that only a copy spun alone read changed the cold result`,
-  `a slow but healthy daemon start kept its daemon`,
+  `a slow warm-up was served by the daemon`,
 ]
 // A stop by SIGTERM exists only where Node can deliver it: on win32 kill is
 // TerminateProcess, so there the stop law is judged by SIGINT (the test stop
@@ -8302,7 +8310,7 @@ oracleProperty({
         // (`slowStart`). The check must not fall back, and the second check,
         // with nothing changed, must reuse what the daemon stored.
         name: `a slow but healthy daemon start`,
-        enters: [`a slow but healthy daemon start kept its daemon`],
+        enters: [`a slow warm-up was served by the daemon`],
         build: (generated) =>
           oneOwnerHistory(generated, {
             contexts: 4,
