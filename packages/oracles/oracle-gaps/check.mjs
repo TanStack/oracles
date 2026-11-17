@@ -953,7 +953,6 @@ export default async (env) => {
     context.getRootProject?.().provide(`oracleGaps`, state)
     writeFileSync(join(out, `state.json`), JSON.stringify(state))
     const started = Date.now()
-    clearErrors(context)
     const running = context.runTestSpecifications(
       contextSpecs.get(context).get(file) ?? [],
       false,
@@ -1204,7 +1203,6 @@ export default async (env) => {
     writeFileSync(join(out, `state.json`), JSON.stringify(state))
     const project = context.getRootProject()
     const started = Date.now()
-    clearErrors(context)
     const run = context.runTestSpecifications(
       copies.map((copy) => project.createSpecification(copy)),
       false,
@@ -1468,10 +1466,10 @@ export default async (env) => {
   }
 
   /**
-   * Drops the errors outside any test that Vitest's state holds. Vitest keeps
-   * them across runs (its own CLI clears them per run), so a run that does
-   * not start without them reads an earlier run's errors as its own (its
-   * batch then runs alone), and a batch that keeps them retains them.
+   * Drops the errors outside any test that Vitest's state holds once a
+   * batch's units are plain data. Vitest clears them when a run starts, but
+   * keeps the last run's until the next, so a batch would retain them (the
+   * bounded-retention law, `errorsSet`).
    */
   function clearErrors(context) {
     if (typeof context.state?.clearErrors !== `function`)
@@ -1562,9 +1560,13 @@ export default async (env) => {
     if (profileFile) rmSync(profileFile, { force: true })
     const checkStarted = Date.now()
     let phase = Date.now()
+    // Each phase that ends, and each context that opens, is progress the
+    // daemon tells its waiting CLIs about (`alive`), so a slow but healthy
+    // start or analysis does not read as a daemon that stopped answering.
     const endPhase = (name, fields) => {
       span(`phase`, phase, { name, ...fields })
       phase = Date.now()
+      alive()
     }
     // The state file is the fallback for setups that cannot `inject`.
     process.env.ORACLE_GAPS_STATE = join(options.out, `state.json`)
@@ -1600,6 +1602,7 @@ export default async (env) => {
         contexts.push(await warmContext(settings, i))
         indexOf.set(contexts.at(-1), i)
         hook?.joined(contexts.at(-1))
+        alive()
       }
       contextsKey = JSON.stringify(settings)
       contextsConfig = configHash()
@@ -1608,6 +1611,7 @@ export default async (env) => {
       contexts.push(await warmContext(settings, contexts.length))
       indexOf.set(contexts.at(-1), contexts.length - 1)
       hook?.joined(contexts.at(-1))
+      alive()
     }
     endPhase(`warm contexts`, { contexts: contexts.length })
     // The run names the config its contexts loaded, before any refusal that
