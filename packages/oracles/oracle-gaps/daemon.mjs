@@ -329,18 +329,14 @@ async function serve(pkg) {
   let idle
   let watch
   // Test-only (ORACLE_GAPS_TEST_HOLD_OVERLAP, a path): the first check this
-  // daemon runs waits, before it starts, until the daemon has accepted a
-  // second check request, so two checks started at once overlap by a count,
-  // never by time. The release writes that count to the path. Once: a check
-  // after the first never waits. The hold changes no outcome; the second
-  // request waits in the queue, as it does whenever two checks overlap.
-  const overlapMark = process.env.ORACLE_GAPS_TEST_HOLD_OVERLAP
-  let accepted = 0
-  let overlapHeld = false
-  let overlapped
-  const secondAccepted = new Promise((resolvePromise) => {
-    overlapped = resolvePromise
-  })
+  // daemon runs waits until it has accepted a second check request
+  // (overlap-hold.mjs, loaded only when the variable is set).
+  const overlap =
+    process.env.ORACLE_GAPS_TEST_HOLD_OVERLAP === undefined
+      ? undefined
+      : (await import(`./overlap-hold.mjs`)).overlapHold(
+          process.env.ORACLE_GAPS_TEST_HOLD_OVERLAP,
+        )
   // Requests wait until the session is open.
   let opened
   let queue = new Promise((resolvePromise) => {
@@ -395,8 +391,7 @@ async function serve(pkg) {
         queue = queue.then(() => shutdown(connection))
         return
       }
-      accepted += 1
-      if (accepted === 2) overlapped()
+      overlap?.accepted()
       queue = queue.then(async () => {
         clearTimeout(idle)
         // A request queued before the session failed hears why.
@@ -425,11 +420,12 @@ async function serve(pkg) {
           const options = parseArgs(message.argv, message.cwd)
           if (options.pkg !== pkg)
             throw new Error(`this daemon serves ${pkg}, not ${options.pkg}`)
-          if (overlapMark !== undefined && !overlapHeld) {
-            overlapHeld = true
-            await secondAccepted
-            writeMark(overlapMark, `${accepted}`)
-          }
+          // The hold's backstop fails this check and closes the daemon, so
+          // its socket and lock are released.
+          await overlap?.hold().catch((error) => {
+            close()
+            throw error
+          })
           stdout = await session.check(options, store, (line) =>
             stderr.push(`${line}\n`),
           )

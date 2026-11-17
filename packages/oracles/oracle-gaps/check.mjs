@@ -1620,16 +1620,18 @@ export default async (env) => {
         options.mutantLimit,
       ]),
     )
-    // How the evidence was produced: units reused and computed, of the
-    // computed ones those that ended without a cut (`ran`), runs cut off at
-    // their time limit or for idleness (of them, `idle`), items rerun after
-    // a cut-off batch, and mutants that changed no value and so needed no
-    // run. `cut` counts cut events: a cut copy confirmed alone is cut once
-    // in its batch and again if its confirmation is cut too.
+    // How the evidence was produced: units reused and computed, runs cut off
+    // at their time limit or for idleness (of them, `idle`), items rerun
+    // after a cut-off batch, and mutants that changed no value and so needed
+    // no run. Under the retention test hook only (README "Test hooks"), also
+    // the computed units that ended without a cut (`ran`), for the e2e
+    // oracle: `cut` counts cut events (a cut copy confirmed alone is cut in
+    // its batch and again if its confirmation is cut), so `computed - cut`
+    // is no count of runs. A normal run's report has no `ran`.
     const evidence = {
       reused: 0,
       computed: 0,
-      ran: 0,
+      ...(hook ? { ran: 0 } : {}),
       cut: 0,
       idle: 0,
       spin: 0,
@@ -1756,7 +1758,7 @@ export default async (env) => {
       })
       evidence.computed += 1
       if (result.timedOut) evidence.cut += 1
-      else evidence.ran += 1
+      else if (hook) evidence.ran += 1
       // A run cut off keeps its file's known inputs and any it named itself
       // (third review of #55, F-D).
       const paths = result.timedOut
@@ -1823,7 +1825,9 @@ export default async (env) => {
           if (u.spin) evidence.spin += 1
           remember(rest[k].id, u, batch.inputs[k])
           evidence.computed += 1
-          evidence.ran += 1
+          // A copy that spun past its call budget is timed out, as `unit`
+          // counts it: it did not end without a cut.
+          if (hook && !u.timedOut) evidence.ran += 1
         })
         if (batch.timedOutAt === undefined) break
         // A copy past its first budget may only be slow: a loaded machine
@@ -1913,7 +1917,7 @@ export default async (env) => {
       const u = confirmed(alone.units[0])
       remember(hung.id, u, inputs)
       evidence.computed += 1
-      evidence.ran += 1
+      if (hook && !u.timedOut) evidence.ran += 1
       return u
     }
 
