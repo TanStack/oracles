@@ -985,7 +985,6 @@ function finishTest(context) {
       calls,
       infected: [...infected],
       operands: [...operands],
-      ...(sawIo ? { io: true } : {}),
       ...(clocked || sawIo ? { clocked: true } : {}),
       outcomes: [...outcomes],
       verdicts: [...verdicts.values()],
@@ -1016,13 +1015,14 @@ function finishTest(context) {
 const thisFile = globalThis.__vitest_worker__?.filepath
 
 // I/O and idleness (maintainer decision, 2026-11-07; state only, 2026-11-15;
-// only the test's I/O, 2026-11-15). Each test's row says whether the test had
-// I/O of its own active: a handle or request that the test's or production's
-// code started, never one the runner made for itself (its channel, stdio, a
-// write that forwards the test's console output). A copy given `idleMs` (a
-// file whose unmutated tests had no I/O of their own) is idle, by state alone,
-// when none of its test's timers is due within its horizon and none of its
-// test's I/O is active (C, timers by ownership, 2026-11-16): a timer the
+// only the test's I/O, 2026-11-15). A test's I/O is a handle or request that
+// the test's or production's code started, never one the runner made for
+// itself (its channel, stdio, a write that forwards the test's console
+// output); a test that had some active is clocked (its count could follow
+// the time). A copy given `idleMs` (every mutant copy, per copy, v21.2 R51) is
+// idle, by state alone, when none of its test's timers is due within its
+// horizon and none of its test's I/O is active (C, timers by ownership,
+// 2026-11-16): a timer the
 // runner keeps (Vitest's task-update or test-limit timer) never counts, and
 // one the test made counts by any path (the globals, `node:timers`,
 // `node:timers/promises`), ref'd or not. A
