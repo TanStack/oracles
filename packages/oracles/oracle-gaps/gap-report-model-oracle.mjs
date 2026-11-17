@@ -272,7 +272,8 @@ const statement = fc.oneof(
     kind: fc.constant(`readData`),
     shape: fc.constantFrom(`object`, `array`, `primitive`, `methods`),
   }),
-  // An object that only a truthy `x` makes, read through `?.`.
+  // An object that only a truthy `x` makes, read through `?.` (the history's
+  // `absentObjects` says what a falsy `x` leaves in its place).
   fc.record({ kind: fc.constant(`optional`) }),
 )
 const libStatement = fc.oneof(
@@ -957,6 +958,14 @@ const drawn = fc.record({
   // has no `-p`): the supervised run needs no external command (POSIX; review
   // of #57, A7).
   psMissing: fc.constantFrom(false, false, false, false, false, false, true),
+  // What each `optional` statement of the generated functions, in order,
+  // holds in place of its object when its `x` is falsy: `undefined`, or
+  // `null`; a statement past the list's end holds `undefined`. A plain read
+  // in place of `?.` throws on either, where `?.` gives `undefined`. Drawn
+  // last, so the earlier fields keep their draws (the generator rule).
+  absentObjects: fc.array(fc.constantFrom(`undefined`, `null`), {
+    maxLength: 3,
+  }),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -2230,6 +2239,9 @@ const referenceKinds = new Set([
 const condText = (stmt) =>
   stmt.not ? `!(x ${stmt.op} ${stmt.k})` : `x ${stmt.op} ${stmt.k}`
 
+// The value an `optional` statement's object takes when `x` is falsy.
+const absentOf = (stmt) => stmt.absent ?? `undefined`
+
 /** The source lines of one statement. */
 function renderStatement(stmt, callText) {
   const probe = `'gap#p${stmt.label}'`
@@ -2357,7 +2369,7 @@ function renderStatement(stmt, callText) {
       return [`out.push(...loaded);`]
     case `optional`:
       return [
-        `const o${stmt.label} = x ? { v: 'p${stmt.label}' } : undefined;`,
+        `const o${stmt.label} = x ? { v: 'p${stmt.label}' } : ${absentOf(stmt)};`,
         `out.push(\`\${o${stmt.label}?.v}\`);`,
       ]
     case `readData`:
@@ -2621,6 +2633,14 @@ function resolveHistory(history) {
         return { kind: `call`, to: target.id }
       return { kind: `push`, quote: `'` }
     })
+  // Each `optional` statement takes its absent object, in order.
+  let optionals = 0
+  for (const fn of generated)
+    fn.body = fn.body.map((stmt) =>
+      stmt.kind === `optional`
+        ? { ...stmt, absent: history.absentObjects[optionals++] ?? `undefined` }
+        : stmt,
+    )
   const library = history.library.map((body, index) => ({
     id: `g${index}`,
     file: LIB,
@@ -3995,7 +4015,8 @@ function interpret(plan, fnId, x, sites, active) {
         }
       }
       // `x` makes the object only when truthy, so the field drop is reached
-      // only then. A plain read in place of `?.` throws on no object.
+      // only then. A plain read in place of `?.` throws on no object,
+      // `undefined` or `null`, where `?.` gives `undefined`.
       if (stmt.kind === `optional`) {
         const drop = siteOf(stmt, `dropV`)
         if (x) reach(drop.id)
@@ -4003,14 +4024,16 @@ function interpret(plan, fnId, x, sites, active) {
           ? isActive(drop)
             ? {}
             : { v: `p${stmt.label}` }
-          : undefined
+          : stmt.absent === `null`
+            ? null
+            : undefined
         const site = siteOf(stmt, `push`)
         reach(site.id)
         if (!isActive(site)) {
           const chain = siteOf(stmt, `chain`)
           reach(chain.id)
-          if (isActive(chain) && made === undefined)
-            throw new TypeError(`Cannot read properties of undefined`)
+          if (isActive(chain) && (made === undefined || made === null))
+            throw new TypeError(`Cannot read properties of ${made}`)
           trace.push(String(made?.v))
         }
       }

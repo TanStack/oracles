@@ -168,7 +168,15 @@
  *    would judge such a verdict, is not built.) A copy that a batch skipped
  *    because an earlier copy killed the mutant runs again, through the batch,
  *    only while no kill is in hand, so every mutant gets an outcome and no
- *    other missing unit is rerun. A test's work is the number of site
+ *    other missing unit is rerun. A mutant is judged without a run, from
+ *    its owners' unmutated runs, only when no owner's unmutated run reached
+ *    its site with a value that the mutant changes (v21.2 P5 and R-equiv: a
+ *    mutant changes nothing only when its completion, a value or a thrown
+ *    error, equals the original's). So a `?.` whose object was `undefined`
+ *    or `null` there runs, since a plain read throws on it, as does a
+ *    comparison whose operators disagreed on its operands, an `if` whose
+ *    condition took the outcome its mutant forces the other way, and a site
+ *    of any other operator that was reached. A test's work is the number of site
  *    evaluations that its instrumented production code made (the capture's
  *    call count, never a time): a call statement, a call whose value is
  *    used, a comparison, an `if`, each pass of a loop's condition. A
@@ -3214,6 +3222,18 @@ async function driver(plan, observe) {
         fn.body.map((s) => [`${fn.file}:${s.line}`, s.kind]),
       ),
     )
+    // The object that each `optional` statement reads through `?.` (on its
+    // second line) when its `x` is falsy: `undefined`, or `null`.
+    const absentAt = new Map(
+      plan.functions.flatMap((fn) =>
+        fn.body
+          .filter((s) => s.kind === `optional`)
+          .map((s) => [`${fn.file}:${s.line + 1}`, s.absent ?? `undefined`]),
+      ),
+    )
+    // A `binary-swap` of these goes through the capture's comparison helper;
+    // the swap of `&&`, `||`, or `??` goes through its switch.
+    const comparisonOperators = new Set([`===`, `!==`, `<`, `<=`, `>`, `>=`])
     for (const m of cli.mutants) {
       if (m.authored) {
         const others = cli.mutants.filter((x) => x.authored && x.key !== m.key)
@@ -3337,6 +3357,30 @@ async function driver(plan, observe) {
         states.add(`a returned value made undefined not distinguished`)
       if (m.operator === `optional-chain` && m.class === `not-distinguished`)
         states.add(`a plain read in place of ?. not distinguished`)
+      // A plain read in place of `?.` where a passing owner test's object is
+      // absent: the capture infects the site, the mutant runs, and the test
+      // crashes on the TypeError that `?.` avoided.
+      if (m.operator === `optional-chain` && m.outcome === `crashed`)
+        states.add(
+          absentAt.get(`${m.source}:${m.line}`) === `null`
+            ? `a plain read in place of ?. on a null object crashed`
+            : `a plain read in place of ?. on an undefined object crashed`,
+        )
+      // Each capture helper's kill, where its site's value changed in an
+      // owner test: a mutant whose helper recorded no change is judged
+      // without a run, and survives.
+      if (m.operator === `return-undefined` && m.outcome === `killed`)
+        states.add(`a returned value made undefined killed`)
+      if (
+        m.operator === `binary-swap` &&
+        comparisonOperators.has(m.original) &&
+        m.outcome === `killed`
+      )
+        states.add(`a comparison swap killed`)
+      if (m.operator === `drop-not` && m.outcome === `killed`)
+        states.add(`a dropped not killed`)
+      if (m.operator === `delete-call` && m.outcome === `killed`)
+        states.add(`a skipped call killed`)
       if (m.operator === `arithmetic-swap` && m.outcome === `killed`)
         states.add(`an arithmetic swap killed`)
       if (m.function === `w_leaf` && m.outcome !== `unowned`)
@@ -5428,6 +5472,13 @@ const posixStarts =
   process.platform === `win32`
     ? []
     : [`a stop before the CLI starts`, `a stop by SIGTERM as the CLI starts`]
+// The states of the constructed history `a value change at a ?. read and at
+// a return` (see there), which `every outcome class` does not name.
+const changedValues = [
+  `a plain read in place of ?. on an undefined object crashed`,
+  `a plain read in place of ?. on a null object crashed`,
+  `a returned value made undefined killed`,
+]
 const required = [
   // Reached only by the constructed history of the disarmed pause (see there).
   `a daemon pause that did not engage`,
@@ -5493,6 +5544,12 @@ const required = [
   `a mutant of module data killed through its reader`,
   `a returned value made undefined not distinguished`,
   `a plain read in place of ?. not distinguished`,
+  // Each capture helper records a change where its site's value changed in
+  // an owner test, so the mutant runs (see `changedValues`).
+  ...changedValues,
+  `a comparison swap killed`,
+  `a dropped not killed`,
+  `a skipped call killed`,
   `a module-level cache judged afresh`,
   `ordinary tests run when asked`,
   `ordinary tests left out by default`,
@@ -5645,6 +5702,7 @@ const ownHistoryStates = [
 ]
 const separate = [
   ...ownHistoryStates,
+  ...changedValues,
   `ordinary tests left out by default`,
   `two authored mutants judged apart`,
   `a package with a prebuilt addon deep in its tree ran in child processes`,
@@ -7865,6 +7923,35 @@ oracleProperty({
           budget: `two`,
           stopRuns: [{ signal: `SIGINT`, pool: `threads`, when: `abort` }],
         }),
+      },
+      {
+        // The skip law of law 4: a mutant is judged without a run only where
+        // no owner test's unmutated run reached its site with a value that
+        // the mutant changes. A passing owner test of input 0 reads two
+        // objects through `?.` that only a truthy input makes, one left
+        // `undefined` and one `null`: a plain read throws on each, so each
+        // `optional-chain` mutant must run, and its test crashes. The same
+        // test pushes a module-data method's returned `1 + 2`, whose
+        // `return-undefined` mutant its push observes, so it must run and
+        // be killed. A capture helper that records no change at such a site
+        // makes the CLI judge its mutant from the unmutated runs, as a
+        // survivor. Built on the one-owner base, so a random base cannot
+        // take the states away, and appended at the end of the list, so the
+        // earlier constructed histories keep their bases.
+        name: `a value change at a ?. read and at a return`,
+        enters: changedValues,
+        build: (generated) =>
+          oneOwnerHistory(generated, {
+            functions: [
+              [
+                { kind: `optional` },
+                { kind: `optional` },
+                { kind: `readData`, shape: `methods` },
+              ],
+            ],
+            absentObjects: [`undefined`, `null`],
+            tests: [{ ...judging(`a`, `fixed seed`, 0), fn: 0 }],
+          }),
       },
     ]),
   },

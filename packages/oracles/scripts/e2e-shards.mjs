@@ -301,6 +301,11 @@ export const shards = {
     `fixed seed 20261105: a probe branch under a generated test's work bound`,
     `random seed: a probe branch under a generated test's work bound`,
     `determinism: constructed history: a probe branch under a generated test's work bound`,
+    // A value change at a ?. read and at a return: one small function of
+    // three statements, like the probe branch's history.
+    `fixed seed 20261105: a value change at a ?. read and at a return`,
+    `random seed: a value change at a ?. read and at a return`,
+    `determinism: constructed history: a value change at a ?. read and at a return`,
     `fixed seed 20261105: every outcome class, the warm stop`,
     `fixed seed 20261105: every outcome class, the abort stop`,
     `random seed: every outcome class, the warm stop`,
