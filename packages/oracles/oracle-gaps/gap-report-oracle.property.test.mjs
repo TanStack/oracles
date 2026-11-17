@@ -328,7 +328,10 @@
  *    run's output directory, which holds a results.json with status
  *    `refused`, the same cause and directive, and a summary.md. A refusal
  *    through the daemon ends the same way, in the output directory of the
- *    CLI that asked.
+ *    CLI that asked. Any other error is an internal error, a bug in the
+ *    CLI: it exits 3, says so in one `oracle-gaps: error` line on stderr
+ *    with no stack frames, and keeps its stack in the error.log of the
+ *    run's output directory (ending.mjs).
  * 13. **Stopping.** A run stopped by SIGTERM or SIGINT ends within 30 s, and
  *    once it has ended no process it started is left: its Vitest workers,
  *    as child processes or as threads, and the processes their tests start
@@ -358,9 +361,8 @@
  *    run). An agent acts on a check's results as they stream, so every line
  *    the CLI writes for the check starts with `oracle-gaps: ` and then its
  *    kind: `config`, `note`, `baseline`, `blocked`, `progress`, `gap`,
- *    `busy`, or `done`. Only an indented line under a baseline failure, a
- *    refusal's `refused:` and `fix:` block, and a line Node writes for the
- *    process are not. The baseline ends with one decisive line before any
+ *    `busy`, `error`, or `done`. Only the declared exempt lines below are
+ *    not. The baseline ends with one decisive line before any
  *    mutant runs: `oracle-gaps: baseline all <n> oracle files pass`, or
  *    `oracle-gaps: baseline <k> of <n> oracle files failed (provisional)`.
  *    The stdout's baseline, blocked, and gap lines carry the same prefixes.
@@ -375,8 +377,21 @@
  *    at its site, not counted here as a missing or extra line.
  *    The run's last line is its done line: `completed, <n> gaps[
  *    (provisional)], report <its summary.md>` on stdout, `refused[, report
- *    <its summary.md>]` after a refusal's block, or `stopped (<signal>)`
- *    after a stop. A check through the daemon streams the same lines.
+ *    <its summary.md>]` after a refusal's block, `error, log <its
+ *    error.log>` after an internal error's one `error` line, or `stopped
+ *    (<signal>)` after a stop. An `error` line is an internal error's one
+ *    diagnostic (P10, one diagnostic per failure; the register's C entry
+ *    "The internal-error line", 2026-11-16): a run that ends through its
+ *    ending (`done error, log <log>`) writes exactly one, on stderr, naming
+ *    that log with its line breaks escaped, and every other run writes none.
+ *    The law holds for every run, whatever its end: an internal error's
+ *    lines are lines of the stream. The declared exempt lines (v21.2 P10,
+ *    I3, R10; the register's M entries of 2026-11-16, "P10 exemptions
+ *    ratified", "`--help` is exempt", and "Other tools' output is exempt")
+ *    are the stdout summary (unused: the CLI prefixes it), refusal blocks,
+ *    indented baseline lines under a prefixed head line, `--help`'s usage
+ *    text, and the lines and blocks that Node, V8, esbuild, and Vite print;
+ *    each is told by its own shape, and no other line is exempt. A check through the daemon streams the same lines.
  *
  * Authority: the maintainer's decisions in the gap-check design runs v11, v14,
  * and v19 (2026-11-04 and 2026-11-05; the design notes are kept by the project
@@ -782,13 +797,27 @@ const retentionLinesOf = (file) =>
  * Writes the fixture's files and runs the CLI on it. A file of an earlier
  * state that this state lacks is removed.
  */
+// A calibration's lines that another writer printed on the CLI's stderr
+// (`foreign`), put before its last line, the done line, where a block that
+// Node, V8, or esbuild prints comes before the CLI's own ending. Only the
+// stream calibrations set it (streamCalibrations); with none, the stderr is
+// read as the CLI wrote it.
+function beforeLastLine(stderr, foreign) {
+  if (foreign === undefined) return stderr
+  const lines = `${stderr ?? ``}`.split(`\n`)
+  const last = lines.findLastIndex((line) => line !== ``)
+  lines.splice(last, 0, ...foreign)
+  return lines.join(`\n`)
+}
+
 function runCli(dir, files, how = {}) {
   writeFixture(dir, files)
   const before = new Set(filesUnder(dir))
   const { args, out: outBase } = cliArgs(dir, files, how)
   // Each call has its own output directory: its retention lines are then its own, even when a
-  // daemon serves several checks of one test.
-  const out = `${outBase}-${++runSeq}`
+  // daemon serves several checks of one test. `outBreak` puts a line break in its name, where the
+  // platform allows one, so that a line that names the directory must escape it.
+  const out = `${outBase}-${++runSeq}${how.outBreak ? `\nbreak` : ``}`
   args[args.indexOf(`--out`) + 1] = out
   // The retention hook (ORACLE_GAPS_TEST_RETENTION): one line per batch,
   // written beside the run's own temporary files, not in the package.
@@ -811,7 +840,7 @@ function runCli(dir, files, how = {}) {
     dir,
     out,
     child.status,
-    child.stderr,
+    beforeLastLine(child.stderr, how.foreign),
     how.cli ?? here,
     child.stdout,
   )
@@ -1235,34 +1264,86 @@ function namedOut(text, out) {
 const streamedGap =
   /^oracle-gaps: gap (?:not-judged|extra-work|indeterminate|dead-code|outside-annotation|branch-never-taken|not-infected|not-observed|not-distinguished|unreached|random-only-kill|agreement-only-kill|unregistered-kill|framework-error|timeout|setup-error|crashed|does-not-apply|blocked) L(?:\d+|\?) (\S+) /
 
+// The declared exempt lines that are not our own (v21.2 P10 and I3), each
+// told by its own shape, never by its indentation alone: a block starts at
+// a line that matches its `head` and goes on while its lines match its
+// `body`. `blank` says that empty lines belong to it.
+// - Under a baseline failure (`oracle-gaps: baseline fail …`), its indented
+//   detail lines (`failing:`, `law:`, `counterexample:`, `replay:`).
+// - Node's warning, `(node:<pid>) …`, the frames that `--trace-warnings`
+//   adds under it (`    at …`), and its hint, which starts `(Use` and names `node --trace-…`.
+// - V8's fatal block, as Node prints it when the heap runs out: its
+//   banners (`<--- Last few GCs --->`, `<--- JS stacktrace --->`, `-----
+//   Native stack trace -----`, `==== JS stack trace ====`), its GC lines
+//   (`[<pid>:0x…] …`), `FATAL ERROR: …`, and its numbered frames, with
+//   empty lines between them.
+// - esbuild's message block (`✘ [ERROR] …` or `▲ [WARNING] …`, `X` and `!`
+//   where it prints no symbols), with its indented location, code frame, and
+//   notes, and the empty lines between them.
+// - Vite's own line (`[vite] …` or `[vite:<plugin>] …`), with indented
+//   lines under it.
+const v8Line =
+  /^(?:<--- .* --->|----- .* -----|==== .* =+|\[\d+:0x[0-9a-f]+\] .*|FATAL ERROR: .*|\s*\d+: .*|Security context: .*)$/
+const exemptBlocks = [
+  { head: /^oracle-gaps: baseline fail /, body: /^ {2}\S/ },
+  { head: /^\(node:\d+\) /, body: /^(?: {4}at \S|\(Use `node --)/ },
+  { head: /^\(Use `node --/, body: /^$/ },
+  {
+    head: /^(?:<--- Last few GCs --->|<--- JS stacktrace --->|FATAL ERROR: |----- Native stack trace -----)/,
+    body: v8Line,
+    blank: true,
+  },
+  {
+    head: /^(?:✘|▲|X|!) \[(?:ERROR|WARNING)\] /,
+    body: /^\s+\S/,
+    blank: true,
+  },
+  { head: /^\[vite(?::[\w:-]+)?\] /, body: /^\s+\S/ },
+]
+
 /**
  * What law 15 judges of a run's stderr, as relations that do not depend on
  * the order in which its contexts finished:
- * - `strays`: each line, once, that is neither a line of a stream kind
- *   (`oracle-gaps: <kind> `), an indented line under a baseline failure, a
- *   refusal's block (`refused:` up to its `fix:` line), nor a line Node
- *   writes for the process (a warning);
+ * - `strays`: each line, once, that is not a line of a stream kind
+ *   (`oracle-gaps: <kind> `) and not one of P10's declared exempt lines
+ *   (v21.2 P10 and I3; the register's M entries of 2026-11-16, "P10
+ *   exemptions ratified" and "Other tools' output is exempt"), each told by
+ *   its own shape (`exemptBlocks`): an indented line under a baseline
+ *   failure, a refusal's block (`refused:` up to its `fix:` line), a block
+ *   that Node or V8 prints, or a block that esbuild or Vite prints. An
+ *   empty line is a stray unless it lies in or right before such a block;
+ *   the text after the last line break is no line;
  * - `verdicts`: the decisive baseline lines;
  * - `mutantBeforeVerdict`: whether a gap line, a count of judged mutants,
  *   or a heartbeat that names a mutant came before the first verdict;
- * - `last`: the last line, which ends a run that did not complete.
+ * - `last`: the last line, which ends a run that did not complete;
+ * - `errors`: how many internal error lines (`oracle-gaps: error `) it has,
+ *   and `errorLogs`, the log each of them names (`its stack is in <log>`).
  */
 function streamOf(lines, name) {
   const kinds = new RegExp(`^oracle-gaps: (?:${streamKinds.join(`|`)}) `)
   const strays = new Set()
+  // The exempt block the line before belongs to, if any (exemptBlocks).
+  let block
   let inRefusal = false
-  for (const line of lines) {
-    if (line === ``) continue
+  const end = lines.findLastIndex((line) => line !== ``)
+  for (const [at, line] of lines.entries()) {
+    if (line === `` && at > end) continue
     if (line.startsWith(`refused: `)) inRefusal = true
     const ending = inRefusal
     if (line.startsWith(`fix: `)) inRefusal = false
-    if (
-      ending ||
-      kinds.test(line) ||
-      line.startsWith(`  `) ||
-      /^\((?:node:\d+|Use `node)/.test(line)
-    )
+    if (line === ``) {
+      // An empty line belongs to a block that holds empty lines, or comes
+      // right before the head of one (V8's fatal block starts so).
+      const next = lines.slice(at + 1).find((l) => l !== ``) ?? ``
+      const opens = exemptBlocks.find((b) => b.blank && b.head.test(next))
+      if (ending || block?.blank || opens) continue
+      strays.add(`(an empty line)`)
       continue
+    }
+    if (!block?.body.test(line)) block = undefined
+    block ??= exemptBlocks.find((b) => b.head.test(line))
+    if (ending || block || kinds.test(line)) continue
     strays.add(name(line).slice(0, 300))
   }
   const verdict = (line) => baselineVerdict.test(line)
@@ -1280,6 +1361,14 @@ function streamOf(lines, name) {
     last: name(lines.filter((line) => line !== ``).at(-1) ?? ``),
     // How many done lines the stream has: exactly one, its last.
     dones: lines.filter((line) => line.startsWith(`oracle-gaps: done `)).length,
+    // How many internal error lines: at most one, and only in a run that
+    // exits 3 (law 12).
+    errors: lines.filter((line) => line.startsWith(`oracle-gaps: error `))
+      .length,
+    errorLogs: lines.flatMap((line) => {
+      const log = line.match(/^oracle-gaps: error .*; its stack is in (.*)$/)
+      return log ? [name(log[1])] : []
+    }),
     // The notes, each once, named as the trace names paths, and with the
     // output directory's name left out: a cold run and a check through the
     // daemon name different ones.
@@ -2219,9 +2308,17 @@ async function driver(plan, observe) {
       budget: plan.budget,
       cli: plan.cliPath === `spaced` ? copy : here,
       ...configArgs(plan),
+      // A rejected batch ends through the internal error's ending, the one ending a history reaches that
+      // names its log, so its output directory's name holds a line break where the platform allows one
+      // (not on win32): its error line and done line must escape it (the register's C entry "The
+      // internal-error line").
       ...(plan.rejectBatch > 0
-        ? { env: { ORACLE_GAPS_TEST_REJECT_BATCH: String(plan.rejectBatch) } }
+        ? {
+            env: { ORACLE_GAPS_TEST_REJECT_BATCH: String(plan.rejectBatch) },
+            outBreak: process.platform !== `win32`,
+          }
         : {}),
+      foreign: plan.foreign,
     }
     const { replay, retention, checkPid, ...cli } = runCli(
       dir,
@@ -2260,8 +2357,9 @@ async function driver(plan, observe) {
     // How many units were computed or reused says how the result was
     // produced, not what it is, so it is not observed. A rejected batch's run ends in an internal error:
     // the baseline lines printed before its batch come in no fixed order, so it observes its exit, its
-    // last line and the laws that judge the run before retention (the register: the order of streamed
-    // lines is not part of the contract).
+    // last line, the laws that judge the run before retention (the register: the order of streamed
+    // lines is not part of the contract), both streams as law 15 reads them (relations that do not
+    // depend on that order), and where its ending put its stack (law 12).
     observe(
       `cli`,
       plan.rejectBatch > 0
@@ -2273,6 +2371,11 @@ async function driver(plan, observe) {
             configLines: cli.configLines,
             strayWrites: cli.strayWrites,
             warnings: cli.warnings,
+            stream: cli.stream,
+            stdoutStream: cli.stdoutStream,
+            outDir: cli.outDir,
+            errorLog: cli.ending?.errorLog,
+            stackFrames: cli.ending?.stackFrames,
           }
         : { ...cli, evidence: undefined },
     )
@@ -2303,6 +2406,10 @@ async function driver(plan, observe) {
       )
     )
       states.add(`a rejected batch retired its copies and logged them`)
+    // Law 12's internal error, where law 15 judges its lines: the run's own
+    // ending (ending.mjs), not a process the supervisor saw end.
+    if (cli.exit === 3 && cli.ending?.errorLog)
+      states.add(`a run ended in an internal error`)
     if (retention.length > 1) states.add(`a check that ran more than one batch`)
     if (tornRead && cli.reported)
       states.add(`a capture row read while the worker wrote it`)
@@ -3020,12 +3127,10 @@ function check(plan, observations, expected) {
       `config`,
       { actual: cli.configLines, expected: expected.configLines },
     )
-  // A rejected batch's run ends with the internal error's lines, which are not stream lines: its ending is
-  // judged below, after retention (the constructed fault only).
-  const stream =
-    expected.rejectedBatch === undefined
-      ? streamBreach(`cli`, cli, expected, plan)
-      : undefined
+  // Law 15 holds for every run, an internal error's included: its error line and its done line are lines of
+  // the stream (v21.2 P10, I3, I7, R10). The rest of a rejected batch's ending is judged below, after
+  // retention.
+  const stream = streamBreach(`cli`, cli, expected, plan)
   if (stream) return stream
   // Bounded retention (retentionBreaches): every call's lines are its own
   // check's, or a daemon's that the driver killed, one per batch, and each
@@ -3044,7 +3149,9 @@ function check(plan, observations, expected) {
       { actual: breached.map((o) => [o.checkpoint, o.value]), expected: [] },
     )
   // A rejected batch (the constructed fault) ends the run as an internal error: exit 3 and its done line
-  // (ending.mjs). Retention was judged above, so only the ending is judged here, and the run is then done.
+  // (ending.mjs), no stack frame on stderr, and its stack in the output directory's error.log (law 12).
+  // Retention and the stream law, with its one error line that names that log (endsBreach), were judged
+  // above, so only the rest of the ending is judged here, and the run is then done.
   if (expected.rejectedBatch !== undefined) {
     if (
       cli.exit !== 3 ||
@@ -3054,6 +3161,12 @@ function check(plan, observations, expected) {
       return violation(
         `cli`,
         `the rejected batch owes exit 3 and an internal error's done line on both streams, got exit ${cli.exit} ending stdout with ${JSON.stringify(cli.lastLine)} and stderr with ${JSON.stringify(cli.stderrLast)}`,
+        `internal error`,
+      )
+    if (cli.stackFrames || !cli.errorLog)
+      return violation(
+        `cli`,
+        `the rejected batch owes its stack in error.log and none on stderr, got ${cli.stackFrames ? `stack frames on stderr` : `no stack frames on stderr`} and ${cli.errorLog ? `an` : `no`} error.log`,
         `internal error`,
       )
     return pass
@@ -3597,11 +3710,30 @@ const showsCode = (shown, text) => {
   )
 }
 
+// A path as a line of the stream spells it: forward slashes, and each
+// control character, a line break included, as its `\uXXXX` escape, so a
+// path stays on its line (the register's C entry "The internal-error line",
+// 2026-11-16).
+const lineSpelling = (path) =>
+  path
+    .replaceAll(`\\`, `/`)
+    .replace(
+      /[\u0000-\u001f\u007f\u2028\u2029]/g,
+      (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, `0`)}`,
+    )
+
 /**
  * What law 15 judges of every run, on both streams, whatever its outcome:
  * no stray line, and exactly one done line, which ends each stream, the
  * same on both, of the kind its exit status says (0 completed, 2 refused,
- * 3 error, and a signal's code stopped). Undefined when it holds.
+ * 3 error, and a signal's code stopped). And law 12's one diagnostic per
+ * failure (v21.2 P10 and R10; the register's C entry "The internal-error
+ * line", 2026-11-16): an internal error that ends through its own ending,
+ * whose done line names its log (`done error, log <log>`), wrote exactly one
+ * error line, on stderr, which names the same log, the error.log of the
+ * run's output directory when the run names one; every other run, the
+ * supervisor's own exit 3 included (`done error, the run's process exited
+ * …`), wrote none. Undefined when it holds.
  */
 function endsBreach(run) {
   const streams = [
@@ -3611,7 +3743,7 @@ function endsBreach(run) {
   for (const [where, stream] of streams)
     if (stream.strays.length > 0)
       return {
-        difference: `the run wrote a line on ${where} that is not a line of the stream: ${stream.strays[0]}`,
+        difference: `the run wrote ${stream.strays.length} lines on ${where} that are not lines of the stream: ${JSON.stringify(stream.strays)}`,
         extra: { actual: stream.strays, expected: [] },
       }
   for (const [where, stream] of streams)
@@ -3632,6 +3764,23 @@ function endsBreach(run) {
     return {
       difference: `the run exited ${run.exit} and its done line says ${kind}, not ${owed}`,
     }
+  const logged = run.stream.last.match(/^oracle-gaps: done error, log (.*)$/)
+  const owedLogs = logged ? [logged[1]] : []
+  if (
+    JSON.stringify(run.stream.errorLogs) !== JSON.stringify(owedLogs) ||
+    run.stream.errors !== owedLogs.length ||
+    run.stdoutStream.errors !== 0
+  )
+    return {
+      difference: `the run ended with ${JSON.stringify(run.stream.last)} and wrote ${run.stream.errors} internal error lines on stderr (naming ${JSON.stringify(run.stream.errorLogs)}) and ${run.stdoutStream.errors} on stdout, owed ${owedLogs.length} on stderr naming ${JSON.stringify(owedLogs)} and none on stdout`,
+    }
+  if (logged && run.outDir !== undefined) {
+    const log = `${lineSpelling(run.outDir)}/error.log`
+    if (logged[1] !== log)
+      return {
+        difference: `the run's internal error names its log as ${JSON.stringify(logged[1])}, owed ${JSON.stringify(log)}, its output directory's error.log`,
+      }
+  }
   return undefined
 }
 
@@ -4256,6 +4405,69 @@ calibrations.push(
   },
 )
 
+// Law 15's exempt lines are told by their own shapes (exemptBlocks): another
+// writer's block on the CLI's stderr is no stray, and the CLI's own line with
+// no prefix is one, indented or not. Each calibration runs the rejected-batch
+// history with lines that another writer printed before its done line
+// (`foreign`, beforeLastLine) and one line of our own with no prefix, and the
+// stream law must name that line alone as a stray: so the block's lines are
+// exempt, and our line is not (the register's M entries of 2026-11-16, "P10
+// exemptions ratified" and "Other tools' output is exempt").
+const ownLine = `judged 25 of 100 mutants`
+const foreignBlocks = {
+  // V8's fatal block, as Node 22 prints it when the heap runs out.
+  [`a V8 fatal block`]: [
+    ``,
+    `<--- Last few GCs --->`,
+    ``,
+    `[4242:0x7f8b5c008000]     1234 ms: Mark-Compact 2040.5 (2083.4) -> 2039.9 (2083.4) MB, pooled: 0 MB, 1033.97 / 0.00 ms  (average mu = 0.112, current mu = 0.029) allocation failure; scavenge might not succeed`,
+    ``,
+    ``,
+    `<--- JS stacktrace --->`,
+    ``,
+    `FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory`,
+    `----- Native stack trace -----`,
+    ``,
+    ` 1: 0x1001b3a7c node::OOMErrorHandler(char const*, v8::OOMDetails const&) [/usr/local/bin/node]`,
+    ` 2: 0x10036d2e4 v8::internal::V8::FatalProcessOutOfMemory(v8::internal::Isolate*, char const*, v8::OOMDetails const&) [/usr/local/bin/node]`,
+  ],
+  // A warning under --trace-warnings: its frames instead of its hint.
+  [`a traced warning's frames`]: [
+    `(node:4242) Warning: a warning a test raised`,
+    `    at emitWarning (node:internal/process/warning:190:3)`,
+    `    at file:///tmp/package/tests/a.test.ts:3:9`,
+  ],
+  // esbuild's block for a syntax error in a module the config imports, as
+  // Vite 7.3.7 with esbuild 0.28.2 prints it.
+  [`an esbuild block`]: [
+    `✘ [ERROR] Unexpected end of file`,
+    ``,
+    `    helper.ts:2:0:`,
+    `      2 │ `,
+    `        ╵ ^`,
+    ``,
+  ],
+}
+calibrations.push(
+  ...Object.entries(foreignBlocks).map(([block, lines]) => ({
+    name: `${block} beside our own line with no prefix`,
+    law: `greppable stream`,
+    difference: `that are not lines of the stream: ${JSON.stringify([ownLine])}`,
+    history: { constructed: `a batch whose run rejects` },
+    driver: (plan, observe) =>
+      driver({ ...plan, foreign: [ownLine, ...lines] }, observe),
+  })),
+  {
+    // Indentation alone exempts no line: only a baseline failure's details.
+    name: `our own indented line with no prefix`,
+    law: `greppable stream`,
+    difference: `that are not lines of the stream: ${JSON.stringify([`  ${ownLine}`])}`,
+    history: { constructed: `a batch whose run rejects` },
+    driver: (plan, observe) =>
+      driver({ ...plan, foreign: [`  ${ownLine}`] }, observe),
+  },
+)
+
 // The states of a config's test root, one for each shape (`testRoots` in the
 // model, issue #101). Each shape has its own constructed history.
 // The state of a config plugin that loads test files itself, with a sync read
@@ -4480,6 +4692,7 @@ const required = [
   `edit lazy changed the cold result`,
   `a lazy edit changed the cold result after a batch was cut off`,
   `a rejected batch retired its copies and logged them`,
+  `a run ended in an internal error`,
 ]
 // The faults the CLI analyzes anyway: a package's TypeScript is no input.
 const analyzedFaults = [`noTypescript`, `apiLessTypescript`]
@@ -4566,6 +4779,7 @@ const separate = [
   `edit lazy changed the cold result`,
   `a lazy edit changed the cold result after a batch was cut off`,
   `a rejected batch retired its copies and logged them`,
+  `a run ended in an internal error`,
 ]
 // A stop by SIGTERM exists only where Node can deliver it: on win32 kill is
 // TerminateProcess, so there the stop law is judged by SIGINT (the test stop
@@ -4688,7 +4902,7 @@ oracleProperty({
   law: {
     statement: `The gap report enumerates the promised operator mutants, leaves out exactly the probe-only code, discovers every oracle that owns a function's call tree and refuses broken ownership, judges each mutant only by its owners' tests on their registered routes and counts only law verdicts on reproducible routes as kills, which outrank a run that never ends, anchors each mutant by its function and normalized statement, lists every gap and unowned mutant once with consistent counts, keeps keys stable under unrelated edits, reports through one daemon per package what a cold run reports at every state of a sequence of edits, and bounds the runs that confirm a mutant's cut-off copies by one budget per mutant and names each busy mutant in a heartbeat while it runs, leaves nothing in the package and writes nothing where Vitest's include could find it while it runs, leaves no process running once it is stopped, runs the package as Vitest does from any install path and any --source spelling: one instance of each workspace dependency, no refusal over an unbuildable devDependency, child processes for a native addon anywhere in the tree, a capture that a test's builtin spies cannot see, and a refusal of test.projects; leads its report with every test file's baseline, blocks only the mutants a failing oracle file owns and judges the rest, prints every line of its stream with the prefix oracle-gaps: and its kind, one decisive baseline line before any mutant, and a done line last, and every run that does not complete ends, cold or through the daemon, with a refusal that exits 2, prints a refused: block and one fix: directive with no stack trace, and writes the refusal to the run's output directory.`,
     authority: `The maintainer's decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), not in this package's records, including that a kill by reach agreement alone is a gap and that an incremental run through the daemon equals a cold one (v19.3); the project's oracle guide on quiet exclusions; the oracle rubric's outcome kinds (ORC-006); the CLI's documented operator list in schemata.mjs; the maintainer's dispositions G1, G2, G4, G5, G6, and G13 of the framework papercut ledger (2026-11-11) and the v20 freeze's namespacing, one-loop, and provisional-report decisions (2026-11-10); the maintainer's request for a greppable stream (2026-11-12, relayed by the coordinator with its decisions of that day: the same prefixes on stdout and stderr, a done line for a stopped run, and no --max-gaps).`,
-    limits: `Law 12 judges refusals. The one internal error a history reaches is the constructed rejected-batch history (rejectBatch, a test-only fault that rejects a batch's run after its copies are in Vitest's and Vite's state). Its run is judged in this order: the output namespace, process warnings, and config lines, as for any run; then bounded retention, which owes the rejected batch's own line with its state after retirement; then exit 3 with an internal error's done line last on both streams. The stream law is not applied to it, and the stack in its error.log is not judged. Bounded retention reads the hook's lines (retention-hook.mjs). Its count of one line per batch (runner law L2) rests on the index the hook takes when a batch starts, so a CLI that skipped a batch's index and its line together, or that omitted only the line of a check's last batch, keeps the indices 0..n-1 and is not seen; a check that ended before its report (the rejected batch, a stopped run) and a daemon the driver killed are judged for at most one line per index, since the batches they were running at their end owe none. A line's process is told by check.pid, which the check writes, and the driver itself knows only the daemon it killed. The cold store's law (held) counts the entries given to the store's put that a full collection leaves reachable, so a store that kept only a part of an entry (its unit without the entry) is not seen; staleOpen reads Vitest's own close state (closingPromise, set when close starts), so a close that starts and never resolves is the runner oracle's (L8); and a context replaced after a check's last batch is observed only by a later check's first batch through the daemon. The run whose process aborts is declared on every platform. Its win32 witness (process.abort through ORACLE_GAPS_TEST_ABORT_AT, under the win32 supervisor) lands in #79; until then the Windows end-to-end job is non-blocking (C entry (c)). On win32 Node cannot deliver SIGTERM (its kill is TerminateProcess, which ends the process with no stopped line), so the stop states that name SIGTERM are required on POSIX only, and a stop there goes through the CLI's test stop hook and is observed as SIGINT; every SIGINT state stays required on win32. Argument refusals are the static oracle's; the check's rejection of a stack trace, a missing fix, and a wrong exit code is calibrated in the static oracle, through the same refusalBreach, and here only a refused run reported as complete is calibrated, because each calibration here runs real CLI histories. Law 15's stdout gap lines are judged against each completed run's own results.json, by id: the cold run, and each check through the daemon (every step's check and the check that a mid-run edit overlaps); a stopped run and a refusal list no gaps and are not judged so. A line's change is read loosely: its code on one line, whole or cut after a kept part and ended with \`...\`; where the printer cuts (60 code points, kept 57) is the classify oracle's law 8 (\`shortened\`), in-process. A line with any text after its change does not read and fails loudly: the \` (cause: <cause>)\` suffix that #99 adds to timeout lines is not read yet, so whichever of #99 and #115 lands second extends readGapLine. Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 20 s full limit, and a slow run only as two witnesses whose tests wait where the output changed, 3 s in one that then judges and 10 s in two one-test owners of one that does not; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; --only only in a stopped run and a partial run of one function's mutants, and no --sample or --diff-base; the baseline's failures only as one failing owner test that throws an error and a setup file that throws, so a baseline law violation's law and counterexample lines are the classify oracle's; a derived class's file is instrumented and its sites are judged as unowned, but no test imports or constructs the class, so its no-mutant and super-region behavior is the static oracle's (in-process), not this oracle's; package configs only as vite.config or vitest.config with one of the extensions .ts, .mts, .cts, .js, .mjs, and .cjs (not every pair), as config/gap-vitest with the same extension through --config, or none, as an object or a sync or async function, with no plugins of their own except one enforce: 'pre' transform that appends a comment to each module of the package (prePlugin) and, in one constructed history, a plugin whose load reads each test file with a sync read (loadPlugin); a plugin whose output depends on anything but the module's text (a sidecar file it reads) and an environment variable that changes between checks are not generated, since the runner tracks neither yet and the daemon's environment is fixed when it starts (F-A1: the maintainer decided on 2026-11-13 that the daemon tracks both and restarts when they change, in the next pull request); and test.projects only as a refusal, and only under the package's own package.json; a config's test.root only in four shapes, each in one constructed history of an ES module config that Vitest discovers, with one owner and one context, where the test files' globs and the setup file are relative to the root (issue #101): the directory that holds the tests, the directory above the package, a directory of the package that holds no test file, and the package's tests as a symbolic link to the directory that holds them (required on every platform, since Windows creates the link as the driver's other links); not under --config, a CommonJS config, test.projects, several contexts with different roots, or a root that is the filesystem's root; the runner serves each copy of a test file by its absolute path, through its pre plugin's load (which answers before the config's own plugins) and through its read of the copy's path for Vitest's pragma read (serveCopies), and histories run copies only in Vite's server environments (node and the pragma's ssr environment): jsdom and happy-dom, Vite's client environment, are not generated (the #103 merge-gate review ran jsdom by hand under all five root shapes, and the copies loaded in each); a top-level await only in an ES module config and require only in a CommonJS one, as Vitest itself loads no other; a --config outside the package is refused by design, through the rule for paths outside the package (args.mjs), and no history generates one; contexts only one, four, or eleven, and process warnings judged only as MaxListenersExceededWarning on the CLI's own stderr (a daemon's process warnings go to its log); a context that fails to open gives back its listener allowance, which no observation shows (a kept allowance only raises the limit, so no warning follows), so that accounting is fixed by inspection; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9 judges the witness module's outcome classes along one constructed edit sequence only (a test edit, a helper edit, and a revert), and the budget witness's along one constructed second check with nothing changed, because a generated history with the witness module or the budget witness takes no steps (maintainer decision, 2026-11-11, and the runtime review's P1-a, 2026-11-12; this oracle owns the gap); law 9's edits come between checks, except one, midrun, which lands during a check through the daemon: a test of file a, whose context has loaded file b's helper, rewrites the helper in the baseline's first run of file a, before file b's runs read it, in one context or several; or a test of file b rewrites its own helper, or the data file that its verdict read through a sync fs read, after file b's judged tests read them, in the run that judges with the old text (review of #55, F1); that check must report, for each mutant, what a cold run of the state before the edit or of the state after it reports, and exit as one of them does (third review of #55, F-C), compared per mutant result rather than per file; when file b's own test lands the edit, b's baseline reads the old text and b's mutant runs read the new one, so b's own mutants in that check are not judged, since their results legitimately mix the two texts (maintainer decision, 2026-11-13), while every other mutant there is judged against both cold runs, with the check's exit code, its mutants' keys, and its stream; the stronger follow-up compares each run's raw outcome with the cold outcome of the state that run read; and the next check, with nothing changed, must equal a cold run of the state after the edit, compared for equality of results only, not for what the daemon reused or computed (the runner's rule: a run whose input changed after the run read it is invalidated and not stored, settleIn); a check through the daemon of a state that nothing changed must compute no run that was not cut off, judged where no test reads the clock (F-A, F-A2), and a test's fs read of a file and the module that the context serves from it are two inputs, each under its own hash (F-A2); an edit during a mutant run is not generated, and a file is edited mid-run only by the run's own tests, not by another process at an arbitrary time; a file that a test reads through fs is edited only as one JSON file that file b's verdict reads by a sync, a promise, or a callback read, or by a sync read after it stats its own directory and tests that it exists (statDir: the directory is an input as a directory, not by its content, and is not itself edited), each read first checking that its fs function keeps its own name and length (the runner stores a run under the files in the package that its copy reads with readFileSync, readFile, existsSync, or statSync, or the fs/promises readFile or stat, each with its hash at the copy's first read; a read outside the package or under node_modules, from a worker thread or a child process that a test starts, or through any other fs API, which includes readdir, opendir, glob, globSync, createReadStream, realpath, lstat, access, open, a read through a file descriptor (read, readSync, readv, fstat, fstatSync, and readFileSync or readFile given a file descriptor), copyFile and copyFileSync, cp and cpSync, openAsBlob, statfs, readlink, the callback stat, exists, watch, watchFile, and the fs/promises access, open, and glob, is no input, and none is generated: the maintainer decided on 2026-11-13 that every fs read except watch and watchFile is an input, which a follow-up of #55 implements, and until then this oracle owns the gap); a run cut off by its clock writes no closing row, so it is stored under its file's known inputs only, while a run that spun ends and keeps the inputs it named (F-D); no history makes a cut run read a file that its file's unmutated run does not read, so this is fixed by inspection; a test that rewrites a file it read with the same text makes the next check compute that run again (1 run in the self-edit histories), since the edit changes the file's modification time: the daemon is conservative there, nothing goes stale, and content keys (D10) remove it, with a selfWrite dimension in that pull request; the mid-run marker sits in the daemon's session directory, .oracle-gaps-<pid>, whose location predates #55; the runner's hash memo knows a file by its size and modification time, so an edit that keeps both is not seen, and no history makes one (D10, planned in phase 2, A5); law 9's edits leave out other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; cut-off charging judged only under one budget; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages; daemon races (two CLIs reading one error file, a CLI hearing closing from the failing daemon it started, a reset connection on macOS) fixed by inspection; the runner's copies of the test files exist only in memory, and its harness and Vitest configs sit in the package's .oracle-gaps-<pid>, which the next run removes once a killed run has left it (judged after two stopped runs, not after a SIGKILL); a default --out is judged by the static oracle, and these runs name --out in the package; the namespace is checked after each run and, in a stopped run, while the run runs; a slow kill in a later owner, after earlier owners' confirmations spent the budget, becomes a timeout (owner order; not generated); the Vitest 5 path of the copies' pragma read and of the runner is verified from Vitest 5's source only, since the Vitest 5 CI job runs no gap oracle; a batch whose run reports an error outside any test reruns each copy alone (unitsBatch, runAlone) with its first budget, and a copy cut there is kept as a timeout with no confirmation, a defect older than this oracle's budget work that no history reaches (no history has an error outside any test beside a slow copy), recorded here with that trace for the maintainer; stale-session removal is scoped to this host's session directories (a host file), and is not judged across pid namespaces; the stop law covers SIGTERM and SIGINT sent to the CLI, not a SIGKILL of the CLI (its group then ends at the next check of its parent, by inspection) or a signal sent to the daemon, and its witness is one test that spins synchronously and starts one child process; the mutant budget is witnessed as two slow owners whose confirmations pass the --mutant-limit floor, not through its multiple of the owners' unmutated time, and authored mutants have no confirmations to budget; the witness w_slowpair is a wall-clock window, since the CLI's budget has no controlled clock and a fixture cannot see the time the CLI measures for its file: with one-test owner files p and q of measured unmutated time t each (a file first in its context pays the instrumented transform too), a wait W of 10 s, a 20 s --hang-limit and a 15 s --mutant-limit, it tells a budget from none only while (a) its first attempt is cut, W > 1 s + 3t, (b) its two confirmations do not fit the budget, 2W > max(15 s, 10 x 2t), and (c) each would fit its own full limit, W < 20 s + 3t; (b) is the binding one, so it holds while the two files' time stays under about 2 s together (about 1 s each, some 20 times the authoring machine's idle and 5 to 10 times its loaded measurements), and under one budget a run's overhead must stay under 10 s + 3t; CI runners measure 1.5 to 2.3 times the idle machine; beyond that w_slowpair would read not-judged; a heartbeat is owed only where a slow test waits 3 s against a 2 s interval, twice the first budget, so that no copy cut at its first budget beats, and each beat is observed as its mutant and file, not how long or how often it beat; a config only in the package's parent directory is generated one level up, in a temporary directory with no package.json (so its .js or .ts name is CommonJS), as a plain config, one that throws, one with no default export, or one that defines test.projects; a config two or more levels up, or a parent config beside a package config, is not generated, and the order in one directory follows Vitest's configFiles list by inspection; a package with no config lives in a temporary directory, where no parent has a config; a counterexample shrinks through at most six histories, so it can be larger than the smallest that fails; module-level data only as four \`const\` declarations of the main source (an object literal, an array that holds a function, a boolean, and an object of two methods), read in place, with no data imported from another file, destructured, reassigned, or declared as an enum or a default export; the work law only through shortcut witnesses (an early return before a counting loop with a bound twin of ratio 2, and a push beside one that calls String with a bound twin of ratio 1), the early return in tests that reach the clock by each watched path and in tests that wait a turn, a generated test's bound of 1 derived from its plan; probe code is never work (maintainer decision, 2026-11-16), so the model and the capture count no probe-only site, and only a constructed history (a probe branch under a generated test's work bound) reaches a probe branch beside a bound: the fixed seeds' generated histories reach neither that state nor \`killed by a work bound in a generated function\`, which stays measured; work counts are observed only through a bound's ratio and a rise, never as numbers (v21.2 O1), so a counter that skips every site on a probe's line, which drops only the condition sites of an elseIf that run once on both sides, survives (mutant M6, equivalent under these observations), while one that skips every site of a function that holds probe code is killed (M7), and one warm-cache witness whose selection reproduces observations but not work; work is the capture's count of site evaluations per test, so code with no site (a plain assignment, a for...of pass, a builtin's own work) counts nothing and a test's histories are summed, and a test whose work varies between the unmutated runs while its observations agree is not generated. Open Limits, owned by the in-process runner oracle (L1, state \"torn tail at a cut-off read\"; RED: captureLines without the guard): (a) the batch's cut-off read (runBatch's rowsOf after the cut-off) drops a partial last row, and no witness reaches that drop yet, because a copy held half written across the cut-off did not observe its release in the harness; (b) a short fragment on the strict path, which the no-newline mutant does not reach. The strict read after a finished run (a fragment is an internal error) is witnessed by the no-newline mutant. Windows idle gap (recorded, not witnessed): the state \`a hang cut off for idleness\` is required on every platform, and win32 reaches it (run 43683794816, job 132719872988), so it is not platform-scoped. The sampler (capture-setup.mjs) counts a copy idle only after 500 ms with no late tick, no non-quiet handle, utilization at most 5%, and no timer due, so \`every outcome class\` reaches the state only when the sampler sees that window. On win32 the check missed it once (run 43683794816, job 132719872940); the cause is not confirmed (a late tick on a shared runner, or a stdio handle outside \`quiet\` for this file's console output, are the candidates). Its witness, a test-only hold at the hang until the window is seen, is owed, and that is a timing dependency the determinism-under-load rule forbids; the maintainer decides whether it lands before the Windows job becomes blocking.`,
+    limits: `Law 12 judges refusals. The one internal error a history reaches is the constructed rejected-batch history (rejectBatch, a test-only fault that rejects a batch's run after its copies are in Vitest's and Vite's state). Its run is judged in this order: the output namespace, process warnings, and config lines, as for any run; then bounded retention, which owes the rejected batch's own line with its state after retirement; then the stream law (law 15) on both streams, as for any run, so its error line and its done line carry the prefix, and no other line does not, which the state \`a run ended in an internal error\` declares; then exit 3 with an internal error's done line last on both streams, no stack frame on stderr, and an error.log in its output directory. What the error.log's stack says is not judged. An internal error that no fault constructs is a completion failure, reported before the stream law; an internal error through the daemon is reached by no history, and its ending is the same function's (endRun), by inspection. The internal error's lines follow the register's C entry "The internal-error line" (2026-11-16): the general law (endsBreach) owes every run that ends through endRun one error line on stderr naming the done line's log, the output directory's error.log, and none on stdout, and owes the supervisor's own exit 3 none. The message's escape is witnessed by the fault's message, which holds a line break and a forged done line after it; the log path's escape only on POSIX, where the rejected batch's output directory holds a line break (a name on win32 cannot). Paths in a completed run's lines (the results note, the done line's report, the test-output note) are escaped the same way, by inspection: no completed history names such a directory. P10's exempt lines (v21.2 P10 and I3) are read by their own shapes (exemptBlocks), never by indentation alone: a baseline failure's indented details, a refusal's block, Node's warning with its \`--trace-warnings\` frames and its hint, V8's fatal block, esbuild's message block, and Vite's own \`[vite]\` line. The V8, traced-warning, and esbuild blocks are calibrated beside our own line with no prefix (the stream calibrations put them before the rejected-batch run's done line, and the law must name our line alone); no generated history prints any of them or a Vite line, and a shape of those tools that exemptBlocks does not name is read as a stray. The stdout summary's exemption is unused and not exercised: the CLI prefixes every summary line (its summary, legend, and function kinds). \`--help\` prints its usage text with no prefix and no done line, exempt by the register's M entry "\`--help\` is exempt" (2026-11-16), and the static oracle's Help law owes exactly that text; \`--stop-daemon\` prints nothing and exits 0, read the same way as a command outside the run protocol (C, pending ratification), and this oracle runs it without observing its streams. A syntax error in a module that the config imports lets the esbuild that Vite bundles configs with print its block before the refusal (trace, Vite 7.3.7, esbuild 0.28.2: \`✘ [ERROR] Unexpected end of file\`, an empty line, \`    helper.ts:2:0:\`, the code frame, then the refused block): its lines are exempt by the register's M entry "Other tools' output is exempt" (2026-11-16), the refusal and the done line around them keep the prefix, and no history generates it. Bounded retention reads the hook's lines (retention-hook.mjs). Its count of one line per batch (runner law L2) rests on the index the hook takes when a batch starts, so a CLI that skipped a batch's index and its line together, or that omitted only the line of a check's last batch, keeps the indices 0..n-1 and is not seen; a check that ended before its report (the rejected batch, a stopped run) and a daemon the driver killed are judged for at most one line per index, since the batches they were running at their end owe none. A line's process is told by check.pid, which the check writes, and the driver itself knows only the daemon it killed. The cold store's law (held) counts the entries given to the store's put that a full collection leaves reachable, so a store that kept only a part of an entry (its unit without the entry) is not seen; staleOpen reads Vitest's own close state (closingPromise, set when close starts), so a close that starts and never resolves is the runner oracle's (L8); and a context replaced after a check's last batch is observed only by a later check's first batch through the daemon. The run whose process aborts is declared on every platform. Its win32 witness (process.abort through ORACLE_GAPS_TEST_ABORT_AT, under the win32 supervisor) lands in #79; until then the Windows end-to-end job is non-blocking (C entry (c)). On win32 Node cannot deliver SIGTERM (its kill is TerminateProcess, which ends the process with no stopped line), so the stop states that name SIGTERM are required on POSIX only, and a stop there goes through the CLI's test stop hook and is observed as SIGINT; every SIGINT state stays required on win32. Argument refusals are the static oracle's; the check's rejection of a stack trace, a missing fix, and a wrong exit code is calibrated in the static oracle, through the same refusalBreach, and here only a refused run reported as complete is calibrated, because each calibration here runs real CLI histories. Law 15's stdout gap lines are judged against each completed run's own results.json, by id: the cold run, and each check through the daemon (every step's check and the check that a mid-run edit overlaps); a stopped run and a refusal list no gaps and are not judged so. A line's change is read loosely: its code on one line, whole or cut after a kept part and ended with \`...\`; where the printer cuts (60 code points, kept 57) is the classify oracle's law 8 (\`shortened\`), in-process. A line with any text after its change does not read and fails loudly: the \` (cause: <cause>)\` suffix that #99 adds to timeout lines is not read yet, so whichever of #99 and #115 lands second extends readGapLine. Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 20 s full limit, and a slow run only as two witnesses whose tests wait where the output changed, 3 s in one that then judges and 10 s in two one-test owners of one that does not; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; --only only in a stopped run and a partial run of one function's mutants, and no --sample or --diff-base; the baseline's failures only as one failing owner test that throws an error and a setup file that throws, so a baseline law violation's law and counterexample lines are the classify oracle's; a derived class's file is instrumented and its sites are judged as unowned, but no test imports or constructs the class, so its no-mutant and super-region behavior is the static oracle's (in-process), not this oracle's; package configs only as vite.config or vitest.config with one of the extensions .ts, .mts, .cts, .js, .mjs, and .cjs (not every pair), as config/gap-vitest with the same extension through --config, or none, as an object or a sync or async function, with no plugins of their own except one enforce: 'pre' transform that appends a comment to each module of the package (prePlugin) and, in one constructed history, a plugin whose load reads each test file with a sync read (loadPlugin); a plugin whose output depends on anything but the module's text (a sidecar file it reads) and an environment variable that changes between checks are not generated, since the runner tracks neither yet and the daemon's environment is fixed when it starts (F-A1: the maintainer decided on 2026-11-13 that the daemon tracks both and restarts when they change, in the next pull request); and test.projects only as a refusal, and only under the package's own package.json; a config's test.root only in four shapes, each in one constructed history of an ES module config that Vitest discovers, with one owner and one context, where the test files' globs and the setup file are relative to the root (issue #101): the directory that holds the tests, the directory above the package, a directory of the package that holds no test file, and the package's tests as a symbolic link to the directory that holds them (required on every platform, since Windows creates the link as the driver's other links); not under --config, a CommonJS config, test.projects, several contexts with different roots, or a root that is the filesystem's root; the runner serves each copy of a test file by its absolute path, through its pre plugin's load (which answers before the config's own plugins) and through its read of the copy's path for Vitest's pragma read (serveCopies), and histories run copies only in Vite's server environments (node and the pragma's ssr environment): jsdom and happy-dom, Vite's client environment, are not generated (the #103 merge-gate review ran jsdom by hand under all five root shapes, and the copies loaded in each); a top-level await only in an ES module config and require only in a CommonJS one, as Vitest itself loads no other; a --config outside the package is refused by design, through the rule for paths outside the package (args.mjs), and no history generates one; contexts only one, four, or eleven, and process warnings judged only as MaxListenersExceededWarning on the CLI's own stderr (a daemon's process warnings go to its log); a context that fails to open gives back its listener allowance, which no observation shows (a kept allowance only raises the limit, so no warning follows), so that accounting is fixed by inspection; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9 judges the witness module's outcome classes along one constructed edit sequence only (a test edit, a helper edit, and a revert), and the budget witness's along one constructed second check with nothing changed, because a generated history with the witness module or the budget witness takes no steps (maintainer decision, 2026-11-11, and the runtime review's P1-a, 2026-11-12; this oracle owns the gap); law 9's edits come between checks, except one, midrun, which lands during a check through the daemon: a test of file a, whose context has loaded file b's helper, rewrites the helper in the baseline's first run of file a, before file b's runs read it, in one context or several; or a test of file b rewrites its own helper, or the data file that its verdict read through a sync fs read, after file b's judged tests read them, in the run that judges with the old text (review of #55, F1); that check must report, for each mutant, what a cold run of the state before the edit or of the state after it reports, and exit as one of them does (third review of #55, F-C), compared per mutant result rather than per file; when file b's own test lands the edit, b's baseline reads the old text and b's mutant runs read the new one, so b's own mutants in that check are not judged, since their results legitimately mix the two texts (maintainer decision, 2026-11-13), while every other mutant there is judged against both cold runs, with the check's exit code, its mutants' keys, and its stream; the stronger follow-up compares each run's raw outcome with the cold outcome of the state that run read; and the next check, with nothing changed, must equal a cold run of the state after the edit, compared for equality of results only, not for what the daemon reused or computed (the runner's rule: a run whose input changed after the run read it is invalidated and not stored, settleIn); a check through the daemon of a state that nothing changed must compute no run that was not cut off, judged where no test reads the clock (F-A, F-A2), and a test's fs read of a file and the module that the context serves from it are two inputs, each under its own hash (F-A2); an edit during a mutant run is not generated, and a file is edited mid-run only by the run's own tests, not by another process at an arbitrary time; a file that a test reads through fs is edited only as one JSON file that file b's verdict reads by a sync, a promise, or a callback read, or by a sync read after it stats its own directory and tests that it exists (statDir: the directory is an input as a directory, not by its content, and is not itself edited), each read first checking that its fs function keeps its own name and length (the runner stores a run under the files in the package that its copy reads with readFileSync, readFile, existsSync, or statSync, or the fs/promises readFile or stat, each with its hash at the copy's first read; a read outside the package or under node_modules, from a worker thread or a child process that a test starts, or through any other fs API, which includes readdir, opendir, glob, globSync, createReadStream, realpath, lstat, access, open, a read through a file descriptor (read, readSync, readv, fstat, fstatSync, and readFileSync or readFile given a file descriptor), copyFile and copyFileSync, cp and cpSync, openAsBlob, statfs, readlink, the callback stat, exists, watch, watchFile, and the fs/promises access, open, and glob, is no input, and none is generated: the maintainer decided on 2026-11-13 that every fs read except watch and watchFile is an input, which a follow-up of #55 implements, and until then this oracle owns the gap); a run cut off by its clock writes no closing row, so it is stored under its file's known inputs only, while a run that spun ends and keeps the inputs it named (F-D); no history makes a cut run read a file that its file's unmutated run does not read, so this is fixed by inspection; a test that rewrites a file it read with the same text makes the next check compute that run again (1 run in the self-edit histories), since the edit changes the file's modification time: the daemon is conservative there, nothing goes stale, and content keys (D10) remove it, with a selfWrite dimension in that pull request; the mid-run marker sits in the daemon's session directory, .oracle-gaps-<pid>, whose location predates #55; the runner's hash memo knows a file by its size and modification time, so an edit that keeps both is not seen, and no history makes one (D10, planned in phase 2, A5); law 9's edits leave out other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; cut-off charging judged only under one budget; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages; daemon races (two CLIs reading one error file, a CLI hearing closing from the failing daemon it started, a reset connection on macOS) fixed by inspection; the runner's copies of the test files exist only in memory, and its harness and Vitest configs sit in the package's .oracle-gaps-<pid>, which the next run removes once a killed run has left it (judged after two stopped runs, not after a SIGKILL); a default --out is judged by the static oracle, and these runs name --out in the package; the namespace is checked after each run and, in a stopped run, while the run runs; a slow kill in a later owner, after earlier owners' confirmations spent the budget, becomes a timeout (owner order; not generated); the Vitest 5 path of the copies' pragma read and of the runner is verified from Vitest 5's source only, since the Vitest 5 CI job runs no gap oracle; a batch whose run reports an error outside any test reruns each copy alone (unitsBatch, runAlone) with its first budget, and a copy cut there is kept as a timeout with no confirmation, a defect older than this oracle's budget work that no history reaches (no history has an error outside any test beside a slow copy), recorded here with that trace for the maintainer; stale-session removal is scoped to this host's session directories (a host file), and is not judged across pid namespaces; the stop law covers SIGTERM and SIGINT sent to the CLI, not a SIGKILL of the CLI (its group then ends at the next check of its parent, by inspection) or a signal sent to the daemon, and its witness is one test that spins synchronously and starts one child process; the mutant budget is witnessed as two slow owners whose confirmations pass the --mutant-limit floor, not through its multiple of the owners' unmutated time, and authored mutants have no confirmations to budget; the witness w_slowpair is a wall-clock window, since the CLI's budget has no controlled clock and a fixture cannot see the time the CLI measures for its file: with one-test owner files p and q of measured unmutated time t each (a file first in its context pays the instrumented transform too), a wait W of 10 s, a 20 s --hang-limit and a 15 s --mutant-limit, it tells a budget from none only while (a) its first attempt is cut, W > 1 s + 3t, (b) its two confirmations do not fit the budget, 2W > max(15 s, 10 x 2t), and (c) each would fit its own full limit, W < 20 s + 3t; (b) is the binding one, so it holds while the two files' time stays under about 2 s together (about 1 s each, some 20 times the authoring machine's idle and 5 to 10 times its loaded measurements), and under one budget a run's overhead must stay under 10 s + 3t; CI runners measure 1.5 to 2.3 times the idle machine; beyond that w_slowpair would read not-judged; a heartbeat is owed only where a slow test waits 3 s against a 2 s interval, twice the first budget, so that no copy cut at its first budget beats, and each beat is observed as its mutant and file, not how long or how often it beat; a config only in the package's parent directory is generated one level up, in a temporary directory with no package.json (so its .js or .ts name is CommonJS), as a plain config, one that throws, one with no default export, or one that defines test.projects; a config two or more levels up, or a parent config beside a package config, is not generated, and the order in one directory follows Vitest's configFiles list by inspection; a package with no config lives in a temporary directory, where no parent has a config; a counterexample shrinks through at most six histories, so it can be larger than the smallest that fails; module-level data only as four \`const\` declarations of the main source (an object literal, an array that holds a function, a boolean, and an object of two methods), read in place, with no data imported from another file, destructured, reassigned, or declared as an enum or a default export; the work law only through shortcut witnesses (an early return before a counting loop with a bound twin of ratio 2, and a push beside one that calls String with a bound twin of ratio 1), the early return in tests that reach the clock by each watched path and in tests that wait a turn, a generated test's bound of 1 derived from its plan; probe code is never work (maintainer decision, 2026-11-16), so the model and the capture count no probe-only site, and only a constructed history (a probe branch under a generated test's work bound) reaches a probe branch beside a bound: the fixed seeds' generated histories reach neither that state nor \`killed by a work bound in a generated function\`, which stays measured; work counts are observed only through a bound's ratio and a rise, never as numbers (v21.2 O1), so a counter that skips every site on a probe's line, which drops only the condition sites of an elseIf that run once on both sides, survives (mutant M6, equivalent under these observations), while one that skips every site of a function that holds probe code is killed (M7), and one warm-cache witness whose selection reproduces observations but not work; work is the capture's count of site evaluations per test, so code with no site (a plain assignment, a for...of pass, a builtin's own work) counts nothing and a test's histories are summed, and a test whose work varies between the unmutated runs while its observations agree is not generated. Open Limits, owned by the in-process runner oracle (L1, state \"torn tail at a cut-off read\"; RED: captureLines without the guard): (a) the batch's cut-off read (runBatch's rowsOf after the cut-off) drops a partial last row, and no witness reaches that drop yet, because a copy held half written across the cut-off did not observe its release in the harness; (b) a short fragment on the strict path, which the no-newline mutant does not reach. The strict read after a finished run (a fragment is an internal error) is witnessed by the no-newline mutant. Windows idle gap (recorded, not witnessed): the state \`a hang cut off for idleness\` is required on every platform, and win32 reaches it (run 43683794816, job 132719872988), so it is not platform-scoped. The sampler (capture-setup.mjs) counts a copy idle only after 500 ms with no late tick, no non-quiet handle, utilization at most 5%, and no timer due, so \`every outcome class\` reaches the state only when the sampler sees that window. On win32 the check missed it once (run 43683794816, job 132719872940); the cause is not confirmed (a late tick on a shared runner, or a stdio handle outside \`quiet\` for this file's console output, are the candidates). Its witness, a test-only hold at the hang until the window is seen, is owed, and that is a timing dependency the determinism-under-load rule forbids; the maintainer decides whether it lands before the Windows job becomes blocking.`,
   },
   histories: {
     // A failing history shrinks through at most six smaller ones. Each runs
@@ -6105,7 +6319,10 @@ oracleProperty({
         // internal error, exit 3 and its done error line (ending.mjs). The batch's copies are retired, and its
         // retention line is written with its state after retirement (the bounded retention law).
         name: `a batch whose run rejects`,
-        enters: [`a rejected batch retired its copies and logged them`],
+        enters: [
+          `a rejected batch retired its copies and logged them`,
+          `a run ended in an internal error`,
+        ],
         build: (generated) => ({
           ...generated,
           functions: [[{ kind: `push`, quote: `'` }]],
