@@ -6360,6 +6360,10 @@ oracleProperty({
         // runs and four daemon checks of the witness module.
         name: `an edit sequence over the witness module`,
         enters: [`a timed-out run reused after an edit`],
+        // Base 0 only: this one history takes 245 to 346 s of a CI job at one
+        // base, so a drawn base would pass the 10-minute limit in a single
+        // test (P12, #122). Cutting its cost is tracked separately.
+        drawnBases: 0,
         build: (generated) => ({
           ...generated,
           functions: [

@@ -244,7 +244,8 @@ export const partitions = {
   // The oracleProperty self-oracle: 843 tests, 2,258 s in all, measured in
   // CI on main at e2af13a (run 43266105332), where its three shards took
   // 4:12, 16:12, and 18:09. One file whose tests run in sequence, so a
-  // shard's time is the sum of its tests. Eight shards of 195 to 330 s:
+  // shard's time is the sum of its tests. Eight shards of 195 to 330 s, and
+  // a ninth since the campaign units split in two (#122):
   // the fixed histories' determinism units in three, the constructed
   // histories' determinism units, the fixed histories and the calibrations
   // in three, and the rest (the seeded units, 312 s, and any new kind).
@@ -260,7 +261,11 @@ export const partitions = {
       5: `(?:${startsWith(`fixed history: `, fixedA)}|${startsWith(`calibration: `, calibration1)})`,
       6: `(?:${startsWith(`fixed history: `, fixedB)}|${startsWith(`calibration: `, calibration2)})`,
       7: startsWith(`calibration: `, [...calibration3, ...calibration4]),
-      8: rest,
+      // The campaign units: each constructed history runs one fixed base and
+      // one drawn from the run's seed (#122), which doubles their 5.6 min, so
+      // the fixed-seed units run apart from the random ones.
+      8: `fixed seed 1: .*`,
+      9: rest,
     },
   },
   // The gap report's static oracle, the slowest of the fast gap suites and
@@ -287,8 +292,9 @@ export const partitions = {
   // the grammar is derived from the plan, not drawn, 2026-11-13). A unit's
   // cost follows the generated history its constructed history is built
   // from, and the witness module's histories grow with its witnesses. The
-  // units are packed longest first into three shards: about 290 s, 277 s,
-  // and 260 s of CI time.
+  // units are packed longest first: into three shards of about 290 s, 277 s,
+  // and 260 s of CI time at first, and into six since each constructed
+  // history also runs a base drawn from the run's seed (#122).
   'oracle-gaps-fixed-seed': {
     args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-oracle`],
     suite: `oracle-gaps.report`,
@@ -296,12 +302,31 @@ export const partitions = {
     // The tests that one job selected before: the shards together must
     // select exactly these.
     previously: `fixed seed`,
+    // Each constructed history runs one fixed base and one drawn from the
+    // run's seed (#122), which doubles a constructed unit's time. The times
+    // below are main's CI times at 153539b, at one base, doubled.
     shards: {
-      // 261 s, 25 s, and small units: #57's last constructed histories sit
-      // here, since the rest (shard 3) is near its 10-minute limit.
-      1: anyOf([
-        'an edit sequence over the witness module',
+      // The witness module's edit sequence alone: 346 s at one base, and it
+      // draws no base (its own `drawnBases: 0`), since two would pass the
+      // 10-minute limit in one test.
+      1: anyOf(['an edit sequence over the witness module']),
+      // Every part of `every outcome class` (126 s, 9 s, and 3 s) and
+      // brokenVitest (22 s): about 320 s. The stop parts are named here:
+      // `every outcome class` alone matches the first half only.
+      2: anyOf([
+        'every outcome class',
+        'every outcome class, the warm stop',
+        'every outcome class, the abort stop',
+        'a declaration fault: brokenVitest',
+      ]),
+      // noTypescript (84 s), a second daemon check (45 s), the stale authored
+      // mutant (29 s), a cold-result edit (10 s), and #57's small units:
+      // about 375 s.
+      3: anyOf([
+        'a declaration fault: noTypescript',
+        'a second daemon check of the budget witness',
         'a stale authored mutant and a reformat',
+        'an edit that changed the cold result after a hang replaced the only context',
         'a failing owner under a config that --config names',
         'a stop before the CLI starts',
         'a stop by SIGTERM as the CLI starts',
@@ -309,23 +334,25 @@ export const partitions = {
         'a start refuses a dangling claim',
         'a supervised check with no ps on its PATH',
       ]),
-      // Every part of `every outcome class` (the first half took 134 s on the CI
-      // runner; the warm and abort stops are two small histories over the stop
-      // witness alone), a second daemon check (101 s), and two small units. The
-      // stop parts are named here: `every outcome class` alone matches the
-      // first half only, and the others would fall into the rest (shard 3).
-      2: anyOf([
-        'every outcome class',
-        'every outcome class, the warm stop',
-        'every outcome class, the abort stop',
-        'a second daemon check of the budget witness',
-        'a declaration fault: brokenVitest',
-        'an edit that changed the cold result after a hang replaced the only context',
+      // The edit sequence through the daemon (94 s) and brokenOwner (69 s):
+      // about 325 s.
+      4: anyOf([
+        'an edit sequence through the daemon',
+        'a declaration fault: brokenOwner',
       ]),
-      // The rest: noTypescript (174 s on the CI runner), the edit sequence
-      // through the daemon (94 s), brokenOwner (83 s), generated (23 s), the
-      // lazy module (12 s), and small units.
-      3: rest,
+      // A pause that cannot engage (26 s), the lazy module (13 s), two
+      // mid-check test edits (12 s and 10 s), and a reset check (11 s):
+      // about 145 s.
+      5: anyOf([
+        'a daemon pause that cannot engage',
+        'a lazy module loaded before a hang in the same batch',
+        'a test edits the helper it read, during a check through the daemon',
+        'a test edits the data it read, during a check through the daemon',
+        'a reset check after its warm daemon was replaced',
+      ]),
+      // The rest: generated (10 s, not doubled) and small units, about
+      // 260 s, and any new unit.
+      6: rest,
     },
   },
   'oracle-gaps-static-windows': {

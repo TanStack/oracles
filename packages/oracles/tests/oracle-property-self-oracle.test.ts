@@ -8715,19 +8715,19 @@ const drawnFailureDraft = (reachVia: Draft[`reachVia`]): Draft => {
 // base and whose second draws one, against the property's one or two.
 const ownDrawnSuite = (generated: Suite): Suite => {
   const withDrawn = drawnBasesSuite(generated)
-  const draft = withDrawn.drafts[0]!
+  const first = withDrawn.drafts[0]!
   const tail = generated.drafts[0]!.clock ? 1 : 2
   return {
     ...withDrawn,
     drafts: [
       {
-        ...draft,
+        ...first,
         constructed: [
           { prefix: [0], enters: [`saw-0`], drawnBases: 0 },
           {
             prefix: [tail],
             enters: [],
-            drawnBases: draft.drawnBases === 1 ? 0 : 1,
+            drawnBases: first.drawnBases === 1 ? 0 : 1,
           },
         ],
       },

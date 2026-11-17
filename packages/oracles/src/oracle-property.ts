@@ -576,6 +576,12 @@ export interface ConstructedHistory<THistory> {
   name: string
   enters: ReadonlyArray<string>
   build: (generated: THistory) => THistory
+  /**
+   * This history's own number of bases drawn from the run's random seed,
+   * which replaces the property's `drawnBases` for it: for a history whose
+   * one base already takes most of a CI job. A whole number of at least 0.
+   */
+  drawnBases?: number
 }
 
 /**
@@ -2441,6 +2447,20 @@ function generatedTests<THistory, TExpected, TPlan>(
     throw new Error(
       `${id}: \`drawnBases\` must be a whole number of at least 0, the number of bases each constructed history draws from the run's random seed; it is ${reportText(drawnBases)}.`,
     )
+  for (const construction of source.constructed ?? [])
+    if (
+      construction.drawnBases !== undefined &&
+      !(
+        Number.isInteger(construction.drawnBases) &&
+        construction.drawnBases >= 0
+      )
+    )
+      throw new Error(
+        `${id}: constructed history "${construction.name}": \`drawnBases\` must be a whole number of at least 0, the number of bases it draws from the run's random seed; it is ${reportText(construction.drawnBases)}.`,
+      )
+  // The bases a constructed history draws: its own number, or the property's.
+  const drawnOf = (index: number) =>
+    source.constructed![index]!.drawnBases ?? drawnBases
   const required = (source.states ?? []).map(stateName)
   const constructions = source.constructed ?? []
   const declared = declaredOf(source)
@@ -2558,11 +2578,12 @@ function generatedTests<THistory, TExpected, TPlan>(
   const constructedBases = (seed: number, index: number, runSeed: number) => {
     const build = (at: number, count: number) =>
       buildBases(id, source.arbitrary, constructions[index]!, at + index, count)
-    if (drawnBases === 0) return build(seed, bases)
-    if (seed === runSeed) return build(seed, bases + drawnBases)
+    const drawn = drawnOf(index)
+    if (drawn === 0) return build(seed, bases)
+    if (seed === runSeed) return build(seed, bases + drawn)
     return [
       ...build(seed, bases),
-      ...build(runSeed, bases + drawnBases).slice(bases),
+      ...build(runSeed, bases + drawn).slice(bases),
     ]
   }
   // Registration checks every fixed history, then the constructed histories
@@ -2613,7 +2634,7 @@ function generatedTests<THistory, TExpected, TPlan>(
     const { reporter: _reporter, asyncReporter: _asyncReporter, ...rest } = base
     let run: typeof rest = rest
     if (index >= 0) {
-      if (!random && drawnBases > 0) drawnFrom = runSeed()
+      if (!random && drawnOf(index) > 0) drawnFrom = runSeed()
       const histories = constructedBases(seed, index, drawnFrom ?? seed)
       // fast-check passes example inputs by reference, which identifies them.
       for (const history of histories)
