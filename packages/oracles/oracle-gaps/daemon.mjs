@@ -58,16 +58,19 @@ export { socketOf, stateDirOf } from './evidence.mjs'
 
 // An error that ended a check, as the daemon sends it, and as the CLI
 // receives it: a refusal stays a refusal.
+// The `out` a refusal names (args.mjs) travels with it, so the client writes the
+// refusal's report to the same directory the daemon's run would have.
 const sent = (error) => ({
   message: String(error?.message ?? error),
   fix: error?.fix,
   stack: error?.stack,
+  out: error?.out,
 })
 /** The error that ended a check in the daemon, to end the CLI's run with. */
-export const received = ({ message, fix, stack }) =>
+export const received = ({ message, fix, stack, out }) =>
   Object.assign(
     fix === undefined ? new Error(message) : new Refusal(message, fix),
-    { stack },
+    { stack, out },
   )
 
 // A test mark is written whole or not at all: its file exists only once it

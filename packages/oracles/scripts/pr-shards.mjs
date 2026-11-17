@@ -309,19 +309,27 @@ export const partitions = {
     // select exactly these.
     previously: `fixed seed`,
     shards: {
-      // 261 s, 25 s, and a small unit.
+      // 261 s, 25 s, and small units: #57's last constructed histories sit
+      // here, since the rest (shard 3) is near its 10-minute limit.
       1: anyOf([
         'an edit sequence over the witness module',
         'a stale authored mutant and a reformat',
         'a failing owner under a config that --config names',
+        'a stop before the CLI starts',
+        'a stop by SIGTERM as the CLI starts',
+        'an unsupervised run stopped after its note',
+        'a start refuses a dangling claim',
+        'a supervised check with no ps on its PATH',
       ]),
-      // Both halves of `every outcome class` (134 s and 155 s on the CI runner),
-      // a second daemon check (101 s), and two small units. The second half
-      // is named here: `every outcome class` alone matches the first half only,
-      // and the second would fall into the rest (shard 3).
+      // Every part of `every outcome class` (the first half took 134 s on the CI
+      // runner; the warm and abort stops are two small histories over the stop
+      // witness alone), a second daemon check (101 s), and two small units. The
+      // stop parts are named here: `every outcome class` alone matches the
+      // first half only, and the others would fall into the rest (shard 3).
       2: anyOf([
         'every outcome class',
-        'every outcome class, the warm and abort stops',
+        'every outcome class, the warm stop',
+        'every outcome class, the abort stop',
         'a second daemon check of the budget witness',
         'a declaration fault: brokenVitest',
         'an edit that changed the cold result after a hang replaced the only context',
@@ -544,8 +552,11 @@ export const partitions = {
       1: anyOf(['an edit sequence over the witness module']),
       2: anyOf(['every outcome class']),
       3: anyOf(['a declaration fault: noTypescript']),
-      4: anyOf(['every outcome class, the warm and abort stops']),
-      5: anyOf(['an edit sequence through the daemon']),
+      4: anyOf(['every outcome class, the warm stop']),
+      5: anyOf([
+        'an edit sequence through the daemon',
+        'every outcome class, the abort stop',
+      ]),
       6: anyOf([
         'a batch whose run rejects',
         'a second daemon check of the budget witness',
@@ -559,6 +570,9 @@ export const partitions = {
         'a config whose test root holds no test file',
         'a config whose test root is a symbolic link',
         'a config whose plugin loads test files with a sync read',
+        'two runs on one output directory',
+        'a stream log that cannot be written',
+        'a start refuses an empty claim',
         daemonInputUnits[0],
         daemonInputUnits[1],
       ]),
@@ -573,6 +587,8 @@ export const partitions = {
         'a package whose parent directory has its config',
         'a declaration fault: configSyntax',
         'a declaration fault: nonLiteral',
+        'a stop as the CLI starts',
+        'a start refuses an unreadable claim',
       ]),
       8: anyOf([
         'a declaration fault: brokenVitest',
@@ -585,6 +601,9 @@ export const partitions = {
         'an awaiting config in a package with no module type',
         'a declaration fault: configNoDefault',
         'a declaration fault: badEntry',
+        'a stop with the default output directory',
+        'a daemon check with the default output directory',
+        'a daemon check with the default output directory, unsupervised',
         daemonInputUnits[2],
         daemonInputUnits[3],
       ]),
@@ -599,6 +618,12 @@ export const partitions = {
         'a .ts config in a package with no module type that calls require',
         'ordinary tests left out by default',
         'a declaration fault: configNull',
+        'two starts race for a stale claim',
+        'a start refuses a stale claim',
+        'a stream log lost after its note, then stopped',
+        'a stop before the CLI starts',
+        'a stop by SIGTERM as the CLI starts',
+        'a start refuses a dangling claim',
         daemonInputUnits[4],
         daemonInputUnits[5],
         daemonInputUnits[6],
@@ -617,6 +642,10 @@ export const partitions = {
         'a declaration fault: configThrows',
         'a reset check after its warm daemon was replaced',
         "a probe branch under a generated test's work bound",
+        'a stream log lost after its note, then completed',
+        'a supervised child exits when its supervisor is killed',
+        'an unsupervised run stopped after its note',
+        'a supervised check with no ps on its PATH',
       ]),
     },
   },
