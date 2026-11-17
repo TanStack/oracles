@@ -71,6 +71,7 @@
     ["supervisorDeath", "ed6866229ecc4969"],
     ["unsupervised", "ed6866229ecc4969"],
     ["psMissing", "e6ef4bc292a3990d"],
+    ["holdOverlap", "ed6866229ecc4969"],
     ["absentObjects", "e1cdfd7ccbdede23"]
   ],
   "histories": [
@@ -145,6 +146,7 @@
     ["supervisorDeath", "ed6866229ecc4969"],
     ["unsupervised", "ed6866229ecc4969"],
     ["psMissing", "e6ef4bc292a3990d"],
+    ["holdOverlap", "ed6866229ecc4969"],
     ["absentObjects", "e1cdfd7ccbdede23"]
   ]
 }
