@@ -265,6 +265,12 @@ export type SyntheticSpec = {
    * least 1, so they fail the load.
    */
   bases?: number
+  /**
+   * The bases each constructed history draws from the run's random seed,
+   * after its fixed ones (the property's `drawnBases`); absent leaves none.
+   * -1 and 0.5 are not whole numbers of at least 0, so they fail the load.
+   */
+  drawnBases?: number
   /** Required states; each must be entered by a constructed history. */
   states: ReadonlyArray<string>
   constructed: ReadonlyArray<{
@@ -1488,6 +1494,9 @@ export function syntheticProperty(spec: SyntheticSpec): void {
           .map(declare),
         runs: spec.source.runs,
         ...(spec.bases === undefined ? {} : { bases: spec.bases }),
+        ...(spec.drawnBases === undefined
+          ? {}
+          : { drawnBases: spec.drawnBases }),
         fixedSeeds: [
           spec.source.seed,
           ...(spec.secondSeed ? [spec.source.seed * 10] : []),

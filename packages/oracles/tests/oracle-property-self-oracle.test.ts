@@ -31,13 +31,18 @@
  *   histories of one name (maintainer decision, 2026-11-11, option D). These come after its state
  *   checks and before law `membership`, in that order (analyst-chosen, 2026-11-11). A generated
  *   source whose `bases` is not a whole number of at least 1 fails to load, naming `bases`, after
- *   the pairing of `predict` with a probe-bound state and before its state checks (analyst-chosen,
- *   2026-11-16).
+ *   the pairing of `predict` with a probe-bound state and before its state checks, and then one
+ *   whose `drawnBases` is not a whole number of at least 0, naming `drawnBases` (analyst-chosen,
+ *   2026-11-16 and 2026-11-17).
  * - `units` (maintainer decision, 2026-11-11, option D): a campaign's units run exactly the
  *   histories that the campaign ran, each in its own test. The constructed unit of history k, for
  *   seed S, runs N histories: the construction built from each of the first N draws of the
  *   arbitrary's sample at seed S + k, in order, where N is the property's `bases`, 5 by default
- *   (register M, 2026-11-16, "N bases per constructed history").
+ *   (register M, 2026-11-16, "N bases per constructed history"). Then it runs D more, D being the
+ *   property's `drawnBases` (none by default): draws N to N + D - 1 of the sample at R + k, where R
+ *   is the run's random seed, the one the random units run (register M, 2026-11-17, "Random bases
+ *   at today's cost for expensive oracles"). So the random unit of the same name, at R, runs those
+ *   histories at the same indices, and a drawn base's failure replays with seed R.
  *   The `generated` unit runs the stream that `fc.sample` draws from the property's arbitrary alone,
  *   at seed S, for the property's `runs` (register M, 2026-11-16, "N bases per constructed
  *   history", which retired the constructed weighting of option D's design). The model draws these with
@@ -156,7 +161,7 @@
  *   compared by their data encoding: `-0` is not `0`, and key order and
  *   Map and Set order count, which a check that iterates them can see.
  * - `campaign budget`: each passing constructed unit runs one example per base (its property's
- *   `bases`, 5 by default), and
+ *   `bases`, 5 by default, plus its `drawnBases`), and
  *   each passing generated unit runs its authored sample count. A wholly
  *   passing lane retains their sum: runs plus bases times constructions, independently
  *   in ordinary/seedless and fixed/random lanes. Children discard parent replay
@@ -194,7 +199,8 @@
  *   above.
  * - `timeout`: a property's `timeout` limits every test it registers, each unit
  *   on its own.
- * - `replay`: a failing campaign unit prints a replay command: the seed, the
+ * - `replay`: a failing campaign unit prints a replay command: the seed (for a fixed-seed unit
+ *   whose failing example is a drawn base, the run's random seed), the
  *   path, the property, and `${prefix}_UNIT` naming the random unit of the same
  *   name (`random seed: <name>`), under the configured prefix, then that unit's
  *   `-t` pattern (maintainer decisions, 2026-11-11, Q3 and Q4). A failing random
@@ -245,10 +251,11 @@
  *   `calibration`; a property without one registers none. The gap report reads it to judge the
  *   test's work under a mutant; a plain run has no unmodified run to compare with, so there the
  *   bound judges nothing (maintainer decision, 2026-11-12: a speed shortcut is owed a cost law).
- * - `seed-log`: a property logs exactly one `ORACLE_SEED` line, in its first
- *   random unit, and no other test logs one; every random unit runs that seed
- *   (maintainer decision, 2026-11-11, Q2: one seed per property per process). A
- *   replay tool reads that line.
+ * - `seed-log`: a property logs exactly one `ORACLE_SEED` line, in the first unit that uses the
+ *   run's random seed, and no other test logs one; every random unit runs that seed (maintainer
+ *   decision, 2026-11-11, Q2: one seed per property per process). That unit is the first random
+ *   unit, or, in a property that draws bases, its first fixed-seed constructed unit (register M,
+ *   2026-11-17, "Random bases at today's cost for expensive oracles"). A replay tool reads that line.
  *
  * Authority: the contract in the header of `oracle-property.ts`, including
  * its state probes (user decision of 2026-11-04 adopting differential reach); the
@@ -513,6 +520,11 @@ type Draft = {
    * which fails the load.
    */
   bases: number | null
+  /**
+   * A generated source's `drawnBases`: absent (none), one or two, or a value
+   * that is not a whole number of at least 0, which fails the load.
+   */
+  drawnBases: number | null
 }
 // `seedless`: one more child run, without `ORACLE_SEED`, records the routes
 // of each random campaign as an ordinary run draws its seed.
@@ -1000,6 +1012,13 @@ const draft: fc.Arbitrary<Draft> = fc.record({
     { weight: 3, arbitrary: fc.constantFrom(1, 2, 3) },
     { weight: 1, arbitrary: fc.constantFrom(0, 1.5) },
   ),
+  // Most drafts draw no base from the run's seed; some draw one or two, and
+  // a few declare a value that fails the load.
+  drawnBases: fc.oneof(
+    { weight: 6, arbitrary: fc.constant(null) },
+    { weight: 3, arbitrary: fc.constantFrom(1, 2) },
+    { weight: 1, arbitrary: fc.constantFrom(-1, 0.5) },
+  ),
 })
 const replayEnvironment: fc.Arbitrary<ReplayEnvironment> = fc.record({
   retired: fc.oneof(
@@ -1220,6 +1239,9 @@ function resolveSuite({
         source: d.source,
         ...(generated && d.secondSeed ? { secondSeed: true } : {}),
         ...(generated && d.bases !== null ? { bases: d.bases } : {}),
+        ...(generated && d.drawnBases !== null
+          ? { drawnBases: d.drawnBases }
+          : {}),
         states,
         constructed,
         fixed: generated
@@ -1775,10 +1797,18 @@ const unitOf = (test: string): { seed?: number; name: string } | undefined => {
 // "N bases per constructed history").
 const defaultBases = 5
 const basesOf = (spec: SyntheticSpec) => spec.bases ?? defaultBases
+// The bases each constructed history draws from the run's random seed, after
+// its fixed ones (register M, 2026-11-17, "Random bases at today's cost for
+// expensive oracles"); none when the property declares none.
+const drawnOf = (spec: SyntheticSpec) => spec.drawnBases ?? 0
+// The histories each constructed unit runs in all.
+const constructedRuns = (spec: SyntheticSpec) => basesOf(spec) + drawnOf(spec)
 // The histories a unit draws at `seed`, in order. Constructed history k's unit
 // runs its construction over the first N draws of the arbitrary's sample at
 // seed + k, N being its bases: a stream of its own, which neither the
-// generated draws nor the rest of the list touch. The `generated` unit runs
+// generated draws nor the rest of the list touch. Then it runs D drawn bases,
+// D being its drawn bases: draws N to N + D - 1 of the sample at the run's
+// random seed + k. The `generated` unit runs
 // the stream that fast-check samples from the property's arbitrary alone, for
 // `runs` draws. Drawn with fast-check itself, never the framework (law
 // `units`, and law `constructed independence`).
@@ -1786,15 +1816,31 @@ function unitStream(
   spec: SyntheticSpec,
   seed: number,
   name: string,
+  // The run's random seed, which the random units run and the drawn bases
+  // come from.
+  runSeed: number,
 ): Array<SyntheticHistory> {
   if (spec.source.kind !== `generated`) return []
   const at = spec.constructed.findIndex(
     (construction) => construction.name === name,
   )
-  if (at >= 0)
-    return fc
-      .sample(syntheticArbitrary, { seed: seed + at, numRuns: basesOf(spec) })
-      .map((base) => builtFrom(spec, spec.constructed[at]!.prefix, base))
+  if (at >= 0) {
+    const fixedBases = fc.sample(syntheticArbitrary, {
+      seed: seed + at,
+      numRuns: basesOf(spec),
+    })
+    // The drawn bases follow the fixed ones in the run seed's own stream, so
+    // the random unit, whose seed is the run's, runs them at the same index.
+    const drawn = fc
+      .sample(syntheticArbitrary, {
+        seed: runSeed + at,
+        numRuns: constructedRuns(spec),
+      })
+      .slice(basesOf(spec))
+    return [...fixedBases, ...drawn].map((base) =>
+      builtFrom(spec, spec.constructed[at]!.prefix, base),
+    )
+  }
   return fc.sample(syntheticArbitrary, { seed, numRuns: spec.source.runs })
 }
 // The history each determinism unit runs twice: a generated source's fixed
@@ -2283,6 +2329,14 @@ function predictSpec(
         loads: false,
         loadError: `${spec.id}: \`bases\` must be a whole number of at least 1`,
       }
+    if (
+      spec.drawnBases !== undefined &&
+      !(Number.isInteger(spec.drawnBases) && spec.drawnBases >= 0)
+    )
+      return {
+        loads: false,
+        loadError: `${spec.id}: \`drawnBases\` must be a whole number of at least 0`,
+      }
     const declared = new Set(spec.states)
     const entered = new Set(
       spec.constructed.flatMap((construction) => construction.enters),
@@ -2423,13 +2477,19 @@ function predictSpec(
     ...fixedSeedsOf(spec).flatMap((seed) =>
       unitNames(spec).map(
         (name) =>
-          [fixedUnit(seed, name), unitStream(spec, seed, name)] as const,
+          [
+            fixedUnit(seed, name),
+            unitStream(spec, seed, name, randomSeed),
+          ] as const,
       ),
     ),
     ...(generated
       ? unitNames(spec).map(
           (name) =>
-            [randomUnit(name), unitStream(spec, randomSeed, name)] as const,
+            [
+              randomUnit(name),
+              unitStream(spec, randomSeed, name, randomSeed),
+            ] as const,
         )
       : []),
   ])
@@ -2914,6 +2974,7 @@ const appendedStates = [
   `appended-to-listed`,
   `constructed-default-bases`,
   `constructed-declared-bases`,
+  `constructed-drawn-bases`,
 ] as const
 const frameworkStates = [
   ...timeoutReceivingStates,
@@ -3218,7 +3279,7 @@ function frameworkReach(
             ? spec.source.kind === `generated`
               ? spec.source.runs
               : 0
-            : basesOf(spec)
+            : constructedRuns(spec)
           if (test?.state !== `passed` || calls.length !== count) return false
           total += calls.length
           reached.add(
@@ -3903,7 +3964,12 @@ function frameworkReach(
           const { ran, owedRun } = comparedRun(
             spec,
             unit,
-            unitStream(spec, seen.seeds[0]!, unitOf(unit)!.name),
+            unitStream(
+              spec,
+              seen.seeds[0]!,
+              unitOf(unit)!.name,
+              seen.seeds[0]!,
+            ),
             seen.ran[unit] ?? [],
           )
           return (
@@ -4008,7 +4074,7 @@ function frameworkReach(
     if (spec.source.kind !== `generated` || spec.slow) continue
     if (
       !expected.get(spec.id)!.loads &&
-      seen?.loadErrors.some((message) => message.includes(`\`bases\``))
+      seen?.loadErrors.some((message) => message.includes(`ases\` must be`))
     )
       reached.add(`bases-load-error`)
     const [seed] = fixedSeedsOf(spec)
@@ -4020,15 +4086,18 @@ function frameworkReach(
         seen.tests.find((test) => test.name === unit)?.state === `passed` &&
         (run?.log ?? []).filter(
           (entry) => entry.test === `${spec.id} > ${unit}`,
-        ).length === basesOf(spec)
+        ).length === constructedRuns(spec)
       )
     })
-    if (ranBases)
+    if (ranBases) {
       reached.add(
         spec.bases === undefined
           ? `constructed-default-bases`
           : `constructed-declared-bases`,
       )
+      // A fixed-seed unit that also ran bases drawn from the run's seed.
+      if (drawnOf(spec) > 0) reached.add(`constructed-drawn-bases`)
+    }
   }
   return reached
 }
@@ -6259,7 +6328,7 @@ function environmentSelection(plan: Plan, spec: SyntheticSpec) {
 }
 
 function environmentUnitOutcome(spec: SyntheticSpec, unit: string): Outcome {
-  const history = unitStream(spec, 5, unitOf(unit)!.name)[0]!
+  const history = unitStream(spec, 5, unitOf(unit)!.name, 5)[0]!
   const ordinary =
     dataOutcome(spec) ??
     (spec.slow ? { kind: `timeout` as const } : judged(spec, history))
@@ -6459,7 +6528,7 @@ function childExpectation(
             ? 1
             : unitOf(test.name)!.name === `generated`
               ? spec.source.runs
-              : basesOf(spec)
+              : constructedRuns(spec)
         if (actualCalls !== owedCalls)
           return {
             failure: violation(
@@ -7005,11 +7074,16 @@ function checkSuite(
         `registration`,
         { actual: seenNames, expected: names },
       )
-    const firstRandom =
-      spec.source.kind === `generated`
-        ? randomUnit(unitNames(spec)[0]!)
-        : undefined
-    const loggedSeed = seen.tests.find(({ name }) => name === firstRandom)
+    // The first unit that uses the run's random seed selects and logs it: the
+    // first fixed-seed constructed unit when the property draws bases from
+    // it, and otherwise the first random unit (law `seed-log`).
+    const seedUnit =
+      spec.source.kind !== `generated`
+        ? undefined
+        : drawnOf(spec) > 0 && spec.constructed.length > 0
+          ? fixedUnit(fixedSeedsOf(spec)[0]!, spec.constructed[0]!.name)
+          : randomUnit(unitNames(spec)[0]!)
+    const loggedSeed = seen.tests.find(({ name }) => name === seedUnit)
       ?.seedLogs[0]
     for (const test of seen.tests) {
       const outcome = owed.tests.get(test.name)!
@@ -7266,9 +7340,9 @@ function checkSuite(
           `${spec.id} "${test.name}" printed a History line that does not show the history`,
           `verdict`,
         )
-      // A property selects its seed once, in its first random unit, and
-      // logs that selection once; every random unit runs it.
-      const owedSeedLogs = test.name === firstRandom ? 1 : 0
+      // A property selects its seed once, in the first unit that uses it,
+      // and logs that selection once; every random unit runs it.
+      const owedSeedLogs = test.name === seedUnit ? 1 : 0
       if (test.seedLogs.length !== owedSeedLogs)
         return violation(
           `run`,
@@ -7502,7 +7576,7 @@ function checkSuite(
         const { ran: logged, owedRun } = comparedRun(
           spec,
           unit,
-          unitStream(spec, seeds[0]!, unitOf(unit)!.name),
+          unitStream(spec, seeds[0]!, unitOf(unit)!.name, seeds[0]!),
           ran[unit] ?? [],
         )
         if (JSON.stringify(logged) !== JSON.stringify(owedRun))
@@ -7842,7 +7916,7 @@ function checkEnvironment(
         `${spec.id} ran ${JSON.stringify(running.map((test) => test.name))} in a path replay that selects ${JSON.stringify(unit ?? null)}, owed ${JSON.stringify(owedRunning)}`,
       )
     if (owedRunning.length === 0) continue
-    const [history] = unitStream(spec, 5, unitOf(unit!)!.name)
+    const [history] = unitStream(spec, 5, unitOf(unit!)!.name, 5)
     const ran = under.log
       .filter((entry) => entry.test === `${spec.id} > ${unit}`)
       .map((entry) => entry.history)
@@ -7939,6 +8013,7 @@ const generatedDraft = (overrides: Partial<Draft>): Draft => ({
   nested: false,
   strictModel: false,
   bases: null,
+  drawnBases: null,
   ...overrides,
 })
 const fixedHistory = (
@@ -8454,6 +8529,21 @@ const basesSuite = (generated: Suite, declared: boolean): Suite => {
       ...(declared ? { bases: drawn } : {}),
     }),
   ])
+}
+// The suite of `basesSuite` with one fixed base, as a costly property
+// declares, and one or two bases drawn from the run's random seed.
+const drawnBasesSuite = (generated: Suite): Suite => {
+  const withBases = basesSuite(generated, true)
+  return {
+    ...withBases,
+    drafts: [
+      {
+        ...withBases.drafts[0]!,
+        bases: 1,
+        drawnBases: generated.drafts[0]!.clock ? 1 : 2,
+      },
+    ],
+  }
 }
 const mainUnitRequiredConstructed: Array<{
   name: string
@@ -9431,6 +9521,14 @@ oracleProperty({
         ],
         build: (generated: Suite) => basesSuite(generated, declared),
       })),
+      // Each costly property's constructed history runs base 0 at the fixed
+      // seed and bases drawn from the run's random seed (register M,
+      // 2026-11-17, "Random bases at today's cost for expensive oracles").
+      {
+        name: `constructed histories run drawn bases`,
+        enters: [`constructed-drawn-bases`],
+        build: (generated: Suite) => drawnBasesSuite(generated),
+      },
     ],
     fixed: [
       {
