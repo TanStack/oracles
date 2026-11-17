@@ -71,6 +71,7 @@
     ["supervisorDeath", "ed6866229ecc4969"],
     ["unsupervised", "ed6866229ecc4969"],
     ["psMissing", "c0f81d568200dc21"],
+    ["holdOverlap", "ed6866229ecc4969"],
     ["hangMs", "1e55590a6f0bb1b3"],
     ["tests.pendingIo", "02f66613e9490d15"]
   ],
@@ -146,6 +147,7 @@
     ["supervisorDeath", "ed6866229ecc4969"],
     ["unsupervised", "ed6866229ecc4969"],
     ["psMissing", "c0f81d568200dc21"],
+    ["holdOverlap", "ed6866229ecc4969"],
     ["hangMs", "1e55590a6f0bb1b3"],
     ["tests.pendingIo", "02f66613e9490d15"]
   ]
