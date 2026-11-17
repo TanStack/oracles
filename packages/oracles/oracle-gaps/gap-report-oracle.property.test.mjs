@@ -2656,18 +2656,23 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       }
     }
     // The daemon's own start: once the check's request waits, the daemon
-    // holds before it loads its session; the driver releases it at once, so
-    // the request waits through the whole start.
+    // holds before it opens its session; the driver releases it at once, so
+    // the request waits through the session's start.
     await until(() => existsSync(`${warm}.open`))
     writeFileSync(`${release}.open`, ``)
+    // The session's start: it holds once Vitest has loaded, and the driver
+    // releases it only once the CLI has heard the beat that loading sent.
+    await until(() => existsSync(`${warm}.session`))
+    await until(() => heard() > 0)
+    writeFileSync(`${release}.session`, ``)
     let before = 0
     let held = 0
     for (let k = 0; !finished; k += 1) {
       await until(() => existsSync(`${warm}.${k}`))
       if (!existsSync(`${warm}.${k}`)) break
       held += 1
-      // Before the first context, the beats of the daemon's own start; before
-      // each later one, the beat for the context before it.
+      // Before each context, a beat since the last release: the session's
+      // start, or the context before it.
       await until(() => heard() > before)
       before = heard()
       writeFileSync(`${release}.${k}`, ``)
