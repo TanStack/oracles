@@ -223,20 +223,23 @@ class KeepOrder {
 }
 
 /**
- * The config's own plugins, with each hook run under `reading` (openSession),
- * so what a hook reads is a session input. A `load` or `transform` hook
- * names the module it serves. A plugin is wrapped once; a hook is a function
- * or an object with a `handler`, as Vite takes it.
+ * Every plugin of a resolved config, Vite's and Vitest's own as well as the
+ * config's, with each hook run under `reading` (openSession), so what a hook
+ * reads is a session input: the tsconfig.json that Vite's esbuild plugin
+ * reads is an input as a sidecar of the config's own plugin is (review of
+ * #133, F1). A `load` or `transform` hook names the module it serves. The
+ * runner's own plugin is left as it is. A plugin is wrapped once; a hook is
+ * a function or an object with a `handler`, as Vite takes it.
  */
 const hooked = new WeakSet()
-function pluginHooks(option, reading) {
-  if (Array.isArray(option))
-    return option.map((plugin) => pluginHooks(plugin, reading))
-  if (typeof option?.then === `function`)
-    return option.then((plugin) => pluginHooks(plugin, reading))
-  if (option === null || typeof option !== `object` || hooked.has(option))
-    return option
-  hooked.add(option)
+function pluginHooks(plugins, reading) {
+  for (const option of plugins) {
+    if (option.name === `oracle-gaps-schemata` || hooked.has(option)) continue
+    hooked.add(option)
+    hookPlugin(option, reading)
+  }
+}
+function hookPlugin(option, reading) {
   for (const [name, hook] of Object.entries(option)) {
     const handler = typeof hook === `function` ? hook : hook?.handler
     if (typeof handler !== `function`) continue
@@ -257,7 +260,6 @@ function pluginHooks(option, reading) {
     option[name] =
       typeof hook === `function` ? watched : { ...hook, handler: watched }
   }
-  return option
 }
 
 /**
@@ -502,25 +504,27 @@ export async function openSession(pkg) {
   // changed since is replaced (inputsChanged, daemon.mjs), since a plugin or
   // a module may keep what it read. A load or transform hook's read of the
   // module it serves is that module's own text, the module's input already.
-  // A file that the session wrote there before it read it, such as the
-  // config Vite bundles into a temporary file, is the session's own output.
-  // So is a variable that the CLI set (ORACLE_GAPS_STATE, which names each
-  // check's output). A read that comes after its warm ended, from work the
+  // A file that the session wrote earlier in the check before it read it,
+  // such as the config Vite bundles into a temporary file, is the session's
+  // own output (maintainer decision, 2026-11-17, "Own writes aren't
+  // inputs": the same process, earlier in the check). Each check starts
+  // with no write (`wrote`), and a file the session wrote must still hold
+  // what it wrote at the next check (`written`, inputsChanged), since a
+  // hand edit of it is no write of the session. So is a variable that the
+  // CLI set (ORACLE_GAPS_STATE, which names each check's output), which a
+  // copy may read too. A read that comes after its warm ended, from work the
   // warm left behind, is a hook's read, so the global inputs stay those of
   // the warm itself.
   const warmReads = new Map()
   const hookReads = new Map()
   const wrote = new Set()
+  const written = new Map()
   const reading = new AsyncLocalStorage()
   watchReads((key, write) => {
     const at = reading.getStore()
     if (write && key.startsWith(`env:`)) wrote.add(key)
     const reads = at?.hook || at?.done ? hookReads : warmReads
     if (at === undefined || key === at.module || reads.has(key)) return
-    // Vitest lists the package's directories to find its test files, which
-    // each check does again (specsOf), so a warm's listing is no input; a
-    // plugin hook's listing is.
-    if (reads === warmReads && /^dirs?:/.test(key)) return
     if (write) wrote.add(key)
     else if (!wrote.has(key))
       reads.set(key, key.startsWith(`env:`) ? null : inputHash(key))
@@ -620,12 +624,15 @@ export default async (env) => {
   const loaded = typeof base === 'function' ? await base(env) : await base
   if (loaded === null || typeof loaded !== 'object')
     throw new Error(${JSON.stringify(`${config ?? `the config`}: config must export or return an object.`)})
-  // The config's own plugins, whose hooks' reads are inputs (check.mjs, pluginHooks).
-  if (loaded.plugins !== undefined) loaded.plugins = globalThis.__oracleGapsPluginHooks(loaded.plugins)
   const merged = mergeConfig(loaded, {
   plugins: [{
     name: 'oracle-gaps-schemata',
     enforce: 'pre',
+    // Every resolved plugin's hooks read their inputs under the runner's
+    // watch (check.mjs, pluginHooks).
+    configResolved(resolved) {
+      globalThis.__oracleGapsPluginHooks(resolved.plugins)
+    },
     // A workspace dependency loads from its one-file bundle
     // (workspaceBundles). A copy of a test file is not resolved here, so
     // Vite keeps the absolute path that Vitest imports it by, and \`load\`
@@ -1607,9 +1614,20 @@ export default async (env) => {
     return environments
   }
 
-  async function check(options, store, log = console.error) {
-    // Each check hashes every input from its text (fileHashes).
+  // A check, after which each file the session wrote is known by its text.
+  async function check(...args) {
+    try {
+      return await checkIn(...args)
+    } finally {
+      for (const key of wrote)
+        if (key.startsWith(`fs:`)) written.set(key, inputHash(key))
+    }
+  }
+  async function checkIn(options, store, log = console.error) {
+    // Each check hashes every input from its text (fileHashes), and starts
+    // with no write of its own.
     hashOf.forget()
+    wrote.clear()
     const authored = options.mutants ? loadAuthored(options.mutants) : []
     seedVariable = `${options.envPrefix}_SEED`
     if (options.hangLimit > options.mutantLimit)
@@ -1806,7 +1824,7 @@ export default async (env) => {
       // A variable that the CLI set (`wrote`) is its own output, which a
       // copy may read too (the harness's fallback read of ORACLE_GAPS_STATE).
       const paths = [...new Set([...runPaths, ...hookReads.keys()])].filter(
-        (path) => !wrote.has(path),
+        (path) => !(path.startsWith(`env:`) && wrote.has(path)),
       )
       const readAt = { ...Object.fromEntries(hookReads), ...runReadAt }
       const inputs = paths.map((path) => {
@@ -2777,12 +2795,13 @@ export default async (env) => {
   }
 
   /**
-   * Whether a file the session read (warmReads, hookReads) holds other text now: a
+   * Whether a file the session read (warmReads, hookReads) or wrote
+   * (written) holds other text now: a
    * daemon then serves no more checks, since a plugin or a module may keep
    * what it read (daemon.mjs).
    */
   const inputsChanged = () =>
-    [...warmReads, ...hookReads].some(
+    [...warmReads, ...hookReads, ...written].some(
       ([key, hash]) => !key.startsWith(`env:`) && inputHash(key) !== hash,
     )
   return { check, close, inputsChanged }
