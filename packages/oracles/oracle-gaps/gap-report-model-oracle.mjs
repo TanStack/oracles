@@ -883,8 +883,12 @@ const drawn = fc.record({
   // variable GAP_INPUT_GATE (`env`); or a file the config's own plugin
   // reads, once when the config resolves (`pluginConfig`) or each time it
   // transforms a test file (`pluginTransform`), and writes into the test's
-  // text. These fields change what a history runs, so they are drawn
-  // (maintainer decision, 2026-11-16, "Randomness wins"), and last.
+  // text; or the listing of a directory of the package's tests, which holds
+  // one empty file named `open` or `shut`, read by `readdirSync`
+  // (`listing`) or by `opendirSync` (`opendir`): the edit renames that file,
+  // so no file's text changes. These fields change what a history runs, so
+  // they are drawn (maintainer decision, 2026-11-16, "Randomness wins"), and
+  // last.
   inputRead: fc.constantFrom(
     `none`,
     `none`,
@@ -895,6 +899,8 @@ const drawn = fc.record({
     `env`,
     `pluginConfig`,
     `pluginTransform`,
+    `listing`,
+    `opendir`,
   ),
   // Each write of a gate file keeps its size (`open` and `shut` have one
   // length) and gets back one fixed modification time, as `cp -p`, `rsync
@@ -4840,6 +4846,14 @@ const inputReads = {
   pluginTransform: [
     `const readInput = async () => ({ open: __GAP_INPUT_GATE__ === 'open' })`,
   ],
+  listing: [
+    `import { readdirSync as listGate } from 'node:fs'`,
+    `const readInput = async () => ({ open: listGate(new URL('./gate-dir/', import.meta.url)).includes('open') })`,
+  ],
+  opendir: [
+    `import { opendirSync as openGate } from 'node:fs'`,
+    `const readInput = async () => { const dir = openGate(new URL('./gate-dir/', import.meta.url)); const names: Array<string> = []; for (let entry = dir.readSync(); entry; entry = dir.readSync()) names.push(entry.name); dir.closeSync(); return { open: names.includes('open') } }`,
+  ],
 }
 /** The variables a check of `state` runs with: the gate's, under `env`. */
 const inputEnv = (plan, state) =>
@@ -5656,6 +5670,11 @@ function fixtureFiles(plan, state = initialState(plan)) {
       : {}),
     // The gate file, which under `keepStamp` gets back one modification
     // time each time it is written.
+    // The gate directory of a listing, which holds one empty file, named
+    // by the gate's word.
+    ...(plan.inputRead === `listing` || plan.inputRead === `opendir`
+      ? { [`tests/gate-dir/${state.inputOpen ? `open` : `shut`}`]: `` }
+      : {}),
     ...(gateFiles[plan.inputRead] === undefined
       ? {}
       : {

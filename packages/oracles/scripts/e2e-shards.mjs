@@ -124,6 +124,12 @@ export const shards = {
     `fixed seed 20261105: an edit to a file the config's plugin reads when it transforms a test`,
     `random seed: an edit to a file the config's plugin reads when it transforms a test`,
     `determinism: constructed history: an edit to a file the config's plugin reads when it transforms a test`,
+    `fixed seed 20261105: an edit to a directory listing that a test reads`,
+    `random seed: an edit to a directory listing that a test reads`,
+    `determinism: constructed history: an edit to a directory listing that a test reads`,
+    `fixed seed 20261105: an edit to a directory a test reads through opendir`,
+    `random seed: an edit to a directory a test reads through opendir`,
+    `determinism: constructed history: an edit to a directory a test reads through opendir`,
     // Added with the CLI's parent-config discovery (not yet measured).
     `fixed seed 20261105: a package whose parent directory has its config`,
     `random seed: test.projects in a parent's config`,

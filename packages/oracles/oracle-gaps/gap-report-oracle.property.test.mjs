@@ -1876,7 +1876,11 @@ async function incremental(dir, plan, cli, copy, observe, states) {
         states.add(
           `an edit to the ${plan.inputRead} gate input changed the cold result`,
         )
-        if (plan.keepStamp && plan.inputRead !== `env`)
+        // Only a gate file keeps its stamp; a listing's edit renames a file.
+        if (
+          plan.keepStamp &&
+          ![`env`, `listing`, `opendir`].includes(plan.inputRead)
+        )
           states.add(
             `an edit that kept a file's size and modification time changed the cold result`,
           )
@@ -4427,6 +4431,8 @@ const inputKinds = [
   `env`,
   `pluginConfig`,
   `pluginTransform`,
+  `listing`,
+  `opendir`,
 ]
 // Law 9's states that a constructed history of their own reaches, not the
 // edit sequence: the mid-run edit, and an edit to data a test reads through
@@ -6329,6 +6335,14 @@ oracleProperty({
           `an edit to a file the config's plugin reads when it transforms a test`,
           `pluginTransform`,
           true,
+        ],
+        // A directory's listing, by readdirSync and by opendirSync: the edit
+        // renames the one file in it.
+        [`an edit to a directory listing that a test reads`, `listing`, false],
+        [
+          `an edit to a directory a test reads through opendir`,
+          `opendir`,
+          false,
         ],
       ].map(([name, inputRead, keepStamp]) => ({
         name,
