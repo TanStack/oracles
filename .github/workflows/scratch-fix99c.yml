@@ -1,0 +1,25 @@
+name: scratch-fix99c
+on:
+  push:
+    branches: ['scratch/fix99c-win-lostlog']
+permissions:
+  contents: read
+jobs:
+  win-lost-log:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
+      - run: pnpm --filter @tanstack/oracles run build
+      - name: lost log units
+        shell: bash
+        working-directory: packages/oracles
+        run: |
+          pnpm exec vitest --run --reporter=verbose --config oracle-gaps/vitest.config.mjs gap-report-oracle -t 'fixed seed 20261105: a stream log lost after its note, then (stopped|completed)$'

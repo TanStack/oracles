@@ -4007,7 +4007,7 @@ function check(plan, observations, expected) {
     const streams = `${lost.stdout}${lost.stderr}`
     let difference
     if (outDone.length !== 1 || errDone.length !== 1)
-      difference = `the lost log's run printed ${outDone.length} done lines on stdout and ${errDone.length} on stderr`
+      difference = `the lost log's run printed ${outDone.length} done lines on stdout and ${errDone.length} on stderr; SCRATCH exit ${lost.exit} stdout ${JSON.stringify(lost.stdout)} stderr ${JSON.stringify(lost.stderr)}`
     else if (outDone[0] !== errDone[0])
       difference = `the done lines differ: ${JSON.stringify(outDone[0])} on stdout, ${JSON.stringify(errDone[0])} on stderr`
     else if (lost.exit !== owedExit(errDone[0]))
