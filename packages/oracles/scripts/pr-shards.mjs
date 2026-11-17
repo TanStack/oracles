@@ -302,7 +302,8 @@ export const partitions = {
       // 261 s, 25 s, and small units: #57's last constructed histories sit
       // here, since the rest (shard 3) is near its 10-minute limit.
       1: anyOf([
-        'an edit sequence over the witness module',
+        'an edit sequence over the witness module, the first half',
+        'an edit sequence over the witness module, the second half',
         'a stale authored mutant and a reformat',
         'a failing owner under a config that --config names',
         'a stop before the CLI starts',
