@@ -93,11 +93,24 @@ export function parseArgs(argv, cwd = process.cwd()) {
     if (problem) throw new Refusal(...problem)
     return optionsOf(args, cwd)
   } catch (error) {
-    if (error instanceof Refusal && args.out) error.out = resolve(cwd, args.out)
+    // Every refusal is written to its run's output directory (law 12): the one
+    // the arguments name, or the default one the run would have used.
+    if (error instanceof Refusal) error.out = outDirOf(args, cwd)
     throw error
   }
 }
 
+/**
+ * The output directory a run with `args` writes to: the `--out` it names, or,
+ * when it names none, the default directory of its package (optionsOf). A refusal
+ * that comes before the package is known has none.
+ */
+function outDirOf(args, cwd) {
+  if (args.out) return resolve(cwd, args.out)
+  if (!args.package || !existsSync(resolve(cwd, args.package))) return undefined
+  const pkg = realPathOf(resolve(cwd, args.package))
+  return resolve(cwd, join(stateDirOf(pkg), `out`, runName()))
+}
 /**
  * The options of parsed arguments `args`, or the refusal of the first that
  * breaks the usage text.

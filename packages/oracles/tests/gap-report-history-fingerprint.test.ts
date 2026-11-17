@@ -101,4 +101,48 @@ describe(`the gap oracle's history grammar`, () => {
       )
     }
   })
+
+  // The maintainer's decision "Randomness wins for new fields" (2026-11-16):
+  // a field that changes what a history runs is drawn, except that a drawn
+  // field never switches a test-only hook. Each field below switches one
+  // (named beside it), so every drawn history holds its neutral value, and no
+  // drawn stop is the stop after the completed line, which holds the run's
+  // exit (ORACLE_GAPS_TEST_HOLD_UNTIL). The list is written here, not read
+  // from the model, so a model that starts to draw one of them fails.
+  test(`draws no value that switches a test-only hook`, () => {
+    const neutral: Record<string, unknown> = {
+      overlap: false, // ORACLE_GAPS_TEST_HOLD_UNTIL
+      spawnStop: false, // ORACLE_GAPS_TEST_STARTED
+      spawnOnStart: false, // ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED
+      logLost: false, // ORACLE_GAPS_TEST_PAUSE_AT=note
+      supervisorDeath: false, // ORACLE_GAPS_TEST_PAUSE_AT=child
+      unsupervised: false, // ORACLE_GAPS_TEST_UNSUPERVISED
+      tornRows: false, // ORACLE_GAPS_TEST_TORN_ROWS
+      loadPlugin: false, // LOAD_PLUGIN
+      rejectBatch: 0, // ORACLE_GAPS_TEST_REJECT_BATCH
+    }
+    // A test's own hook switch (#99): what is pending while it waits, which
+    // switches ORACLE_GAPS_TEST_SAMPLES, ORACLE_GAPS_TEST_RUNNER_WRITE or
+    // ORACLE_GAPS_TEST_RUNNER_TIMER.
+    const neutralTest: Record<string, unknown> = { pendingIo: null }
+    for (const seed of [FIXED_SEED, 1, 2]) {
+      const samples = fc.sample(drawn, { seed, numRuns: DRAWS }) as Array<
+        Record<string, unknown> & {
+          stopRuns: Array<{ when: string }>
+          tests: Array<Record<string, unknown>>
+        }
+      >
+      for (const history of samples) {
+        for (const [field, value] of Object.entries(neutral))
+          expect([field, history[field]]).toEqual([field, value])
+        for (const t of history.tests)
+          for (const [field, value] of Object.entries(neutralTest))
+            expect([`tests.${field}`, t[field]]).toEqual([
+              `tests.${field}`,
+              value,
+            ])
+        for (const stop of history.stopRuns) expect(stop.when).not.toBe(`after`)
+      }
+    }
+  })
 })
