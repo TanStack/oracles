@@ -121,61 +121,323 @@
 // SIGINT or SIGTERM is sent on to the whole group; a process that has not
 // ended 2 s later is killed, and so is any process left in the group when
 // the run ends. The run kills its group itself if the CLI dies first.
+// The stop handlers and the claim on the output directory come before the
+// CLI's modules load (review of #57, P1): a signal during the loads is kept
+// and acted on once the stream log's note is written, so a stop as the CLI starts still
+// leaves the note and one done line. Only Node's own start is before them.
 import { spawn } from 'node:child_process'
-import { existsSync, realpathSync } from 'node:fs'
+import {
+  appendFileSync,
+  existsSync,
+  linkSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { constants } from 'node:os'
+import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { parseArgs, usage } from './args.mjs'
-import { codeIdentity, openSession } from './check.mjs'
-import { received, requestDaemon, stopDaemon } from './daemon.mjs'
-import { endRun } from './ending.mjs'
-import { memoryStore } from './evidence.mjs'
-import { streamLine } from './stream.mjs'
+import { posix } from './paths.mjs'
+
+let early
+const keepEarly = (signal) => {
+  early ??= signal
+}
+process.on(`SIGINT`, keepEarly)
+process.on(`SIGTERM`, keepEarly)
+// A test-only marker (ORACLE_GAPS_TEST_STARTED): the first statement that runs
+// project code writes this file, before any project module loads, so a test can
+// tell a stop that came before the CLI started from one that came during its loads.
+if (process.env.ORACLE_GAPS_TEST_STARTED)
+  writeFileSync(process.env.ORACLE_GAPS_TEST_STARTED, ``)
+// A test-only hold after the marker (ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED): the
+// CLI waits there until it has kept a stop (keepEarly), or until the test stop
+// file exists (win32, ORACLE_GAPS_TEST_STOP), so a stop a test sends on seeing the
+// marker lands before the handlers below are installed, whatever the load. The
+// stop releases the hold, never the time; a hold with no stop within 60 s fails
+// loudly. Inert unless set.
+if (process.env.ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED !== undefined) {
+  const stopFile = process.env.ORACLE_GAPS_TEST_STOP
+  for (
+    let waited = 0;
+    early === undefined && !(stopFile !== undefined && existsSync(stopFile));
+    waited += 10
+  ) {
+    if (waited >= 60_000)
+      throw new Error(`the hold after the started marker saw no stop in 60 s`)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
+const { parseArgs, usage } = await import(`./args.mjs`)
+const { endRun, Refusal } = await import(`./ending.mjs`)
+// ending.mjs loads stream.mjs, so this import costs no load of its own.
+const { escapeControls, streamLine } = await import(`./stream.mjs`)
 
 // How long the group has to end after a stop signal before it is killed.
 const STOP_GRACE_MS = 2000
 
-/** Signals every process of group `group`; false when none is left. */
-function signalGroup(group, signal) {
+// The stream log (the maintainer's decision of 2026-11-12): a run that
+// starts a check writes its stderr to `<out>/stream.log` too, line for line,
+// and names that file in its first line on both streams. The supervisor opens
+// it before the child starts (startLog), and is then the only writer of the
+// child's stderr to it (superviseRun). Undefined until the log is open.
+let streamLog
+let writingEnding = false
+const logPathOf = (out) => join(out, `stream.log`)
+/** Appends `text` to the stream log at `path`; a failure is the refusal that ends the run. */
+const appendLog = (path, text) => {
   try {
-    process.kill(-group, signal)
-    return true
-  } catch {
-    return false
+    appendFileSync(path, text)
+  } catch (error) {
+    throw cannotWrite(path, error)
   }
+}
+/** Writes `text` to stderr and, once the log is open, to the stream log. */
+const writeStream = (text) => {
+  process.stderr.write(text)
+  if (streamLog) appendLog(streamLog, text)
+}
+const cannotWrite = (path, error) =>
+  new Refusal(
+    `the stream log ${path} cannot be written (${error.code ?? error.message})`,
+    `Remove ${path}, or pass --out a directory whose stream.log can be written.`,
+  )
+/** Whether process `pid` runs. */
+const alive = (pid) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error.code === `EPERM`
+  }
+}
+// The output directory this process claimed (its run.pid), released when the
+// process exits, on every exit but SIGKILL.
+let claimed
+process.on(`exit`, () => {
+  if (claimed === undefined) return
+  try {
+    if (Number(readFileSync(claimed, `utf8`)) === process.pid)
+      rmSync(claimed, { force: true })
+  } catch {
+    // Already gone.
+  }
+})
+/**
+ * Claims output directory `out` for this process. The claim is a temp file that
+ * already holds the pid, linked to `run.pid`, which fails when `run.pid` exists,
+ * so the claim is atomic. A `run.pid` that names no running process, or that
+ * cannot be read, refuses as a live one does: nothing is taken over (the
+ * maintainer's decision, "Stale claims refuse; no takeover"), and the user
+ * removes the file.
+ */
+function claimOut(out) {
+  const claim = join(out, `run.pid`)
+  const temp = `${claim}.${process.pid}.tmp`
+  try {
+    mkdirSync(out, { recursive: true })
+    writeFileSync(temp, `${process.pid}\n`)
+  } catch (error) {
+    throw claimCannotWrite(out, claim, error)
+  }
+  try {
+    // A claim that vanishes between the link and the read was released by a run
+    // that just ended: the link is tried again, a few times at most.
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        linkSync(temp, claim)
+        claimed = claim
+        return
+      } catch (error) {
+        if (error.code !== `EEXIST`) throw claimCannotWrite(out, claim, error)
+        const holder = readHolder(claim)
+        if (holder === undefined && attempt < 3) continue
+        // A claim that the link finds and no read does (a link to no file, or
+        // one released and retaken on every try) can't be read.
+        throw heldRefusal(out, claim, holder ?? UNREADABLE)
+      }
+    }
+  } finally {
+    rmSync(temp, { force: true })
+  }
+}
+/** The refusal for a `run.pid` that cannot be written: the claim's own cause. */
+function claimCannotWrite(out, claim, error) {
+  return new Refusal(
+    `run.pid in ${posix(out)} cannot be written (${error.code ?? error.message})`,
+    `if no run uses ${posix(out)}, delete ${posix(claim)}, or pass --out a directory whose run.pid can be written`,
+  )
+}
+/** The refusal for a `run.pid` that holds its directory or cannot be read. */
+function heldRefusal(out, claim, holder) {
+  const refusal =
+    holder === UNREADABLE
+      ? new Refusal(
+          `run.pid in ${posix(out)} can't be read`,
+          `if no run uses ${posix(out)}, delete ${posix(claim)}`,
+        )
+      : holder > 0 && alive(holder)
+        ? new Refusal(
+            `another run (pid ${holder}) is using ${posix(out)}`,
+            `If no run is using it, delete ${posix(claim)}; otherwise pass --out a directory no run is using.`,
+          )
+        : holder > 0
+          ? new Refusal(
+              `run.pid names pid ${holder}, which is not running`,
+              `if no run uses ${posix(out)}, delete ${posix(claim)}`,
+            )
+          : new Refusal(
+              `run.pid in ${posix(out)} does not name a pid`,
+              `if no run uses ${posix(out)}, delete ${posix(claim)}`,
+            )
+  refusal.reportless = true
+  return refusal
+}
+/** Read a claim that cannot be read (a directory, or no permission). */
+const UNREADABLE = `unreadable`
+/**
+ * The pid a claim names: undefined when the claim is gone, UNREADABLE when it
+ * cannot be read at all, and NaN or 0 when its text names no pid.
+ */
+function readHolder(claim) {
+  try {
+    return Number(readFileSync(claim, `utf8`))
+  } catch (error) {
+    if (error.code === `ENOENT`) return undefined
+    return UNREADABLE
+  }
+}
+// The longest a test-only wait lasts before it fails the run loudly.
+const TEST_WAIT_LIMIT_MS = 60_000
+/**
+ * A test-only hold at one named point (ORACLE_GAPS_TEST_PAUSE_AT): the process
+ * writes its marker (ORACLE_GAPS_TEST_PAUSE_MARKER) when it reaches the point,
+ * then waits until the file ORACLE_GAPS_TEST_PAUSE_UNTIL exists. A test sequences
+ * other runs against it and releases it. Inert unless set (register: test hooks).
+ */
+function testPause(point) {
+  const until = enterTestPause(point)
+  if (until !== undefined) waitForFile(until, `the pause at ${point}`)
+}
+/**
+ * The same hold for the supervised child, which must keep its event loop
+ * running: its orphan watchdog is a timer, and a synchronous wait would stop it,
+ * so the child could never end itself while held.
+ */
+async function testPauseOnTimers(point) {
+  const until = enterTestPause(point)
+  if (until === undefined) return
+  for (let waited = 0; !existsSync(until); waited += 20) {
+    if (waited >= TEST_WAIT_LIMIT_MS)
+      throw new Error(
+        `the pause at ${point} was not released within ${TEST_WAIT_LIMIT_MS} ms`,
+      )
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+}
+/** Writes the marker of the hold at `point`; returns its release file, when the point is held. */
+function enterTestPause(point) {
+  if (process.env.ORACLE_GAPS_TEST_PAUSE_AT !== point) return undefined
+  const marker = process.env.ORACLE_GAPS_TEST_PAUSE_MARKER
+  if (marker !== undefined) writeFileSync(marker, ``)
+  return process.env.ORACLE_GAPS_TEST_PAUSE_UNTIL
+}
+/** Waits for `file` for at most TEST_WAIT_LIMIT_MS, then throws. */
+function waitForFile(file, what) {
+  for (let waited = 0; !existsSync(file); waited += 20) {
+    if (waited >= TEST_WAIT_LIMIT_MS)
+      throw new Error(
+        `${what} was not released within ${TEST_WAIT_LIMIT_MS} ms`,
+      )
+    sleepMs(20)
+  }
+}
+function sleepMs(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+/**
+ * Claims the output directory and writes the run's first line, on both
+ * streams, which names the log. Throws a Refusal when the directory is in use
+ * or the log cannot be written; nothing is written then.
+ */
+function startLog(out) {
+  const path = logPathOf(out)
+  claimOut(out)
+  try {
+    writeFileSync(path, ``)
+  } catch (error) {
+    throw cannotWrite(path, error)
+  }
+  streamLog = path
+  // The log is named in forward slashes on win32 (the Windows paths rule); POSIX
+  // paths are unchanged.
+  // A line break in the path is written as its escape: the note stays one line
+  // (the register's C entry "The internal-error line").
+  const note = `oracle-gaps: note log ${escapeControls(posix(path))}\n`
+  process.stdout.write(note)
+  writeStream(note)
+  testPause(`note`)
+}
+
+/** Flushes both streams, then exits with `code` (after a test's hold). */
+/**
+ * A test-only hold (ORACLE_GAPS_TEST_HOLD_UNTIL, a path): after its done line the
+ * process keeps its exit, and its output claim, until the file exists. A test
+ * releases it once the overlapping run or the stop it sent has been observed, so
+ * the outcome does not depend on wall-clock timing. Inert unless set.
+ */
+// A hold that never releases is a driver fault. The run keeps the exit code its
+// done line already stated: the streams stay as the done line left them, and the
+// failure is the driver's, through the `.unreleased` marker beside the hold file.
+function holdUntil() {
+  const file = process.env.ORACLE_GAPS_TEST_HOLD_UNTIL
+  if (file === undefined) return
+  try {
+    waitForFile(file, `the hold`)
+  } catch {
+    writeFileSync(`${file}.unreleased`, ``)
+  }
+}
+function exitWhenFlushed(code) {
+  process.stdout.write(``, () =>
+    process.stderr.write(``, () => {
+      holdUntil()
+      process.exit(code)
+    }),
+  )
 }
 
 /**
- * Runs this CLI again as a child in a process group of its own, and ends
- * with it: with its exit code, or, once a stop signal has ended its group,
- * with 128 plus the signal's number.
+ * Runs this CLI again as a child in a process group of its own, and ends with
+ * it: with its exit code, or, once a stop signal has ended its group, with 128
+ * plus the signal's number. The child gets `--out` appended, the directory this
+ * process resolved (review of #57, F2).
  */
-function superviseRun() {
+function superviseRun(out) {
   let child
   let stopped
   // How the run ended: its exit code, or the signal that ended it.
   let ended
   // Whether the run said that it writes its ending (a message it sends
-  // before it writes): then its done line is the last on each stream, and
-  // it ends with its own code, whatever stop reaches it.
+  // before it writes): then its done line is the last on each stream, and it
+  // ends with its own code, whatever stop reaches it.
   let ending = false
-  // Whether the run's stderr, which the CLI passes on, said that V8 ran
-  // out of memory.
+  // Whether the run's stderr, which the CLI passes on, said that V8 ran out
+  // of memory.
   let outOfMemory = false
   let stderrTail = ``
   // Whether the run's streams and channel have closed.
   let closed = false
-  // Ends the CLI once the run has ended (or the grace has passed), with
-  // what is left of the group killed, and once the run's stderr has been
-  // passed on (at most 2 s more). A run that writes its ending wrote its
-  // done line, so the CLI ends with its code and writes none. Every other
-  // end gets one done line from the CLI, on both streams: a run that a stop
-  // ended stopped (review of #46, F3; re-review N1); a run whose process
-  // ended on its own, by a signal or a code, with no ending (a V8
-  // out-of-memory abort is a SIGABRT) is an error, exit 3, with the remedy
-  // when it ran out of memory (the coordinator's decision of 2026-11-12 on
-  // P10). A write to a pipe is asynchronous on macOS, so the process exits
-  // once it is written.
+  // Ends the CLI once the run has ended (or the grace has passed), with what
+  // is left of the group killed. A run that writes its ending wrote its done
+  // line, so the CLI ends with its code and writes none. Every other end gets
+  // one done line from the CLI, on both streams: a stop ended the run
+  // (stopped); a run whose process ended on its own (a signal, a code, a V8
+  // out-of-memory abort) is an error, exit 3, with the remedy when it ran out
+  // of memory.
   let finishing = false
   const finish = () => {
     if (finishing) return
@@ -193,11 +455,19 @@ function superviseRun() {
       const line = stopped
         ? `oracle-gaps: done stopped (${stopped})\n`
         : `oracle-gaps: done error, the run's process exited with ${how}${outOfMemory ? `: it ran out of memory; give Node more (NODE_OPTIONS=--max-old-space-size=<MB>) or run fewer --contexts` : ``}\n`
-      process.stdout.write(line, () =>
+      process.stdout.write(line, () => {
+        // The log was opened before the run started (startLog). A log that
+        // cannot take the line does not change the ending: both streams still
+        // get it, and the code is the decided one.
+        try {
+          appendLog(streamLog, line)
+        } catch {
+          // The line is still written to stderr below.
+        }
         process.stderr.write(line, () =>
           process.exit(stopped ? 128 + constants.signals[stopped] : 3),
-        ),
-      )
+        )
+      })
     }
     if (child === undefined || closed) return decide()
     child.once(`close`, decide)
@@ -219,39 +489,55 @@ function superviseRun() {
       finish()
     }, 50)
   }
-  // The stop handlers come first, so a signal that comes while the run
-  // starts is a stop too (re-review N3).
+  // The stop handlers come first, so a signal that comes while the run starts
+  // is a stop too. A stop that came during the CLI's loads ends the run before
+  // it starts: its stopped line follows the note the caller already wrote.
   process.on(`SIGINT`, stop)
   process.on(`SIGTERM`, stop)
-  // The test-only stop hook (ORACLE_GAPS_TEST_STOP, review F(f)): in a
-  // supervised run it goes through this supervisor's stop, which forwards to
-  // the child and writes the stopped line, as a SIGINT does.
-  if (process.env.ORACLE_GAPS_TEST_STOP !== undefined) {
-    const file = process.env.ORACLE_GAPS_TEST_STOP
-    setInterval(() => {
-      if (existsSync(file)) stop(`SIGINT`)
-    }, 50).unref()
-  }
+  // A test-only stop (ORACLE_GAPS_TEST_STOP, #58): once the named file exists, the
+  // stop is taken as a SIGINT would be. Inert unless set.
+  watchTestStop(stop)
+  if (early !== undefined) return stop(early)
   // An inspector flag would bind the CLI's own port a second time.
   child = spawn(
     process.execPath,
     [
       ...process.execArgv.filter((flag) => !/^--inspect/.test(flag)),
       ...process.argv.slice(1),
+      `--out`,
+      out,
     ],
     {
       detached: true,
       stdio: [`inherit`, `inherit`, `pipe`, `ipc`],
-      env: { ...process.env, ORACLE_GAPS_GROUP: String(process.pid) },
+      env: {
+        ...process.env,
+        ORACLE_GAPS_INTERNAL_SUPERVISED: String(process.pid),
+      },
     },
   )
+  // A test that kills this supervisor reads the child's pid beside the started
+  // marker (ORACLE_GAPS_TEST_STARTED), to see the child exit (the watchdog).
+  if (process.env.ORACLE_GAPS_TEST_STARTED !== undefined)
+    writeFileSync(
+      `${process.env.ORACLE_GAPS_TEST_STARTED}.child`,
+      `${child.pid}\n`,
+    )
   child.on(`message`, (message) => {
     if (message === `ending`) ending = true
   })
-  // The run's stderr, passed on as it comes, and read for V8's
-  // out-of-memory message.
+  // The run's stderr, passed on as it comes, written to the stream log as it is
+  // (V8's own lines included, which the run does not write itself), and read
+  // for V8's out-of-memory message.
   child.stderr.on(`data`, (chunk) => {
     process.stderr.write(chunk)
+    // A chunk the log cannot take is not written to it, and the relay goes on: the
+    // run's own ending stays the only done line on each stream.
+    try {
+      appendLog(streamLog, chunk)
+    } catch {
+      // The stream log cannot be written; stderr above has the chunk.
+    }
     stderrTail = (stderrTail + chunk).slice(-200)
     if (/heap out of memory/i.test(stderrTail)) outOfMemory = true
   })
@@ -264,34 +550,66 @@ function superviseRun() {
   })
 }
 
-/**
- * The run's side of the group: once the CLI that started it is gone, the
- * run kills its group, itself included.
- */
-function watchSupervisor(supervisor) {
-  setInterval(() => {
-    if (process.ppid !== supervisor) process.kill(-process.pid, `SIGKILL`)
-  }, 1000).unref()
-}
-
-/**
- * Whether arguments `argv` ask for a check, the only run that starts
- * processes; a refusal of them is written by the run itself.
- */
-function asksForCheck(argv) {
+/** Signals every process of group `group`; false when none is left. */
+function signalGroup(group, signal) {
   try {
-    const options = parseArgs(argv)
-    return !options.help && !options.stop
+    process.kill(-group, signal)
+    return true
   } catch {
     return false
   }
 }
 
+/**
+ * The run's side of the group: once the CLI that started it is gone, the run
+ * kills its group, itself included.
+ */
+function watchSupervisor(supervisor) {
+  // Only a process that leads its own group kills it: an inherited variable
+  // (a test's child, say) must not name a group this process does not lead. A
+  // group whose id is this process's pid exists only while this process leads
+  // it, so a signal 0 to it tells, with no external command (no `ps`, which a
+  // slim container lacks; review of #57, A7).
+  if (!signalGroup(process.pid, 0)) return
+  setInterval(() => {
+    if (process.ppid !== supervisor) process.kill(-process.pid, `SIGKILL`)
+  }, 1000).unref()
+}
+/**
+ * A test-only stop (ORACLE_GAPS_TEST_STOP, #58): once the named file exists, the
+ * stop is taken as a SIGINT would be. Inert unless set.
+ */
+function watchTestStop(onStop) {
+  const file = process.env.ORACLE_GAPS_TEST_STOP
+  if (file === undefined) return
+  setInterval(() => {
+    if (existsSync(file)) onStop(`SIGINT`)
+  }, 50).unref()
+}
+
+/**
+ * The options of arguments `argv` when they ask for a check, the only run that
+ * starts processes; undefined for help, a stop, or arguments that refuse (a
+ * refusal is written by the run itself).
+ */
+function asksForCheck(argv) {
+  try {
+    const options = parseArgs(argv)
+    return options.help || options.stop ? undefined : options
+  } catch {
+    return undefined
+  }
+}
+
 /** The summary of a check run in this process. */
 async function checkCold(options) {
+  const { openSession } = await import(`./check.mjs`)
+  const { memoryStore } = await import(`./evidence.mjs`)
   const session = await openSession(options.pkg)
   try {
-    return await session.check(options, memoryStore())
+    return await session.check(options, memoryStore(), (line) =>
+      writeStream(`${line}\n`),
+    )
   } finally {
     await session.close()
   }
@@ -304,20 +622,46 @@ async function checkCold(options) {
  * would have (incremental equals cold).
  */
 async function checkThroughDaemon(options) {
+  const { codeIdentity } = await import(`./check.mjs`)
+  const { received, requestDaemon } = await import(`./daemon.mjs`)
+  // A run without `--out` names its directory per call (args.mjs), so the daemon
+  // would name another one than this run's stream log is in. The request
+  // carries the directory this run named.
   const reply = await requestDaemon(
     options.pkg,
-    process.argv.slice(2),
+    [...process.argv.slice(2), `--out`, options.out],
     codeIdentity(),
   )
   if (reply.silent) {
-    process.stderr.write(
+    writeStream(
       `${streamLine(`note`, `the package's daemon sent nothing for ${reply.silent} s; this check runs cold`)}\n`,
     )
     return checkCold(options)
   }
-  if (reply.stderr) process.stderr.write(reply.stderr)
+  if (reply.stderr) writeStream(reply.stderr)
   if (reply.failed) throw received(reply.failed)
   return reply.stdout
+}
+
+// The run's ending, once: its refusal or error is written to its output
+// directory and stdout and stderr, and the process exits with its code.
+let ended = false
+const holdStops = () => {
+  writingEnding = true
+  process.send?.(`ending`)
+}
+function endWith(error, out) {
+  if (ended) return
+  ended = true
+  const ending = endRun(error, out)
+  holdStops()
+  try {
+    writeStream(ending.stderr)
+  } catch {
+    // The log cannot take the ending, which writeStream wrote to stderr first.
+  }
+  process.stdout.write(`${ending.done}\n`)
+  exitWhenFlushed(ending.exitCode)
 }
 
 // A file URL escapes a space, `#`, and the like, so the script's own URL is
@@ -325,95 +669,88 @@ async function checkThroughDaemon(options) {
 const main =
   import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
 // Windows has no process groups: there the run is the CLI's own process.
-const supervised = process.platform !== `win32`
-const supervisor = process.env.ORACLE_GAPS_GROUP
-if (
-  main &&
-  supervised &&
-  supervisor === undefined &&
-  asksForCheck(process.argv.slice(2))
-)
-  superviseRun()
-else if (main) {
-  if (supervisor !== undefined) watchSupervisor(Number(supervisor))
-  // A test that runs this CLI starts a run of its own, in a group of its own.
-  delete process.env.ORACLE_GAPS_GROUP
-  // The run's options, once its arguments parse; a refusal or an error is
-  // written to their output directory.
+// A test-only hook (ORACLE_GAPS_TEST_UNSUPERVISED) runs a POSIX check unsupervised,
+// the path win32 takes, so the oracle reaches it on every platform.
+const supervised =
+  process.platform !== `win32` &&
+  process.env.ORACLE_GAPS_TEST_UNSUPERVISED === undefined
+const supervisor = process.env.ORACLE_GAPS_INTERNAL_SUPERVISED
+
+// Set once the note is written (the unsupervised run has started).
+let runStarted = false
+/** Ends an unsupervised run with its stopped line on both streams (#58). */
+function stopNow(signal) {
+  const line = `oracle-gaps: done stopped (${signal})\n`
+  process.stdout.write(line)
+  writeStream(line)
+  exitWhenFlushed(128 + constants.signals[signal])
+}
+
+async function run() {
+  // The run's options, once its arguments parse. The handlers come first, so an
+  // error thrown by the supervisor ends the run through endWith too.
   let options
-  let ended = false
-  // Ends the run once. A write to a pipe is asynchronous on macOS, and
-  // exiting at once cuts it off at the pipe's buffer, so the process exits
-  // once both streams have written everything before it.
-  // A test-only hook for the CLI's own oracle, not for users:
-  // ORACLE_GAPS_TEST_HOLD_EXIT_MS holds the exit after the done line, so the
-  // CLI's oracle can send a signal in that window.
-  const end = (exitCode) => {
-    if (ended) return
-    ended = true
-    const hold = Number(process.env.ORACLE_GAPS_TEST_HOLD_EXIT_MS ?? 0)
-    process.stdout.write(``, () =>
-      process.stderr.write(``, () =>
-        setTimeout(() => process.exit(exitCode), hold),
-      ),
-    )
+  process.on(`uncaughtException`, (error) => endWith(error, options?.out))
+  process.on(`unhandledRejection`, (error) => endWith(error, options?.out))
+  // The supervisor: it claims the output directory, writes the note, and runs
+  // the child. A refusal of the claim or the log ends it through endWith (the
+  // single path for every refusal of a check).
+  if (supervised && supervisor === undefined) {
+    const checking = asksForCheck(process.argv.slice(2))
+    if (checking !== undefined) {
+      options = checking
+      try {
+        startLog(checking.out)
+      } catch (error) {
+        return endWith(error, checking.out)
+      }
+      return superviseRun(checking.out)
+    }
   }
-  // A stop ends the run at once, with no line: an error that the stop
-  // causes (a config load that it cuts off) is no refusal, and the
-  // supervisor writes the stopped line (re-review N1). Once the run writes
-  // its ending, it says so to the supervisor, and a stop no longer cuts it
-  // off: its done line is then the last line of each stream.
-  let writingEnding = false
-  // A run that has started owes its stop one stopped line on each stream
-  // (#57, all-or-nothing). A supervised run's supervisor writes it; an
-  // unsupervised run (win32, no process groups) writes it here. A stop before
-  // the run starts prints nothing, as the law allows.
-  let runStarted = false
+  if (supervisor !== undefined) {
+    try {
+      watchSupervisor(Number(supervisor))
+    } catch (error) {
+      return endWith(error, options?.out)
+    }
+    // A supervised child waits here, before it writes anything, so a test can
+    // kill its supervisor while the child is silent (the watchdog's own case).
+    await testPauseOnTimers(`child`)
+  }
+  // A test that runs this CLI starts a run of its own, in a group of its own.
+  delete process.env.ORACLE_GAPS_INTERNAL_SUPERVISED
+  // A stop ends the run at once, with no line: an error that the stop causes
+  // is no refusal, and the supervisor writes the stopped line. Once the run
+  // writes its ending, a stop no longer cuts it off.
+  // The all-or-nothing stop law (#57 and #58): a stop after the note writes one
+  // done stopped line on each stream; a supervised child's stop is the
+  // supervisor's line; a stop before the note waits for it (the early stop).
   const onStop = (signal) => {
     if (writingEnding) return
-    const code = 128 + constants.signals[signal]
-    if (!runStarted || supervised) return process.exit(code)
-    const line = `oracle-gaps: done stopped (${signal})\n`
-    process.stdout.write(line, () =>
-      process.stderr.write(line, () => process.exit(code)),
-    )
+    if (!supervised) return runStarted && stopNow(signal)
+    process.exit(128 + constants.signals[signal])
   }
   process.on(`SIGINT`, onStop)
   process.on(`SIGTERM`, onStop)
-  // A test-only hook for the CLI's own oracle, not for users (as
-  // ORACLE_GAPS_TEST_HOLD_EXIT_MS): when the file ORACLE_GAPS_TEST_STOP names
-  // appears, the CLI takes the same stop as a SIGINT. CI's Windows witness uses
-  // it, since a non-console parent cannot deliver Ctrl+C there.
-  // Unsupervised runs only (win32, no supervisor); a supervised child's stop
-  // is the supervisor's.
-  if (process.env.ORACLE_GAPS_TEST_STOP !== undefined && !supervised) {
-    const file = process.env.ORACLE_GAPS_TEST_STOP
-    setInterval(() => {
-      if (existsSync(file)) onStop(`SIGINT`)
-    }, 50).unref()
-  }
-  const holdStops = () => {
-    writingEnding = true
-    process.send?.(`ending`)
-  }
-  const fail = (error) => {
-    if (ended) return
-    const ending = endRun(error, options?.out)
-    holdStops()
-    process.stderr.write(ending.stderr)
-    process.stdout.write(`${ending.done}\n`)
-    end(ending.exitCode)
-  }
-  // An error thrown outside the awaited check, by a timer or a promise no
-  // one awaits, ends the run the same way.
-  process.on(`uncaughtException`, fail)
-  process.on(`unhandledRejection`, fail)
+  // A test-only stop for unsupervised runs (ORACLE_GAPS_TEST_STOP, #58).
+  if (!supervised) watchTestStop(onStop)
+  // A child of a supervisor that was stopped before its own handlers ran exits
+  // now (the supervisor writes the line). An unsupervised run keeps the stop
+  // and takes it once its note is written, below.
+  if (supervisor !== undefined && early !== undefined)
+    process.exit(128 + constants.signals[early])
   try {
     options = parseArgs(process.argv.slice(2))
     if (options.help) console.log(usage)
-    else if (options.stop) await stopDaemon(options.pkg)
-    else {
+    else if (options.stop) {
+      const { stopDaemon } = await import(`./daemon.mjs`)
+      await stopDaemon(options.pkg)
+    } else {
+      // Windows has no supervisor: this process opens the log and runs the
+      // check. A child of a supervisor writes its stderr alone.
+      if (supervisor === undefined) startLog(options.out)
       runStarted = true
+      if (early !== undefined) return stopNow(early)
       const summary = await (options.daemon ? checkThroughDaemon : checkCold)(
         options,
       )
@@ -421,10 +758,12 @@ else if (main) {
       // The summary ends with the done line (report.mjs), which ends stderr
       // too.
       console.log(summary)
-      process.stderr.write(`${summary.split(`\n`).at(-1)}\n`)
+      writeStream(`${summary.split(`\n`).at(-1)}\n`)
     }
-    end(0)
+    exitWhenFlushed(0)
   } catch (error) {
-    fail(error)
+    endWith(error, options?.out)
   }
 }
+
+if (main) await run()

@@ -69,20 +69,28 @@ describe(`the gap oracle's history grammar`, () => {
   // no drawn field switches a test-only hook on. The hooks are read off what
   // the driver would set for a history, by value, here, not from the model,
   // so a model that starts to draw one fails:
-  // - its constant hook fields hold their neutral values;
+  // - its constant hook fields hold their neutral values (#57's among them);
   // - no step arms a daemon pause: `dieMidCheck` sets ORACLE_GAPS_TEST_PAUSE_AT
   //   (daemon-reply), _PAUSE_MARK, _SERVED_MARK, _WAIT_MS and _WAIT_MARK, and
   //   `resetBeforeRead` sets ORACLE_GAPS_TEST_PAUSE_AT (daemon-read),
   //   _PAUSE_ARM and _SERVED_MARK; `pauseEngages` only disarms those, so it is
   //   no neutral value of its own;
   // - no stop switches a hook: a stop after the completed line holds the run's
-  //   exit (ORACLE_GAPS_TEST_HOLD_EXIT_MS), and a stop while the config warms
+  //   exit (ORACLE_GAPS_TEST_HOLD_UNTIL), and a stop while the config warms
   //   waits at the warm probe (ORACLE_GAPS_TEST_WARM_PROBE); on win32 the
   //   driver runs a stop through the test stop file (ORACLE_GAPS_TEST_STOP)
   //   only for a history that sets `hookStops`.
-  // It reads `histories`, the histories the oracle takes, at three seeds.
+  // It reads `histories`, the histories the oracle takes, at three seeds, and
+  // the drawn records, which hold no stop after the completed line at all.
+  // `loadPlugin` is fixture text (LOAD_PLUGIN), not a hook, so it is drawn.
   test(`draws no value that switches a test-only hook`, () => {
     const neutral: Record<string, unknown> = {
+      overlap: false, // ORACLE_GAPS_TEST_HOLD_UNTIL
+      spawnStop: false, // ORACLE_GAPS_TEST_STARTED
+      spawnOnStart: false, // ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED
+      logLost: false, // ORACLE_GAPS_TEST_PAUSE_AT=note
+      supervisorDeath: false, // ORACLE_GAPS_TEST_PAUSE_AT=child
+      unsupervised: false, // ORACLE_GAPS_TEST_UNSUPERVISED
       tornRows: false, // ORACLE_GAPS_TEST_TORN_ROWS
       rejectBatch: 0, // ORACLE_GAPS_TEST_REJECT_BATCH
       replyHeld: false, // ORACLE_GAPS_TEST_PAUSE_AT=daemon-check, with a release
@@ -105,6 +113,11 @@ describe(`the gap oracle's history grammar`, () => {
         for (const stop of history.stopRuns)
           expect(hookStops).not.toContain(stop.when)
       }
+      const records = fc.sample(drawn, { seed, numRuns: DRAWS }) as Array<{
+        stopRuns: Array<{ when: string }>
+      }>
+      for (const record of records)
+        for (const stop of record.stopRuns) expect(stop.when).not.toBe(`after`)
     }
   })
 })
