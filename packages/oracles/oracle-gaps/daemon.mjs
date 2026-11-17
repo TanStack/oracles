@@ -547,22 +547,6 @@ async function serve(pkg) {
   // Listening proves that this daemon holds the lock, so it listens before
   // it loads anything; checks wait for the session.
   await new Promise((resolvePromise) => server.listen(socket, resolvePromise))
-  // Test-only (ORACLE_GAPS_TEST_PAUSE_AT=daemon-warm, as in check.mjs): once a
-  // request waits, the daemon writes <ORACLE_GAPS_TEST_PAUSE_MARK>.open and
-  // holds its own start there until <ORACLE_GAPS_TEST_PAUSE_RELEASE>.open
-  // exists, so a test knows a request waits while the daemon starts. Inert
-  // unless set.
-  const startMark = process.env.ORACLE_GAPS_TEST_PAUSE_MARK
-  const startRelease = process.env.ORACLE_GAPS_TEST_PAUSE_RELEASE
-  if (
-    process.env.ORACLE_GAPS_TEST_PAUSE_AT === `daemon-warm` &&
-    startMark !== undefined &&
-    startRelease !== undefined
-  ) {
-    while (waiting.size === 0) await sleep(50)
-    writeMark(`${startMark}.open`, ``)
-    while (!existsSync(`${startRelease}.open`)) await sleep(50)
-  }
   try {
     const check = await import(`./check.mjs`)
     // The CLI's code as this process loaded it. A process cannot reload its
@@ -572,6 +556,22 @@ async function serve(pkg) {
     ;({ parseArgs } = await import(`./args.mjs`))
     const { diskStore } = await import(`./evidence.mjs`)
     store = await diskStore(stateDirOf(pkg))
+    // Test-only (ORACLE_GAPS_TEST_PAUSE_AT=daemon-warm, as in check.mjs): once
+    // a request waits, the daemon writes <ORACLE_GAPS_TEST_PAUSE_MARK>.open
+    // before it opens its session and holds there until
+    // <ORACLE_GAPS_TEST_PAUSE_RELEASE>.open exists, so a test can hold a slow
+    // start with a request waiting. Inert unless set.
+    const startMark = process.env.ORACLE_GAPS_TEST_PAUSE_MARK
+    const startRelease = process.env.ORACLE_GAPS_TEST_PAUSE_RELEASE
+    if (
+      process.env.ORACLE_GAPS_TEST_PAUSE_AT === `daemon-warm` &&
+      startMark !== undefined &&
+      startRelease !== undefined
+    ) {
+      while (waiting.size === 0) await sleep(50)
+      writeMark(`${startMark}.open`, ``)
+      while (!existsSync(`${startRelease}.open`)) await sleep(50)
+    }
     session = await check.openSession(pkg)
   } catch (error) {
     // The requests already queued hear why, and the CLI that started this

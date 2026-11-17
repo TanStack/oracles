@@ -451,6 +451,24 @@ export async function openSession(pkg) {
       `Install a working Vitest in the package, so that vitest/node loads from it.`,
     )
   }
+  // Test-only (ORACLE_GAPS_TEST_PAUSE_AT=daemon-warm): once Vitest has
+  // loaded, the session writes <ORACLE_GAPS_TEST_PAUSE_MARK>.session and holds
+  // until <ORACLE_GAPS_TEST_PAUSE_RELEASE>.session exists, so a test can hold a
+  // slow session start. Inert unless set.
+  {
+    const mark = process.env.ORACLE_GAPS_TEST_PAUSE_MARK
+    const release = process.env.ORACLE_GAPS_TEST_PAUSE_RELEASE
+    if (
+      process.env.ORACLE_GAPS_TEST_PAUSE_AT === `daemon-warm` &&
+      mark !== undefined &&
+      release !== undefined &&
+      !existsSync(`${mark}.session`)
+    ) {
+      writeWhole(`${mark}.session`, ``)
+      while (!existsSync(`${release}.session`))
+        await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+  }
   // Each process uses its own harness files, so a cold run beside the daemon
   // cannot remove the daemon's.
   // Vitest's CLI sets these before it loads a config, and a config may read
