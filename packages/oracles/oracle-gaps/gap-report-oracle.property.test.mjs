@@ -3939,7 +3939,7 @@ function incrementalCheck(observations, expected, plan) {
     if (daemon.slowFellBack)
       return violation(
         `incremental`,
-        `after ${step}, the CLI ended a daemon that was warming its contexts and checked cold: the daemon told it nothing between contexts`,
+        `after ${step}, the CLI ended a daemon that was starting its session or warming its contexts, and checked cold: the daemon told it nothing between steps`,
         `cold fallback`,
       )
     if (daemon.held && daemon.exit !== cold.exit)
