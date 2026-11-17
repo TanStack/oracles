@@ -726,7 +726,27 @@ export default async (env) => {
     await new Promise((resolve) => service.on(`exit`, resolve))
     throw new Error(`The service was stopped`)
   }
+  // Test-only (ORACLE_GAPS_TEST_PAUSE_AT=daemon-warm): before it warms context
+  // `index` the first time, the session writes <ORACLE_GAPS_TEST_PAUSE_MARK>.<index>
+  // and waits until <ORACLE_GAPS_TEST_PAUSE_RELEASE>.<index> exists, so a test
+  // can hold a slow but healthy start; the test releases it, never the clock.
+  // Inert unless set.
+  async function warmHold(index) {
+    const mark = process.env.ORACLE_GAPS_TEST_PAUSE_MARK
+    const release = process.env.ORACLE_GAPS_TEST_PAUSE_RELEASE
+    if (
+      process.env.ORACLE_GAPS_TEST_PAUSE_AT !== `daemon-warm` ||
+      mark === undefined ||
+      release === undefined ||
+      existsSync(`${mark}.${index}`)
+    )
+      return
+    writeWhole(`${mark}.${index}`, ``)
+    while (!existsSync(`${release}.${index}`))
+      await new Promise((resolve) => setTimeout(resolve, 50))
+  }
   async function warmContext(settings, index) {
+    await warmHold(index)
     await fromConfig(index, settings.config, warmProbe())
     writeWrapper(index, settings.config)
     // A context that fails to open gives its listener allowance back: one

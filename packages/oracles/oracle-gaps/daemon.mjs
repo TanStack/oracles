@@ -31,6 +31,7 @@
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import {
+  appendFileSync,
   existsSync,
   linkSync,
   mkdirSync,
@@ -113,8 +114,14 @@ function send(pkg, message, bounded = false) {
         mark === undefined ? done({ silent: true }) : writeMark(mark, ``),
       )
     }
+    // Test-only (ORACLE_GAPS_TEST_BEAT_MARK, a path): each line the request
+    // hears, a beat or its reply, appends one byte there, so a test can count
+    // what the CLI heard. It only observes.
+    const beatMark = process.env.ORACLE_GAPS_TEST_BEAT_MARK
     socket.on(`data`, (chunk) => {
       reply += chunk
+      if (beatMark !== undefined)
+        appendFileSync(beatMark, String(chunk).replace(/[^\n]/g, ``))
     })
     socket.on(`end`, () => {
       // A daemon that ends a connection unanswered has died, or is exiting.
