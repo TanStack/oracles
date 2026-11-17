@@ -28,7 +28,7 @@ import { appendFileSync, readFileSync } from 'node:fs'
 import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { dirname, isAbsolute, join } from 'node:path'
 import { afterAll, beforeEach, chai, expect, inject, vi } from 'vitest'
-import { fileHash, keepProperties, watchReads } from './inputs.mjs'
+import { inputHash, keepProperties, watchReads } from './inputs.mjs'
 import { writeWhole } from './paths.mjs'
 
 const run =
@@ -285,7 +285,7 @@ watchReads((key, write) => {
   const reads = globalThis.__oracleGapsReads
   if (write) wrote.add(key)
   else if (!reads.has(key) && !wrote.has(key))
-    reads.set(key, key.startsWith(`fs:`) ? fileHash(key.slice(3)) : null)
+    reads.set(key, key.startsWith(`env:`) ? null : inputHash(key))
 })
 // A test's own writes to the process's stdout and stderr (a debugging
 // `process.stdout.write`) go to the run's test-output.log, beside its

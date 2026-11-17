@@ -79,7 +79,7 @@ import {
   specifierOf,
 } from './paths.mjs'
 import { stateDirOf } from './evidence.mjs'
-import { envHash, fileHash, watchReads } from './inputs.mjs'
+import { envHash, inputHash, watchReads } from './inputs.mjs'
 import {
   baselineOf,
   blockedOr,
@@ -517,9 +517,13 @@ export async function openSession(pkg) {
     if (write && key.startsWith(`env:`)) wrote.add(key)
     const reads = at?.hook || at?.done ? hookReads : warmReads
     if (at === undefined || key === at.module || reads.has(key)) return
+    // Vitest lists the package's directories to find its test files, which
+    // each check does again (specsOf), so a warm's listing is no input; a
+    // plugin hook's listing is.
+    if (reads === warmReads && /^dirs?:/.test(key)) return
     if (write) wrote.add(key)
     else if (!wrote.has(key))
-      reads.set(key, key.startsWith(`fs:`) ? fileHash(key.slice(3)) : null)
+      reads.set(key, key.startsWith(`env:`) ? null : inputHash(key))
   })
   // Runs `work` as a warm under `reading`.
   const warming = async (work) => {
@@ -683,8 +687,11 @@ export default async (env) => {
   // module by the text that its context serves.
   const servedHash = (path, index) => {
     if (path.startsWith(`fs:`)) return hashOf(path.slice(3))
-    // A variable by its value in the environment this check runs under.
+    // A variable by its value in the environment this check runs under, and
+    // a directory by its listing now.
     if (path.startsWith(`env:`)) return envHash(path.slice(4))
+    if (path.startsWith(`dir:`) || path.startsWith(`dirs:`))
+      return inputHash(path)
     const text =
       globalThis.__oracleGapsServe[index]?.get(path) ??
       globalThis.__oracleGapsSchemata.get(path)
@@ -2766,7 +2773,7 @@ export default async (env) => {
    */
   const inputsChanged = () =>
     [...warmReads, ...hookReads].some(
-      ([key, hash]) => key.startsWith(`fs:`) && fileHash(key.slice(3)) !== hash,
+      ([key, hash]) => !key.startsWith(`env:`) && inputHash(key) !== hash,
     )
   return { check, close, inputsChanged }
 }

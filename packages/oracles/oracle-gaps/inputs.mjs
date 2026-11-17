@@ -6,9 +6,10 @@
 // CLI oracle's law 9).
 //
 // An input's key is `fs:<path>` for a file, hashed by its text (or as
-// `not a file`, or `missing`), `env:<name>` for a variable, hashed by its
-// value, or `env:*` for the set of names, which code reads when it lists
-// the environment. The harness (capture-setup.mjs) watches a test's reads in
+// `not a file`, or `missing`), `dir:<path>` for a directory's listing,
+// hashed by its entries' names and kinds, or `dirs:<path>` for a recursive
+// one, `env:<name>` for a variable, hashed by its value, or `env:*` for the
+// set of names, which code reads when it lists the environment. The harness (capture-setup.mjs) watches a test's reads in
 // its worker, and the session (check.mjs) watches what the config and its
 // plugins read in the CLI's process. Both files are copied beside the
 // harness with this one.
@@ -26,6 +27,11 @@ const reads = [
   [fs, [`readFileSync`, `readFile`, `existsSync`, `statSync`]],
   [fs.promises, [`readFile`, `stat`]],
 ]
+// The calls that list a directory.
+const listings = [
+  [fs, [`readdirSync`, `readdir`, `opendirSync`, `opendir`]],
+  [fs.promises, [`readdir`, `opendir`]],
+]
 // The calls that write a file's text. A file that a reader wrote before it
 // reads it holds the reader's own output, which follows from the reader's
 // other inputs, so that read is no input: a test's temporary file, or the
@@ -37,6 +43,7 @@ const writes = [
 const original = (globalThis.__oracleGapsOriginalFs ??= {
   readFileSync: fs.readFileSync,
   statSync: fs.statSync,
+  readdirSync: fs.readdirSync,
   realpathSync: fs.realpathSync.native,
 })
 const sha1 = (data) => createHash(`sha1`).update(data).digest(`hex`)
@@ -55,6 +62,35 @@ export function fileHash(path) {
     return `missing`
   }
 }
+
+/**
+ * A directory's input hash now: that of its entries' names and kinds, every
+ * level's for a recursive listing, or `not a directory`, or `missing`.
+ */
+function listingHash(path, recursive) {
+  try {
+    return sha1(
+      original
+        .readdirSync(path, { withFileTypes: true, recursive })
+        .map(
+          (entry) =>
+            `${posix(entry.parentPath ?? path)}/${entry.name}\0${entry.isDirectory() ? `d` : entry.isSymbolicLink() ? `l` : `f`}`,
+        )
+        .sort()
+        .join(`\0`),
+    )
+  } catch (error) {
+    return error?.code === `ENOTDIR` ? `not a directory` : `missing`
+  }
+}
+
+/** A file's or a directory's input hash now, by its key. */
+export const inputHash = (key) =>
+  key.startsWith(`fs:`)
+    ? fileHash(key.slice(3))
+    : key.startsWith(`dirs:`)
+      ? listingHash(key.slice(5), true)
+      : listingHash(key.slice(4), false)
 
 /** A variable's input hash under `env`, or for `*`, that of its names. */
 export const envHash = (name, env = process.env) =>
@@ -97,17 +133,19 @@ export function watchReads(record) {
   if (globalThis.__oracleGapsWatching) return
   globalThis.__oracleGapsWatching = true
   record = (key, write) => globalThis.__oracleGapsRecord(key, write)
-  const watched = (target, write) => {
+  const watched = (target, kind, options) => {
+    const write = kind === `write`
     let path
     try {
-      if (target instanceof URL) path = fileURLToPath(target)
+      if (target instanceof URL) path = resolve(fileURLToPath(target))
       else if (typeof target === `string`) path = resolve(target)
       else if (Buffer.isBuffer(target)) path = resolve(target.toString())
     } catch {
       return
     }
     if (path === undefined || isRunnerFile(posix(path))) return
-    record(`fs:${posix(path)}`, write)
+    const prefix = kind !== `list` ? `fs` : options?.recursive ? `dirs` : `dir`
+    record(`${prefix}:${posix(path)}`, write)
     // A written file is also known by its directory's real path, which a
     // later read through a link, or an import by its real URL, names.
     if (write)
@@ -120,15 +158,16 @@ export function watchReads(record) {
         // No directory to write in: the write fails as it would.
       }
   }
-  for (const [calls, write] of [
-    [reads, false],
-    [writes, true],
+  for (const [calls, kind] of [
+    [reads, `read`],
+    [listings, `list`],
+    [writes, `write`],
   ])
     for (const [owner, names] of calls)
       for (const name of names) {
         const call = owner[name]
         owner[name] = keepProperties(call, function (target, ...rest) {
-          watched(target, write)
+          watched(target, kind, rest[0])
           return call.call(this, target, ...rest)
         })
       }
