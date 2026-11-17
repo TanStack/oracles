@@ -73,7 +73,8 @@ export const shards = {
     `determinism: constructed history: an edit sequence through the daemon`,
     // The witness module's edit sequence (option M): 189 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
-    `determinism: constructed history: an edit sequence over the witness module`,
+    `determinism: constructed history: an edit sequence over the witness module, the first half`,
+    `determinism: constructed history: an edit sequence over the witness module, the second half`,
     // The daemon's law 9 histories cost 3 to 13 s each here (their replays).
     `fixed seed 20261105: an edit that changed the cold result after a hang replaced the only context`,
     `random seed: an edit that changed the cold result after a hang replaced the only context`,
@@ -295,7 +296,8 @@ export const shards = {
     `determinism: constructed history: a second daemon check of the budget witness`,
     // The witness module's edit sequence (option M): 97 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
-    `fixed seed 20261105: an edit sequence over the witness module`,
+    `fixed seed 20261105: an edit sequence over the witness module, the first half`,
+    `fixed seed 20261105: an edit sequence over the witness module, the second half`,
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-5': [
@@ -357,7 +359,8 @@ export const shards = {
     `calibration: a check through the daemon drops a gap line`,
     // The witness module's edit sequence (option M): about 97 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
-    `random seed: an edit sequence over the witness module`,
+    `random seed: an edit sequence over the witness module, the first half`,
+    `random seed: an edit sequence over the witness module, the second half`,
   ],
 }
 

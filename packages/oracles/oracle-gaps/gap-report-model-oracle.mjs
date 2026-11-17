@@ -154,6 +154,37 @@ const MUTANT_LIMIT_MS = 15000
 // its first budget never lasts it, and whether a run beats is a function of
 // the history, not of the machine's load, as the determinism tests require.
 const HEARTBEAT_MS = 2000
+// The slow kill's hold (#84; v21.2 R57, the register's C entry "Determinism
+// under load covers witnesses too"). A wait of SLOW_MS spans the heartbeat
+// interval only while the copy stays the batch's running copy for two
+// seconds of it, which load decides, so whether a heartbeat named the busy
+// mutant was a matter of timing (#84). Where the driver names the run's
+// stream log (`GAP_BEAT_LOG`), the test instead holds until the log has one
+// more heartbeat that names a mutant in its own file than it had when the
+// hold began: the CLI's own line releases it, never the clock. The copy
+// stays busy while it holds, so the CLI beats for it at its next interval
+// (in its batch, or in its confirming run alone if its first budget cut it
+// first), and a beat for another busy copy of the file releases it too.
+// Either way the run has a heartbeat that names a mutant, so the state "a
+// heartbeat named a busy mutant" follows from the history. The bound of
+// 2,400 polls (about 120 s) is a backstop that fails loudly. A run with no
+// such log (through the daemon, whose workers keep the environment of the
+// call that started it, or a stop run) waits SLOW_MS as before: its beats
+// are progress, checked for shape only (maintainer decision, 2026-11-14).
+const beatHold = (file) => [
+  `import { readFileSync as readBeatLog } from 'node:fs'`,
+  `const beatLine = /^oracle-gaps: busy \\S+:M\\d+ in tests\\/${file}\\.test\\.ts for \\d+s$/`,
+  `const beatsLogged = (log: string) => { try { return readBeatLog(log, 'utf8').split('\\n').filter((line) => beatLine.test(line)).length } catch { return 0 } }`,
+  `async function beatHeld(): Promise<void> {`,
+  `  const log = process.env.GAP_BEAT_LOG`,
+  `  if (!log) return new Promise((r) => setTimeout(r, ${SLOW_MS}))`,
+  `  const before = beatsLogged(log)`,
+  `  for (let polls = 0; beatsLogged(log) <= before; polls += 1) {`,
+  `    if (polls >= 2400) throw new Error('no heartbeat named a mutant of this file within 2400 polls')`,
+  `    await new Promise((r) => setTimeout(r, 50))`,
+  `  }`,
+  `}`,
+]
 const ORACLE_FILES = [`a`, `b`]
 // The owners of the budget witness (`w_slowpair`): two oracle files of one
 // test each, so that their unmutated time stays short on a loaded machine,
@@ -1056,9 +1087,14 @@ const histories = drawn.map(
     )
       ? value
       : { ...history, ...constructedNeutral }
+    // A half of the witness module (captureHalves, constructed only) comes
+    // back as the whole module, which the arbitrary draws.
+    const whole = Object.hasOwn(captureHalves, history.witness)
+      ? { ...reset, witness: `capture` }
+      : reset
     // A constructed stop after the completed line (`after`) is no drawn stop,
     // so it is dropped (drawnStops).
-    const taken = drawnStops(reset)
+    const taken = drawnStops(whole)
     const later = (history.steps ?? []).filter((step) =>
       laterEdits.includes(step),
     )
@@ -2091,6 +2127,58 @@ const captureWitness = new Set([
   `w_oldprobe`,
   `w_spin`,
 ])
+// The witness module's edit sequence in two halves (`captureA` and
+// `captureB`), whose union is `captureWitness` and which share no function.
+// One sequence over the whole module took one CI job alone, over P12's
+// 10 minutes for its determinism unit (#106, #145). The maintainer's
+// decision "A one-history job over budget is cut by cost" (2026-11-16)
+// replaces such a history by cheaper ones of equal reach and equal kills,
+// which is not a weakening (v21.2 R7, R55 (b)). A function and the functions
+// its tests or statements read stay in one half: `w_shared` with `w_kill`,
+// `w_late` with `w_caught`, `w_loaded` with `w_load`, `w_dead` with its
+// inner function, the memo's writers and reader, and the shortcut family.
+// Only constructed histories take a half: a generated history with the
+// witness module takes no steps (maintainer decision, 2026-11-11), so a
+// half without steps judges nothing that `capture` does not.
+const captureA = new Set([
+  `w_kill`,
+  `w_shared`,
+  `w_dead`,
+  `w_dead>unused`,
+  `w_fast`,
+  `w_fastbound`,
+  `w_fastcall`,
+  `w_fastcallbound`,
+  `w_fastclocked`,
+  `w_fastturn`,
+  `w_fastplain`,
+  `w_flaky`,
+  `w_flakykill`,
+  `w_both`,
+  `w_random`,
+  `w_agree`,
+  `w_agreeboth`,
+  `w_crash`,
+  `w_frame`,
+  `w_unregistered`,
+  `w_observe`,
+  `w_expect`,
+  `w_noobs`,
+  `w_hang`,
+  `w_hangkill`,
+  `w_spin`,
+  `w_iowait`,
+  `w_shrink`,
+  `w_flag`,
+  `w_loop`,
+  `w_record`,
+])
+const captureHalves = {
+  captureA,
+  captureB: new Set([...captureWitness].filter((id) => !captureA.has(id))),
+}
+if ([...captureA].some((id) => !captureWitness.has(id)))
+  throw new Error(`captureA names a function outside captureWitness`)
 
 // ## Rendering and layout
 //
@@ -2742,6 +2830,7 @@ function resolveHistory(history) {
               // so only histories of the `budget` mode carry it.
               (history.witness === true && w.id !== `w_slowpair`) ||
               (history.witness === `capture` && captureWitness.has(w.id)) ||
+              captureHalves[history.witness]?.has(w.id) ||
               (stopsOnly(history) && w.id === `w_stop`) ||
               (history.witness === `budget` && w.id === `w_slowpair`),
           )
@@ -4941,6 +5030,11 @@ function oracleTestFile(plan, file) {
           `import { join as pidPath } from 'node:path'`,
         ]
       : []),
+    ...(plan.tests.some(
+      (t) => t.file === file && t.slow && t.slowMs === undefined,
+    )
+      ? beatHold(file)
+      : []),
     // The mid-run edit (`midrun`): file a loads file b's helper, so its
     // context holds the helper's old text when the edit lands.
     ...(plan.midrun && file === plan.midrunBy
@@ -5073,10 +5167,12 @@ function oracleTestFile(plan, file) {
             ]
           : []),
         // A slow test waits past the first budget, within the full limit,
-        // where the output differs; it then judges as usual.
+        // where the output differs; it then judges as usual. The slow kill
+        // (`w_slowkill`, no `slowMs`) waits on the CLI instead of the clock
+        // where the driver names the run's stream log (`beatHeld`).
         ...(t.slow
           ? [
-              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await new Promise((r) => setTimeout(r, ${t.slowMs ?? SLOW_MS}))`,
+              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await ${t.slowMs === undefined ? `beatHeld()` : `new Promise((r) => setTimeout(r, ${t.slowMs}))`}`,
             ]
           : []),
         // A test that waits on I/O (a child process, about 3 s) where the

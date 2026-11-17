@@ -876,6 +876,13 @@ function runCli(dir, files, how = {}) {
     env: {
       ...cleanEnv(),
       ORACLE_GAPS_TEST_RETENTION: hook,
+      // The slow kill's hold reads this run's stream log (beatHold in the
+      // model): a cold run with an --out of its own. A daemon keeps the
+      // environment of the call that started it, so a check through the
+      // daemon names no log, and its slow kill waits as before.
+      ...(out !== undefined && how.daemon !== true
+        ? { GAP_BEAT_LOG: join(out, `stream.log`) }
+        : {}),
       ...pathEnv(how),
       ...how.env,
       ...(how.unsupervised === true
@@ -2562,6 +2569,25 @@ async function incremental(dir, plan, cli, copy, observe, states) {
           `an unchanged check through the daemon computed nothing while a test read a source through fs`,
         )
     }
+    // A daemon check after an edit that computed fewer runs cut off by their
+    // call budget than the cold run of the same state reused such a run, so
+    // law 9 judged a timeout that came from the store (#104). The witness's
+    // spin (`w_spin`, file a only) is cut by a count the CLI records, its
+    // call budget, so the number of such runs a check computes follows from
+    // the history; the helper edit changes only file b, so the daemon reuses
+    // the spun run. Runs cut by the clock (the hangs) are not counted: on main
+    // a hang is final at once only when the sampler saw it idle, which load
+    // decides, and otherwise its confirmation is cut short by its mutant's
+    // budget and not stored (determinism under load, the register's C entry
+    // of 2026-11-13, and v21.2 R57; #99 cuts hangs by state).
+    if (
+      plan.witness !== false &&
+      step !== `start` &&
+      !daemonEvents.has(step) &&
+      reused > 0 &&
+      (daemon.evidence?.spin ?? 0) < (coldRun.evidence?.spin ?? 0)
+    )
+      states.add(`a timed-out run reused after an edit`)
     // Undoing an edit to a file returns to a state the daemon has seen, so
     // it reruns nothing.
     if (
@@ -3444,6 +3470,12 @@ async function driver(plan, observe) {
         states.add(`a hang in one owner and a survivor in another timed out`)
       if (m.function === `w_slowpair` && m.outcome === `timeout`)
         states.add(`confirmations past a mutant's budget timed out`)
+      // The slow kill holds until a heartbeat names a mutant of its file
+      // (beatHold), so a cold run with the witness module has such a beat
+      // whatever the load (#84). Only the beat's presence is reach; the set
+      // of beats is progress (maintainer decision, 2026-11-14).
+      if (cli.heartbeats.some((beat) => beat.label === m.id))
+        states.add(`a heartbeat named a busy mutant`)
       const named = {
         killed: `killed`,
         'random-only-kill': `random-only kill`,
@@ -5559,6 +5591,7 @@ const required = [
   `a hang in one owner and a kill in another killed`,
   `a hang in one owner and a survivor in another timed out`,
   `confirmations past a mutant's budget timed out`,
+  `a heartbeat named a busy mutant`,
   `a run stopped by SIGINT while a worker spun`,
   `a stop signal after the completed line`,
   `a stop signal while the config warms`,
@@ -5615,6 +5648,7 @@ const required = [
   `a config fault in a run that owns nothing`,
   ...incrementalStates,
   ...ownedIncrementalStates,
+  `a timed-out run reused after an edit`,
   `an edit that changed the cold result after a hang replaced the only context`,
   `edit lazy changed the cold result`,
   `a lazy edit changed the cold result after a batch was cut off`,
@@ -5724,6 +5758,7 @@ const separate = [
   `a failing owner replayed under a config that --config names`,
   ...incrementalStates,
   ...ownedIncrementalStates,
+  `a timed-out run reused after an edit`,
   `an edit that changed the cold result after a hang replaced the only context`,
   `edit lazy changed the cold result`,
   `a lazy edit changed the cold result after a batch was cut off`,
@@ -5853,6 +5888,69 @@ const withDeclaration = (constructed) =>
         owners: [`a`, ...generated.owners.slice(1)],
       }),
   }))
+
+// Law 9 over the witness module's outcome classes, along the one edit
+// sequence that a history with the witness module takes (witnessSteps): its
+// hangs are recomputed after the test edit and reused after the helper edit,
+// which changes only file b, and so is its spin, whose reuse is the state "a
+// timed-out run reused after an edit". Generated histories with the witness
+// module take no steps, so this is the one sequence that judges them
+// (maintainer decision, 2026-11-11). Everything else is the cheapest legal
+// setting. The whole module along this sequence cost one CI job (#106, #145),
+// so it runs as two constructed histories, one for each half of the module
+// (captureA and captureB in the model, whose union is the module and which
+// share no function): cheaper histories of equal reach and equal kills, by
+// the maintainer's decision "A one-history job over budget is cut by cost"
+// (2026-11-16; v21.2 R7, R55 (b)). Each costs about two cold runs and four
+// daemon checks of its half.
+const witnessEditSequence = (witness) => (generated) => ({
+  ...generated,
+  functions: [
+    [{ kind: `if`, op: `>`, k: 4, not: false, quote: `'` }],
+    [{ kind: `push`, quote: `'` }],
+  ],
+  containers: [],
+  overloads: [],
+  owners: [`a`, `b`],
+  library: [],
+  libraryOwners: [],
+  runes: [],
+  derived: null,
+  dotGen: false,
+  dataOwners: [],
+  exportOwners: [],
+  importer: `none`,
+  wholeFile: `none`,
+  template: false,
+  tests: [
+    { ...judging(`a`, `fixed seed`, 5), fn: 0 },
+    { ...judging(`b`, `fixed seed`, 1), fn: 1 },
+  ],
+  witness,
+  authored: null,
+  secondAuthored: false,
+  fault: `none`,
+  stability: `none`,
+  ordinary: false,
+  config: `object`,
+  configEnv: false,
+  setupGlobal: false,
+  native: `none`,
+  depSubpath: false,
+  unbuiltDep: false,
+  boot: false,
+  budget: `two`,
+  cliPath: `plain`,
+  concurrentStart: false,
+  configFile: `vite.config.ts`,
+  configPlace: `discovered`,
+  packageType: `module`,
+  configAwait: false,
+  configRequire: false,
+  contexts: 4,
+  sourceSpelling: `plain`,
+  steps: witnessSteps,
+})
 
 oracleProperty({
   id: `oracle-gaps.report`,
@@ -6377,63 +6475,12 @@ oracleProperty({
         }),
       })),
       {
-        // Law 9 over the witness module's outcome classes: its hangs are
-        // recomputed after the test edit and reused after the helper edit,
-        // which changes only file b. Generated histories with the witness
-        // module take no steps, so this is the one sequence that judges
-        // them (maintainer decision, 2026-11-11). Everything else is the
-        // cheapest legal setting, so that the history costs about two cold
-        // runs and four daemon checks of the witness module.
-        name: `an edit sequence over the witness module`,
-        enters: [],
-        build: (generated) => ({
-          ...generated,
-          functions: [
-            [{ kind: `if`, op: `>`, k: 4, not: false, quote: `'` }],
-            [{ kind: `push`, quote: `'` }],
-          ],
-          containers: [],
-          overloads: [],
-          owners: [`a`, `b`],
-          library: [],
-          libraryOwners: [],
-          runes: [],
-          derived: null,
-          dotGen: false,
-          dataOwners: [],
-          exportOwners: [],
-          importer: `none`,
-          wholeFile: `none`,
-          template: false,
-          tests: [
-            { ...judging(`a`, `fixed seed`, 5), fn: 0 },
-            { ...judging(`b`, `fixed seed`, 1), fn: 1 },
-          ],
-          witness: `capture`,
-          authored: null,
-          secondAuthored: false,
-          fault: `none`,
-          stability: `none`,
-          ordinary: false,
-          config: `object`,
-          configEnv: false,
-          setupGlobal: false,
-          native: `none`,
-          depSubpath: false,
-          unbuiltDep: false,
-          boot: false,
-          budget: `two`,
-          cliPath: `plain`,
-          concurrentStart: false,
-          configFile: `vite.config.ts`,
-          configPlace: `discovered`,
-          packageType: `module`,
-          configAwait: false,
-          configRequire: false,
-          contexts: 4,
-          sourceSpelling: `plain`,
-          steps: witnessSteps,
-        }),
+        // The first half of the witness module along its edit sequence
+        // (witnessEditSequence). It holds the spin, so it enters the reuse of
+        // a timed-out run.
+        name: `an edit sequence over the witness module, the first half`,
+        enters: [`a timed-out run reused after an edit`],
+        build: witnessEditSequence(`captureA`),
       },
       {
         // One context runs every file. A hang in file a's test replaces it
@@ -7901,6 +7948,15 @@ oracleProperty({
           budget: `two`,
           stopRuns: [{ signal: `SIGINT`, pool: `threads`, when: `abort` }],
         }),
+      },
+      {
+        // The second half of the witness module along its edit sequence
+        // (witnessEditSequence), appended last: a constructed history is
+        // built from the fixed seed and its index, so one inserted before
+        // others would change theirs.
+        name: `an edit sequence over the witness module, the second half`,
+        enters: [],
+        build: witnessEditSequence(`captureB`),
       },
     ]),
   },

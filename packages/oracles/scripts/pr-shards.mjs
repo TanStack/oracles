@@ -348,7 +348,8 @@ export const partitions = {
     shards: {
       // 344 s of declared weight.
       1: anyOf([
-        `an edit sequence over the witness module`,
+        `an edit sequence over the witness module, the first half`,
+        `an edit sequence over the witness module, the second half`,
         `an edit to data a test reads through fs (statDir)`,
         `an edit to data a test reads through fs (callback)`,
         `two batches each read a capture row while its worker wrote it`,
@@ -431,7 +432,7 @@ export const partitions = {
     shards: {
       // 344 s: the witness module's edit sequence, alone.
       1: anyOf([
-        `constructed history: an edit sequence over the witness module`,
+        `constructed history: an edit sequence over the witness module, the first half`,
       ]),
       // 240 s here.
       2: anyOf([
@@ -686,7 +687,10 @@ export const partitions = {
     // their own, and the rest are dealt out longest-first. Each shard's pattern
     // stays short: cmd.exe limits the command line.
     shards: {
-      1: anyOf(['an edit sequence over the witness module']),
+      1: anyOf([
+        'an edit sequence over the witness module, the first half',
+        'an edit sequence over the witness module, the second half',
+      ]),
       2: anyOf(['every outcome class']),
       3: anyOf(['a declaration fault: noTypescript']),
       4: anyOf(['every outcome class, the warm stop']),

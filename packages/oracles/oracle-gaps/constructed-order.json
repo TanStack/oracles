@@ -33,7 +33,7 @@
     "a declaration fault: setupThrows",
     "a declaration fault: noTypescript",
     "a declaration fault: apiLessTypescript",
-    "an edit sequence over the witness module",
+    "an edit sequence over the witness module, the first half",
     "an edit that changed the cold result after a hang replaced the only context",
     "an edit during a check through the daemon",
     "an unchanged check through the daemon under a config's pre plugin",
@@ -76,6 +76,7 @@
     "a start refuses a dangling claim",
     "a supervised check with no ps on its PATH",
     "every outcome class, the warm stop",
-    "every outcome class, the abort stop"
+    "every outcome class, the abort stop",
+    "an edit sequence over the witness module, the second half"
   ]
 }
