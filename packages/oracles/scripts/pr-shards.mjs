@@ -38,6 +38,9 @@ const daemonInputUnits = [
   'an edit to a directory listing that a test reads',
   'an edit to a directory a test reads through opendir',
   'an edit to a file a test reads through a stream',
+  "an edit to the tsconfig that Vite's own plugin reads",
+  'an edit to a directory the config lists when it loads',
+  "a hand edit of a file the config's plugin writes",
 ]
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
 const anyOf = (names) => `(?:${names.map(escape).join(`|`)})`
@@ -576,6 +579,7 @@ export const partitions = {
         'a start refuses an empty claim',
         daemonInputUnits[0],
         daemonInputUnits[1],
+        daemonInputUnits[9],
       ]),
       7: anyOf([
         'a daemon pause that cannot engage',
@@ -607,6 +611,8 @@ export const partitions = {
         'a daemon check with the default output directory, unsupervised',
         daemonInputUnits[2],
         daemonInputUnits[3],
+        daemonInputUnits[10],
+        daemonInputUnits[11],
       ]),
       9: anyOf([
         'a lazy module loaded before a hang in the same batch',

@@ -991,7 +991,14 @@ const drawn = fc.record({
   // one empty file named `open` or `shut`, read by `readdirSync`
   // (`listing`) or by `opendirSync` (`opendir`): the edit renames that file,
   // so no file's text changes; or the package's gate file read through a
-  // stream (`stream`, createReadStream). These fields change what a history runs, so
+  // stream (`stream`, createReadStream); or an input of Vite's own plugins,
+  // the package's tsconfig.json, whose useDefineForClassFields decides
+  // whether a declared class field is an own property (`tsconfig`); or a
+  // listing that the config makes when it loads and gives to the tests
+  // through `define` (`configListing`); or a file that the config's plugin
+  // writes when the config resolves, which the edit then changes by hand
+  // (`pluginWrite`: a cold run's plugin writes it again, so the cold result
+  // does not change, and the daemon must not read the hand edit). These fields change what a history runs, so
   // they are drawn (maintainer decision, 2026-11-16, "Randomness wins"), and
   // last.
   inputRead: fc.constantFrom(
@@ -1007,6 +1014,9 @@ const drawn = fc.record({
     `listing`,
     `opendir`,
     `stream`,
+    `tsconfig`,
+    `configListing`,
+    `pluginWrite`,
   ),
   // Each write of a gate file keeps its size (`open` and `shut` have one
   // length) and gets back one fixed modification time, as `cp -p`, `rsync
@@ -3171,7 +3181,7 @@ function resolveHistory(history) {
     // A plugin's gate needs a config to hold the plugin: with none, file b
     // reads no gate.
     inputRead:
-      pluginGated(history) && configOf(history).configPath === undefined
+      configGated(history) && configOf(history).configPath === undefined
         ? `none`
         : (history.inputRead ?? `none`),
     keepStamp: history.keepStamp === true,
@@ -5006,6 +5016,11 @@ const gateFiles = {
 const pluginGated = (history) =>
   history.inputRead === `pluginConfig` ||
   history.inputRead === `pluginTransform`
+/** Whether the gate lives in the config (a plugin, or the config's own listing). */
+const configGated = (history) =>
+  pluginGated(history) ||
+  history.inputRead === `configListing` ||
+  history.inputRead === `pluginWrite`
 // Whether a test's verdict waits on the gate input.
 const inputGated = (plan, file, t) =>
   plan.inputRead !== `none` &&
@@ -5044,6 +5059,18 @@ const inputReads = {
   ],
   pluginTransform: [
     `const readInput = async () => ({ open: __GAP_INPUT_GATE__ === 'open' })`,
+  ],
+  tsconfig: [
+    `class GateBase {}`,
+    `class GateField extends GateBase { field!: number }`,
+    `const readInput = async () => ({ open: Object.hasOwn(new GateField(), 'field') })`,
+  ],
+  configListing: [
+    `const readInput = async () => ({ open: __GAP_INPUT_GATE__ === 'open' })`,
+  ],
+  pluginWrite: [
+    `import { readFileSync as readGate } from 'node:fs'`,
+    readGateFile(`new URL('./gen.json', import.meta.url)`),
   ],
   stream: [
     `import { createReadStream as streamGate } from 'node:fs'`,
@@ -5604,14 +5631,21 @@ const LOAD_PLUGIN = `{ name: 'gap-own-load', load(id) { const path = id.split('?
 // resolves; `pluginTransform` reads it in each transform.
 const GATE_READ = `JSON.parse(readGate(gatePath, 'utf8')).gate`
 const gatePlugin = (plan) =>
-  `(() => { let gate; return { name: 'gap-input-gate', configResolved() { ${plan.inputRead === `pluginConfig` ? `gate = ${GATE_READ}` : ``} }, transform(code, id) { return id.split('?')[0].endsWith('.test.ts') ? code.replaceAll('__GAP_INPUT_GATE__', JSON.stringify(${plan.inputRead === `pluginConfig` ? `gate` : GATE_READ})) : undefined } } })()`
+  plan.inputRead === `pluginWrite`
+    ? `{ name: 'gap-input-gate', configResolved() { writeGate(gatePath, '{"gate":"open"}\\n') } }`
+    : `(() => { let gate; return { name: 'gap-input-gate', configResolved() { ${plan.inputRead === `pluginConfig` ? `gate = ${GATE_READ}` : ``} }, transform(code, id) { return id.split('?')[0].endsWith('.test.ts') ? code.replaceAll('__GAP_INPUT_GATE__', JSON.stringify(${plan.inputRead === `pluginConfig` ? `gate` : GATE_READ})) : undefined } } })()`
 // The gate file's path from a config at `configPath` (in the package, or in
 // its parent, where the package is the directory `pkg`).
-const gateFromConfig = (configPath) =>
+const gateFromConfig = (configPath, target = `tests/plugin-gate.json`) =>
   posixPath.relative(
     posixPath.dirname(posixPath.join(`/pkg`, configPath)),
-    `/pkg/tests/plugin-gate.json`,
+    `/pkg/${target}`,
   )
+// The file or directory the config reads or writes, by gate kind.
+const configTargets = {
+  configListing: `tests/gate-dir`,
+  pluginWrite: `tests/gen.json`,
+}
 
 /**
  * The text of the package's config, in its syntax (`configOf`), with the
@@ -5623,8 +5657,15 @@ function configText(plan, test, configPath = plan.configPath) {
   const plugins = [
     ...(plan.prePlugin ? [PRE_PLUGIN] : []),
     ...(plan.loadPlugin ? [LOAD_PLUGIN] : []),
-    ...(pluginGated(plan) ? [gatePlugin(plan)] : []),
+    ...(pluginGated(plan) || plan.inputRead === `pluginWrite`
+      ? [gatePlugin(plan)]
+      : []),
   ]
+  // The config's listing of the gate directory, given to the tests.
+  const define =
+    plan.inputRead === `configListing`
+      ? `, define: { __GAP_INPUT_GATE__: JSON.stringify(listGate(gatePath).includes('open') ? 'open' : 'shut') }`
+      : ``
   const config = `defineConfig(${
     { object: ``, function: `() => (`, async: `async () => (`, promise: `` }[
       plan.config
@@ -5633,7 +5674,7 @@ function configText(plan, test, configPath = plan.configPath) {
     plan.fault === `projects`
       ? `{ projects: [{ test: { name: 'unit', ...${test} } }] }`
       : test
-  }${plugins.length > 0 ? `, plugins: [${plugins.join(`, `)}]` : ``} }${plan.config === `object` || plan.config === `promise` ? `` : `)`})`
+  }${plugins.length > 0 ? `, plugins: [${plugins.join(`, `)}]` : ``}${define} }${plan.config === `object` || plan.config === `promise` ? `` : `)`})`
   // A promise of the config, a null default, or a config cut off mid-object.
   const body =
     plan.fault === `configNull`
@@ -5652,15 +5693,15 @@ function configText(plan, test, configPath = plan.configPath) {
       : [`import { fileURLToPath } from 'node:url'`]),
     // Only an ES module config has the load plugin (its constructed history).
     ...(plan.loadPlugin ? [`import { readFileSync } from 'node:fs'`] : []),
-    ...(pluginGated(plan)
+    ...(configGated(plan)
       ? commonjs
         ? [
-            `const { readFileSync: readGate } = require('node:fs')`,
-            `const gatePath = require('node:path').join(__dirname, '${gateFromConfig(configPath)}')`,
+            `const { readFileSync: readGate, readdirSync: listGate, writeFileSync: writeGate } = require('node:fs')`,
+            `const gatePath = require('node:path').join(__dirname, '${gateFromConfig(configPath, configTargets[plan.inputRead])}')`,
           ]
         : [
-            `import { readFileSync as readGate } from 'node:fs'`,
-            `const gatePath = new URL('${gateFromConfig(configPath)}', import.meta.url)`,
+            `import { readFileSync as readGate, readdirSync as listGate, writeFileSync as writeGate } from 'node:fs'`,
+            `const gatePath = new URL('${gateFromConfig(configPath, configTargets[plan.inputRead])}', import.meta.url)`,
           ]
       : []),
     ...(plan.fault === `configThrows`
@@ -5875,8 +5916,18 @@ function fixtureFiles(plan, state = initialState(plan)) {
     // time each time it is written.
     // The gate directory of a listing, which holds one empty file, named
     // by the gate's word.
-    ...(plan.inputRead === `listing` || plan.inputRead === `opendir`
+    ...([`listing`, `opendir`, `configListing`].includes(plan.inputRead)
       ? { [`tests/gate-dir/${state.inputOpen ? `open` : `shut`}`]: `` }
+      : {}),
+    // The package's tsconfig.json, read by Vite's own esbuild plugin.
+    ...(plan.inputRead === `tsconfig`
+      ? {
+          'tsconfig.json': `${JSON.stringify({ compilerOptions: { target: `ES2022`, useDefineForClassFields: state.inputOpen } })}\n`,
+        }
+      : {}),
+    // The file the config's plugin writes, as a hand edit leaves it.
+    ...(plan.inputRead === `pluginWrite`
+      ? { 'tests/gen.json': gateText(state.inputOpen) }
       : {}),
     ...(gateFiles[plan.inputRead] === undefined
       ? {}
@@ -6007,6 +6058,14 @@ function fixtureFiles(plan, state = initialState(plan)) {
   }
   for (const file of oracleFilesOf(plan))
     files[`tests/${file}.test.ts`] = oracleTestFile(plan, file)
+  // The hand edit of the file the plugin writes also changes file b's own
+  // text, so the daemon runs b again and reads the edited file.
+  if (
+    plan.inputRead === `pluginWrite` &&
+    files[`tests/b.test.ts`] !== undefined
+  )
+    files[`tests/b.test.ts`] +=
+      `// the plugin's file was edited to ${state.inputOpen ? `open` : `shut`}\n`
   // Each mid-run edit changes file a's own text too (a count of them), so
   // the daemon runs file a's tests again in the check the edit lands in,
   // instead of reusing their evidence: the marker sits in the daemon's

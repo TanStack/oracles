@@ -2669,6 +2669,17 @@ async function incremental(dir, plan, cli, copy, observe, states) {
     // The other install's summary reads otherwise by construction, so its
     // check is no edit, and the next edit is compared with the state before.
     if (step === `otherInstall`) return
+    // A hand edit of a file the config's plugin writes leaves the cold result
+    // as it was (the cold run's plugin writes the file again); the check
+    // through the daemon is judged against it all the same.
+    if (
+      step === `inputGate` &&
+      plan.inputRead === `pluginWrite` &&
+      daemon.reported
+    )
+      states.add(
+        `a hand edit of a file the config's plugin writes was checked through the daemon`,
+      )
     // An edit that changes the cold result is one a stale cache could miss.
     if (step !== `start` && result(previous) !== result(coldRun)) {
       states.add(`edit ${step} changed the cold result`)
@@ -2686,7 +2697,9 @@ async function incremental(dir, plan, cli, copy, observe, states) {
         // Only a gate file keeps its stamp; a listing's edit renames a file.
         if (
           plan.keepStamp &&
-          ![`env`, `listing`, `opendir`].includes(plan.inputRead)
+          ![`env`, `listing`, `opendir`, `tsconfig`, `configListing`].includes(
+            plan.inputRead,
+          )
         )
           states.add(
             `an edit that kept a file's size and modification time changed the cold result`,
@@ -5575,6 +5588,8 @@ const inputKinds = [
   `listing`,
   `opendir`,
   `stream`,
+  `tsconfig`,
+  `configListing`,
 ]
 // Law 9's states that a constructed history of their own reaches, not the
 // edit sequence: the mid-run edit, and an edit to data a test reads through
@@ -5599,6 +5614,7 @@ const ownedIncrementalStates = [
   ...inputKinds.map(
     (kind) => `an edit to the ${kind} gate input changed the cold result`,
   ),
+  `a hand edit of a file the config's plugin writes was checked through the daemon`,
   `edit inputGate changed the cold result`,
   `an edit that kept a file's size and modification time changed the cold result`,
 ]
@@ -8141,11 +8157,37 @@ oracleProperty({
         // The package's gate file read through a stream, written back with
         // its size and modification time.
         [`an edit to a file a test reads through a stream`, `stream`, true],
+        // An input of Vite's own esbuild plugin (review of #133, F1).
+        [
+          `an edit to the tsconfig that Vite's own plugin reads`,
+          `tsconfig`,
+          false,
+        ],
+        // A listing that the config makes when it loads (review of #133, F2).
+        [
+          `an edit to a directory the config lists when it loads`,
+          `configListing`,
+          false,
+        ],
+        // A hand edit of a file that the config's plugin writes (review of
+        // #133, F3): the cold run's plugin writes it again, so the cold
+        // result does not change.
+        [
+          `a hand edit of a file the config's plugin writes`,
+          `pluginWrite`,
+          false,
+        ],
       ].map(([name, inputRead, keepStamp]) => ({
         name,
         enters: [
-          `edit inputGate changed the cold result`,
-          `an edit to the ${inputRead} gate input changed the cold result`,
+          ...(inputRead === `pluginWrite`
+            ? [
+                `a hand edit of a file the config's plugin writes was checked through the daemon`,
+              ]
+            : [
+                `edit inputGate changed the cold result`,
+                `an edit to the ${inputRead} gate input changed the cold result`,
+              ]),
           `an unchanged check through the daemon computed nothing`,
           ...(keepStamp
             ? [
