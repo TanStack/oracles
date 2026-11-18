@@ -166,8 +166,10 @@ const HEARTBEAT_MS = 2000
 // (in its batch, or in its confirming run alone if its first budget cut it
 // first), and a beat for another busy copy of the file releases it too.
 // Either way the run has a heartbeat that names a mutant, so the state "a
-// heartbeat named a busy mutant" follows from the history. The bound of
-// 2,400 polls (about 120 s) is a backstop that fails loudly. A run with no
+// heartbeat named a busy mutant" follows from the history. If no beat ever
+// came, the CLI's budget would cut the held copy, and the mutant would read
+// `timeout, owed killed`: that is the loud failure. The bound of 2,400 polls
+// (about 120 s) is only a backstop, which the CLI's limits reach first. A run with no
 // such log (through the daemon, whose workers keep the environment of the
 // call that started it, or a stop run) waits SLOW_MS as before: its beats
 // are progress, checked for shape only (maintainer decision, 2026-11-14).

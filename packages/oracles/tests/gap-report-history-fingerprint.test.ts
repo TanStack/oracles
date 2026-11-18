@@ -69,10 +69,13 @@ describe(`the gap oracle's history grammar`, () => {
   // The constructed histories of the end-to-end gap oracle, in the order the
   // oracle registers them: each one is built from the fixed seed and its index
   // (`seed + index`), so a history inserted before a recorded one changes every
-  // later history's draw. The register's generator rule (2026-11-14) says new
-  // constructed histories are appended at the end. The recorded names are
-  // the list the oracle registered on main; the current list must begin with
-  // them, so a new name can only follow.
+  // later history's draw. The register's rule (C-6, ratified) appends new
+  // constructed histories at the end. The recorded names are the list the
+  // oracle registered on main, with any entry a pull request renamed in place
+  // (a rename keeps its index, so no base moves; #90 renamed the witness
+  // sequence's first half). The current list must begin with them, so a new
+  // name can only follow. The canary cannot see an edit to its own record:
+  // it guards an insertion only while a review keeps the record to main's.
   // The gap oracle loads under Vitest 4; the Vitest 5 job runs no gap oracle
   // (its listing finds no suite in this file), so the canary runs there only
   // where the file loads.

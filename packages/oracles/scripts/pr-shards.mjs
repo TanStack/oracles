@@ -5,8 +5,7 @@
 // shard of its partition takes. The check lists the suite's tests with
 // `vitest list` and fails unless every selected test is in exactly one
 // shard, no other test is in any shard, and every test that a shard names
-// exists. A partition's `excluded` names are the exception: each is in no
-// shard on purpose, with its own issue, and must exist. So the jobs together
+// exists. So the jobs together
 // run exactly the tests that one job ran before: a test in no shard would
 // leave its law out of CI, and a test in two would run twice. A new test
 // lands in the `rest` shard, so the jobs' balance can drift, but no test is
@@ -445,8 +444,8 @@ export const partitions = {
   // into eight shards of at most 202 s here, about 7 minutes of CI time at
   // the 1.1 to 1.9 times an Arclet's time that CI took in the jobs both ran
   // (P12). The witness module's edit sequence runs as two halves (202 s and
-  // 99 s here), where the whole took 344 to 364 s (#106). No unit is
-  // excluded: the daemon edit sequence (#92, fixed by #126) passed 4 of 4 and
+  // 99 s here), where the whole took 344 to 364 s (#106). Every unit is in a
+  // shard: the daemon edit sequence (#92, fixed by #126) passed 4 of 4 and
   // the daemon pause that cannot engage (#105) 6 of 6 on this branch.
   'oracle-gaps-determinism': {
     args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-oracle`],
@@ -846,18 +845,12 @@ export const partitions = {
   },
 }
 
-/** A partition's excluded names, relative to its select: tests in no shard. */
-const excludedOf = (partition) => new Set(partition.excluded ?? [])
-
 /** A shard's pattern over the name that follows the suite's. */
 function bodyOf(partition, shard) {
   const own = partition.shards[shard]
   if (own !== rest) return `${escape(partition.select)}(?:${own})`
-  // A rest shard takes what no other shard and no exclusion takes.
-  const others = [
-    ...Object.values(partition.shards).filter((body) => body !== rest),
-    ...[...excludedOf(partition)].map(escape),
-  ]
+  // A rest shard takes what no other shard takes.
+  const others = Object.values(partition.shards).filter((body) => body !== rest)
   return `(?!${escape(partition.select)}(?:${others.join(`|`)})$)${escape(partition.select)}.*`
 }
 
@@ -905,12 +898,7 @@ export function partitionErrors(name, listed) {
       joined.every((text) => owners[0].pattern.test(text))
     const own = full.startsWith(prefix) ? full.slice(prefix.length) : undefined
     const selected = own !== undefined && own.startsWith(partition.select)
-    // An excluded test is in no shard on purpose; its issue is the record.
-    const excluded =
-      selected && excludedOf(partition).has(own.slice(partition.select.length))
-    if (excluded && owners.length > 0)
-      errors.push(`${JSON.stringify(full)} is excluded, but is in a shard`)
-    if (selected && !whole && !excluded)
+    if (selected && !whole)
       errors.push(
         `${JSON.stringify(full)} is in ${owners.length === 0 ? `no shard` : owners.length === 1 ? `shard ${owners[0].shard} under only one of Vitest's name joins` : `shards ${owners.map(({ shard }) => shard).join(`, `)}`}`,
       )
@@ -928,9 +916,6 @@ export function partitionErrors(name, listed) {
   for (const exception of partition.exceptions ?? [])
     if (!names.has(`${prefix}${exception}`))
       errors.push(`exception ${JSON.stringify(exception)} names no test`)
-  for (const exclusion of excludedOf(partition))
-    if (!names.has(`${prefix}${partition.select}${exclusion}`))
-      errors.push(`excluded ${JSON.stringify(exclusion)} names no test`)
   for (const [shard, body] of Object.entries(partition.shards))
     if (
       body !== rest &&

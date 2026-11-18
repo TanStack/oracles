@@ -129,6 +129,9 @@ jobs:
   test-oracle-gaps-random:
     name: Gap report end-to-end oracle (random seed, ${{ matrix.shard }}/6)
     runs-on: ubuntu-latest
+    # A high backstop only (the maintainer's decision of 2026-11-12, M-6):
+    # each shard takes under 10 minutes (P12).
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -141,19 +144,25 @@ jobs:
       - name: Setup Tools
         uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
       # The end-to-end oracle's random units, in six weighted shards. Each run
-      # draws a fresh campaign seed (the ORACLE_SEED line in the log), and a
-      # failing unit prints its Replay line and its history. A counterexample
-      # is replayed by its history on the base and filed as an issue (P4); one
-      # the base also fails does not block the pull request (the maintainer's
-      # phase-1 decision). The verbose reporter prints each unit's duration,
-      # which sizes the shards.
+      # draws a fresh campaign seed (the ORACLE_SEED line in the log). A failing
+      # unit prints its Replay line and its history, cut at 2,000 characters
+      # (#81), and does not shrink (GAP_E2E_SHRINKS=0; the maintainer's decision
+      # "Shrink briefly in CI", 2026-11-17), so the job stays under 10 minutes.
+      # The agent prints the full history from the seed and path, replays it
+      # on the base, and files it (P4, "Replay by history"); one the base also
+      # fails does not block the pull request (the phase-1 decision). That
+      # base replay is manual until #157. The verbose reporter prints each
+      # unit's duration, which sizes the shards.
       - run: pnpm exec vitest --run --reporter=verbose --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-random "$SHARD")"
         working-directory: packages/oracles
         env:
           SHARD: ${{ matrix.shard }}
+          GAP_E2E_SHRINKS: 0
   test-oracle-gaps-determinism:
     name: Gap report end-to-end oracle (determinism, ${{ matrix.shard }}/8)
     runs-on: ubuntu-latest
+    # A high backstop only (M-6): each shard takes under 10 minutes (P12).
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
