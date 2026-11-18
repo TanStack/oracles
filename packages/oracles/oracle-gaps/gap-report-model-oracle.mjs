@@ -708,7 +708,7 @@ const drawn = fc.record({
           // `after` switches the test-only hold ORACLE_GAPS_TEST_HOLD_UNTIL,
           // so only a constructed history sets it (the maintainer's decision
           // "Randomness wins for new fields": a drawn field never switches a
-          // test-only hook); the take-back drops it (drawnStops).
+          // test-only hook); the take-back reads it as `run` (plainStops).
           when: fc.constantFrom(`run`, `run`, `warm`, `abort`),
         }),
         { minLength: 1, maxLength: 5 },
@@ -842,28 +842,50 @@ const drawn = fc.record({
       }),
     },
   ),
+  // Randomness wins for new fields (maintainer decision, 2026-11-16): a field
+  // that changes what a history runs is drawn, and only a field that switches
+  // a test-only hook on stays a constant that constructed histories set. Of
+  // the fields below, `tornRows` (ORACLE_GAPS_TEST_TORN_ROWS), `pauseEngages`
+  // (ORACLE_GAPS_TEST_PAUSE_AT, which the daemon steps arm unless it is false)
+  // and `rejectBatch` (ORACLE_GAPS_TEST_REJECT_BATCH) switch hooks, so each is
+  // a constant; `warmReplaced`, `testRoot` and `loadPlugin` choose a scenario
+  // or a fixture's shape, so each is drawn. Their draws come after every
+  // earlier field's, so the earlier fields keep their values; the histories
+  // that draw them run other code, so a fixed seed's histories shift.
+  //
   // A batch's closing row written in two halves (issue #83) is constructed
   // only: the constant draws nothing, so generated histories hold no row, and
   // `histories` takes a constructed one back as this constant (as
   // `logLost` does). Its neutral value is recorded by the canary.
   tornRows: fc.constant(false),
   // Whether the daemon's pause engages in the daemon steps (dieMidCheck and
-  // resetBeforeRead). Always true in drawn histories, so the seeds' histories are
-  // unchanged; only the constructed history "a daemon pause that cannot engage" sets
-  // it false.
+  // resetBeforeRead): false leaves the pause hook unset. Always true in drawn
+  // histories; only the constructed history "a daemon pause that cannot engage"
+  // sets it false.
   pauseEngages: fc.constant(true),
-  // Whether the warm daemon is replaced after the warm check (review of #73, B2).
-  // Only the constructed history of a replaced warm daemon sets it.
-  warmReplaced: fc.constant(false),
+  // Whether the warm daemon is stopped after the warm check of a
+  // `resetBeforeRead` step, so another daemon takes the reset (review of #73,
+  // B2). It acts only in that step, which arms a daemon pause and so only
+  // constructed histories take (`plainSteps`): a drawn value changes nothing
+  // a generated history runs.
+  warmReplaced: fc.boolean(),
   // Where the config's `test.root` sits (issue #101, `testRoots`): `none`, the
-  // package, or a shape that only a constructed history sets. The constant
-  // draws nothing, so generated histories keep their values; `histories`
-  // takes a constructed one back as this constant, as `tornRows` does.
-  testRoot: fc.constant(`none`),
+  // package, or one of four shapes. Only an ES module config that Vitest
+  // discovers sets one (`testRootOf`).
+  testRoot: fc.constantFrom(
+    `none`,
+    `none`,
+    `none`,
+    `none`,
+    `tests`,
+    `parent`,
+    `outside`,
+    `link`,
+  ),
   // Whether the config has a plugin whose own \`load\` reads each test file
-  // with a sync read (\`LOAD_PLUGIN\`, review of #103). Only a constructed
-  // history sets it; \`histories\` takes it back as this constant.
-  loadPlugin: fc.constant(false),
+  // with a sync read (\`LOAD_PLUGIN\`, review of #103). Only a config in ES
+  // module syntax has it (\`loadPluginOf\`).
+  loadPlugin: fc.constantFrom(false, false, false, true),
   // The batch whose run rejects: a constructed-only field (0 is no fault). Only the constructed history at
   // the end of the campaign sets it; the take-back below returns it to 0 (the generator rule, extended).
   rejectBatch: fc.constant(0),
@@ -964,6 +986,55 @@ const drawn = fc.record({
   // only the constructed edit sequence through the daemon sets it; the
   // take-back below returns it to false.
   holdOverlap: fc.constant(false),
+  // Whether the daemon of a `dieMidCheck` step holds its reply and lives on
+  // until the CLI has ended (the cold-fallback witness, R39). It switches the
+  // test-only `daemon-reply` pause on with no kill, so it is a constant that
+  // only the constructed history "a check whose daemon stops answering" sets;
+  // the take-back returns it to false.
+  replyHeld: fc.constant(false),
+  // Whether file b's verdict tests that read `tests/data.json` (`fsRead`)
+  // spin on the function they test, where its output differs and the data
+  // is open, in place of judging: a mutated copy then reads a file that its
+  // file's unmutated run never reads, and its call budget cuts it (a spin).
+  // An edit that closes the data makes those copies end unjudged, so a run
+  // stored under fewer inputs than it read would be reused stale (F-D of
+  // #55's third review: a spun run is stored under the inputs it read).
+  // Drawn: it shapes the fixture's tests and switches no hook.
+  spinData: fc.constantFrom(false, false, false, true),
+  // Where a package that lies in this repository is placed: beside the CLI's
+  // own files (`.scratch-*` in its directory), or in a directory beside the
+  // CLI's directory whose name extends that directory's name
+  // (`oracle-gaps-sibling-*`), so a plain prefix test of its path reads it
+  // as inside the CLI's directory when it is not (#73, fix class 2). Drawn:
+  // it places the fixture and switches no hook.
+  siblingDir: fc.constantFrom(false, false, false, true),
+  // Whether the driver runs this history's stops on win32, where every stop
+  // goes through the test stop file (ORACLE_GAPS_TEST_STOP): a constant that
+  // only the halves of `every outcome class` set, so no drawn history
+  // switches that hook on, and the history is the same on every platform.
+  hookStops: fc.constant(false),
+  // Whether a copy that spins on open data (`spinData`) first schedules an
+  // error that fires after its test has ended: an error outside any test,
+  // which Vitest cannot give to one copy, so the CLI runs each copy of that
+  // batch alone (runAlone), and the spun copy's unit comes from a run alone
+  // (merge gate F4). The outcomes stay the batch's. Drawn: it shapes the
+  // fixture's tests and switches no hook.
+  spinThrows: fc.constantFrom(false, false, false, true),
+  // Whether a daemon is held past its CLI's bound, and where: `open`, a fresh
+  // daemon holds its first check before it runs
+  // (ORACLE_GAPS_TEST_HOLD_OVERLAP) while its CLI carries the warm-up pause, a
+  // session slower to open than the bound (merge gate delta 4, F-h); after a
+  // warm check, `warm`, the next check holds before it warms its contexts
+  // (ORACLE_GAPS_TEST_PAUSE_AT=daemon-warm), a slow but healthy warm-up (merge
+  // gate D1), and `replace`, before a context warms in place of one a cut
+  // stopped (daemon-replace), a slow config load mid-phase (delta 4, P11). It
+  // switches a test-only hook on, so only constructed histories set it.
+  slowStart: fc.constant(false),
+  // Whether a warm daemon's checks run under a 3 s bound
+  // (ORACLE_GAPS_TEST_WAIT_MS): the witness that a daemon that works tells its
+  // CLI so (its beats). It switches a test-only knob, so only the constructed
+  // history "a check through the daemon that works past the bound" sets it.
+  shortWait: fc.constant(false),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -1007,20 +1078,21 @@ const keepsSteps = (history) => {
 // test-only hook (a stream log loss, `logLost`, for one) is not a value `drawn`
 // can produce, so its take-back reads it as the drawn constant (a shrink of
 // such a counterexample is log-intact: the constructed history stays the
-// counterexample for its law), and so is a constructed stop after the
-// completed line (`drawnStops`). A constructed history may also set `tornRows`
+// counterexample for its law), and a constructed stop after the completed
+// line or while the config warms is read as a plain stop (`plainStops`). A constructed history may also set `tornRows`
 // (issue #83), which `drawn` cannot produce, so its take-back reads it as the
 // drawn constant `false`: a shrink is torn-row-free.
 // A history is drawn as on main; the plan takes its later edits after its
 // steps (`laterStepsOf`). Taking a history back returns it unchanged,
 // except a constructed one whose `steps` hold a later edit, which the
 // steps grammar cannot draw: its later edits move to `laterSteps`. A
-// constructed history may also set `tornRows` (issue #83) or `testRoot`
-// (issue #101), which `drawn` cannot produce, so its take-back reads each as
-// its drawn constant (as `logLost` does): a shrink is torn-row-free and
-// runs with the package as the config's root.
-// The neutral value of each constructed-only field: a drawn record holds it, and
-// the take-back maps a constructed history back to it (the generator rule, 2026-11-14).
+// constructed history may also set a hook's field, which `drawn` cannot
+// produce, so its take-back reads each as its neutral value
+// (`constructedNeutral`, as `logLost` does): a shrink switches no hook on.
+// The drawn fields (`warmReplaced`, `testRoot`, `loadPlugin`, `spinData`,
+// `siblingDir`, `spinThrows`) come back as they are.
+// The neutral value of each constructed-only field: a drawn record holds it,
+// and the take-back maps a constructed history back to it.
 const constructedNeutral = {
   overlap: false,
   spawnStop: false,
@@ -1029,60 +1101,85 @@ const constructedNeutral = {
   supervisorDeath: false,
   unsupervised: false,
   tornRows: false,
-  testRoot: `none`,
-  loadPlugin: false,
+  pauseEngages: true,
+  rejectBatch: 0,
+  replyHeld: false,
+  hookStops: false,
+  slowStart: false,
   holdOverlap: false,
+  shortWait: false,
 }
-// The stops a drawn record can hold: every stop but a constructed `after` one.
-const drawnWhens = [`run`, `warm`, `abort`]
-const drawnStops = (history) =>
-  (history.stopRuns ?? []).every((stop) => drawnWhens.includes(stop.when))
-    ? history
-    : {
-        ...history,
-        stopRuns: history.stopRuns.some((stop) =>
-          drawnWhens.includes(stop.when),
-        )
-          ? history.stopRuns.filter((stop) => drawnWhens.includes(stop.when))
-          : NO_STOPS,
-      }
+// A drawn history never switches a test-only hook either (randomness wins,
+// 2026-11-16; v21.2 I16). Two steps arm a daemon pause: `dieMidCheck` holds
+// the daemon's reply (ORACLE_GAPS_TEST_PAUSE_AT=daemon-reply, with the wait
+// and served marks) and `resetBeforeRead` holds its connection unread
+// (daemon-read), so a drawn history takes neither; the constructed histories
+// that gate their states take them. A stop after the completed line holds the
+// run's exit (ORACLE_GAPS_TEST_HOLD_UNTIL) and a stop while the config warms
+// waits at the warm probe (ORACLE_GAPS_TEST_WARM_PROBE), so a drawn history's
+// stops are stops while the witness spins and aborts (`warm` becomes `run`;
+// the grammar draws no `after`, and a constructed one is taken back as `run`).
+// On win32 every stop goes through the test stop file; the driver runs a
+// stop there only for a history that sets `hookStops`, so the histories are
+// the same on every platform (v21.2 R4). The maps read the same draws, so no
+// field's draws move. Taking a constructed history back reads its hook steps
+// and stops the same way, so a shrink keeps none.
+const hookSteps = new Set([`dieMidCheck`, `resetBeforeRead`])
+const plainSteps = (steps) => {
+  if (steps == null || !steps.some((step) => hookSteps.has(step))) return steps
+  const kept = steps.filter((step) => !hookSteps.has(step))
+  return kept.length > 0 ? kept : null
+}
+// The plain stops: a stop while the witness spins (`run`) and an abort; every
+// other stop (`warm`, and a constructed `after` or `note`) is read as `run`.
+const plainWhens = new Set([`run`, `abort`])
+const plainStops = (stopRuns) =>
+  stopRuns.some((stop) => !plainWhens.has(stop.when))
+    ? stopRuns.map((stop) =>
+        plainWhens.has(stop.when) ? stop : { ...stop, when: `run` },
+      )
+    : stopRuns.length === 0
+      ? NO_STOPS
+      : stopRuns
 const histories = drawn.map(
-  (history) => (keepsSteps(history) ? history : { ...history, steps: null }),
+  (history) => {
+    const kept = keepsSteps(history) ? history : { ...history, steps: null }
+    const steps = plainSteps(kept.steps)
+    const stopRuns = plainStops(kept.stopRuns)
+    return steps === kept.steps && stopRuns === kept.stopRuns
+      ? kept
+      : { ...kept, steps, stopRuns }
+  },
   (value) => {
     const history =
-      /** @type {{ witness: unknown, steps: unknown[] | null, tornRows: unknown, testRoot: unknown, loadPlugin: unknown, claimScenario: unknown, logLost: unknown }} */ (
+      /** @type {{ witness: unknown, steps: unknown[] | null, stopRuns: Array<{ when: string }>, tests: Array<{ slow: unknown, slowMs?: unknown }> } & Record<string, unknown>} */ (
         value
       )
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
-    // Take-back into the drawn language: a disarmed pause (pauseEngages false,
-    // only the constructed history sets it) comes back as engaged, and a
-    // rejected batch (rejectBatch, likewise) as none, so the arbitrary can
-    // shrink it. Neither is therefore kept by a shrink.
     const reset = Object.entries(constructedNeutral).every(
       ([field, neutral]) => history[field] === neutral,
     )
       ? value
       : { ...history, ...constructedNeutral }
-    // A constructed stop after the completed line (`after`) is no drawn stop,
-    // so it is dropped (drawnStops).
-    const taken = drawnStops(reset)
-    const later = (history.steps ?? []).filter((step) =>
-      laterEdits.includes(step),
-    )
-    if (later.length === 0)
-      return {
-        ...taken,
-        pauseEngages: true,
-        warmReplaced: false,
-        rejectBatch: 0,
-      }
-    const earlier = history.steps.filter((step) => !laterEdits.includes(step))
+    const stopRuns = plainStops(history.stopRuns ?? NO_STOPS)
+    const steps = plainSteps(history.steps)
+    // A constructed slow test (a wait where the output differs, seconds of
+    // real time) is read as the drawn one, which never waits.
+    const tests = history.tests.some((test) => test.slow)
+      ? history.tests.map(({ slowMs, ...test }) => ({ ...test, slow: false }))
+      : history.tests
+    const taken =
+      stopRuns === history.stopRuns &&
+      steps === history.steps &&
+      tests === history.tests
+        ? reset
+        : { ...reset, stopRuns, steps, tests }
+    const later = (steps ?? []).filter((step) => laterEdits.includes(step))
+    if (later.length === 0) return taken
+    const earlier = steps.filter((step) => !laterEdits.includes(step))
     return {
       ...taken,
-      pauseEngages: true,
-      warmReplaced: false,
-      rejectBatch: 0,
       steps: earlier.length > 0 ? earlier : null,
       laterSteps: later,
     }
@@ -2562,6 +2659,40 @@ function configOf(history) {
   }
 }
 
+/**
+ * Where a history's config sets `test.root` (`testRoots`): its drawn shape
+ * where a shape applies, and the package (`none`) elsewhere. A shape's root
+ * is written from the config's own URL, so only an ES module config sets
+ * one, and only the config that Vitest discovers in the package: a config
+ * that `--config` names (and the `config` edit's second config, which it
+ * names) sits in `config/`, and a parent's config above the package, so the
+ * shape's paths would name other directories; a `projects` config nests its
+ * test options in a project.
+ */
+function testRootOf(history) {
+  const config = configOf(history)
+  const steps = [...(history.steps ?? []), ...laterStepsOf(history)]
+  return config.configFormat === `esm` &&
+    config.configPlace === `discovered` &&
+    history.fault !== `projects` &&
+    !steps.includes(`config`)
+    ? (history.testRoot ?? `none`)
+    : `none`
+}
+
+/**
+ * Whether a history's config has the load plugin (`LOAD_PLUGIN`): where it
+ * draws one and has a config whose syntax can import `readFileSync`.
+ */
+function loadPluginOf(history) {
+  const config = configOf(history)
+  return (
+    history.loadPlugin === true &&
+    config.configPlace !== `none` &&
+    config.configSyntax === `esm`
+  )
+}
+
 function resolveHistory(history) {
   let label = 0
   const containerOf = (index) => history.containers[index] ?? `free`
@@ -3092,8 +3223,15 @@ function resolveHistory(history) {
     steps: [...(history.steps ?? []), ...laterStepsOf(history)],
     pauseEngages: history.pauseEngages !== false,
     warmReplaced: history.warmReplaced === true,
+    replyHeld: history.replyHeld === true,
     lazyGate: history.lazyGate === true,
     fsRead: history.fsRead ?? `none`,
+    spinData: history.spinData === true,
+    siblingDir: history.siblingDir === true,
+    hookStops: history.hookStops === true,
+    spinThrows: history.spinThrows === true,
+    slowStart: history.slowStart ?? false,
+    shortWait: history.shortWait === true,
     // Whether a step edits file b's helper during a check (`midrun`): then
     // file a loads the helper and holds the test that edits it.
     midrun: [...(history.steps ?? []), ...laterStepsOf(history)].includes(
@@ -3124,11 +3262,10 @@ function resolveHistory(history) {
     tornRows: history.tornRows === true,
     ...configOf(history),
     configEnv: history.configEnv === true,
-    // Where the config's `test.root` sits (`testRoots`, issue #101): only a
-    // constructed history sets it, so a generated one runs with the package
-    // as the root.
-    testRoot: history.testRoot ?? `none`,
-    loadPlugin: history.loadPlugin === true,
+    // Where the config's `test.root` sits (`testRoots`, issue #101), and
+    // whether it has the load plugin, where each applies.
+    testRoot: testRootOf(history),
+    loadPlugin: loadPluginOf(history),
     native: history.native ?? `none`,
     // A prebuilt addon in the workspace dependency's build/Release
     // (`addRelease`).
@@ -4259,6 +4396,11 @@ function runsOf(plan, tests, sites, active) {
         // A test that hangs where another would judge never ends.
         if (changed && t.hangs)
           return { t, route, hang: true, verdicts: found, changed: true }
+        // A verdict test of file b that reads the data spins there instead,
+        // while the data is open, which it is before any edit (`spinData`):
+        // a loop that never ends, as above.
+        if (changed && plan.spinData && fsGated(plan, t.file, t))
+          return { t, route, hang: true, verdicts: found, changed: true }
         if (changed && t.judges) {
           found.push({
             route,
@@ -5144,6 +5286,22 @@ function oracleTestFile(plan, file) {
               `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await new Promise(() => {})`,
             ]
           : []),
+        // Where the output differs and the data is open, a verdict test of
+        // file b that reads the data spins on the function it tests
+        // (`spinData`), so the capture's call budget cuts its copy. A flaky
+        // test does not: the model leaves flaky tests out.
+        ...(plan.spinData && fsGated(plan, file, t) && !t.flaky
+          ? [
+              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)} && (await readData()).open) {`,
+              ...(plan.spinThrows
+                ? [
+                    `      setTimeout(() => { throw new Error('a spinning copy threw outside its test') })`,
+                  ]
+                : []),
+              `      for (;;) ${callFor(t.fn)}(${part.input}, [])`,
+              `    }`,
+            ]
+          : []),
         ...(!t.judges
           ? []
           : t.judgeBy !== `verdict`
@@ -5462,7 +5620,7 @@ function configText(plan, test) {
     ...(plan.testRoot === `none`
       ? []
       : [`import { fileURLToPath } from 'node:url'`]),
-    // Only an ES module config has the load plugin (its constructed history).
+    // Only a config in ES module syntax has the load plugin (`loadPluginOf`).
     ...(plan.loadPlugin ? [`import { readFileSync } from 'node:fs'`] : []),
     ...(plan.fault === `configThrows`
       ? [`throw new Error('the fixture config broke')`]
@@ -5530,8 +5688,9 @@ const parentModules = (plan, state) =>
  * init chunk's `vitest-environment-<name>` resolution), so under `parent` that
  * package lies in the root's node_modules (`environments`); every other shape
  * finds the package's own.
- * Only an ES module config sets a root (it reads its own URL), and only the
- * constructed histories set one, each as an ES module config.
+ * Only an ES module config that Vitest discovers sets a root (it reads its
+ * own URL; `testRootOf`). Generated histories draw the shape, and each shape
+ * also has a constructed history of its own.
  */
 const inTests = {
   root: `./tests`,
@@ -5558,6 +5717,14 @@ const testRoots = {
 // The directory that the package's `tests` links to under the `link` test
 // root.
 const linkedTests = `tests-target`
+/**
+ * Where a package path lies in the fixture's files: under the `link` test
+ * root, the files of `tests` live in `linkedTests`, and `tests` links there.
+ */
+const fixturePathOf = (plan, path) =>
+  plan.testRoot === `link` && path.startsWith(`tests/`)
+    ? `${linkedTests}/${path.slice(`tests/`.length)}`
+    : path
 
 function fixtureFiles(plan, state = initialState(plan)) {
   const manifest = (fields) =>
@@ -5832,9 +5999,7 @@ function fixtureFiles(plan, state = initialState(plan)) {
   // `tests` links to it.
   return Object.fromEntries([
     ...Object.entries(files).map(([path, text]) => [
-      path.startsWith(`tests/`)
-        ? `${linkedTests}/${path.slice(`tests/`.length)}`
-        : path,
+      fixturePathOf(plan, path),
       text,
     ]),
     [`tests`, link(linkedTests)],
@@ -6295,6 +6460,7 @@ export {
   AUTHORED,
   initialState,
   fixtureFiles,
+  fixturePathOf,
   written,
   writeFixture,
   applyEdit,

@@ -340,12 +340,23 @@ export const partitions = {
         'an unsupervised run stopped after its note',
         'a start refuses a dangling claim',
         'a supervised check with no ps on its PATH',
+        // #131's daemon witnesses: the beat's (a 10 s confirmation through
+        // the daemon), the slow warm-up, the held check, and both F-D paths,
+        // moved off shard 3, which ran 11.2 min with them.
+        'a check through the daemon that works past the bound',
+        'a slow but healthy warm-up',
+        'a check whose daemon stops answering',
+        'an edit to data that only a spun copy reads',
+        'an edit to data that only a copy spun alone reads',
       ]),
       // The edit sequence through the daemon (94 s) and brokenOwner (69 s):
       // about 325 s.
       4: anyOf([
         'an edit sequence through the daemon',
         'a declaration fault: brokenOwner',
+        // Delta 4's two daemon witnesses (11 s and 20 s on Arca, #131).
+        'a daemon start slower than the bound',
+        'a check abandoned while a context warms in place of a cut one',
       ]),
       // A pause that cannot engage (26 s), the lazy module (13 s), two
       // mid-check test edits (12 s and 10 s), and a reset check (11 s):
@@ -599,6 +610,7 @@ export const partitions = {
         'a config whose test root holds no test file',
         'a config whose test root is a symbolic link',
         'a config whose plugin loads test files with a sync read',
+        'a check whose daemon stops answering',
         'two runs on one output directory',
         'a stream log that cannot be written',
         'a start refuses an empty claim',
@@ -628,6 +640,13 @@ export const partitions = {
         'an awaiting config in a package with no module type',
         'a declaration fault: configNoDefault',
         'a declaration fault: badEntry',
+        'an edit to data that only a spun copy reads',
+        "a refused run beside the CLI's directory, under a name that extends it",
+        'an edit to data that only a copy spun alone reads',
+        'a slow but healthy warm-up',
+        'a daemon start slower than the bound',
+        'a check abandoned while a context warms in place of a cut one',
+        'a check through the daemon that works past the bound',
         'a stop with the default output directory',
         'a daemon check with the default output directory',
         'a daemon check with the default output directory, unsupervised',
