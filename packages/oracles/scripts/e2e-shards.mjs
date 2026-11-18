@@ -36,8 +36,9 @@ const suite = `oracle-gaps.report`
 // cost follows its seed, so a shard's time varies from run to run. Option M
 // of the e2e speed plan bounds the random units' tail: a generated history
 // with the witness module takes no steps, and the one edit sequence over it
-// is a constructed history. CI keeps its one fixed-seed job until the
-// maintainer decides which units run on a pull request.
+// is a constructed history. A pull request runs the fixed-seed, random, and
+// determinism units as the partitions of pr-shards.mjs; these shards are
+// the full-suite plan, which this file's check keeps partitioned.
 export const shards = {
   // 522 s in the measured run, about 221 s idle.
   'e2e-1': [
@@ -72,7 +73,8 @@ export const shards = {
     `determinism: constructed history: an edit sequence through the daemon`,
     // The witness module's edit sequence (option M): 189 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
-    `determinism: constructed history: an edit sequence over the witness module`,
+    `determinism: constructed history: an edit sequence over the witness module, the first half`,
+    `determinism: constructed history: an edit sequence over the witness module, the second half`,
     // The daemon's law 9 histories cost 3 to 13 s each here (their replays).
     `fixed seed 20261105: an edit that changed the cold result after a hang replaced the only context`,
     `random seed: an edit that changed the cold result after a hang replaced the only context`,
@@ -301,7 +303,9 @@ export const shards = {
     // Added with the gap CLI's runtime fixes (not yet measured).
     `fixed seed 20261105: a second daemon check of the budget witness`,
     `calibration: a stopped run leaves a process it started running`,
-    `calibration: a busy mutant is named in no heartbeat`,
+    // The heartbeat calibrations after the shape-only change (not yet measured).
+    `calibration: a heartbeat names a mutant whose gap line came first`,
+    `calibration: a heartbeat names no mutant of its run`,
     // Law 15's calibrations (the greppable stream), measured at ab18c60:
     // 79 s and 70 s; the daemon-notes one, bound to its history, 2 s (it
     // took 433 s searching for one).
@@ -316,7 +320,8 @@ export const shards = {
     `determinism: constructed history: a second daemon check of the budget witness`,
     // The witness module's edit sequence (option M): 97 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
-    `fixed seed 20261105: an edit sequence over the witness module`,
+    `fixed seed 20261105: an edit sequence over the witness module, the first half`,
+    `fixed seed 20261105: an edit sequence over the witness module, the second half`,
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-5': [
@@ -391,7 +396,8 @@ export const shards = {
     `calibration: a check through the daemon names another check's report`,
     // The witness module's edit sequence (option M): about 97 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
-    `random seed: an edit sequence over the witness module`,
+    `random seed: an edit sequence over the witness module, the first half`,
+    `random seed: an edit sequence over the witness module, the second half`,
   ],
 }
 
