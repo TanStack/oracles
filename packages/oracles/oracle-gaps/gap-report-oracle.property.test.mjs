@@ -2599,13 +2599,16 @@ async function incremental(dir, plan, cli, copy, observe, states) {
     }
     if (twice && step === `start`)
       states.add(`two checks started the daemon at once`)
-    // A warm daemon's check under the short bound that cut a slow copy and
-    // ran its 10 s confirmation (`shortWait`), and did not fall back.
+    // A warm daemon's check under the short bound that ran a slow copy's 10 s
+    // wait (`shortWait`), and did not fall back. Under deterministic cuts no
+    // first budget cuts the copy: it waits in its batch, so the check that
+    // computed file a's runs again worked past the bound (#99, M-17; the
+    // state is kept, its precondition follows the runtime, v21.2 R7).
     if (
       plan.shortWait &&
       step !== `start` &&
       daemon.reported &&
-      (daemon.evidence?.cut ?? 0) > 0 &&
+      (daemon.evidence?.computed ?? 0) > 0 &&
       !daemon.stream.notes.some((note) => coldFallbackNote.test(note)) &&
       plan.tests.some((t) => t.slow)
     )
@@ -8942,8 +8945,8 @@ oracleProperty({
       },
       {
         // A check through a warm daemon that works past its CLI's bound (3 s,
-        // `shortWait`): after the test edit, a slow copy is cut at its first
-        // budget, and its confirming run waits 10 s where the output differs. The daemon's beats while the copy runs keep the CLI
+        // `shortWait`): after the test edit, a slow copy waits 10 s where the
+        // output differs, in its batch. The daemon's beats while the copy runs keep the CLI
         // waiting: it must not fall back (the beat's witness, delta 3).
         name: `a check through the daemon that works past the bound`,
         enters: [`a check through the daemon worked past its CLI's bound`],
@@ -8959,7 +8962,7 @@ oracleProperty({
               },
             ],
             // The test edit recomputes file a's runs, the slow one with them;
-            // a first budget cuts the slow copy, which then waits 10 s alone.
+            // the slow copy waits 10 s in its batch (no first budget, #99).
             steps: [`test`],
             laterSteps: NO_LATER_STEPS,
             budget: `two`,

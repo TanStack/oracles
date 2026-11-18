@@ -4583,11 +4583,14 @@ function runsOf(plan, tests, sites, active) {
           }
         // A verdict test of file b that reads the data spins there instead,
         // while the data is open, which it is before any edit (`spinData`):
-        // a loop that never ends, cut by its call count, as above.
+        // a loop that never ends, cut by its call count, as above. A copy
+        // that first schedules its error (`spinThrows`) has made a timer, so
+        // its count could follow the clock (v21.1 R19a): its spin is a gap.
         if (changed && plan.spinData && fsGated(plan, t.file, t))
           return {
-            clocked: readsClock(t) || waited,
-            rowClocked: readsClock(t) || waited || (changed && waitsIn(t)),
+            clocked: readsClock(t) || waited || plan.spinThrows,
+            rowClocked:
+              readsClock(t) || waited || plan.spinThrows || waitsIn(t),
             t,
             route,
             hang: true,
