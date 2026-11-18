@@ -313,67 +313,68 @@ export const partitions = {
     // run's seed (#122), which doubles a constructed unit's time. The times
     // below are main's CI times at 153539b, at one base, doubled.
     shards: {
-      // The witness module's edit sequence alone: 346 s at one base, and it
-      // draws no base (its own `drawnBases: 0`), since two would pass the
-      // 10-minute limit in one test.
+      // Times are Arclet times at #122's merged head b470a883, with one
+      // fixed base and one drawn (CI takes about 1.8 times as long), packed
+      // to about 9 minutes of CI a job (register M, 2026-11-17, "Pack CI
+      // jobs to about 9 min").
+      // The witness module's edit sequence alone: 193 s, and it draws no
+      // base (its own `drawnBases: 0`).
       1: anyOf(['an edit sequence over the witness module']),
-      // Every part of `every outcome class` (126 s, 9 s, and 3 s) and
-      // brokenVitest (22 s): about 320 s. The stop parts are named here:
-      // `every outcome class` alone matches the first half only.
+      // Every part of `every outcome class` and brokenVitest: 285 s.
       2: anyOf([
         'every outcome class',
         'every outcome class, the warm stop',
         'every outcome class, the abort stop',
         'a declaration fault: brokenVitest',
       ]),
-      // noTypescript (84 s), a second daemon check (45 s), the stale authored
-      // mutant (29 s), a cold-result edit (10 s), and #57's small units:
-      // about 375 s.
+      // #131's check past the bound (190 s), the stale authored mutant
+      // (38 s), a cold-result edit (20 s), and three small units: about
+      // 270 s.
       3: anyOf([
-        'a declaration fault: noTypescript',
-        'a second daemon check of the budget witness',
+        'a check through the daemon that works past the bound',
         'a stale authored mutant and a reformat',
         'an edit that changed the cold result after a hang replaced the only context',
-        'a failing owner under a config that --config names',
-        'a stop before the CLI starts',
-        'a stop by SIGTERM as the CLI starts',
-        'an unsupervised run stopped after its note',
-        'a start refuses a dangling claim',
-        'a supervised check with no ps on its PATH',
-        // #131's daemon witnesses: the beat's (a 10 s confirmation through
-        // the daemon), the slow warm-up, the held check, and both F-D paths,
-        // moved off shard 3, which ran 11.2 min with them.
-        'a check through the daemon that works past the bound',
-        'a slow but healthy warm-up',
-        'a check whose daemon stops answering',
         'an edit to data that only a spun copy reads',
         'an edit to data that only a copy spun alone reads',
+        'a failing owner under a config that --config names',
       ]),
-      // The edit sequence through the daemon (94 s) and brokenOwner (69 s):
-      // about 325 s.
+      // The edit sequence through the daemon, brokenOwner, and delta 4's
+      // two daemon witnesses: 283 s.
       4: anyOf([
         'an edit sequence through the daemon',
         'a declaration fault: brokenOwner',
-        // Delta 4's two daemon witnesses (11 s and 20 s on Arca, #131).
         'a daemon start slower than the bound',
         'a check abandoned while a context warms in place of a cut one',
       ]),
-      // A pause that cannot engage (26 s), the lazy module (13 s), two
-      // mid-check test edits (12 s and 10 s), and a reset check (11 s):
-      // about 145 s.
+      // apiLessTypescript, noTypescript (55 s), a pause that cannot engage,
+      // the lazy module, two mid-check test edits, and a reset check: about
+      // 160 s.
       5: anyOf([
-        // apiLessTypescript (146 s at 59b5c449, with its drawn base) moved
-        // here from the rest, which took 8m07s with it.
         'a declaration fault: apiLessTypescript',
+        'a declaration fault: noTypescript',
         'a daemon pause that cannot engage',
         'a lazy module loaded before a hang in the same batch',
         'a test edits the helper it read, during a check through the daemon',
         'a test edits the data it read, during a check through the daemon',
         'a reset check after its warm daemon was replaced',
       ]),
-      // The rest: generated (10 s, not doubled) and small units, about
-      // 260 s, and any new unit.
-      6: rest,
+      // A second daemon check (89 s), #131's daemon that stops answering
+      // (22 s) and slow warm-up (19 s), and #57's stop units: about 155 s,
+      // and about 285 s when a drawn base of `a stop before the CLI starts`
+      // fails and shrinks (#150).
+      6: anyOf([
+        'a second daemon check of the budget witness',
+        'a check whose daemon stops answering',
+        'a slow but healthy warm-up',
+        'a stop before the CLI starts',
+        'a stop by SIGTERM as the CLI starts',
+        'an unsupervised run stopped after its note',
+        'a start refuses a dangling claim',
+        'a supervised check with no ps on its PATH',
+      ]),
+      // The rest: generated (not doubled) and small units, 232 s, and any
+      // new unit.
+      7: rest,
     },
   },
   'oracle-gaps-static-windows': {

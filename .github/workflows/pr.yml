@@ -108,12 +108,12 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
   test-oracle-gaps-end-to-end:
-    name: Gap report end-to-end oracle (fixed seed, ${{ matrix.shard }}/6)
+    name: Gap report end-to-end oracle (fixed seed, ${{ matrix.shard }}/7)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -121,7 +121,7 @@ jobs:
           persist-credentials: false
       - name: Setup Tools
         uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
-      # The end-to-end oracle's fixed-seed units, in six shards. Its random
+      # The end-to-end oracle's fixed-seed units, in seven shards. Its random
       # units, calibrations, and determinism units run locally.
       - run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-fixed-seed "$SHARD")"
         working-directory: packages/oracles
