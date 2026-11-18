@@ -254,23 +254,23 @@ export const partitions = {
     suite: `self-oracle.framework`,
     select: ``,
     // Packed to about 9 minutes a job (register M, 2026-11-17, "Pack CI jobs
-    // to about 9 min"), from the CI times at #122's 59b5c449 and deb5997f:
-    // the first two determinism shards (4m33s and 5m03s) run together; the
-    // constructed histories' determinism units alone (9m49s with the last
-    // calibrations); and the campaign units, which run one fixed base and one
-    // drawn from the run's seed (#122), as the fixed-seed units and, in the
-    // rest, the random-seed units with the last calibrations.
+    // to about 9 min"), from CI runs 44198893231 (59b5c449), 44279328397
+    // (deb5997f) and 44283777367 (cf2bca81). Two determinism shards together
+    // ran 8m37s and 9m42s, so each runs alone; the first runs beside the
+    // first half of the random-seed campaign units (4m33s and 3m22s), and the
+    // last calibrations beside the second half, in the rest. The campaign
+    // units run one fixed base and one drawn from the run's seed (#122).
     shards: {
-      1: `(?:${startsWith(`determinism: fixed history: `, detFixedA)}|${startsWith(`determinism: fixed history: `, detFixedB)})`,
-      2: startsWith(`determinism: fixed history: `, detFixedC),
-      3: `determinism: constructed history: .*`,
-      4: `(?:${startsWith(`fixed history: `, fixedA)}|${startsWith(`calibration: `, calibration1)})`,
-      5: `(?:${startsWith(`fixed history: `, fixedB)}|${startsWith(`calibration: `, calibration2)})`,
-      6: `fixed seed 1: .*`,
-      // The rest: the random-seed campaign units (3m22s and 3m59s as two jobs
-      // at deb5997f), the last calibrations (3m19s at 59b5c449), and any new
-      // kind.
-      7: rest,
+      1: `(?:${startsWith(`determinism: fixed history: `, detFixedA)}|random seed: (?:[a-q]|r(?!ound[3-9])).*)`,
+      2: startsWith(`determinism: fixed history: `, detFixedB),
+      3: startsWith(`determinism: fixed history: `, detFixedC),
+      4: `determinism: constructed history: .*`,
+      5: `(?:${startsWith(`fixed history: `, fixedA)}|${startsWith(`calibration: `, calibration1)})`,
+      6: `(?:${startsWith(`fixed history: `, fixedB)}|${startsWith(`calibration: `, calibration2)})`,
+      7: `fixed seed 1: .*`,
+      // The rest: the second half of the random-seed campaign units (3m59s),
+      // the last calibrations (3m19s), and any new kind.
+      8: rest,
     },
   },
   // The gap report's static oracle, the slowest of the fast gap suites and
