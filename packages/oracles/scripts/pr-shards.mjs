@@ -254,22 +254,23 @@ export const partitions = {
     suite: `self-oracle.framework`,
     select: ``,
     // Packed to about 9 minutes a job (register M, 2026-11-17, "Pack CI jobs
-    // to about 9 min"), from the CI times at #122's 59b5c449: the first two
-    // determinism shards (4m33s and 5m03s) run together, and so do the
-    // constructed histories' determinism units and the last calibrations
-    // (6m02s and 3m19s). The campaign units, which run one fixed base and one
-    // drawn from the run's seed (#122), run in three jobs: the fixed-seed
-    // units, and the random-seed units split by name (about 249 s of CI time
-    // before `round3`, and about 260 s with the rest).
+    // to about 9 min"), from the CI times at #122's 59b5c449 and deb5997f:
+    // the first two determinism shards (4m33s and 5m03s) run together; the
+    // constructed histories' determinism units alone (9m49s with the last
+    // calibrations); and the campaign units, which run one fixed base and one
+    // drawn from the run's seed (#122), as the fixed-seed units and, in the
+    // rest, the random-seed units with the last calibrations.
     shards: {
       1: `(?:${startsWith(`determinism: fixed history: `, detFixedA)}|${startsWith(`determinism: fixed history: `, detFixedB)})`,
       2: startsWith(`determinism: fixed history: `, detFixedC),
-      3: `(?:determinism: constructed history: .*|${startsWith(`calibration: `, [...calibration3, ...calibration4])})`,
+      3: `determinism: constructed history: .*`,
       4: `(?:${startsWith(`fixed history: `, fixedA)}|${startsWith(`calibration: `, calibration1)})`,
       5: `(?:${startsWith(`fixed history: `, fixedB)}|${startsWith(`calibration: `, calibration2)})`,
       6: `fixed seed 1: .*`,
-      7: `random seed: (?:[a-q]|r(?!ound[3-9])).*`,
-      8: rest,
+      // The rest: the random-seed campaign units (3m22s and 3m59s as two jobs
+      // at deb5997f), the last calibrations (3m19s at 59b5c449), and any new
+      // kind.
+      7: rest,
     },
   },
   // The gap report's static oracle, the slowest of the fast gap suites and

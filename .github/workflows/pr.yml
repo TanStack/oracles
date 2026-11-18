@@ -60,12 +60,12 @@ jobs:
       - run: pnpm run build
       - run: pnpm --filter @tanstack/eslint-plugin-oracles run test
   test-oracle-framework:
-    name: Framework self-oracle (${{ matrix.shard }}/8)
+    name: Framework self-oracle (${{ matrix.shard }}/7)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4, 5, 6, 7]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -74,7 +74,7 @@ jobs:
       - name: Setup Tools
         uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
       # The oracleProperty self-oracle spawns real Vitest runs, so the
-      # default test run leaves it out; it runs here on its own, in eight
+      # default test run leaves it out; it runs here on its own, in seven
       # shards, packed to about 9 minutes each.
       - run: pnpm exec vitest --run --config vitest.oracle-framework.config.mjs -t "$(node scripts/pr-shards.mjs pattern oracle-framework "$SHARD")"
         working-directory: packages/oracles
@@ -201,7 +201,6 @@ jobs:
           - oracle-framework 5
           - oracle-framework 6
           - oracle-framework 7
-          - oracle-framework 8
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
