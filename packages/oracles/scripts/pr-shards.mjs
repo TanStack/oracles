@@ -308,6 +308,14 @@ export const partitions = {
         'an unsupervised run stopped after its note',
         'a start refuses a dangling claim',
         'a supervised check with no ps on its PATH',
+        // #131's daemon witnesses: the beat's (a 10 s confirmation through
+        // the daemon), the slow warm-up, the held check, and both F-D paths,
+        // moved off shard 3, which ran 11.2 min with them.
+        'a check through the daemon that works past the bound',
+        'a slow but healthy daemon start',
+        'a check whose daemon stops answering',
+        'an edit to data that only a spun copy reads',
+        'an edit to data that only a copy spun alone reads',
       ]),
       // Every part of `every outcome class` (the first half took 134 s on the CI
       // runner; the warm and abort stops are two small histories over the stop
@@ -321,9 +329,10 @@ export const partitions = {
         'a second daemon check of the budget witness',
         'a declaration fault: brokenVitest',
         'an edit that changed the cold result after a hang replaced the only context',
+        // Moved off shard 3 (174 s on the CI runner).
+        'a declaration fault: noTypescript',
       ]),
-      // The rest: noTypescript (174 s on the CI runner), the edit sequence
-      // through the daemon (94 s), brokenOwner (83 s), generated (23 s), the
+      // The rest: the edit sequence through the daemon (94 s), brokenOwner (83 s), generated (23 s), the
       // lazy module (12 s), and small units.
       3: rest,
     },
