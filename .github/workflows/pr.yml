@@ -81,12 +81,12 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
   test-oracle-gaps-fast:
-    name: Gap report oracles (${{ matrix.shard }}/2)
+    name: Gap report oracles (${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -96,12 +96,12 @@ jobs:
         uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
       # The gap report's own oracles also run real Vitest runs on fixture
       # packages (test:oracle-gaps:fast): the static oracle in two shards,
-      # the first beside the classify, probe-form, and mutant-validity
-      # oracles, so each job runs about 8 minutes (register M, 2026-11-17,
-      # "Pack CI jobs to about 9 min").
+      # and the classify, probe-form, and mutant-validity oracles in a third.
+      # Packed with the first static shard, that job ran 8m10s and 9m08s on
+      # #122's CI, within a minute of the limit, so it runs apart.
       - run: |
-          if [ "$SHARD" = 1 ]; then
-            pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-classify gap-report-probe-form gap-report-mutant-validity gap-report-path-spelling
+          if [ "$SHARD" = 3 ]; then
+            exec pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-classify gap-report-probe-form gap-report-mutant-validity gap-report-path-spelling
           fi
           pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-static -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-static "$SHARD")"
         working-directory: packages/oracles
