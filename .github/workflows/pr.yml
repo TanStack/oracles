@@ -127,7 +127,7 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
   test-oracle-gaps-random:
-    name: Gap report end-to-end oracle (random seed, ${{ matrix.shard }}/3)
+    name: Gap report end-to-end oracle (random seed, ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     # A high backstop only (the maintainer's decision of 2026-11-12, M-6):
     # each shard is packed to about 9 minutes and stays under 10 (P12).
@@ -135,7 +135,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -143,7 +143,7 @@ jobs:
           persist-credentials: false
       - name: Setup Tools
         uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
-      # The end-to-end oracle's random units, in three weighted shards. Each run
+      # The end-to-end oracle's random units, in four weighted shards. Each run
       # draws a fresh campaign seed (the ORACLE_SEED line in the log). A failing
       # unit prints its Replay line and its history, cut at 2,000 characters
       # (#81), and does not shrink (GAP_E2E_SHRINKS=0; the maintainer's decision

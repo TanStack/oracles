@@ -361,15 +361,17 @@ export const partitions = {
   // (maintainer decision CI-1; v21.2 P4, R26): each run draws a fresh
   // campaign seed, and a failing unit prints its replay line and its
   // history. 79 units. A unit's cost follows the seed, so each unit weighs
-  // the larger of its longest time in CI runs 44200775802 and 44216367366
-  // (two seeds) and its longest passing time on the Arca pool under five
-  // seeds (r90b-rand-s1 to -s5, at 7418dcc) times the median CI/Arclet
-  // ratio (1.03). Packed longest first into three shards of 533 s of weight;
-  // one seed's shard takes about 370 s in CI (the two CI runs' totals,
-  // 1,114 s and 1,030 s, over three), so a job takes 7 to 9 minutes (the
-  // maintainer's decision "Pack CI jobs to about 9 min", 2026-11-17; P12).
-  // CI's random units do not shrink (GAP_E2E_SHRINKS=0, pr.yml), so a failing
-  // seed's job takes about its passing time.
+  // the larger of its longest time in CI runs 44200775802, 44216367366 and
+  // 44221410343 (three seeds) and its longest passing time on the Arca pool
+  // under five seeds (r90b-rand-s1 to -s5, at 7418dcc) times the median
+  // CI/Arclet ratio (1.28). Packed longest first into four shards of 472 s
+  // of weight, so a job takes at most about 8.5 minutes, and one seed's
+  // shard about 5.5 (the three CI runs' totals, 1,030 to 1,336 s, over four).
+  // Three shards were too few: under seed 1047281476 one took 570 s of tests
+  // and its job 10:00 (run 44221410343). The maintainer's decision "Pack CI
+  // jobs to about 9 min" (2026-11-17); P12. CI's random units do not shrink
+  // (GAP_E2E_SHRINKS=0, pr.yml), so a failing seed's job takes about its
+  // passing time.
   'oracle-gaps-random': {
     args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-oracle`],
     suite: `oracle-gaps.report`,
@@ -377,67 +379,76 @@ export const partitions = {
     // Every name is checked against the listed tests (partitionErrors).
     exactNames: true,
     shards: {
-      // 533 s of weight.
+      // 472 s of weight.
       1: anyOf([
         `every outcome class`,
-        `a declaration fault: brokenOwner`,
-        `an edit sequence over the witness module, the first half`,
-        `a reset check after its warm daemon was replaced`,
-        `a lazy module loaded before a hang in the same batch`,
-        `every outcome class, the abort stop`,
-        `an edit during a check through the daemon`,
-        `a test edits the data it read, during a check through the daemon`,
-        `an unchanged check through the daemon under a config's pre plugin`,
-        `a probe branch under a generated test's work bound`,
-        `a stream log lost after its note, then stopped`,
+        `a stale authored mutant and a reformat`,
+        `a daemon pause that cannot engage`,
+        `an edit to data a test reads through fs (promise)`,
         `an unchanged check through the daemon while a test reads a source through fs`,
-        `every outcome class, the warm stop`,
-        `a config whose test root is a symbolic link`,
+        `an edit to data a test reads through fs (sync)`,
+        `a stop by SIGTERM as the CLI starts`,
+        `a probe branch under a generated test's work bound`,
+        `a stop with the default output directory`,
+        `a run with eleven contexts`,
         `a declaration fault: nonLiteral`,
-        `a config that --config names`,
-        `a start refuses a stale claim`,
-        `a supervised child exits when its supervisor is killed`,
-        `an awaiting config in a package with no module type`,
+        `two starts race for a stale claim`,
+        `a start refuses an empty claim`,
         `a .ts config in a package with no module type that calls require`,
         `a supervised check with no ps on its PATH`,
-        `two batches each read a capture row while its worker wrote it`,
-        `a batch whose run rejects`,
-        `a declaration fault: badEntry`,
+        `a declaration fault: configThrows`,
         `a declaration fault: missingSource`,
-        `a stream log that cannot be written`,
-      ]),
-      // 533 s of weight.
-      2: anyOf([
-        `an edit sequence over the witness module, the second half`,
-        `a second daemon check of the budget witness`,
-        `an edit sequence through the daemon`,
-        `a daemon pause that cannot engage`,
-        `a stale authored mutant and a reformat`,
-        `an edit that changed the cold result after a hang replaced the only context`,
-        `a test edits the helper it read, during a check through the daemon`,
-        `an edit to data a test reads through fs (callback)`,
-        `an edit to a module that only mutated runs load`,
-        `an edit to data a test reads through fs (statDir)`,
-        `a stop by SIGTERM as the CLI starts`,
-        `a stop as the CLI starts`,
-        `a load failure beside a hang`,
-        `a failing owner under a config that --config names`,
-        `a config whose test root is a subdirectory that holds the tests`,
-        `a capture row read while the worker wrote it`,
-        `a package whose parent directory has its config`,
-        `two authored mutants`,
-        `a start refuses an unreadable claim`,
-        `a start refuses a dangling claim`,
-        `a .cjs config that calls require`,
-        `two runs on one output directory`,
-        `a config whose test root holds no test file`,
-        `a declaration fault: configSyntax`,
-        `a declaration fault: projects`,
-        `test.projects in a parent's config`,
         `a declaration fault: outsideSource`,
       ]),
-      // The rest: 533 s of weight, and any unit added later.
-      3: rest,
+      // 472 s of weight.
+      2: anyOf([
+        `an edit sequence over the witness module, the second half`,
+        `generated`,
+        `an edit sequence over the witness module, the first half`,
+        `an edit that changed the cold result after a hang replaced the only context`,
+        `every outcome class, the abort stop`,
+        `a test edits the data it read, during a check through the daemon`,
+        `a declaration fault: setupThrows`,
+        `an unchanged check through the daemon under a config's pre plugin`,
+        `a stream log lost after its note, then completed`,
+        `a load failure beside a hang`,
+        `a start refuses an unreadable claim`,
+        `a capture row read while the worker wrote it`,
+        `a config whose test root is above the package`,
+        `a supervised child exits when its supervisor is killed`,
+        `a package with no config`,
+        `a config whose plugin loads test files with a sync read`,
+        `two runs on one output directory`,
+        `a declaration fault: configSyntax`,
+        `test.projects in a parent's config`,
+        `a stream log that cannot be written`,
+      ]),
+      // 472 s of weight.
+      3: anyOf([
+        `a declaration fault: noTypescript`,
+        `a declaration fault: brokenOwner`,
+        `a declaration fault: brokenVitest`,
+        `a stop before the CLI starts`,
+        `an ambiguous authored mutant`,
+        `an edit during a check through the daemon`,
+        `an edit to data a test reads through fs (callback)`,
+        `an edit to a module that only mutated runs load`,
+        `a stream log lost after its note, then stopped`,
+        `a failing owner under a config that --config names`,
+        `a stop as the CLI starts`,
+        `an awaiting config in a package with no module type`,
+        `a failing owner under its parent's config`,
+        `a config that --config names`,
+        `a start refuses a dangling claim`,
+        `a start refuses a stale claim`,
+        `a .cjs config that calls require`,
+        `two batches each read a capture row while its worker wrote it`,
+        `a declaration fault: configNoDefault`,
+        `a declaration fault: projects`,
+        `a config fault in a run that owns nothing`,
+      ]),
+      // The rest: 472 s of weight, and any unit added later.
+      4: rest,
     },
   },
   // The end-to-end gap oracle's determinism units, which every pull request
