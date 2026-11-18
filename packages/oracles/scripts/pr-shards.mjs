@@ -329,10 +329,9 @@ export const partitions = {
         'a second daemon check of the budget witness',
         'a declaration fault: brokenVitest',
         'an edit that changed the cold result after a hang replaced the only context',
-        // Moved off shard 3 (174 s on the CI runner).
-        'a declaration fault: noTypescript',
       ]),
-      // The rest: the edit sequence through the daemon (94 s), brokenOwner (83 s), generated (23 s), the
+      // The rest: noTypescript (174 s on the CI runner), the edit sequence
+      // through the daemon (94 s), brokenOwner (83 s), generated (23 s), the
       // lazy module (12 s), and small units.
       3: rest,
     },
