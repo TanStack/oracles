@@ -78,7 +78,9 @@
     ["hookStops", "ed6866229ecc4969"],
     ["spinThrows", "fbc4c4e88a554e03"],
     ["slowStart", "ed6866229ecc4969"],
-    ["shortWait", "ed6866229ecc4969"]
+    ["shortWait", "ed6866229ecc4969"],
+    ["absentObjects", "b9e3dd12df07d597"],
+    ["optionalChains", "92f0ef0b4dde6c60"]
   ],
   "histories": [
     ["functions", "66c0e9c56951c377"],
@@ -159,6 +161,8 @@
     ["hookStops", "ed6866229ecc4969"],
     ["spinThrows", "fbc4c4e88a554e03"],
     ["slowStart", "ed6866229ecc4969"],
-    ["shortWait", "ed6866229ecc4969"]
+    ["shortWait", "ed6866229ecc4969"],
+    ["absentObjects", "b9e3dd12df07d597"],
+    ["optionalChains", "92f0ef0b4dde6c60"]
   ]
 }
