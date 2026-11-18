@@ -256,21 +256,25 @@ export const partitions = {
     // Packed to about 9 minutes a job (register M, 2026-11-17, "Pack CI jobs
     // to about 9 min"), from CI runs 44198893231 (59b5c449), 44279328397
     // (deb5997f) and 44283777367 (cf2bca81). Two determinism shards together
-    // ran 8m37s and 9m42s, so each runs alone; the first runs beside the
-    // first half of the random-seed campaign units (4m33s and 3m22s), and the
-    // last calibrations beside the second half, in the rest. The campaign
+    // ran 8m37s and 9m42s, so each runs alone. The first half of the
+    // random-seed campaign units runs alone too (beside a determinism shard
+    // it ran 7m59s and 9m42s, run 44297247671), and the last calibrations
+    // run beside the second half, in the rest. The campaign
     // units run one fixed base and one drawn from the run's seed (#122).
     shards: {
-      1: `(?:${startsWith(`determinism: fixed history: `, detFixedA)}|random seed: (?:[a-q]|r(?!ound[3-9])).*)`,
+      1: startsWith(`determinism: fixed history: `, detFixedA),
       2: startsWith(`determinism: fixed history: `, detFixedB),
       3: startsWith(`determinism: fixed history: `, detFixedC),
       4: `determinism: constructed history: .*`,
       5: `(?:${startsWith(`fixed history: `, fixedA)}|${startsWith(`calibration: `, calibration1)})`,
       6: `(?:${startsWith(`fixed history: `, fixedB)}|${startsWith(`calibration: `, calibration2)})`,
       7: `fixed seed 1: .*`,
+      // The first half of the random-seed campaign units: its bases vary from
+      // run to run, and beside a determinism shard it ran 7m59s and 9m42s.
+      8: `random seed: (?:[a-q]|r(?!ound[3-9])).*`,
       // The rest: the second half of the random-seed campaign units (3m59s),
       // the last calibrations (3m19s), and any new kind.
-      8: rest,
+      9: rest,
     },
   },
   // The gap report's static oracle, the slowest of the fast gap suites and
