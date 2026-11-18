@@ -479,9 +479,11 @@ function isModuleConfig(pkg, config) {
 /**
  * A session over one package: the Vitest that the package resolves, and warm
  * Vitest contexts that later checks reuse. A cold run opens a session for one
- * check; the daemon keeps one open.
+ * check; the daemon keeps one open. `pause` is the daemon's test-only hold at
+ * a named point (daemon.mjs `pauseAt`); a cold run has none, so its check
+ * never holds (v21.2 G43).
  */
-export async function openSession(pkg) {
+export async function openSession(pkg, pause = async () => {}) {
   // The analysis reads with this CLI's own TypeScript, never the package's: a
   // TypeScript 7 package exposes its version and no compiler API. The CLI's
   // dependency is TypeScript 5, so a copy without the API is a broken install,
@@ -983,12 +985,15 @@ export default async (env) => {
   // and for how long, so that a long run never looks frozen. Its label is
   // its mutant's id, an authored mutant's `authored:<id>`, or `baseline`
   // for a run with no mutant. The interval is 30 s; the CLI's oracle
-  // shortens it (ORACLE_GAPS_HEARTBEAT_MS). Each check sets where it logs.
-  let pulse = { log: () => {}, every: 30_000 }
+  // shortens it (ORACLE_GAPS_HEARTBEAT_MS). Each check sets where it logs,
+  // and whom each poll of a running copy tells that the check progresses
+  // (`progress`: the daemon's beat to the CLIs that wait on it).
+  let pulse = { log: () => {}, progress: () => {}, every: 30_000 }
   function heartbeat() {
     let since
     let sent = 0
     return (label, file, started) => {
+      pulse.progress()
       if (started !== since) {
         since = started
         sent = 0
@@ -1134,16 +1139,7 @@ export default async (env) => {
       }
       rmSync(capture)
     }
-    // A run that spun ended, so its closing row names what it read (F-D).
-    if (spun)
-      return {
-        file,
-        timedOut: true,
-        spin: true,
-        seconds,
-        inputs: importsOf(file, modules, closing),
-        readAt: closing.readAt,
-      }
+    if (spun) return spunRun(file, seconds, modules, closing)
     const tests = modules.flatMap((module) =>
       [...module.children.allTests()].map((testCase) => {
         const testResult = testCase.result()
@@ -1185,6 +1181,22 @@ export default async (env) => {
         String(error?.message ?? error),
       ),
       rows,
+      inputs: importsOf(file, modules, closing),
+      readAt: closing.readAt,
+    }
+  }
+
+  /**
+   * The unit of a run that spun past its call budget, alone or in a batch:
+   * a timeout. It ended, so its closing row names what it read, which it is
+   * stored under (F-D).
+   */
+  function spunRun(file, seconds, modules, closing = {}) {
+    return {
+      file,
+      timedOut: true,
+      spin: true,
+      seconds,
       inputs: importsOf(file, modules, closing),
       readAt: closing.readAt,
     }
@@ -1398,15 +1410,6 @@ export default async (env) => {
         return rows
       }
       const skippedUnit = (item) => ({ file: item.file, skipped: true })
-      // A copy that ran past its call budget, even one whose throw ended the
-      // loop and let it finish, is a timeout as it stands (a count, not a
-      // clock: no confirming run).
-      const spunUnit = (item) => ({
-        file: item.file,
-        timedOut: true,
-        spin: true,
-        seconds,
-      })
       if (result === undefined) {
         // Cancelled without waiting; the caller replaces the context (see
         // runUnit).
@@ -1427,7 +1430,11 @@ export default async (env) => {
           units: items.slice(0, current).map((item, i) => {
             if (!closed.has(copies[i])) return undefined
             if (skipped.has(copies[i])) return skippedUnit(item)
-            if (spun.has(copies[i])) return spunUnit(item)
+            // A copy that ran past its call budget, even one whose throw
+            // ended the loop and let it finish, is a timeout as it stands (a
+            // count, not a clock: no confirming run).
+            if (spun.has(copies[i]))
+              return spunRun(item.file, seconds, [], closings.get(copies[i]))
             const map = keyFor(copies[i], item.file)
             const own = rows
               .get(copies[i])
@@ -1471,7 +1478,8 @@ export default async (env) => {
         units: items.map((item, i) => {
           const copy = copies[i]
           if (skipped.has(copy)) return skippedUnit(item)
-          if (spun.has(copy)) return spunUnit(item)
+          if (spun.has(copy))
+            return spunRun(item.file, seconds, [], closings.get(copy))
           const map = keyFor(copy, item.file)
           const modules = result.testModules.filter((m) => m.moduleId === copy)
           return {
@@ -1548,6 +1556,8 @@ export default async (env) => {
       throw new Error(
         `oracle-gaps: this Vitest keeps no filesMap, idMap, or pathsSet in its state, so a check cannot retire its copies`,
       )
+    // The batch's errors outside any test are plain data in its units now.
+    clearErrors(context)
     const gone = new Set(copies)
     for (const [id, task] of idMap)
       if (gone.has(task.file?.filepath ?? task.filepath)) idMap.delete(id)
@@ -1556,6 +1566,20 @@ export default async (env) => {
       pathsSet.delete(copy)
     }
     retireModules(context.getRootProject().vite, gone)
+  }
+
+  /**
+   * Drops the errors outside any test that Vitest's state holds once a
+   * batch's units are plain data. Vitest clears them when a run starts, but
+   * keeps the last run's until the next, so a batch would retain them (the
+   * bounded-retention law, `errorsSet`).
+   */
+  function clearErrors(context) {
+    if (typeof context.state?.clearErrors !== `function`)
+      throw new Error(
+        `oracle-gaps: this Vitest's state has no clearErrors, so a run cannot tell its own errors outside any test`,
+      )
+    context.state.clearErrors()
   }
 
   /**
@@ -1622,7 +1646,21 @@ export default async (env) => {
         if (key.startsWith(`fs:`)) written.set(key, inputHash(key))
     }
   }
-  async function checkIn(options, store, log = console.error) {
+  async function checkIn(
+    options,
+    store,
+    log = console.error,
+    progress = () => {},
+    gone = () => false,
+  ) {
+    // A check whose caller has gone (a daemon's CLI that checked cold) stops
+    // before it writes more into its --out: here, at each phase's end, and
+    // after a context warms in place of a cut one (`replace`), the one stretch
+    // inside a phase with no running copy to beat.
+    const stopIfGone = () => {
+      if (gone()) throw new Error(`the check's caller has gone`)
+    }
+    stopIfGone()
     // Each check hashes every input from its text (fileHashes), and starts
     // with no write of its own.
     hashOf.forget()
@@ -1635,6 +1673,7 @@ export default async (env) => {
       )
     pulse = {
       log,
+      progress,
       every: Number(process.env.ORACLE_GAPS_HEARTBEAT_MS ?? 30_000),
     }
     mkdirSync(options.out, { recursive: true })
@@ -1654,6 +1693,7 @@ export default async (env) => {
     const endPhase = (name, fields) => {
       span(`phase`, phase, { name, ...fields })
       phase = Date.now()
+      stopIfGone()
     }
     // The state file is the fallback for setups that cannot `inject`.
     process.env.ORACLE_GAPS_STATE = join(options.out, `state.json`)
@@ -1676,6 +1716,9 @@ export default async (env) => {
     // the CLI's streams (review of #46, F7).
     if (settings.config !== undefined)
       await fromConfig(0, settings.config, configParses(settings.config))
+    // The daemon's test-only hold before the contexts warm: a healthy warm-up
+    // made slow, released by the test, never by time.
+    await pause(`daemon-warm`)
     // Contexts are warmed again when their settings or the Vite config they
     // loaded changed.
     const configHash = () =>
@@ -2127,6 +2170,9 @@ export default async (env) => {
         sleep(10_000),
       ])
       const replaced = slot.context
+      // The daemon's test-only hold before the replacement warms: a slow
+      // config load mid-phase, released by the test, never by time.
+      await pause(`daemon-replace`)
       const next = await warmContext(settings, slot.index)
       const specs = await specsOf(next)
       // One synchronous step: the replaced context leaves every map keyed by it and the new one joins them,
@@ -2139,21 +2185,28 @@ export default async (env) => {
       slot.context = next
       hook?.joined(next)
       span(`replace context`, started, { slot: slot.index })
+      stopIfGone()
+    }
+    // Each context's share of a phase, at once. The phase goes on only once
+    // every share has ended, even when one throws (a check whose caller has
+    // gone), so no share of this check still runs beside the daemon's next.
+    const eachSlot = async (share) => {
+      const ends = await Promise.allSettled(contexts.map(share))
+      for (const end of ends) if (end.status === `rejected`) throw end.reason
+      return ends.map((end) => end.value)
     }
     // `after(index)` is more work for context `index` once its files ran.
     const runAcross = async (files, pass, after = async () => {}) => {
       const parts = contexts.map(() => [])
       files.forEach((file, index) => parts[index % contexts.length].push(file))
       const { units, rows, failed } = passOf(
-        await Promise.all(
-          contexts.map(async (context, index) => {
-            const done = []
-            for (const file of parts[index])
-              done.push(await unit(context, file, `unmutated:${pass}`, true))
-            await after(index)
-            return done
-          }),
-        ),
+        await eachSlot(async (context, index) => {
+          const done = []
+          for (const file of parts[index])
+            done.push(await unit(context, file, `unmutated:${pass}`, true))
+          await after(index)
+          return done
+        }),
       )
       for (const u of units)
         fileSeconds.set(
@@ -2605,17 +2658,15 @@ export default async (env) => {
     const total = queue.length
     let judged = 0
     let gaps = 0
-    await Promise.all(
-      contexts.map(async (context, index) => {
-        const slot = { context, index }
-        for (
-          let group = queue.splice(0, GROUP);
-          group.length > 0;
-          group = queue.splice(0, GROUP)
-        )
-          await evaluateGroup(group, slot)
-      }),
-    )
+    await eachSlot(async (context, index) => {
+      const slot = { context, index }
+      for (
+        let group = queue.splice(0, GROUP);
+        group.length > 0;
+        group = queue.splice(0, GROUP)
+      )
+        await evaluateGroup(group, slot)
+    })
     results.sort(
       (a, b) => a.number - b.number || a.source.localeCompare(b.source),
     )
@@ -2674,39 +2725,37 @@ export default async (env) => {
       job.targets.map((file) => ({ job, file })),
     )
     for (const job of authoredJobs) job.units = []
-    await Promise.all(
-      contexts.map(async (context, index) => {
-        const slot = { context, index }
-        const serve = globalThis.__oracleGapsServe
-        for (
-          let item = authoredItems.shift();
-          item;
-          item = authoredItems.shift()
-        ) {
-          const { job, file } = item
-          serve[slot.index] = new Map([[job.path, job.patched.text]])
-          invalidateChanged([job.path], slot.context)
-          const [got] = await unitsBatch(slot, [
-            {
-              file,
-              label: job.id,
-              spec: job.id,
-              mutant: -1,
-              select: null,
-              limitMs: limitFor(file),
-              stopOnKill: true,
-              ignore: ignoredIn(file),
-            },
-          ])
-          // In the order the contexts finish: the classification lists
-          // the tests and laws in report order (classify.mjs
-          // `inReportOrder`), so they are listed alike in every run (law 9).
-          job.units.push(got)
-          serve[slot.index] = undefined
-          invalidateChanged([job.path], slot.context)
-        }
-      }),
-    )
+    await eachSlot(async (context, index) => {
+      const slot = { context, index }
+      const serve = globalThis.__oracleGapsServe
+      for (
+        let item = authoredItems.shift();
+        item;
+        item = authoredItems.shift()
+      ) {
+        const { job, file } = item
+        serve[slot.index] = new Map([[job.path, job.patched.text]])
+        invalidateChanged([job.path], slot.context)
+        const [got] = await unitsBatch(slot, [
+          {
+            file,
+            label: job.id,
+            spec: job.id,
+            mutant: -1,
+            select: null,
+            limitMs: limitFor(file),
+            stopOnKill: true,
+            ignore: ignoredIn(file),
+          },
+        ])
+        // In the order the contexts finish: the classification lists
+        // the tests and laws in report order (classify.mjs
+        // `inReportOrder`), so they are listed alike in every run (law 9).
+        job.units.push(got)
+        serve[slot.index] = undefined
+        invalidateChanged([job.path], slot.context)
+      }
+    })
     for (const job of authoredJobs)
       Object.assign(
         job.result,

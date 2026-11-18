@@ -324,6 +324,14 @@ export const partitions = {
         'an unsupervised run stopped after its note',
         'a start refuses a dangling claim',
         'a supervised check with no ps on its PATH',
+        // #131's daemon witnesses: the beat's (a 10 s confirmation through
+        // the daemon), the slow warm-up, the held check, and both F-D paths,
+        // moved off shard 3, which ran 11.2 min with them.
+        'a check through the daemon that works past the bound',
+        'a slow but healthy warm-up',
+        'a check whose daemon stops answering',
+        'an edit to data that only a spun copy reads',
+        'an edit to data that only a copy spun alone reads',
       ]),
       // Every part of `every outcome class` (the first half took 134 s on the CI
       // runner; the warm and abort stops are two small histories over the stop
@@ -337,6 +345,10 @@ export const partitions = {
         'a second daemon check of the budget witness',
         'a declaration fault: brokenVitest',
         'an edit that changed the cold result after a hang replaced the only context',
+        // Delta 4's two daemon witnesses (11 s and 20 s on Arca): shard 1
+        // ran 513 s on the CI runner without them, and this shard 309 s.
+        'a daemon start slower than the bound',
+        'a check abandoned while a context warms in place of a cut one',
       ]),
       // The rest: noTypescript (174 s on the CI runner), the edit sequence
       // through the daemon (94 s), brokenOwner (83 s), generated (23 s), the
@@ -574,6 +586,7 @@ export const partitions = {
         'a config whose test root holds no test file',
         'a config whose test root is a symbolic link',
         'a config whose plugin loads test files with a sync read',
+        'a check whose daemon stops answering',
         'two runs on one output directory',
         'a stream log that cannot be written',
         'a start refuses an empty claim',
@@ -606,6 +619,13 @@ export const partitions = {
         'an awaiting config in a package with no module type',
         'a declaration fault: configNoDefault',
         'a declaration fault: badEntry',
+        'an edit to data that only a spun copy reads',
+        "a refused run beside the CLI's directory, under a name that extends it",
+        'an edit to data that only a copy spun alone reads',
+        'a slow but healthy warm-up',
+        'a daemon start slower than the bound',
+        'a check abandoned while a context warms in place of a cut one',
+        'a check through the daemon that works past the bound',
         'a stop with the default output directory',
         'a daemon check with the default output directory',
         'a daemon check with the default output directory, unsupervised',
