@@ -327,12 +327,10 @@ export const partitions = {
         'every outcome class, the abort stop',
         'a declaration fault: brokenVitest',
       ]),
-      // #131's check past the bound (190 s), the stale authored mutant
-      // (38 s), a cold-result edit (20 s), and three small units: about
-      // 270 s.
+      // #131's check past the bound (190 s), a cold-result edit (20 s), and
+      // three small units: about 240 s.
       3: anyOf([
         'a check through the daemon that works past the bound',
-        'a stale authored mutant and a reformat',
         'an edit that changed the cold result after a hang replaced the only context',
         'an edit to data that only a spun copy reads',
         'an edit to data that only a copy spun alone reads',
@@ -346,16 +344,12 @@ export const partitions = {
         'a daemon start slower than the bound',
         'a check abandoned while a context warms in place of a cut one',
       ]),
-      // apiLessTypescript, noTypescript (55 s), a pause that cannot engage,
-      // the lazy module, two mid-check test edits, and a reset check: about
-      // 160 s.
+      // apiLessTypescript, a pause that cannot engage, the lazy module, and
+      // a reset check.
       5: anyOf([
         'a declaration fault: apiLessTypescript',
-        'a declaration fault: noTypescript',
         'a daemon pause that cannot engage',
         'a lazy module loaded before a hang in the same batch',
-        'a test edits the helper it read, during a check through the daemon',
-        'a test edits the data it read, during a check through the daemon',
         'a reset check after its warm daemon was replaced',
       ]),
       // A second daemon check (89 s), #131's daemon that stops answering
@@ -372,9 +366,17 @@ export const partitions = {
         'a start refuses a dangling claim',
         'a supervised check with no ps on its PATH',
       ]),
-      // The rest: generated (not doubled) and small units, 232 s, and any
+      // noTypescript, the two mid-check test edits, and the stale authored
+      // mutant, moved off shards 3 and 5 (280 s and 313 s at 3ea7bcc4).
+      7: anyOf([
+        'a declaration fault: noTypescript',
+        'a test edits the helper it read, during a check through the daemon',
+        'a test edits the data it read, during a check through the daemon',
+        'a stale authored mutant and a reformat',
+      ]),
+      // The rest: generated (not doubled) and small units, 238 s, and any
       // new unit.
-      7: rest,
+      8: rest,
     },
   },
   'oracle-gaps-static-windows': {
