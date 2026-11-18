@@ -172,7 +172,7 @@ if (process.env.ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED !== undefined) {
 const { parseArgs, usage } = await import(`./args.mjs`)
 const { endRun, Refusal } = await import(`./ending.mjs`)
 // ending.mjs loads stream.mjs, so this import costs no load of its own.
-const { escapeControls } = await import(`./stream.mjs`)
+const { escapeControls, streamLine } = await import(`./stream.mjs`)
 
 // How long the group has to end after a stop signal before it is killed.
 const STOP_GRACE_MS = 2000
@@ -613,7 +613,12 @@ async function checkCold(options) {
   }
 }
 
-/** The summary of a check run by the package's daemon. */
+/**
+ * The summary of a check run by the package's daemon, or, when the daemon
+ * stopped answering, of a cold check, after a note that names why (R39: a
+ * cold fallback is not a failure). A cold check reports what the daemon's
+ * would have (incremental equals cold).
+ */
 async function checkThroughDaemon(options) {
   const { codeIdentity } = await import(`./check.mjs`)
   const { received, requestDaemon } = await import(`./daemon.mjs`)
@@ -625,6 +630,12 @@ async function checkThroughDaemon(options) {
     [...process.argv.slice(2), `--out`, options.out],
     codeIdentity(),
   )
+  if (reply.silent) {
+    writeStream(
+      `${streamLine(`note`, `the package's daemon sent nothing for ${reply.silent} s; this check runs cold`)}\n`,
+    )
+    return checkCold(options)
+  }
   if (reply.stderr) writeStream(reply.stderr)
   if (reply.failed) throw received(reply.failed)
   return reply.stdout

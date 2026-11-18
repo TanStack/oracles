@@ -15,14 +15,18 @@ import { drawn, histories } from '../oracle-gaps/gap-report-model-oracle.mjs'
 // the histories that the oracle takes, after the grammar's own mapping, so
 // a mapping that folds a new field into an old one shows too. A new field
 // goes at the end of the grammar and gets its own line at the end of each
-// list; no earlier line changes. It guards the fields' draws, not the
+// list; no earlier line changes. A constant field that becomes drawn
+// (randomness wins for new fields, maintainer decision, 2026-11-16) changes
+// its own line and the lines of the fields drawn after it, and no earlier
+// one. It guards the fields' draws, not the
 // resolved plans: a new field may still change what a plan does (the plan
 // takes `laterSteps` after a history's steps). The default fixed-seed
-// campaign draws 2 histories, and those resolve as on main. Under M
+// campaign draws 2 histories; since `warmReplaced`, `testRoot` and
+// `loadPlugin` are drawn, those resolve with these fields' draws. Under M
 // "Randomness wins" (2026-11-16) a new field that changes what runs is drawn,
 // so the fields after it shift: the PR that adds it records the lists anew
 // and reports the fixed seed's reach states lost and gained (#99 drew the
-// deterministic-cuts fields).
+// deterministic-cuts fields and appended `heavy`).
 const FIXED_SEED = 20261105
 const DRAWS = 500
 // The constructed-only test fields: constants in every drawn test record,
@@ -102,13 +106,25 @@ describe(`the gap oracle's history grammar`, () => {
     }
   })
 
-  // The maintainer's decision "Randomness wins for new fields" (2026-11-16):
-  // a field that changes what a history runs is drawn, except that a drawn
-  // field never switches a test-only hook. Each field below switches one
-  // (named beside it), so every drawn history holds its neutral value, and no
-  // drawn stop is the stop after the completed line, which holds the run's
-  // exit (ORACLE_GAPS_TEST_HOLD_UNTIL). The list is written here, not read
-  // from the model, so a model that starts to draw one of them fails.
+  // Randomness wins for new fields (maintainer decision, 2026-11-16; v21.2
+  // R54, I16): a field that changes what a history runs is drawn, except that
+  // no drawn field switches a test-only hook on. The hooks are read off what
+  // the driver would set for a history, by value, here, not from the model,
+  // so a model that starts to draw one fails:
+  // - its constant hook fields hold their neutral values (#57's among them);
+  // - no step arms a daemon pause: `dieMidCheck` sets ORACLE_GAPS_TEST_PAUSE_AT
+  //   (daemon-reply), _PAUSE_MARK, _SERVED_MARK, _WAIT_MS and _WAIT_MARK, and
+  //   `resetBeforeRead` sets ORACLE_GAPS_TEST_PAUSE_AT (daemon-read),
+  //   _PAUSE_ARM and _SERVED_MARK; `pauseEngages` only disarms those, so it is
+  //   no neutral value of its own;
+  // - no stop switches a hook: a stop after the completed line holds the run's
+  //   exit (ORACLE_GAPS_TEST_HOLD_UNTIL), and a stop while the config warms
+  //   waits at the warm probe (ORACLE_GAPS_TEST_WARM_PROBE); on win32 the
+  //   driver runs a stop through the test stop file (ORACLE_GAPS_TEST_STOP)
+  //   only for a history that sets `hookStops`.
+  // It reads `histories`, the histories the oracle takes, at three seeds, and
+  // the drawn records, which hold no stop after the completed line at all.
+  // `loadPlugin` is fixture text (LOAD_PLUGIN), not a hook, so it is drawn.
   test(`draws no value that switches a test-only hook`, () => {
     const neutral: Record<string, unknown> = {
       overlap: false, // ORACLE_GAPS_TEST_HOLD_UNTIL
@@ -118,16 +134,23 @@ describe(`the gap oracle's history grammar`, () => {
       supervisorDeath: false, // ORACLE_GAPS_TEST_PAUSE_AT=child
       unsupervised: false, // ORACLE_GAPS_TEST_UNSUPERVISED
       tornRows: false, // ORACLE_GAPS_TEST_TORN_ROWS
-      loadPlugin: false, // LOAD_PLUGIN
       rejectBatch: 0, // ORACLE_GAPS_TEST_REJECT_BATCH
+      replyHeld: false, // ORACLE_GAPS_TEST_PAUSE_AT=daemon-check, with a release
+      hookStops: false, // ORACLE_GAPS_TEST_STOP on win32
+      slowStart: false, // _HOLD_OVERLAP, or _PAUSE_AT=daemon-warm or daemon-replace
+      shortWait: false, // ORACLE_GAPS_TEST_WAIT_MS
+      holdOverlap: false, // ORACLE_GAPS_TEST_HOLD_OVERLAP (#126)
     }
+    const hookSteps = [`dieMidCheck`, `resetBeforeRead`]
+    const hookStops = [`after`, `warm`]
     // A test's own hook switch (#99): what is pending while it waits, which
     // switches ORACLE_GAPS_TEST_SAMPLES, ORACLE_GAPS_TEST_RUNNER_WRITE or
     // ORACLE_GAPS_TEST_RUNNER_TIMER.
     const neutralTest: Record<string, unknown> = { pendingIo: null }
     for (const seed of [FIXED_SEED, 1, 2]) {
-      const samples = fc.sample(drawn, { seed, numRuns: DRAWS }) as Array<
+      const samples = fc.sample(histories, { seed, numRuns: DRAWS }) as Array<
         Record<string, unknown> & {
+          steps: Array<string> | null
           stopRuns: Array<{ when: string }>
           tests: Array<Record<string, unknown>>
         }
@@ -141,8 +164,16 @@ describe(`the gap oracle's history grammar`, () => {
               `tests.${field}`,
               value,
             ])
-        for (const stop of history.stopRuns) expect(stop.when).not.toBe(`after`)
+        for (const step of history.steps ?? [])
+          expect(hookSteps).not.toContain(step)
+        for (const stop of history.stopRuns)
+          expect(hookStops).not.toContain(stop.when)
       }
+      const records = fc.sample(drawn, { seed, numRuns: DRAWS }) as Array<{
+        stopRuns: Array<{ when: string }>
+      }>
+      for (const record of records)
+        for (const stop of record.stopRuns) expect(stop.when).not.toBe(`after`)
     }
   })
 })

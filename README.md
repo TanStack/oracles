@@ -178,18 +178,22 @@ agent.
   - `ORACLE_GAPS_TEST_PAUSE_MARK` and `ORACLE_GAPS_TEST_PAUSE_ARM` (daemon points):
     `ORACLE_GAPS_TEST_PAUSE_AT` also names `daemon-reply` (holds a daemon's reply
     after the check) and `daemon-read` (holds its first connection unread, once
-    `ORACLE_GAPS_TEST_PAUSE_ARM` names an existing file). The blocked process
+    `ORACLE_GAPS_TEST_PAUSE_ARM` names an existing file; `daemon-reply` too, when
+    `ORACLE_GAPS_TEST_PAUSE_ARM` is set) and `daemon-check` (holds a daemon's
+    first armed check before it runs, until the file
+    `ORACLE_GAPS_TEST_PAUSE_RELEASE` names exists). The blocked process
     writes its pid to `ORACLE_GAPS_TEST_PAUSE_MARK`, whole (a temp file, then a
     rename), and the test parses the pid as a positive integer before it sends
     any signal, so no signal is needed to pause on win32.
-  - `ORACLE_GAPS_TEST_WAIT_MARK` names a file a request writes when its reply has
-    not come `ORACLE_GAPS_TEST_WAIT_MS` after it was sent. A request has no
-    timeout of its own: this timer starts with the request, and is cleared when
-    the request settles, whether it resolves or rejects. The test acts on the
-    CLI's wait, not on the clock.
+  - `ORACLE_GAPS_TEST_WAIT_MARK` names a file a check's request writes when
+    its daemon has sent nothing for `ORACLE_GAPS_TEST_WAIT_MS`, the point at
+    which the CLI would run the check cold. With the mark set, the request
+    writes it there and keeps waiting, so the test acts on the CLI's wait, not
+    on the clock.
   - `ORACLE_GAPS_TEST_WAIT_MS` (milliseconds, default 60000) is the CLI's wait
-    for a daemon to start or to close; a test shortens it to outlast a paused
-    daemon. It is a test-only knob, not a setting for users.
+    for a daemon to start or to close, and for a daemon that holds its check
+    to send anything; a test shortens it to outlast a paused daemon. It is a
+    test-only knob, not a setting for users.
   - `ORACLE_GAPS_TEST_SERVED_MARK` names a file the daemon writes its pid to
     after it answers a check, so a test can tell which daemon served an
     earlier check (the warm daemon that a later check's pause must match).
@@ -243,8 +247,15 @@ exited with <signal or code>` and exits 3; after an out-of-memory crash
   of its own (as some browser drivers are). On SIGINT or SIGTERM the CLI
   signals the whole group, kills what is left 2 s later, and exits 130 or 143.
   A check through the daemon (`--daemon`) runs in the daemon's process; stop
-  it with `oracle-gaps --stop-daemon --package <dir>`. On Windows, which has
-  no process groups, the run is not supervised.
+  it with `oracle-gaps --stop-daemon --package <dir>`. While a check waits or
+  runs there, the daemon tells the CLI whenever a running copy is polled. A
+  daemon that sends nothing for 60 s has stopped answering: the CLI prints
+  `oracle-gaps: note the package's daemon sent nothing for 60 s; this check
+runs cold` and runs the check in its own process, which reports what the
+  daemon would have. The daemon keeps running: it drops the abandoned check
+  before it runs, or at its next phase, so it writes nothing more into that
+  run's output directory, and serves the next check. On Windows, which has no process groups, the run is not
+  supervised.
 
   A check through the daemon reuses a run while its inputs are unchanged:
   the modules the run loaded, and the files in the package that its tests
