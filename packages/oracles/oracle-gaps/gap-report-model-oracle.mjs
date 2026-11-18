@@ -982,10 +982,10 @@ const drawn = fc.record({
   // rest of the chain. Drawn last (the generator rule).
   // A chain may end in a method `f` called through `?.()`, then read `v`
   // through `?.` (`o?.f?.()?.v`) or a plain read (`o?.f?.().v`). The method
-  // returns an object (`Object`) or nothing (`() => undefined`; the plain
-  // read is drawn only after a method that returns an object), and the
-  // absent value may be the method itself (the level after the last
-  // object). An optional call is no mutation site: where its method is
+  // is a builtin, so its field holds no function of the source: `Object`
+  // returns an object, and `Function.prototype` returns nothing (the plain
+  // read is drawn only after a method that returns an object). The absent
+  // value may be the method itself (the level after the last object). An optional call is no mutation site: where its method is
   // absent, JavaScript skips the rest of the chain, so a later `?.` link's
   // plain read changes nothing.
   optionalChains: fc.array(
@@ -2296,7 +2296,7 @@ const readText = (stmt) =>
 // The method's source: one that returns an object, or one that returns
 // nothing; absent for a falsy `x` where the method is the statement's level.
 const methodText = (stmt) => {
-  const method = stmt.returns === `nothing` ? `() => undefined` : `Object`
+  const method = stmt.returns === `nothing` ? `Function.prototype` : `Object`
   return stmt.level === stmt.links
     ? `x ? ${method} : ${absentOf(stmt)}`
     : method
