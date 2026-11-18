@@ -893,6 +893,7 @@ export const partitions = {
         'a stop by SIGTERM as the CLI starts',
         'a start refuses a dangling claim',
         'a stop before the CLI starts, after a stopped check',
+        'a run after a killed CLI',
       ]),
       10: anyOf([
         'an edit that changed the cold result after a hang replaced the only context',

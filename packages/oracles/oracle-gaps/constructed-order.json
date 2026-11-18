@@ -88,6 +88,7 @@
     "an edit sequence over the witness module, the second half",
     "a value change at a ?. read and at a return",
     "a ?. read of an object absent only at load",
-    "a stop before the CLI starts, after a stopped check"
+    "a stop before the CLI starts, after a stopped check",
+    "a run after a killed CLI"
   ]
 }
