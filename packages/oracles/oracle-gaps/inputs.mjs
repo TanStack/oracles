@@ -81,6 +81,11 @@ function listingHash(path, recursive) {
     return sha1(
       original
         .readdirSync(path, { withFileTypes: true, recursive })
+        // The runner's own entries (its session directory) are no input.
+        .filter(
+          (entry) =>
+            !isRunnerFile(`${posix(entry.parentPath ?? path)}/${entry.name}/`),
+        )
         .map(
           (entry) =>
             `${posix(entry.parentPath ?? path)}/${entry.name}\0${entry.isDirectory() ? `d` : entry.isSymbolicLink() ? `l` : `f`}`,
@@ -114,7 +119,10 @@ function kindOf(path) {
 }
 
 /** A variable's input hash under `env`, or for `*`, that of its names. */
-export const envHash = (name, env = process.env) =>
+export const envHash = (
+  name,
+  env = globalThis.__oracleGapsEnv ?? process.env,
+) =>
   sha1(
     name === `*`
       ? Object.keys(env).sort().join(`\0`)
@@ -203,6 +211,8 @@ export function watchReads(record) {
   syncBuiltinESMExports()
   // A variable read by name, a test of whether it is set, and a listing of
   // the names, which reads the set of names.
+  // The environment itself, which hashing reads without being watched.
+  globalThis.__oracleGapsEnv = process.env
   process.env = new Proxy(process.env, {
     get(env, name) {
       if (typeof name === `string`) record(`env:${name}`)

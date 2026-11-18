@@ -519,6 +519,15 @@ export async function openSession(pkg, pause = async () => {}) {
   // the warm itself.
   const warmReads = new Map()
   const hookReads = new Map()
+  // The hook reads in the order they came (`hookLog`), kept once in the
+  // store per session (`hook-log:<id>`): a unit names the part of the log
+  // that came before it settled (`hooks:<id>:<n>`), which is an input while
+  // every read in that part holds its hash, so no unit carries the reads
+  // themselves (about 3,000 on TanStack DB's suite; review of #133).
+  const hookLogId = sha1(`${process.pid}:${Date.now()}:${Math.random()}`)
+  const hookLog = []
+  // Per check: how far each session's log still holds (logHolds).
+  const holds = new Map()
   const wrote = new Set()
   const written = new Map()
   const reading = new AsyncLocalStorage()
@@ -526,10 +535,18 @@ export async function openSession(pkg, pause = async () => {}) {
     const at = reading.getStore()
     if (write && key.startsWith(`env:`)) wrote.add(key)
     const reads = at?.hook || at?.done ? hookReads : warmReads
-    if (at === undefined || key === at.module || reads.has(key)) return
+    if (at === undefined || at.discovery || key === at.module || reads.has(key))
+      return
     if (write) wrote.add(key)
-    else if (!wrote.has(key))
-      reads.set(key, key.startsWith(`env:`) ? null : inputHash(key))
+    else if (!wrote.has(key)) {
+      const hash = key.startsWith(`env:`)
+        ? reads === hookReads
+          ? envHash(key.slice(4))
+          : null
+        : inputHash(key)
+      reads.set(key, hash)
+      if (reads === hookReads) hookLog.push([key, hash])
+    }
   })
   // Runs `work` as a warm under `reading`.
   const warming = async (work) => {
@@ -699,11 +716,33 @@ export default async (env) => {
     // A variable by its value in the environment this check runs under, and
     // a directory by its listing now.
     if (path.startsWith(`env:`)) return envHash(path.slice(4))
+    if (path.startsWith(`hooks:`)) {
+      const [, id, n] = path.split(`:`)
+      return logHolds(id, Number(n)) >= Number(n) ? `held` : `changed`
+    }
     if (/^(dir|dirs|stat):/.test(path)) return inputHash(path)
     const text =
       globalThis.__oracleGapsServe[index]?.get(path) ??
       globalThis.__oracleGapsSchemata.get(path)
     return text === undefined ? hashOf(path) : sha1(text)
+  }
+  // How much of a session's hook log, from its start, still holds its
+  // hashes in this check: a unit that names `hooks:<id>:<n>` is unchanged
+  // while the first n reads hold. Another session's log is read from the
+  // store; the current one's grows while the check runs, so the count
+  // extends as later units ask.
+  let currentStore
+  const logHolds = (id, n) => {
+    const log =
+      id === hookLogId
+        ? hookLog
+        : (currentStore?.get(`hook-log:${id}`)?.variants[0]?.inputs ?? [])
+    const held = holds.get(id) ?? { count: 0, broken: false }
+    holds.set(id, held)
+    while (!held.broken && held.count < Math.min(n, log.length))
+      if (servedHash(log[held.count][0]) === log[held.count][1]) held.count += 1
+      else held.broken = true
+    return held.count
   }
   // A context transformed a module (its wrapper's transform hook): the hash
   // of what it then serves.
@@ -901,6 +940,17 @@ export default async (env) => {
         throw error
       }),
     )
+    // Vitest's discovery of the test files lists the package's directories.
+    // Each check discovers them again, outside any warm (specsOf), so what a
+    // listing found is never stale: those listings are no global input. The
+    // `--out` directories that runs create beside the tests would otherwise
+    // change every unit's identity at every check.
+    for (const project of context.projects ?? []) {
+      const globFiles = project.globFiles
+      if (typeof globFiles === `function`)
+        project.globFiles = (...args) =>
+          reading.run({ discovery: true }, () => globFiles.apply(project, args))
+    }
     // Vitest 3 calls this step `init`; Vitest 4 renamed it `standalone`.
     await fromConfig(
       index,
@@ -1644,6 +1694,12 @@ export default async (env) => {
     } finally {
       for (const key of wrote)
         if (key.startsWith(`fs:`)) written.set(key, inputHash(key))
+      // The session's hook log, for units that later sessions look up.
+      if (hookLog.length > 0)
+        args[1]?.put(`hook-log:${hookLogId}`, {
+          inputs: [...hookLog],
+          unit: null,
+        })
     }
   }
   async function checkIn(
@@ -1665,6 +1721,8 @@ export default async (env) => {
     // with no write of its own.
     hashOf.forget()
     wrote.clear()
+    holds.clear()
+    currentStore = store
     const authored = options.mutants ? loadAuthored(options.mutants) : []
     seedVariable = `${options.envPrefix}_SEED`
     if (options.hangLimit > options.mutantLimit)
@@ -1865,10 +1923,11 @@ export default async (env) => {
       // its read: the run may have read through any of it (see hookReads).
       // A variable that the CLI set (`wrote`) is its own output, which a
       // copy may read too (the harness's fallback read of ORACLE_GAPS_STATE).
-      const paths = [...new Set([...runPaths, ...hookReads.keys()])].filter(
+      const hooks = `hooks:${hookLogId}:${hookLog.length}`
+      const paths = [...new Set([...runPaths, hooks])].filter(
         (path) => !(path.startsWith(`env:`) && wrote.has(path)),
       )
-      const readAt = { ...Object.fromEntries(hookReads), ...runReadAt }
+      const readAt = { [hooks]: `held`, ...runReadAt }
       const inputs = paths.map((path) => {
         const now = servedHash(path, index)
         const hash =
