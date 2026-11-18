@@ -4880,9 +4880,9 @@ function runsOf(plan, tests, sites, active) {
         if (changed && waitsIn(plan, t)) waited = true
       }
       // A test that passed: its route is the last one it registered, and
-      // its work is judged against the bound it declared. An authored
-      // mutant's copy is not instrumented, so it counts no work, and the
-      // work law judges only operator mutants.
+      // its work is judged against the bound it declared. The work law
+      // judges only operator mutants: an authored copy counts calls only for
+      // its call budget.
       const route = routeOf(t, partsOf(t).at(-1))
       // Only a route that oracleProperty registers for production can carry
       // a bound, and a test whose row is clocked (it made a timer, read the
@@ -5017,9 +5017,9 @@ function judge(plan, tests, sites, active, { budgeted = true, detail } = {}) {
     for (const r of runs.filter((x) => x.t.file === file)) {
       // A test whose calls pass its call budget is cut by count, where the
       // run goes past it (the CLI's spin row; the budget is per test). An
-      // authored mutant's copy is not instrumented, so it counts no calls and
-      // never spins.
-      const spun = !r.hang && active?.site !== undefined && r.work > callBudget
+      // authored mutant's copy counts calls too (issue #167), so it spins as
+      // an operator copy does.
+      const spun = !r.hang && r.work > callBudget
       const byCount = spun || (r.hang && r.cut === `count`)
       if (r.hang && r.cut === `wall`) wallCut = true
       // A count that could depend on time kills nothing: a gap.
@@ -5485,8 +5485,9 @@ function model(plan) {
   const authoredAll = plan.authoredList.map((a) => ({
     id: a.id,
     key: `${SOURCE}#authored:${a.id}`,
-    // An authored mutant is not instrumented, so a survivor is not-judged
-    // (a changed observation) or not-observed (the patch changed the code).
+    // An authored mutant's copy counts calls only, with no value changes
+    // recorded, so a survivor is not-judged (a changed observation) or
+    // not-observed (the patch changed the code).
     kind: !a.applies
       ? `does-not-apply`
       : owners(a.fn).size === 0

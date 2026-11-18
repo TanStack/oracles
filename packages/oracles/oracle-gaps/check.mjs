@@ -63,6 +63,7 @@ import {
   testNamesOf,
 } from './stream.mjs'
 import { analyze, isRunnerCopy } from './analysis.mjs'
+import { instrument } from './schemata.mjs'
 import { Refusal } from './ending.mjs'
 import {
   baseOf,
@@ -2634,11 +2635,15 @@ export default async (env) => {
     endPhase(`operator mutants`, { mutants: results.length })
 
     // 6. Authored mutants, spread across the contexts. Each serves a patched
-    // copy of its source only to the context that runs it. The copy is not
-    // instrumented, so an authored mutant runs against every owner of the
-    // function its edit lands in, whole files, still stopping at its first
-    // kill.
+    // copy of its source only to the context that runs it. An authored mutant
+    // runs against every owner of the function its edit lands in, whole
+    // files, still stopping at its first kill. The patched copy is
+    // instrumented with no site active, under site numbers past every
+    // operator mutant's, only so that it counts calls: a copy that spins past
+    // its call budget is cut by count, as an operator copy is (v21.2 R50, G6;
+    // issue #167), and its probe sites count nothing (R53).
     const authoredJobs = []
+    let authoredSites = mutants.length
     for (const mutant of authored) {
       const id = `authored:${mutant.id}`
       if (options.only && !options.only.has(id)) continue
@@ -2669,10 +2674,22 @@ export default async (env) => {
         result.outcome = `unowned`
         continue
       }
+      const counted = instrument(
+        ts,
+        path,
+        patched.text,
+        mutant.source,
+        authoredSites,
+      )
+      authoredSites += counted.mutants.length
+      probeSites.push(
+        ...counted.mutants.filter((m) => m.probeGuard).map((m) => m.number),
+      )
       authoredJobs.push({
         id,
         path,
         patched,
+        counted: counted.code,
         result,
         owners,
         targets: [...owners].filter((file) => fileSpecs.has(file)),
@@ -2695,7 +2712,7 @@ export default async (env) => {
         item = authoredItems.shift()
       ) {
         const { job, file } = item
-        serve[slot.index] = new Map([[job.path, job.patched.text]])
+        serve[slot.index] = new Map([[job.path, job.counted]])
         invalidateChanged([job.path], slot.context)
         const [got] = await unitsBatch(slot, [
           {
@@ -2705,9 +2722,10 @@ export default async (env) => {
             mutant: -1,
             select: null,
             limitMs: limitFor(file),
-            // An authored copy makes no progress as an operator copy does
-            // (v21.2 R50). It counts no calls, so it has no call budget.
+            // An authored copy makes no progress, and spins, as an operator
+            // copy does (v21.2 R50): it is idle by state and cut by count.
             idleMs: IDLE_MS,
+            callBudget: callBudgetFor(file),
             idleHorizonMs: limitFor(file),
             stopOnKill: true,
             ignore: ignoredIn(file),
@@ -2716,7 +2734,8 @@ export default async (env) => {
         // In the order the contexts finish: the classification lists
         // the tests and laws in report order (classify.mjs
         // `inReportOrder`), so they are listed alike in every run (law 9).
-        job.units.push(got)
+        // A spin judges only by a count that cannot follow the clock.
+        job.units.push(countOnly(got))
         serve[slot.index] = undefined
         invalidateChanged([job.path], slot.context)
       }

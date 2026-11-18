@@ -559,8 +559,9 @@ export function judgeAuthored(units, baseline) {
     ),
     baseline,
   )
-  // An authored mutant is not instrumented, so only its changed observations
-  // are measured: the rest is `not-observed`, the patch changed the code.
+  // An authored mutant's copy counts calls only (check.mjs), so only its
+  // changed observations are measured: the rest is `not-observed`, the patch
+  // changed the code.
   result.class = result.changedTests.length > 0 ? `not-judged` : `not-observed`
   return result
 }
