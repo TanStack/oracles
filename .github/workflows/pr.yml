@@ -106,12 +106,12 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
   test-oracle-gaps-end-to-end:
-    name: Gap report end-to-end oracle (fixed seed, ${{ matrix.shard }}/3)
+    name: Gap report end-to-end oracle (fixed seed, ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -119,7 +119,7 @@ jobs:
           persist-credentials: false
       - name: Setup Tools
         uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
-      # The end-to-end oracle's fixed-seed units, in three shards. Its random
+      # The end-to-end oracle's fixed-seed units, in four shards. Its random
       # units and determinism units run in their own jobs, and its
       # calibrations run locally.
       - run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-fixed-seed "$SHARD")"
@@ -159,14 +159,14 @@ jobs:
           SHARD: ${{ matrix.shard }}
           GAP_E2E_SHRINKS: 0
   test-oracle-gaps-determinism:
-    name: Gap report end-to-end oracle (determinism, ${{ matrix.shard }}/6)
+    name: Gap report end-to-end oracle (determinism, ${{ matrix.shard }}/7)
     runs-on: ubuntu-latest
     # A high backstop only (M-6): each shard stays under 10 minutes (P12).
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -174,7 +174,7 @@ jobs:
           persist-credentials: false
       - name: Setup Tools
         uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
-      # The end-to-end oracle's determinism units, in six shards, the witness
+      # The end-to-end oracle's determinism units, in seven shards, the witness
       # module's two halves among them (the maintainer's decision "#90 job
       # stays blocking", 2026-11-16). Each unit runs a history twice and
       # compares the results and fixed lines; heartbeats are checked for shape.
