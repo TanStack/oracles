@@ -480,12 +480,12 @@ export function instrument(ts, path, text, source, offset = 0) {
   const isProbeGuard = (node) =>
     isProbeOnly(node) || helpers.has(node) || isGuardDeclarator(node)
   let guarded = false
-  // Each `?.` site's id, by its node, so a later link of the same chain can
-  // name the link before it (see `innerLink`).
-  const chainIds = new Map()
-  // Each optional call that a later `?.` site of its chain reads, by its
-  // node: the key of the record by which it passes its short-circuit on.
-  const callKeys = new Map()
+  // Each link that a later `?.` site of its chain can name (see
+  // `innerLink`), by its node: a `?.` site's id (a number), or, for an
+  // optional call, the key of the record by which it passes its
+  // short-circuit on (a string).
+  const linkIds = new Map()
+  let optionalCalls = 0
 
   // An operand is an identifier or a numeric literal: its text reads the same
   // value wherever it appears. Anything else has no text here.
@@ -1182,7 +1182,7 @@ export function instrument(ts, path, text, source, offset = 0) {
         `.`,
         constant ? DEAD_CODE : undefined,
       )
-      chainIds.set(node, ids.chain)
+      linkIds.set(node, ids.chain)
     }
 
     const children = []
@@ -1261,8 +1261,8 @@ export function instrument(ts, path, text, source, offset = 0) {
     // passes its short-circuit on: an empty spread before its arguments,
     // which runs only when the call does, records that it ran.
     if (ts.isCallExpression(node) && node.questionDotToken && feedsLink(node)) {
-      const key = JSON.stringify(`${source}#${callKeys.size}`)
-      callKeys.set(node, key)
+      const key = JSON.stringify(`${source}#${optionalCalls++}`)
+      linkIds.set(node, key)
       const [first] = node.arguments
       const at = first ? emitted.get(first).at : out.length - 1
       return `${out.slice(0, at)}...${G}.ran(${key})${first ? `, ` : ``}${out.slice(at)}`
@@ -1297,8 +1297,7 @@ export function instrument(ts, path, text, source, offset = 0) {
     let link = receiver
     while (ts.isOptionalChain(link) && link.questionDotToken === undefined)
       link = link.expression
-    if (!ts.isOptionalChain(link)) return undefined
-    return ts.isCallExpression(link) ? callKeys.get(link) : chainIds.get(link)
+    return ts.isOptionalChain(link) ? linkIds.get(link) : undefined
   }
   // A link's helper call. After an optional call, the receiver first opens
   // the call's record, which the call's spread closes when the call runs.

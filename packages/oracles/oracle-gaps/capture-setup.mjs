@@ -585,6 +585,8 @@ if (fc && process.env.ORACLE_GAPS_PROFILE) {
 let shortCircuited
 // Each optional call's open records: whether the call ran (`open`, `ran`).
 const callRuns = new Map()
+// The spread that `ran` returns: it adds no argument.
+const NO_ARGUMENTS = Object.freeze([])
 const swapped = {
   '===': `!==`,
   '!==': `===`,
@@ -664,9 +666,16 @@ globalThis.__oracleGaps = {
   // An optional call that a later `?.` link reads passes its short-circuit
   // on: the link's receiver opens a record that the call has not run, and
   // the call's empty argument spread, which runs only when the call does,
-  // marks it as run. The link reads the record and closes it. A record per
-  // open evaluation keeps an evaluation of the same expression inside the
-  // method lookup or the call apart.
+  // marks the newest open record of that call as run. The link reads the
+  // newest record and closes it. The records of one call form a stack, so
+  // they pair with their evaluation only where evaluations of the same
+  // expression nest and each one ends: an evaluation nested in the
+  // receiver, the method lookup, the arguments, or the method's body that
+  // throws and is caught there leaves its record open, and two async
+  // evaluations interleaved at an `await` close each other's records. Then
+  // the outer link reads another evaluation's record: a false skip (its
+  // mutant judged without a run) or a false throw (the gap oracle's Limits;
+  // TanStack/oracles#162).
   open(key) {
     const runs = callRuns.get(key)
     if (runs) runs.push(false)
@@ -675,7 +684,7 @@ globalThis.__oracleGaps = {
   ran(key) {
     const runs = callRuns.get(key)
     if (runs?.length) runs[runs.length - 1] = true
-    return []
+    return NO_ARGUMENTS
   },
   // Records whether the condition was truthy or falsy, then applies a forced
   // value if one of this `if`'s two mutants is active.
