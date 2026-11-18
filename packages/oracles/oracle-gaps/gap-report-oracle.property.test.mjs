@@ -2578,13 +2578,13 @@ async function incremental(dir, plan, cli, copy, observe, states) {
     }
     if (twice && step === `start`)
       states.add(`two checks started the daemon at once`)
-    // A warm daemon's check under the short bound that ran a copy past it
-    // (`shortWait`) and did not fall back.
+    // A warm daemon's check under the short bound that cut a slow copy and
+    // ran its 10 s confirmation (`shortWait`), and did not fall back.
     if (
       plan.shortWait &&
       step !== `start` &&
       daemon.reported &&
-      (daemon.evidence?.computed ?? 0) > 0 &&
+      (daemon.evidence?.cut ?? 0) > 0 &&
       !daemon.stream.notes.some((note) => coldFallbackNote.test(note)) &&
       plan.tests.some((t) => t.slow)
     )
@@ -8367,6 +8367,8 @@ oracleProperty({
             steps: [`dieMidCheck`],
             laterSteps: NO_LATER_STEPS,
             replyHeld: true,
+            // The witness poisons the run's --out, so it names one.
+            outMode: `explicit`,
           }),
       },
       {
@@ -8498,12 +8500,14 @@ oracleProperty({
             steps: [`seed`],
             laterSteps: NO_LATER_STEPS,
             slowStart: true,
+            // The witness poisons the run's --out, so it names one.
+            outMode: `explicit`,
           }),
       },
       {
         // A check through a warm daemon that works past its CLI's bound (3 s,
-        // `shortWait`): a slow kill's confirming run waits 10 s where the
-        // output differs. The daemon's beats while the copy runs keep the CLI
+        // `shortWait`): after the test edit, a slow copy is cut at its first
+        // budget, and its confirming run waits 10 s where the output differs. The daemon's beats while the copy runs keep the CLI
         // waiting: it must not fall back (the beat's witness, delta 3).
         name: `a check through the daemon that works past the bound`,
         enters: [`a check through the daemon worked past its CLI's bound`],
@@ -8518,8 +8522,12 @@ oracleProperty({
                 fn: 0,
               },
             ],
-            steps: [`seed`],
+            // The test edit recomputes file a's runs, the slow one with them;
+            // a first budget cuts the slow copy, which then waits 10 s alone.
+            steps: [`test`],
             laterSteps: NO_LATER_STEPS,
+            budget: `two`,
+            outMode: `explicit`,
             shortWait: true,
           }),
       },
