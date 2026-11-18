@@ -95,7 +95,7 @@ describe(`the gap oracle's history grammar`, () => {
       rejectBatch: 0, // ORACLE_GAPS_TEST_REJECT_BATCH
       replyHeld: false, // ORACLE_GAPS_TEST_PAUSE_AT=daemon-check, with a release
       hookStops: false, // ORACLE_GAPS_TEST_STOP on win32
-      slowStart: false, // ORACLE_GAPS_TEST_PAUSE_AT=daemon-warm
+      slowStart: false, // _HOLD_OVERLAP, or _PAUSE_AT=daemon-warm or daemon-replace
       shortWait: false, // ORACLE_GAPS_TEST_WAIT_MS
       holdOverlap: false, // ORACLE_GAPS_TEST_HOLD_OVERLAP (#126)
     }

@@ -1020,12 +1020,14 @@ const drawn = fc.record({
   // (merge gate F4). The outcomes stay the batch's. Drawn: it shapes the
   // fixture's tests and switches no hook.
   spinThrows: fc.constantFrom(false, false, false, true),
-  // Whether a daemon is held past its CLI's bound, and where: `true`, the
-  // first check's daemon holds before it warms its contexts
-  // (ORACLE_GAPS_TEST_PAUSE_AT=daemon-warm), a slow but healthy warm-up (merge
-  // gate D1); `open`, a fresh daemon holds its first check before it runs
+  // Whether a daemon is held past its CLI's bound, and where: `open`, a fresh
+  // daemon holds its first check before it runs
   // (ORACLE_GAPS_TEST_HOLD_OVERLAP) while its CLI carries the warm-up pause, a
-  // session slower to open than the bound (merge gate delta 4, F-h). It
+  // session slower to open than the bound (merge gate delta 4, F-h); after a
+  // warm check, `warm`, the next check holds before it warms its contexts
+  // (ORACLE_GAPS_TEST_PAUSE_AT=daemon-warm), a slow but healthy warm-up (merge
+  // gate D1), and `replace`, before a context warms in place of one a cut
+  // stopped (daemon-replace), a slow config load mid-phase (delta 4, P11). It
   // switches a test-only hook on, so only constructed histories set it.
   slowStart: fc.constant(false),
   // Whether a warm daemon's checks run under a 3 s bound
