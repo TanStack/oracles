@@ -315,10 +315,9 @@ export const partitions = {
         'an unsupervised run stopped after its note',
         'a start refuses a dangling claim',
         'a supervised check with no ps on its PATH',
-        // #131's daemon witnesses: the beat's (a 10 s confirmation through
-        // the daemon), the slow warm-up, the held check, and both F-D paths,
-        // moved off shard 3, which ran 11.2 min with them.
-        'a check through the daemon that works past the bound',
+        // #131's daemon witnesses: the slow warm-up, the held check, and both
+        // F-D paths, moved off shard 3, which ran 11.2 min with them (the
+        // beat's witness is in shard 2).
         'a slow but healthy warm-up',
         'a check whose daemon stops answering',
         'an edit to data that only a spun copy reads',
@@ -342,6 +341,9 @@ export const partitions = {
         'a check abandoned while a context warms in place of a cut one',
         'a declaration fault: brokenOwner',
         'a slow kill after a 16 s wait',
+        // Under deterministic cuts its slow copies each wait 10 s in their
+        // batch (86 s on the pool at c198a89), so it leaves shard 1 (431 s).
+        'a check through the daemon that works past the bound',
       ]),
       // The rest: the edit sequence through the daemon (71 s on the pool),
       // generated (42 s), the lazy module (10 s), and small units.
