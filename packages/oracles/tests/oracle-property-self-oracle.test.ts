@@ -204,7 +204,9 @@
  * - `timeout`: a property's `timeout` limits every test it registers, each unit
  *   on its own.
  * - `replay`: a failing campaign unit prints a replay command: the seed (for a fixed-seed unit
- *   whose failing example is a drawn base, the run's random seed), the
+ *   whose failing example is a drawn base, the run's random seed, with a report that names the
+ *   base and directs the reader to replay the history on the base commit and to file, not block
+ *   on, a failure the base shares: R42, phase 1), the
  *   path, the property, and `${prefix}_UNIT` naming the random unit of the same
  *   name (`random seed: <name>`), under the configured prefix, then that unit's
  *   `-t` pattern (maintainer decisions, 2026-11-11, Q3 and Q4). A failing random
@@ -4265,8 +4267,12 @@ type Failure = {
   violationRerun?: string
   /** A campaign unit's replay command, as printed. */
   replay?: string
-  /** A drawn base's report: the failing example's index and the run's seed. */
-  drawnBase?: { at: number; seed: number }
+  /**
+   * A drawn base's report: the failing example's index, the run's seed, and
+   * whether it directs the reader to replay the history on the base commit
+   * and to file, not block on, a failure the base shares (R42).
+   */
+  drawnBase?: { at: number; seed: number; directsBase: boolean }
   /** Whether a law's failure prints the history's items. */
   showsHistory?: boolean
   /** Whether a model error quotes this machine's paths. */
@@ -4766,7 +4772,15 @@ function classify(
   return {
     ...(drawnLine
       ? {
-          drawnBase: { at: Number(drawnLine[1]), seed: Number(drawnLine[2]) },
+          drawnBase: {
+            at: Number(drawnLine[1]),
+            seed: Number(drawnLine[2]),
+            directsBase:
+              /replay this history on the base commit/.test(outer) &&
+              /file it with its full history, or find its issue, and do not block on it/.test(
+                outer,
+              ),
+          },
         }
       : {}),
     kind,
@@ -7538,6 +7552,7 @@ function checkSuite(
           owesDrawn
             ? failure.drawnBase?.at !== example ||
               failure.drawnBase.seed !== loggedSeed ||
+              !failure.drawnBase.directsBase ||
               replaySeed !== `${loggedSeed}`
             : failure.drawnBase !== undefined
         )
