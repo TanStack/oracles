@@ -483,6 +483,9 @@ export function instrument(ts, path, text, source, offset = 0) {
   // Each `?.` site's id, by its node, so a later link of the same chain can
   // name the link before it (see `innerLink`).
   const chainIds = new Map()
+  // Each optional call that a later `?.` site of its chain reads, by its
+  // node: the key of the record by which it passes its short-circuit on.
+  const callKeys = new Map()
 
   // An operand is an identifier or a numeric literal: its text reads the same
   // value wherever it appears. Anything else has no text here.
@@ -1244,7 +1247,7 @@ export function instrument(ts, path, text, source, offset = 0) {
           ? // The value is evaluated, and then dropped when the mutant is
             // active: element 1 of a one-element array is `undefined`.
             `${G}.v([(${value})][${G}.m(${ids.returned}) ? 1 : 0])`
-          : `${G}.chain(${[ids.chain, value, innerLink(node.expression)].filter((part) => part !== undefined).join(`, `)})`
+          : chainText(ids.chain, value, innerLink(node.expression))
       return `${out.slice(0, at)}${replaced}${out.slice(at + value.length)}`
     }
     if (ids.call !== undefined) {
@@ -1254,18 +1257,56 @@ export function instrument(ts, path, text, source, offset = 0) {
       const { text: call, at } = emitted.get(node.expression)
       return `${out.slice(0, at)}${G}.m(${ids.call}) || ${call}${out.slice(at + call.length)}`
     }
+    // An optional call that a later `?.` site reads is no site, but it
+    // passes its short-circuit on: an empty spread before its arguments,
+    // which runs only when the call does, records that it ran.
+    if (ts.isCallExpression(node) && node.questionDotToken && feedsLink(node)) {
+      const key = JSON.stringify(`${source}#${callKeys.size}`)
+      callKeys.set(node, key)
+      const [first] = node.arguments
+      const at = first ? emitted.get(first).at : out.length - 1
+      return `${out.slice(0, at)}...${G}.ran(${key})${first ? `, ` : ``}${out.slice(at)}`
+    }
     return out
+  }
+
+  // Whether a later `?.` property or element read of the same chain reads
+  // the value of `call`.
+  function feedsLink(call) {
+    let link = call
+    while (
+      ts.isOptionalChain(link.parent) &&
+      link.parent.expression === link &&
+      link.parent.questionDotToken === undefined
+    )
+      link = link.parent
+    return (
+      (ts.isPropertyAccessExpression(link.parent) ||
+        ts.isElementAccessExpression(link.parent)) &&
+      link.parent.expression === link &&
+      link.parent.questionDotToken !== undefined
+    )
   }
 
   // The id of the nearest earlier `?.` link of the chain that `receiver`
   // ends, when that link is a site. The call that wraps a receiver ends the
   // chain in the instrumented text, so the link's helper tells the next one
   // when it short-circuited, and the next one then runs as a skipped link.
+  // For an optional call, the key of its record (a string).
   function innerLink(receiver) {
     let link = receiver
     while (ts.isOptionalChain(link) && link.questionDotToken === undefined)
       link = link.expression
-    return ts.isOptionalChain(link) ? chainIds.get(link) : undefined
+    if (!ts.isOptionalChain(link)) return undefined
+    return ts.isCallExpression(link) ? callKeys.get(link) : chainIds.get(link)
+  }
+  // A link's helper call. After an optional call, the receiver first opens
+  // the call's record, which the call's spread closes when the call runs.
+  function chainText(id, value, inner) {
+    if (inner === undefined) return `${G}.chain(${id}, ${value})`
+    if (typeof inner === `number`)
+      return `${G}.chain(${id}, ${value}, ${inner})`
+    return `${G}.chain(${id}, (${G}.open(${inner}), ${value}), ${inner})`
   }
 
   const code = emit(file)

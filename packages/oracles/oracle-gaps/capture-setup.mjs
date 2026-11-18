@@ -583,6 +583,8 @@ if (fc && process.env.ORACLE_GAPS_PROFILE) {
 }
 // The `?.` site whose helper last saw its chain short-circuit (`chain`).
 let shortCircuited
+// Each optional call's open records: whether the call ran (`open`, `ran`).
+const callRuns = new Map()
 const swapped = {
   '===': `!==`,
   '!==': `===`,
@@ -647,7 +649,10 @@ globalThis.__oracleGaps = {
   // helper, so the last short-circuit is that link's exactly.
   chain(id, value, inner) {
     hit(id)
-    const skipped = inner !== undefined && shortCircuited === inner
+    const skipped =
+      typeof inner === `string`
+        ? callRuns.get(inner)?.pop() === false
+        : inner !== undefined && shortCircuited === inner
     shortCircuited = undefined
     if (value !== undefined && value !== null) return value
     shortCircuited = id
@@ -655,6 +660,22 @@ globalThis.__oracleGaps = {
     infect(id)
     if (id === active) throw new TypeError(`Cannot read properties of ${value}`)
     return value
+  },
+  // An optional call that a later `?.` link reads passes its short-circuit
+  // on: the link's receiver opens a record that the call has not run, and
+  // the call's empty argument spread, which runs only when the call does,
+  // marks it as run. The link reads the record and closes it. A record per
+  // open evaluation keeps an evaluation of the same expression inside the
+  // method lookup or the call apart.
+  open(key) {
+    const runs = callRuns.get(key)
+    if (runs) runs.push(false)
+    else callRuns.set(key, [false])
+  },
+  ran(key) {
+    const runs = callRuns.get(key)
+    if (runs?.length) runs[runs.length - 1] = true
+    return []
   },
   // Records whether the condition was truthy or falsy, then applies a forced
   // value if one of this `if`'s two mutants is active.
