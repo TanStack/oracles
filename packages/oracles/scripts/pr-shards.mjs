@@ -313,8 +313,6 @@ export const partitions = {
         // moved off shard 3, which ran 11.2 min with them.
         'a check through the daemon that works past the bound',
         'a slow but healthy warm-up',
-        'a daemon start slower than the bound',
-        'a check abandoned while a context warms in place of a cut one',
         'a check whose daemon stops answering',
         'an edit to data that only a spun copy reads',
         'an edit to data that only a copy spun alone reads',
@@ -331,6 +329,10 @@ export const partitions = {
         'a second daemon check of the budget witness',
         'a declaration fault: brokenVitest',
         'an edit that changed the cold result after a hang replaced the only context',
+        // Delta 4's two daemon witnesses (11 s and 20 s on Arca): shard 1
+        // ran 513 s on the CI runner without them, and this shard 309 s.
+        'a daemon start slower than the bound',
+        'a check abandoned while a context warms in place of a cut one',
       ]),
       // The rest: noTypescript (174 s on the CI runner), the edit sequence
       // through the daemon (94 s), brokenOwner (83 s), generated (23 s), the
