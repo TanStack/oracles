@@ -77,6 +77,14 @@
     "a supervised check with no ps on its PATH",
     "every outcome class, the warm stop",
     "every outcome class, the abort stop",
+    "a check whose daemon stops answering",
+    "an edit to data that only a spun copy reads",
+    "a refused run beside the CLI's directory, under a name that extends it",
+    "an edit to data that only a copy spun alone reads",
+    "a slow but healthy warm-up",
+    "a check through the daemon that works past the bound",
+    "a daemon start slower than the bound",
+    "a check abandoned while a context warms in place of a cut one",
     "an edit sequence over the witness module, the second half"
   ]
 }
