@@ -971,7 +971,7 @@ const drawn = fc.record({
   // in place of `?.` throws on either, where `?.` gives `undefined`. Drawn
   // last, so the earlier fields keep their draws (the generator rule).
   absentObjects: fc.array(fc.constantFrom(`undefined`, `null`), {
-    maxLength: 5,
+    maxLength: 8,
   }),
   // How each `optional` statement, in order, reads its object: through
   // `links` `?.` links (`o?.v`, `o?.a?.v`, `o?.a?.b?.v`), where the object at
@@ -980,12 +980,22 @@ const drawn = fc.record({
   // place of one link throws only where that link's own object is absent: a
   // link past an absent object is short-circuited, as JavaScript skips the
   // rest of the chain. Drawn last (the generator rule).
+  // A chain may end in a method `f` called through `?.()`, then read `v`
+  // through `?.` (`o?.f?.()?.v`) or a plain read (`o?.f?.().v`). The method
+  // returns an object (`Object`) or nothing (`() => undefined`; the plain
+  // read is drawn only after a method that returns an object), and the
+  // absent value may be the method itself (the level after the last
+  // object). An optional call is no mutation site: where its method is
+  // absent, JavaScript skips the rest of the chain, so a later `?.` link's
+  // plain read changes nothing.
   optionalChains: fc.array(
     fc.record({
       links: fc.constantFrom(1, 1, 2, 3),
-      level: fc.nat({ max: 2 }),
+      level: fc.nat({ max: 3 }),
+      call: fc.constantFrom(`none`, `none`, `optional`, `plain`),
+      returns: fc.constantFrom(`object`, `nothing`),
     }),
-    { maxLength: 5 },
+    { maxLength: 8 },
   ),
 })
 
@@ -2266,17 +2276,41 @@ const absentOf = (stmt) => stmt.absent ?? `undefined`
 // The site roles of an `optional` statement's field drops and links.
 const dropRole = (prop) => `drop${prop.toUpperCase()}`
 const chainRole = (link) => (link === 0 ? `chain` : `chain${link}`)
-// The property that each link of an `optional` statement reads, outermost
-// object first: `a`, then `b`, and `v` last.
-const linkProps = (stmt) => [...[`a`, `b`].slice(0, (stmt.links ?? 1) - 1), `v`]
+// The property that each object link of an `optional` statement reads,
+// outermost object first: `a`, then `b`, and `v` last, or the method `f`
+// where the chain calls one.
+const linkProps = (stmt) => [
+  ...[`a`, `b`].slice(0, (stmt.links ?? 1) - 1),
+  (stmt.call ?? `none`) === `none` ? `v` : `f`,
+]
+// Every `?.` link of the read that is a mutation site, first link first:
+// the object links, then the `?.v` after an optional call.
+const siteLinks = (stmt) =>
+  linkProps(stmt).length + (stmt.call === `optional` ? 1 : 0)
+// The read's text after the object's name.
+const readText = (stmt) =>
+  linkProps(stmt)
+    .map((prop) => `?.${prop}`)
+    .join(``) +
+  { none: ``, optional: `?.()?.v`, plain: `?.().v` }[stmt.call ?? `none`]
+// The method's source: one that returns an object, or one that returns
+// nothing; absent for a falsy `x` where the method is the statement's level.
+const methodText = (stmt) => {
+  const method = stmt.returns === `nothing` ? `() => undefined` : `Object`
+  return stmt.level === stmt.links
+    ? `x ? ${method} : ${absentOf(stmt)}`
+    : method
+}
 // The source of the object at depth `depth` of an `optional` statement: the
 // object a falsy `x` leaves absent at the statement's level.
 function optionalObject(stmt, depth = 0) {
   const props = linkProps(stmt)
   const value =
-    depth === props.length - 1
-      ? `'p${stmt.label}'`
-      : optionalObject(stmt, depth + 1)
+    depth < props.length - 1
+      ? optionalObject(stmt, depth + 1)
+      : (stmt.call ?? `none`) === `none`
+        ? `'p${stmt.label}'`
+        : methodText(stmt)
   const made = `{ ${props[depth]}: ${value} }`
   return depth === (stmt.level ?? 0) ? `x ? ${made} : ${absentOf(stmt)}` : made
 }
@@ -2409,9 +2443,7 @@ function renderStatement(stmt, callText) {
     case `optional`:
       return [
         `const o${stmt.label} = ${optionalObject(stmt)};`,
-        `out.push(\`\${o${stmt.label}${linkProps(stmt)
-          .map((prop) => `?.${prop}`)
-          .join(``)}}\`);`,
+        `out.push(\`\${o${stmt.label}${readText(stmt)}}\`);`,
       ]
     case `readData`:
       return [`out.push(${dataOf(stmt.shape).read});`]
@@ -2683,9 +2715,18 @@ function resolveHistory(history) {
       if (stmt.kind !== `optional`) return stmt
       const chain = history.optionalChains?.[optionals]
       const links = chain?.links ?? 1
+      const call = chain?.call ?? `none`
       const absent = history.absentObjects?.[optionals] ?? `undefined`
       optionals += 1
-      return { ...stmt, absent, links, level: (chain?.level ?? 0) % links }
+      return {
+        ...stmt,
+        absent,
+        links,
+        // The method itself is one more level that may be absent.
+        level: (chain?.level ?? 0) % (links + (call === `none` ? 0 : 1)),
+        call,
+        returns: call === `plain` ? `object` : (chain?.returns ?? `object`),
+      }
     })
   const library = history.library.map((body, index) => ({
     id: `g${index}`,
@@ -3493,7 +3534,7 @@ function sitesOf(plan) {
         for (const prop of linkProps(stmt))
           at(`field-drop`, dropRole(prop), stmt.line, stmt.lines[0])
         at(`delete-call`, `push`, stmt.line + 1, stmt.lines[1])
-        for (let link = linkProps(stmt).length - 1; link >= 0; link -= 1)
+        for (let link = siteLinks(stmt) - 1; link >= 0; link -= 1)
           at(`optional-chain`, chainRole(link), stmt.line + 1, stmt.lines[1])
       }
       // Two arrows on one line: each property's field drop, its call, and
@@ -4082,11 +4123,17 @@ function interpret(plan, fnId, x, sites, active) {
           const drop = siteOf(stmt, dropRole(props[depth]))
           reach(drop.id)
           if (isActive(drop)) return {}
+          if (depth < props.length - 1)
+            return { [props[depth]]: objectAt(depth + 1) }
+          if (stmt.call === `none`) return { v: `p${stmt.label}` }
+          // The method, absent at its own level for a falsy `x`.
           return {
-            [props[depth]]:
-              depth === props.length - 1
-                ? `p${stmt.label}`
-                : objectAt(depth + 1),
+            f:
+              stmt.level === stmt.links && !x
+                ? stmt.absent === `null`
+                  ? null
+                  : undefined
+                : () => (stmt.returns === `nothing` ? undefined : {}),
           }
         }
         const made = objectAt(0)
@@ -4094,16 +4141,31 @@ function interpret(plan, fnId, x, sites, active) {
         reach(site.id)
         if (!isActive(site)) {
           // Every link's switch runs before the chain does.
-          props.forEach((_, link) => reach(siteOf(stmt, chainRole(link)).id))
+          for (let link = 0; link < siteLinks(stmt); link += 1)
+            reach(siteOf(stmt, chainRole(link)).id)
+          // The read's steps in order: each object link, then the optional
+          // call and the read of `v` after it.
+          const steps = [
+            ...props.map((prop, link) => ({ link, prop })),
+            ...(stmt.call === `none` ? [] : [{ call: true }]),
+            ...(stmt.call === `optional`
+              ? [{ link: props.length, prop: `v` }]
+              : []),
+            ...(stmt.call === `plain` ? [{ prop: `v` }] : []),
+          ]
           let value = made
-          for (const [link, prop] of props.entries()) {
-            if (value === undefined || value === null) {
-              if (isActive(siteOf(stmt, chainRole(link))))
+          for (const step of steps) {
+            const absent = value === undefined || value === null
+            if (absent && (step.call || step.link !== undefined)) {
+              if (
+                step.link !== undefined &&
+                isActive(siteOf(stmt, chainRole(step.link)))
+              )
                 throw new TypeError(`Cannot read properties of ${value}`)
               value = undefined
               break
             }
-            value = value[prop]
+            value = step.call ? value() : value[step.prop]
           }
           trace.push(String(value))
         }
