@@ -71,6 +71,7 @@ import {
   writeWhole,
   realPathOf,
   relativeWithin,
+  removeSession,
   sessionDirOf,
   specifierOf,
 } from './paths.mjs'
@@ -105,16 +106,6 @@ function sessionHostOf(dir) {
     return readFileSync(join(dir, `host`), `utf8`)
   } catch {
     return undefined
-  }
-}
-
-/** Whether process `pid` runs. */
-function alive(pid) {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return error.code === `EPERM`
   }
 }
 
@@ -477,22 +468,12 @@ export async function openSession(pkg, pause = async () => {}) {
   for (const name of readdirSync(pkg))
     if (
       /^\.oracle-gaps-\d+$/.test(name) &&
-      !alive(Number(name.slice(13))) &&
       sessionHostOf(join(pkg, name)) === hostname()
     )
-      rmSync(join(pkg, name), { recursive: true, force: true })
-  const removeHome = () => rmSync(home, { recursive: true, force: true })
-  // At an exit before the session closes (a stop, an error), a directory that
-  // cannot be removed (a file another process holds open on win32) is left
-  // for the next run: a throw in an exit listener would end the run twice.
-  const removeAtExit = () => {
-    try {
-      removeHome()
-    } catch {
-      // The next run removes it.
-    }
-  }
-  process.on(`exit`, removeAtExit)
+      removeSession(pkg, Number(name.slice(13)))
+  // At an exit before the session closes (a stop, an error), as when it closes.
+  const removeHome = () => removeSession(pkg, process.pid)
+  process.on(`exit`, removeHome)
   mkdirSync(home, { recursive: true })
   writeFileSync(join(home, `host`), hostname())
   const harness = join(home, `capture-setup.mjs`)
@@ -2708,7 +2689,7 @@ export default async (env) => {
 
   async function close() {
     await closeContexts()
-    process.off(`exit`, removeAtExit)
+    process.off(`exit`, removeHome)
     removeHome()
   }
 

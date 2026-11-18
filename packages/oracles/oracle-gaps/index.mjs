@@ -139,7 +139,7 @@ import {
 import { constants } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { posix, sessionDirOf } from './paths.mjs'
+import { alive, posix, removeSession } from './paths.mjs'
 
 let early
 const keepEarly = (signal) => {
@@ -205,15 +205,6 @@ const cannotWrite = (path, error) =>
     `the stream log ${path} cannot be written (${error.code ?? error.message})`,
     `Remove ${path}, or pass --out a directory whose stream.log can be written.`,
   )
-/** Whether process `pid` runs. */
-const alive = (pid) => {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return error.code === `EPERM`
-  }
-}
 // The output directory this process claimed (its run.pid), released when the
 // process exits, on every exit but SIGKILL.
 let claimed
@@ -450,8 +441,7 @@ function superviseRun(out, pkg) {
       decided = true
       // An abort or a kill of the child skips its own cleanup, and the CLI
       // outlives it, so a supervised run leaves no session directory.
-      if (child)
-        rmSync(sessionDirOf(pkg, child.pid), { recursive: true, force: true })
+      if (child) removeSession(pkg, child.pid)
       if (ending)
         return process.exit(
           ended?.code ?? 128 + constants.signals[ended?.signal ?? stopped],
