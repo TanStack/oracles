@@ -482,7 +482,17 @@ export async function openSession(pkg, pause = async () => {}) {
     )
       rmSync(join(pkg, name), { recursive: true, force: true })
   const removeHome = () => rmSync(home, { recursive: true, force: true })
-  process.on(`exit`, removeHome)
+  // At an exit before the session closes (a stop, an error), a directory that
+  // cannot be removed (a file another process holds open on win32) is left
+  // for the next run: a throw in an exit listener would end the run twice.
+  const removeAtExit = () => {
+    try {
+      removeHome()
+    } catch {
+      // The next run removes it.
+    }
+  }
+  process.on(`exit`, removeAtExit)
   mkdirSync(home, { recursive: true })
   writeFileSync(join(home, `host`), hostname())
   const harness = join(home, `capture-setup.mjs`)
@@ -2698,7 +2708,7 @@ export default async (env) => {
 
   async function close() {
     await closeContexts()
-    process.off(`exit`, removeHome)
+    process.off(`exit`, removeAtExit)
     removeHome()
   }
 
