@@ -2715,7 +2715,7 @@ function generatedTests<THistory, TExpected, TPlan>(
           report,
           ...(drawn
             ? [
-                `Drawn base: example ${at} is base ${at} of constructed history "${unit}" drawn from the run's random seed ${drawnFrom} (its ORACLE_SEED line), not from seed ${seed}. The counterexample above is its full history, and the Replay line runs it with the run's seed; a rerun draws other bases.`,
+                `Drawn base: example ${at} is base ${at} of constructed history "${unit}" drawn from the run's random seed ${drawnFrom} (its ORACLE_SEED line), not from seed ${seed}. The counterexample above is its full history, and the Replay line runs it with the run's seed; a rerun draws other bases, so it would hide this failure. Before you rerun, replay this history on the base commit: the Replay line, or the counterexample as a fixed history. If the base fails too, the failure is not this change's: file it with its full history, or find its issue, and do not block on it (R42; base replay is not automated).`,
               ]
             : []),
           ...commandLines(`Rerun`, rerun),
