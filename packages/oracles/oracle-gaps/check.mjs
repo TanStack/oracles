@@ -1524,7 +1524,9 @@ export default async (env) => {
     gone = () => false,
   ) {
     // A check whose caller has gone (a daemon's CLI that checked cold) stops
-    // here and at each phase's end, before it writes more into its --out.
+    // before it writes more into its --out: here, at each phase's end, and
+    // after a context warms in place of a cut one (`replace`), the one stretch
+    // inside a phase with no running copy to beat.
     const stopIfGone = () => {
       if (gone()) throw new Error(`the check's caller has gone`)
     }
@@ -2038,21 +2040,28 @@ export default async (env) => {
       slot.context = next
       hook?.joined(next)
       span(`replace context`, started, { slot: slot.index })
+      stopIfGone()
+    }
+    // Each context's share of a phase, at once. The phase goes on only once
+    // every share has ended, even when one throws (a check whose caller has
+    // gone), so no share of this check still runs beside the daemon's next.
+    const eachSlot = async (share) => {
+      const ends = await Promise.allSettled(contexts.map(share))
+      for (const end of ends) if (end.status === `rejected`) throw end.reason
+      return ends.map((end) => end.value)
     }
     // `after(index)` is more work for context `index` once its files ran.
     const runAcross = async (files, pass, after = async () => {}) => {
       const parts = contexts.map(() => [])
       files.forEach((file, index) => parts[index % contexts.length].push(file))
       const { units, rows, failed } = passOf(
-        await Promise.all(
-          contexts.map(async (context, index) => {
-            const done = []
-            for (const file of parts[index])
-              done.push(await unit(context, file, `unmutated:${pass}`, true))
-            await after(index)
-            return done
-          }),
-        ),
+        await eachSlot(async (context, index) => {
+          const done = []
+          for (const file of parts[index])
+            done.push(await unit(context, file, `unmutated:${pass}`, true))
+          await after(index)
+          return done
+        }),
       )
       for (const u of units)
         fileSeconds.set(
@@ -2504,17 +2513,15 @@ export default async (env) => {
     const total = queue.length
     let judged = 0
     let gaps = 0
-    await Promise.all(
-      contexts.map(async (context, index) => {
-        const slot = { context, index }
-        for (
-          let group = queue.splice(0, GROUP);
-          group.length > 0;
-          group = queue.splice(0, GROUP)
-        )
-          await evaluateGroup(group, slot)
-      }),
-    )
+    await eachSlot(async (context, index) => {
+      const slot = { context, index }
+      for (
+        let group = queue.splice(0, GROUP);
+        group.length > 0;
+        group = queue.splice(0, GROUP)
+      )
+        await evaluateGroup(group, slot)
+    })
     results.sort(
       (a, b) => a.number - b.number || a.source.localeCompare(b.source),
     )
@@ -2573,39 +2580,37 @@ export default async (env) => {
       job.targets.map((file) => ({ job, file })),
     )
     for (const job of authoredJobs) job.units = []
-    await Promise.all(
-      contexts.map(async (context, index) => {
-        const slot = { context, index }
-        const serve = globalThis.__oracleGapsServe
-        for (
-          let item = authoredItems.shift();
-          item;
-          item = authoredItems.shift()
-        ) {
-          const { job, file } = item
-          serve[slot.index] = new Map([[job.path, job.patched.text]])
-          invalidateChanged([job.path], slot.context)
-          const [got] = await unitsBatch(slot, [
-            {
-              file,
-              label: job.id,
-              spec: job.id,
-              mutant: -1,
-              select: null,
-              limitMs: limitFor(file),
-              stopOnKill: true,
-              ignore: ignoredIn(file),
-            },
-          ])
-          // In the order the contexts finish: the classification lists
-          // the tests and laws in report order (classify.mjs
-          // `inReportOrder`), so they are listed alike in every run (law 9).
-          job.units.push(got)
-          serve[slot.index] = undefined
-          invalidateChanged([job.path], slot.context)
-        }
-      }),
-    )
+    await eachSlot(async (context, index) => {
+      const slot = { context, index }
+      const serve = globalThis.__oracleGapsServe
+      for (
+        let item = authoredItems.shift();
+        item;
+        item = authoredItems.shift()
+      ) {
+        const { job, file } = item
+        serve[slot.index] = new Map([[job.path, job.patched.text]])
+        invalidateChanged([job.path], slot.context)
+        const [got] = await unitsBatch(slot, [
+          {
+            file,
+            label: job.id,
+            spec: job.id,
+            mutant: -1,
+            select: null,
+            limitMs: limitFor(file),
+            stopOnKill: true,
+            ignore: ignoredIn(file),
+          },
+        ])
+        // In the order the contexts finish: the classification lists
+        // the tests and laws in report order (classify.mjs
+        // `inReportOrder`), so they are listed alike in every run (law 9).
+        job.units.push(got)
+        serve[slot.index] = undefined
+        invalidateChanged([job.path], slot.context)
+      }
+    })
     for (const job of authoredJobs)
       Object.assign(
         job.result,
