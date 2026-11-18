@@ -911,6 +911,8 @@ export const partitions = {
         'a supervised child exits when its supervisor is killed',
         'an unsupervised run stopped after its note',
         'a supervised check with no ps on its PATH',
+        'a value change at a ?. read and at a return',
+        'a ?. read of an object absent only at load',
       ]),
     },
   },

@@ -86,6 +86,8 @@
     "a daemon start slower than the bound",
     "a check abandoned while a context warms in place of a cut one",
     "an edit sequence over the witness module, the second half",
+    "a value change at a ?. read and at a return",
+    "a ?. read of an object absent only at load",
     "a stop before the CLI starts, after a stopped check"
   ]
 }
