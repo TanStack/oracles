@@ -2273,6 +2273,13 @@ const condText = (stmt) =>
 
 // The value an `optional` statement's object takes when `x` is falsy.
 const absentOf = (stmt) => stmt.absent ?? `undefined`
+// An `optional` statement's chain fields where it names none.
+const OPTIONAL_DEFAULTS = {
+  links: 1,
+  level: 0,
+  call: `none`,
+  returns: `object`,
+}
 // The site roles of an `optional` statement's field drops and links.
 const dropRole = (prop) => `drop${prop.toUpperCase()}`
 const chainRole = (link) => (link === 0 ? `chain` : `chain${link}`)
@@ -2297,7 +2304,7 @@ const readText = (stmt) =>
 // nothing; absent for a falsy `x` where the method is the statement's level.
 const methodText = (stmt) => {
   const method = stmt.returns === `nothing` ? `Function.prototype` : `Object`
-  return stmt.level === stmt.links
+  return (stmt.level ?? 0) === stmt.links
     ? `x ? ${method} : ${absentOf(stmt)}`
     : method
 }
@@ -4116,24 +4123,26 @@ function interpret(plan, fnId, x, sites, active) {
       // chain and no later link runs, while a plain read in its place
       // throws. A link past that one changes nothing.
       if (stmt.kind === `optional`) {
-        const props = linkProps(stmt)
+        // A witness's statement holds no chain fields: one link, no call.
+        const chain = { ...OPTIONAL_DEFAULTS, ...stmt }
+        const props = linkProps(chain)
         const objectAt = (depth) => {
-          if (depth === stmt.level && !x)
+          if (depth === chain.level && !x)
             return stmt.absent === `null` ? null : undefined
           const drop = siteOf(stmt, dropRole(props[depth]))
           reach(drop.id)
           if (isActive(drop)) return {}
           if (depth < props.length - 1)
             return { [props[depth]]: objectAt(depth + 1) }
-          if (stmt.call === `none`) return { v: `p${stmt.label}` }
+          if (chain.call === `none`) return { v: `p${stmt.label}` }
           // The method, absent at its own level for a falsy `x`.
           return {
             f:
-              stmt.level === stmt.links && !x
+              chain.level === chain.links && !x
                 ? stmt.absent === `null`
                   ? null
                   : undefined
-                : () => (stmt.returns === `nothing` ? undefined : {}),
+                : () => (chain.returns === `nothing` ? undefined : {}),
           }
         }
         const made = objectAt(0)
@@ -4141,17 +4150,17 @@ function interpret(plan, fnId, x, sites, active) {
         reach(site.id)
         if (!isActive(site)) {
           // Every link's switch runs before the chain does.
-          for (let link = 0; link < siteLinks(stmt); link += 1)
+          for (let link = 0; link < siteLinks(chain); link += 1)
             reach(siteOf(stmt, chainRole(link)).id)
           // The read's steps in order: each object link, then the optional
           // call and the read of `v` after it.
           const steps = [
             ...props.map((prop, link) => ({ link, prop })),
-            ...(stmt.call === `none` ? [] : [{ call: true }]),
-            ...(stmt.call === `optional`
+            ...(chain.call === `none` ? [] : [{ call: true }]),
+            ...(chain.call === `optional`
               ? [{ link: props.length, prop: `v` }]
               : []),
-            ...(stmt.call === `plain` ? [{ prop: `v` }] : []),
+            ...(chain.call === `plain` ? [{ prop: `v` }] : []),
           ]
           let value = made
           for (const step of steps) {
