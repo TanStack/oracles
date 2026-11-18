@@ -454,6 +454,8 @@ export const partitions = {
         `a declaration fault: configNull`,
         `a declaration fault: missingSource`,
         `a config fault in a run that owns nothing`,
+        // Its slow copies each wait 10 s under #99 (86 s on the pool at 83a0b3a8, where this shard took 124 s and the rest shard 491 s).
+        'a check through the daemon that works past the bound',
       ]),
       // 560 s of weight.
       3: anyOf([
@@ -478,6 +480,8 @@ export const partitions = {
         `a declaration fault: configNoDefault`,
         `a declaration fault: projects`,
         `test.projects in a parent's config`,
+        // #99's 16 s wait (67 s on the pool; this shard took 147 s).
+        'a slow kill after a 16 s wait',
       ]),
       // The rest: 560 s of weight, and any unit added later.
       4: rest,
@@ -519,6 +523,12 @@ export const partitions = {
         `constructed history: a start refuses a stale claim`,
         `constructed history: a declaration fault: configSyntax`,
         `constructed history: a declaration fault: nonLiteral`,
+        // #99's deterministic-cuts histories, the heavier (141 s on the pool at 83a0b3a8; this shard took 32 s).
+        'constructed history: a slow kill after a 16 s wait',
+        'constructed history: a backstop cut ends the copies ahead of a later kill',
+        "constructed history: a slow owner's kill and another owner's kill",
+        'constructed history: a copy waiting on a timer',
+        "constructed history: a copy waiting on an unref'd timer",
       ]),
       // 471 s of weight.
       2: anyOf([
@@ -600,6 +610,19 @@ export const partitions = {
         `constructed history: a start refuses a dangling claim`,
         `constructed history: a declaration fault: setupThrows`,
         `constructed history: a refused run beside the CLI's directory, under a name that extends it`,
+        // #99's lighter histories (74 s on the pool; this shard took 205 s).
+        'constructed history: a hang in a file whose test does a short read',
+        "constructed history: a copy beside the runner's pending timer",
+        'constructed history: a copy waiting on a pipe it opened',
+        'constructed history: an authored mutant whose owner hangs',
+        "constructed history: a copy beside the runner's pending write",
+        'constructed history: a stream log lost after its note, then stopped, unsupervised',
+        'constructed history: a kill past the work budget in a later owner',
+        'constructed history: a clocked owner beside a counted one under the work budget',
+        'constructed history: a heavy test that reads the clock after its work',
+        'constructed history: a heavy test that reads the clock first',
+        'constructed history: a spin after a short async read',
+        'constructed history: a clocked copy that spins',
       ]),
       // The rest: 471 s of weight, and any unit added later.
       7: rest,
