@@ -1844,5 +1844,10 @@ oracleProperty({
   driver,
   check,
   calibrations,
-  timeout: 120_000,
+  // Each unit's wall-clock backstop: a test that runs past it fails loudly,
+  // and it decides no outcome of the CLI's (it is not a run budget). The
+  // generated units sat near 120 s on the CI runner (#144, #133, and #99's
+  // drawn `heavy`), so the backstop is 240 s (C ruling, 2026-11-17); cutting
+  // the generated unit's cost is #163.
+  timeout: 240_000,
 })
