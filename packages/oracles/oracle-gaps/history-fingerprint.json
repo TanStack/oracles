@@ -79,8 +79,10 @@
     ["spinThrows", "0c0ede6e889793cd"],
     ["slowStart", "ed6866229ecc4969"],
     ["shortWait", "ed6866229ecc4969"],
-    ["hangMs", "d5af57f376a38125"],
-    ["heavy", "757f64e11890419d"],
+    ["absentObjects", "819b4a9d10c98c0b"],
+    ["optionalChains", "d383282128c31644"],
+    ["hangMs", "0d53e8bb13182e66"],
+    ["heavy", "803af343d7fb884e"],
     ["tests.pendingIo", "02f66613e9490d15"]
   ],
   "histories": [
@@ -163,8 +165,10 @@
     ["spinThrows", "0c0ede6e889793cd"],
     ["slowStart", "ed6866229ecc4969"],
     ["shortWait", "ed6866229ecc4969"],
-    ["hangMs", "d5af57f376a38125"],
-    ["heavy", "757f64e11890419d"],
+    ["absentObjects", "819b4a9d10c98c0b"],
+    ["optionalChains", "d383282128c31644"],
+    ["hangMs", "0d53e8bb13182e66"],
+    ["heavy", "803af343d7fb884e"],
     ["tests.pendingIo", "02f66613e9490d15"]
   ]
 }

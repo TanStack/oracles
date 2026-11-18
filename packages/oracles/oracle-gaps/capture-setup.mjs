@@ -563,6 +563,12 @@ if (fc && process.env.ORACLE_GAPS_PROFILE) {
     prototype.run = counted
   }
 }
+// The `?.` site whose helper last saw its chain short-circuit (`chain`).
+let shortCircuited
+// Each optional call's open records: whether the call ran (`open`, `ran`).
+const callRuns = new Map()
+// The spread that `ran` returns: it adds no argument.
+const NO_ARGUMENTS = Object.freeze([])
 const swapped = {
   '===': `!==`,
   '!==': `===`,
@@ -618,12 +624,49 @@ globalThis.__oracleGaps = {
     return id === active ? !value : value
   },
   // A plain read in place of `?.`: the object passes on, and when its
-  // mutant is active a nullish one throws, as the plain read would.
-  chain(id, value) {
+  // mutant is active a nullish one throws, as the plain read would. A
+  // nullish object is where the mutant changes the site's completion (a
+  // throw where `?.` gives `undefined`), so it infects the site. `inner`
+  // names the chain's earlier `?.` link: when that link short-circuited,
+  // JavaScript runs no later link, so this one neither infects nor throws.
+  // No code runs between a link that short-circuits and the next link's
+  // helper, so the last short-circuit is that link's exactly.
+  chain(id, value, inner) {
     hit(id)
-    if (id === active && (value === undefined || value === null))
-      throw new TypeError(`Cannot read properties of ${value}`)
+    const skipped =
+      typeof inner === `string`
+        ? callRuns.get(inner)?.pop() === false
+        : inner !== undefined && shortCircuited === inner
+    shortCircuited = undefined
+    if (value !== undefined && value !== null) return value
+    shortCircuited = id
+    if (skipped) return value
+    infect(id)
+    if (id === active) throw new TypeError(`Cannot read properties of ${value}`)
     return value
+  },
+  // An optional call that a later `?.` link reads passes its short-circuit
+  // on: the link's receiver opens a record that the call has not run, and
+  // the call's empty argument spread, which runs only when the call does,
+  // marks the newest open record of that call as run. The link reads the
+  // newest record and closes it. The records of one call form a stack, so
+  // they pair with their evaluation only where evaluations of the same
+  // expression nest and each one ends: an evaluation nested in the
+  // receiver, the method lookup, the arguments, or the method's body that
+  // throws and is caught there leaves its record open, and two async
+  // evaluations interleaved at an `await` close each other's records. Then
+  // the outer link reads another evaluation's record: a false skip (its
+  // mutant judged without a run) or a false throw (the gap oracle's Limits;
+  // TanStack/oracles#162).
+  open(key) {
+    const runs = callRuns.get(key)
+    if (runs) runs.push(false)
+    else callRuns.set(key, [false])
+  },
+  ran(key) {
+    const runs = callRuns.get(key)
+    if (runs?.length) runs[runs.length - 1] = true
+    return NO_ARGUMENTS
   },
   // Records whether the condition was truthy or falsy, then applies a forced
   // value if one of this `if`'s two mutants is active.
