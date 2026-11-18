@@ -88,14 +88,19 @@ const writeMark = (path, text) => {
  * A daemon's test-only hold (ORACLE_GAPS_TEST_PAUSE_AT=<point>): a check
  * waits at the named point until the file ORACLE_GAPS_TEST_PAUSE_RELEASE
  * names exists, so its CLI hears nothing until the test releases it, never
- * the clock. It writes this daemon's pid to ORACLE_GAPS_TEST_PAUSE_MARK
- * first, and holds once: the mark keeps it from holding again. With
- * ORACLE_GAPS_TEST_PAUSE_ARM set, it holds only once that file exists, so a
- * test can warm the daemon first. The points are `daemon-check`, before a
- * check runs, and, in the session (check.mjs), `daemon-warm`, before a check
- * warms its contexts, and `daemon-replace`, before a context warms in place of
- * one a cut stopped. Only the daemon gives it to its session, so a CLI's own
- * cold check never holds, whatever its environment (v21.2 G43).
+ * the clock; with no release named, until the test ends the daemon. It writes
+ * this daemon's pid to ORACLE_GAPS_TEST_PAUSE_MARK first, for the test to end
+ * it by (no signal pauses a process on win32), and holds once: the mark keeps
+ * it from holding again, so a daemon the CLI starts in place of an ended one,
+ * which inherits the variables, answers. With ORACLE_GAPS_TEST_PAUSE_ARM set,
+ * it holds only once that file exists, so a test can warm the daemon first.
+ * The points are `daemon-check`, before a check runs, and `daemon-reply`,
+ * once a check is done and before its reply, so the CLI waits as it would for
+ * a daemon that is slow and dies; and, in the session (check.mjs),
+ * `daemon-warm`, before a check warms its contexts, and `daemon-replace`,
+ * before a context warms in place of one a cut stopped. Only the daemon gives
+ * it to its session, so a CLI's own cold check never holds, whatever its
+ * environment (v21.2 G43).
  */
 async function pauseAt(point) {
   const {
@@ -107,13 +112,12 @@ async function pauseAt(point) {
   if (
     at !== point ||
     mark === undefined ||
-    release === undefined ||
     (arm !== undefined && !existsSync(arm)) ||
     existsSync(mark)
   )
     return
   writeMark(mark, `${process.pid}`)
-  while (!existsSync(release)) await sleep(50)
+  while (release === undefined || !existsSync(release)) await sleep(50)
 }
 
 /**
@@ -505,24 +509,8 @@ async function serve(pkg) {
             () => connection.destroyed,
           )
           await store.flush()
-          // A test-only pause (ORACLE_GAPS_TEST_PAUSE_AT=daemon-reply): the check
-          // is done and its reply is held, so the CLI waits as it would for a
-          // daemon that is slow and dies. The pause writes this daemon's pid to
-          // ORACLE_GAPS_TEST_PAUSE_MARK, for the oracle to kill it by (no signal
-          // pauses a process on win32). Once: a daemon the CLI restarts after this
-          // one died inherits the variable, and must answer.
-          // With ORACLE_GAPS_TEST_PAUSE_ARM set, it holds only once that file
-          // exists, so a test can warm the daemon first.
-          const mark = process.env.ORACLE_GAPS_TEST_PAUSE_MARK
-          if (
-            process.env.ORACLE_GAPS_TEST_PAUSE_AT === `daemon-reply` &&
-            mark !== undefined &&
-            (armMark === undefined || existsSync(armMark)) &&
-            !existsSync(mark)
-          ) {
-            writeMark(mark, `${process.pid}`)
-            await new Promise(() => {})
-          }
+          // The test-only hold of a done check's reply (`pauseAt`).
+          await pauseAt(`daemon-reply`)
         } catch (error) {
           failed = sent(error)
         }
