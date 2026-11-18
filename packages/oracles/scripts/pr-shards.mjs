@@ -245,7 +245,7 @@ export const partitions = {
   // CI on main at e2af13a (run 43266105332), where its three shards took
   // 4:12, 16:12, and 18:09. One file whose tests run in sequence, so a
   // shard's time is the sum of its tests. Eight shards of 195 to 330 s, and
-  // a ninth since the campaign units split in two (#122):
+  // two more since the campaign units split in three (#122):
   // the fixed histories' determinism units in three, the constructed
   // histories' determinism units, the fixed histories and the calibrations
   // in three, and the rest (the seeded units, 312 s, and any new kind).
@@ -265,7 +265,11 @@ export const partitions = {
       // one drawn from the run's seed (#122), which doubles their 5.6 min, so
       // the fixed-seed units run apart from the random ones.
       8: `fixed seed 1: .*`,
-      9: rest,
+      // The random-seed campaign units, split by name: about 249 s of CI
+      // time before `round3`, and about 260 s with the rest (59b5c449's 9/9
+      // took 8m51s whole).
+      9: `random seed: (?:[a-q]|r(?!ound[3-9])).*`,
+      10: rest,
     },
   },
   // The gap report's static oracle, the slowest of the fast gap suites and
@@ -344,6 +348,9 @@ export const partitions = {
       // mid-check test edits (12 s and 10 s), and a reset check (11 s):
       // about 145 s.
       5: anyOf([
+        // apiLessTypescript (146 s at 59b5c449, with its drawn base) moved
+        // here from the rest, which took 8m07s with it.
+        'a declaration fault: apiLessTypescript',
         'a daemon pause that cannot engage',
         'a lazy module loaded before a hang in the same batch',
         'a test edits the helper it read, during a check through the daemon',
