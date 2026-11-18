@@ -282,14 +282,12 @@ export const partitions = {
     },
   },
   // The end-to-end gap oracle's fixed-seed units, which a pull request runs
-  // (`-t "fixed seed"`): 38 units, measured in CI on main at ae3184d (each
-  // unit's cost read from its reach line's time in the three jobs' logs),
-  // whose generated histories this branch keeps (the work law's bound in
-  // the grammar is derived from the plan, not drawn, 2026-11-13). A unit's
-  // cost follows the generated history its constructed history is built
-  // from, and the witness module's histories grow with its witnesses. The
-  // units are packed longest first into three shards: about 290 s, 277 s,
-  // and 260 s of CI time.
+  // (`-t "fixed seed"`): 79 units. Each unit weighs its longest CI time in
+  // runs 44200775802 and 44216367366 (from its reach line's time, since this
+  // job's reporter prints no durations), and the units are packed longest
+  // first into three shards of 375 s each, so each job takes about 7 minutes
+  // (the maintainer's decision "Pack CI jobs to about 9 min", 2026-11-17;
+  // P12: never over 10).
   'oracle-gaps-fixed-seed': {
     args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-oracle`],
     suite: `oracle-gaps.report`,
@@ -298,53 +296,80 @@ export const partitions = {
     // select exactly these.
     previously: `fixed seed`,
     shards: {
-      // 261 s, 25 s, and small units: #57's last constructed histories sit
-      // here, since the rest (shard 3) is near its 10-minute limit.
+      // 375 s of weight.
       1: anyOf([
-        'an edit sequence over the witness module, the first half',
-        'an edit sequence over the witness module, the second half',
-        'a stale authored mutant and a reformat',
-        'a failing owner under a config that --config names',
-        'a stop before the CLI starts',
-        'a stop by SIGTERM as the CLI starts',
-        'an unsupervised run stopped after its note',
-        'a start refuses a dangling claim',
-        'a supervised check with no ps on its PATH',
+        `every outcome class`,
+        `an edit sequence over the witness module, the first half`,
+        `a daemon pause that cannot engage`,
+        `generated`,
+        `a test edits the data it read, during a check through the daemon`,
+        `an edit to a module that only mutated runs load`,
+        `a daemon check with the default output directory, unsupervised`,
+        `an unchanged check through the daemon under a config's pre plugin`,
+        `a load failure beside a hang`,
+        `an awaiting config in a package with no module type`,
+        `a stop with the default output directory`,
+        `a stop before the CLI starts`,
+        `a config whose plugin loads test files with a sync read`,
+        `a supervised child exits when its supervisor is killed`,
+        `a config that --config names`,
+        `a .ts config in a package with no module type that calls require`,
+        `a failing owner under its parent's config`,
+        `two batches each read a capture row while its worker wrote it`,
+        `a config whose test root holds no test file`,
+        `two runs on one output directory`,
+        `a stream log lost after its note, then stopped`,
+        `a supervised check with no ps on its PATH`,
+        `a declaration fault: missingSource`,
+        `a declaration fault: configThrows`,
+        `a declaration fault: outsideSource`,
+        `a stream log that cannot be written`,
       ]),
-      // Every part of `every outcome class` (the first half took 134 s on the CI
-      // runner; the warm and abort stops are two small histories over the stop
-      // witness alone), a second daemon check (101 s), and two small units. The
-      // stop parts are named here: `every outcome class` alone matches the
-      // first half only, and the others would fall into the rest (shard 3).
+      // 375 s of weight.
       2: anyOf([
-        'every outcome class',
-        'every outcome class, the warm stop',
-        'every outcome class, the abort stop',
-        'a second daemon check of the budget witness',
-        'a declaration fault: brokenVitest',
-        'an edit that changed the cold result after a hang replaced the only context',
+        `an edit sequence over the witness module, the second half`,
+        `a declaration fault: brokenOwner`,
+        `a declaration fault: brokenVitest`,
+        `an edit that changed the cold result after a hang replaced the only context`,
+        `every outcome class, the abort stop`,
+        `an edit during a check through the daemon`,
+        `an edit to data a test reads through fs (callback)`,
+        `an edit to data a test reads through fs (promise)`,
+        `an unchanged check through the daemon while a test reads a source through fs`,
+        `an ambiguous authored mutant`,
+        `a declaration fault: apiLessTypescript`,
+        `a stream log lost after its note, then completed`,
+        `an unsupervised run stopped after its note`,
+        `a stop as the CLI starts`,
+        `a stop by SIGTERM as the CLI starts`,
+        `a .cjs config that calls require`,
+        `a package whose parent directory has its config`,
+        `a declaration fault: setupThrows`,
+        `a config whose test root is above the package`,
+        `a probe branch under a generated test's work bound`,
+        `a start refuses a stale claim`,
+        `a start refuses a dangling claim`,
+        `a config fault in a run that owns nothing`,
+        `a declaration fault: nonLiteral`,
+        `a declaration fault: configNoDefault`,
       ]),
-      // The rest: noTypescript (174 s on the CI runner), the edit sequence
-      // through the daemon (94 s), brokenOwner (83 s), generated (23 s), the
-      // lazy module (12 s), and small units.
+      // The rest: 375 s of weight, and any unit added later.
       3: rest,
     },
   },
   // The end-to-end gap oracle's random units, which every pull request runs
   // (maintainer decision CI-1; v21.2 P4, R26): each run draws a fresh
-  // campaign seed, and a counterexample prints its replay line and its
-  // history. 79 units. Measured on the Arca pool at 7418dcc (one Arclet, 8
-  // vCPU, per run) under five fresh seeds: -2007897226, 942375281,
-  // -220175856, -1406654421, -1102976104 (tags r90b-rand-s1 to -s5). Each
-  // unit's weight is its longest passing time across the five; the units
-  // are packed longest first, and `every outcome class` has a shard of its
-  // own, because a failing run of it shrinks for 470 to 524 s here (seeds
-  // 942375281 and -220175856, the classes of #109 and #120, on main too).
-  // CI ran 1.1 to 1.9 times an Arclet's time in the jobs that both ran (the
-  // determinism shards at e558496), so a shard's 208 s at most here is
-  // about 7 minutes of CI time (P12, v21.2 R12). A counterexample's shrink
-  // is not weighted: a failing seed can take its shard past 10 minutes (the
-  // pull request's Limits).
+  // campaign seed, and a failing unit prints its replay line and its
+  // history. 79 units. A unit's cost follows the seed, so each unit weighs
+  // the larger of its longest time in CI runs 44200775802 and 44216367366
+  // (two seeds) and its longest passing time on the Arca pool under five
+  // seeds (r90b-rand-s1 to -s5, at 7418dcc) times the median CI/Arclet
+  // ratio (1.03). Packed longest first into three shards of 533 s of weight;
+  // one seed's shard takes about 370 s in CI (the two CI runs' totals,
+  // 1,114 s and 1,030 s, over three), so a job takes 7 to 9 minutes (the
+  // maintainer's decision "Pack CI jobs to about 9 min", 2026-11-17; P12).
+  // CI's random units do not shrink (GAP_E2E_SHRINKS=0, pr.yml), so a failing
+  // seed's job takes about its passing time.
   'oracle-gaps-random': {
     args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-oracle`],
     suite: `oracle-gaps.report`,
@@ -352,101 +377,83 @@ export const partitions = {
     // Every name is checked against the listed tests (partitionErrors).
     exactNames: true,
     shards: {
-      // 103, 524, 471, 106, 106 s on the five seeds (the two longest are failing seeds, which shrank a counterexample of #109's and #120's classes).
-      1: anyOf([`every outcome class`]),
-      // 105, 168, 172, 156, 157 s on the five seeds.
-      2: anyOf([
-        `a declaration fault: noTypescript`,
-        `a reset check after its warm daemon was replaced`,
-        `a daemon pause that cannot engage`,
-        `a daemon check with the default output directory`,
-        `a test edits the data it read, during a check through the daemon`,
-        `an edit to data a test reads through fs (sync)`,
-        `an unchanged check through the daemon while a test reads a source through fs`,
-        `a failing owner under a config that --config names`,
-        `a capture row read while the worker wrote it`,
-        `a config whose test root is above the package`,
-        `a start refuses an unreadable claim`,
-        `a package with no config`,
-        `a config whose test root holds no test file`,
-        `a declaration fault: configSyntax`,
-        `a declaration fault: badEntry`,
-        `a declaration fault: outsideSource`,
-      ]),
-      // 171, 177, 189, 187, 200 s on the five seeds.
-      3: anyOf([
-        `an edit sequence over the witness module, the second half`,
+      // 533 s of weight.
+      1: anyOf([
+        `every outcome class`,
+        `a declaration fault: brokenOwner`,
         `an edit sequence over the witness module, the first half`,
-        `a stale authored mutant and a reformat`,
+        `a reset check after its warm daemon was replaced`,
+        `a lazy module loaded before a hang in the same batch`,
         `every outcome class, the abort stop`,
-        `a declaration fault: setupThrows`,
-        `an edit to data a test reads through fs (promise)`,
-        `a stream log lost after its note, then completed`,
-        `a load failure beside a hang`,
+        `an edit during a check through the daemon`,
+        `a test edits the data it read, during a check through the daemon`,
+        `an unchanged check through the daemon under a config's pre plugin`,
+        `a probe branch under a generated test's work bound`,
+        `a stream log lost after its note, then stopped`,
+        `an unchanged check through the daemon while a test reads a source through fs`,
+        `every outcome class, the warm stop`,
         `a config whose test root is a symbolic link`,
-        `a stop as the CLI starts`,
-        `two authored mutants`,
-        `a start refuses an empty claim`,
-        `a .cjs config that calls require`,
+        `a declaration fault: nonLiteral`,
+        `a config that --config names`,
+        `a start refuses a stale claim`,
+        `a supervised child exits when its supervisor is killed`,
+        `an awaiting config in a package with no module type`,
         `a .ts config in a package with no module type that calls require`,
-        `a declaration fault: configNoDefault`,
+        `a supervised check with no ps on its PATH`,
+        `two batches each read a capture row while its worker wrote it`,
+        `a batch whose run rejects`,
+        `a declaration fault: badEntry`,
+        `a declaration fault: missingSource`,
         `a stream log that cannot be written`,
       ]),
-      // 161, 203, 163, 199, 170 s on the five seeds.
-      4: anyOf([
+      // 533 s of weight.
+      2: anyOf([
+        `an edit sequence over the witness module, the second half`,
         `a second daemon check of the budget witness`,
         `an edit sequence through the daemon`,
-        `a lazy module loaded before a hang in the same batch`,
-        `an edit during a check through the daemon`,
-        `an edit to a module that only mutated runs load`,
-        `an unchanged check through the daemon under a config's pre plugin`,
-        `a stream log lost after its note, then stopped`,
-        `every outcome class, the warm stop`,
-        `a run with eleven contexts`,
-        `a declaration fault: nonLiteral`,
-        `two starts race for a stale claim`,
-        `an awaiting config in a package with no module type`,
-        `a config whose plugin loads test files with a sync read`,
-        `a start refuses a stale claim`,
-        `a declaration fault: configNull`,
-        `test.projects in a parent's config`,
-      ]),
-      // 95, 103, 208, 56, 149 s on the five seeds.
-      5: anyOf([
-        `a declaration fault: brokenOwner`,
-        `a declaration fault: brokenVitest`,
+        `a daemon pause that cannot engage`,
+        `a stale authored mutant and a reformat`,
         `an edit that changed the cold result after a hang replaced the only context`,
         `a test edits the helper it read, during a check through the daemon`,
-        `a daemon check with the default output directory, unsupervised`,
         `an edit to data a test reads through fs (callback)`,
+        `an edit to a module that only mutated runs load`,
+        `an edit to data a test reads through fs (statDir)`,
         `a stop by SIGTERM as the CLI starts`,
-        `a probe branch under a generated test's work bound`,
+        `a stop as the CLI starts`,
+        `a load failure beside a hang`,
+        `a failing owner under a config that --config names`,
         `a config whose test root is a subdirectory that holds the tests`,
-        `a stop before the CLI starts`,
-        `a config that --config names`,
+        `a capture row read while the worker wrote it`,
+        `a package whose parent directory has its config`,
+        `two authored mutants`,
+        `a start refuses an unreadable claim`,
         `a start refuses a dangling claim`,
-        `a supervised check with no ps on its PATH`,
+        `a .cjs config that calls require`,
         `two runs on one output directory`,
-        `a declaration fault: configThrows`,
+        `a config whose test root holds no test file`,
+        `a declaration fault: configSyntax`,
         `a declaration fault: projects`,
+        `test.projects in a parent's config`,
+        `a declaration fault: outsideSource`,
       ]),
-      // The rest: 30, 85, 123, 121, 120 s on the five seeds, and any unit added later.
-      6: rest,
+      // The rest: 533 s of weight, and any unit added later.
+      3: rest,
     },
   },
   // The end-to-end gap oracle's determinism units, which every pull request
   // runs, in blocking jobs (the maintainer's decision "#90 job stays
   // blocking", 2026-11-16; v21.2 R55 (a)). Each unit runs one history twice
   // and compares the two traces: results and fixed lines, not the heartbeats,
-  // which are progress (maintainer decision, 2026-11-14; v21.2 R52). 81 units;
-  // measured on the Arca pool at 7418dcc, one Arclet per part (tags
-  // r90b-det-a and -b): 1,558 s in all. The units are packed longest first
-  // into eight shards of at most 202 s here, about 7 minutes of CI time at
-  // the 1.1 to 1.9 times an Arclet's time that CI took in the jobs both ran
-  // (P12). The witness module's edit sequence runs as two halves (202 s and
-  // 99 s here), where the whole took 344 to 364 s (#106). Every unit is in a
-  // shard: the daemon edit sequence (#92, fixed by #126) passed 4 of 4 and
-  // the daemon pause that cannot engage (#105) 6 of 6 on this branch.
+  // which are progress (maintainer decision, 2026-11-14; v21.2 R52). 81 units.
+  // Each weighs its longest CI time in runs 44200775802 and 44216367366
+  // (which differed by up to 1.6 times on one unit), packed longest first
+  // into six shards of at most 425 s, so a job takes about 7.5 minutes, with
+  // room for a slower runner under 10 (the maintainer's decision "Pack CI
+  // jobs to about 9 min", 2026-11-17; P12). The witness module's edit
+  // sequence runs as two halves, where the whole took 344 to 364 s on an
+  // Arclet (#106). Every unit is in a shard: the daemon edit sequence (#92,
+  // fixed by #126) passed 4 of 4 and the daemon pause that cannot engage
+  // (#105) 6 of 6 on this branch.
   'oracle-gaps-determinism': {
     args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-oracle`],
     suite: `oracle-gaps.report`,
@@ -454,93 +461,85 @@ export const partitions = {
     // Every name is checked against the listed tests (partitionErrors).
     exactNames: true,
     shards: {
-      // 202 s here.
-      1: anyOf([
-        `constructed history: an edit sequence over the witness module, the second half`,
-      ]),
-      // 194 s here.
-      2: anyOf([`generated 2`]),
-      // 194 s here.
-      3: anyOf([
+      // 425 s of weight.
+      1: anyOf([`generated 2`]),
+      // 422 s of weight.
+      2: anyOf([
         `constructed history: every outcome class`,
-        `constructed history: a declaration fault: nonLiteral`,
-        `generated 0`,
-      ]),
-      // 193 s here.
-      4: anyOf([
-        `constructed history: an edit sequence through the daemon`,
-        `constructed history: an edit during a check through the daemon`,
-        `constructed history: a daemon check with the default output directory`,
-        `constructed history: an unchanged check through the daemon while a test reads a source through fs`,
+        `constructed history: an edit to a module that only mutated runs load`,
+        `generated 1`,
+        `constructed history: every outcome class, the warm stop`,
+        `constructed history: a stop before the CLI starts`,
         `constructed history: a stream log lost after its note, then stopped`,
-        `constructed history: a stream log lost after its note, then completed`,
-        `constructed history: an awaiting config in a package with no module type`,
-        `constructed history: a config whose plugin loads test files with a sync read`,
-        `constructed history: a .ts config in a package with no module type that calls require`,
+        `constructed history: a probe branch under a generated test's work bound`,
         `constructed history: a package with no config`,
         `constructed history: a config that --config names`,
-        `constructed history: a declaration fault: configThrows`,
-        `constructed history: a declaration fault: missingSource`,
-        `constructed history: a declaration fault: outsideSource`,
-      ]),
-      // 193 s here.
-      5: anyOf([
-        `constructed history: an edit sequence over the witness module, the first half`,
-        `constructed history: a lazy module loaded before a hang in the same batch`,
-        `constructed history: every outcome class, the abort stop`,
-        `generated 1`,
-        `constructed history: an edit to data a test reads through fs (statDir)`,
-        `constructed history: a failing owner under a config that --config names`,
-        `constructed history: a stop as the CLI starts`,
-        `constructed history: an unsupervised run stopped after its note`,
-        `constructed history: a load failure beside a hang`,
-        `constructed history: a start refuses an unreadable claim`,
-        `constructed history: a run with eleven contexts`,
-        `constructed history: a start refuses a stale claim`,
-        `constructed history: two runs on one output directory`,
-        `constructed history: a declaration fault: configNoDefault`,
-        `constructed history: a config fault in a run that owns nothing`,
-        `constructed history: a stream log that cannot be written`,
-      ]),
-      // 194 s here.
-      6: anyOf([
-        `constructed history: a declaration fault: noTypescript`,
-        `constructed history: a stale authored mutant and a reformat`,
-        `constructed history: a reset check after its warm daemon was replaced`,
-        `constructed history: an edit to data a test reads through fs (sync)`,
-        `constructed history: a daemon check with the default output directory, unsupervised`,
-        `constructed history: an unchanged check through the daemon under a config's pre plugin`,
-        `constructed history: a config whose test root is a symbolic link`,
-        `constructed history: two authored mutants`,
-        `constructed history: a start refuses an empty claim`,
-        `constructed history: a failing owner under its parent's config`,
-        `constructed history: a config whose test root is above the package`,
-        `constructed history: a supervised check with no ps on its PATH`,
-        `constructed history: two starts race for a stale claim`,
-        `constructed history: a declaration fault: setupThrows`,
-        `constructed history: a declaration fault: configSyntax`,
-      ]),
-      // 194 s here.
-      7: anyOf([
-        `constructed history: a second daemon check of the budget witness`,
-        `constructed history: a daemon pause that cannot engage`,
-        `constructed history: a test edits the helper it read, during a check through the daemon`,
-        `constructed history: an edit to a module that only mutated runs load`,
-        `constructed history: an edit to data a test reads through fs (callback)`,
-        `constructed history: a stop with the default output directory`,
-        `constructed history: a declaration fault: apiLessTypescript`,
-        `constructed history: a supervised child exits when its supervisor is killed`,
-        `constructed history: an ambiguous authored mutant`,
-        `constructed history: a config whose test root is a subdirectory that holds the tests`,
-        `constructed history: a start refuses a dangling claim`,
-        `constructed history: a .cjs config that calls require`,
         `constructed history: a batch whose run rejects`,
+        `constructed history: a declaration fault: configThrows`,
         `constructed history: a declaration fault: configNull`,
         `constructed history: a declaration fault: projects`,
-        `constructed history: test.projects in a parent's config`,
       ]),
-      // The rest: 194 s here, and any unit added later.
-      8: rest,
+      // 423 s of weight.
+      3: anyOf([
+        `constructed history: an edit sequence over the witness module, the second half`,
+        `constructed history: a daemon check with the default output directory`,
+        `constructed history: an unchanged check through the daemon under a config's pre plugin`,
+        `constructed history: an edit to data a test reads through fs (statDir)`,
+        `constructed history: a stop by SIGTERM as the CLI starts`,
+        `constructed history: an unsupervised run stopped after its note`,
+        `constructed history: a capture row read while the worker wrote it`,
+        `constructed history: a config whose plugin loads test files with a sync read`,
+        `constructed history: two starts race for a stale claim`,
+        `constructed history: ordinary tests left out by default`,
+        `constructed history: a .cjs config that calls require`,
+        `constructed history: a declaration fault: configSyntax`,
+        `constructed history: a declaration fault: nonLiteral`,
+        `constructed history: a config fault in a run that owns nothing`,
+      ]),
+      // 422 s of weight.
+      4: anyOf([
+        `constructed history: an edit sequence through the daemon`,
+        `constructed history: a stale authored mutant and a reformat`,
+        `constructed history: a daemon pause that cannot engage`,
+        `constructed history: an edit during a check through the daemon`,
+        `constructed history: a test edits the helper it read, during a check through the daemon`,
+        `constructed history: a daemon check with the default output directory, unsupervised`,
+        `constructed history: an edit to data a test reads through fs (callback)`,
+        `constructed history: a stream log lost after its note, then completed`,
+        `constructed history: a stop with the default output directory`,
+        `constructed history: an ambiguous authored mutant`,
+        `constructed history: a start refuses an empty claim`,
+        `constructed history: a config whose test root holds no test file`,
+        `constructed history: a .ts config in a package with no module type that calls require`,
+        `constructed history: a supervised check with no ps on its PATH`,
+        `constructed history: a run with eleven contexts`,
+        `constructed history: two runs on one output directory`,
+        `constructed history: a declaration fault: missingSource`,
+        `constructed history: a declaration fault: outsideSource`,
+        `constructed history: a stream log that cannot be written`,
+      ]),
+      // 422 s of weight.
+      5: anyOf([
+        `constructed history: a declaration fault: noTypescript`,
+        `constructed history: a second daemon check of the budget witness`,
+        `constructed history: an edit that changed the cold result after a hang replaced the only context`,
+        `constructed history: a reset check after its warm daemon was replaced`,
+        `constructed history: a test edits the data it read, during a check through the daemon`,
+        `constructed history: an edit to data a test reads through fs (sync)`,
+        `constructed history: an unchanged check through the daemon while a test reads a source through fs`,
+        `constructed history: two authored mutants`,
+        `constructed history: an awaiting config in a package with no module type`,
+        `constructed history: a failing owner under a config that --config names`,
+        `constructed history: a supervised child exits when its supervisor is killed`,
+        `constructed history: a load failure beside a hang`,
+        `constructed history: two batches each read a capture row while its worker wrote it`,
+        `constructed history: a config whose test root is a subdirectory that holds the tests`,
+        `constructed history: a start refuses an unreadable claim`,
+        `constructed history: a declaration fault: badEntry`,
+        `constructed history: a declaration fault: configNoDefault`,
+      ]),
+      // The rest: 423 s of weight, and any unit added later.
+      6: rest,
     },
   },
   'oracle-gaps-static-windows': {
