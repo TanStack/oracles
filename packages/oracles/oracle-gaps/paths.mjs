@@ -7,7 +7,7 @@
 // the JavaScript `realpathSync` keeps an 8.3 short name (RUNNER~1), which the
 // native call expands, so the two never agree on Windows.
 import { realpathSync, renameSync, writeFileSync } from 'node:fs'
-import { relative } from 'node:path'
+import { join, relative } from 'node:path'
 
 /**
  * The forward-slash spelling of `path`, with a drive letter in capitals: a
@@ -61,6 +61,12 @@ export function specifierOf(from, to) {
   const rel = posix(relative(from, to))
   return /^\.\.?\//.test(rel) ? rel : `./${rel}`
 }
+
+/**
+ * The session directory of process `pid` in package `pkg`: its capture setup
+ * and Vitest configs while it checks (check.mjs).
+ */
+export const sessionDirOf = (pkg, pid) => join(pkg, `.oracle-gaps-${pid}`)
 
 /** The last segment of `path`, in forward slashes. */
 export const baseOf = (path) => posix(path).split(`/`).at(-1)
