@@ -36,8 +36,9 @@ const suite = `oracle-gaps.report`
 // cost follows its seed, so a shard's time varies from run to run. Option M
 // of the e2e speed plan bounds the random units' tail: a generated history
 // with the witness module takes no steps, and the one edit sequence over it
-// is a constructed history. CI keeps its one fixed-seed job until the
-// maintainer decides which units run on a pull request.
+// is a constructed history. A pull request runs the fixed-seed, random, and
+// determinism units as the partitions of pr-shards.mjs; these shards are
+// the full-suite plan, which this file's check keeps partitioned.
 export const shards = {
   // 522 s in the measured run, about 221 s idle.
   'e2e-1': [
@@ -70,42 +71,10 @@ export const shards = {
     `determinism: constructed history: a declaration fault: projects`,
     `determinism: constructed history: a package with no config`,
     `determinism: constructed history: an edit sequence through the daemon`,
-    `fixed seed 20261105: a slow owner's kill and another owner's kill`,
-    `random seed: a slow owner's kill and another owner's kill`,
-    `determinism: constructed history: a slow owner's kill and another owner's kill`,
-    `fixed seed 20261105: a slow kill after a 16 s wait`,
-    `random seed: a slow kill after a 16 s wait`,
-    `determinism: constructed history: a slow kill after a 16 s wait`,
-    `fixed seed 20261105: a copy waiting on a timer`,
-    `random seed: a copy waiting on a timer`,
-    `determinism: constructed history: a copy waiting on a timer`,
-    `fixed seed 20261105: a copy waiting on an unref'd timer`,
-    `random seed: a copy waiting on an unref'd timer`,
-    `determinism: constructed history: a copy waiting on an unref'd timer`,
-    `fixed seed 20261105: a copy waiting on a pipe it opened`,
-    `random seed: a copy waiting on a pipe it opened`,
-    `determinism: constructed history: a copy waiting on a pipe it opened`,
-    `fixed seed 20261105: a copy beside the runner's pending write`,
-    `random seed: a copy beside the runner's pending write`,
-    `determinism: constructed history: a copy beside the runner's pending write`,
-    `fixed seed 20261105: a copy beside the runner's pending timer`,
-    `random seed: a copy beside the runner's pending timer`,
-    `determinism: constructed history: a copy beside the runner's pending timer`,
-    `fixed seed 20261105: a clocked copy that spins`,
-    `random seed: a clocked copy that spins`,
-    `determinism: constructed history: a clocked copy that spins`,
-    `fixed seed 20261105: an authored mutant whose owner hangs`,
-    `random seed: an authored mutant whose owner hangs`,
-    `determinism: constructed history: an authored mutant whose owner hangs`,
-    `fixed seed 20261105: a kill past the work budget in a later owner`,
-    `random seed: a kill past the work budget in a later owner`,
-    `determinism: constructed history: a kill past the work budget in a later owner`,
-    `fixed seed 20261105: a backstop cut ends the copies ahead of a later kill`,
-    `random seed: a backstop cut ends the copies ahead of a later kill`,
-    `determinism: constructed history: a backstop cut ends the copies ahead of a later kill`,
     // The witness module's edit sequence (option M): 189 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
-    `determinism: constructed history: an edit sequence over the witness module`,
+    `determinism: constructed history: an edit sequence over the witness module, the first half`,
+    `determinism: constructed history: an edit sequence over the witness module, the second half`,
     // The daemon's law 9 histories cost 3 to 13 s each here (their replays).
     `fixed seed 20261105: an edit that changed the cold result after a hang replaced the only context`,
     `random seed: an edit that changed the cold result after a hang replaced the only context`,
@@ -334,7 +303,9 @@ export const shards = {
     // Added with the gap CLI's runtime fixes (not yet measured).
     `fixed seed 20261105: a second daemon check of the budget witness`,
     `calibration: a stopped run leaves a process it started running`,
-    `calibration: a busy mutant is named in no heartbeat`,
+    // The heartbeat calibrations after the shape-only change (not yet measured).
+    `calibration: a heartbeat names a mutant whose gap line came first`,
+    `calibration: a heartbeat names no mutant of its run`,
     // Law 15's calibrations (the greppable stream), measured at ab18c60:
     // 79 s and 70 s; the daemon-notes one, bound to its history, 2 s (it
     // took 433 s searching for one).
@@ -349,7 +320,8 @@ export const shards = {
     `determinism: constructed history: a second daemon check of the budget witness`,
     // The witness module's edit sequence (option M): 97 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
-    `fixed seed 20261105: an edit sequence over the witness module`,
+    `fixed seed 20261105: an edit sequence over the witness module, the first half`,
+    `fixed seed 20261105: an edit sequence over the witness module, the second half`,
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-5': [
@@ -406,36 +378,66 @@ export const shards = {
     `calibration: the stdout drops a gap line`,
     `calibration: a stdout gap line shows another change`,
     `calibration: a stdout gap line names another kind`,
-    `calibration: a stdout gap line names another cause`,
     `calibration: a stdout gap line does not read as a gap`,
     `calibration: the stdout has a gap line for a mutant that is not a gap`,
     `calibration: a check through the daemon drops a gap line`,
     `calibration: a check through the daemon names another check's report`,
     // The witness module's edit sequence (option M): about 97 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
-    `random seed: an edit sequence over the witness module`,
-    // The merge gate's histories for #99 (count-only kills, no progress per
-    // copy, the work budget's clocked rows, the unsupervised lost-log stop).
+    `random seed: an edit sequence over the witness module, the first half`,
+    `random seed: an edit sequence over the witness module, the second half`,
+    // #99's deterministic-cuts and merge-gate histories.
+    `fixed seed 20261105: a slow owner's kill and another owner's kill`,
+    `fixed seed 20261105: a backstop cut ends the copies ahead of a later kill`,
+    `fixed seed 20261105: a kill past the work budget in a later owner`,
+    `fixed seed 20261105: a slow kill after a 16 s wait`,
+    `fixed seed 20261105: a copy waiting on a timer`,
+    `fixed seed 20261105: a copy waiting on an unref'd timer`,
+    `fixed seed 20261105: a copy waiting on a pipe it opened`,
+    `fixed seed 20261105: a copy beside the runner's pending write`,
+    `fixed seed 20261105: a copy beside the runner's pending timer`,
+    `fixed seed 20261105: a clocked copy that spins`,
+    `fixed seed 20261105: an authored mutant whose owner hangs`,
     `fixed seed 20261105: a stream log lost after its note, then stopped, unsupervised`,
-    `random seed: a stream log lost after its note, then stopped, unsupervised`,
-    `determinism: constructed history: a stream log lost after its note, then stopped, unsupervised`,
     `fixed seed 20261105: a heavy test that reads the clock after its work`,
-    `random seed: a heavy test that reads the clock after its work`,
-    `determinism: constructed history: a heavy test that reads the clock after its work`,
     `fixed seed 20261105: a heavy test that reads the clock first`,
-    `random seed: a heavy test that reads the clock first`,
-    `determinism: constructed history: a heavy test that reads the clock first`,
     `fixed seed 20261105: a hang in a file whose test does a short read`,
-    `random seed: a hang in a file whose test does a short read`,
-    `determinism: constructed history: a hang in a file whose test does a short read`,
     `fixed seed 20261105: a clocked owner beside a counted one under the work budget`,
+    `fixed seed 20261105: a spin after a short async read`,
+    `random seed: a slow owner's kill and another owner's kill`,
+    `random seed: a backstop cut ends the copies ahead of a later kill`,
+    `random seed: a kill past the work budget in a later owner`,
+    `random seed: a slow kill after a 16 s wait`,
+    `random seed: a copy waiting on a timer`,
+    `random seed: a copy waiting on an unref'd timer`,
+    `random seed: a copy waiting on a pipe it opened`,
+    `random seed: a copy beside the runner's pending write`,
+    `random seed: a copy beside the runner's pending timer`,
+    `random seed: a clocked copy that spins`,
+    `random seed: an authored mutant whose owner hangs`,
+    `random seed: a stream log lost after its note, then stopped, unsupervised`,
+    `random seed: a heavy test that reads the clock after its work`,
+    `random seed: a heavy test that reads the clock first`,
+    `random seed: a hang in a file whose test does a short read`,
     `random seed: a clocked owner beside a counted one under the work budget`,
+    `random seed: a spin after a short async read`,
+    `calibration: a stdout gap line names another cause`,
+    `determinism: constructed history: a slow owner's kill and another owner's kill`,
+    `determinism: constructed history: a backstop cut ends the copies ahead of a later kill`,
+    `determinism: constructed history: a kill past the work budget in a later owner`,
+    `determinism: constructed history: a slow kill after a 16 s wait`,
+    `determinism: constructed history: a copy waiting on a timer`,
+    `determinism: constructed history: a copy waiting on an unref'd timer`,
+    `determinism: constructed history: a copy waiting on a pipe it opened`,
+    `determinism: constructed history: a copy beside the runner's pending write`,
+    `determinism: constructed history: a copy beside the runner's pending timer`,
+    `determinism: constructed history: a clocked copy that spins`,
+    `determinism: constructed history: an authored mutant whose owner hangs`,
+    `determinism: constructed history: a stream log lost after its note, then stopped, unsupervised`,
+    `determinism: constructed history: a heavy test that reads the clock after its work`,
+    `determinism: constructed history: a heavy test that reads the clock first`,
+    `determinism: constructed history: a hang in a file whose test does a short read`,
     `determinism: constructed history: a clocked owner beside a counted one under the work budget`,
-    `fixed seed 20261105: a spin after a short async read`,
-    `random seed: a spin after a short async read`,
-    `determinism: constructed history: a spin after a short async read`,
-    `fixed seed 20261105: a spin after a short async read`,
-    `random seed: a spin after a short async read`,
     `determinism: constructed history: a spin after a short async read`,
   ],
 }

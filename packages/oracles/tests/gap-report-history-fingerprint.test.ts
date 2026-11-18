@@ -1,7 +1,13 @@
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import fc from 'fast-check'
 import { describe, expect, test } from 'vitest'
+import { version as vitestVersion } from 'vitest/package.json'
 import { drawn, histories } from '../oracle-gaps/gap-report-model-oracle.mjs'
 
 // The generator rule (coordinator decision, 2026-11-13): a new field of the
@@ -105,6 +111,73 @@ describe(`the gap oracle's history grammar`, () => {
       )
     }
   })
+
+  // The constructed histories of the end-to-end gap oracle, in the order the
+  // oracle registers them: each one is built from the fixed seed and its index
+  // (`seed + index`), so a history inserted before a recorded one changes every
+  // later history's draw. The register's rule (C-6, ratified) appends new
+  // constructed histories at the end. The recorded names are the list the
+  // oracle registered on main, with any entry a pull request renamed in place
+  // (a rename keeps its index, so no base moves; #90 renamed the witness
+  // sequence's first half). The current list must begin with them, so a new
+  // name can only follow. The canary cannot see an edit to its own record:
+  // it guards an insertion only while a review keeps the record to main's.
+  // The gap oracle loads under Vitest 4; the Vitest 5 job runs no gap oracle
+  // (its listing finds no suite in this file), so the canary runs there only
+  // where the file loads.
+  const gapOracleLoads = Number(vitestVersion.split(`.`)[0]) < 5
+  test.skipIf(!gapOracleLoads)(
+    `appends new constructed histories, and never inserts one before a recorded one`,
+    () => {
+      const recorded = JSON.parse(
+        readFileSync(
+          new URL(`../oracle-gaps/constructed-order.json`, import.meta.url),
+          `utf8`,
+        ),
+      ) as { constructed: Array<string> }
+      // Vitest writes the listing to a file, so no package manager's stdout
+      // line can reach the JSON (as pr-shards.mjs does).
+      const dir = mkdtempSync(join(tmpdir(), `constructed-order-`))
+      let tests: Array<{ name: string }>
+      try {
+        const file = join(dir, `list.json`)
+        const packageDir = dirname(
+          createRequire(import.meta.url).resolve(`vitest/package.json`),
+        )
+        const listing = spawnSync(
+          process.execPath,
+          [
+            join(packageDir, `vitest.mjs`),
+            `list`,
+            `--json=${file}`,
+            `--config`,
+            `oracle-gaps/vitest.config.mjs`,
+            `gap-report-oracle`,
+          ],
+          {
+            cwd: fileURLToPath(new URL(`..`, import.meta.url)),
+            encoding: `utf8`,
+            maxBuffer: 64 * 1024 * 1024,
+          },
+        )
+        expect(listing.status, listing.stderr).toBe(0)
+        tests = JSON.parse(readFileSync(file, `utf8`)) as Array<{
+          name: string
+        }>
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+      const unit = `oracle-gaps.report > fixed seed ${FIXED_SEED}: `
+      const current = tests
+        .map(({ name }) => name)
+        .filter((name) => name.startsWith(unit))
+        .map((name) => name.slice(unit.length))
+        .filter((name) => name !== `generated`)
+      expect(current.slice(0, recorded.constructed.length)).toEqual(
+        recorded.constructed,
+      )
+    },
+  )
 
   // Randomness wins for new fields (maintainer decision, 2026-11-16; v21.2
   // R54, I16): a field that changes what a history runs is drawn, except that
