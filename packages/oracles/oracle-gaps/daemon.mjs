@@ -85,6 +85,38 @@ const writeMark = (path, text) => {
 }
 
 /**
+ * A daemon's test-only hold (ORACLE_GAPS_TEST_PAUSE_AT=<point>): a check
+ * waits at the named point until the file ORACLE_GAPS_TEST_PAUSE_RELEASE
+ * names exists, so its CLI hears nothing until the test releases it, never
+ * the clock. It writes this daemon's pid to ORACLE_GAPS_TEST_PAUSE_MARK
+ * first, and holds once: the mark keeps it from holding again. With
+ * ORACLE_GAPS_TEST_PAUSE_ARM set, it holds only once that file exists, so a
+ * test can warm the daemon first. The points are `daemon-check`, before a
+ * check runs, and, in the session (check.mjs), `daemon-warm`, before a check
+ * warms its contexts, and `daemon-replace`, before a context warms in place of
+ * one a cut stopped. Only the daemon gives it to its session, so a CLI's own
+ * cold check never holds, whatever its environment (v21.2 G43).
+ */
+async function pauseAt(point) {
+  const {
+    ORACLE_GAPS_TEST_PAUSE_AT: at,
+    ORACLE_GAPS_TEST_PAUSE_MARK: mark,
+    ORACLE_GAPS_TEST_PAUSE_RELEASE: release,
+    ORACLE_GAPS_TEST_PAUSE_ARM: arm,
+  } = process.env
+  if (
+    at !== point ||
+    mark === undefined ||
+    release === undefined ||
+    (arm !== undefined && !existsSync(arm)) ||
+    existsSync(mark)
+  )
+    return
+  writeMark(mark, `${process.pid}`)
+  while (!existsSync(release)) await sleep(50)
+}
+
+/**
  * Sends one request and settles with the daemon's reply. A check's request
  * (`bounded`) settles as `{ silent: true }` once its daemon has sent nothing
  * for WAIT_MS of wall-clock time (the socket's own idle timeout). A daemon
@@ -446,23 +478,8 @@ async function serve(pkg) {
           queue = queue.then(() => shutdown(connection, { restart: true }))
           return
         }
-        // Test-only (ORACLE_GAPS_TEST_PAUSE_AT=daemon-check): once the arm file
-        // exists (ORACLE_GAPS_TEST_PAUSE_ARM), the first check waits here,
-        // before it runs, until the file ORACLE_GAPS_TEST_PAUSE_RELEASE names
-        // exists, so its CLI hears nothing until the test releases it. This
-        // daemon's pid goes to ORACLE_GAPS_TEST_PAUSE_MARK. Once.
-        const pauseMark = process.env.ORACLE_GAPS_TEST_PAUSE_MARK
-        const release = process.env.ORACLE_GAPS_TEST_PAUSE_RELEASE
-        if (
-          process.env.ORACLE_GAPS_TEST_PAUSE_AT === `daemon-check` &&
-          pauseMark !== undefined &&
-          release !== undefined &&
-          (armMark === undefined || existsSync(armMark)) &&
-          !existsSync(pauseMark)
-        ) {
-          writeMark(pauseMark, `${process.pid}`)
-          while (!existsSync(release)) await sleep(50)
-        }
+        // The test-only hold before a check runs (`pauseAt`).
+        await pauseAt(`daemon-check`)
         const stderr = []
         let stdout = ``
         let failed
@@ -551,7 +568,7 @@ async function serve(pkg) {
     ;({ parseArgs } = await import(`./args.mjs`))
     const { diskStore } = await import(`./evidence.mjs`)
     store = await diskStore(stateDirOf(pkg))
-    session = await check.openSession(pkg)
+    session = await check.openSession(pkg, pauseAt)
   } catch (error) {
     // The requests already queued hear why, and the CLI that started this
     // daemon reads it from the error file, written before the lock is

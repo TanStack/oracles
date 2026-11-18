@@ -425,9 +425,11 @@ function isModuleConfig(pkg, config) {
 /**
  * A session over one package: the Vitest that the package resolves, and warm
  * Vitest contexts that later checks reuse. A cold run opens a session for one
- * check; the daemon keeps one open.
+ * check; the daemon keeps one open. `pause` is the daemon's test-only hold at
+ * a named point (daemon.mjs `pauseAt`); a cold run has none, so its check
+ * never holds (v21.2 G43).
  */
-export async function openSession(pkg) {
+export async function openSession(pkg, pause = async () => {}) {
   // The analysis reads with this CLI's own TypeScript, never the package's: a
   // TypeScript 7 package exposes its version and no compiler API. The CLI's
   // dependency is TypeScript 5, so a copy without the API is a broken install,
@@ -1578,23 +1580,9 @@ export default async (env) => {
     // the CLI's streams (review of #46, F7).
     if (settings.config !== undefined)
       await fromConfig(0, settings.config, configParses(settings.config))
-    // Test-only (ORACLE_GAPS_TEST_PAUSE_AT=daemon-warm): the first check holds
-    // here, before it warms its contexts, until the file
-    // ORACLE_GAPS_TEST_PAUSE_RELEASE names exists; its pid goes to
-    // ORACLE_GAPS_TEST_PAUSE_MARK. So a test can make a healthy warm-up slow,
-    // released by the test, never by time. Inert unless set; once.
-    const warmMark = process.env.ORACLE_GAPS_TEST_PAUSE_MARK
-    const warmRelease = process.env.ORACLE_GAPS_TEST_PAUSE_RELEASE
-    if (
-      process.env.ORACLE_GAPS_TEST_PAUSE_AT === `daemon-warm` &&
-      warmMark !== undefined &&
-      warmRelease !== undefined &&
-      !existsSync(warmMark)
-    ) {
-      writeWhole(warmMark, `${process.pid}`)
-      while (!existsSync(warmRelease))
-        await new Promise((resolve) => setTimeout(resolve, 50))
-    }
+    // The daemon's test-only hold before the contexts warm: a healthy warm-up
+    // made slow, released by the test, never by time.
+    await pause(`daemon-warm`)
     // Contexts are warmed again when their settings or the Vite config they
     // loaded changed.
     const configHash = () =>
@@ -2035,6 +2023,9 @@ export default async (env) => {
         sleep(10_000),
       ])
       const replaced = slot.context
+      // The daemon's test-only hold before the replacement warms: a slow
+      // config load mid-phase, released by the test, never by time.
+      await pause(`daemon-replace`)
       const next = await warmContext(settings, slot.index)
       const specs = await specsOf(next)
       // One synchronous step: the replaced context leaves every map keyed by it and the new one joins them,
