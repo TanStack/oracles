@@ -306,7 +306,8 @@ const statement = fc.oneof(
     kind: fc.constant(`readData`),
     shape: fc.constantFrom(`object`, `array`, `primitive`, `methods`),
   }),
-  // An object that only a truthy `x` makes, read through `?.`.
+  // An object that only a truthy `x` makes, read through `?.` (the history's
+  // `absentObjects` says what a falsy `x` leaves in its place).
   fc.record({ kind: fc.constant(`optional`) }),
 )
 const libStatement = fc.oneof(
@@ -1080,6 +1081,39 @@ const drawn = fc.record({
   // CLI so (its beats). It switches a test-only knob, so only the constructed
   // history "a check through the daemon that works past the bound" sets it.
   shortWait: fc.constant(false),
+  // What each `optional` statement of the generated functions, in order,
+  // holds in place of its object when its `x` is falsy: `undefined`, or
+  // `null`; a statement past the list's end holds `undefined`. A plain read
+  // in place of `?.` throws on either, where `?.` gives `undefined`. Drawn
+  // last, so the earlier fields keep their draws (the generator rule).
+  absentObjects: fc.array(fc.constantFrom(`undefined`, `null`), {
+    maxLength: 8,
+  }),
+  // How each `optional` statement, in order, reads its object: through
+  // `links` `?.` links (`o?.v`, `o?.a?.v`, `o?.a?.b?.v`), where the object at
+  // depth `level % links` (0 is `o` itself) is the one a falsy `x` leaves
+  // absent. A statement past the list's end reads one link. A plain read in
+  // place of one link throws only where that link's own object is absent: a
+  // link past an absent object is short-circuited, as JavaScript skips the
+  // rest of the chain. Drawn last (the generator rule).
+  // A chain may end in a method `f` called through `?.()`, then read `v`
+  // through `?.` (`o?.f?.()?.v`) or a plain read (`o?.f?.().v`). The method
+  // is a builtin, so its field holds no function of the source: `Object`
+  // returns an object, and `Function.prototype` returns nothing (the plain
+  // read is drawn only after a method that returns an object). The absent
+  // value may be the method itself (the level after the last object). An
+  // optional call is no mutation site: where its method is absent,
+  // JavaScript skips the rest of the chain, so a later `?.` link's plain read
+  // changes nothing.
+  optionalChains: fc.array(
+    fc.record({
+      links: fc.constantFrom(1, 1, 2, 3),
+      level: fc.nat({ max: 3 }),
+      call: fc.constantFrom(`none`, `none`, `optional`, `plain`),
+      returns: fc.constantFrom(`object`, `nothing`),
+    }),
+    { maxLength: 8 },
+  ),
   // Every read is a daemon input (maintainer decision, 2026-11-16, "All of
   // them"): a file a test reads through fs on any path, node_modules
   // included; an environment variable a test reads; and what the config's
@@ -2500,6 +2534,57 @@ const referenceKinds = new Set([
 const condText = (stmt) =>
   stmt.not ? `!(x ${stmt.op} ${stmt.k})` : `x ${stmt.op} ${stmt.k}`
 
+// The value an `optional` statement's object takes when `x` is falsy.
+const absentOf = (stmt) => stmt.absent ?? `undefined`
+// An `optional` statement's chain fields where it names none.
+const OPTIONAL_DEFAULTS = {
+  links: 1,
+  level: 0,
+  call: `none`,
+  returns: `object`,
+}
+// The site roles of an `optional` statement's field drops and links.
+const dropRole = (prop) => `drop${prop.toUpperCase()}`
+const chainRole = (link) => (link === 0 ? `chain` : `chain${link}`)
+// The property that each object link of an `optional` statement reads,
+// outermost object first: `a`, then `b`, and `v` last, or the method `f`
+// where the chain calls one.
+const linkProps = (stmt) => [
+  ...[`a`, `b`].slice(0, (stmt.links ?? 1) - 1),
+  (stmt.call ?? `none`) === `none` ? `v` : `f`,
+]
+// Every `?.` link of the read that is a mutation site, first link first:
+// the object links, then the `?.v` after an optional call.
+const siteLinks = (stmt) =>
+  linkProps(stmt).length + (stmt.call === `optional` ? 1 : 0)
+// The read's text after the object's name.
+const readText = (stmt) =>
+  linkProps(stmt)
+    .map((prop) => `?.${prop}`)
+    .join(``) +
+  { none: ``, optional: `?.()?.v`, plain: `?.().v` }[stmt.call ?? `none`]
+// The method's source: one that returns an object, or one that returns
+// nothing; absent for a falsy `x` where the method is the statement's level.
+const methodText = (stmt) => {
+  const method = stmt.returns === `nothing` ? `Function.prototype` : `Object`
+  return (stmt.level ?? 0) === stmt.links
+    ? `x ? ${method} : ${absentOf(stmt)}`
+    : method
+}
+// The source of the object at depth `depth` of an `optional` statement: the
+// object a falsy `x` leaves absent at the statement's level.
+function optionalObject(stmt, depth = 0) {
+  const props = linkProps(stmt)
+  const value =
+    depth < props.length - 1
+      ? optionalObject(stmt, depth + 1)
+      : (stmt.call ?? `none`) === `none`
+        ? `'p${stmt.label}'`
+        : methodText(stmt)
+  const made = `{ ${props[depth]}: ${value} }`
+  return depth === (stmt.level ?? 0) ? `x ? ${made} : ${absentOf(stmt)}` : made
+}
+
 /** The source lines of one statement. */
 function renderStatement(stmt, callText) {
   const probe = `'gap#p${stmt.label}'`
@@ -2627,8 +2712,8 @@ function renderStatement(stmt, callText) {
       return [`out.push(...loaded);`]
     case `optional`:
       return [
-        `const o${stmt.label} = x ? { v: 'p${stmt.label}' } : undefined;`,
-        `out.push(\`\${o${stmt.label}?.v}\`);`,
+        `const o${stmt.label} = ${optionalObject(stmt)};`,
+        `out.push(\`\${o${stmt.label}${readText(stmt)}}\`);`,
       ]
     case `readData`:
       return [`out.push(${dataOf(stmt.shape).read});`]
@@ -2924,6 +3009,28 @@ function resolveHistory(history) {
       )
         return { kind: `call`, to: target.id }
       return { kind: `push`, quote: `'` }
+    })
+  // Each `optional` statement takes its absent object and its chain, in
+  // order. A history filed before either field existed reads `undefined` and
+  // one link (register M, "Replay by history").
+  let optionals = 0
+  for (const fn of generated)
+    fn.body = fn.body.map((stmt) => {
+      if (stmt.kind !== `optional`) return stmt
+      const chain = history.optionalChains?.[optionals]
+      const links = chain?.links ?? 1
+      const call = chain?.call ?? `none`
+      const absent = history.absentObjects?.[optionals] ?? `undefined`
+      optionals += 1
+      return {
+        ...stmt,
+        absent,
+        links,
+        // The method itself is one more level that may be absent.
+        level: (chain?.level ?? 0) % (links + (call === `none` ? 0 : 1)),
+        call,
+        returns: call === `plain` ? `object` : (chain?.returns ?? `object`),
+      }
     })
   const library = history.library.map((body, index) => ({
     id: `g${index}`,
@@ -3745,10 +3852,15 @@ function sitesOf(plan) {
       if (stmt.kind === `innerReturned`)
         at(`return-undefined`, `returned`, stmt.line, whole)
       // The object literal's field, then the push and its optional read.
+      // Each object's field, outermost first, then the push and its links,
+      // the last link first (the instrumenter numbers a node before its
+      // children, and a chain's last link holds the earlier ones).
       if (stmt.kind === `optional`) {
-        at(`field-drop`, `dropV`, stmt.line, stmt.lines[0])
+        for (const prop of linkProps(stmt))
+          at(`field-drop`, dropRole(prop), stmt.line, stmt.lines[0])
         at(`delete-call`, `push`, stmt.line + 1, stmt.lines[1])
-        at(`optional-chain`, `chain`, stmt.line + 1, stmt.lines[1])
+        for (let link = siteLinks(stmt) - 1; link >= 0; link -= 1)
+          at(`optional-chain`, chainRole(link), stmt.line + 1, stmt.lines[1])
       }
       // Two arrows on one line: each property's field drop, its call, and
       // the `+ 1` belong to the arrow whose text holds them; the push and
@@ -4321,24 +4433,68 @@ function interpret(plan, fnId, x, sites, active) {
           }
         }
       }
-      // `x` makes the object only when truthy, so the field drop is reached
-      // only then. A plain read in place of `?.` throws on no object.
+      // The object at the statement's level exists only for a truthy `x`,
+      // so its fields, and those of the objects inside it, are reached only
+      // then; a dropped field leaves its property out. The read follows
+      // JavaScript's optional chain: at the first link whose object is
+      // absent (`undefined` or `null`), `?.` gives `undefined` for the whole
+      // chain and no later link runs, while a plain read in its place
+      // throws. A link past that one changes nothing.
       if (stmt.kind === `optional`) {
-        const drop = siteOf(stmt, `dropV`)
-        if (x) reach(drop.id)
-        const made = x
-          ? isActive(drop)
-            ? {}
-            : { v: `p${stmt.label}` }
-          : undefined
+        // A witness's statement holds no chain fields: one link, no call.
+        const chain = { ...OPTIONAL_DEFAULTS, ...stmt }
+        const props = linkProps(chain)
+        const objectAt = (depth) => {
+          if (depth === chain.level && !x)
+            return stmt.absent === `null` ? null : undefined
+          const drop = siteOf(stmt, dropRole(props[depth]))
+          reach(drop.id)
+          if (isActive(drop)) return {}
+          if (depth < props.length - 1)
+            return { [props[depth]]: objectAt(depth + 1) }
+          if (chain.call === `none`) return { v: `p${stmt.label}` }
+          // The method, absent at its own level for a falsy `x`.
+          return {
+            f:
+              chain.level === chain.links && !x
+                ? stmt.absent === `null`
+                  ? null
+                  : undefined
+                : () => (chain.returns === `nothing` ? undefined : {}),
+          }
+        }
+        const made = objectAt(0)
         const site = siteOf(stmt, `push`)
         reach(site.id)
         if (!isActive(site)) {
-          const chain = siteOf(stmt, `chain`)
-          reach(chain.id)
-          if (isActive(chain) && made === undefined)
-            throw new TypeError(`Cannot read properties of undefined`)
-          trace.push(String(made?.v))
+          // Every link's switch runs before the chain does.
+          for (let link = 0; link < siteLinks(chain); link += 1)
+            reach(siteOf(stmt, chainRole(link)).id)
+          // The read's steps in order: each object link, then the optional
+          // call and the read of `v` after it.
+          const steps = [
+            ...props.map((prop, link) => ({ link, prop })),
+            ...(chain.call === `none` ? [] : [{ call: true }]),
+            ...(chain.call === `optional`
+              ? [{ link: props.length, prop: `v` }]
+              : []),
+            ...(chain.call === `plain` ? [{ prop: `v` }] : []),
+          ]
+          let value = made
+          for (const step of steps) {
+            const absent = value === undefined || value === null
+            if (absent && (step.call || step.link !== undefined)) {
+              if (
+                step.link !== undefined &&
+                isActive(siteOf(stmt, chainRole(step.link)))
+              )
+                throw new TypeError(`Cannot read properties of ${value}`)
+              value = undefined
+              break
+            }
+            value = step.call ? value() : value[step.prop]
+          }
+          trace.push(String(value))
         }
       }
       if (stmt.kind === `innerReturned`) reach(siteOf(stmt, `returned`).id)
@@ -6738,6 +6894,7 @@ function readSummary(summary) {
 
 export {
   drawn,
+  NO_STOPS,
   NO_LATER_STEPS,
   NO_INPUT_STEPS,
   inputEdits,
