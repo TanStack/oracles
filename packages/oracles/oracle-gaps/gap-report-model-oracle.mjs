@@ -4503,7 +4503,8 @@ function runsOf(plan, tests, sites, active) {
         if (changed && t.slow && (t.slowMs ?? SLOW_MS) > backstopMs + 6000)
           return {
             clocked: readsClock(t) || waited,
-            rowClocked: readsClock(t) || waited || (changed && waitsIn(t)),
+            rowClocked:
+              readsClock(t) || waited || (changed && waitsIn(plan, t)),
             t,
             route,
             hang: true,
@@ -4526,7 +4527,8 @@ function runsOf(plan, tests, sites, active) {
         )
           return {
             clocked: readsClock(t) || waited,
-            rowClocked: readsClock(t) || waited || (changed && waitsIn(t)),
+            rowClocked:
+              readsClock(t) || waited || (changed && waitsIn(plan, t)),
             t,
             route,
             hang: true,
@@ -4540,7 +4542,8 @@ function runsOf(plan, tests, sites, active) {
         if (mutated.spun)
           return {
             clocked: readsClock(t) || waited,
-            rowClocked: readsClock(t) || waited || (changed && waitsIn(t)),
+            rowClocked:
+              readsClock(t) || waited || (changed && waitsIn(plan, t)),
             t,
             route,
             hang: true,
@@ -4555,7 +4558,8 @@ function runsOf(plan, tests, sites, active) {
         if (mutated.threw)
           return {
             clocked: readsClock(t) || waited,
-            rowClocked: readsClock(t) || waited || (changed && waitsIn(t)),
+            rowClocked:
+              readsClock(t) || waited || (changed && waitsIn(plan, t)),
             t,
             route,
             crash: true,
@@ -4571,7 +4575,8 @@ function runsOf(plan, tests, sites, active) {
         if (changed && t.hangs)
           return {
             clocked: readsClock(t) || waited,
-            rowClocked: readsClock(t) || waited || (changed && waitsIn(t)),
+            rowClocked:
+              readsClock(t) || waited || (changed && waitsIn(plan, t)),
             t,
             route,
             hang: true,
@@ -4584,13 +4589,16 @@ function runsOf(plan, tests, sites, active) {
         // A verdict test of file b that reads the data spins there instead,
         // while the data is open, which it is before any edit (`spinData`):
         // a loop that never ends, cut by its call count, as above. A copy
-        // that first schedules its error (`spinThrows`) has made a timer, so
-        // its count could follow the clock (v21.1 R19a): its spin is a gap.
+        // that first schedules its error (`spinThrows`) has made a timer, and
+        // one whose data read is async has had its own I/O complete first
+        // (C, 2026-11-17), so its count could follow the clock (v21.1 R19a):
+        // its spin is a gap.
         if (changed && plan.spinData && fsGated(plan, t.file, t))
           return {
-            clocked: readsClock(t) || waited || plan.spinThrows,
+            clocked:
+              readsClock(t) || waited || plan.spinThrows || waitsIn(plan, t),
             rowClocked:
-              readsClock(t) || waited || plan.spinThrows || waitsIn(t),
+              readsClock(t) || waited || plan.spinThrows || waitsIn(plan, t),
             t,
             route,
             hang: true,
@@ -4608,7 +4616,8 @@ function runsOf(plan, tests, sites, active) {
           if (t.judgeBy !== `soft`)
             return {
               clocked: readsClock(t) || waited,
-              rowClocked: readsClock(t) || waited || (changed && waitsIn(t)),
+              rowClocked:
+                readsClock(t) || waited || (changed && waitsIn(plan, t)),
               t,
               route,
               verdicts: found,
@@ -4618,7 +4627,7 @@ function runsOf(plan, tests, sites, active) {
               before,
             }
         }
-        if (changed && waitsIn(t)) waited = true
+        if (changed && waitsIn(plan, t)) waited = true
       }
       // A test that passed: its route is the last one it registered, and
       // its work is judged against the bound it declared. An authored
@@ -4626,13 +4635,15 @@ function runsOf(plan, tests, sites, active) {
       // work law judges only operator mutants.
       const route = routeOf(t, partsOf(t).at(-1))
       // Only a route that oracleProperty registers for production can carry
-      // a bound, and a test that made a timer can do work that follows the
-      // clock, so neither judges work.
+      // a bound, and a test whose row is clocked (it made a timer, read the
+      // clock, or its own I/O completed, here or where it waited) can do work
+      // that follows the clock, so neither judges work (the CLI's `!clocked`).
       const judgesWork =
         found.length === 0 &&
         active?.site !== undefined &&
         [`reproducible`, `random`].includes(route) &&
-        !readsClock(t)
+        !readsClock(t) &&
+        !waited
       return {
         clocked: readsClock(t) || waited,
         rowClocked: readsClock(t) || waited,
@@ -4662,8 +4673,13 @@ function runsOf(plan, tests, sites, active) {
 // on a timer or on I/O where its output changed.
 const readsClock = (t) =>
   (Boolean(t.timed) && t.timed !== `turn`) || t.pendingIo === `short`
-const waitsIn = (t) =>
-  Boolean(t.slow || t.timerWait || t.ioWait || t.pendingIo === `test`)
+// A verdict test of file b that reads the data with an async read (`fsRead`
+// promise or callback) where its output differs has I/O of its own that
+// completes there (C, 2026-11-17: clocked by state).
+const waitsIn = (plan, t) =>
+  Boolean(t.slow || t.timerWait || t.ioWait || t.pendingIo === `test`) ||
+  (fsGated(plan, t.file, t) &&
+    (plan.fsRead === `promise` || plan.fsRead === `callback`))
 // Whether a test makes its heavy calls (`heavy`): a test that calls
 // production on its own input, once per run (a test.prop runs its body many
 // times, and the shared-state witness calls it only after another test, so

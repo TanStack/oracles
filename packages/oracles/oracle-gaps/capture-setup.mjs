@@ -455,7 +455,7 @@ function cutTest() {
   return {
     key: currentTask && testKey(currentTask),
     route,
-    ...(clocked || sawIo ? { clocked: true } : {}),
+    ...(clocked || ioDone.value ? { clocked: true } : {}),
   }
 }
 function spin() {
@@ -862,7 +862,8 @@ globalThis.__oracleWorkBound = (ratio) => {
 // Whether the current test's count could follow the clock (maintainer
 // decision, 2026-11-12, under P3: a kill must replay on an idle machine):
 // it made a real timer or interval by any path, or read the clock (the
-// wrappers above), or held I/O open (`sawIo`). A read counts when any frame
+// wrappers above), or its own I/O completed while it ran (`ioDone`, by state:
+// the async_hooks hook below, never a sample). A read counts when any frame
 // of its stack is the test's or production's: a read whose every frame is
 // the test runner's (Vitest's, or Vite's module runner, which evaluates this
 // file and the test files), fast-check's, the oracle framework's (its shrink
@@ -986,7 +987,7 @@ function finishTest(context) {
       calls,
       infected: [...infected],
       operands: [...operands],
-      ...(clocked || sawIo ? { clocked: true } : {}),
+      ...(clocked || ioDone.value ? { clocked: true } : {}),
       outcomes: [...outcomes],
       verdicts: [...verdicts.values()],
       route,
@@ -1041,6 +1042,10 @@ const thisFile = globalThis.__vitest_worker__?.filepath
 // resource triggers another. Promises are not recorded.
 // Each live timer and immediate, with its record.
 const liveTimers = (globalThis.__oracleGapsTimers ??= new Map())
+// Whether an I/O handle or request of the running test's ran its callback
+// (a read completed, data arrived) since the test began: by state, so a
+// short read that no sample sees still counts (C, 2026-11-17).
+const ioDone = (globalThis.__oracleGapsIoDone ??= { value: false })
 const startedBy = (globalThis.__oracleGapsStartedBy ??= (() => {
   const records = new WeakMap()
   const live = new Map()
@@ -1060,6 +1065,11 @@ const startedBy = (globalThis.__oracleGapsStartedBy ??= (() => {
       records.set(resource, record)
       if (type === `Timeout` || type === `Immediate`)
         liveTimers.set(id, [resource, record])
+      else record.io = true
+    },
+    before(id) {
+      const record = live.get(id)
+      if (record?.io && !ioDone.value && owned(record)) ioDone.value = true
     },
     destroy(id) {
       live.delete(id)
@@ -1108,7 +1118,6 @@ const runnerWrites = process.env.ORACLE_GAPS_TEST_RUNNER_WRITE
 const runnerTimers = process.env.ORACLE_GAPS_TEST_RUNNER_TIMER
 let held
 let heldTimer
-let sawIo = false
 if (state.capture) {
   let testing = false
   let since
@@ -1118,7 +1127,7 @@ if (state.capture) {
     if (continuing) return
     testing = true
     since = undefined
-    sawIo = false
+    ioDone.value = false
     samples = 0
   })
   beforeEach((context) => {
@@ -1166,7 +1175,6 @@ if (state.capture) {
     if (samplesAt)
       writeWhole(join(samplesAt, `${process.pid}-${threadId}`), `${++samples}`)
     const io = testsIo()
-    sawIo ||= io
     // A timer due after the copy's full time limit cannot end its wait in
     // time, so it does not keep the copy busy: a test waiting on it would be
     // a timeout at the limit anyway (a collection's five-minute GC timer).
