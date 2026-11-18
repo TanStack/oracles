@@ -313,6 +313,7 @@ export const partitions = {
         // moved off shard 3, which ran 11.2 min with them.
         'a check through the daemon that works past the bound',
         'a slow but healthy daemon start',
+        'a daemon start slower than the bound',
         'a check whose daemon stops answering',
         'an edit to data that only a spun copy reads',
         'an edit to data that only a copy spun alone reads',
@@ -596,6 +597,7 @@ export const partitions = {
         "a refused run beside the CLI's directory, under a name that extends it",
         'an edit to data that only a copy spun alone reads',
         'a slow but healthy daemon start',
+        'a daemon start slower than the bound',
         'a check through the daemon that works past the bound',
         'a stop with the default output directory',
         'a daemon check with the default output directory',

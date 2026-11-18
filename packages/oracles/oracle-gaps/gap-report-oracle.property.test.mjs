@@ -2830,6 +2830,50 @@ async function incremental(dir, plan, cli, copy, observe, states) {
     // check, and its existing mark keeps it from holding again.
     return [run]
   }
+  // A daemon start slower than the CLI's bound (merge gate delta 4, F-h): a
+  // fresh daemon whose session takes longer to open than the CLI waits, held
+  // by a count in place of the clock. The daemon holds its first check before
+  // it runs until it has accepted a second request
+  // (ORACLE_GAPS_TEST_HOLD_OVERLAP), so it sends its CLI nothing; that second
+  // request is the driver's next check, sent only once the CLI has ended. The
+  // CLI's bound (3 s) runs out and it checks cold, while its environment
+  // carries the daemon's warm-up pause (`daemon-warm`), as the slow warm-up's
+  // does. A test-only hook never changes an outcome (v21.2 G43): the cold
+  // check owes a cold run's result in a cold run's time, whatever point the
+  // daemon has reached, so the pause is the daemon's alone. Then the daemon
+  // must still run, write nothing more into the run's --out, and serve the
+  // next check (afterFallback).
+  async function slowOpen(files, how) {
+    const marks = mkdtempSync(join(realpathSync(tmpdir()), `gap-open-`))
+    const release = join(marks, `release`)
+    const served = join(marks, `served`)
+    const outs = []
+    const [run] = await runClisAtOnce(
+      dir,
+      files,
+      [
+        {
+          ...how,
+          daemon: true,
+          env: {
+            ORACLE_GAPS_TEST_HOLD_OVERLAP: join(marks, `overlap`),
+            ORACLE_GAPS_TEST_PAUSE_AT: `daemon-warm`,
+            ORACLE_GAPS_TEST_PAUSE_MARK: join(marks, `warm`),
+            ORACLE_GAPS_TEST_PAUSE_RELEASE: release,
+            ORACLE_GAPS_TEST_SERVED_MARK: served,
+            ORACLE_GAPS_TEST_WAIT_MS: `3000`,
+          },
+          backstopMs: 120_000,
+        },
+      ],
+      outs,
+    )
+    // The daemon that holds the check: the one the package's lock names.
+    const [pid] = daemonsOf(dir)
+    if (afterFallback(run, files, how, { out: outs[0], pid, release, served }))
+      states.add(`a slow daemon start was served by the daemon`)
+    return [run]
+  }
   // A check through a daemon that stops answering: the daemon holds the
   // check before it runs (`daemon-check`), so it has written nothing into the
   // run's --out, and hears nothing until the driver releases it. A warm check
@@ -2971,7 +3015,10 @@ async function incremental(dir, plan, cli, copy, observe, states) {
         )
       return [next]
     }
-    if (step === `start` && plan.slowStart) return slowStart(files, how)
+    if (step === `start` && plan.slowStart === `open`)
+      return slowOpen(files, how)
+    if (step === `start` && plan.slowStart === true)
+      return slowStart(files, how)
     if (step !== `dieMidCheck` && step !== `resetBeforeRead`)
       return [runCli(dir, files, { ...how, daemon: true })]
     stop()
@@ -6035,6 +6082,7 @@ const required = [
   `an edit to data that only a copy spun alone read changed the cold result`,
   `a slow warm-up was served by the daemon`,
   `a check through the daemon worked past its CLI's bound`,
+  `a slow daemon start was served by the daemon`,
 ]
 // The faults the CLI analyzes anyway: a package's TypeScript is no input.
 const analyzedFaults = [`noTypescript`, `apiLessTypescript`]
@@ -6151,6 +6199,7 @@ const separate = [
   `an edit to data that only a copy spun alone read changed the cold result`,
   `a slow warm-up was served by the daemon`,
   `a check through the daemon worked past its CLI's bound`,
+  `a slow daemon start was served by the daemon`,
 ]
 // A stop by SIGTERM exists only where Node can deliver it: on win32 kill is
 // TerminateProcess, so there the stop law is judged by SIGINT (the test stop
@@ -8529,6 +8578,24 @@ oracleProperty({
             budget: `two`,
             outMode: `explicit`,
             shortWait: true,
+          }),
+      },
+      {
+        // A daemon start slower than its CLI's bound (merge gate delta 4,
+        // F-h): the fresh daemon holds its first check before it runs, by a
+        // count (`slowOpen`), as a session slow to open would, while the CLI
+        // carries the warm-up pause. The CLI's cold check must not hold, and
+        // the daemon must stay, write nothing more into the run's --out, and
+        // serve the next check.
+        name: `a daemon start slower than the bound`,
+        enters: [`a slow daemon start was served by the daemon`],
+        build: (generated) =>
+          oneOwnerHistory(generated, {
+            contexts: 4,
+            steps: [`seed`],
+            laterSteps: NO_LATER_STEPS,
+            slowStart: `open`,
+            outMode: `explicit`,
           }),
       },
     ]),

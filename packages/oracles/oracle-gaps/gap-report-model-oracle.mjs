@@ -1020,10 +1020,13 @@ const drawn = fc.record({
   // (merge gate F4). The outcomes stay the batch's. Drawn: it shapes the
   // fixture's tests and switches no hook.
   spinThrows: fc.constantFrom(false, false, false, true),
-  // Whether the first check's daemon holds before it warms its contexts
-  // until its CLI has fallen back (ORACLE_GAPS_TEST_PAUSE_AT=daemon-warm): a
-  // slow but healthy warm-up (merge gate D1). It switches a test-only hook on,
-  // so only the constructed history "a slow but healthy daemon start" sets it.
+  // Whether a daemon is held past its CLI's bound, and where: `true`, the
+  // first check's daemon holds before it warms its contexts
+  // (ORACLE_GAPS_TEST_PAUSE_AT=daemon-warm), a slow but healthy warm-up (merge
+  // gate D1); `open`, a fresh daemon holds its first check before it runs
+  // (ORACLE_GAPS_TEST_HOLD_OVERLAP) while its CLI carries the warm-up pause, a
+  // session slower to open than the bound (merge gate delta 4, F-h). It
+  // switches a test-only hook on, so only constructed histories set it.
   slowStart: fc.constant(false),
   // Whether a warm daemon's checks run under a 3 s bound
   // (ORACLE_GAPS_TEST_WAIT_MS): the witness that a daemon that works tells its
@@ -3225,7 +3228,7 @@ function resolveHistory(history) {
     siblingDir: history.siblingDir === true,
     hookStops: history.hookStops === true,
     spinThrows: history.spinThrows === true,
-    slowStart: history.slowStart === true,
+    slowStart: history.slowStart ?? false,
     shortWait: history.shortWait === true,
     // Whether a step edits file b's helper during a check (`midrun`): then
     // file a loads the helper and holds the test that edits it.
