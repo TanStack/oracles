@@ -622,6 +622,7 @@ export const partitions = {
         'constructed history: a heavy test that reads the clock after its work',
         'constructed history: a heavy test that reads the clock first',
         'constructed history: a spin after a short async read',
+        'constructed history: an authored mutant whose owner spins',
         'constructed history: a clocked copy that spins',
       ]),
       // The rest: 471 s of weight, and any unit added later.
@@ -865,6 +866,7 @@ export const partitions = {
         'a hang in a file whose test does a short read',
         'a clocked owner beside a counted one under the work budget',
         'a spin after a short async read',
+        'an authored mutant whose owner spins',
       ]),
       7: anyOf([
         'a daemon pause that cannot engage',

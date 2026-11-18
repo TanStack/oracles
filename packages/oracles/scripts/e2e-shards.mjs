@@ -451,6 +451,9 @@ export const shards = {
     `determinism: constructed history: a hang in a file whose test does a short read`,
     `determinism: constructed history: a clocked owner beside a counted one under the work budget`,
     `determinism: constructed history: a spin after a short async read`,
+    `fixed seed 20261105: an authored mutant whose owner spins`,
+    `random seed: an authored mutant whose owner spins`,
+    `determinism: constructed history: an authored mutant whose owner spins`,
   ],
 }
 

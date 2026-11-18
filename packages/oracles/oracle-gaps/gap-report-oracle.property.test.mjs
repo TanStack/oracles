@@ -3621,6 +3621,20 @@ async function driver(plan, observe) {
       )
     )
       states.add(`a spin after a short async read timed out`)
+    // An authored mutant whose owner test spins on the function it changed:
+    // its copy counts calls as an operator copy does, so its spin is cut by
+    // its call budget and kills by count (v21.2 R50; M "Count-only kills"),
+    // never by the backstop.
+    if (
+      plan.history.authored &&
+      cli.report?.results?.some(
+        (r) =>
+          r.authored &&
+          r.outcome === `killed` &&
+          r.laws?.includes(`bounded work`),
+      )
+    )
+      states.add(`an authored mutant killed by its spin`)
     // A heavy test that reads the clock first: its copies' call budget is a
     // hundred times its unmutated work (G6), so a copy past CALL_FLOOR and
     // inside that budget runs to its end and is killed by its own law.
@@ -6572,6 +6586,7 @@ const required = [
   `a clocked owner's work left out of the work budget`,
   `a hang in a file whose test did a short read killed by no progress`,
   `a spin after a short async read timed out`,
+  `an authored mutant killed by its spin`,
   `a hang in one owner and a survivor in another killed by no progress`,
   `a mutant's copies past its work budget killed by bounded work`,
   `a heartbeat named a busy mutant`,
@@ -6760,6 +6775,7 @@ const separate = [
   `a clocked owner's work left out of the work budget`,
   `a hang in a file whose test did a short read killed by no progress`,
   `a spin after a short async read timed out`,
+  `an authored mutant killed by its spin`,
   // The config and contexts states have constructed histories of their own.
   `a config that --config names ran`,
   ...Object.values(testRootStates),
@@ -10046,6 +10062,52 @@ oracleProperty({
             { ...judging(`a`, `fixed seed`, 1), fn: 0, timed: `read` },
           ]),
           functions: [[{ kind: `until`, quote: `'` }]],
+        }),
+      },
+      // An authored mutant whose owner spins (issue #167, a random seed of #99):
+      // file b's verdict test reads its data (a sync read, so its count cannot
+      // follow the clock) and, while the data is open, spins on the function
+      // whose output the authored patch changed (`spinData`). Its copy is
+      // owed a kill by bounded work, by count (v21.2 R50, G6; M "Count-only
+      // kills"); the backstop must never decide it.
+      {
+        name: `an authored mutant whose owner spins`,
+        enters: [`an authored mutant killed by its spin`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`b`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          derived: null,
+          dotGen: false,
+          dataOwners: [],
+          exportOwners: [],
+          importer: `none`,
+          wholeFile: `none`,
+          template: false,
+          tests: [{ ...judging(`b`, `fixed seed`, 1), fn: 0 }],
+          witness: false,
+          authored: { stmt: 0, kind: `apply` },
+          secondAuthored: false,
+          fault: `none`,
+          stability: `none`,
+          ordinary: false,
+          native: `none`,
+          boot: false,
+          budget: `two`,
+          cliPath: `plain`,
+          concurrentStart: false,
+          contexts: 1,
+          steps: null,
+          laterSteps: NO_LATER_STEPS,
+          fsRead: `sync`,
+          spinData: true,
+          spinThrows: false,
+          heavy: 0,
         }),
       },
     ]),
