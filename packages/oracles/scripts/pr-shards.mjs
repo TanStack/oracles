@@ -584,6 +584,8 @@ export const partitions = {
         // 864818be: this shard took 1:37, shard 10 5:08).
         'a hang in a file whose test does a short read',
         'a clocked owner beside a counted one under the work budget',
+        'a spin after a short async read',
+        'a spin after a short async read',
       ]),
       7: anyOf([
         'a daemon pause that cannot engage',

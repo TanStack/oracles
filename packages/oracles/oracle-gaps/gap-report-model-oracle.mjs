@@ -4656,8 +4656,9 @@ function runsOf(plan, tests, sites, active) {
 
 // Whether a test's count could follow the clock in every run: it reads the
 // clock or makes a timer (`timed`, except a turn, which waits no time),
-// before it runs production or after it (`after`), or does I/O of its own
-// before production (`pendingIo: 'short'`, a pipe read). And whether it waits
+// before it runs production or after it (`after`), or its own I/O completes
+// during it (`timed: 'read'`, a short async read, and `pendingIo: 'short'`,
+// a pipe read), whatever a sample saw (C, 2026-11-17: clocked by state). And whether it waits
 // on a timer or on I/O where its output changed.
 const readsClock = (t) =>
   (Boolean(t.timed) && t.timed !== `turn`) || t.pendingIo === `short`
@@ -5449,6 +5450,7 @@ function oracleTestFile(plan, file) {
           `import { setTimeout as nodeSetTimeout } from 'node:timers'`,
           `import { uptime as osUptime } from 'node:os'`,
           `import { monitorEventLoopDelay } from 'node:perf_hooks'`,
+          `import { readFile as readFileAsync } from 'node:fs/promises'`,
         ]
       : []),
     ...(plan.tests.some((t) => t.file === file && t.stops)
@@ -5536,6 +5538,9 @@ function oracleTestFile(plan, file) {
                 waitasync: `    if (Atomics.waitAsync(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 0).value !== 'timed-out') throw new Error('waitAsync did not time out')`,
                 wait: `    if (Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 0) !== 'timed-out') throw new Error('wait did not time out')`,
                 loopdelay: `    { const delay = monitorEventLoopDelay(); delay.enable(); delay.disable() }`,
+                // A short async read of its own (a millisecond, which the
+                // sampler rarely sees): I/O that completes during the test.
+                read: `    if ((await readFileAsync(new URL('../package.json', import.meta.url), 'utf8')).length === 0) throw new Error('the package file is empty')`,
                 turn: `    await new Promise((r) => setImmediate(r))`,
               }[t.timed],
             ]

@@ -431,6 +431,12 @@ export const shards = {
     `fixed seed 20261105: a clocked owner beside a counted one under the work budget`,
     `random seed: a clocked owner beside a counted one under the work budget`,
     `determinism: constructed history: a clocked owner beside a counted one under the work budget`,
+    `fixed seed 20261105: a spin after a short async read`,
+    `random seed: a spin after a short async read`,
+    `determinism: constructed history: a spin after a short async read`,
+    `fixed seed 20261105: a spin after a short async read`,
+    `random seed: a spin after a short async read`,
+    `determinism: constructed history: a spin after a short async read`,
   ],
 }
 

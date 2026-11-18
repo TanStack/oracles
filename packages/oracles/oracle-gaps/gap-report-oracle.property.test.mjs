@@ -3517,6 +3517,16 @@ async function driver(plan, observe) {
       states.add(
         `a spin of a test that reads the clock after its work timed out`,
       )
+    // A spin after the test's own short async read: the read completed during
+    // the test, so its count could follow the clock, on every run (C,
+    // 2026-11-17: clocked by state, not by what a sample saw).
+    if (
+      plan.history.tests.some((t) => t.timed === `read`) &&
+      cli.report?.results?.some(
+        (r) => r.outcome === `timeout` && r.detail === `spin`,
+      )
+    )
+      states.add(`a spin after a short async read timed out`)
     // A heavy test that reads the clock first: its copies' call budget is a
     // hundred times its unmutated work (G6), so a copy past CALL_FLOOR and
     // inside that budget runs to its end and is killed by its own law.
@@ -6337,6 +6347,7 @@ const required = [
   `a heavy clocked test's copy past the call floor killed by its law`,
   `a clocked owner's work left out of the work budget`,
   `a hang in a file whose test did a short read killed by no progress`,
+  `a spin after a short async read timed out`,
   `a hang in one owner and a survivor in another killed by no progress`,
   `a mutant's copies past its work budget killed by bounded work`,
   `a heartbeat named a busy mutant`,
@@ -6522,6 +6533,7 @@ const separate = [
   `a heavy clocked test's copy past the call floor killed by its law`,
   `a clocked owner's work left out of the work budget`,
   `a hang in a file whose test did a short read killed by no progress`,
+  `a spin after a short async read timed out`,
   // The config and contexts states have constructed histories of their own.
   `a config that --config names ran`,
   ...Object.values(testRootStates),
@@ -9463,6 +9475,23 @@ oracleProperty({
           steps: null,
           // Its work budget decides its state, so its tests make no heavy calls.
           heavy: 0,
+        }),
+      },
+      // Clocked by state (C, 2026-11-17, under M "Count-only kills" and I15):
+      // a test whose own I/O completes during it has a count that could
+      // follow the clock, whatever the sampler saw. This test reads the
+      // package file asynchronously before production (a millisecond, which a
+      // 50 ms sample rarely sees), and its copy that spins (the until loop
+      // without its push) is a gap on every run, never a kill on one and a
+      // gap on another.
+      {
+        name: `a spin after a short async read`,
+        enters: [`a spin after a short async read timed out`],
+        build: (generated) => ({
+          ...soloKill(generated, [
+            { ...judging(`a`, `fixed seed`, 1), fn: 0, timed: `read` },
+          ]),
+          functions: [[{ kind: `until`, quote: `'` }]],
         }),
       },
     ]),
