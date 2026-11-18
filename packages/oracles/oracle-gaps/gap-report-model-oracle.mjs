@@ -4808,7 +4808,6 @@ function filesRun(runs) {
   return ran
 }
 
-/**
 // The built-in law that each cut by count or by state fails (M, 2026-11-16,
 // "Spin, no progress and the work budget are kills", restoring v21.1 K1 and
 // P3): a spin past the call budget, and a copy whose work passes the
