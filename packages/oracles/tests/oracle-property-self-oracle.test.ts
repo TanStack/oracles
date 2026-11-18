@@ -60,7 +60,9 @@
  *   alike except that the second's constructed list is the first's with one history appended. At
  *   each fixed seed, and at the seeded run's random seed, the `generated` unit and the unit of each
  *   constructed history of the shorter list run the same histories in the same order in both, up
- *   to the shorter list's first failure, and the appended history's own unit runs. The law
+ *   to the shorter list's first failure, and the appended history's own unit runs. Drawn bases
+ *   vary from run to run: in each unseeded child run, a fixed-seed unit's drawn bases follow
+ *   that run's logged seed, and two unseeded runs with other host draws draw other bases. The law
  *   compares the two properties' own logs, so it holds without the model's streams.
  * - `verdict`: a test fails with a violation of law L exactly when its first
  *   failing history violates L, whatever values the history holds (a bigint,
@@ -3017,6 +3019,7 @@ const appendedStates = [
   `constructed-drawn-bases`,
   `drawn-base-failure-replayed`,
   `constructed-own-drawn-bases`,
+  `seedless-drawn-bases-vary`,
 ] as const
 const frameworkStates = [
   ...timeoutReceivingStates,
@@ -4155,6 +4158,32 @@ function frameworkReach(
         reached.add(`constructed-own-drawn-bases`)
     }
   }
+  // Two unseeded runs logged other seeds, and a fixed-seed unit's drawn
+  // bases differ between them.
+  const unseeded = trace
+    .filter(
+      ({ checkpoint }) =>
+        checkpoint === `seedless` || checkpoint === `seedless-second`,
+    )
+    .map(({ value }) => value as SeedlessRun)
+  if (
+    unseeded.length === 2 &&
+    plan.specs.some((spec) => {
+      const [first, second] = unseeded.map((runs) => runs[spec.id])
+      if (!first || !second || first.seeds[0] === second.seeds[0]) return false
+      return Object.keys(first.fixedRan).some((unit) => {
+        const name = unitOf(unit)!.name
+        const drawn = (ran: Array<SyntheticHistory> | undefined) =>
+          JSON.stringify((ran ?? []).slice(basesOf(spec)))
+        return (
+          drawnOf(spec, name) > 0 &&
+          (first.fixedRan[unit]?.length ?? 0) > basesOf(spec) &&
+          drawn(first.fixedRan[unit]) !== drawn(second.fixedRan[unit])
+        )
+      })
+    })
+  )
+    reached.add(`seedless-drawn-bases-vary`)
   // A drawn base's failure, reported with the run's seed, whose printed
   // replay reproduced it under the same law.
   for (const { checkpoint, value } of trace) {
@@ -4339,6 +4368,10 @@ type SeedlessRun = Record<
     routes: Array<string | null>
     seeds: Array<number>
     ran: Record<string, Array<SyntheticHistory>>
+    /** What each fixed-seed constructed unit ran, including its drawn bases. */
+    fixedRan: Record<string, Array<SyntheticHistory>>
+    /** The tests that logged an ORACLE_SEED line for the property. */
+    seedTests: Array<string>
   }
 >
 /** The run under a drawn replay environment. */
@@ -5800,12 +5833,27 @@ function driveSuite(
         writeFileSync(file, original)
       }
     }
-    if (plan.seedless) {
-      const seedlessLog = join(directory, `seedless-${runCount}.jsonl`)
+    // A seedless child run, and, when a property draws bases, a second one
+    // with another host draw: two unseeded runs, whose drawn bases must
+    // follow each run's own seed (law `constructed independence`, M
+    // 2026-11-17, "Random bases at today's cost for expensive oracles").
+    const seedlessRuns: Array<[checkpoint: string, draw: number]> =
+      plan.seedless
+        ? [
+            [`seedless`, plan.seedlessDraw ?? 0.5],
+            ...(plan.specs.some(
+              (spec) => spec.source.kind === `generated` && drawsAny(spec),
+            )
+              ? [[`seedless-second`, 0.25] as [string, number]]
+              : []),
+          ]
+        : []
+    for (const [checkpoint, draw] of seedlessRuns) {
+      const seedlessLog = join(directory, `${checkpoint}-${runCount}.jsonl`)
       const seedless = receive({ kind: `seedless` }, directory, files, {
         env: {
           SELF_ORACLE_LOG: seedlessLog,
-          SELF_ORACLE_RANDOM_DRAW: String(plan.seedlessDraw ?? 0.5),
+          SELF_ORACLE_RANDOM_DRAW: String(draw),
         },
         seeded: false,
         prefix,
@@ -5813,33 +5861,46 @@ function driveSuite(
       const logged = readLog(seedlessLog)
       const settled = new Set(settledLog(plan, logged))
       // Per property: the routes its random units ran under, the same
-      // whatever seed it drew; the seed it logged; and what each random unit
-      // ran, which that seed decides (none for a slow spec).
+      // whatever seed it drew; the seed it logged, and the tests that logged
+      // it; what each random unit ran, which that seed decides (none for a
+      // slow spec); and what each fixed-seed constructed unit ran.
       observe(
-        `seedless`,
+        checkpoint,
         Object.fromEntries(
           plan.specs.map((spec, index) => {
+            const unitName = (entry: LogEntry) =>
+              entry.test.slice(spec.id.length + 3)
             const random = logged.filter(
               (entry) =>
                 entry.id === spec.id &&
-                unitOf(entry.test.slice(spec.id.length + 3))?.seed ===
-                  undefined &&
-                isCampaign(entry.test.slice(spec.id.length + 3)),
+                unitOf(unitName(entry))?.seed === undefined &&
+                isCampaign(unitName(entry)),
             )
             const ran: Record<string, Array<SyntheticHistory>> = {}
             for (const entry of random.filter((kept) => settled.has(kept)))
-              (ran[entry.test.slice(spec.id.length + 3)] ??= []).push(
-                entry.history,
-              )
+              (ran[unitName(entry)] ??= []).push(entry.history)
+            const fixedRan: Record<string, Array<SyntheticHistory>> = {}
+            for (const entry of logged.filter(
+              (kept) =>
+                kept.id === spec.id &&
+                settled.has(kept) &&
+                unitOf(unitName(kept))?.seed !== undefined &&
+                unitOf(unitName(kept))?.name !== `generated`,
+            ))
+              (fixedRan[unitName(entry)] ??= []).push(entry.history)
+            const tests =
+              seedless.files.find((file) => file.file === files[index])
+                ?.tests ?? []
             return [
               spec.id,
               {
                 routes: [...new Set(random.map((entry) => entry.route))].sort(),
-                seeds: (
-                  seedless.files.find((file) => file.file === files[index])
-                    ?.tests ?? []
-                ).flatMap((test) => seedLogsOf(test, spec.id)),
+                seeds: tests.flatMap((test) => seedLogsOf(test, spec.id)),
                 ran,
+                fixedRan,
+                seedTests: tests
+                  .filter((test) => seedLogsOf(test, spec.id).length > 0)
+                  .map((test) => short(spec.id, test.name)),
               },
             ]
           }),
@@ -6749,6 +6810,7 @@ function checkSuite(
           : [
                 `binding-reordered`,
                 `seedless`,
+                `seedless-second`,
                 `replay`,
                 `rerun`,
                 `reach-alone`,
@@ -7655,14 +7717,21 @@ function checkSuite(
   // `random seed`, and a loaded property runs at least one. A slow unit
   // times out, but its first history starts before it does. The property
   // logged one seed, and each random unit ran the stream of that seed.
-  const seedless = trace.find(({ checkpoint }) => checkpoint === `seedless`)
-    ?.value as SeedlessRun | undefined
-  if (seedless)
+  // Each unseeded run is judged on its own seed: the random units, and the
+  // fixed-seed constructed units that draw bases from it, whose drawn bases
+  // follow that seed, so two unseeded runs draw other bases. The first unit
+  // that uses the seed logs it.
+  for (const seedless of trace
+    .filter(
+      ({ checkpoint }) =>
+        checkpoint === `seedless` || checkpoint === `seedless-second`,
+    )
+    .map(({ value }) => value as SeedlessRun))
     for (const spec of plan.specs) {
       const generated =
         expected.get(spec.id)!.loads && spec.source.kind === `generated`
       const owedRoutes = generated ? [`random seed`] : []
-      const { routes, seeds, ran } = seedless[spec.id]!
+      const { routes, seeds, ran, fixedRan, seedTests } = seedless[spec.id]!
       if (JSON.stringify(routes) !== JSON.stringify(owedRoutes))
         return violation(
           `seedless`,
@@ -7693,6 +7762,36 @@ function checkSuite(
             { actual: logged, expected: owedRun },
           )
       }
+      const [fixedSeed] = fixedSeedsOf(spec)
+      const drawing = spec.constructed.filter(
+        ({ name }) => drawnOf(spec, name) > 0,
+      )
+      if (drawing.length === 0 || fixedSeed === undefined) continue
+      const owedSeedTest = fixedUnit(fixedSeed, drawing[0]!.name)
+      if (JSON.stringify(seedTests) !== JSON.stringify([owedSeedTest]))
+        return violation(
+          `seedless`,
+          `${spec.id}: an ordinary run logged its seed in ${JSON.stringify(seedTests)}, owed ${JSON.stringify([owedSeedTest])}, the first unit that draws a base from it`,
+          `seed-log`,
+          { actual: seedTests, expected: [owedSeedTest] },
+        )
+      for (const { name } of drawing)
+        for (const seed of fixedSeedsOf(spec)) {
+          const unit = fixedUnit(seed, name)
+          const { ran: logged, owedRun } = comparedRun(
+            spec,
+            unit,
+            unitStream(spec, seed, name, seeds[0]!),
+            fixedRan[unit] ?? [],
+          )
+          if (JSON.stringify(logged) !== JSON.stringify(owedRun))
+            return violation(
+              `seedless`,
+              `${spec.id} "${unit}" ran ${JSON.stringify(logged)} in an ordinary run that logged seed ${seeds[0]}, owed ${JSON.stringify(owedRun)}: its drawn bases follow the run's seed`,
+              `units`,
+              { actual: logged, expected: owedRun },
+            )
+        }
     }
   // In a full run, every history's test starts, so the reach test runs
   // none of them again: it reuses what their tests recorded.
@@ -9719,6 +9818,15 @@ oracleProperty({
         name: `constructed histories run drawn bases`,
         enters: [`constructed-drawn-bases`],
         build: (generated: Suite) => drawnBasesSuite(generated),
+      },
+      // Two unseeded runs draw other bases (law `constructed independence`).
+      {
+        name: `two unseeded runs draw other bases`,
+        enters: [`seedless-drawn-bases-vary`],
+        build: (generated: Suite) => ({
+          ...drawnBasesSuite(generated),
+          seedless: true,
+        }),
       },
       // A constructed history's own drawnBases replaces the property's.
       {
