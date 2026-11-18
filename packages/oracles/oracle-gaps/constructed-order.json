@@ -85,6 +85,7 @@
     "a check through the daemon that works past the bound",
     "a daemon start slower than the bound",
     "a check abandoned while a context warms in place of a cut one",
-    "an edit sequence over the witness module, the second half"
+    "an edit sequence over the witness module, the second half",
+    "a stop before the CLI starts, after a stopped check"
   ]
 }
