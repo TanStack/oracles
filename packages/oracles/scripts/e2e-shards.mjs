@@ -159,6 +159,9 @@ export const shards = {
     'fixed seed 20261105: a daemon store longer than the string limit, reloaded after a restart',
     'random seed: a daemon store longer than the string limit, reloaded after a restart',
     'determinism: constructed history: a daemon store longer than the string limit, reloaded after a restart',
+    'fixed seed 20261105: a test that reads a file its child process wrote, rechecked through the daemon',
+    'random seed: a test that reads a file its child process wrote, rechecked through the daemon',
+    'determinism: constructed history: a test that reads a file its child process wrote, rechecked through the daemon',
     // Added with the CLI's parent-config discovery (not yet measured).
     `fixed seed 20261105: a package whose parent directory has its config`,
     `random seed: test.projects in a parent's config`,

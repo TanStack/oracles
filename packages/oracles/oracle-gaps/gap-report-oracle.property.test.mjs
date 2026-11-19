@@ -2850,6 +2850,13 @@ async function incremental(dir, plan, cli, copy, observe, states) {
         states.add(
           `an unchanged check through the daemon computed nothing while a test read a source through fs`,
         )
+      // File b read a file that its test's child process tree wrote, in a
+      // new temporary directory each run: the file is the tree's own output,
+      // so the unchanged recheck reused b's runs (`childWrite`).
+      if (plan.childWrite)
+        states.add(
+          `an unchanged check through the daemon computed nothing while a test read what its child process wrote`,
+        )
     }
     // A daemon check after an edit that computed fewer runs cut off by their
     // call budget than the cold run of the same state reused such a run, so
@@ -6565,6 +6572,7 @@ const required = [
   `a slow daemon start was served by the daemon`,
   `a check abandoned while a context warmed in place of a cut one wrote nothing more`,
   `a daemon reloaded a store longer than the string limit`,
+  `an unchanged check through the daemon computed nothing while a test read what its child process wrote`,
 ]
 // The faults the CLI analyzes anyway: a package's TypeScript is no input.
 const analyzedFaults = [`noTypescript`, `apiLessTypescript`]
@@ -7100,6 +7108,8 @@ oracleProperty({
           inputRead: `none`,
           keepStamp: false,
           inputSteps: NO_INPUT_STEPS,
+          storeLimit: false,
+          childWrite: false,
           stopRuns: NO_STOPS,
           laterSteps: NO_LATER_STEPS,
         },
@@ -9703,6 +9713,57 @@ oracleProperty({
           inputSteps: NO_INPUT_STEPS,
           steps: [`recheck`, `restart`],
           storeLimit: true,
+        }),
+      },
+      {
+        // A file that the test's own child process tree wrote earlier in the
+        // check is no input of the test (maintainer decisions "Own writes
+        // aren't inputs", 2026-11-17, and "Optimize #133 before merging",
+        // 2026-11-19): file b reads, as it loads, a file that a node
+        // grandchild of its test wrote in a new temporary directory, so the
+        // unchanged recheck through the daemon must reuse b's runs although
+        // the file's path differs in every run (`unchanged reuse`).
+        name: `a test that reads a file its child process wrote, rechecked through the daemon`,
+        enters: [
+          `an unchanged check through the daemon computed nothing`,
+          `an unchanged check through the daemon computed nothing while a test read what its child process wrote`,
+        ],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`b`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          derived: null,
+          dotGen: false,
+          dataOwners: [],
+          exportOwners: [],
+          importer: `none`,
+          wholeFile: `none`,
+          template: false,
+          tests: [{ ...judging(`b`, `fixed seed`, 1), fn: 0 }],
+          witness: false,
+          authored: null,
+          secondAuthored: false,
+          fault: `none`,
+          stability: `none`,
+          ordinary: false,
+          native: `none`,
+          boot: false,
+          cliPath: `plain`,
+          concurrentStart: false,
+          lazyGate: false,
+          fsRead: `none`,
+          prePlugin: false,
+          inputRead: `none`,
+          keepStamp: false,
+          laterSteps: NO_LATER_STEPS,
+          inputSteps: NO_INPUT_STEPS,
+          steps: [`recheck`],
+          childWrite: true,
         }),
       },
     ]),

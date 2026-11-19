@@ -44,6 +44,8 @@ const daemonInputUnits = [
   "a hand edit of a file the config's plugin writes",
   // The evidence store under a test string limit (#179).
   'a daemon store longer than the string limit, reloaded after a restart',
+  // A file the test's child process wrote (own writes of the process tree).
+  'a test that reads a file its child process wrote, rechecked through the daemon',
 ]
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
 const anyOf = (names) => `(?:${names.map(escape).join(`|`)})`
@@ -888,6 +890,7 @@ export const partitions = {
         daemonInputUnits[1],
         daemonInputUnits[9],
         daemonInputUnits[12],
+        daemonInputUnits[13],
       ]),
       7: anyOf([
         'a daemon pause that cannot engage',

@@ -1181,6 +1181,26 @@ const drawn = fc.record({
   // "a daemon store longer than the string limit, reloaded after a restart"
   // sets it.
   storeLimit: fc.constant(false),
+  // Whether file b, as it loads, reads a file that its test's own child
+  // process wrote: a node child starts a node grandchild, which writes the
+  // file in a new temporary directory and prints the directory, and file b
+  // reads the file and removes the directory. A file that the test's own
+  // process tree wrote earlier in the check is its own output, no input
+  // (maintainer decisions "Own writes aren't inputs", 2026-11-17, and
+  // "Optimize #133 before merging", 2026-11-19), so an unchanged recheck
+  // through the daemon reuses file b's runs although the directory differs
+  // in every run. It changes what a history runs, so it is drawn (randomness
+  // wins, 2026-11-16), and last.
+  childWrite: fc.constantFrom(
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+  ),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -3520,6 +3540,7 @@ function resolveHistory(history) {
     slowStart: history.slowStart ?? false,
     shortWait: history.shortWait === true,
     storeLimit: history.storeLimit === true,
+    childWrite: history.childWrite === true,
     // The gate input that file b's verdicts also wait on (`inputRead`), and
     // whether each write of a gate file keeps its size and modification time
     // (`keepStamp`).
@@ -5462,6 +5483,21 @@ const inputReads = {
     `const readInput = async () => { const dir = openGate(new URL('./gate-dir/', import.meta.url)); const names: Array<string> = []; for (let entry = dir.readSync(); entry; entry = dir.readSync()) names.push(entry.name); dir.closeSync(); return { open: names.includes('open') } }`,
   ],
 }
+// File b's read of a file that its test's child process tree wrote
+// (`childWrite`): the grandchild writes `child.txt` in a new directory under
+// the OS temporary directory and prints the directory, which the child
+// passes on; file b checks the text and removes the directory.
+const CHILD_WRITE = `const fs = require('node:fs'), os = require('node:os'), path = require('node:path'); const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gap-child-')); fs.writeFileSync(path.join(dir, 'child.txt'), 'written'); process.stdout.write(dir)`
+const CHILD_START = `process.stdout.write(require('node:child_process').execFileSync(process.execPath, ['-e', ${JSON.stringify(CHILD_WRITE)}], { encoding: 'utf8' }))`
+const childWriteRead = [
+  `import { execFileSync as runChild } from 'node:child_process'`,
+  `import { readFileSync as readChild, rmSync as removeChild } from 'node:fs'`,
+  `import { join as joinChild } from 'node:path'`,
+  `const childDir = runChild(process.execPath, ['-e', ${JSON.stringify(CHILD_START)}], { encoding: 'utf8' })`,
+  `const childText = readChild(joinChild(childDir, 'child.txt'), 'utf8')`,
+  `removeChild(childDir, { recursive: true, force: true })`,
+  `if (childText !== 'written') throw new Error('the child process wrote another text')`,
+]
 /** The variables a check of `state` runs with: the gate's, under `env`. */
 const inputEnv = (plan, state) =>
   plan.inputRead === `env`
@@ -5573,6 +5609,7 @@ function oracleTestFile(plan, file) {
     ...(file === `b` && plan.inputRead !== `none`
       ? inputReads[plan.inputRead]
       : []),
+    ...(file === `b` && plan.childWrite ? childWriteRead : []),
     ...stubs,
     // State that tests of this file share (the `w_shared` witness).
     `const shared = { value: 0 }`,
