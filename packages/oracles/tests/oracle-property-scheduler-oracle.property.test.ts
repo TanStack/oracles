@@ -24,9 +24,10 @@
  * task through `scheduleFrom`, waits until idle, and records the release
  * order and each task's outcome, or that `scheduleFrom` threw. The check
  * compares them. The declared state `a choice that names no queue` is entered
- * by a constructed history that puts one first, so half of each campaign
- * reaches it; the generated choices are mostly valid, so the release order is
- * checked in most of the rest.
+ * by a constructed history that puts one first, which each campaign runs
+ * over its bases (5 by default); the generated choices are mostly valid, so
+ * they reach it only by chance, and the release order is checked in most of
+ * them.
  *
  * Limits: tasks are scheduled up front; tasks scheduled by released tasks'
  * continuations are not generated.

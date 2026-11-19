@@ -2157,6 +2157,9 @@ oracleProperty({
   histories: {
     arbitrary: historyArbitrary,
     runs: 40,
+    // Two bases per constructed history: at the framework's default of five
+    // this file took the Windows unit job past 10 minutes (#122).
+    bases: 2,
     fixedSeeds: [2261113],
     states: STATES,
     constructed,
