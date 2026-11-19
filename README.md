@@ -184,6 +184,10 @@ agent.
     for a daemon to start or to close, and for a daemon that holds its check
     to send anything; a test shortens it to outlast a paused daemon. It is a
     test-only knob, not a setting for users.
+  - `ORACLE_GAPS_TEST_STRING_LIMIT` (characters) makes the daemon's evidence
+    store throw where it makes or reads a string longer than this, as V8 does
+    past its own limit (about 512 MB), so a test meets that limit with a small
+    store. It is a test-only knob, not a setting for users.
   - `ORACLE_GAPS_TEST_SERVED_MARK` names a file the daemon writes its pid to
     after it answers a check, so a test can tell which daemon served an
     earlier check (the warm daemon that a later check's pause must match).

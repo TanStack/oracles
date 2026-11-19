@@ -1172,6 +1172,15 @@ const drawn = fc.record({
       }),
     },
   ),
+  // Whether a daemon's checks run under a small test-only string limit
+  // (ORACLE_GAPS_TEST_STRING_LIMIT): V8 makes no string longer than about
+  // 512 MB, and a suite's store can pass that (#179), so a store that the
+  // daemon writes and reads as one string fails every check past it. The
+  // limit is longer than any one stored row of this history and shorter than
+  // the store. It switches a test-only knob, so only the constructed history
+  // "a daemon store longer than the string limit, reloaded after a restart"
+  // sets it.
+  storeLimit: fc.constant(false),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -1245,6 +1254,7 @@ const constructedNeutral = {
   slowStart: false,
   holdOverlap: false,
   shortWait: false,
+  storeLimit: false,
 }
 // A drawn history never switches a test-only hook either (randomness wins,
 // 2026-11-16; v21.2 I16). Two steps arm a daemon pause: `dieMidCheck` holds
@@ -3509,6 +3519,7 @@ function resolveHistory(history) {
     spinThrows: history.spinThrows === true,
     slowStart: history.slowStart ?? false,
     shortWait: history.shortWait === true,
+    storeLimit: history.storeLimit === true,
     // The gate input that file b's verdicts also wait on (`inputRead`), and
     // whether each write of a gate file keeps its size and modification time
     // (`keepStamp`).

@@ -624,6 +624,12 @@ import {
   outsideOf,
 } from './gap-report-model-oracle.mjs'
 
+// The test string limit of the `storeLimit` history, in characters: longer
+// than any one row that history's store holds, and shorter than the store
+// (#179). Measured on macOS: the store is about 78,000 characters, and its
+// longest row about 9,000.
+const STORE_STRING_LIMIT = 32_768
+
 const here = dirname(fileURLToPath(import.meta.url))
 const repo = resolve(here, `..`)
 
@@ -2594,6 +2600,10 @@ async function incremental(dir, plan, cli, copy, observe, states) {
         ...(plan.shortWait && step !== `start`
           ? { ORACLE_GAPS_TEST_WAIT_MS: `3000` }
           : {}),
+        // The daemon's store under the test string limit (`storeLimit`).
+        ...(plan.storeLimit
+          ? { ORACLE_GAPS_TEST_STRING_LIMIT: `${STORE_STRING_LIMIT}` }
+          : {}),
       },
     }
     // The first check may be two at once, which must reach one daemon, and
@@ -2818,6 +2828,10 @@ async function incremental(dir, plan, cli, copy, observe, states) {
       states.add(`incremental check reused some evidence and recomputed some`)
     if (step === `restart` && reused > 0)
       states.add(`evidence reused after a daemon restart`)
+    // A daemon restarted under the test string limit read back a store
+    // longer than the limit, and reused what it held (#179).
+    if (plan.storeLimit && step === `restart` && reused > 0)
+      states.add(`a daemon reloaded a store longer than the string limit`)
     if (unchangedComputed === 0 && reused > 0) {
       states.add(`an unchanged check through the daemon computed nothing`)
       if (plan.prePlugin)
@@ -6545,6 +6559,7 @@ const required = [
   `a check through the daemon worked past its CLI's bound`,
   `a slow daemon start was served by the daemon`,
   `a check abandoned while a context warmed in place of a cut one wrote nothing more`,
+  `a daemon reloaded a store longer than the string limit`,
 ]
 // The faults the CLI analyzes anyway: a package's TypeScript is no input.
 const analyzedFaults = [`noTypescript`, `apiLessTypescript`]
@@ -9624,6 +9639,67 @@ oracleProperty({
           steps: [`inputGate`, `recheck`],
         }),
       })),
+      {
+        // A store longer than the longest string V8 makes (#179), under a
+        // test-only limit (`storeLimit`) that is longer than any one stored
+        // row of this history and shorter than the store: the daemon writes
+        // the store after its first check, reuses it unchanged on the
+        // recheck, and a new daemon after the restart reads it back and
+        // reuses it. A store made or read as one string ends each of those
+        // checks in an internal error, which the cold run does not have.
+        name: `a daemon store longer than the string limit, reloaded after a restart`,
+        enters: [
+          `a daemon reloaded a store longer than the string limit`,
+          `evidence reused after a daemon restart`,
+          `an unchanged check through the daemon computed nothing`,
+        ],
+        build: (generated) => ({
+          ...generated,
+          functions: [
+            [{ kind: `push`, quote: `'` }],
+            [{ kind: `push`, quote: `'` }],
+            [{ kind: `push`, quote: `'` }],
+          ],
+          containers: [],
+          overloads: [],
+          owners: [`a`, `b`, `both`],
+          library: [],
+          libraryOwners: [],
+          runes: [],
+          derived: null,
+          dotGen: false,
+          dataOwners: [],
+          exportOwners: [],
+          importer: `none`,
+          wholeFile: `none`,
+          template: false,
+          tests: [
+            { ...judging(`a`, `fixed seed`, 1), fn: 0 },
+            { ...judging(`b`, `fixed seed`, 1), fn: 1 },
+            { ...judging(`a`, `fixed seed`, 1), fn: 2 },
+            { ...judging(`b`, `fixed seed`, 1), fn: 2 },
+          ],
+          witness: false,
+          authored: null,
+          secondAuthored: false,
+          fault: `none`,
+          stability: `none`,
+          ordinary: false,
+          native: `none`,
+          boot: false,
+          cliPath: `plain`,
+          concurrentStart: false,
+          lazyGate: false,
+          fsRead: `none`,
+          prePlugin: false,
+          inputRead: `none`,
+          keepStamp: false,
+          laterSteps: NO_LATER_STEPS,
+          inputSteps: NO_INPUT_STEPS,
+          steps: [`recheck`, `restart`],
+          storeLimit: true,
+        }),
+      },
     ]),
   },
   resolve: resolveHistory,

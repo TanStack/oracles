@@ -42,6 +42,8 @@ const daemonInputUnits = [
   "an edit to the tsconfig that Vite's own plugin reads",
   'an edit to a directory the config lists when it loads',
   "a hand edit of a file the config's plugin writes",
+  // The evidence store under a test string limit (#179).
+  'a daemon store longer than the string limit, reloaded after a restart',
 ]
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
 const anyOf = (names) => `(?:${names.map(escape).join(`|`)})`
@@ -885,6 +887,7 @@ export const partitions = {
         daemonInputUnits[0],
         daemonInputUnits[1],
         daemonInputUnits[9],
+        daemonInputUnits[12],
       ]),
       7: anyOf([
         'a daemon pause that cannot engage',

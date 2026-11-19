@@ -68,6 +68,18 @@ export function memoryStore() {
   return { get: () => undefined, put: () => {} }
 }
 
+// The longest string V8 makes (about 512 MB on 64-bit), which a test lowers
+// (ORACLE_GAPS_TEST_STRING_LIMIT, a test-only knob) so that a small store
+// meets the limit that a suite's store meets: past it, V8 throws a
+// RangeError where the store makes or reads a string.
+const STRING_LIMIT = Number(process.env.ORACLE_GAPS_TEST_STRING_LIMIT) || 0
+/** `text`, a string the store made or read, past the test limit a throw. */
+function storeString(text) {
+  if (STRING_LIMIT > 0 && text.length > STRING_LIMIT)
+    throw new RangeError(`Invalid string length`)
+  return text
+}
+
 /**
  * A store in `<dir>/evidence.json`. It reads the file once, when it opens.
  * `put` changes the rows in memory, and `flush` writes every row to a
@@ -80,7 +92,10 @@ export async function diskStore(dir) {
   const file = join(dir, `evidence.json`)
   const rows = new Map(
     existsSync(file)
-      ? JSON.parse(readFileSync(file, `utf8`)).map((row) => [row.id, row])
+      ? JSON.parse(storeString(readFileSync(file, `utf8`))).map((row) => [
+          row.id,
+          row,
+        ])
       : [],
   )
   let dirty = false
@@ -95,7 +110,7 @@ export async function diskStore(dir) {
       // The OS may have cleaned the temp directory that holds the store.
       mkdirSync(dir, { recursive: true })
       const temporary = `${file}.${process.pid}.tmp`
-      writeFileSync(temporary, JSON.stringify([...rows.values()]))
+      writeFileSync(temporary, storeString(JSON.stringify([...rows.values()])))
       renameSync(temporary, file)
       dirty = false
     },
