@@ -17,12 +17,19 @@
  *
  * For one mutant, with the owner files of its function:
  *
- * 1. No owner: `unowned`. An oracle file that fails with no mutant active
- *    judges nothing: a mutant that one owns, and that no passing owner
- *    kills, is `blocked`, a gap whose message names the failing owners in
- *    report order (maintainer disposition G5, 2026-11-11; the v20 freeze's
- *    decision 2). Laws 2 to 5 apply over the passing owners. No passing
- *    owner test reached it: `unreached`.
+ * 1. No owner: `unowned`. A test that fails with no mutant active (a
+ *    failing law) judges nothing: it is left out per test, as a
+ *    nondeterministic test is, its records leave the baseline, and the
+ *    passing tests of its file still judge the mutants the file owns; an
+ *    owner file that does not load has no test that runs (the maintainer's
+ *    decision "Block per law", 2026-11-18, which replaces the file-level
+ *    block of disposition G5, 2026-11-11, and of the v20 freeze's decision
+ *    2, v21.2 R11, at the granularity of a test). A mutant with no passing
+ *    owner test, that a failing law or a file that did not load holds, and
+ *    that nothing kills, is `blocked`, a gap whose message names its
+ *    owners' failing laws by file and test names, and its owner files that
+ *    did not load, in report order. Laws 2 to 5 apply over the passing
+ *    owner tests. No passing owner test reached it: `unreached`.
  * 2. Otherwise the records of the owner files whose tests reached it judge
  *    it, except tests whose values differed between the two unmutated runs
  *    (nondeterministic), which judge nothing.
@@ -185,8 +192,10 @@
  *    The stdout leads with the baseline (law 9's lines), then the one
  *    decisive baseline line (all oracle files pass, or how many of them
  *    failed, provisional), then one `oracle-gaps: blocked`
- *    line for each failing oracle file that names it, its failing test, and
- *    the step that unblocks it (G13), then, when an oracle file failed,
+ *    line for each failing law of an oracle file, which names it by its file
+ *    and test names and says that it judges nothing, and one for each oracle
+ *    file that did not load, which names the file, each with the step that
+ *    unblocks it (G13), then, when an oracle file failed,
  *    `Provisional:` with the count of blocked mutants; summary.md leads with
  *    the same lines, before its gaps (the freeze's one loop, 2026-11-10).
  *    The legend line for `crashed` says first that a crash is a gap, not a
@@ -254,9 +263,9 @@
  * compared (it is the not-judged message's). Every test the mutant runs
  * record the baseline recorded too, so a test the baseline did not record,
  * which report order puts after its file's others, is not generated. A file
- * that fails with no mutant active keeps its records here, which the
- * runner drops; the driver leaves a failing owner out of each mutant's
- * targets, as the runner does. A failing test fails by one violation
+ * that does not load keeps its records here, which the runner drops; the
+ * driver leaves it out of each mutant's targets, as the runner does. A
+ * failing law's records leave the baseline through the CLI's own `passOf`. A failing test fails by one violation
  * message or one error text. An authored
  * mutant's intent holds no word the exit law forbids, because the stdout
  * prints it as text, and its author is not shortened.
@@ -688,10 +697,18 @@ const workUnder = (t, slot) => Math.max(0, t.work + t.under[slot].work)
 // route is one that `oracleProperty` registers for production, a
 // reproducible or a random one, so it can carry a declared bound.
 const passedKinds = new Set([`same`, `changed`, `observedChanged`, `unhandled`])
+// A failing law: a test that fails with no mutant active, in a file whose
+// baseline is `test` (`failsAlone`). It judges nothing, as a nondeterministic
+// test judges nothing, and its records leave the baseline, so it reaches no
+// mutant (the maintainer's decision "Block per law", 2026-11-18). Its
+// file's run still loads, times out, or errs outside a test as it does.
+const failsWithNoMutant = (h, fi, ti) =>
+  failsAlone(h.files[fi], h.files[fi].tests[ti], ti)
+const judgesNothing = (h, x) => x.t.flaky || failsWithNoMutant(h, x.fi, x.ti)
 const workJudges = (h, mi, x) =>
   passedKinds.has(x.t.under[mi].kind) &&
   (x.t.reaches[mi] || h.files[x.fi].background[mi]) &&
-  !x.t.flaky &&
+  !judgesNothing(h, x) &&
   !x.t.workFlaky &&
   x.t.clocked === `none` &&
   [`reproducible`, `random`].includes(kindOf(x.t.route))
@@ -730,7 +747,7 @@ function failureOf(h, slot, tests, work = false) {
   )
   const failing = ran.filter(
     (x) =>
-      !x.t.flaky &&
+      !judgesNothing(h, x) &&
       [`verdict`, `assertion`, `crash`, `timeoutMessage`].includes(under(x)),
   )
   // A test past its work bound reports a verdict under `work bound` on its
@@ -783,20 +800,41 @@ function failureOf(h, slot, tests, work = false) {
   return decided(undefined)
 }
 
-// An owner file that fails with no mutant active judges nothing, so a
-// mutant it owns that no other owner kills is `blocked`: it waits for the
-// file to pass, and its message names the failing owner files in report
-// order (maintainer disposition G5, 2026-11-11, and the v20 freeze's
-// decision 2: a RED baseline gives a provisional report that lists the
-// blocked mutants and judges the rest). A kill by another owner stands.
-const failingOwners = (h, owners) =>
-  [...owners].filter((fi) => h.files[fi].baseline !== `pass`).sort(byPath(h))
+// A failing law judges nothing (`failsWithNoMutant`), and an owner file that
+// does not load has no test that runs, so the passing tests of the owner
+// files judge a mutant, failing laws left out per test (the maintainer's
+// decision "Block per law", 2026-11-18, which replaces the file-level block
+// of disposition G5, 2026-11-11, and of the v20 freeze's decision 2, v21.2
+// R11, at the granularity of a test). A mutant with no passing owner test,
+// that a failing law or a file that did not load holds, is `blocked`, unless
+// it is killed: it waits for them, and its message names its owners'
+// failing laws, by file and test names, and its owner files that did not
+// load, in report order (by file path, and within a file in its order). The
+// report is provisional. A kill stands.
+const loads = (h, fi) => h.files[fi].baseline !== `load`
+const passingIn = (h, fi) =>
+  loads(h, fi) &&
+  h.files[fi].tests.some((t, ti) => !failsWithNoMutant(h, fi, ti))
+const blockersOf_ = (h, owners) =>
+  [...owners].some((fi) => passingIn(h, fi))
+    ? []
+    : [...owners]
+        .sort(byPath(h))
+        .flatMap((fi) =>
+          !loads(h, fi)
+            ? [`\`${fileName(h, fi)}\``]
+            : h.files[fi].tests.flatMap((t, ti) =>
+                failsWithNoMutant(h, fi, ti)
+                  ? [`\`${fileName(h, fi)} > ${shownName(h, fi, ti)}\``]
+                  : [],
+              ),
+        )
 const modelBlocked = (h, judged, blocking) =>
   blocking.length === 0 || judged.outcome === `killed`
     ? judged
     : {
         outcome: `blocked`,
-        mention: blocking.map((fi) => `\`${fileName(h, fi)}\``),
+        mention: blocking,
         ownerFiles: judged.ownerFiles,
       }
 
@@ -806,16 +844,18 @@ function modelOutcome(h, mi) {
     m.owners.filter((fi) => fi < h.files.length && h.files[fi].oracle),
   )
   if (owners.size === 0) return { outcome: `unowned` }
-  const blocking = failingOwners(h, owners)
-  const passing = new Set([...owners].filter((fi) => !blocking.includes(fi)))
-  return modelBlocked(h, judgedOutcome(h, mi, passing), blocking)
+  const loaded = new Set([...owners].filter((fi) => loads(h, fi)))
+  return modelBlocked(h, judgedOutcome(h, mi, loaded), blockersOf_(h, owners))
 }
 
 // A mutant's outcome by the owner files that passed with no mutant active.
 function judgedOutcome(h, mi, owners) {
   const m = h.mutants[mi]
   const reachingIn = (fi) =>
-    h.files[fi].background[mi] || h.files[fi].tests.some((t) => t.reaches[mi])
+    h.files[fi].background[mi] ||
+    h.files[fi].tests.some(
+      (t, ti) => t.reaches[mi] && !failsWithNoMutant(h, fi, ti),
+    )
   const ordinary = h.files
     .map((f, fi) => fi)
     .filter((fi) => !h.files[fi].oracle && reachingIn(fi))
@@ -862,7 +902,8 @@ function judgedOutcome(h, mi, owners) {
   // A survivor. Only reaching, deterministic owner tests judge it; code that
   // ran when a file loaded the module reaches every test of that file.
   const compared = ran.filter(
-    (x) => (x.t.reaches[mi] || h.files[x.fi].background[mi]) && !x.t.flaky,
+    (x) =>
+      (x.t.reaches[mi] || h.files[x.fi].background[mi]) && !judgesNothing(h, x),
   )
   const changed = compared.find((x) =>
     [`changed`, `observedChanged`].includes(x.t.under[mi].kind),
@@ -952,15 +993,14 @@ function modelAuthored(h, ai) {
     ),
   ].sort(byPath(h))
   if (owners.length === 0) return { outcome: `unowned` }
-  const blocking = failingOwners(h, owners)
   return modelBlocked(
     h,
     judgedAuthored(
       h,
       ai,
-      owners.filter((fi) => !blocking.includes(fi)),
+      owners.filter((fi) => loads(h, fi)),
     ),
-    blocking,
+    blockersOf_(h, owners),
   )
 }
 
@@ -975,7 +1015,7 @@ function judgedAuthored(h, ai, owners) {
   if (failure) return failure
   const changed = ran.find(
     (x) =>
-      !x.t.flaky &&
+      !judgesNothing(h, x) &&
       [`changed`, `observedChanged`].includes(x.t.under[slot].kind),
   )
   return changed
@@ -1067,7 +1107,11 @@ function reachingTests(h, mi, owners, withFlaky = false) {
     .sort(byPath(h))
     .flatMap((fi) =>
       h.files[fi].tests.flatMap((t, ti) =>
-        t.reaches[mi] && (withFlaky || !t.flaky) ? [{ t, fi, ti }] : [],
+        t.reaches[mi] &&
+        (withFlaky || !t.flaky) &&
+        !failsWithNoMutant(h, fi, ti)
+          ? [{ t, fi, ti }]
+          : [],
       ),
     )
 }
@@ -1201,6 +1245,8 @@ const baselineOf_ = (h) =>
       failed: marked > 0 ? marked : 1,
       test: first < 0 ? 0 : first,
       violation: f.failure === `violation`,
+      // Its failing laws, in file order (Block per law).
+      laws: f.tests.flatMap((t, ti) => (failsAlone(f, t, ti) ? [ti] : [])),
     }
   })
 
@@ -1311,7 +1357,9 @@ function model(h) {
         .sort(byPath(h))
         .flatMap((fi) =>
           h.files[fi].tests.flatMap((t, ti) =>
-            t.flaky ? [`${fileName(h, fi)} > ${nameOf(h, fi, ti)}`] : [],
+            t.flaky && !failsWithNoMutant(h, fi, ti)
+              ? [`${fileName(h, fi)} > ${nameOf(h, fi, ti)}`]
+              : [],
           ),
         ),
     },
@@ -1838,7 +1886,13 @@ async function driver(h, observe) {
   const [first, second] = [1, 2].map((pass) =>
     passOf([baselineUnitsOf(h, pass)]),
   )
-  const baseline = baselineOf(first.rows, second.rows)
+  // A failing law's records leave the baseline (`passOf`), and its key
+  // joins the tests that judge nothing, as check.mjs gives them.
+  const baseline = baselineOf(
+    first.rows,
+    second.rows,
+    [...(first.failing?.values() ?? [])].flat(),
+  )
   // The pass's lists that results.json and the refusal print (law 7).
   observe(`pass`, {
     failed: [...first.failed.keys()],
@@ -1879,12 +1933,24 @@ async function driver(h, observe) {
     states.add(
       `baseline records list the nondeterministic tests against file order`,
     )
-  // The oracle files that fail with no mutant active, which the runner
-  // leaves out of every mutant's runs (check.mjs): each blocks the mutants
-  // it owns (`blockedOr`).
-  const blocking = new Set(
-    [...first.failed.keys()].filter((file) => oracleFiles.has(file)),
+  // The oracle files that the runner leaves out of every mutant's runs
+  // (check.mjs): each one that failed outside its tests, and so names
+  // itself as its failing law (`passOf`). A failing law is left out per
+  // test: its file's passing tests still run. A runner before Block per law
+  // left out every failing oracle file.
+  const leftOut = new Set(
+    [...first.failed.keys()].filter(
+      (file) =>
+        oracleFiles.has(file) &&
+        (first.failing === undefined || first.failing.get(file)?.[0] === file),
+    ),
   )
+  // The failing laws and files that block a mutant of these owners
+  // (classify.mjs `blockersOf`); a runner before it blocked on every
+  // failing owner file.
+  const blockersOf =
+    core.blockersOf ??
+    ((owners) => [...owners].filter((file) => first.failed.has(file)))
   const results = mutants.map((mutant, mi) => {
     const owners = new Set(
       h.mutants[mi].owners
@@ -1892,7 +1958,7 @@ async function driver(h, observe) {
         .map((fi) => fileName(h, fi))
         .filter((file) => oracleFiles.has(file)),
     )
-    const passing = new Set([...owners].filter((file) => !blocking.has(file)))
+    const passing = new Set([...owners].filter((file) => !leftOut.has(file)))
     const targets = targetsOf(mutant, baseline, passing, oracleFiles)
     // The runner runs the owner files in the order the targets give them,
     // and stops at the first file that kills (check.mjs `runOwners`).
@@ -1900,8 +1966,8 @@ async function driver(h, observe) {
     for (const file of targets.oracleTargets) {
       units.push(unitOf(h, fileIndex(file), mi))
       if (
-        outcomeOf([units.at(-1)], baseline.nondeterministic).outcome ===
-        `killed`
+        outcomeOf([units.at(-1)], baseline.leftOut ?? baseline.nondeterministic)
+          .outcome === `killed`
       )
         break
     }
@@ -1910,11 +1976,28 @@ async function driver(h, observe) {
       oracleFiles: targets.oracleTargets,
       ...blockedOr(
         judgeMutant(mutant, { owners, targets, units, baseline, mutants }),
-        [...owners].filter((file) => blocking.has(file)),
+        blockersOf(owners, first),
       ),
     }
-    if (result.outcome === `killed` && owners.size > passing.size)
+    if (
+      result.outcome === `killed` &&
+      [...owners].some((file) => first.failed.has(file))
+    )
       states.add(`killed by one owner beside a failing owner`)
+    // Block per law: a kill of a mutant every one of whose owner files holds
+    // a failing law, so a passing law beside one judged it; and a mutant
+    // blocked where an owner's failure is a failing law.
+    const lawFiles = [...owners].filter(
+      (file) => h.files[fileIndex(file)].baseline === `test`,
+    )
+    if (
+      result.outcome === `killed` &&
+      owners.size > 0 &&
+      lawFiles.length === owners.size
+    )
+      states.add(`a failing law left its file's other laws judging`)
+    if (result.outcome === `blocked` && lawFiles.length > 0)
+      states.add(`blocked by a failing law`)
     const targetFiles = targets.oracleTargets.map(fileIndex)
     if (result.class !== undefined || namesAFailingTest.has(result.outcome))
       if (reordered(h, targetFiles, byLocale(h)))
@@ -2076,7 +2159,7 @@ async function driver(h, observe) {
         a.owners.filter((fi) => fi < h.files.length && h.files[fi].oracle),
       ),
     ]
-    const failing = owners.filter((fi) => blocking.has(fileName(h, fi)))
+    const failing = owners.filter((fi) => leftOut.has(fileName(h, fi)))
     if (!a.applies) result.outcome = `does-not-apply`
     else if (owners.length === 0) result.outcome = `unowned`
     else {
@@ -2089,7 +2172,7 @@ async function driver(h, observe) {
               .map((fi) => unitOf(h, fi, MUTANTS + ai)),
             baseline,
           ),
-          failing.map((fi) => fileName(h, fi)),
+          blockersOf(new Set(owners.map((fi) => fileName(h, fi))), first),
         ),
       )
       orderStates(h, states, `changed test`, placesOfKeys(h, result), owners)
@@ -2462,6 +2545,22 @@ function check(h, observations, expected) {
   const blockedLines = stdoutLines.filter((line) =>
     line.startsWith(`oracle-gaps: blocked `),
   )
+  // One blocked line per failing law of an oracle file, named by its file
+  // and test names, and one per oracle file that did not load, named by its
+  // path (Block per law, 2026-11-18).
+  const owedBlocked = failingOracle.flatMap((b) =>
+    b.test === undefined
+      ? [
+          {
+            named: relativeName(h, b.fi),
+            says: ` fails with no mutant active, so none of its tests judges: `,
+          },
+        ]
+      : b.laws.map((ti) => ({
+          named: `${relativeName(h, b.fi)} > ${shownName(h, b.fi, ti)}`,
+          says: ` fails with no mutant active, so it judges nothing: `,
+        })),
+  )
   // The one decisive baseline line, right after the baseline's lines (law
   // 15 of the end-to-end oracle; the maintainer's request of 2026-11-12):
   // every oracle file passed, or how many failed.
@@ -2488,24 +2587,21 @@ function check(h, observations, expected) {
       : stdoutLines[baselineGot.length] !== verdict ||
           stdoutLines.filter((line) => line === verdict).length !== 1
         ? `the stdout's line after the baseline is ${JSON.stringify(stdoutLines[baselineGot.length])}, not the decisive ${JSON.stringify(verdict)}`
-        : blockedLines.length !== failingOracle.length
-          ? `${blockedLines.length} blocked lines for ${failingOracle.length} failing oracle files`
-          : failingOracle.find((b) => {
-                const named = blockedLines.find(
+        : blockedLines.length !== owedBlocked.length
+          ? `${blockedLines.length} blocked lines for ${owedBlocked.length} failing laws and oracle files that did not load`
+          : owedBlocked.find(({ named, says }) => {
+                const line = blockedLines.find(
                   (l) =>
                     readSpan(l.slice(`oracle-gaps: blocked `.length))
-                      ?.content === relativeName(h, b.fi),
+                      ?.content === named,
                 )
                 return (
-                  named === undefined ||
-                  (b.test !== undefined &&
-                    !named.includes(
-                      ` at ${codeSpanOf(shownName(h, b.fi, b.test))}`,
-                    )) ||
-                  !named.endsWith(`then check again.`)
+                  line === undefined ||
+                  !line.includes(says) ||
+                  !line.endsWith(`then check again.`)
                 )
               })
-            ? `a failing oracle file's blocked line does not name it, its failing test, and the step that unblocks it`
+            ? `a failing law's blocked line (or a file's that did not load) does not name it, say that it judges nothing, and give the step that unblocks it`
             : provisional.length !== (failingOracle.length > 0 ? 1 : 0) ||
                 (failingOracle.length > 0 &&
                   !provisional[0].startsWith(
@@ -3164,6 +3260,11 @@ const calibrations = [
 const required = [
   `unowned`,
   `unreached`,
+  // Block per law (2026-11-18): a failing law's file's passing laws judge,
+  // and a mutant with no passing owner test is blocked by its owners'
+  // failing laws.
+  `a failing law left its file's other laws judging`,
+  `blocked by a failing law`,
   `timeout`,
   `killed`,
   `killed beside a timeout`,
@@ -4013,6 +4114,41 @@ const constructed = [
       authored: [{}],
     },
   ),
+  // Block per law (the maintainer's decision "Block per law", 2026-11-18):
+  // each oracle file has a failing law, a test that fails with no mutant
+  // active and reports a violation under every mutant. The first file also
+  // has a passing law, which kills the first mutant: the failing law judges
+  // nothing, and its file's other law still judges. The second file's only
+  // test is its failing law, so the second mutant, which only it owns, has
+  // no passing owner test and is blocked by that law. Appended at the end
+  // of the list.
+  {
+    name: `a failing law beside its file's passing laws`,
+    enters: [
+      `a failing law left its file's other laws judging`,
+      `blocked by a failing law`,
+    ],
+    build: () => {
+      const base = single(`x`, [], {
+        effect: { kind: `verdict` },
+        test: { fails: true },
+        more: [plainTest({ kind: `verdict` }, { label: `it's ` })],
+        baseline: `test`,
+      }).build()
+      const [file] = base.files
+      return {
+        ...base,
+        files: [
+          file,
+          { ...file, tests: [{ ...file.tests[0], label: `(a|b) ` }] },
+        ],
+        mutants: [
+          base.mutants[0],
+          { ...base.mutants[0], owners: [1], line: 1 },
+        ],
+      }
+    },
+  },
 ]
 
 oracleProperty({

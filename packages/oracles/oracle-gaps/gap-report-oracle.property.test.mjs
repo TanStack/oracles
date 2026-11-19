@@ -350,14 +350,21 @@
  *    test file runs once with no mutant active, an ordinary file too. The
  *    stdout opens with each file's result and its test counts, a failing
  *    file's failing test and its error, and its replay command; then one
- *    line for each failing oracle file that names it, its failing test, and
- *    the step that unblocks the mutants it owns (G13); then, when an oracle
- *    file failed, `Provisional:` with how many mutants are blocked. A
- *    failing oracle file, or a setup file that throws and fails every file,
- *    refuses nothing: a mutant that a failing oracle file owns and no
- *    passing owner kills is `blocked`, a gap, and the rest are judged
- *    (maintainer disposition G5, 2026-11-11, and the freeze's decision 2: a
- *    RED baseline gives a provisional report). With `--only`, the baseline
+ *    `blocked` line for each failing law of an oracle file, which names it
+ *    by its file and test names, and one for each oracle file that did not
+ *    load, which names the file, each with the step that unblocks it (G13);
+ *    then, when an oracle file failed, `Provisional:` with how many mutants
+ *    are blocked. A failing law, a failing owner file, or a setup file that
+ *    throws and fails every file, refuses nothing. A test that fails with no
+ *    mutant active judges nothing: it is left out per test, as a
+ *    nondeterministic test is, and the passing tests of its file still
+ *    judge the mutants the file owns (the maintainer's decision "Block per
+ *    law", 2026-11-18, which replaces the file-level block of disposition
+ *    G5, 2026-11-11, and of the freeze's decision 2, v21.2 R11, at the
+ *    granularity of a test). A mutant with no passing owner test, that a
+ *    failing law or a file that did not load holds, and that nothing kills,
+ *    is `blocked`, a gap; the rest are judged, and the report is
+ *    provisional (a RED baseline gives a provisional report). With `--only`, the baseline
  *    runs only the selected mutants' owners (and the ordinary files with
  *    `--ordinary`), and each selected mutant is judged as the full run
  *    judges it. The last stdout line is the run's done line (law 15),
@@ -577,6 +584,7 @@ import {
   baselineVerdict,
   verdictLine,
   doneLine,
+  kill,
   push,
   judging,
   witness,
@@ -586,6 +594,7 @@ import {
   interpret,
   refusal,
   ownsNothing,
+  blockingOf,
   MODULE_DATA,
   model,
   edited,
@@ -3673,13 +3682,43 @@ async function driver(plan, observe) {
     // reached its fault.
     if (plan.fault !== `none` && cli.exit !== 0 && !logRefused)
       states.add(`refused ${plan.fault}`)
-    // A failing owner and a throwing setup file block mutants (law 14).
+    // A throwing setup file blocks mutants (law 14).
     if (
       blockingFaults.includes(plan.fault) &&
       cli.exit === 0 &&
       cli.mutants.some((m) => m.outcome === `blocked`)
     )
       states.add(`blocked by ${plan.fault}`)
+    // Block per law (law 14; the maintainer's decision of 2026-11-18): a
+    // mutant every one of whose owner files holds a failing law, killed, so
+    // a passing law of a file that also holds a failing law judged it; and a
+    // mutant blocked where its owners' failures are failing laws, so no
+    // passing owner test was left to judge it.
+    const lawFiles = new Set(
+      blockingOf(plan)
+        .filter((f) => !f.ordinary && f.laws !== undefined)
+        .map((f) => f.file),
+    )
+    const ownedBy = ownersOf(plan)
+    if (
+      cli.exit === 0 &&
+      cli.mutants.some((m) => {
+        const files = [...ownedBy(m.function)]
+        return (
+          m.source === SOURCE &&
+          m.outcome === `killed` &&
+          files.length > 0 &&
+          files.every((file) => lawFiles.has(file))
+        )
+      })
+    )
+      states.add(`a failing law left its file's other laws judging`)
+    if (
+      cli.exit === 0 &&
+      lawFiles.size > 0 &&
+      cli.mutants.some((m) => m.outcome === `blocked`)
+    )
+      states.add(`blocked by a failing law`)
     // A refused run's output is recorded with its scratch paths named, and
     // this package lies inside the CLI's directory: the case in which the
     // naming order decides whether a random name stays in the trace. The
@@ -5284,8 +5323,9 @@ function endsBreach(run, { checked = true } = {}) {
 /**
  * Law 14: the report leads with the baseline. The stdout opens with each
  * test file's result and its test counts, a failing file's failing test and
- * its error, and a line for each failing oracle file that names it, its
- * failing test, and the step that unblocks the mutants it owns; then, when
+ * its error, and a line for each failing law of an oracle file (and each
+ * oracle file that did not load) that names it, says that it judges
+ * nothing, and gives the step that unblocks it; then, when
  * an oracle file failed, the provisional status with how many mutants are
  * blocked. Its last line says the check completed, with its gap count. A
  * failing owner's replay runs exactly its failing test. A partial run
@@ -5336,22 +5376,35 @@ function leadBreach(plan, cli, observations, expected) {
   const blocked = cli.lead.filter((line) =>
     line.startsWith(`oracle-gaps: blocked `),
   )
-  if (blocked.length !== expected.blocking.length)
+  // One blocked line per failing law, named by its file and test names, and
+  // one per oracle file that did not load, which has no law to name (Block
+  // per law, 2026-11-18).
+  const owedBlocked = expected.blocking.flatMap((f) =>
+    f.laws === undefined
+      ? [
+          {
+            named: `tests/${f.file}.test.ts`,
+            head: `oracle-gaps: blocked ${span(`tests/${f.file}.test.ts`)} fails with no mutant active, so none of its tests judges: `,
+          },
+        ]
+      : f.laws.map((law) => ({
+          named: `tests/${f.file}.test.ts > ${law}`,
+          head: `oracle-gaps: blocked ${span(`tests/${f.file}.test.ts > ${law}`)} fails with no mutant active, so it judges nothing: `,
+        })),
+  )
+  if (blocked.length !== owedBlocked.length)
     return breach(
-      `${blocked.length} blocked lines for ${expected.blocking.length} failing oracle files`,
+      `${blocked.length} blocked lines for ${owedBlocked.length} failing laws and files that did not load`,
     )
-  for (const f of expected.blocking) {
-    const at = f.test === undefined ? `` : ` at ${span(f.test)}`
-    const line = `oracle-gaps: blocked ${span(`tests/${f.file}.test.ts`)} fails with no mutant active${at}, `
+  for (const { named, head } of owedBlocked)
     if (
       !blocked.some(
-        (l) => l.startsWith(line) && l.endsWith(`then check again.`),
+        (l) => l.startsWith(head) && l.endsWith(`then check again.`),
       )
     )
       return breach(
-        `no blocked line names tests/${f.file}.test.ts, its failing test, and the step that unblocks it`,
+        `no blocked line names ${named}, that it judges nothing, and the step that unblocks it`,
       )
-  }
   const blockedCount = expected.entries.filter(
     (e) => e.kind === `blocked`,
   ).length
@@ -6204,7 +6257,15 @@ const required = [
   `refused badEntry`,
   `refused missingSource`,
   `refused nonLiteral`,
-  `blocked by brokenOwner`,
+  // Block per law (law 14; the maintainer's decision of 2026-11-18): the
+  // two states that replace "blocked by brokenOwner", whose failing owner
+  // always leaves passing tests in its file, so that it blocks nothing
+  // under that decision (a repair under the register's M "P7
+  // clarification", v21.2 R7: each narrowed case has its own state and a
+  // witness, the constructed history "a failing law beside its file's
+  // passing laws").
+  `a failing law left its file's other laws judging`,
+  `blocked by a failing law`,
   `killed on both routes`,
   `killed under an unnamed law`,
   `second campaign's route attributed`,
@@ -6328,9 +6389,11 @@ const required = [
 ]
 // The faults the CLI analyzes anyway: a package's TypeScript is no input.
 const analyzedFaults = [`noTypescript`, `apiLessTypescript`]
-// The faults that fail test files with no mutant active, which block the
-// mutants those files own and refuse nothing (law 14).
-const blockingFaults = [`brokenOwner`, `setupThrows`]
+// The fault that fails every test file with no mutant active, so no owner
+// test passes: it blocks every owned mutant and refuses nothing (law 14). A
+// failing owner (`brokenOwner`) refuses nothing either, and leaves passing
+// tests in its file, which judge the mutants it owns (Block per law).
+const blockingFaults = [`setupThrows`]
 // The faults found when the package's Vitest and config load, before the
 // analysis.
 const configFaults = [
@@ -6401,10 +6464,14 @@ const separate = [
   ...faults
     .filter(
       (fault) =>
-        !analyzedFaults.includes(fault) && !blockingFaults.includes(fault),
+        !analyzedFaults.includes(fault) &&
+        !blockingFaults.includes(fault) &&
+        fault !== `brokenOwner`,
     )
     .map((fault) => `refused ${fault}`),
   ...blockingFaults.map((fault) => `blocked by ${fault}`),
+  `a failing law left its file's other laws judging`,
+  `blocked by a failing law`,
   `a partial run of one function`,
   `a partial run beside a failing owner`,
   ...analyzedFaults.map((fault) => `analyzed ${fault}`),
@@ -6564,6 +6631,7 @@ const withDeclaration = (constructed) =>
         stopWitness: false,
         claimScenario: false,
         psMissing: false,
+        failingLaw: `none`,
         declaration: index % 2 === 0 ? `wrapper` : `oracleProperty`,
         ownerless: false,
         owners: [`a`, ...generated.owners.slice(1)],
@@ -6856,6 +6924,7 @@ oracleProperty({
           shortWait: false,
           absentObjects: [],
           optionalChains: [],
+          failingLaw: `none`,
           stopRuns: NO_STOPS,
           laterSteps: NO_LATER_STEPS,
         },
@@ -7264,13 +7333,14 @@ oracleProperty({
         name: `a failing owner under a config that --config names`,
         enters: [
           `a failing owner replayed under a config that --config names`,
-          `blocked by brokenOwner`,
           `a partial run of one function`,
           `a partial run beside a failing owner`,
         ],
         // The failing owner, file b, owns the second function and nothing
-        // else that the generated base could leave out: so a mutant that
-        // only it owns is blocked whatever the base holds.
+        // else that the generated base could leave out. Its suite's two
+        // passing tests judge that function's mutants (Block per law,
+        // 2026-11-18), so none is blocked; its partial run is of file a's
+        // function.
         build: (generated) => ({
           ...generated,
           functions: [
@@ -7325,29 +7395,31 @@ oracleProperty({
           ? [`analyzed ${fault}`]
           : blockingFaults.includes(fault)
             ? [`blocked by ${fault}`]
-            : [
-                `refused ${fault}`,
-                // The CLI runs from this directory, so the scratch package
-                // lies inside it.
-                ...(fault === `badEntry`
-                  ? [
-                      `a refused run whose package lies inside the CLI's directory`,
-                    ]
-                  : []),
-                ...(fault === `brokenVitest`
-                  ? [
-                      `two checks at once on a session that cannot open`,
-                      `a session failure larger than a socket buffer`,
-                      `edit fixSession changed the cold result`,
-                      `a check after the session's failure was fixed`,
-                    ]
-                  : []),
-                // A config the session cannot load is refused through the
-                // daemon with the cold run's lines (law 15; review F4).
-                ...(daemonConfigFaults.includes(fault)
-                  ? [`a config refusal through the daemon`]
-                  : []),
-              ],
+            : fault === `brokenOwner`
+              ? [`a failing law left its file's other laws judging`]
+              : [
+                  `refused ${fault}`,
+                  // The CLI runs from this directory, so the scratch package
+                  // lies inside it.
+                  ...(fault === `badEntry`
+                    ? [
+                        `a refused run whose package lies inside the CLI's directory`,
+                      ]
+                    : []),
+                  ...(fault === `brokenVitest`
+                    ? [
+                        `two checks at once on a session that cannot open`,
+                        `a session failure larger than a socket buffer`,
+                        `edit fixSession changed the cold result`,
+                        `a check after the session's failure was fixed`,
+                      ]
+                    : []),
+                  // A config the session cannot load is refused through the
+                  // daemon with the cold run's lines (law 15; review F4).
+                  ...(daemonConfigFaults.includes(fault)
+                    ? [`a config refusal through the daemon`]
+                    : []),
+                ],
         // A session that cannot open is checked through the daemon too, and
         // fixed once; a long failure is heard by two checks at once, then by
         // a fresh daemon's check (fixing it reruns the whole generated
@@ -7355,6 +7427,24 @@ oracleProperty({
         build: (generated) => ({
           ...generated,
           fault,
+          // The failing owner, file b, also owns a first function that no
+          // other function calls (calls go only to later functions), judged
+          // by a passing test of file b that kills its mutants: file b's
+          // passing laws still judge it beside the failing one (Block per
+          // law, 2026-11-18). The base's functions and tests follow it.
+          ...(fault === `brokenOwner`
+            ? {
+                functions: [[kill], ...generated.functions],
+                containers: [`free`, ...generated.containers],
+                overloads: [false, ...generated.overloads],
+                owners: [`b`, ...generated.owners],
+                wholeFile: `none`,
+                tests: [
+                  ...generated.tests,
+                  { ...judging(`b`, `fixed seed`, 7), fn: 0 },
+                ],
+              }
+            : {}),
           // Its package lies in the CLI's directory, so it is not placed
           // beside it (`siblingDir`, drawn).
           ...(fault === `badEntry`
@@ -9188,6 +9278,31 @@ oracleProperty({
             absentObjects: [`undefined`],
             optionalChains: [],
             tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          }),
+      },
+      {
+        // Block per law (law 14; the maintainer's decision "Block per law",
+        // 2026-11-18): each oracle file holds a law that fails with no
+        // mutant active. File a also holds a passing law, which kills the
+        // first function's mutants: a failing law judges nothing, and its
+        // file's other laws still judge. File b holds the failing law alone,
+        // so the second function, which only file b owns, has no passing
+        // owner test, and its mutants are blocked by that law. The baseline
+        // names both failing laws, and the report is provisional. Built on
+        // the one-owner base, so a random base cannot take the states away,
+        // and appended at the end of the list, so the earlier constructed
+        // histories keep their bases.
+        name: `a failing law beside its file's passing laws`,
+        enters: [
+          `a failing law left its file's other laws judging`,
+          `blocked by a failing law`,
+        ],
+        build: (generated) =>
+          oneOwnerHistory(generated, {
+            functions: [[kill], [push]],
+            owners: [`a`, `b`],
+            tests: [{ ...judging(`a`, `fixed seed`, 7), fn: 0 }],
+            failingLaw: `both`,
           }),
       },
     ]),
