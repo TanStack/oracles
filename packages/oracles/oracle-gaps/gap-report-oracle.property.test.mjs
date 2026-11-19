@@ -2474,11 +2474,16 @@ const waitGone = async (pid) => {
  * evidence store (evidence.mjs), or none when it has stored nothing.
  */
 function storedInputs(dir) {
-  const file = join(stateDirOf(realpathSync(dir)), `evidence.json`)
+  const file = join(stateDirOf(realpathSync(dir)), `evidence.jsonl`)
   if (!existsSync(file)) return []
-  return JSON.parse(readFileSync(file, `utf8`)).flatMap((row) =>
-    row.variants.flatMap((variant) => variant.inputs.map(([path]) => path)),
-  )
+  return readFileSync(file, `utf8`)
+    .split(`\n`)
+    .filter((line) => line !== ``)
+    .flatMap((line) =>
+      JSON.parse(line).variants.flatMap((variant) =>
+        variant.inputs.map(([path]) => path),
+      ),
+    )
 }
 
 function daemonsOf(dir) {
