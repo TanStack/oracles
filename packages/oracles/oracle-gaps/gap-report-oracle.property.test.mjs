@@ -3709,12 +3709,15 @@ async function driver(plan, observe) {
       cli.report?.results?.some((r) => r.class === `not-judged`)
     )
       states.add(`a clocked owner's work left out of the work budget`)
-    // A witness copy that hangs (owner a, listed first) is cut as no progress,
-    // and the mutant is killed by that cut, before a later owner's test that
-    // spins on the function is run (copies run in sorted owner order, G44).
+    // Owner a's witness copy of w_hangkill hangs and is cut as no progress, and
+    // the mutant is killed by that cut before owner b's copy runs. Owner b's
+    // verdict test spins on the function where its file is read (`spinData`,
+    // a read that is not `none`), so that spin is the later owner's, which the
+    // sorted-owner order (G44) runs after a. The detector reads the history's
+    // fields and the CLI's result, not the position of the tests in the listing.
     if (
-      plan.history.witness === `capture` &&
-      plan.history.tests[0]?.file === `b` &&
+      plan.history.spinData &&
+      plan.history.fsRead !== `none` &&
       cli.report?.results?.some(
         (r) =>
           r.function === `w_hangkill` &&
