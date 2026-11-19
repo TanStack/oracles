@@ -602,8 +602,9 @@ that in a line or two the first time, then show the count of gaps
 shrinking as you work. Never call a gap an equivalent mutant: every gap is
 behavior the oracle cannot see yet. Take the command and
 its flags from `oracles-setup` step 7. Its report goes to the OS temp
-directory, outside the repository. While an oracle file fails, the mutants it owns
-are blocked, and the rest of the report is provisional: fix the failure
+directory, outside the repository. While an oracle test fails, it judges
+nothing: its file's passing tests still judge, a mutant with no passing
+owner test is blocked, and the report is provisional: fix the failure
 first.
 
 Closing gaps is how the oracle reverse-engineers the production code into
