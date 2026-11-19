@@ -6694,6 +6694,10 @@ const separate = [
   `a check through the daemon worked past its CLI's bound`,
   `a slow daemon start was served by the daemon`,
   `a check abandoned while a context warmed in place of a cut one wrote nothing more`,
+  // Each has its own constructed history (#179; own writes of the test's
+  // process tree).
+  `a daemon reloaded a store longer than the string limit`,
+  `an unchanged check through the daemon computed nothing while a test read what its child process wrote`,
 ]
 // A stop by SIGTERM exists only where Node can deliver it: on win32 kill is
 // TerminateProcess, so there the stop law is judged by SIGINT (the test stop
