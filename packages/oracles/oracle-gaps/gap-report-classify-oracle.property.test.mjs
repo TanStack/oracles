@@ -699,9 +699,10 @@ const workUnder = (t, slot) => Math.max(0, t.work + t.under[slot].work)
 const passedKinds = new Set([`same`, `changed`, `observedChanged`, `unhandled`])
 // A failing law: a test that fails with no mutant active, in a file whose
 // baseline is `test` (`failsAlone`). It judges nothing, as a nondeterministic
-// test judges nothing, and its records leave the baseline, so it reaches no
-// mutant (the maintainer's decision "Block per law", 2026-11-18). Its
-// file's run still loads, times out, or errs outside a test as it does.
+// test judges nothing (the maintainer's decision "Block per law",
+// 2026-11-18): its verdicts, its work, its infections and its operands
+// judge no mutant. Its file's run still loads, times out, or errs outside a
+// test as it does.
 const failsWithNoMutant = (h, fi, ti) =>
   failsAlone(h.files[fi], h.files[fi].tests[ti], ti)
 const judgesNothing = (h, x) => x.t.flaky || failsWithNoMutant(h, x.fi, x.ti)
@@ -805,30 +806,51 @@ function failureOf(h, slot, tests, work = false) {
 // files judge a mutant, failing laws left out per test (the maintainer's
 // decision "Block per law", 2026-11-18, which replaces the file-level block
 // of disposition G5, 2026-11-11, and of the v20 freeze's decision 2, v21.2
-// R11, at the granularity of a test). A mutant with no passing owner test,
-// that a failing law or a file that did not load holds, is `blocked`, unless
-// it is killed: it waits for them, and its message names its owners'
-// failing laws, by file and test names, and its owner files that did not
-// load, in report order (by file path, and within a file in its order). The
-// report is provisional. A kill stands.
+// R11, at the granularity of a test). A failing law keeps its reach, as a
+// nondeterministic test does. An operator mutant that no deterministic
+// passing owner test reached (directly, or through code its file loaded) is
+// `blocked`, unless it is killed, by its owners' failing laws that reached
+// it, and by its owner files that judge nothing at all: one that does not
+// load, or whose every test fails ("A broken owner file judges nothing",
+// 2026-11-19, and its C reading: a mutant reached only by failing laws or
+// broken files is blocked by them). Its message names them, the laws by file
+// and test names and the files by path, in report order (by file path, and
+// within a file in its order). A mutant that nothing reached is unreached.
+// An authored mutant, whose copy records no reach, is blocked when no owner
+// file has a passing test. The report is provisional. A kill stands.
 const loads = (h, fi) => h.files[fi].baseline !== `load`
 const passingIn = (h, fi) =>
   loads(h, fi) &&
   h.files[fi].tests.some((t, ti) => !failsWithNoMutant(h, fi, ti))
-const blockersOf_ = (h, owners) =>
+const lawsOf = (h, fi, which = () => true) =>
+  !loads(h, fi)
+    ? [`\`${fileName(h, fi)}\``]
+    : h.files[fi].tests.flatMap((t, ti) =>
+        failsWithNoMutant(h, fi, ti) && which(t)
+          ? [`\`${fileName(h, fi)} > ${shownName(h, fi, ti)}\``]
+          : [],
+      )
+const authoredBlockers = (h, owners) =>
   [...owners].some((fi) => passingIn(h, fi))
+    ? []
+    : [...owners].sort(byPath(h)).flatMap((fi) => lawsOf(h, fi))
+const operatorBlockers = (h, mi, owners) => {
+  const reaches = (fi) => (t) => t.reaches[mi] || h.files[fi].background[mi]
+  const judged = [...owners].some(
+    (fi) =>
+      loads(h, fi) &&
+      h.files[fi].tests.some(
+        (t, ti) => reaches(fi)(t) && !judgesNothing(h, { t, fi, ti }),
+      ),
+  )
+  return judged
     ? []
     : [...owners]
         .sort(byPath(h))
         .flatMap((fi) =>
-          !loads(h, fi)
-            ? [`\`${fileName(h, fi)}\``]
-            : h.files[fi].tests.flatMap((t, ti) =>
-                failsWithNoMutant(h, fi, ti)
-                  ? [`\`${fileName(h, fi)} > ${shownName(h, fi, ti)}\``]
-                  : [],
-              ),
+          passingIn(h, fi) ? lawsOf(h, fi, reaches(fi)) : lawsOf(h, fi),
         )
+}
 const modelBlocked = (h, judged, blocking) =>
   blocking.length === 0 || judged.outcome === `killed`
     ? judged
@@ -845,17 +867,20 @@ function modelOutcome(h, mi) {
   )
   if (owners.size === 0) return { outcome: `unowned` }
   const loaded = new Set([...owners].filter((fi) => loads(h, fi)))
-  return modelBlocked(h, judgedOutcome(h, mi, loaded), blockersOf_(h, owners))
+  return modelBlocked(
+    h,
+    judgedOutcome(h, mi, loaded),
+    operatorBlockers(h, mi, owners),
+  )
 }
 
 // A mutant's outcome by the owner files that passed with no mutant active.
 function judgedOutcome(h, mi, owners) {
   const m = h.mutants[mi]
+  // A failing law keeps its reach: the files it reached are targets, and
+  // run, though it judges nothing there.
   const reachingIn = (fi) =>
-    h.files[fi].background[mi] ||
-    h.files[fi].tests.some(
-      (t, ti) => t.reaches[mi] && !failsWithNoMutant(h, fi, ti),
-    )
+    h.files[fi].background[mi] || h.files[fi].tests.some((t) => t.reaches[mi])
   const ordinary = h.files
     .map((f, fi) => fi)
     .filter((fi) => !h.files[fi].oracle && reachingIn(fi))
@@ -1000,7 +1025,7 @@ function modelAuthored(h, ai) {
       ai,
       owners.filter((fi) => loads(h, fi)),
     ),
-    blockersOf_(h, owners),
+    authoredBlockers(h, owners),
   )
 }
 
@@ -1945,9 +1970,9 @@ async function driver(h, observe) {
         (first.failing === undefined || first.failing.get(file)?.[0] === file),
     ),
   )
-  // The failing laws and files that block a mutant of these owners
-  // (classify.mjs `blockersOf`); a runner before it blocked on every
-  // failing owner file.
+  // The failing laws and files that block a mutant of these owners, given
+  // its targets (none for an authored mutant) (classify.mjs `blockersOf`);
+  // a runner before it blocked on every failing owner file.
   const blockersOf =
     core.blockersOf ??
     ((owners) => [...owners].filter((file) => first.failed.has(file)))
@@ -1976,7 +2001,7 @@ async function driver(h, observe) {
       oracleFiles: targets.oracleTargets,
       ...blockedOr(
         judgeMutant(mutant, { owners, targets, units, baseline, mutants }),
-        blockersOf(owners, first),
+        blockersOf(owners, first, targets, baseline),
       ),
     }
     if (
@@ -1998,6 +2023,14 @@ async function driver(h, observe) {
       states.add(`a failing law left its file's other laws judging`)
     if (result.outcome === `blocked` && lawFiles.length > 0)
       states.add(`blocked by a failing law`)
+    // A mutant blocked though each owner file has a passing test: a failing
+    // law alone reached it (review of #176, F2).
+    if (
+      result.outcome === `blocked` &&
+      lawFiles.length === owners.size &&
+      [...owners].every((file) => passingIn(h, fileIndex(file)))
+    )
+      states.add(`a mutant that only a failing law reached was blocked by it`)
     const targetFiles = targets.oracleTargets.map(fileIndex)
     if (result.class !== undefined || namesAFailingTest.has(result.outcome))
       if (reordered(h, targetFiles, byLocale(h)))
@@ -3265,6 +3298,7 @@ const required = [
   // failing laws.
   `a failing law left its file's other laws judging`,
   `blocked by a failing law`,
+  `a mutant that only a failing law reached was blocked by it`,
   `timeout`,
   `killed`,
   `killed beside a timeout`,
@@ -4121,15 +4155,19 @@ const constructed = [
   // under the third: the failing law judges nothing, and its file's other
   // law still judges, so the first is killed and the third survives. The
   // second file's only test is its failing law, so the second mutant, which
-  // only it owns, has no passing owner test and is blocked by that law. A
+  // only it owns, has no passing owner test and is blocked by that law. The
+  // fourth mutant is the first file's, and only its failing law reaches it,
+  // so it is blocked by that law, not unreached (review of #176, F2). A
   // runner that blocked the whole first file would block the third; one
-  // that counted the failing law's verdict would kill it. Appended at the
+  // that counted the failing law's verdict would kill it; one that dropped
+  // the failing law's reach would call the fourth unreached. Appended at the
   // end of the list.
   {
     name: `a failing law beside its file's passing laws`,
     enters: [
       `a failing law left its file's other laws judging`,
       `blocked by a failing law`,
+      `a mutant that only a failing law reached was blocked by it`,
     ],
     build: () => {
       const base = single(`x`, [], {
@@ -4148,6 +4186,7 @@ const constructed = [
               file.tests[0],
               {
                 ...passing,
+                reaches: passing.reaches.map((r, mi) => mi !== 3),
                 under: passing.under.map((effect, slot) =>
                   slot === 0 ? { ...effect, kind: `verdict` } : effect,
                 ),
@@ -4160,6 +4199,7 @@ const constructed = [
           base.mutants[0],
           { ...base.mutants[0], owners: [1], line: 1 },
           { ...base.mutants[0], anchor: `x \`\` y` },
+          { ...base.mutants[0], line: 1, anchor: `x \`\` y` },
         ],
       }
     },
@@ -4171,7 +4211,7 @@ oracleProperty({
   law: {
     statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, extra-work, dead-code, outside-annotation, branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only; a test whose property declares a work bound, whose work judges the mutant, and whose work (site evaluations, never time) passes the bound's ratio of its unmutated work reports a verdict under law work bound on its route, and a survivor whose work rose in such a test, with no changed observation, is extra-work, whose directive names that test, both counts, and the bound to declare that rejects it. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed.`,
     authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the oracle rubric's outcome kinds (ORC-006); the frozen design's oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); the maintainer's findings F22 and the leftovers of #12 (2026-11-10); for the work law, the maintainer's decision of 2026-11-12 that a speed shortcut reported as not-observed is a gap CLI bug, and the design decided with it: a cost law, never an exit, judged by a deterministic count; for report order, the gap CLI's determinism requirement (oracle-gaps.report's determinism test and law 9, and the runner's "listed alike in every run") and the maintainer's decision of 2026-11-11 that the tests a report names depend on neither --contexts, worker timing, nor how owners are declared; Vitest's runner (@vitest/runner 4.1: -t is a regular expression matched against getTaskFullName, the suites' names and the test's joined by a space); POSIX.1-2017 Shell Command Language 2.2 and 2.6 for the replay's quoting.`,
-    limits: `That real runs produce these records is oracle-gaps.report's, and so is a real replay. The driver encodes operands as capture-setup.mjs \`shown\` does, by a copy of it; long strings are told apart by a 32-bit digest; no symbol operand is generated, and two symbols of one description print alike. Only the runner's single-file path records a test's names, and only it feeds the baseline. Test names hold no backtick and no \` > \`, and names within a file are distinct; the replay's file argument is judged as text, not as Vitest's substring filter over every file. Authored intents hold no word that the exit law forbids, and an author is not shortened. Report order within a file is the baseline's record order: that a file whose tests run concurrently writes its records in one order is not judged, and a failing test is ordered within its file as the reporter lists it, which a run cut off by a hang takes from the records. The "Changed observations in" list is the changed tests' first three, and only its first is compared. A test that only a mutant run records is not generated. A file that fails with no mutant active keeps its records and its mutants are classified; the refusal text and the summary's left-out list are not judged, only the list of failing files they print. Work arrives as counts: that the capture counts site evaluations, and which work it does not count, is oracle-gaps.report's; a test that reaches a site but did no work is generated, which no real run records; an authored mutant's copy counts no work, so the work law does not judge it.`,
+    limits: `That real runs produce these records is oracle-gaps.report's, and so is a real replay. The driver encodes operands as capture-setup.mjs \`shown\` does, by a copy of it; long strings are told apart by a 32-bit digest; no symbol operand is generated, and two symbols of one description print alike. Only the runner's single-file path records a test's names, and only it feeds the baseline. Test names hold no backtick and no \` > \`, and names within a file are distinct; the replay's file argument is judged as text, not as Vitest's substring filter over every file. Authored intents hold no word that the exit law forbids, and an author is not shortened. Report order within a file is the baseline's record order: that a file whose tests run concurrently writes its records in one order is not judged, and a failing test is ordered within its file as the reporter lists it, which a run cut off by a hang takes from the records. The "Changed observations in" list is the changed tests' first three, and only its first is compared. A test that only a mutant run records is not generated. A file that does not load keeps its records here, which the runner drops, and the driver leaves it out of every target, as the runner does; a failing law keeps its records and its reach, as the runner keeps them. The refusal text and the summary's left-out list are not judged, only the list of failing files they print. A failing law is generated only as a whole test of a file whose baseline is test: a describe's failing hook, a failing law's leftover state, and how the runner selects the tests of a file that has failing laws are oracle-gaps.report's. Work arrives as counts: that the capture counts site evaluations, and which work it does not count, is oracle-gaps.report's; a test that reaches a site but did no work is generated, which no real run records; an authored mutant's copy counts no work, so the work law does not judge it.`,
   },
   histories: {
     arbitrary: records,
