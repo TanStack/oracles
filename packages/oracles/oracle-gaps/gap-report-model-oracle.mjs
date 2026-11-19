@@ -5001,7 +5001,12 @@ function judge(plan, tests, sites, active, { budgeted = true, detail } = {}) {
   // count, and no later copy runs. The budget is the larger of WORK_FLOOR and
   // ten times the owner files' unmutated work, where a file's unmutated work
   // is its most-working test's.
-  const files = [...new Set(runs.map((r) => r.t.file))]
+  // Copies run in sorted owner order (register 2026-11-14, "Deterministic cuts,
+  // outcome rule"; G44), the order production takes by path, whatever order the
+  // history lists its tests in.
+  const files = [...new Set(runs.map((r) => r.t.file))].sort((a, b) =>
+    a < b ? -1 : a > b ? 1 : 0,
+  )
   // A file's most-working unmutated test, in site evaluations.
   const mostBefore = (file) =>
     Math.max(0, ...runs.filter((r) => r.t.file === file).map((r) => r.before))
