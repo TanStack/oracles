@@ -596,6 +596,9 @@ oracleProperty({
   histories: {
     arbitrary: historyArbitrary,
     runs: 40,
+    // Two bases per constructed history: at the framework's default of five
+    // this file took the Windows unit job past 10 minutes (#122).
+    bases: 2,
     fixedSeeds: [2261111],
     states: STATES,
     constructed,
@@ -1283,6 +1286,9 @@ oracleProperty({
   histories: {
     arbitrary: agreeHistories,
     runs: 40,
+    // Two bases per constructed history: at the framework's default of five
+    // this file took the Windows unit job past 10 minutes (#122).
+    bases: 2,
     fixedSeeds: [2261112],
     states: AGREE_STATES,
     constructed: agreeConstructed,

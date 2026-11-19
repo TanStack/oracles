@@ -275,10 +275,14 @@ No requirement here can be met by declaring something out of reach.
   on, and a history MUST be constructed to enter each one.
 - **Framework:** Enforced. Every state in `states` must be named by a
   constructed history. Every campaign runs each constructed history, and one
-  that does not enter its named state fails. Half of the generated histories
-  are also constructed, so the histories after each state are explored. A
-  state that random histories reach only by chance goes in `measured`, which
-  is reported but not required.
+  that does not enter its named state, on any of its bases, fails. Each
+  constructed history runs `bases` bases (5 by default) from a stream of its
+  own, and the generated histories are drawn apart from the constructed ones.
+  So at a fixed seed, appending a constructed history keeps the generated
+  histories and every other constructed history's bases, and the histories
+  after each required state are explored, not visited once. A state that random histories
+  reach only by chance goes in `measured`, which is reported but not
+  required.
 - **Author:** Reach is a predicate over the plan or trace, or a production
   probe. A literal example is not reach. A `fixed` history is a regression,
   not reach. A law that needs a state entered at least N times in each

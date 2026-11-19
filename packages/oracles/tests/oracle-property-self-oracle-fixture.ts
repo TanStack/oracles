@@ -259,12 +259,26 @@ export type SyntheticSpec = {
     | { kind: `enumerated`; histories: ReadonlyArray<SyntheticHistory> }
   /** A second fixed seed, ten times the first, whose text the first's extends. */
   secondSeed?: boolean
+  /**
+   * The bases each constructed history runs (the property's `bases`); absent
+   * leaves the framework's default. 0 and 1.5 are not whole numbers of at
+   * least 1, so they fail the load.
+   */
+  bases?: number
+  /**
+   * The bases each constructed history draws from the run's random seed,
+   * after its fixed ones (the property's `drawnBases`); absent leaves none.
+   * -1 and 0.5 are not whole numbers of at least 0, so they fail the load.
+   */
+  drawnBases?: number
   /** Required states; each must be entered by a constructed history. */
   states: ReadonlyArray<string>
   constructed: ReadonlyArray<{
     name: string
     prefix: SyntheticHistory
     enters: ReadonlyArray<string>
+    /** This history's own `drawnBases`; absent takes the property's. */
+    drawnBases?: number
   }>
   fixed: ReadonlyArray<{
     name: string
@@ -1481,41 +1495,48 @@ export function syntheticProperty(spec: SyntheticSpec): void {
           .filter((state) => !spec.states.includes(state))
           .map(declare),
         runs: spec.source.runs,
+        ...(spec.bases === undefined ? {} : { bases: spec.bases }),
+        ...(spec.drawnBases === undefined
+          ? {}
+          : { drawnBases: spec.drawnBases }),
         fixedSeeds: [
           spec.source.seed,
           ...(spec.secondSeed ? [spec.source.seed * 10] : []),
         ],
-        constructed: spec.constructed.map(({ name, prefix, enters }, at) => ({
-          name,
-          enters: enters.map(publicState),
-          // A constructed history extends a generated history, so its histories
-          // depend on the campaign's seed, as real constructed histories do.
-          build: (generated: Formed) => {
-            if (at === 0 && spec.throwingBuild)
-              throw new Error(`synthetic build failed`)
-            const tail = spec.isolatedPlans
-              ? items(generated).map((item) => item % 3)
-              : items(generated)
-            const history = markOrigin(
-              form([...prefix, ...tail].slice(0, 3)),
-              `constructed:${name}`,
-            )
-            const log = process.env.SELF_ORACLE_LOG
-            if (log)
-              appendFileSync(
-                `${log}.builds`,
-                `${JSON.stringify({
-                  id: spec.id,
-                  test: owningTestName() ?? ``,
-                  name,
-                  generated: items(generated),
-                  history: items(history),
-                })}\n`,
+        constructed: spec.constructed.map(
+          ({ name, prefix, enters, drawnBases }, at) => ({
+            name,
+            enters: enters.map(publicState),
+            ...(drawnBases === undefined ? {} : { drawnBases }),
+            // A constructed history extends a generated history, so its histories
+            // depend on the campaign's seed, as real constructed histories do.
+            build: (generated: Formed) => {
+              if (at === 0 && spec.throwingBuild)
+                throw new Error(`synthetic build failed`)
+              const tail = spec.isolatedPlans
+                ? items(generated).map((item) => item % 3)
+                : items(generated)
+              const history = markOrigin(
+                form([...prefix, ...tail].slice(0, 3)),
+                `constructed:${name}`,
               )
-            built.add(history as object)
-            return history
-          },
-        })),
+              const log = process.env.SELF_ORACLE_LOG
+              if (log)
+                appendFileSync(
+                  `${log}.builds`,
+                  `${JSON.stringify({
+                    id: spec.id,
+                    test: owningTestName() ?? ``,
+                    name,
+                    generated: items(generated),
+                    history: items(history),
+                  })}\n`,
+                )
+              built.add(history as object)
+              return history
+            },
+          }),
+        ),
         fixed: spec.fixed.map((fixed) => {
           const declaration = {
             ...fixed,
