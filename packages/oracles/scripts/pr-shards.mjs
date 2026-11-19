@@ -542,6 +542,11 @@ export const partitions = {
         "constructed history: a slow owner's kill and another owner's kill",
         'constructed history: a copy waiting on a timer',
         "constructed history: a copy waiting on an unref'd timer",
+        // #164's two histories and the filed base, out of the rest shard (7),
+        // which took 12:03 on CI at cb1de4ff (P12).
+        'constructed history: a run after a killed CLI',
+        'constructed history: a stop before the CLI starts, after a stopped check',
+        'fixed history: a filed base whose owner reads an absent object through ?.',
       ]),
       // 471 s of weight.
       2: anyOf([
