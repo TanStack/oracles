@@ -5176,7 +5176,10 @@ function model(plan) {
       (file) =>
         failingFiles.has(file) &&
         (passingIn(file) === 0 ||
-          (atLoad && runsTests(file)) ||
+          // Code that ran at load reaches a file's failing laws where it
+          // reaches its tests: in a file with a test of the plan (main's
+          // rule for code run at load).
+          (atLoad && plan.tests.some((t) => t.file === file)) ||
           (holdsFailingLaw(plan, file) && lawReached.has(site.id))),
     )
     return holds ? `blocked` : kind
