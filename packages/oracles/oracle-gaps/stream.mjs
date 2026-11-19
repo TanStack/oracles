@@ -245,22 +245,32 @@ export function verdictLine(files) {
 }
 
 /**
- * One line per oracle file that failed with no mutant active (G13): the
- * file, its failing test, and the step that unblocks the mutants it owns.
+ * One line per failing law of an oracle file (G13): the law, by its file
+ * and test names, that it judges nothing, and the step that unblocks it.
+ * A failing law is left out per test, so its file's passing tests judge the
+ * mutants the file owns, and only a mutant with no passing owner test waits
+ * for it (maintainer decision "Block per law", 2026-11-18). An oracle file
+ * that failed outside its tests has no law to name, so its line names the
+ * file.
  */
 export function blockedLines(files) {
-  return files.flatMap(({ file, ordinary, failure, tests }) => {
-    if (ordinary || failure === undefined) return []
-    const first = tests.find((t) => t.state === `failed`)
-    const at =
-      first === undefined
-        ? ``
-        : ` at ${codeSpan(escapeControls((first.names ?? [first.fullName]).join(` > `)))}`
-    return [
-      streamLine(
-        `blocked`,
-        `${codeSpan(file)} fails with no mutant active${at}, so the mutants it owns wait for it: make it pass (its replay is above), then check again.`,
-      ),
-    ]
-  })
+  return files.flatMap(
+    ({ file, ordinary, failure, failedOutsideTests, tests }) => {
+      if (ordinary || failure === undefined) return []
+      const laws = tests.filter((t) => t.state === `failed`)
+      return failedOutsideTests || laws.length === 0
+        ? [
+            streamLine(
+              `blocked`,
+              `${codeSpan(file)} fails with no mutant active, so none of its tests judges: a mutant with no passing owner test waits for it. Make it pass (its replay is above), then check again.`,
+            ),
+          ]
+        : laws.map((t) =>
+            streamLine(
+              `blocked`,
+              `${codeSpan(escapeControls([file, ...(t.names ?? [t.fullName])].join(` > `)))} fails with no mutant active, so it judges nothing: the passing tests judge the mutants its file owns, and a mutant with no passing owner test waits for it. Make it pass, then check again.`,
+            ),
+          )
+    },
+  )
 }

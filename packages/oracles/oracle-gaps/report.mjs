@@ -144,8 +144,10 @@ const directive = {
     `Run an owner test that loads this module and asserts on its exports, so a failed load rejects the mutant.`,
   'does-not-apply': () =>
     `Update the \`find\` text of this authored mutant so that it occurs exactly once in the source.`,
+  // Its owners' failing laws, by file and test names, and the owner files
+  // that failed outside their tests: no passing owner test judges it.
   blocked: (g) =>
-    `Make ${g.blockedBy.map((file) => `\`${file}\``).join(`, `)} pass with no mutant active, then check again: this mutant waits for ${g.blockedBy.length === 1 ? `it` : `them`}.`,
+    `Make ${g.blockedBy.map((law) => `\`${escapeControls(law)}\``).join(`, `)} pass with no mutant active, then check again: this mutant waits for ${g.blockedBy.length === 1 ? `it` : `them`}.`,
 }
 
 // What a legend line says a class is, before its directive, where the
@@ -221,9 +223,9 @@ const counted = (n, thing) => `${n} ${thing}${n === 1 ? `` : `s`}`
 /**
  * The baseline's lines that lead both reports (the v20 freeze's one loop:
  * test results and gaps together): each test file's result, a line for
- * each failing oracle file that names what it blocks (G13), and, when one
- * failed, the provisional status with how many mutants are blocked (the
- * freeze's decision 2).
+ * each failing law of an oracle file, or the file when it failed outside
+ * its tests (G13), and, when one failed, the provisional status with how
+ * many mutants are blocked (the freeze's decision 2; Block per law).
  */
 function baselineSection(results, baseline, config) {
   const blocking = blockedLines(baseline)
@@ -237,7 +239,7 @@ function baselineSection(results, baseline, config) {
     provisional:
       blocking.length === 0
         ? undefined
-        : `Provisional: ${counted(blocked, `mutant`)} ${blocked === 1 ? `is` : `are`} blocked by failing oracle files; the rest are judged.`,
+        : `Provisional: ${counted(blocked, `mutant`)} ${blocked === 1 ? `is` : `are`} blocked by failing laws; the rest are judged.`,
   }
 }
 

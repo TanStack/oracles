@@ -215,17 +215,47 @@ function failureOf(unit) {
  * refusal says why. The contexts' order depends on their count; this order
  * does not, so the refusal, the files left out, and the nondeterministic
  * tests are listed alike on any machine.
+ *
+ * A test that fails with no mutant active (a failing law) judges nothing,
+ * as a nondeterministic test judges nothing, so it is left out per test:
+ * its records leave the pass, and its file's passing tests still judge
+ * (maintainer decision "Block per law", 2026-11-18). `failing` gives each
+ * failing file's failing laws, its failing tests' keys in the order its
+ * reporter lists them, or the file alone when it failed outside its tests
+ * (it did not load, its run timed out, or an error came outside any test),
+ * which leaves none of its tests to judge. `passing` holds the files with a
+ * test that passed and judges.
  */
 export function passOf(parts) {
   const units = parts.flat().sort((a, b) => byPath(a.file, b.file))
+  const failed = new Map()
+  const failing = new Map()
+  const passing = new Set()
+  for (const u of units) {
+    const passes = outcomeOf([u]).outcome === `survived`
+    const laws =
+      passes || u.timedOut || u.setupErrors.length + u.unhandled.length > 0
+        ? []
+        : u.tests.filter((t) => t.state === `failed`).map((t) => t.key)
+    if (!passes) {
+      failed.set(u.file, failureOf(u))
+      failing.set(u.file, laws.length > 0 ? laws : [u.file])
+    }
+    if (
+      (passes || laws.length > 0) &&
+      u.tests.some((t) => t.state === `passed`)
+    )
+      passing.add(u.file)
+  }
+  const left = new Set([...failing.values()].flat())
   return {
     units,
-    rows: new Map(units.flatMap((u) => u.rows ?? [])),
-    failed: new Map(
-      units
-        .filter((u) => outcomeOf([u]).outcome !== `survived`)
-        .map((u) => [u.file, failureOf(u)]),
+    rows: new Map(
+      units.flatMap((u) => (u.rows ?? []).filter(([key]) => !left.has(key))),
     ),
+    failed,
+    failing,
+    passing,
   }
 }
 
@@ -235,7 +265,7 @@ export function passOf(parts) {
  * tests reached each site, and which `if` outcomes each oracle file saw. The
  * first run's records come in report order (`passOf`), and so do these lists.
  */
-export function baselineOf(firstRows, secondRows) {
+export function baselineOf(firstRows, secondRows, failing = []) {
   const nondeterministic = new Set()
   for (const [key, row] of firstRows) {
     const again = secondRows.get(key)
@@ -264,7 +294,10 @@ export function baselineOf(firstRows, secondRows) {
       secondRows.get(key)?.calls === row.calls
     )
       work.set(key, row.calls)
-  return { firstRows, nondeterministic, reachedBy, rank, work }
+  // The tests that judge nothing: the nondeterministic ones and the
+  // failing laws (`passOf`), whose verdicts neither kill nor stop a run.
+  const leftOut = new Set([...nondeterministic, ...failing])
+  return { firstRows, nondeterministic, leftOut, reachedBy, rank, work }
 }
 
 /**
@@ -398,7 +431,7 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
     (k) =>
       (reaching.has(k) || loadedIn.has(fileOf(k))) &&
       !rows.get(k).background &&
-      !baseline.nondeterministic.has(k),
+      !baseline.leftOut.has(k),
   )
   // A compared test's work judges the mutant when the two unmutated runs
   // agree on it, no run's count could follow the clock, and its route is
@@ -414,7 +447,7 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
   const result = {
     ...outcomeOf(
       units,
-      baseline.nondeterministic,
+      baseline.leftOut,
       false,
       (k, row) =>
         rose(k, row) &&
@@ -479,17 +512,32 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
 }
 
 /**
- * A mutant's outcome once its failing owners count: an owner file that
- * fails with no mutant active judges nothing, so a mutant that one of them
- * owns and no passing owner kills is `blocked`, and names those files
- * (`blockers`) in report order (maintainer disposition G5, 2026-11-11; the
- * v20 freeze's decision 2: a RED baseline gives a provisional report that
- * lists the blocked mutants and judges the rest). A kill stands.
+ * The failing laws that block a mutant with these owner files, from the
+ * first unmutated pass (`passOf`): none when an owner file has a passing
+ * test, which judges it; otherwise its owners' failing laws, and the owner
+ * files that failed outside their tests (maintainer decision "Block per
+ * law", 2026-11-18, which replaces the file-level block of disposition G5
+ * and of the v20 freeze's decision 2 at the granularity of a test).
+ */
+export const blockersOf = (owners, { failing, passing }) =>
+  [...owners].some((file) => passing.has(file))
+    ? []
+    : [...owners].flatMap((file) => failing.get(file) ?? [])
+
+/**
+ * A mutant's outcome once its blockers count: a mutant that they hold and
+ * nothing kills is `blocked`, and names them (`blockedBy`) in report order,
+ * by file path and within a file in its reporter's order (a RED baseline
+ * gives a provisional report that lists the blocked mutants and judges the
+ * rest). A kill stands.
  */
 export const blockedOr = (judged, blockers) =>
   blockers.length === 0 || judged.outcome === `killed`
     ? judged
-    : { outcome: `blocked`, blockedBy: [...blockers].sort(byPath) }
+    : {
+        outcome: `blocked`,
+        blockedBy: [...blockers].sort((a, b) => byPath(fileOf(a), fileOf(b))),
+      }
 
 /** Whether the ordinary tests run, for information: only for a survivor. */
 export const needsOrdinary = (result, targets) =>
@@ -510,7 +558,7 @@ export const judgeOrdinary = (units) =>
  */
 export function judgeAuthored(units, baseline) {
   const result = {
-    ...outcomeOf(units, baseline.nondeterministic),
+    ...outcomeOf(units, baseline.leftOut),
     seconds: units.reduce((sum, u) => sum + u.seconds, 0),
   }
   if (result.outcome !== `survived`) return result
@@ -518,7 +566,7 @@ export function judgeAuthored(units, baseline) {
   result.changedTests = changedIn(
     rows,
     [...rows.keys()].filter(
-      (k) => !rows.get(k).background && !baseline.nondeterministic.has(k),
+      (k) => !rows.get(k).background && !baseline.leftOut.has(k),
     ),
     baseline,
   )
