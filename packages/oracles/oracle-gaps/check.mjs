@@ -1981,6 +1981,9 @@ export default async (env) => {
           : own
         ).push(input)
       if (common.length < 2) return inputs
+      // In one order, so the copies of a file, which read the same modules
+      // in different orders, name one set.
+      common.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
       const path = `shared:${sha1(JSON.stringify(common))}`
       if (!store.get(path)) store.put(path, { inputs: common, unit: null })
       return [...own, [path, `held`]]
