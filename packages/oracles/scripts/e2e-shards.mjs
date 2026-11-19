@@ -339,6 +339,11 @@ export const shards = {
     `fixed seed 20261105: a ?. read of an object absent only at load`,
     `random seed: a ?. read of an object absent only at load`,
     `determinism: constructed history: a ?. read of an object absent only at load`,
+    // A failing law beside its file's passing laws: two small functions
+    // (about 2 s on an Arclet).
+    `fixed seed 20261105: a failing law beside its file's passing laws`,
+    `random seed: a failing law beside its file's passing laws`,
+    `determinism: constructed history: a failing law beside its file's passing laws`,
     // The filed history of a stale authored mutant's fourth base (about 12 s).
     `fixed history: a filed base whose owner reads an absent object through ?.`,
     `determinism: fixed history: a filed base whose owner reads an absent object through ?.`,
