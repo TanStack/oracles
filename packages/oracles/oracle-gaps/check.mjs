@@ -519,6 +519,8 @@ export async function openSession(pkg, pause = async () => {}) {
   // themselves (about 3,000 on TanStack DB's suite; review of #133).
   const hookLogId = sha1(`${process.pid}:${Date.now()}:${Math.random()}`)
   const hookLog = []
+  // How much of the hook log the store holds (see check).
+  let hookLogStored = 0
   // Per check: how far each session's log still holds (logHolds).
   const holds = new Map()
   const wrote = new Set()
@@ -1713,12 +1715,15 @@ export default async (env) => {
     } finally {
       for (const key of wrote)
         if (key.startsWith(`fs:`)) written.set(key, inputHash(key))
-      // The session's hook log, for units that later sessions look up.
-      if (hookLog.length > 0)
+      // The session's hook log, for units that later sessions look up, once
+      // it has grown: a put marks the store to be written again, whole.
+      if (hookLog.length > hookLogStored) {
         args[1]?.put(`hook-log:${hookLogId}`, {
           inputs: [...hookLog],
           unit: null,
         })
+        hookLogStored = hookLog.length
+      }
     }
   }
   async function checkIn(
