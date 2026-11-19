@@ -5486,14 +5486,17 @@ const inputReads = {
 // File b's read of a file that its test's child process tree wrote
 // (`childWrite`): the grandchild writes `child.txt` in a new directory under
 // the OS temporary directory and prints the directory, which the child
-// passes on; file b checks the text and removes the directory.
+// passes on; file b tests that the file exists, which is a read of it by
+// existence and kind (G42's stat family), checks its text, and removes the
+// directory.
 const CHILD_WRITE = `const fs = require('node:fs'), os = require('node:os'), path = require('node:path'); const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gap-child-')); fs.writeFileSync(path.join(dir, 'child.txt'), 'written'); process.stdout.write(dir)`
 const CHILD_START = `process.stdout.write(require('node:child_process').execFileSync(process.execPath, ['-e', ${JSON.stringify(CHILD_WRITE)}], { encoding: 'utf8' }))`
 const childWriteRead = [
   `import { execFileSync as runChild } from 'node:child_process'`,
-  `import { readFileSync as readChild, rmSync as removeChild } from 'node:fs'`,
+  `import { existsSync as childExists, readFileSync as readChild, rmSync as removeChild } from 'node:fs'`,
   `import { join as joinChild } from 'node:path'`,
   `const childDir = runChild(process.execPath, ['-e', ${JSON.stringify(CHILD_START)}], { encoding: 'utf8' })`,
+  `if (!childExists(joinChild(childDir, 'child.txt'))) throw new Error('the child process wrote no file')`,
   `const childText = readChild(joinChild(childDir, 'child.txt'), 'utf8')`,
   `removeChild(childDir, { recursive: true, force: true })`,
   `if (childText !== 'written') throw new Error('the child process wrote another text')`,
