@@ -7114,6 +7114,7 @@ oracleProperty({
           inputSteps: NO_INPUT_STEPS,
           storeLimit: false,
           childWrite: false,
+          childEnvironment: `node`,
           stopRuns: NO_STOPS,
           laterSteps: NO_LATER_STEPS,
         },
@@ -9768,6 +9769,9 @@ oracleProperty({
           inputSteps: NO_INPUT_STEPS,
           steps: [`recheck`],
           childWrite: true,
+          // In an environment that transforms file b for the client, as a
+          // jsdom environment does (`childEnvironment`).
+          childEnvironment: `client`,
         }),
       },
     ]),

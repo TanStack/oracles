@@ -1201,6 +1201,16 @@ const drawn = fc.record({
     false,
     true,
   ),
+  // The Vite environment that file b runs in when it reads what its child
+  // process wrote (`childWrite`): the config's (`node`), or one that
+  // transforms its modules for the client (`client`), as a jsdom
+  // environment does. The client transform rewrites `new URL(<literal>,
+  // import.meta.url)` to a URL of the dev server, in the harness that runs in
+  // the file's environment too, so the harness's own path to the child
+  // preload must not take that form (TanStack DB's jsdom suite). Only file b
+  // takes it, and only where it reads no gate input or data, whose paths
+  // take that form in the file's own text.
+  childEnvironment: fc.constantFrom(`node`, `node`, `node`, `client`),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -3541,6 +3551,12 @@ function resolveHistory(history) {
     shortWait: history.shortWait === true,
     storeLimit: history.storeLimit === true,
     childWrite: history.childWrite === true,
+    childEnvironment:
+      history.childWrite === true &&
+      (history.inputRead ?? `none`) === `none` &&
+      (history.fsRead ?? `none`) === `none`
+        ? (history.childEnvironment ?? `node`)
+        : `node`,
     // The gate input that file b's verdicts also wait on (`inputRead`), and
     // whether each write of a gate file keeps its size and modification time
     // (`keepStamp`).
@@ -5556,6 +5572,9 @@ function oracleTestFile(plan, file) {
   const out = [
     // A per-file environment, which Vitest reads from the file's text.
     ...(plan.pragma && file === `a` ? [`// @vitest-environment marked`] : []),
+    ...(plan.childEnvironment === `client` && file === `b`
+      ? [`// @vitest-environment client-marked`]
+      : []),
     `import { ${plan.tests.some((t) => t.file === file && t.cleanupThrows) ? `afterEach, ` : ``}describe, expect, test${plan.tests.some((t) => t.file === file && (t.spies || t.timed === `spiedclock`)) ? `, vi` : ``} } from 'vitest'`,
     ...(plan.tests.some((t) => t.file === file && t.shrinks)
       ? [`import fc from 'fast-check'`]
@@ -6486,6 +6505,24 @@ function fixtureFiles(plan, state = initialState(plan)) {
               `  setup(global) {`,
               `    global.__gapEnvironment = 'marked'`,
               `    return { teardown() { delete global.__gapEnvironment } }`,
+              `  },`,
+              `}`,
+              ``,
+            ].join(`\n`),
+        }
+      : {}),
+    // The client-transform environment that file b names when it reads what
+    // its child process wrote (`childEnvironment`).
+    ...(plan.childEnvironment === `client`
+      ? {
+          [`${testRoot.environments ?? `node_modules`}/vitest-environment-client-marked/package.json`]: `${JSON.stringify({ name: `vitest-environment-client-marked`, type: `module`, exports: `./index.js` })}\n`,
+          [`${testRoot.environments ?? `node_modules`}/vitest-environment-client-marked/index.js`]:
+            [
+              `export default {`,
+              `  name: 'client-marked',`,
+              `  viteEnvironment: 'client',`,
+              `  setup() {`,
+              `    return { teardown() {} }`,
               `  },`,
               `}`,
               ``,

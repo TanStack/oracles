@@ -85,7 +85,8 @@
     ["keepStamp", "56ab48b583bcfac8"],
     ["inputSteps", "d0b00193871ff120"],
     ["storeLimit", "ed6866229ecc4969"],
-    ["childWrite", "b5de417f8ab99e7a"]
+    ["childWrite", "b5de417f8ab99e7a"],
+    ["childEnvironment", "6f44f756ac5ac6ef"]
   ],
   "histories": [
     ["functions", "66c0e9c56951c377"],
@@ -173,6 +174,7 @@
     ["keepStamp", "56ab48b583bcfac8"],
     ["inputSteps", "d0b00193871ff120"],
     ["storeLimit", "ed6866229ecc4969"],
-    ["childWrite", "b5de417f8ab99e7a"]
+    ["childWrite", "b5de417f8ab99e7a"],
+    ["childEnvironment", "6f44f756ac5ac6ef"]
   ]
 }
