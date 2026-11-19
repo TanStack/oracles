@@ -329,6 +329,11 @@ export const shards = {
     // with the daemon fix of fix/daemon-current-inputs.
     `fixed seed 20261105: an edit sequence over the witness module, the first half`,
     `fixed seed 20261105: an edit sequence over the witness module, the second half`,
+    // #182's constructed history, a later owner's test listed first beside an
+    // earlier owner's hang: 57 s here with GAP_E2E_SHRINKS=0.
+    `fixed seed 20261105: a later owner's test listed first beside an earlier owner's hang`,
+    `random seed: a later owner's test listed first beside an earlier owner's hang`,
+    `determinism: constructed history: a later owner's test listed first beside an earlier owner's hang`,
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-5': [
