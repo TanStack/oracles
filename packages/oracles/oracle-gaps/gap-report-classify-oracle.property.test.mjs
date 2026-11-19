@@ -4117,11 +4117,14 @@ const constructed = [
   // Block per law (the maintainer's decision "Block per law", 2026-11-18):
   // each oracle file has a failing law, a test that fails with no mutant
   // active and reports a violation under every mutant. The first file also
-  // has a passing law, which kills the first mutant: the failing law judges
-  // nothing, and its file's other law still judges. The second file's only
-  // test is its failing law, so the second mutant, which only it owns, has
-  // no passing owner test and is blocked by that law. Appended at the end
-  // of the list.
+  // has a passing law, which kills the first mutant and changes nothing
+  // under the third: the failing law judges nothing, and its file's other
+  // law still judges, so the first is killed and the third survives. The
+  // second file's only test is its failing law, so the second mutant, which
+  // only it owns, has no passing owner test and is blocked by that law. A
+  // runner that blocked the whole first file would block the third; one
+  // that counted the failing law's verdict would kill it. Appended at the
+  // end of the list.
   {
     name: `a failing law beside its file's passing laws`,
     enters: [
@@ -4132,19 +4135,31 @@ const constructed = [
       const base = single(`x`, [], {
         effect: { kind: `verdict` },
         test: { fails: true },
-        more: [plainTest({ kind: `verdict` }, { label: `it's ` })],
         baseline: `test`,
       }).build()
       const [file] = base.files
+      const passing = plainTest({}, { label: `it's ` })
       return {
         ...base,
         files: [
-          file,
+          {
+            ...file,
+            tests: [
+              file.tests[0],
+              {
+                ...passing,
+                under: passing.under.map((effect, slot) =>
+                  slot === 0 ? { ...effect, kind: `verdict` } : effect,
+                ),
+              },
+            ],
+          },
           { ...file, tests: [{ ...file.tests[0], label: `(a|b) ` }] },
         ],
         mutants: [
           base.mutants[0],
           { ...base.mutants[0], owners: [1], line: 1 },
+          { ...base.mutants[0], anchor: `x \`\` y` },
         ],
       }
     },
