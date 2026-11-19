@@ -547,6 +547,10 @@ export const partitions = {
         'constructed history: a run after a killed CLI',
         'constructed history: a stop before the CLI starts, after a stopped check',
         'fixed history: a filed base whose owner reads an absent object through ?.',
+        // Still 10:51 with only those three moved (run 44552467396), so two more
+        // of the rest shard's units (about 89 s on the pool) come here too.
+        'constructed history: a daemon pause that cannot engage',
+        'constructed history: every outcome class, the abort stop',
       ]),
       // 471 s of weight.
       2: anyOf([
