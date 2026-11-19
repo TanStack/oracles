@@ -868,7 +868,11 @@ export const partitions = {
         'an edit sequence over the witness module, the second half',
       ]),
       2: anyOf(['every outcome class']),
-      3: anyOf(['a declaration fault: noTypescript']),
+      // #182's constructed history (one unit here, 57 s on the pool).
+      3: anyOf([
+        'a declaration fault: noTypescript',
+        "a later owner's test listed first beside an earlier owner's hang",
+      ]),
       4: anyOf(['every outcome class, the warm stop']),
       5: anyOf([
         'an edit sequence through the daemon',
