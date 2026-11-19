@@ -4939,9 +4939,6 @@ function baselineOf(plan) {
       loads: broken === undefined || broken.test !== undefined,
       test: broken?.test,
       error: broken?.error,
-      // The tests of the plan in the file, which the model judges by; its
-      // other passing tests change nothing under any mutant.
-      planned: plan.tests.filter((t) => t.file === file).length,
     }
   })
 }
@@ -5044,17 +5041,16 @@ function model(plan) {
   const baseline = baselineOf(plan)
   const entryOf = (file) =>
     baseline.find((b) => b.file === `tests/${file}.test.ts`)
-  // An owner file that loads and runs a test, failing or passing: the
-  // module's load reaches every test of it.
+  // An owner file that loads and runs a test, failing or passing.
   const runsTests = (file) =>
     entryOf(file)?.loads === true && entryOf(file).ran > 0
-  // How many of a file's tests pass, and how many of those are no test of
-  // the plan (the failing owner's two passing tests, the mid-run edit's,
-  // the console's, and the abort's): those change nothing under any mutant.
+  // How many of a file's tests pass: the plan's, and the tests of no plan
+  // (the failing owner's two passing tests, the mid-run edit's, the
+  // console's, and the abort's), which judge no mutant, though each keeps
+  // its file's mutants from blocking. A failing law is no test of the plan,
+  // so the plan's tests judge as they would beside none.
   const passingIn = (file) =>
     runsTests(file) ? entryOf(file).ran - entryOf(file).failed : 0
-  const othersIn = (file) =>
-    runsTests(file) ? passingIn(file) - entryOf(file).planned : 0
   const ownerTests = (id) =>
     plan.tests.filter(
       (t) =>
@@ -5093,10 +5089,8 @@ function model(plan) {
     // Code that ran when the module loaded runs in every owner file that has
     // a test, and reaches every test of that file (maintainer decision,
     // 2026-11-06); a site that the load did not run is reached only by tests.
-    // A failing law, and a test of no plan, is a test of its file too.
     const atLoad = ranAtLoad(site)
-    const loaded = [...owners(site.fnId)].filter(runsTests)
-    if (!reached.has(site.id) && !(atLoad && loaded.length > 0))
+    if (!reached.has(site.id) && !(atLoad && tests.length > 0))
       return `unreached`
     // A mutant under which the module throws while it loads fails every
     // file that imports it before any test runs: an error outside any test
@@ -5116,14 +5110,7 @@ function model(plan) {
             interpret(plan, t.fn, part.input, sites).reached.has(site.id),
           ),
         )
-    // A deterministic passing test judges it: one of the plan's that reached
-    // it, or, for code that ran at load, a passing test of no plan in an
-    // owner file. A failing law judges nothing, as a nondeterministic test.
-    if (
-      reaching.every((t) => t.flaky) &&
-      !(atLoad && loaded.some((file) => othersIn(file) > 0))
-    )
-      return `indeterminate`
+    if (reaching.every((t) => t.flaky)) return `indeterminate`
     const kind = judge(plan, tests, sites, { site: site.id })
     if (kind !== `survived`) return kind
     // A test that reached it did more work, though nothing it observed
@@ -5163,7 +5150,7 @@ function model(plan) {
             interpret(plan, t.fn, part.input, sites).infected.has(site.id),
           ),
       ) ||
-      (loaded.length > 0 && loadRuns.some((run) => run.infected.has(site.id)))
+      (tests.length > 0 && loadRuns.some((run) => run.infected.has(site.id)))
     if (isIf) return infectedIn ? `not-observed` : `branch-never-taken`
     if (comparison && !infectedIn) return `not-infected`
     return `not-observed`
