@@ -7061,6 +7061,13 @@ oracleProperty({
       `a check that ran more than one batch`,
     ],
     runs: 2,
+    // One fixed base per constructed history and none drawn: the per-run
+    // randomness comes from the random-seed jobs that every pull request runs
+    // (#90), which build each constructed history from a fresh sample (register
+    // M, 2026-11-18, "Gap e2e: 1 fixed base plus random-seed jobs"). Each
+    // history runs the CLI end to end, often for minutes: five fixed bases
+    // took a fixed-seed shard to 18 to 30 minutes on an Arclet (#122).
+    bases: 1,
     fixedSeeds: [20261105],
     // A filed counterexample, replayed by its history (register M, "Replay by
     // history"): the fourth base of `a stale authored mutant and a

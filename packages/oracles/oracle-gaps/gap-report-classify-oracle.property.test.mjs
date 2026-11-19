@@ -3327,6 +3327,7 @@ const required = [
   `a survivor whose work fell`,
   `extra-work named past an unregistered rise`,
   `a rise exactly at the declared bound`,
+  `authored agreement-only-kill`,
 ]
 
 // One constructed history per outcome class: one mutant judged by one
@@ -4121,6 +4122,18 @@ const constructed = [
       baseline: `load`,
     },
   ),
+  // An authored mutant that only the reach agreement rejects: a G11
+  // failure-gap class, so a constructed history enters it (review of #122;
+  // the fixed seed's generated histories stopped reaching it once the
+  // constructed histories left the generated unit).
+  single(
+    `an authored mutant killed by reach agreement alone`,
+    [`authored agreement-only-kill`],
+    {
+      effect: { kind: `verdict`, law: `reach agreement` },
+      authored: [{}],
+    },
+  ),
 ]
 
 oracleProperty({
@@ -4137,7 +4150,6 @@ oracleProperty({
     measured: [
       ...[
         `timeout`,
-        `agreement-only-kill`,
         `unregistered-kill`,
         `crashed`,
         `framework-error`,
