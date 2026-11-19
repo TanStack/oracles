@@ -51,11 +51,16 @@ agent.
   law violation, and a `replay:` command. A test of an oracle file that
   fails with no mutant active (a failing law) judges nothing: it is left
   out, as a nondeterministic test is, and the passing tests of its file
-  still judge the mutants the file owns. A mutant with no passing owner
-  test, and that nothing kills, is a `blocked` gap whose directive names the
-  failing laws it waits for. A `blocked` line names each failing law by its
-  file and test names (or the file, when it failed outside its tests, as a
-  file that does not load does), and the report says it is provisional. With
+  still judge the mutants the file owns; it keeps its reach and its work. A
+  test of a `describe` whose `beforeAll` or `afterAll` throws is a failing
+  law too. An owner file that fails outside its tests (it does not load, or
+  a file-level hook throws) is broken, and judges nothing. A mutant that no
+  deterministic passing owner test reached, held by a failing law that
+  reached it or by an owner file that judges nothing, and that nothing
+  kills, is a `blocked` gap whose directive names what it waits for. A
+  `blocked` line names each failing law by its file and test names (or a
+  broken file by its path), `results.json` lists each failing file's
+  `laws`, and the report says it is provisional. With
   `--only <id,...>`, the baseline runs only the owners of the selected
   mutants. A `crashed` gap is not a kill: production threw where no law
   judged it, and the error is on the gap's Detail line in `summary.md` and
