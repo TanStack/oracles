@@ -7427,20 +7427,26 @@ oracleProperty({
         build: (generated) => ({
           ...generated,
           fault,
-          // The failing owner, file b, also owns a first function that no
-          // other function calls (calls go only to later functions), judged
-          // by a passing test of file b that kills its mutants: file b's
+          // The failing owner, file b, owns the first function, which no
+          // other function calls (calls go only to later functions), in
+          // place of the base's: an `if` that a passing test of file b,
+          // which takes the base's last test's place, kills. File b's
           // passing laws still judge it beside the failing one (Block per
-          // law, 2026-11-18). The base's functions and tests follow it.
+          // law, 2026-11-18). The history keeps the grammar's bounds, so the
+          // arbitrary takes it back.
           ...(fault === `brokenOwner`
             ? {
-                functions: [[kill], ...generated.functions],
-                containers: [`free`, ...generated.containers],
-                overloads: [false, ...generated.overloads],
-                owners: [`b`, ...generated.owners],
+                functions: [[kill], ...generated.functions.slice(1)],
+                containers: generated.containers.map((c, i) =>
+                  i === 0 ? `free` : c,
+                ),
+                overloads: generated.overloads.map((o, i) =>
+                  i === 0 ? false : o,
+                ),
+                owners: [`b`, ...generated.owners.slice(1)],
                 wholeFile: `none`,
                 tests: [
-                  ...generated.tests,
+                  ...generated.tests.slice(0, 4),
                   { ...judging(`b`, `fixed seed`, 7), fn: 0 },
                 ],
               }
