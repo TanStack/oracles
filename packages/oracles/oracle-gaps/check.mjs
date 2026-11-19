@@ -2055,7 +2055,7 @@ export default async (env) => {
     const runAcross = async (files, pass, after = async () => {}) => {
       const parts = contexts.map(() => [])
       files.forEach((file, index) => parts[index % contexts.length].push(file))
-      const { units, rows, failed } = passOf(
+      const { units, rows, failed, failing, passing } = passOf(
         await eachSlot(async (context, index) => {
           const done = []
           for (const file of parts[index])
@@ -2073,6 +2073,8 @@ export default async (env) => {
         rows,
         units,
         failed,
+        failing,
+        passing,
         seconds: Math.max(0, ...units.map((u) => u.seconds)),
       }
     }
