@@ -944,6 +944,8 @@ export const partitions = {
         'a stop before the CLI starts',
         'a stop by SIGTERM as the CLI starts',
         'a start refuses a dangling claim',
+        'a stop before the CLI starts, after a stopped check',
+        'a run after a killed CLI',
         // #99's unsupervised stop after a lost stream log.
         'a stream log lost after its note, then stopped, unsupervised',
       ]),

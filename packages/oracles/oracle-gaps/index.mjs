@@ -137,7 +137,7 @@ import {
 import { constants } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { posix } from './paths.mjs'
+import { alive, posix, removeSession } from './paths.mjs'
 
 let early
 const keepEarly = (signal) => {
@@ -203,15 +203,6 @@ const cannotWrite = (path, error) =>
     `the stream log ${path} cannot be written (${error.code ?? error.message})`,
     `Remove ${path}, or pass --out a directory whose stream.log can be written.`,
   )
-/** Whether process `pid` runs. */
-const alive = (pid) => {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return error.code === `EPERM`
-  }
-}
 // The output directory this process claimed (its run.pid), released when the
 // process exits, on every exit but SIGKILL.
 let claimed
@@ -412,9 +403,10 @@ function exitWhenFlushed(code) {
  * Runs this CLI again as a child in a process group of its own, and ends with
  * it: with its exit code, or, once a stop signal has ended its group, with 128
  * plus the signal's number. The child gets `--out` appended, the directory this
- * process resolved (review of #57, F2).
+ * process resolved (review of #57, F2). The child's session directory in `pkg`
+ * goes with the child, however the child ended.
  */
-function superviseRun(out) {
+function superviseRun(out, pkg) {
   let child
   let stopped
   // How the run ended: its exit code, or the signal that ended it.
@@ -445,6 +437,9 @@ function superviseRun(out) {
     const decide = () => {
       if (decided) return
       decided = true
+      // An abort or a kill of the child skips its own cleanup, and the CLI
+      // outlives it, so a supervised run leaves no session directory.
+      if (child) removeSession(pkg, child.pid)
       if (ending)
         return process.exit(
           ended?.code ?? 128 + constants.signals[ended?.signal ?? stopped],
@@ -708,7 +703,7 @@ async function run() {
       } catch (error) {
         return endWith(error, checking.out)
       }
-      return superviseRun(checking.out)
+      return superviseRun(checking.out, checking.pkg)
     }
   }
   if (supervisor !== undefined) {

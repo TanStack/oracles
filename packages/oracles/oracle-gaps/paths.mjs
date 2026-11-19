@@ -6,8 +6,8 @@
 // real path, `realpathSync.native`, is taken on both sides of a comparison:
 // the JavaScript `realpathSync` keeps an 8.3 short name (RUNNER~1), which the
 // native call expands, so the two never agree on Windows.
-import { realpathSync, renameSync, writeFileSync } from 'node:fs'
-import { relative } from 'node:path'
+import { realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { join, relative } from 'node:path'
 
 /**
  * The forward-slash spelling of `path`, with a drive letter in capitals: a
@@ -60,6 +60,39 @@ export const isWithin = (dir, file) => relativeWithin(dir, file) !== undefined
 export function specifierOf(from, to) {
   const rel = posix(relative(from, to))
   return /^\.\.?\//.test(rel) ? rel : `./${rel}`
+}
+
+/**
+ * The session directory of process `pid` in package `pkg`: its capture setup
+ * and Vitest configs while it checks (check.mjs).
+ */
+export const sessionDirOf = (pkg, pid) => join(pkg, `.oracle-gaps-${pid}`)
+
+/** Whether process `pid` runs. */
+export function alive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error.code === `EPERM`
+  }
+}
+
+/**
+ * Removes the session directory of process `pid` in package `pkg`: this
+ * process's own, or a process's that has ended. A pid that another process
+ * runs under now names that process's directory, which stays. A removal that
+ * fails (a file another process holds open on win32) leaves the directory for
+ * the next run: a throw here, after a run's done line, would end the run a
+ * second time (review of #164, F2).
+ */
+export function removeSession(pkg, pid) {
+  if (pid !== process.pid && alive(pid)) return
+  try {
+    rmSync(sessionDirOf(pkg, pid), { recursive: true, force: true })
+  } catch {
+    // The next run removes it.
+  }
 }
 
 /** The last segment of `path`, in forward slashes. */
