@@ -27,7 +27,7 @@ import { createHash } from 'node:crypto'
 import { appendFileSync, readFileSync } from 'node:fs'
 import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { dirname, isAbsolute, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { threadId } from 'node:worker_threads'
 import { afterAll, beforeEach, chai, expect, inject, vi } from 'vitest'
 import { inputHash, keepProperties, watchReads } from './inputs.mjs'
@@ -289,8 +289,12 @@ const wrote = new Set()
 // child-writes.mjs, which each of its own children inherits through
 // NODE_OPTIONS, and appends the key of each file it writes to this copy's
 // log, in the session directory beside this file.
+// The session directory, from this file's path. Not `new URL(<literal>,
+// import.meta.url)`: a client-transform environment (jsdom) rewrites that
+// form to a URL of Vite's dev server.
+const home = dirname(fileURLToPath(import.meta.url))
 const childLog = join(
-  dirname(fileURLToPath(import.meta.url)),
+  home,
   `child-writes-${process.pid}-${threadId}-${(globalThis.__oracleGapsCopies = (globalThis.__oracleGapsCopies ?? 0) + 1)}.log`,
 )
 let childRead = 0
@@ -318,7 +322,7 @@ watchReads((key, write) => {
 if (!globalThis.__oracleGapsChildren) {
   globalThis.__oracleGapsChildren = true
   process.env.NODE_OPTIONS =
-    `${process.env.NODE_OPTIONS ?? ``} --import=${new URL(`./child-writes.mjs`, import.meta.url).href}`.trim()
+    `${process.env.NODE_OPTIONS ?? ``} --import=${pathToFileURL(join(home, `child-writes.mjs`)).href}`.trim()
 }
 process.env.ORACLE_GAPS_CHILD_WRITES = childLog
 // A test's own writes to the process's stdout and stderr (a debugging
