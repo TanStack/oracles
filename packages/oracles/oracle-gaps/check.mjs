@@ -1964,7 +1964,9 @@ export default async (env) => {
       })
       return stable ? inputs : undefined
     }
-    const remember = (id, unit, inputs) => {
+    // A unit is stored without the hashes of what its copy read (`readAt`),
+    // which only its settling used: the stored inputs hold them.
+    const remember = (id, { readAt, ...unit }, inputs) => {
       if (!inputs) return
       const entry = { inputs: sharedInputs(inputs), unit }
       hook?.stored(entry)
