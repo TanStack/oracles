@@ -3709,6 +3709,20 @@ async function driver(plan, observe) {
       cli.report?.results?.some((r) => r.class === `not-judged`)
     )
       states.add(`a clocked owner's work left out of the work budget`)
+    // A witness copy that hangs (owner a, listed first) is cut as no progress,
+    // and the mutant is killed by that cut, before a later owner's test that
+    // spins on the function is run (copies run in sorted owner order, G44).
+    if (
+      plan.history.witness === `capture` &&
+      plan.history.tests[0]?.file === `b` &&
+      cli.report?.results?.some(
+        (r) =>
+          r.function === `w_hangkill` &&
+          r.outcome === `killed` &&
+          r.laws?.includes(`no progress`),
+      )
+    )
+      states.add(`a copy cut as no progress before a later owner's spin`)
     // A file whose test does a short read of its own before production, in
     // every run: its copy that hangs is still idle by state, and is killed by
     // no progress (v21.2 R50, R51).
@@ -6727,6 +6741,7 @@ const required = [
   `a hang in a file whose test did a short read killed by no progress`,
   `a spin after a short async read timed out`,
   `an authored mutant killed by its spin`,
+  `a copy cut as no progress before a later owner's spin`,
   `a hang in one owner and a survivor in another killed by no progress`,
   `a mutant's copies past its work budget killed by bounded work`,
   `a heartbeat named a busy mutant`,
@@ -6845,6 +6860,7 @@ const faults = [
 // history: they are not witnessed by "every outcome class" (a named history
 // of its own must enter them, or registration fails).
 const ownHistoryStates = [
+  `a copy cut as no progress before a later owner's spin`,
   `a run after a killed CLI that left its own session`,
   `two starts race for a stale claim`,
   `a start refuses a stale claim`,
@@ -10331,6 +10347,29 @@ oracleProperty({
           fsRead: `sync`,
           spinData: true,
           spinThrows: false,
+          heavy: 0,
+        }),
+      },
+      // A later owner's test listed first beside an earlier owner's hang (issue
+      // #182, the random seed of #99 that the capture drew). The history lists
+      // file b's test before the witness's tests, so a copy order taken from the
+      // listing would run b first. Owner a's copy of w_hangkill hangs where it
+      // would judge and is cut as no progress by state. Copies run in sorted owner
+      // order (register 2026-11-14, "Deterministic cuts, outcome rule"; G44), so
+      // a decides the mutant before b's copy spins on the function (`spinData`),
+      // which would be a cut by count.
+      {
+        name: `a later owner's test listed first beside an earlier owner's hang`,
+        enters: [`a copy cut as no progress before a later owner's spin`],
+        build: (generated) => ({
+          ...soloKill(generated, [
+            { ...judging(`b`, `fixed seed`, 1), fn: 0, judges: false },
+          ]),
+          witness: `capture`,
+          spinData: true,
+          spinThrows: false,
+          fsRead: `sync`,
+          hangMs: null,
           heavy: 0,
         }),
       },
