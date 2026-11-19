@@ -718,11 +718,32 @@ export default async (env) => {
       const [, id, n] = path.split(`:`)
       return logHolds(id, Number(n)) >= Number(n) ? `held` : `changed`
     }
+    if (path.startsWith(`shared:`)) return sharedHolds(path, index)
     if (/^(dir|dirs|stat):/.test(path)) return inputHash(path)
     const text =
       globalThis.__oracleGapsServe[index]?.get(path) ??
       globalThis.__oracleGapsSchemata.get(path)
     return text === undefined ? hashOf(path) : sha1(text)
+  }
+  // The inputs that many units read alike, a variable or a file under
+  // node_modules, are stored once per distinct set (`shared:<hash>`, a row
+  // of the store) and named by each unit that read them (sharedInputs), so
+  // a unit keeps only the inputs that are its own (review of #133, M
+  // "Optimize #133 before merging"). A set holds while each of its inputs
+  // holds its hash, judged once per check and context.
+  const shared = new Map()
+  const sharedHolds = (path, index) => {
+    const key = `${path}:${index}`
+    if (!shared.has(key)) {
+      const inputs = currentStore?.get(path)?.variants[0]?.inputs
+      shared.set(
+        key,
+        inputs?.every(([input, hash]) => servedHash(input, index) === hash)
+          ? `held`
+          : `changed`,
+      )
+    }
+    return shared.get(key)
   }
   // How much of a session's hook log, from its start, still holds its
   // hashes in this check: a unit that names `hooks:<id>:<n>` is unchanged
@@ -1720,6 +1741,7 @@ export default async (env) => {
     hashOf.forget()
     wrote.clear()
     holds.clear()
+    shared.clear()
     currentStore = store
     const authored = options.mutants ? loadAuthored(options.mutants) : []
     seedVariable = `${options.envPrefix}_SEED`
@@ -1944,9 +1966,24 @@ export default async (env) => {
     }
     const remember = (id, unit, inputs) => {
       if (!inputs) return
-      const entry = { inputs, unit }
+      const entry = { inputs: sharedInputs(inputs), unit }
       hook?.stored(entry)
       store.put(id, entry)
+    }
+    // A unit's inputs with those that many units read alike (see
+    // sharedHolds) moved into one stored set, which the unit names.
+    const sharedInputs = (inputs) => {
+      const common = []
+      const own = []
+      for (const input of inputs)
+        (input[0].startsWith(`env:`) || input[0].includes(`/node_modules/`)
+          ? common
+          : own
+        ).push(input)
+      if (common.length < 2) return inputs
+      const path = `shared:${sha1(JSON.stringify(common))}`
+      if (!store.get(path)) store.put(path, { inputs: common, unit: null })
+      return [...own, [path, `held`]]
     }
     // A batch run in a slot's context, with the inputs to store each item
     // under: the modules its file's unmutated run read, and those its copy
