@@ -251,8 +251,13 @@ runs cold` and runs the check in its own process, which reports what the
   the config read in the CLI's process, while Vitest loads and the contexts
   warm, and in each hook of every plugin, Vite's own (such as the
   `tsconfig.json` that its esbuild plugin reads) and the config's alike. A
-  file that a reader wrote earlier in the check, before it read it, is its
-  own output and no input (maintainer decision, 2026-11-17); a file the
+  file that a reader wrote earlier in the check, before it read it or tested
+  whether it exists, is its own output and no input (maintainer decision,
+  2026-11-17). For a test, that includes a file that a Node process it
+  started wrote, at any depth: each such process preloads the runner's
+  write log through `NODE_OPTIONS` (maintainer decision, 2026-11-19). A
+  child started with an environment that drops `NODE_OPTIONS`, or a writer
+  that is not Node, is not seen, so its file stays an input. A file the
   session wrote that is edited by hand afterwards is seen. Each check hashes
   every file input from its content, so an edit that keeps a file's size and
   modification time (`cp -p`, `rsync -t`, `touch -r`) is seen. A run that an

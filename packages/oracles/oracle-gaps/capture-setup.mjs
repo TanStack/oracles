@@ -27,6 +27,8 @@ import { createHash } from 'node:crypto'
 import { appendFileSync, readFileSync } from 'node:fs'
 import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { dirname, isAbsolute, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { threadId } from 'node:worker_threads'
 import { afterAll, beforeEach, chai, expect, inject, vi } from 'vitest'
 import { inputHash, keepProperties, watchReads } from './inputs.mjs'
 import { writeWhole } from './paths.mjs'
@@ -278,15 +280,47 @@ function appendClosingRow(row) {
 // run is stored under the text it read and not under an edit that lands
 // later in the run (review of #55, F1). A variable's hash is the runner's,
 // from the environment it gives the check (check.mjs, servedHash). A file
-// the copy wrote before it read it is its own output, no input.
+// that the copy, or a process it started at any depth, wrote before the copy
+// read it is its own output, no input, whether the copy reads its text or
+// tests whether it exists (`stat:`).
 globalThis.__oracleGapsReads = new Map()
 const wrote = new Set()
+// The child processes' writes: every Node process a test starts preloads
+// child-writes.mjs, which each of its own children inherits through
+// NODE_OPTIONS, and appends the key of each file it writes to this copy's
+// log, in the session directory beside this file.
+const childLog = join(
+  dirname(fileURLToPath(import.meta.url)),
+  `child-writes-${process.pid}-${threadId}-${(globalThis.__oracleGapsCopies = (globalThis.__oracleGapsCopies ?? 0) + 1)}.log`,
+)
+let childRead = 0
+/** Whether the copy or a process it started wrote the file `key` names. */
+function ownOutput(key) {
+  const file = key.replace(/^stat:/, `fs:`)
+  if (wrote.has(file)) return true
+  let text
+  try {
+    text = globalThis.__oracleGapsOriginalFs.readFileSync(childLog, `utf8`)
+  } catch {
+    return false
+  }
+  for (const line of text.slice(childRead).split(`\n`))
+    if (line !== ``) wrote.add(line)
+  childRead = text.length
+  return wrote.has(file)
+}
 watchReads((key, write) => {
   const reads = globalThis.__oracleGapsReads
   if (write) wrote.add(key)
-  else if (!reads.has(key) && !wrote.has(key))
+  else if (!reads.has(key) && !wrote.has(key) && !ownOutput(key))
     reads.set(key, key.startsWith(`env:`) ? null : inputHash(key))
 })
+if (!globalThis.__oracleGapsChildren) {
+  globalThis.__oracleGapsChildren = true
+  process.env.NODE_OPTIONS =
+    `${process.env.NODE_OPTIONS ?? ``} --import=${new URL(`./child-writes.mjs`, import.meta.url).href}`.trim()
+}
+process.env.ORACLE_GAPS_CHILD_WRITES = childLog
 // A test's own writes to the process's stdout and stderr (a debugging
 // `process.stdout.write`) go to the run's test-output.log, beside its
 // capture, not to the CLI's streams, whose every line is a line of the

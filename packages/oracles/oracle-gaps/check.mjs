@@ -161,6 +161,7 @@ const ownFiles = [
   `authored.mjs`,
   `capture-setup.mjs`,
   `inputs.mjs`,
+  `child-writes.mjs`,
   `paths.mjs`,
   `evidence.mjs`,
   `daemon.mjs`,
@@ -596,9 +597,11 @@ export async function openSession(pkg, pause = async () => {}) {
   writeFileSync(join(home, `host`), hostname())
   const harness = join(home, `capture-setup.mjs`)
   copyFileSync(join(here, `capture-setup.mjs`), harness)
-  // The harness imports the input rule and the path rule beside it
+  // The harness imports the input rule and the path rule beside it, and
+  // preloads the child-write log into the processes a test starts
   // (capture-setup.mjs).
   copyFileSync(join(here, `inputs.mjs`), join(home, `inputs.mjs`))
+  copyFileSync(join(here, `child-writes.mjs`), join(home, `child-writes.mjs`))
   copyFileSync(join(here, `paths.mjs`), join(home, `paths.mjs`))
   // One wrapper config per context, over the package's own config (a path
   // relative to the package, or undefined for none). Each serves its own
