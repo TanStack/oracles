@@ -248,29 +248,28 @@ export function verdictLine(files) {
  * One line per failing law of an oracle file (G13): the law, by its file
  * and test names, that it judges nothing, and the step that unblocks it.
  * A failing law is left out per test, so its file's passing tests judge the
- * mutants the file owns, and only a mutant with no passing owner test waits
- * for it (maintainer decision "Block per law", 2026-11-18). An oracle file
- * that failed outside its tests has no law to name, so its line names the
- * file.
+ * mutants the file owns, and a mutant that no passing owner test reached
+ * waits for it (maintainer decision "Block per law", 2026-11-18). A broken
+ * file, one that failed outside its tests, has no law to name, so its line
+ * names the file ("A broken owner file judges nothing", 2026-11-19). `laws`
+ * names the failing laws, as the runner gives them; without it, the failing
+ * tests are.
  */
 export function blockedLines(files) {
-  return files.flatMap(
-    ({ file, ordinary, failure, failedOutsideTests, tests }) => {
-      if (ordinary || failure === undefined) return []
-      const laws = tests.filter((t) => t.state === `failed`)
-      return failedOutsideTests || laws.length === 0
-        ? [
-            streamLine(
-              `blocked`,
-              `${codeSpan(file)} fails with no mutant active, so none of its tests judges: a mutant with no passing owner test waits for it. Make it pass (its replay is above), then check again.`,
-            ),
-          ]
-        : laws.map((t) =>
-            streamLine(
-              `blocked`,
-              `${codeSpan(escapeControls([file, ...(t.names ?? [t.fullName])].join(` > `)))} fails with no mutant active, so it judges nothing: the passing tests judge the mutants its file owns, and a mutant with no passing owner test waits for it. Make it pass, then check again.`,
-            ),
-          )
-    },
-  )
+  return files.flatMap(({ file, ordinary, failure, laws, tests }) => {
+    if (ordinary || failure === undefined) return []
+    const named =
+      laws ??
+      tests
+        .filter((t) => t.state === `failed`)
+        .map((t) => [file, ...(t.names ?? [t.fullName])].join(` > `))
+    const line = (name, what) =>
+      streamLine(
+        `blocked`,
+        `${codeSpan(escapeControls(name))} fails with no mutant active, so ${what}: a mutant that no passing owner test reached waits for it. Make it pass, then check again.`,
+      )
+    return named.length === 0
+      ? [line(file, `none of its tests judges`)]
+      : named.map((name) => line(name, `it judges nothing`))
+  })
 }

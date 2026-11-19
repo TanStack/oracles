@@ -1051,6 +1051,24 @@ export default async (env) => {
       setupErrors: modules.flatMap((m) =>
         (m.errors?.() ?? []).map((error) => error.message),
       ),
+      // Each describe whose own hook failed (a `beforeAll` or `afterAll`):
+      // its error, and the tests it holds, whose laws fail with it (review of
+      // #176, F4). A file-level hook's error is the module's, above.
+      hooks: modules.flatMap((m) =>
+        [...m.children.allSuites()].flatMap((suite) => {
+          const errors = suite.errors?.() ?? []
+          return errors.length === 0
+            ? []
+            : [
+                {
+                  error: errors[0].message,
+                  keys: [...suite.children.allTests()].map(
+                    (t) => `${m.moduleId} > ${t.fullName}`,
+                  ),
+                },
+              ]
+        }),
+      ),
       tests,
       unhandled: (result.unhandledErrors ?? []).map((error) =>
         String(error?.message ?? error),
@@ -2119,13 +2137,23 @@ export default async (env) => {
     // oracle file, or the file when it failed outside its tests, with the
     // step that unblocks it (G13).
     const outsideTests = (file) => first.failing.get(file)?.[0] === file
-    const baselineFiles = firstFiles.map((file) => ({
-      file: relative(file),
-      ordinary: !oracleFiles.has(file),
-      failure: first.failed.get(file),
-      ...(outsideTests(file) ? { failedOutsideTests: true } : {}),
-      tests: first.units.find((u) => u.file === file)?.tests ?? [],
-    }))
+    const baselineFiles = firstFiles.map((file) => {
+      const tests = first.units.find((u) => u.file === file)?.tests ?? []
+      // Its failing laws, by file and test names: none for a broken file.
+      const laws = outsideTests(file)
+        ? []
+        : (first.failing.get(file) ?? []).map((key) => {
+            const t = tests.find((x) => x.key === key)
+            return [relative(file), ...(t.names ?? [t.fullName])].join(` > `)
+          })
+      return {
+        file: relative(file),
+        ordinary: !oracleFiles.has(file),
+        failure: first.failed.get(file),
+        ...(first.failed.has(file) ? { laws } : {}),
+        tests,
+      }
+    })
     for (const line of [
       ...baselineLines(baselineFiles, options.config),
       verdictLine(baselineFiles),
@@ -2174,14 +2202,24 @@ export default async (env) => {
     // comes from the first pass alone, so every mutant's selections are
     // known before the second, and their checks run beside it, on the
     // contexts it leaves idle.
+    // A failing law judges nothing, so it is left out of every selection
+    // too, and a file that has one runs without it where the rest
+    // reproduces (review of #176, F3); the file runs whole otherwise, its
+    // failing laws ignored.
+    const laws = new Set([...first.failing.values()].flat())
     const selectionOf = (file, keys) => {
-      if (keys.some((k) => k === `${file} > (background)`)) return null
       const all = [...first.rows.keys()].filter(
         (k) => fileOf(k) === file && !first.rows.get(k).background,
       )
       const reaching = new Set(keys)
-      const at = all.findIndex((k) => reaching.has(k))
-      return at <= 0 ? null : all.slice(at)
+      const at = reaching.has(`${file} > (background)`)
+        ? 0
+        : Math.max(
+            0,
+            all.findIndex((k) => reaching.has(k)),
+          )
+      const rest = all.slice(at).filter((k) => !laws.has(k))
+      return rest.length === 0 || rest.length === all.length ? null : rest
     }
     const selectionId = (file, selection) => `${file}\0${selection.join(`\0`)}`
     const reproduces = (selection, run) => {
@@ -2481,7 +2519,7 @@ export default async (env) => {
               baseline,
               mutants,
             }),
-            blockersOf(st.owners, first),
+            blockersOf(st.owners, first, st.targets, baseline),
           ),
         }
         if (needsOrdinary(st.result, st.targets))

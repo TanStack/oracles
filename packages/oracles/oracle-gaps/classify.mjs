@@ -203,7 +203,10 @@ function failureOf(unit) {
   const test = unit.tests.find((t) => t.state === `failed`)
   const text = test
     ? `${test.fullName}: ${test.message.split(`\n`)[0]}`
-    : (unit.setupErrors[0] ?? unit.unhandled[0] ?? `it failed`)
+    : (unit.setupErrors[0] ??
+      unit.unhandled[0] ??
+      unit.hooks?.[0]?.error ??
+      `it failed`)
   return text.slice(0, 300)
 }
 
@@ -217,14 +220,17 @@ function failureOf(unit) {
  * tests are listed alike on any machine.
  *
  * A test that fails with no mutant active (a failing law) judges nothing,
- * as a nondeterministic test judges nothing, so it is left out per test:
- * its records leave the pass, and its file's passing tests still judge
- * (maintainer decision "Block per law", 2026-11-18). `failing` gives each
- * failing file's failing laws, its failing tests' keys in the order its
+ * as a nondeterministic test judges nothing, so it is left out per test,
+ * and its file's passing tests still judge (maintainer decision "Block per
+ * law", 2026-11-18). A describe whose hook failed (`hooks`) fails its tests
+ * so: they are failing laws, passed or skipped. Its records stay: its reach
+ * and its work count where a test's do, and only its judging is left out.
+ * `failing` gives each failing file's failing laws, keys in the order its
  * reporter lists them, or the file alone when it failed outside its tests
- * (it did not load, its run timed out, or an error came outside any test),
- * which leaves none of its tests to judge. `passing` holds the files with a
- * test that passed and judges.
+ * (it did not load, its run timed out, or an error came outside any test):
+ * such a file is broken, and judges nothing (maintainer decision "A broken
+ * owner file judges nothing", 2026-11-19). `passing` holds the files with a
+ * test that passed and is no failing law.
  */
 export function passOf(parts) {
   const units = parts.flat().sort((a, b) => byPath(a.file, b.file))
@@ -232,27 +238,27 @@ export function passOf(parts) {
   const failing = new Map()
   const passing = new Set()
   for (const u of units) {
-    const passes = outcomeOf([u]).outcome === `survived`
-    const laws =
-      passes || u.timedOut || u.setupErrors.length + u.unhandled.length > 0
-        ? []
-        : u.tests.filter((t) => t.state === `failed`).map((t) => t.key)
+    const hooked = new Set((u.hooks ?? []).flatMap((hook) => hook.keys))
+    const passes = outcomeOf([u]).outcome === `survived` && hooked.size === 0
+    const broken = u.timedOut || u.setupErrors.length + u.unhandled.length > 0
+    const laws = broken
+      ? []
+      : u.tests
+          .filter((t) => t.state === `failed` || hooked.has(t.key))
+          .map((t) => t.key)
     if (!passes) {
       failed.set(u.file, failureOf(u))
       failing.set(u.file, laws.length > 0 ? laws : [u.file])
     }
     if (
-      (passes || laws.length > 0) &&
-      u.tests.some((t) => t.state === `passed`)
+      !broken &&
+      u.tests.some((t) => t.state === `passed` && !laws.includes(t.key))
     )
       passing.add(u.file)
   }
-  const left = new Set([...failing.values()].flat())
   return {
     units,
-    rows: new Map(
-      units.flatMap((u) => (u.rows ?? []).filter(([key]) => !left.has(key))),
-    ),
+    rows: new Map(units.flatMap((u) => u.rows ?? [])),
     failed,
     failing,
     passing,
@@ -266,15 +272,23 @@ export function passOf(parts) {
  * first run's records come in report order (`passOf`), and so do these lists.
  */
 export function baselineOf(firstRows, secondRows, failing = []) {
+  // A failing law is left out whatever it observed (`leftOut`), so it is
+  // never listed as nondeterministic.
+  const laws = new Set(failing)
   const nondeterministic = new Set()
   for (const [key, row] of firstRows) {
     const again = secondRows.get(key)
     if (
       !row.background &&
+      !laws.has(key) &&
       (again?.hash !== row.hash || again?.observed !== row.observed)
     )
       nondeterministic.add(key)
   }
+  // The tests that judge nothing: the nondeterministic ones and the
+  // failing laws (`passOf`), whose verdicts, work, infections and operands
+  // neither kill nor stop a run.
+  const leftOut = new Set([...nondeterministic, ...laws])
   const reachedBy = new Map()
   for (const [key, row] of firstRows)
     for (const id of row.hits)
@@ -288,15 +302,12 @@ export function baselineOf(firstRows, secondRows, failing = []) {
   for (const [key, row] of firstRows)
     if (
       !row.background &&
-      !nondeterministic.has(key) &&
+      !leftOut.has(key) &&
       !row.clocked &&
       !secondRows.get(key)?.clocked &&
       secondRows.get(key)?.calls === row.calls
     )
       work.set(key, row.calls)
-  // The tests that judge nothing: the nondeterministic ones and the
-  // failing laws (`passOf`), whose verdicts neither kill nor stop a run.
-  const leftOut = new Set([...nondeterministic, ...failing])
   return { firstRows, nondeterministic, leftOut, reachedBy, rank, work }
 }
 
@@ -343,13 +354,13 @@ const isUnmeasured = (mutant) =>
 
 // Whether a deterministic owner test, or the loaded code of an owner file,
 // infected the mutant (the capture's `infected` rows; a nondeterministic
-// test's infection judges nothing). `infectedBy` names the first owner test
+// test's infection, and a failing law's, judges nothing). `infectedBy` names the first owner test
 // with one; undefined when only loaded code did.
 function infectionOf(mutant, targets, baseline) {
   const id = mutant.number
   const infected = targets.oracleKeys.filter(
     (k) =>
-      !baseline.nondeterministic.has(k) &&
+      !baseline.leftOut.has(k) &&
       baseline.firstRows.get(k)?.infected?.includes(id),
   )
   const test = infected.find((k) => !k.endsWith(` > (background)`))
@@ -374,11 +385,11 @@ export function operandText([kind, text, digest]) {
 
 // The operand pairs that the owner tests' comparison recorded for a mutant,
 // as code spans: distinct, in test order, up to three. A nondeterministic
-// test's do not count.
+// test's, and a failing law's, do not count.
 function operandsOf(mutant, targets, baseline) {
   const pairs = []
   for (const k of targets.oracleKeys)
-    if (!baseline.nondeterministic.has(k))
+    if (!baseline.leftOut.has(k))
       for (const [id, pair] of baseline.firstRows.get(k)?.operands ?? [])
         if (id === mutant.number)
           pairs.push(pair.map((o) => codeSpan(operandText(o))).join(` and `))
@@ -512,17 +523,45 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
 }
 
 /**
- * The failing laws that block a mutant with these owner files, from the
- * first unmutated pass (`passOf`): none when an owner file has a passing
- * test, which judges it; otherwise its owners' failing laws, and the owner
- * files that failed outside their tests (maintainer decision "Block per
- * law", 2026-11-18, which replaces the file-level block of disposition G5
- * and of the v20 freeze's decision 2 at the granularity of a test).
+ * The failing laws and broken files that block a mutant with these owner
+ * files, from the first unmutated pass (`passOf`) and, for an operator
+ * mutant, its targets and the baseline. A mutant that a deterministic
+ * passing owner test reached (directly, or through code its file loaded) is
+ * judged, and has none. Otherwise its blockers are its owners' failing laws
+ * that reached it, and its owner files that judge nothing at all, which may
+ * reach anything they own: a broken file, and one whose every test is a
+ * failing law (maintainer decisions "Block per law", 2026-11-18, and "A
+ * broken owner file judges nothing", 2026-11-19, with its C reading: a
+ * mutant reached only by failing laws or broken files is blocked by them,
+ * as one reached only by nondeterministic tests is indeterminate). With
+ * none, a mutant that nothing reached stays unreached. An authored
+ * mutant's copy records no reach (`targets` undefined), so it is judged by
+ * every test of its owners, and blocked when no owner file has a passing
+ * test.
  */
-export const blockersOf = (owners, { failing, passing }) =>
-  [...owners].some((file) => passing.has(file))
+export function blockersOf(owners, { failing, passing }, targets, baseline) {
+  const all = [...owners]
+  const lawsOf = (file, reaching) =>
+    passing.has(file)
+      ? (failing.get(file) ?? []).filter((k) => reaching.has(k))
+      : (failing.get(file) ?? [])
+  if (targets === undefined)
+    return all.some((file) => passing.has(file))
+      ? []
+      : all.flatMap((file) => failing.get(file) ?? [])
+  const rows = baseline.firstRows
+  const reaching = new Set(targets.oracleKeys)
+  const loadedIn = new Set(
+    targets.oracleKeys.filter((k) => rows.get(k)?.background).map(fileOf),
+  )
+  if (loadedIn.size > 0)
+    for (const [k, row] of rows)
+      if (loadedIn.has(fileOf(k)) && !row.background) reaching.add(k)
+  for (const k of reaching) if (rows.get(k)?.background) reaching.delete(k)
+  return [...reaching].some((k) => !baseline.leftOut.has(k))
     ? []
-    : [...owners].flatMap((file) => failing.get(file) ?? [])
+    : all.flatMap((file) => lawsOf(file, reaching))
+}
 
 /**
  * A mutant's outcome once its blockers count: a mutant that they hold and
