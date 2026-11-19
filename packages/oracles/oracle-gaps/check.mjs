@@ -76,6 +76,8 @@ import {
   writeWhole,
   realPathOf,
   relativeWithin,
+  removeSession,
+  sessionDirOf,
   specifierOf,
 } from './paths.mjs'
 import { stateDirOf } from './evidence.mjs'
@@ -110,16 +112,6 @@ function sessionHostOf(dir) {
     return readFileSync(join(dir, `host`), `utf8`)
   } catch {
     return undefined
-  }
-}
-
-/** Whether process `pid` runs. */
-function alive(pid) {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return error.code === `EPERM`
   }
 }
 
@@ -583,9 +575,10 @@ export async function openSession(pkg, pause = async () => {}) {
   // where a Vitest run started meanwhile would find them (maintainer
   // disposition G4, 2026-11-11; the freeze's namespacing decision): the
   // capture setup and one wrapper config per context. The session removes
-  // its directory when it closes; a killed run's is removed by the next.
-  const home = join(pkg, `.oracle-gaps-${process.pid}`)
-  // A session directory that a stopped or killed run left behind, whose
+  // its directory when it closes, or when its process exits first (a stop,
+  // an error); a killed run's is removed by the next.
+  const home = sessionDirOf(pkg, process.pid)
+  // A session directory that a killed run left behind, whose
   // process is gone, is removed now (maintainer decision, 2026-11-11). Only
   // one of this host's (its `host` file): a process id names a process only
   // in its own pid namespace, so a container and its host sharing the
@@ -593,10 +586,12 @@ export async function openSession(pkg, pause = async () => {}) {
   for (const name of readdirSync(pkg))
     if (
       /^\.oracle-gaps-\d+$/.test(name) &&
-      !alive(Number(name.slice(13))) &&
       sessionHostOf(join(pkg, name)) === hostname()
     )
-      rmSync(join(pkg, name), { recursive: true, force: true })
+      removeSession(pkg, Number(name.slice(13)))
+  // At an exit before the session closes (a stop, an error), as when it closes.
+  const removeHome = () => removeSession(pkg, process.pid)
+  process.on(`exit`, removeHome)
   mkdirSync(home, { recursive: true })
   writeFileSync(join(home, `host`), hostname())
   const harness = join(home, `capture-setup.mjs`)
@@ -2898,7 +2893,8 @@ export default async (env) => {
 
   async function close() {
     await closeContexts()
-    rmSync(home, { recursive: true, force: true })
+    process.off(`exit`, removeHome)
+    removeHome()
   }
 
   /**

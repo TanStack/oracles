@@ -948,6 +948,8 @@ export const partitions = {
         daemonInputUnits[6],
         daemonInputUnits[7],
         daemonInputUnits[8],
+        'a stop before the CLI starts, after a stopped check',
+        'a run after a killed CLI',
       ]),
       10: anyOf([
         'an edit that changed the cold result after a hang replaced the only context',

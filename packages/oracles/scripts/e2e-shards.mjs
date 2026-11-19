@@ -46,6 +46,8 @@ export const shards = {
     `fixed seed 20261105: a daemon check with the default output directory`,
     `fixed seed 20261105: a daemon check with the default output directory, unsupervised`,
     `fixed seed 20261105: a stop before the CLI starts`,
+    `fixed seed 20261105: a stop before the CLI starts, after a stopped check`,
+    `fixed seed 20261105: a run after a killed CLI`,
     `fixed seed 20261105: a stop by SIGTERM as the CLI starts`,
     `fixed seed 20261105: an unsupervised run stopped after its note`,
     `fixed seed 20261105: a start refuses a dangling claim`,
@@ -228,6 +230,8 @@ export const shards = {
     `determinism: constructed history: a start refuses an unreadable claim`,
     `determinism: constructed history: a supervised child exits when its supervisor is killed`,
     `determinism: constructed history: a stop before the CLI starts`,
+    `determinism: constructed history: a stop before the CLI starts, after a stopped check`,
+    `determinism: constructed history: a run after a killed CLI`,
     `determinism: constructed history: a stop by SIGTERM as the CLI starts`,
     `determinism: constructed history: an unsupervised run stopped after its note`,
     `determinism: constructed history: a start refuses a dangling claim`,
@@ -308,6 +312,8 @@ export const shards = {
     `random seed: a start refuses an unreadable claim`,
     `random seed: a supervised child exits when its supervisor is killed`,
     `random seed: a stop before the CLI starts`,
+    `random seed: a stop before the CLI starts, after a stopped check`,
+    `random seed: a run after a killed CLI`,
     `random seed: a stop by SIGTERM as the CLI starts`,
     `random seed: an unsupervised run stopped after its note`,
     `random seed: a start refuses a dangling claim`,
@@ -341,6 +347,7 @@ export const shards = {
     // Added with the gap CLI's runtime fixes (not yet measured).
     `fixed seed 20261105: a second daemon check of the budget witness`,
     `calibration: a stopped run leaves a process it started running`,
+    `calibration: a stopped run leaves its own session directory`,
     // The heartbeat calibrations after the shape-only change (not yet measured).
     `calibration: a heartbeat names a mutant whose gap line came first`,
     `calibration: a heartbeat names no mutant of its run`,
@@ -414,6 +421,7 @@ export const shards = {
     // Added with the gap CLI's runtime fixes (not yet measured).
     `random seed: a second daemon check of the budget witness`,
     `calibration: a stopped run had written a copy beside the tests`,
+    `calibration: a stopped run keeps a killed run's session directory`,
     `calibration: a heartbeat names a file that does not run its mutant`,
     // Law 15's calibrations (the greppable stream), measured at ab18c60:
     // 69 s, 58 s, 73 s, and 69 s.
