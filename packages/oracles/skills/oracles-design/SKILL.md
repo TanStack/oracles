@@ -420,6 +420,10 @@ Techniques: [guide § Histories](../../docs/guide.md#histories).
   (`src/x.ts#run`, `src/x.ts#Class.method`). Own only what the laws cover. The
   gap check judges only owned code, and the gap check's `--source` selects
   files.
+  - Write `owns` inline in each call, as an array of string literals:
+    `owns: ['src/x.ts#run']`. The gap check reads it without running the
+    file, so it refuses a shared constant (`owns: OWNS`, `{ owns }`), a
+    spread, and `as const`.
   - A method of an object that a function returns (`createEmitter().emit`)
     has no name of its own. Own it through the enclosing function
     (`src/index.ts#createEmitter`).
