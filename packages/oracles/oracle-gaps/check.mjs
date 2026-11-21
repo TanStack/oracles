@@ -63,6 +63,7 @@ import {
   testNamesOf,
 } from './stream.mjs'
 import { analyze, isRunnerCopy } from './analysis.mjs'
+import { instrument } from './schemata.mjs'
 import { Refusal } from './ending.mjs'
 import {
   baseOf,
@@ -91,14 +92,33 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url))
 const sha1 = (text) => createHash(`sha1`).update(text).digest(`hex`)
-// How long a copy of a file with no I/O may sit idle before it is cut off as
-// a hang (capture-setup.mjs). The longest idle stretch measured in correct
+// How long a copy may sit idle, by state, before it is cut off as no progress
+// (capture-setup.mjs). The longest idle stretch measured in correct
 // tests was 51 ms (79,180 test runs, 2026-11-07), so this is ten times that.
 const IDLE_MS = 500
+// The test a spin or no progress ended, from its cut row (capture-setup.mjs),
+// with the route it registered, under its original file's key (`map`): the
+// built-in law (bounded work or no progress) judges it on that route (M,
+// 2026-11-16, "Spin, no progress and the work budget are kills"). The row
+// also says whether the test had read the clock by then, which the check's
+// count-only rule reads for a spin (`countOnly`).
+const cutVerdicts = (row, map = (key) => key) => [
+  {
+    key: row?.key && map(row.key),
+    test: row?.key && map(row.key).split(` > `).slice(1).join(` > `),
+    route: row?.route,
+    ...(row?.clocked ? { clocked: true } : {}),
+  },
+]
 // The least call budget a copy gets (capture-setup.mjs): mutation-helper calls
 // in one test before it counts as a loop that never ends. A file's budget is
 // a hundred times the most calls any of its unmutated tests made, if more.
 const CALL_FLOOR = 100_000
+// The least work (site evaluations) a mutant's copies may do together: the
+// larger of this and ten times their owner files' unmutated work (`workBudgetOf`).
+// It is the call floor: two copies that each stay inside their own call budget
+// can pass it together.
+const WORK_FLOOR = CALL_FLOOR
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 /** The host that a session directory names, if it names one. */
 function sessionHostOf(dir) {
@@ -810,14 +830,25 @@ export default async (env) => {
     }
     return map
   }
+  // A context's close, up to the backstop (60 s). A close still pending past it
+  // is a loud backstop gap (register L8), never a silent one: the caller never
+  // warms a replacement while the old context is still closing.
+  async function closeWithin(context, label) {
+    const closed = await Promise.race([
+      closeContext(context).then(
+        () => true,
+        () => true,
+      ),
+      sleep(60_000).then(() => false),
+    ])
+    if (!closed)
+      throw new Error(
+        `oracle-gaps: gap backstop: a context close (${label}) is still pending after 60 s; no replacement is warmed while it closes`,
+      )
+  }
   async function closeContexts() {
     await Promise.all(
-      contexts.map((context) =>
-        Promise.race([
-          closeContext(context).catch(() => undefined),
-          sleep(10_000),
-        ]),
-      ),
+      contexts.map((context) => closeWithin(context, `end of run`)),
     )
     // The closed contexts leave the registry with the array: a context closed for a config change is no longer
     // reachable through indexOf or contextSpecs (the daemon's edit sequence left them there before).
@@ -939,8 +970,11 @@ export default async (env) => {
     // A run past its call budget (capture-setup.mjs) is cut off once it has
     // had IDLE_MS to end on its own, as in a batch.
     const spinRow = () =>
-      existsSync(capture) &&
-      readFileSync(capture, `utf8`).includes(`"spin":true`)
+      existsSync(capture)
+        ? readFileSync(capture, `utf8`)
+            .split(`\n`)
+            .find((line) => line.includes(`"spin":true`))
+        : undefined
     let spunAt
     const beat = heartbeat()
     // A run with no time limit (an unmutated one) only beats.
@@ -962,7 +996,8 @@ export default async (env) => {
     clearTimeout(timer)
     clearTimeout(poller)
     const seconds = (Date.now() - started) / 1000
-    // A run that spun is a timeout as it stands, even one that then ended.
+    // A run that spun fails bounded work as it stands, even one that then
+    // ended.
     const spun = spinRow()
     const profiled = {
       file: baseOf(file),
@@ -979,7 +1014,13 @@ export default async (env) => {
       forceCancel(context)
       span(`run`, started, { ...profiled, timedOut: true })
       rmSync(capture, { force: true })
-      return { file, timedOut: true, seconds, ...(spun ? { spin: true } : {}) }
+      return {
+        file,
+        timedOut: true,
+        seconds,
+        cause: spun ? `spin` : `backstop`,
+        ...(spun ? { builtIn: cutVerdicts(JSON.parse(spun)) } : {}),
+      }
     }
     // The result also lists test modules from earlier runs, with their old
     // results. Only this run's file counts.
@@ -1008,12 +1049,20 @@ export default async (env) => {
         .filter(Boolean)) {
         const row = JSON.parse(line)
         // A closing row marks the end of a file for a batch's watchdog.
-        if (!row.closed && !row.idle) rows.push([row.key, row])
+        if (!row.closed && !row.idle && !row.spin) rows.push([row.key, row])
         if (row.closed && row.file === file) closing = row
       }
       rmSync(capture)
     }
-    if (spun) return spunRun(file, seconds, modules, closing)
+    // A run that spun ended, so its closing row names what it read (F-D).
+    if (spun)
+      return spunRun(
+        file,
+        seconds,
+        modules,
+        closing,
+        cutVerdicts(JSON.parse(spun)),
+      )
     const tests = modules.flatMap((module) =>
       [...module.children.allTests()].map((testCase) => {
         const testResult = testCase.result()
@@ -1065,11 +1114,12 @@ export default async (env) => {
    * a timeout. It ended, so its closing row names what it read, which it is
    * stored under (F-D).
    */
-  function spunRun(file, seconds, modules, closing = {}) {
+  function spunRun(file, seconds, modules, closing = {}, builtIn) {
     return {
       file,
       timedOut: true,
-      spin: true,
+      cause: `spin`,
+      builtIn,
       seconds,
       inputs: importsOf(file, modules, closing),
       readAt: closing.readAt,
@@ -1196,6 +1246,8 @@ export default async (env) => {
     // at once (capture-setup.mjs).
     const idle = new Set()
     const spun = new Set()
+    // Each cut copy's spin or idle row: the test it ended and its route.
+    const cutRows = new Map()
     // When each copy's spin row was first seen. The budget's throw usually
     // ends the loop and the copy finishes on its own; a copy still running
     // IDLE_MS after it spun swallowed the throw and is cut off.
@@ -1208,11 +1260,16 @@ export default async (env) => {
         if (line.includes(`"started":true`))
           at = Math.max(at, copies.indexOf(JSON.parse(line).file))
         if (line.includes(`"closed":true`)) closed.add(JSON.parse(line).file)
-        if (line.includes(`"idle":true`)) idle.add(JSON.parse(line).file)
+        if (line.includes(`"idle":true`)) {
+          const row = JSON.parse(line)
+          idle.add(row.file)
+          cutRows.set(row.file, row)
+        }
         if (line.includes(`"spin":true`)) {
-          const file = JSON.parse(line).file
-          spun.add(file)
-          if (!spunAt.has(file)) spunAt.set(file, Date.now())
+          const row = JSON.parse(line)
+          spun.add(row.file)
+          cutRows.set(row.file, row)
+          if (!spunAt.has(row.file)) spunAt.set(row.file, Date.now())
         }
       }
       if (closed.has(copies[at])) at += 1
@@ -1221,6 +1278,10 @@ export default async (env) => {
     let current = 0
     let copyStarted = Date.now()
     let timer
+    // The cut that ended the running copy, if the watchdog cut it off, and how
+    // long the copy had run then.
+    let cutCause
+    let cutMs
     const beat = heartbeat()
     // Each poll counts itself, after it has read the capture (the hold in
     // capture-setup.mjs waits for two of these).
@@ -1239,12 +1300,18 @@ export default async (env) => {
           items[current].file,
           copyStarted,
         )
-        if (
-          idle.has(copies[current]) ||
-          Date.now() - (spunAt.get(copies[current]) ?? Infinity) > IDLE_MS ||
-          Date.now() - copyStarted > items[current].limitMs
-        )
+        // The cut that ends the copy, in this order: a spin past the call
+        // budget (a count), no progress (a state), then the backstop (a clock).
+        const copy = copies[current]
+        if (Date.now() - (spunAt.get(copy) ?? Infinity) > IDLE_MS)
+          cutCause = `spin`
+        else if (idle.has(copy)) cutCause = `no progress`
+        else if (Date.now() - copyStarted > items[current].limitMs)
+          cutCause = `backstop`
+        if (cutCause !== undefined) {
+          cutMs = Date.now() - copyStarted
           return resolve(undefined)
+        }
         timer = setTimeout(poll, 50)
       }
       timer = setTimeout(poll, 50)
@@ -1277,7 +1344,10 @@ export default async (env) => {
             )
             if (copy && row.skipped) skipped.add(copy)
             if (copy && row.closed) closings.set(copy, row)
-            if (copy && row.spin) spun.add(copy)
+            if (copy && row.spin) {
+              spun.add(copy)
+              cutRows.set(copy, row)
+            }
             if (copy && !row.closed && !row.idle && !row.spin && !row.started)
               rows.get(copy).push(row)
           }
@@ -1305,10 +1375,20 @@ export default async (env) => {
             if (!closed.has(copies[i])) return undefined
             if (skipped.has(copies[i])) return skippedUnit(item)
             // A copy that ran past its call budget, even one whose throw
-            // ended the loop and let it finish, is a timeout as it stands (a
-            // count, not a clock: no confirming run).
+            // ended the loop and let it finish, fails bounded work as it
+            // stands, when its count cannot follow the clock (a count, not a
+            // clock: no confirming run).
             if (spun.has(copies[i]))
-              return spunRun(item.file, seconds, [], closings.get(copies[i]))
+              return spunRun(
+                item.file,
+                seconds,
+                [],
+                closings.get(copies[i]),
+                cutVerdicts(
+                  cutRows.get(copies[i]),
+                  keyFor(copies[i], item.file),
+                ),
+              )
             const map = keyFor(copies[i], item.file)
             const own = rows
               .get(copies[i])
@@ -1338,8 +1418,16 @@ export default async (env) => {
             }
           }),
           timedOutAt: current,
-          idle: idle.has(copies[current]),
-          spin: spun.has(copies[current]),
+          cause: cutCause,
+          ...(cutCause === `backstop`
+            ? {}
+            : {
+                builtIn: cutVerdicts(
+                  cutRows.get(copies[current]),
+                  keyFor(copies[current], items[current].file),
+                ),
+              }),
+          cutMs,
         }
       }
       // Errors outside any test cannot be attributed to one copy, so the
@@ -1353,7 +1441,13 @@ export default async (env) => {
           const copy = copies[i]
           if (skipped.has(copy)) return skippedUnit(item)
           if (spun.has(copy))
-            return spunRun(item.file, seconds, [], closings.get(copy))
+            return spunRun(
+              item.file,
+              seconds,
+              [],
+              closings.get(copy),
+              cutVerdicts(cutRows.get(copy), keyFor(copy, item.file)),
+            )
           const map = keyFor(copy, item.file)
           const modules = result.testModules.filter((m) => m.moduleId === copy)
           return {
@@ -1528,9 +1622,13 @@ export default async (env) => {
     stopIfGone()
     const authored = options.mutants ? loadAuthored(options.mutants) : []
     seedVariable = `${options.envPrefix}_SEED`
-    if (options.hangLimit > options.mutantLimit)
+    if (options.retiredFirstLimit)
       log(
-        `oracle-gaps: note --hang-limit ${options.hangLimit} ms is above --mutant-limit ${options.mutantLimit} ms; a mutant's confirmations together get at most the larger of --mutant-limit and ten times its owner files' unmutated time`,
+        `oracle-gaps: note --first-limit is retired: a copy has no first budget, so it changes nothing (deterministic cuts, option A)`,
+      )
+    if (options.retiredMutantLimit)
+      log(
+        `oracle-gaps: note --mutant-limit is retired: a mutant's work budget bounds it, so it changes nothing (deterministic cuts, option A)`,
       )
     pulse = {
       log,
@@ -1655,7 +1753,6 @@ export default async (env) => {
         settings,
         // A run cut off under one limit may end under a longer one.
         options.hangLimit,
-        options.mutantLimit,
       ]),
     )
     // How the evidence was produced: units reused and computed, runs cut off
@@ -1663,8 +1760,8 @@ export default async (env) => {
     // after a cut-off batch, and mutants that changed no value and so needed
     // no run. Under the retention test hook only (README "Test hooks"), also
     // the computed units that ended without a cut (`ran`), for the e2e
-    // oracle: `cut` counts cut events (a cut copy confirmed alone is cut in
-    // its batch and again if its confirmation is cut), so `computed - cut`
+    // oracle: `cut` counts copies cut off, while a copy that spun past its
+    // call budget and then ended is timed out with no cut, so `computed - cut`
     // is no count of runs. A normal run's report has no `ran`.
     const evidence = {
       reused: 0,
@@ -1675,7 +1772,7 @@ export default async (env) => {
       spin: 0,
       rerun: 0,
       unchanged: 0,
-      // Confirmations that a mutant's budget cut short or left no time.
+      // Copies past their mutant's work budget (each a timeout).
       budget: 0,
     }
     // Each file's imports in its unmutated run. A run that timed out reports
@@ -1771,8 +1868,7 @@ export default async (env) => {
       )
       return { ...batch, inputs }
     }
-    // A unit that depends on more than its inputs (a confirmation that its
-    // mutant's budget cut short) is not kept (`keep`).
+    // A unit that depends on more than its inputs is not kept (`keep`).
     async function unit(context, file, spec, keep, runOptions = {}) {
       const index = indexOf.get(context)
       const id = idOf(file, spec, runOptions.select, runOptions.ignore)
@@ -1816,13 +1912,30 @@ export default async (env) => {
       return result
     }
     // Units for many requests at once. Each is looked up first; the rest run
-    // as one batch (runBatch). A batch cut off by a hang queues that item's
-    // confirming run, which any free slot takes, and reruns the rest in a
-    // fresh context; a batch with
+    // as one batch (runBatch). A batch cut off (a copy's backstop, idleness,
+    // or a spin) settles that copy as cut, with its cause and the built-in
+    // verdict of a cut by count or state, and reruns the rest in a fresh
+    // context; a batch with
     // errors outside any test runs its items alone. `needed` says, from the
     // units found so far, whether a request must still run; a request that
     // need not run, gets no unit; a copy that skipped its tests gets a
     // skipped marker, which its caller runs again (runOwners).
+    // A profile row for one copy (ORACLE_GAPS_PROFILE): its mutant, its file's
+    // measured time, its limit, the cause that ended it or `completed`, and its
+    // duration.
+    const copyRow = (request, { cause, durationMs }) =>
+      appendFileSync(
+        profileFile,
+        `${JSON.stringify({
+          kind: `copy`,
+          mutant: request.label,
+          file: baseOf(request.file),
+          cause,
+          fileMs: Math.round((fileSeconds.get(request.file) ?? 0) * 1000),
+          limitMs: request.limitMs,
+          durationMs,
+        })}\n`,
+      )
     async function unitsBatch(slot, requests, needed = () => true) {
       const index = indexOf.get(slot.context)
       const got = new Array(requests.length)
@@ -1860,33 +1973,47 @@ export default async (env) => {
           // A skipped copy keeps its marker, so the caller can run it again.
           got[rest[k].i] = u
           if (u.skipped) return
-          if (u.spin) evidence.spin += 1
+          if (u.cause === `spin`) evidence.spin += 1
           remember(rest[k].id, u, batch.inputs[k])
           evidence.computed += 1
           // A copy that spun past its call budget is timed out, as `unit`
           // counts it: it did not end without a cut.
           if (hook && !u.timedOut) evidence.ran += 1
         })
+        // Per-copy rows for ORACLE_GAPS_PROFILE: each copy's cut or completion,
+        // with its file's measured time and its limit, to see what a cut was.
+        if (profileFile)
+          batch.units.forEach((u, k) => {
+            if (u === undefined || u.skipped) return
+            copyRow(rest[k], {
+              cause: u.cause ?? `completed`,
+              durationMs: Math.round(u.seconds * 1000),
+            })
+          })
         if (batch.timedOutAt === undefined) break
-        // A copy past its first budget may only be slow: a loaded machine
-        // slows a run that ends. It runs again alone, in a fresh context,
-        // with the full limit, and only a run cut off there too is a timeout.
+        // A copy cut off by its backstop, for idleness, or for spinning is a
+        // cut as it stands: a count or a state decides its built-in verdict, and
+        // no clock decides a kill (deterministic cuts).
         const hung = rest[batch.timedOutAt]
-        const full = limitFor(hung.file)
+        if (profileFile)
+          copyRow(hung, { cause: batch.cause, durationMs: batch.cutMs })
         evidence.cut += 1
-        if (batch.idle) evidence.idle += 1
-        if (batch.spin) evidence.spin += 1
+        if (batch.cause === `no progress`) evidence.idle += 1
+        if (batch.cause === `spin`) evidence.spin += 1
         await replace(slot)
-        // A copy that already had the full limit, or that sat idle, is
-        // final; any other comes back marked `cut`, for its mutant's own
-        // confirmation (`runOwners`).
-        if (hung.limitMs >= full || batch.idle || batch.spin)
-          settle(
-            hung,
-            { file: hung.file, timedOut: true, seconds: full / 1000 },
-            batch.inputs[batch.timedOutAt],
-          )
-        else got[hung.i] = { file: hung.file, cut: true }
+        // A count or state cut (a spin, or no progress) is a built-in kill for its
+        // copy alone; only a wall-clock cut ends the mutant's copies (cutByTime).
+        settle(
+          hung,
+          {
+            file: hung.file,
+            timedOut: true,
+            seconds: hung.limitMs / 1000,
+            cause: batch.cause,
+            ...(batch.builtIn ? { builtIn: batch.builtIn } : {}),
+          },
+          batch.inputs[batch.timedOutAt],
+        )
         rest = [
           ...rest.slice(0, batch.timedOutAt).filter((_, k) => !batch.units[k]),
           ...rest.slice(batch.timedOutAt + 1),
@@ -1907,58 +2034,10 @@ export default async (env) => {
         limitMs: r.limitMs,
         callBudget: r.callBudget,
       })
-      if (u.spin) evidence.spin += 1
+      if (u.cause === `spin`) evidence.spin += 1
       if (u.timedOut) await replace(slot)
       return u
     }
-    // A hung copy's confirming run: alone, in a clean context, with the full
-    // limit, or with what is left of its mutant's budget when that is less
-    // (`left`, in milliseconds). Only a run cut off there too is a timeout.
-    // An idle copy in a file with no I/O is final at once (see unitsBatch):
-    // it waits on nothing that can come. The unit is marked `confirmed`, so
-    // its seconds count against the budget whenever it is used, reused ones
-    // too. One that the budget cut short, or left no time, depends on the
-    // mutant's other units, so it is not kept.
-    async function confirmAlone(slot, request, left) {
-      // The confirmation is kept under the request's own identity, so a
-      // later check reuses it in place of the request's first run.
-      const hung = {
-        ...request,
-        id: idOf(request.file, request.spec, request.select, request.ignore),
-      }
-      const full = limitFor(hung.file)
-      const limit = Math.min(full, left)
-      const confirmed = (u) => ({ ...u, confirmed: true })
-      if (limit <= 0) {
-        evidence.budget += 1
-        return confirmed({ file: hung.file, timedOut: true, seconds: 0 })
-      }
-      const alone = await batchIn(slot, [{ ...hung, limitMs: limit }])
-      if (alone.unattributed)
-        return confirmed(
-          await runAlone(slot, { ...hung, limitMs: limit }, limit >= full),
-        )
-      const [inputs] = alone.inputs
-      if (alone.timedOutAt === 0) {
-        evidence.cut += 1
-        if (alone.idle) evidence.idle += 1
-        if (limit < full) evidence.budget += 1
-        const u = confirmed({
-          file: hung.file,
-          timedOut: true,
-          seconds: limit / 1000,
-        })
-        if (limit >= full) remember(hung.id, u, inputs)
-        await replace(slot)
-        return u
-      }
-      const u = confirmed(alone.units[0])
-      remember(hung.id, u, inputs)
-      evidence.computed += 1
-      if (hook && !u.timedOut) evidence.ran += 1
-      return u
-    }
-
     const vitest = contexts[0]
     const fileSpecs = new Map(contextSpecs.get(vitest))
     const relative = (file) => relativeWithin(pkg, file) ?? posix(file)
@@ -1976,49 +2055,46 @@ export default async (env) => {
     // detect anything, and it may read source text that instrumentation
     // changes. Each file's unmutated duration sets a mutant run's time limit.
     const fileSeconds = new Map()
-    // A mutant can slow a run that still ends, for example by lengthening a
-    // retry backoff, and a loaded machine slows every run. A mutant run
-    // first gets a short budget (`--first-limit`); a copy cut off there runs
-    // again alone, with the full limit (`--hang-limit`, 10 s by default:
-    // a 5 s base once turned a slow kill into a timeout), and only a run
-    // cut off there too is a timeout (see unitsBatch).
+    // A copy's time limit is a backstop: the full limit, which reports a gap and
+    // never decides a kill (deterministic cuts, option A, 2026-11-14). There is
+    // no first budget, so a copy runs once, to its end.
     const limitFor = (file) =>
       options.hangLimit + 3000 * (fileSeconds.get(file) ?? 10)
-    const firstLimitFor = (file) =>
-      Math.min(
-        limitFor(file),
-        options.firstLimit + 3000 * (fileSeconds.get(file) ?? 10),
-      )
-    // Each mutant's budget (maintainer disposition G1, 2026-11-11), for the
-    // runs that confirm its cut-off copies: the larger of `--mutant-limit`
-    // (30 s by default) and ten times its owner files' unmutated time. Its
-    // confirmations run in its owner files' order, and each gets at most the
-    // smaller of its full limit and what the budget has left after the
-    // seconds of the mutant's earlier confirmed units, reused ones included
-    // (`runOwners`), so the outcome is a function of the units, whatever ran
-    // first or was reused. With the default limits the budget cuts a
-    // confirmation below its full limit (10 s plus three times its file's
-    // time t) only when the mutant's confirmations together pass it: for
-    // one owner file that is never, since 10t >= 10 + 3t once t >= 1.43 s
-    // and the 30 s floor covers a smaller t; it binds when `--hang-limit` is
-    // raised past the budget, or when several owner files need long
-    // confirmations. It does not bound a mutant's first runs (each has its
-    // first budget) or the context replacements after cuts (each up to a
-    // 10 s close and a warm start).
-    const budgetOf = (files) =>
+    // A mutant's work budget (maintainer disposition G1, option A): the larger of
+    // WORK_FLOOR and ten times its owner files' unmutated work, in site
+    // evaluations, each file counted by its most-working unmutated test.
+    const workBudgetOf = (files) =>
       Math.max(
-        options.mutantLimit,
-        10_000 *
-          files.reduce((sum, file) => sum + (fileSeconds.get(file) ?? 0), 0),
+        WORK_FLOOR,
+        10 * files.reduce((sum, file) => sum + (mostCalls.get(file) ?? 0), 0),
       )
+    // A copy cut by a clock or by its call count: its own run's timeout, or
+    // Vitest's own limit ("Test timed out"), which the copy outlived. Such a
+    // copy is never charged, and it ends the mutant's copies (the outcome rule,
+    // register 2026-11-14, `Deterministic cuts, outcome rule`).
+    const cutByTime = (unit) =>
+      unit.cause === `backstop` ||
+      (unit.tests ?? []).some(
+        (test) =>
+          test.state === `failed` && /Test timed out/.test(test.message),
+      )
+    // A copy's work: the calls of its deterministic, unclocked tests
+    // (`baseline.work`, classify.mjs), so a row that a clock could move counts
+    // nothing.
+    const workOf = (unit) =>
+      cutByTime(unit)
+        ? 0
+        : (unit.rows ?? []).reduce(
+            (sum, [key, row]) =>
+              sum +
+              (baseline.work.has(key) && !row.clocked ? (row.calls ?? 0) : 0),
+            0,
+          )
     // A run cut off is still running, so its context is replaced; closing
     // it stops the worker.
     const replace = async (slot) => {
       const started = Date.now()
-      await Promise.race([
-        closeContext(slot.context).catch(() => undefined),
-        sleep(10_000),
-      ])
+      await closeWithin(slot.context, `slot ${slot.index}`)
       const replaced = slot.context
       // The daemon's test-only hold before the replacement warms: a slow
       // config load mid-phase, released by the test, never by time.
@@ -2267,15 +2343,12 @@ export default async (env) => {
           valueChanges.get(file).add(number)
       }
     const unmutatedUnits = new Map(first.units.map((u) => [u.file, u]))
-    // Files whose unmutated tests had an I/O handle open (a socket, a child
-    // process, file I/O): a test there may wait on something outside the
-    // worker, so no copy of it is cut for idleness (capture-setup.mjs).
-    const ioFiles = new Set()
-    for (const rows of [first.rows, second.rows])
-      for (const [key, row] of rows) if (row.io) ioFiles.add(fileOf(key))
     // Each file's call budget: a hundred times the most mutation-helper calls
-    // any of its unmutated tests made, and at least CALL_FLOOR. A copy past it
-    // is spinning (capture-setup.mjs) and is a timeout as it stands.
+    // any of its unmutated tests made, in either run, and at least CALL_FLOOR
+    // (G6). Every test counts, a clocked one too: a budget that left one out
+    // would cut its copies at the floor. A copy past it is spinning
+    // (capture-setup.mjs), which fails bounded work only by a count that
+    // cannot follow the clock (`countOnly`).
     const mostCalls = new Map()
     for (const rows of [first.rows, second.rows])
       for (const [key, row] of rows)
@@ -2286,6 +2359,17 @@ export default async (env) => {
           )
     const callBudgetFor = (file) =>
       Math.max(CALL_FLOOR, 100 * (mostCalls.get(file) ?? 0))
+    // Count-only kills (M, 2026-11-16; v21.1 R19a): a spin kills only when the
+    // count that decided it could not follow the clock at all, that is, when
+    // its test's unmutated runs agreed, read no clock and made equal counts
+    // (`baseline.work`), and the copy had read none when it spun. A test that
+    // reads the clock anywhere in its run, after its work too, has no such
+    // count. Otherwise the spin names no test, and the mutant is a gap.
+    const countOnly = (u) =>
+      u?.cause === `spin` &&
+      !u.builtIn?.every((v) => !v.clocked && baseline.work.has(v.key))
+        ? { ...u, builtIn: undefined }
+        : u
     const changesNothing = (mutant, targets) =>
       targets.oracleTargets.every(
         (file) =>
@@ -2337,12 +2421,16 @@ export default async (env) => {
     // hang), so a result never depends on how its evidence was produced. The
     // ordinary tier, when asked for, runs the same way afterwards.
     const GROUP = 4
-    // A copy that a batch skipped, or cut off for its confirmation, has no
+    // A copy that a batch skipped, or cut off by a count or a state, has no
     // verdicts of its own yet.
     const kills = (u) =>
       !u.skipped &&
-      !u.cut &&
-      outcomeOf([u], baseline.nondeterministic).outcome === `killed`
+      outcomeOf([countOnly(u)], baseline.nondeterministic).outcome === `killed`
+    // A mutant's copies run in their owner files' order and are summed in that
+    // order (the work budget, below). The order is the report's, so it does not
+    // depend on the timing of the copies. A later owner's kill does not count
+    // once the budget is passed; that is deterministic because the work is a
+    // count, and it is the rule the design note (option A) states.
     const runOwners = async (slot, states, filesOf, keysOf) => {
       const active = states.filter((st) => !st.done)
       const requests = []
@@ -2359,9 +2447,9 @@ export default async (env) => {
             spec: `mutant:${st.mutant.number}`,
             mutant: st.mutant.number,
             select: await selectionFor(slot, file, keysOf(st)),
-            limitMs: firstLimitFor(file),
-            // Idle detection only where no unmutated test of the file did I/O.
-            idleMs: ioFiles.has(file) ? null : IDLE_MS,
+            limitMs: limitFor(file),
+            // Idle by state, per copy: the test's own I/O keeps it busy.
+            idleMs: IDLE_MS,
             // A loop that spins on instrumented code is cut by count.
             callBudget: callBudgetFor(file),
             // Timers due after the full limit do not keep a copy busy.
@@ -2385,43 +2473,62 @@ export default async (env) => {
         (request, found) => !killedBefore(request, found),
       )
       for (const st of active) {
-        // The mutant's budget, spent in its files' order by the seconds of
-        // each confirmed unit, reused or run now, so its outcome is a
-        // function of its units, whatever ran first or was reused.
-        let left = budgetOf(filesOf(st))
+        const files = filesOf(st)
+        // The mutant's copies in their files' order, judged by count: each copy's
+        // work is added, and once the sum passes the work budget, that copy's
+        // own verdicts do not count and no later copy runs: that copy fails
+        // bounded work instead (below).
+        const budget = workBudgetOf(files)
+        let work = 0
         for (const [i, request] of requests.entries()) {
           if (request.st !== st) continue
-          // A copy its batch skipped (an earlier copy killed the mutant)
-          // runs again through unitsBatch, so it is confirmed like any copy
-          // while no kill is in hand.
+          // A copy its batch skipped (an earlier copy killed the mutant) runs
+          // again through unitsBatch, while no kill is in hand.
           if (got[i]?.skipped) {
             if (st.units.some(kills)) break
             got[i] = (await unitsBatch(slot, [request], () => true))[0]
           }
-          // A kill earlier in the mutant's files leaves a file without a
-          // unit. Any other missing unit stops the run.
+          // A kill earlier in the mutant's files leaves a file without a unit.
+          // Any other missing unit stops the run.
           if (got[i] === undefined || got[i].skipped) {
             if (st.units.some(kills)) break
             throw new Error(
               `${st.mutant.id}: ${relative(request.file)} has no unit and no earlier kill`,
             )
           }
-          // A cut copy is confirmed only while no later owner's unit already
-          // killed the mutant: a kill decides, so its confirmation would
-          // spend time for nothing.
-          if (
-            got[i].cut &&
-            requests.some(
-              (other, j) =>
-                other.st === st &&
-                j > i &&
-                got[j] !== undefined &&
-                kills(got[j]),
-            )
-          )
-            continue
-          if (got[i].cut) got[i] = await confirmAlone(slot, request, left)
-          if (got[i].confirmed) left -= got[i].seconds * 1000
+          // A spin judges only by a count that cannot follow the clock.
+          got[i] = countOnly(got[i])
+          // A copy cut by the backstop is a timeout, uncharged, and no
+          // later copy runs (the outcome rule).
+          if (cutByTime(got[i])) {
+            st.units.push(got[i])
+            break
+          }
+          work += workOf(got[i])
+          // The copy whose work passes the budget fails bounded work on the
+          // routes of its tests that did counted work; its own verdicts do not
+          // count, and no later copy runs.
+          if (work > budget) {
+            evidence.budget += 1
+            st.units.push({
+              file: request.file,
+              timedOut: true,
+              seconds: 0,
+              cause: `work budget`,
+              builtIn: (got[i].rows ?? [])
+                .filter(
+                  ([key, row]) =>
+                    baseline.work.has(key) &&
+                    !row.clocked &&
+                    (row.calls ?? 0) > 0,
+                )
+                .map(([key, row]) => ({
+                  test: key.split(` > `).slice(1).join(` > `),
+                  route: row.route,
+                })),
+            })
+            break
+          }
           st.units.push(got[i])
           if (kills(got[i])) break
         }
@@ -2523,11 +2630,15 @@ export default async (env) => {
     endPhase(`operator mutants`, { mutants: results.length })
 
     // 6. Authored mutants, spread across the contexts. Each serves a patched
-    // copy of its source only to the context that runs it. The copy is not
-    // instrumented, so an authored mutant runs against every owner of the
-    // function its edit lands in, whole files, still stopping at its first
-    // kill.
+    // copy of its source only to the context that runs it. An authored mutant
+    // runs against every owner of the function its edit lands in, whole
+    // files, still stopping at its first kill. The patched copy is
+    // instrumented with no site active, under site numbers past every
+    // operator mutant's, only so that it counts calls: a copy that spins past
+    // its call budget is cut by count, as an operator copy is (v21.2 R50, G6;
+    // issue #167), and its probe sites count nothing (R53).
     const authoredJobs = []
+    let authoredSites = mutants.length
     for (const mutant of authored) {
       const id = `authored:${mutant.id}`
       if (options.only && !options.only.has(id)) continue
@@ -2558,10 +2669,22 @@ export default async (env) => {
         result.outcome = `unowned`
         continue
       }
+      const counted = instrument(
+        ts,
+        path,
+        patched.text,
+        mutant.source,
+        authoredSites,
+      )
+      authoredSites += counted.mutants.length
+      probeSites.push(
+        ...counted.mutants.filter((m) => m.probeGuard).map((m) => m.number),
+      )
       authoredJobs.push({
         id,
         path,
         patched,
+        counted: counted.code,
         result,
         owners,
         targets: [...owners].filter((file) => fileSpecs.has(file)),
@@ -2584,7 +2707,7 @@ export default async (env) => {
         item = authoredItems.shift()
       ) {
         const { job, file } = item
-        serve[slot.index] = new Map([[job.path, job.patched.text]])
+        serve[slot.index] = new Map([[job.path, job.counted]])
         invalidateChanged([job.path], slot.context)
         const [got] = await unitsBatch(slot, [
           {
@@ -2594,6 +2717,11 @@ export default async (env) => {
             mutant: -1,
             select: null,
             limitMs: limitFor(file),
+            // An authored copy makes no progress, and spins, as an operator
+            // copy does (v21.2 R50): it is idle by state and cut by count.
+            idleMs: IDLE_MS,
+            callBudget: callBudgetFor(file),
+            idleHorizonMs: limitFor(file),
             stopOnKill: true,
             ignore: ignoredIn(file),
           },
@@ -2601,7 +2729,8 @@ export default async (env) => {
         // In the order the contexts finish: the classification lists
         // the tests and laws in report order (classify.mjs
         // `inReportOrder`), so they are listed alike in every run (law 9).
-        job.units.push(got)
+        // A spin judges only by a count that cannot follow the clock.
+        job.units.push(countOnly(got))
         serve[slot.index] = undefined
         invalidateChanged([job.path], slot.context)
       }

@@ -39,9 +39,17 @@ export const usage = `Usage: oracle-gaps --package <dir> --source <src/x.ts,...>
   [--env-prefix <name>] [--daemon] [--ordinary] [--seed <n>] [--mutants <dir>]
   [--out <dir>] [--only <id,id>] [--diff-base <rev>] [--test-timeout <ms>]
   [--sample <n>] [--contexts <n>] [--pool threads|forks] [--config <file>]
-  [--first-limit <ms>] [--hang-limit <ms>] [--mutant-limit <ms>]
+  [--hang-limit <ms>] [--first-limit <ms>] [--mutant-limit <ms>]
   oracle-gaps --stop-daemon --package <dir>
   oracle-gaps --help
+
+Defaults: --env-prefix ORACLE; --test-timeout 65000 (Vitest's per-test limit,
+in ms); --hang-limit 60000 (the base of each copy's backstop, in ms, plus 3 s
+per second of its file's unmutated time); --contexts the machine's parallelism
+minus 2, at most 16; --pool threads (forks when a package has a native
+addon); --sample and --only off; --out a directory under the package's state.
+Retired: --first-limit and --mutant-limit are checked and print a note, and
+change nothing. A copy has no first budget, and a mutant's work budget bounds it.
 
 The paths in --source and --config are relative to --package. Without
 --config, the run loads the Vitest config that Vitest discovers for the
@@ -223,17 +231,20 @@ function optionsOf(args, cwd) {
     sample: args.sample ? Number(args.sample) : undefined,
     // A mutant can make a test hang. Oracles that run in milliseconds do not
     // need Vitest's default limits, which would make each hang cost seconds.
-    testTimeout: Number(args[`test-timeout`] ?? 15000),
-    // The base of each mutant run's time limit, in milliseconds; the limit
-    // adds three times the file's unmutated duration (see limitFor).
-    hangLimit: Number(args[`hang-limit`] ?? 10000),
-    // The base of a mutant run's first, short budget; a copy past it runs
-    // again alone with the full limit before it can be a timeout.
-    firstLimit: Number(args[`first-limit`] ?? 2000),
-    // The floor of a mutant's budget, which the runs that confirm its
-    // cut-off copies share (check.mjs, `budgetOf`): 30 s by default, room
-    // for three confirmations at the default hang limit.
-    mutantLimit: Number(args[`mutant-limit`] ?? 30000),
+    // Vitest's per-test limit, above the copies' backstop (`hangLimit` plus
+    // five seconds, so a copy that waits for its backstop is cut by it first).
+    testTimeout: Number(args[`test-timeout`] ?? 65000),
+    // The base of each mutant run's backstop time limit, in milliseconds; the
+    // limit adds three times the file's unmutated duration (see limitFor). A
+    // backstop reports a gap and never decides a kill (deterministic cuts,
+    // option A, 2026-11-14).
+    hangLimit: Number(args[`hang-limit`] ?? 60000),
+    // The `--first-limit` option is retired (option A): it is validated and
+    // noted, and changes nothing.
+    retiredFirstLimit: args[`first-limit`] !== undefined,
+    // `--mutant-limit` is retired too (deterministic cuts, option A): the work
+    // budget bounds a mutant, so it is validated and noted, and changes nothing.
+    retiredMutantLimit: args[`mutant-limit`] !== undefined,
     // Vitest's worker pool. Threads start much faster than child processes;
     // a package with a native addon in its tree runs with `forks`.
     pool: args.pool ?? defaultPool(pkg),

@@ -467,6 +467,8 @@ export const partitions = {
         `a declaration fault: configNull`,
         `a declaration fault: missingSource`,
         `a config fault in a run that owns nothing`,
+        // Its slow copies each wait 10 s under #99 (86 s on the pool at 83a0b3a8, where this shard took 124 s and the rest shard 491 s).
+        'a check through the daemon that works past the bound',
       ]),
       // 560 s of weight.
       3: anyOf([
@@ -491,6 +493,8 @@ export const partitions = {
         `a declaration fault: configNoDefault`,
         `a declaration fault: projects`,
         `test.projects in a parent's config`,
+        // #99's 16 s wait (67 s on the pool; this shard took 147 s).
+        'a slow kill after a 16 s wait',
       ]),
       // The rest: 560 s of weight, and any unit added later.
       4: rest,
@@ -532,6 +536,21 @@ export const partitions = {
         `constructed history: a start refuses a stale claim`,
         `constructed history: a declaration fault: configSyntax`,
         `constructed history: a declaration fault: nonLiteral`,
+        // #99's deterministic-cuts histories, the heavier (141 s on the pool at 83a0b3a8; this shard took 32 s).
+        'constructed history: a slow kill after a 16 s wait',
+        'constructed history: a backstop cut ends the copies ahead of a later kill',
+        "constructed history: a slow owner's kill and another owner's kill",
+        'constructed history: a copy waiting on a timer',
+        "constructed history: a copy waiting on an unref'd timer",
+        // #164's two histories and the filed base, out of the rest shard (7),
+        // which took 12:03 on CI at cb1de4ff (P12).
+        'constructed history: a run after a killed CLI',
+        'constructed history: a stop before the CLI starts, after a stopped check',
+        'fixed history: a filed base whose owner reads an absent object through ?.',
+        // Still 10:51 with only those three moved (run 44552467396), so two more
+        // of the rest shard's units (about 89 s on the pool) come here too.
+        'constructed history: a daemon pause that cannot engage',
+        'constructed history: every outcome class, the abort stop',
       ]),
       // 471 s of weight.
       2: anyOf([
@@ -613,6 +632,20 @@ export const partitions = {
         `constructed history: a start refuses a dangling claim`,
         `constructed history: a declaration fault: setupThrows`,
         `constructed history: a refused run beside the CLI's directory, under a name that extends it`,
+        // #99's lighter histories (74 s on the pool; this shard took 205 s).
+        'constructed history: a hang in a file whose test does a short read',
+        "constructed history: a copy beside the runner's pending timer",
+        'constructed history: a copy waiting on a pipe it opened',
+        'constructed history: an authored mutant whose owner hangs',
+        "constructed history: a copy beside the runner's pending write",
+        'constructed history: a stream log lost after its note, then stopped, unsupervised',
+        'constructed history: a kill past the work budget in a later owner',
+        'constructed history: a clocked owner beside a counted one under the work budget',
+        'constructed history: a heavy test that reads the clock after its work',
+        'constructed history: a heavy test that reads the clock first',
+        'constructed history: a spin after a short async read',
+        'constructed history: an authored mutant whose owner spins',
+        'constructed history: a clocked copy that spins',
       ]),
       // The rest: 471 s of weight, and any unit added later.
       7: rest,
@@ -835,7 +868,11 @@ export const partitions = {
         'an edit sequence over the witness module, the second half',
       ]),
       2: anyOf(['every outcome class']),
-      3: anyOf(['a declaration fault: noTypescript']),
+      // #182's constructed history (one unit here, 57 s on the pool).
+      3: anyOf([
+        'a declaration fault: noTypescript',
+        "a later owner's test listed first beside an earlier owner's hang",
+      ]),
       4: anyOf(['every outcome class, the warm stop']),
       5: anyOf([
         'an edit sequence through the daemon',
@@ -858,6 +895,11 @@ export const partitions = {
         'two runs on one output directory',
         'a stream log that cannot be written',
         'a start refuses an empty claim',
+        // #99's merge-gate witnesses: per-copy no progress, the clocked work-budget rows, clocked by state.
+        'a hang in a file whose test does a short read',
+        'a clocked owner beside a counted one under the work budget',
+        'a spin after a short async read',
+        'an authored mutant whose owner spins',
       ]),
       7: anyOf([
         'a daemon pause that cannot engage',
@@ -894,6 +936,9 @@ export const partitions = {
         'a stop with the default output directory',
         'a daemon check with the default output directory',
         'a daemon check with the default output directory, unsupervised',
+        // #99's heavy-test witnesses.
+        'a heavy test that reads the clock after its work',
+        'a heavy test that reads the clock first',
       ]),
       9: anyOf([
         'a lazy module loaded before a hang in the same batch',
@@ -914,6 +959,8 @@ export const partitions = {
         'a start refuses a dangling claim',
         'a stop before the CLI starts, after a stopped check',
         'a run after a killed CLI',
+        // #99's unsupervised stop after a lost stream log.
+        'a stream log lost after its note, then stopped, unsupervised',
       ]),
       10: anyOf([
         'an edit that changed the cold result after a hang replaced the only context',
@@ -934,6 +981,18 @@ export const partitions = {
         'a supervised check with no ps on its PATH',
         'a value change at a ?. read and at a return',
         'a ?. read of an object absent only at load',
+        // #99's deterministic-cuts histories (the 16 s wait is the longest).
+        "a slow owner's kill and another owner's kill",
+        'a backstop cut ends the copies ahead of a later kill',
+        'a kill past the work budget in a later owner',
+        'a slow kill after a 16 s wait',
+        'a copy waiting on a timer',
+        "a copy waiting on an unref'd timer",
+        'a copy waiting on a pipe it opened',
+        "a copy beside the runner's pending write",
+        "a copy beside the runner's pending timer",
+        'a clocked copy that spins',
+        'an authored mutant whose owner hangs',
       ]),
     },
   },

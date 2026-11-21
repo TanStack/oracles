@@ -23,11 +23,16 @@
 //
 // In a mutant run, fast-check stops a property at its first failure instead
 // of shrinking it: a kill needs one failing history, not the smallest one.
+import { createHook } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
+import { once } from 'node:events'
 import fs, { appendFileSync, readFileSync } from 'node:fs'
 import { createRequire, syncBuiltinESMExports } from 'node:module'
+import { connect, createServer } from 'node:net'
+import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { threadId } from 'node:worker_threads'
 import { afterAll, beforeEach, chai, expect, inject, vi } from 'vitest'
 import { posix, writeWhole } from './paths.mjs'
 
@@ -50,7 +55,6 @@ const run =
 const real = (globalThis.__oracleGapsReal ??= {
   setInterval: globalThis.setInterval,
   now: Date.now.bind(Date),
-  use: performance.eventLoopUtilization.bind(performance),
   keys: Object.keys,
   getPrototypeOf: Object.getPrototypeOf,
   getOwnPropertyDescriptor: Object.getOwnPropertyDescriptor,
@@ -64,7 +68,6 @@ const real = (globalThis.__oracleGapsReal ??= {
 })
 const realInterval = real.setInterval
 const realNow = real.now
-const realUse = real.use
 
 // A wrapper keeps every own property of the function it wraps, such as
 // `util.promisify.custom`, so `util.promisify(setTimeout)` still resolves
@@ -77,48 +80,12 @@ function keepProperties(from, to) {
   return to
 }
 
-// The timers that code in this worker has pending, counted where they are
-// made, each with when it is next due: Node's resource list does not
-// reliably show one entry per timer.
-// The wrappers are installed once per worker, before any test file loads, so
-// a timer a module makes when it loads is counted too. Vitest's own timers
-// are not: it took the real functions before this file ran. Fake timers
-// install over the wrappers and give them back.
-const pending = (globalThis.__oracleGapsPendingTimers ??= (() => {
-  const handles = new Map()
-  const wrap = (make, clear, once, timed) => {
-    globalThis[make.name] = keepProperties(make, function (callback, ...rest) {
-      if (typeof callback !== `function`) return make(callback, ...rest)
-      // An immediate is due at once; a timer or interval after its delay.
-      const delay = make === globalThis.setImmediate ? 0 : Number(rest[0]) || 0
-      const handle = make(
-        function (...args) {
-          if (once) handles.delete(handle)
-          else handles.set(handle, real.now() + delay)
-          return callback.apply(this, args)
-        },
-        ...rest,
-      )
-      handles.set(handle, real.now() + delay)
-      // The copy now running hears of a timer or an interval: a test that
-      // made one can do work that follows the clock, as a polling or a
-      // deadline loop does (classify.mjs). An immediate waits a turn, not a
-      // time, as the framework's `withinTurns` does.
-      if (timed) globalThis.__oracleGapsClock?.()
-      return handle
-    })
-    globalThis[clear.name] = function (handle) {
-      handles.delete(handle)
-      return clear(handle)
-    }
-  }
-  wrap(globalThis.setTimeout, globalThis.clearTimeout, true, true)
-  wrap(globalThis.setInterval, globalThis.clearInterval, false, true)
-  wrap(globalThis.setImmediate, globalThis.clearImmediate, true, false)
-  return handles
-})())
-// The other paths to the clock, wrapped once per worker as the timers are,
-// each telling the copy now running (`__oracleGapsClock`): a read of
+// The paths to the clock, wrapped once per worker, before any test file
+// loads, each telling the copy now running (`__oracleGapsClock`): a timer or
+// an interval of the global functions (a test that made one can do work that
+// follows the clock, as a polling or a deadline loop does, classify.mjs; an
+// immediate waits a turn, not a time, as the framework's `withinTurns` does,
+// so it is not told); a read of
 // `Date.now`, `new Date()` or `Date()` with no argument, `performance.now`,
 // `performance.eventLoopUtilization`, `process.hrtime`, `process.uptime`,
 // `os.uptime`, and `Temporal.Now`; a timer of `node:timers` or
@@ -135,6 +102,8 @@ if (!globalThis.__oracleGapsClocks) {
       globalThis.__oracleGapsClock?.()
       return read.apply(this, args)
     })
+  globalThis.setTimeout = told(globalThis.setTimeout)
+  globalThis.setInterval = told(globalThis.setInterval)
   const RealDate = Date
   RealDate.now = told(RealDate.now)
   const TrackedDate = new Proxy(RealDate, {
@@ -459,7 +428,8 @@ const active = state.mutant
 // copy's budget (`callBudget`, from check.mjs: a hundred times the most calls
 // any unmutated test of the file made, and at least 100,000), the copy throws
 // from every helper call and writes a spin row, and the batch reports it as a
-// timeout. A count, unlike a clock, does not depend on load. It is also the
+// spin, which fails bounded work when its count cannot follow the clock
+// (check.mjs `countOnly`). A count, unlike a clock, does not depend on load. It is also the
 // test's work, which a work bound judges (classify.mjs): each site
 // evaluation counts once, so a call statement, a call whose value is used, a
 // comparison, a logical operator, an `if`, and each pass of a loop's
@@ -476,12 +446,24 @@ const hit = (id) => {
   if (inTest && !probeOnly.has(id)) calls += 1
   if (spun || (state.callBudget && calls > state.callBudget)) spin()
 }
+// The test a cut ends, the route it registered, and whether its count could
+// have followed the clock by then: a spin or no progress is a verdict of a
+// built-in law on that route (M, 2026-11-16, "Spin, no progress and the work
+// budget are kills"), and a spin only when its count could not (M, 2026-11-16,
+// "Count-only kills").
+function cutTest() {
+  return {
+    key: currentTask && testKey(currentTask),
+    route,
+    ...(clocked || ioDone.value ? { clocked: true } : {}),
+  }
+}
 function spin() {
   if (!spun) {
     spun = true
     appendFileSync(
       state.capture,
-      `${JSON.stringify({ file: thisFile, spin: true })}\n`,
+      `${JSON.stringify({ file: thisFile, spin: true, ...cutTest() })}\n`,
     )
   }
   throw new Error(
@@ -923,23 +905,23 @@ globalThis.__oracleWorkBound = (ratio) => {
 // Whether the current test's count could follow the clock (maintainer
 // decision, 2026-11-12, under P3: a kill must replay on an idle machine):
 // it made a real timer or interval by any path, or read the clock (the
-// wrappers above), or held I/O open (`sawIo`). A read counts when any frame
+// wrappers above), or its own I/O completed while it ran (`ioDone`, by state:
+// the async_hooks hook below, never a sample). A read counts when any frame
 // of its stack is the test's or production's: a read whose every frame is
-// the test runner's, fast-check's, the oracle framework's (its shrink
+// the test runner's (Vitest's, or Vite's module runner, which evaluates this
+// file and the test files), fast-check's, the oracle framework's (its shrink
 // budget), Node's, or this file's does not, while a user's read through a
 // spy (tinyspy's frame first) still does.
 let clocked = false
 // A backslash separates only on win32 (on POSIX it is a name's character).
 const SEP = process.platform === `win32` ? `[\\\\/]` : `/`
 const machinery = new RegExp(
-  `${SEP}node_modules${SEP}(?:vitest|@vitest|fast-check|@fast-check|tinypool|tinyspy|chai|@tanstack${SEP}oracles)${SEP}|${SEP}packages${SEP}oracles${SEP}src${SEP}`,
+  `${SEP}node_modules${SEP}(?:vitest|@vitest|vite|fast-check|@fast-check|tinypool|tinyspy|chai|@tanstack${SEP}oracles)${SEP}|${SEP}packages${SEP}oracles${SEP}src${SEP}`,
 )
-function fromTest() {
-  const limit = Error.stackTraceLimit
-  Error.stackTraceLimit = 50
-  const stack = String(new Error().stack)
-  Error.stackTraceLimit = limit
-  return stack
+// Whether a stack names the test's or production's code: a frame outside
+// Node, this file, and the machinery.
+const namesTest = (stack) =>
+  String(stack)
     .split(`\n`)
     .slice(1)
     .some((frame) => {
@@ -953,6 +935,12 @@ function fromTest() {
         !machinery.test(file)
       )
     })
+function fromTest() {
+  const limit = Error.stackTraceLimit
+  Error.stackTraceLimit = 50
+  const stack = new Error().stack
+  Error.stackTraceLimit = limit
+  return namesTest(stack)
 }
 globalThis.__oracleGapsClock = () => {
   if (inTest && !clocked && fromTest()) clocked = true
@@ -1042,8 +1030,7 @@ function finishTest(context) {
       calls,
       infected: [...infected],
       operands: [...operands],
-      ...(sawIo ? { io: true } : {}),
-      ...(clocked || sawIo ? { clocked: true } : {}),
+      ...(clocked || ioDone.value ? { clocked: true } : {}),
       outcomes: [...outcomes],
       verdicts: [...verdicts.values()],
       route,
@@ -1072,64 +1059,175 @@ function finishTest(context) {
 
 const thisFile = globalThis.__vitest_worker__?.filepath
 
-// I/O and idleness (maintainer decision, 2026-11-07). Each test's row says
-// whether the test ever had an I/O handle open: anything but the runner's
-// own channel, stdio, and timers. A copy given `idleMs` (a file whose
-// unmutated tests did no I/O) is idle when no counted timer is pending, no
-// more timers are listed than when its test began (which covers timers made
-// outside the wrappers, such as `node:timers/promises`), nothing but the
-// channel and stdio is open, and its event loop is under 5% busy. After
-// `idleMs` of that it writes an idle row, and the batch's watchdog cuts it
-// off as a hang. A late sample means the thread was busy.
-const quiet = new Set([
-  `MessagePort`,
-  `PipeWrap`,
-  `TTYWrap`,
-  `Timeout`,
-  `Immediate`,
-])
-const timersListed = (kinds) =>
-  kinds.filter((kind) => kind === `Timeout` || kind === `Immediate`).length
-let sawIo = false
+// I/O and idleness (maintainer decision, 2026-11-07; state only, 2026-11-15;
+// only the test's I/O, 2026-11-15). A test's I/O is a handle or request that
+// the test's or production's code started, never one the runner made for
+// itself (its channel, stdio, a write that forwards the test's console
+// output); a test that had some active is clocked (its count could follow
+// the time). A copy given `idleMs` (every mutant copy, per copy, v21.2 R51) is
+// idle, by state alone, when none of its test's timers is due within its
+// horizon and none of its test's I/O is active (C, timers by ownership,
+// 2026-11-16): a timer the
+// runner keeps (Vitest's task-update or test-limit timer) never counts, and
+// one the test made counts by any path (the globals, `node:timers`,
+// `node:timers/promises`), ref'd or not. A
+// busy synchronous or microtask loop blocks this sampler, so it cannot look
+// idle; it ends by its call budget or the backstop. After `idleMs` of that
+// state it writes an idle row, and the batch's watchdog cuts it off as no
+// progress.
+//
+// Who started each timer, handle and request is recorded once per worker, when Node
+// makes it: the test, when the test's or production's code is on the stack
+// then (`namesTest`), or when the resource that triggered it is the test's.
+// Node triggers a write by the stream it writes to, so the runner's write on
+// its own channel is the runner's even when a test's console.log led to it.
+// The stack is read only when the sampler meets the resource, or when the
+// resource triggers another. Promises are not recorded.
+// Each live timer and immediate, with its record.
+const liveTimers = (globalThis.__oracleGapsTimers ??= new Map())
+// Whether an I/O handle or request of the running test's ran its callback
+// (a read completed, data arrived) since the test began: by state, so a
+// short read that no sample sees still counts (C, 2026-11-17).
+const ioDone = (globalThis.__oracleGapsIoDone ??= { value: false })
+const startedBy = (globalThis.__oracleGapsStartedBy ??= (() => {
+  const records = new WeakMap()
+  const live = new Map()
+  createHook({
+    init(id, type, trigger, resource) {
+      if (type === `PROMISE`) return
+      const parent = live.get(trigger)
+      const record = {}
+      if (parent !== undefined && owned(parent)) record.test = true
+      else {
+        const limit = Error.stackTraceLimit
+        Error.stackTraceLimit = 50
+        Error.captureStackTrace(record)
+        Error.stackTraceLimit = limit
+      }
+      live.set(id, record)
+      records.set(resource, record)
+      if (type === `Timeout` || type === `Immediate`)
+        liveTimers.set(id, [resource, record])
+      else record.io = true
+    },
+    before(id) {
+      const record = live.get(id)
+      if (record?.io && !ioDone.value && owned(record)) ioDone.value = true
+    },
+    destroy(id) {
+      live.delete(id)
+      liveTimers.delete(id)
+    },
+    trackPromises: false,
+  }).enable()
+  return records
+})())
+function owned(record) {
+  return (record.test ??= namesTest(record.stack))
+}
+// Node lists a handle by its owner (a socket, a child process), and records
+// the handle itself.
+const testsIo = () =>
+  [...process._getActiveRequests(), ...process._getActiveHandles()].some(
+    (resource) => {
+      const record = startedBy.get(resource) ?? startedBy.get(resource?._handle)
+      return record !== undefined && owned(record)
+    },
+  )
+// Whether a timer of the test's is due within `horizon` ms of `now`, both in
+// the timers' own clock: an immediate is due at once, and a timer at its
+// start plus its delay (its next run, for an interval).
+const testsTimerDue = (now, horizon) =>
+  [...liveTimers.values()].some(
+    ([timer, record]) =>
+      owned(record) &&
+      (timer._idleStart === undefined ||
+        timer._idleStart + timer._idleTimeout - now <= horizon),
+  )
+// Test-only hooks for the CLI's own oracle, not for users. With
+// ORACLE_GAPS_TEST_SAMPLES (a directory), the sampler writes how many times
+// it has judged the running test to `<pid>-<threadId>` there, so a witness
+// can hold its own I/O open for a count of samples rather than for a time.
+// With ORACLE_GAPS_TEST_RUNNER_WRITE (a directory), the runner itself holds
+// one write pending through each test, on a local pipe whose reader never
+// reads, as a write that forwards output can stay pending on win32; a copy
+// that goes idle while it is pending marks the directory. With
+// ORACLE_GAPS_TEST_RUNNER_TIMER (a directory), the runner itself keeps one
+// 100 ms interval through each test, made through the global setInterval as
+// Vitest's task-update timer is; a copy that goes idle while it runs marks the
+// directory.
+const samplesAt = process.env.ORACLE_GAPS_TEST_SAMPLES
+const runnerWrites = process.env.ORACLE_GAPS_TEST_RUNNER_WRITE
+const runnerTimers = process.env.ORACLE_GAPS_TEST_RUNNER_TIMER
+let held
+let heldTimer
 if (state.capture) {
-  let baseTimers
+  let testing = false
   let since
-  let last
-  let use = realUse()
   let reported = false
+  let samples = 0
   beforeEach(() => {
     if (continuing) return
-    baseTimers = timersListed(process.getActiveResourcesInfo())
+    testing = true
     since = undefined
-    sawIo = false
+    ioDone.value = false
+    samples = 0
   })
   beforeEach((context) => {
     if (continuing) return
     context.onTestFinished(() => {
-      baseTimers = undefined
+      testing = false
     })
   })
-  realInterval(() => {
+  if (runnerWrites)
+    beforeEach(async (context) => {
+      if (continuing) return
+      const name = `oracle-gaps-${process.pid}-${threadId}-${(globalThis.__oracleGapsHolds = (globalThis.__oracleGapsHolds ?? 0) + 1)}`
+      const server = createServer({ pauseOnConnect: true }).listen(
+        process.platform === `win32`
+          ? `\\\\.\\pipe\\${name}`
+          : join(tmpdir(), `${name}.sock`),
+      )
+      await once(server, `listening`)
+      const accepted = once(server, `connection`)
+      const client = connect(server.address())
+      await once(client, `connect`)
+      const [peer] = await accepted
+      client.write(Buffer.alloc(1 << 22))
+      held = client
+      context.onTestFinished(() => {
+        held = undefined
+        client.destroy()
+        peer.destroy()
+        server.close()
+      })
+    })
+  if (runnerTimers)
+    beforeEach((context) => {
+      if (continuing) return
+      const timer = setInterval(() => {}, 100)
+      heldTimer = timer
+      context.onTestFinished(() => {
+        heldTimer = undefined
+        clearInterval(timer)
+      })
+    })
+  realInterval(function () {
     const now = realNow()
-    const late = last !== undefined && now - last > 150
-    last = now
-    const used = realUse(use)
-    use = realUse()
-    if (baseTimers === undefined || reported) return
-    const kinds = process.getActiveResourcesInfo()
-    const io = kinds.some((kind) => !quiet.has(kind))
-    sawIo ||= io
+    if (!testing || reported) return
+    if (samplesAt)
+      writeWhole(join(samplesAt, `${process.pid}-${threadId}`), `${++samples}`)
+    const io = testsIo()
     // A timer due after the copy's full time limit cannot end its wait in
     // time, so it does not keep the copy busy: a test waiting on it would be
     // a timeout at the limit anyway (a collection's five-minute GC timer).
-    const horizon = now + (state.idleHorizonMs ?? Infinity)
-    const timerDue = [...pending.values()].some((due) => due <= horizon)
+    // The timers' clock now is this interval's own due time.
     if (
-      late ||
       io ||
-      used.utilization > 0.05 ||
-      timerDue ||
-      timersListed(kinds) > baseTimers
+      testsTimerDue(
+        this._idleStart + this._idleTimeout,
+        state.idleHorizonMs ?? Infinity,
+      )
     ) {
       since = undefined
       return
@@ -1137,9 +1235,13 @@ if (state.capture) {
     since ??= now
     if (!state.idleMs || now - since < state.idleMs) return
     reported = true
+    if (held?.writableLength)
+      writeWhole(join(runnerWrites, `idle-${process.pid}-${threadId}`), ``)
+    if (heldTimer)
+      writeWhole(join(runnerTimers, `idle-${process.pid}-${threadId}`), ``)
     appendFileSync(
       state.capture,
-      `${JSON.stringify({ file: thisFile, idle: true })}\n`,
+      `${JSON.stringify({ file: thisFile, idle: true, ...cutTest() })}\n`,
     )
   }, 50).unref()
 }

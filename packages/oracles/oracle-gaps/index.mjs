@@ -84,15 +84,13 @@
 //     [--ordinary]            (also run ordinary test files, for information)
 //     [--seed <n>] [--mutants <dir>] [--out <dir>] [--only <id,id>]
 //     [--diff-base <rev>]
-//     [--first-limit <ms>]    (a copy's first budget; default 2000)
-//     [--hang-limit <ms>]     (the full limit a cut copy gets again; default 10000)
-//     [--mutant-limit <ms>]   (the floor of each mutant's budget, which the
-//                              runs that confirm its cut copies share; the
-//                              budget is the larger of this and ten times
-//                              its owner files' unmutated time; default 30000)
-//     [--test-timeout <ms>]   (default 15000; also bounds hooks and teardown.
-//                              Each mutant run also has a wall-clock limit of
-//                              10 s plus three times its file's unmutated time.)
+//     [--hang-limit <ms>]     (the base of each copy's backstop, which adds
+//                              3 s per second of its file's unmutated time;
+//                              default 60000)
+//     [--first-limit <ms>]    (retired: checked and noted, no effect)
+//     [--mutant-limit <ms>]   (retired: checked and noted, no effect)
+//     [--test-timeout <ms>]   (Vitest's per-test limit, also bounding hooks
+//                              and teardown; default 65000)
 //     [--sample <n>]          (a fixed-seed sample of n mutants per source;
 //                              the report marks the run as partial)
 //     [--contexts <n>]        (warm contexts, one worker each; default
@@ -638,17 +636,20 @@ async function checkThroughDaemon(options) {
   return reply.stdout
 }
 
-// The run's ending, once: its refusal or error is written to its output
-// directory and stdout and stderr, and the process exits with its code.
+// The run's ending, once: its refusal, error or stop is written to stdout and
+// stderr (and a refusal or error to its output directory), and the process
+// exits with its code. Once an ending has begun, nothing ends the run again
+// (P10, v21.2 I7): not a stop, and not the error of a log that can no longer
+// be written.
 let ended = false
 const holdStops = () => {
   writingEnding = true
   process.send?.(`ending`)
 }
-function endWith(error, out) {
+function end(endingOf) {
   if (ended) return
   ended = true
-  const ending = endRun(error, out)
+  const ending = endingOf()
   holdStops()
   try {
     writeStream(ending.stderr)
@@ -658,6 +659,7 @@ function endWith(error, out) {
   process.stdout.write(`${ending.done}\n`)
   exitWhenFlushed(ending.exitCode)
 }
+const endWith = (error, out) => end(() => endRun(error, out))
 
 // A file URL escapes a space, `#`, and the like, so the script's own URL is
 // compared with the URL of the path it was started as.
@@ -675,10 +677,12 @@ const supervisor = process.env.ORACLE_GAPS_INTERNAL_SUPERVISED
 let runStarted = false
 /** Ends an unsupervised run with its stopped line on both streams (#58). */
 function stopNow(signal) {
-  const line = `oracle-gaps: done stopped (${signal})\n`
-  process.stdout.write(line)
-  writeStream(line)
-  exitWhenFlushed(128 + constants.signals[signal])
+  const done = `oracle-gaps: done stopped (${signal})`
+  end(() => ({
+    stderr: `${done}\n`,
+    done,
+    exitCode: 128 + constants.signals[signal],
+  }))
 }
 
 async function run() {

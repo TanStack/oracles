@@ -35,15 +35,25 @@ agent.
   While one copy of a test file runs for 30 s or more, the CLI prints
   `oracle-gaps: busy <mutant id> in <test file> for <n>s` every 30 s. A run of many fast
   copies prints none, and a check through `--daemon` prints its heartbeats
-  only when the check ends. The runs that confirm a mutant's cut-off copies
-  share one budget: the larger of `--mutant-limit` (30 s by default) and ten
-  times the owner files' unmutated time. They run in the owner files'
-  order, each with at most what its mutant's earlier confirmations left. A
-  mutant whose confirmations pass the budget is a `timeout` gap. With the
-  default limits one owner's confirmation always fits; the budget binds
-  when several owners need long confirmations, or when `--hang-limit` is
-  above it, which the run notes. To give one copy more time with
-  `--hang-limit`, raise `--mutant-limit` too.
+  only when the check ends. No wall-clock limit decides an outcome. A copy
+  is cut in one of three ways: by its call count, when it runs past its
+  call budget (`spin`); by its state, when it makes no progress (`no progress`:
+  none of its test's own timers is due before its backstop, and none of its
+  test's own I/O is pending, while timers and I/O the runner keeps for itself,
+  such as Vitest's task-update timer or a write that forwards the test's
+  console output, do not count); or by the backstop, when it runs past `--hang-limit` (60 s by default) plus
+  3 s per second of its file's unmutated time (`backstop`). A spin and no
+  progress are kills: the built-in law `bounded work` or `no progress` fails
+  on the route of the test that was running, so on a reproducible route the
+  mutant is `killed`, and on another route the next owner's copy still runs.
+  The copies of one mutant share a work budget, counted in site evaluations
+  and not in time: the larger of 100,000 and ten times their owner files'
+  unmutated work. The copy whose work passes it fails `bounded work` on the
+  routes of its tests that did that work, and no later copy runs. Only the
+  backstop is a gap: the mutant is a `timeout`, with `(cause: backstop)` on
+  its gap line and `detail` in `results.json`, and no later copy runs. A kill
+  in an earlier owner still decides. `--first-limit` and `--mutant-limit` are retired:
+  they are checked and noted, and change nothing.
 
   The report, on stdout and in `summary.md`, leads with the baseline: each
   test file's result with its test counts (ordinary files too), and for a
@@ -108,7 +118,7 @@ agent.
   | `baseline`                               | `oracle-gaps: baseline pass tests/a.test.ts: 3 tests`, `oracle-gaps: baseline fail tests/b.test.ts: 1 of 2 tests failed`                                                                                                                                    |
   | `baseline` (decisive, before any mutant) | `oracle-gaps: baseline all 4 oracle files pass`, or `oracle-gaps: baseline 1 of 4 oracle files failed (provisional)`                                                                                                                                        |
   | `blocked`                                | `oracle-gaps: blocked <file> fails with no mutant active at <test>, so the mutants it owns wait for it: …`                                                                                                                                                  |
-  | `gap`                                    | `oracle-gaps: gap <kind> L<line> <id> <change>`                                                                                                                                                                                                             |
+  | `gap`                                    | `oracle-gaps: gap <kind> L<line> <id> <change>`, and for a `timeout` ` (cause: <cause>)`                                                                                                                                                                    |
   | `progress`                               | `oracle-gaps: progress judged 25 of 120 mutants: 7 gaps so far, 18 not gaps`                                                                                                                                                                                |
   | `busy`                                   | `oracle-gaps: busy <mutant id or baseline> in <test file> for <n>s`                                                                                                                                                                                         |
   | `note`                                   | `oracle-gaps: note …`: the `--hang-limit` note, Vite's own messages (`note vite: …`), ordinary files left out, the provisional count, unowned counts, the results' path, and where the tests' console output went (`note test output in <path>`)            |
@@ -199,6 +209,19 @@ agent.
     watchdog has polled twice. The directory holds a `.begun` marker per batch and
     a `.reached` or `.unreached` marker per hold (`.unreached` after 60 s with no
     two polls).
+  - `ORACLE_GAPS_TEST_SAMPLES` names a directory where each worker's idle
+    sampler writes, to `<pid>-<threadId>`, how many times it has judged the
+    running test. A witness holds its own I/O open until that count rises, so
+    the hold is a count and not a time.
+  - `ORACLE_GAPS_TEST_RUNNER_WRITE` names a directory. Through each test, the
+    runner itself holds one write pending on a local pipe whose reader never
+    reads, as a write that forwards a test's output can stay pending on
+    win32. A copy that goes idle while that write is pending writes an
+    `idle-<pid>-<threadId>` marker there.
+  - `ORACLE_GAPS_TEST_RUNNER_TIMER` names a directory. Through each test, the
+    runner itself keeps one 100 ms interval running, made through the global
+    `setInterval` as Vitest's task-update timer is. A copy that goes idle while
+    it runs writes an `idle-<pid>-<threadId>` marker there.
 
   A few endings print no done line, or one more line: a SIGKILL of the CLI,
   or a signal that comes while Node is still starting the CLI, before its

@@ -36,8 +36,8 @@
  *    so a kill names a non-empty part of them. An operator mutant's owner
  *    files run one after another in report order (law 7), and the runner
  *    stops at the first that kills, so its kill names laws of that file
- *    alone. Failing that, a run that
- *    timed out makes it `timeout`. Failing that, reproducible verdicts under
+ *    alone. Failing that, a run that timed out, or a test that Vitest's limit
+ *    ended, makes it `timeout`. Failing that, reproducible verdicts under
  *    reach agreement alone make it an `agreement-only-kill`, which names
  *    them all. Failing that, a verdict on the random campaign
  *    makes it a `random-only-kill`, and one on an unknown or unregistered
@@ -62,7 +62,10 @@
  *    and the design decided with it that day: a speed shortcut is owed a
  *    cost law, not an exit, so a regression that deletes it must be
  *    catchable, by a deterministic count and never by wall-clock time.
- * 4. Failing that, if every failing test timed out, it is `timeout`; a
+ * 4. Failing that, a test that Vitest's own limit ended (its message is
+ *    `Test timed out`) is a backstop, with a run that timed out: the mutant
+ *    is `timeout`, a gap that never keeps a kill from deciding (deterministic
+ *    cuts, option A, 2026-11-14). Otherwise a
  *    failing test outside the framework's own checks makes it `crashed`; a
  *    failing framework check alone (the `calibration` route, which covers
  *    calibrations, probe calibrations, and the determinism test) makes it a
@@ -296,7 +299,8 @@ const SLOTS = MUTANTS + AUTHORED
 // operands a comparison there saw, and what it did under it: nothing
 // different, a changed asserted or observed value, a law verdict (on the
 // route then active, or with none active), an assertion failure, a crash, a
-// timeout message, a timed-out run, a setup error, or an unhandled error.
+// timeout message, a timed-out run, a run cut by its call count or by no
+// progress while it ran, a setup error, or an unhandled error.
 // Each test also has a name and enclosing suites, whose names hold regular
 // expression and shell syntax, and each file a baseline: it passes, a test
 // of it fails with no mutant active, or it does not load. A law verdict
@@ -445,6 +449,10 @@ const effect = fc.record({
     `runTimeout`,
     `setupError`,
     `unhandled`,
+    // A copy cut by its call count or by no progress, where this test ran:
+    // drawn, under M "Randomness wins" (2026-11-16), appended last.
+    `runSpin`,
+    `runIdle`,
   ),
   law: fc.constantFrom(`L`, `M`, `reach agreement`),
   // The route active when a verdict fired, when it differs from the test's.
@@ -712,6 +720,32 @@ function boundBelow(before, after) {
   return (hundredths / 100).toFixed(2)
 }
 
+// A copy cut by its call count (`runSpin`) or by no progress (`runIdle`)
+// fails a built-in law on the route of the test that was running, and records
+// nothing else (M, 2026-11-16, "Spin, no progress and the work budget are
+// kills", restoring v21.1 K1 and P3).
+const CUT_LAW = { runSpin: `bounded work`, runIdle: `no progress` }
+// The kinds that end a file's run, so that it ran none of its tests.
+const ENDS_RUN = [`setupError`, `runTimeout`, ...Object.keys(CUT_LAW)]
+// What cut file `fi`'s run under the mutant in `slot`: the backstop (a run
+// that timed out, or Vitest's own limit in a file that loaded and that no cut
+// by count or state ended first), the built-in law of its first test cut by
+// count or by state, or a spin whose count could follow the clock (a test
+// whose row is clocked), which kills nothing and is a gap (M, 2026-11-16,
+// "Count-only kills").
+function cutOf(h, fi, slot) {
+  const kinds = h.files[fi].tests.map((t) => t.under[slot].kind)
+  if (kinds.includes(`runTimeout`)) return { gap: `backstop` }
+  const first = h.files[fi].tests.find((t) => CUT_LAW[t.under[slot].kind])
+  if (first)
+    return first.under[slot].kind === `runSpin` && first.clocked !== `none`
+      ? { gap: `spin` }
+      : { law: CUT_LAW[first.under[slot].kind], t: first }
+  if (kinds.includes(`timeoutMessage`) && !kinds.includes(`setupError`))
+    return { gap: `backstop` }
+  return {}
+}
+
 // Laws 2 to 4 over the tests that judge a mutant, read from each test's
 // effect in the mutant's slot: the failure's outcome, if a failure decides,
 // and the tests that ran (a file that failed to load, or whose run timed
@@ -720,14 +754,17 @@ function boundBelow(before, after) {
 // at a kill reads no work.
 function failureOf(h, slot, tests, work = false) {
   const under = ({ t }) => t.under[slot].kind
-  const timedOut = tests.some((x) => under(x) === `runTimeout`)
+  // The first gap cut in report order names a timeout's cause.
+  const files = [...new Set(tests.map((x) => x.fi))]
+  const timedOut = files.map((fi) => cutOf(h, fi, slot).gap).find(Boolean)
   const setup = tests.some((x) => under(x) === `setupError`)
   const ran = tests.filter(
     (x) =>
-      !h.files[x.fi].tests.some((t) =>
-        [`setupError`, `runTimeout`].includes(t.under[slot].kind),
-      ),
+      !h.files[x.fi].tests.some((t) => ENDS_RUN.includes(t.under[slot].kind)),
   )
+  // The test whose copy a cut by count or by state ended, one per file (the
+  // first), in a file whose run no backstop ended, when it kills.
+  const cut = tests.filter((x) => cutOf(h, x.fi, slot).t === x.t)
   const failing = ran.filter(
     (x) =>
       !x.t.flaky &&
@@ -736,15 +773,18 @@ function failureOf(h, slot, tests, work = false) {
   // A test past its work bound reports a verdict under `work bound` on its
   // own route; the tests stay in report order.
   const overBound = (x) => work && pastBound(h, slot, x)
-  const lawOf = (x) => (overBound(x) ? `work bound` : x.t.under[slot].law)
-  const verdictsIn = (kind) =>
-    ran.filter(
+  const lawOf = (x) =>
+    CUT_LAW[under(x)] ?? (overBound(x) ? `work bound` : x.t.under[slot].law)
+  const verdictsIn = (kind) => [
+    ...ran.filter(
       (x) =>
         (failing.includes(x) &&
           under(x) === `verdict` &&
           kindOf(x.t.under[slot].firedAt ?? x.t.route) === kind) ||
         (overBound(x) && kindOf(x.t.route) === kind),
-    )
+    ),
+    ...cut.filter((x) => kindOf(x.t.route) === kind),
+  ]
   const kills = verdictsIn(`reproducible`).map(lawOf)
   const behavioral = kills.filter((law) => law !== `reach agreement`)
   const decided = (failure) => ({ failure, ran })
@@ -762,7 +802,8 @@ function failureOf(h, slot, tests, work = false) {
       laws: [...new Set(behavioral)].sort(),
       lawsMayBePart: true,
     })
-  if (timedOut) return decided({ outcome: `timeout` })
+  // A gap cut: the timeout names the first (classify.mjs).
+  if (timedOut) return decided({ outcome: `timeout`, detail: timedOut })
   if (kills.length > 0)
     return naming(`agreement-only-kill`, verdictsIn(`reproducible`), {
       laws: [`reach agreement`],
@@ -771,13 +812,12 @@ function failureOf(h, slot, tests, work = false) {
     return naming(`random-only-kill`, verdictsIn(`random`))
   if (verdictsIn(`unknown`).length > 0)
     return naming(`unregistered-kill`, verdictsIn(`unknown`))
-  if (failing.length > 0 && failing.every((x) => under(x) === `timeoutMessage`))
-    return decided({ outcome: `timeout` })
-  const crashed = failing.filter(
-    (x) => under(x) !== `timeoutMessage` && kindOf(x.t.route) !== `framework`,
+  const crashed = [...failing, ...cut].filter(
+    (x) => kindOf(x.t.route) !== `framework`,
   )
   if (crashed.length > 0) return naming(`crashed`, crashed)
-  if (failing.length > 0) return naming(`framework-error`, failing)
+  if (failing.length + cut.length > 0)
+    return naming(`framework-error`, [...failing, ...cut])
   const unhandled = ran.some((x) => under(x) === `unhandled`)
   if (setup || unhandled) return decided({ outcome: `setup-error` })
   return decided(undefined)
@@ -1102,42 +1142,43 @@ function operandsSeen(h, mi, owners) {
 function ordinaryOutcome(h, mi, files) {
   const tests = files.flatMap((fi) => h.files[fi].tests.map((t) => ({ t, fi })))
   const under = ({ t }) => t.under[mi].kind
-  const timedOut = tests.some((x) => under(x) === `runTimeout`)
+  // A gap cut in any of the files (the backstop, or a spin that could follow
+  // the clock).
+  const timedOut = files.some((fi) => cutOf(h, fi, mi).gap)
   const ran = tests.filter(
     (x) =>
-      !h.files[x.fi].tests.some((t) =>
-        [`setupError`, `runTimeout`].includes(t.under[mi].kind),
-      ),
+      !h.files[x.fi].tests.some((t) => ENDS_RUN.includes(t.under[mi].kind)),
   )
-  const failing = ran.filter((x) =>
-    [`verdict`, `assertion`, `crash`, `timeoutMessage`].includes(under(x)),
-  )
+  const cut = tests.filter((x) => cutOf(h, x.fi, mi).t === x.t)
+  const failing = [
+    ...ran.filter((x) =>
+      [`verdict`, `assertion`, `crash`, `timeoutMessage`].includes(under(x)),
+    ),
+    ...cut,
+  ]
   const judgedOn = (kind) =>
     failing.filter(
       (x) =>
         (under(x) === `verdict` &&
           kindOf(x.t.under[mi].firedAt ?? x.t.route) === kind) ||
+        (CUT_LAW[under(x)] && kindOf(x.t.route) === kind) ||
         (under(x) === `assertion` &&
           kindOf(x.t.route) === kind &&
           kind !== `framework`),
     )
   const kills = judgedOn(`reproducible`)
   const behavioral = kills.filter(
-    (x) => under(x) === `assertion` || x.t.under[mi].law !== `reach agreement`,
+    (x) =>
+      under(x) === `assertion` ||
+      CUT_LAW[under(x)] ||
+      x.t.under[mi].law !== `reach agreement`,
   )
   if (behavioral.length > 0) return `killed`
   if (timedOut) return `timeout`
   if (kills.length > 0) return `agreement-only-kill`
   if (judgedOn(`random`).length > 0) return `random-only-kill`
   if (judgedOn(`unknown`).length > 0) return `unregistered-kill`
-  if (failing.length > 0 && failing.every((x) => under(x) === `timeoutMessage`))
-    return `timeout`
-  if (
-    failing.some(
-      (x) => under(x) !== `timeoutMessage` && kindOf(x.t.route) !== `framework`,
-    )
-  )
-    return `crashed`
+  if (failing.some((x) => kindOf(x.t.route) !== `framework`)) return `crashed`
   if (failing.length > 0) return `framework-error`
   if (tests.some((x) => under(x) === `setupError` || under(x) === `unhandled`))
     return `setup-error`
@@ -1487,7 +1528,7 @@ const messages = {
   verdict: `Error: violation`,
   assertion: `AssertionError: expected [ 'a' ] to deeply equal [ 'b' ]`,
   crash: `TypeError: x.y is not a function`,
-  timeoutMessage: `Error: Test timed out in 15000ms.`,
+  timeoutMessage: `Error: Test timed out in 65000ms.`,
 }
 // The capture's comparison and the swap a comparison mutant states, as the
 // instrumented code evaluates them (capture-setup.mjs `cmp`).
@@ -1633,7 +1674,30 @@ function unitOf(h, fi, slot) {
   const f = h.files[fi]
   const under = (t) => t.under[slot]
   if (f.tests.some((t) => under(t).kind === `runTimeout`))
-    return { file: fileName(h, fi), timedOut: true, seconds: 1 }
+    return {
+      file: fileName(h, fi),
+      timedOut: true,
+      cause: `backstop`,
+      seconds: 1,
+    }
+  // A copy cut by its call count or by no progress: the test that was running
+  // and its registered route, as the capture's cut row names them.
+  const cutAt = f.tests.findIndex((t) => CUT_LAW[under(t).kind])
+  if (cutAt >= 0)
+    return {
+      file: fileName(h, fi),
+      timedOut: true,
+      cause: under(f.tests[cutAt]).kind === `runSpin` ? `spin` : `no progress`,
+      seconds: 1,
+      // A spin whose test's row is clocked names no test (check.mjs).
+      ...(cutOf(h, fi, slot).gap
+        ? {}
+        : {
+            builtIn: [
+              { test: nameOf(h, fi, cutAt), route: f.tests[cutAt].route },
+            ],
+          }),
+    }
   const loadFailed = f.tests.some((t) => under(t).kind === `setupError`)
   const tests = loadFailed ? [] : f.tests
   return {
@@ -1924,12 +1988,7 @@ async function driver(h, observe) {
     // reproducible route, in a run that neither timed out nor failed to load.
     const lawsIn = (fi) => {
       const tests = h.files[fi].tests
-      if (
-        tests.some((t) =>
-          [`runTimeout`, `setupError`].includes(t.under[mi].kind),
-        )
-      )
-        return ``
+      if (tests.some((t) => ENDS_RUN.includes(t.under[mi].kind))) return ``
       const laws = tests.flatMap((t) =>
         !t.flaky &&
         t.under[mi].kind === `verdict` &&
@@ -1945,8 +2004,27 @@ async function driver(h, observe) {
       if (new Set(killing).size > 1)
         states.add(`two owner files kill under different laws`)
     }
-    if (result.outcome === `killed` && units.some((u) => u.timedOut))
+    if (
+      result.outcome === `killed` &&
+      units.some((u) => u.timedOut && u.cause === `backstop`)
+    )
       states.add(`killed beside a timeout`)
+    // A kill by a built-in law, from a copy cut by its call count or by no
+    // progress, and the same cut on the random campaign.
+    for (const law of [`bounded work`, `no progress`])
+      if (result.outcome === `killed` && result.laws?.includes(law))
+        states.add(`killed by ${law}`)
+    if (
+      result.outcome === `random-only-kill` &&
+      units.some((u) => u.builtIn !== undefined)
+    )
+      states.add(`a random-only kill by a built-in law`)
+    // A spin whose count could follow the clock: a gap, not a kill.
+    if (
+      result.outcome === `timeout` &&
+      units.some((u) => u.cause === `spin` && u.builtIn === undefined)
+    )
+      states.add(`a spin whose count could follow the clock timed out`)
     // The work law's states (laws 3 and 5): a kill by a work bound, alone
     // or beside a changed value that would otherwise be not-judged, a work
     // bound on the random campaign, and survivors whose work rose under a
@@ -2120,6 +2198,8 @@ async function driver(h, observe) {
       class: r.class,
       laws: r.laws && [...r.laws].sort(),
       testOutcome: r.testOutcome,
+      // A timeout's detail is its cut (`outcomeOf`).
+      detail: r.outcome === `timeout` ? r.detail : undefined,
     })),
     summary: readSummary(summary),
     messages: messagesOf(summary),
@@ -2259,8 +2339,14 @@ function check(h, observations, expected) {
     return violation(`classified`, `nothing was classified`, `completion`)
   // A kill names a non-empty part of its behavioral laws (the runner may
   // stop at the first); an agreement-only kill names reach agreement.
+  // A timeout names the cut that ended it (its `detail`, the cause).
   const view = (o) =>
-    JSON.stringify([o.outcome, o.class, o.testOutcome ?? null])
+    JSON.stringify([
+      o.outcome,
+      o.class,
+      o.testOutcome ?? null,
+      o.outcome === `timeout` ? o.detail : null,
+    ])
   for (const [mi, owed] of expected.outcomes.entries()) {
     const actual = got.outcomes[mi]
     const lawsFit =
@@ -2599,11 +2685,18 @@ function check(h, observations, expected) {
     )
   // Law 8: each gap line is one line, and shows its change shortened: an
   // operator mutant's original and replacement as two code spans, an
-  // authored mutant's intent as a code span and its author. The results keep the full text.
+  // authored mutant's intent as a code span and its author. A timeout's line
+  // ends with its cause, `(cause: <cause>)`, after the change. The results
+  // keep the full text.
   for (const owed of gapsOfModel) {
     const head = `oracle-gaps: gap ${owed.class ?? owed.outcome} L${owed.line} ${owed.id} `
     const line = streamed.find((l) => l.startsWith(head))
-    const rest = line?.slice(head.length)
+    const cause = owed.outcome === `timeout` ? ` (cause: ${owed.detail})` : ``
+    const tail = line?.slice(head.length)
+    const rest =
+      tail !== undefined && tail.endsWith(cause)
+        ? tail.slice(0, tail.length - cause.length)
+        : undefined
     let shown
     if (owed.authored) {
       // The intent is the author's text, so it sits in a code span.
@@ -3167,6 +3260,10 @@ const required = [
   `timeout`,
   `killed`,
   `killed beside a timeout`,
+  `killed by bounded work`,
+  `killed by no progress`,
+  `a random-only kill by a built-in law`,
+  `a spin whose count could follow the clock timed out`,
   `owners declared against file order name another first changed test`,
   `baseline records against file order name another first changed test`,
   `a mutant run's records against the baseline's name another first changed test`,
@@ -3376,6 +3473,30 @@ const constructed = [
   single(`a verdict on a fixed seed`, [`killed`], {
     effect: { kind: `verdict` },
   }),
+  single(
+    `a copy cut by its call count on a fixed seed`,
+    [`killed by bounded work`],
+    {
+      effect: { kind: `runSpin` },
+    },
+  ),
+  single(
+    `a copy cut by no progress on a fixed seed`,
+    [`killed by no progress`],
+    {
+      effect: { kind: `runIdle` },
+    },
+  ),
+  single(
+    `a clocked copy cut by its call count`,
+    [`a spin whose count could follow the clock timed out`],
+    { test: { clocked: `timer` }, effect: { kind: `runSpin` } },
+  ),
+  single(
+    `a copy cut by no progress in the random campaign`,
+    [`a random-only kill by a built-in law`],
+    { test: { route: `random seed` }, effect: { kind: `runIdle` } },
+  ),
   single(`reach agreement alone`, [`agreement-only-kill`], {
     effect: { kind: `verdict`, law: `reach agreement` },
   }),
