@@ -1102,6 +1102,31 @@ const drawn = fc.record({
     }),
     { maxLength: 8 },
   ),
+  // The oracle files that hold a law that fails with no mutant active
+  // (`FAILING_LAW`), beside the plan's tests: file a, file b, both, or
+  // neither. A failing law judges nothing, and its file's passing tests
+  // still judge the mutants the file owns (the maintainer's decision "Block
+  // per law", 2026-11-18). It is no test-only hook, so it is drawn
+  // (randomness wins, 2026-11-16; v21.2 R54), last (the generator rule).
+  failingLaw: fc.oneof(
+    { weight: 4, arbitrary: fc.constant(`none`) },
+    { weight: 3, arbitrary: fc.constantFrom(`a`, `b`, `both`) },
+  ),
+  // Where the failing law sits in its file: after every other test, or
+  // before them, so the plan's tests run after it (review of #176, F3).
+  // Drawn last (the generator rule).
+  failingLawAt: fc.constantFrom(`end`, `start`),
+  // Whether the failing law calls production before it fails: not at all,
+  // once (so it reaches the sites of the first generated function, which
+  // only it may reach), or `HEAVY_CALLS` times, past the call floor, as a
+  // failing property that shrinks does (review of #176, F1 and F2).
+  failingLawCalls: fc.constantFrom(`none`, `once`, `heavy`),
+  // Whether the failing law fails by itself, or a hook of a `describe`
+  // around it does: a `beforeAll` that throws, which skips it, or an
+  // `afterAll` that throws after it passed. Either is a failure that only
+  // that describe's laws own (the maintainer's decision "A broken owner file
+  // judges nothing", 2026-11-19, scoped to the describe; review of #176, F4).
+  failingLawHook: fc.constantFrom(`none`, `none`, `beforeAll`, `afterAll`),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -3447,6 +3472,12 @@ function resolveHistory(history) {
     // Whether a run aborts its process (a stop run `abort`): then file a has
     // the test that aborts when the driver asks.
     aborts: (history.stopRuns ?? []).some((stop) => stop.when === `abort`),
+    // The oracle files that hold a failing law (`failingLaw` above). A
+    // history filed before the field existed holds none.
+    failingLaw: history.failingLaw ?? `none`,
+    failingLawAt: history.failingLawAt ?? `end`,
+    failingLawCalls: history.failingLawCalls ?? `none`,
+    failingLawHook: history.failingLawHook ?? `none`,
     ordinary: history.ordinary === true,
     // The batch whose run rejects (a test-only fault; 0 is none).
     rejectBatch: history.rejectBatch ?? 0,
@@ -4835,20 +4866,56 @@ function refusal(plan) {
   // (maintainer decision, 2026-11-10).
   if (plan.declaration === `neither`) return { cause: `no oracle file` }
   if (ownsNothing(plan)) return { cause: `owns any selected source` }
-  // A failing owner, and a setup file that throws (which fails every test
-  // file before any test runs), refuse nothing: they block the mutants the
-  // failing files own (`blockingOf`).
+  // A failing owner, a failing law, and a setup file that throws (which
+  // fails every test file before any test runs) refuse nothing: they judge
+  // nothing, and they block only the mutants that no passing owner test
+  // judges (`blockingOf`).
   return undefined
 }
 
+// The law that fails with no mutant active (`failingLaw`), a test of its
+// own at the start or the end of its file (`failingLawAt`), and the error it
+// throws. Under a failing describe hook (`failingLawHook`) it sits in the
+// describe `HOOKED_SUITE`, passes itself, and the hook throws `HOOK_ERROR`.
+const FAILING_LAW = `a law that fails with no mutant active`
+const FAILING_ERROR = `Error: this law fails with no mutant active`
+const HOOKED_SUITE = `hooked`
+const HOOK_ERROR = `this hook fails with no mutant active`
+// How often a heavy failing law calls production: past the call floor
+// (check.mjs CALL_FLOOR, 100,000 site evaluations) in its own test.
+const HEAVY_CALLS = 110_000
+/** Whether oracle file `file` holds the failing law. */
+const holdsFailingLaw = (plan, file) =>
+  plan.failingLaw === file ||
+  (plan.failingLaw === `both` && (file === `a` || file === `b`))
+/** The failing law's name, as its file's tests name it. */
+const failingLawName = (plan) =>
+  plan.failingLawHook === `none`
+    ? FAILING_LAW
+    : `${HOOKED_SUITE} > ${FAILING_LAW}`
+/** The function the failing law calls, if it calls one: the first generated. */
+const failingLawTarget = (plan) =>
+  plan.failingLawCalls === `none` || plan.failingLawHook === `beforeAll`
+    ? undefined
+    : plan.functions.find((fn) => fn.generated)?.id
+
 /**
- * The test files that fail with no mutant active, each with its failing
- * test (none for a file that does not load). An oracle file among them
- * judges nothing: each mutant it owns that no passing owner kills is
- * `blocked`, and the report is provisional (maintainer disposition G5,
- * 2026-11-11; the v20 freeze's decision 2). Its baseline's replay runs its
- * failing test alone, under the config the run loaded: a config that only
- * `--config` names, too (F12 with law 3).
+ * The test files that fail with no mutant active, each with its first
+ * failing test and that test's error (none for a file that does not load, or
+ * whose only failure is a hook), and its failing laws, in file order: each
+ * test of it that fails, and each test of a describe whose hook fails. A
+ * failing law judges nothing, as a nondeterministic test judges nothing, so
+ * it is left out per test, and the passing tests of its file still judge the
+ * mutants the file owns (the maintainer's decision "Block per law",
+ * 2026-11-18, which replaces the file-level block of disposition G5 and the
+ * v20 freeze's decision 2, v21.2 R11, at the granularity of a test; a
+ * describe's failing hook is a failure of its laws, under "A broken owner
+ * file judges nothing", 2026-11-19, scoped to the describe). A file that
+ * does not load has no law that passes, and names no failing law: it fails
+ * as a whole, and judges nothing. The report is provisional while any oracle
+ * file fails. The baseline's replay runs a file's first failing test alone,
+ * under the config the run loaded: a config that only `--config` names, too
+ * (F12 with law 3).
  */
 function blockingOf(plan) {
   if (plan.fault === `setupThrows`)
@@ -4856,22 +4923,55 @@ function blockingOf(plan) {
       ...oracleFilesOf(plan).map((file) => ({ file })),
       { file: `c`, ordinary: true },
     ]
-  if (plan.fault === `brokenOwner`)
+  const brokenOwner = plan.fault === `brokenOwner`
+  return [`a`, `b`].flatMap((file) => {
+    const owner = brokenOwner && file === `b`
+    const law = holdsFailingLaw(plan, file)
+    if (!owner && !law) return []
+    const broken = owner ? [`${BROKEN_SUITE} > fixed seed 999`] : []
+    const failing = law ? [failingLawName(plan)] : []
+    // File b's failing owner follows the plan's tests; the failing law is
+    // the first test of its file or the last.
+    const laws =
+      plan.failingLawAt === `start`
+        ? [...failing, ...broken]
+        : [...broken, ...failing]
+    // The first failing test: the failing law throws itself only with no
+    // hook around it.
+    const lawFails = law && plan.failingLawHook === `none`
+    const first = laws.find((name) =>
+      name === failingLawName(plan) ? lawFails : true,
+    )
     return [
       {
-        file: `b`,
-        test: `${BROKEN_SUITE} > fixed seed 999`,
-        error: `Error: this owner fails with no mutant active`,
-        replayed: [`${BROKEN_SUITE} fixed seed 999`],
+        file,
+        laws,
+        // How many of its tests fail, which the baseline counts.
+        failed: broken.length + (lawFails ? 1 : 0),
+        hook: law && plan.failingLawHook !== `none` ? HOOK_ERROR : undefined,
+        ...(first === undefined
+          ? {}
+          : first === failingLawName(plan)
+            ? {
+                test: first,
+                error: FAILING_ERROR,
+                replayed: owner ? [FAILING_LAW] : undefined,
+              }
+            : {
+                test: first,
+                error: `Error: this owner fails with no mutant active`,
+                replayed: [`${BROKEN_SUITE} fixed seed 999`],
+              }),
       },
     ]
-  return []
+  })
 }
 
 /**
  * Each test file's baseline (law 14): its tests that ran and those skipped
  * (a file with no tests of the plan holds one skipped placeholder), how
- * many failed, and its failing test, or that it did not load.
+ * many failed, and its failing test, or that it did not load, or that it
+ * failed outside its tests (a describe's hook).
  */
 function baselineOf(plan) {
   const failing = blockingOf(plan)
@@ -4884,18 +4984,25 @@ function baselineOf(plan) {
       (plan.midrun && file === plan.midrunBy ? 1 : 0) +
       (file === `a` && plan.consoleOutput ? 1 : 0) +
       (file === `a` && plan.aborts ? 1 : 0)
-    const broken = failing.find((f) => f.file === file)
-    // The failing owner's suite holds two tests and a third of its name.
-    const extra = broken?.test === undefined ? 0 : 3
+    const entry = failing.find((f) => f.file === file)
+    const loads = entry === undefined || entry.laws !== undefined
+    // The failing owner's suite holds two tests and a third of its name, and
+    // the failing law is one test more; a `beforeAll` that throws skips it.
+    const owner = plan.fault === `brokenOwner` && file === `b`
+    const law = loads && holdsFailingLaw(plan, file)
+    const skippedLaw = law && plan.failingLawHook === `beforeAll`
+    const ran = own + (owner ? 3 : 0) + (law && !skippedLaw ? 1 : 0)
     return {
       file: `tests/${file}.test.ts`,
       ordinary: file === `c`,
-      ran: own + extra,
-      skipped: own + extra === 0 ? 1 : 0,
-      failed: broken?.test === undefined ? 0 : 1,
-      loads: broken === undefined || broken.test !== undefined,
-      test: broken?.test,
-      error: broken?.error,
+      ran,
+      skipped: ran === 0 && !skippedLaw ? 1 : 0,
+      failed: entry?.failed ?? 0,
+      loads,
+      fails: entry !== undefined,
+      test: entry?.test,
+      error: entry?.error,
+      hook: entry?.hook,
     }
   })
 }
@@ -4990,23 +5097,38 @@ function model(plan) {
   if (refused) return { refused, configLines }
   const sites = sitesOf(plan)
   const owners = ownersOf(plan)
-  // The oracle files that fail with no mutant active judge nothing.
-  const blocking = new Set(
-    blockingOf(plan)
-      .filter((f) => !f.ordinary)
-      .map((f) => f.file),
-  )
+  // The oracle files that fail with no mutant active. A failing law judges
+  // nothing, and the plan's tests are no failing law, so they judge in
+  // every file that loads; a file that does not load runs no test.
+  const failing = blockingOf(plan).filter((f) => !f.ordinary)
+  const failingFiles = new Set(failing.map((f) => f.file))
+  const baseline = baselineOf(plan)
+  const entryOf = (file) =>
+    baseline.find((b) => b.file === `tests/${file}.test.ts`)
+  // An owner file that loads and runs a test, failing or passing.
+  const runsTests = (file) =>
+    entryOf(file)?.loads === true && entryOf(file).ran > 0
+  // How many of a file's tests pass: the plan's, and the tests of no plan
+  // (the failing owner's two passing tests, the mid-run edit's, the
+  // console's, and the abort's), which judge no mutant, though each keeps
+  // its file's mutants from blocking. A failing law is no test of the plan,
+  // so the plan's tests judge as they would beside none.
+  const passingIn = (file) =>
+    runsTests(file) ? entryOf(file).ran - entryOf(file).failed : 0
   const ownerTests = (id) =>
     plan.tests.filter(
       (t) =>
         oracleFilesOf(plan).includes(t.file) &&
         owners(id).has(t.file) &&
-        !blocking.has(t.file),
+        runsTests(t.file),
     )
-  // A mutant that a failing oracle file owns, and no passing owner kills,
-  // is blocked: it waits for that file.
+  // An authored mutant (its copy records no reach) with no passing owner
+  // test, that a failing law or a failing file of its owners holds, and no
+  // passing owner kills, is blocked: it waits for them.
   const blockedOr = (id, kind) =>
-    kind !== `killed` && [...owners(id)].some((file) => blocking.has(file))
+    kind !== `killed` &&
+    [...owners(id)].some((file) => failingFiles.has(file)) &&
+    [...owners(id)].every((file) => passingIn(file) === 0)
       ? `blocked`
       : kind
   // Code that ran when the module loaded: the calls at the end of the
@@ -5018,6 +5140,50 @@ function model(plan) {
     site.fnId === `<module>` ||
     site.data !== undefined ||
     loadRuns.some((run) => run.reached.has(site.id))
+  // The sites the failing law reaches, when it calls production (input 7);
+  // a `beforeAll` that throws skips it, so it reaches nothing then.
+  const lawTarget = failingLawTarget(plan)
+  const lawReached =
+    lawTarget === undefined
+      ? new Set()
+      : interpret(plan, lawTarget, 7, sites).reached
+  // Whether a deterministic passing owner test judges an operator mutant:
+  // one of the plan's that reached it, or, for code that ran at load, one
+  // of an owner file that loads (main's rule for code run at load). A
+  // failing law judges nothing.
+  const judgedAt = (site) => {
+    const tests = ownerTests(site.fnId).filter((t) => !t.flaky)
+    return ranAtLoad(site)
+      ? tests.length > 0
+      : tests.some((t) =>
+          partsOf(t).some((part) =>
+            interpret(plan, t.fn, part.input, sites).reached.has(site.id),
+          ),
+        )
+  }
+  // An operator mutant that no deterministic passing owner test judges is
+  // blocked by its owners' failing laws that reached it, and by its owner
+  // files that judge nothing at all (one that does not load, or whose every
+  // test fails, which may reach anything it owns), unless it is killed
+  // (Block per law, 2026-11-18; "A broken owner file judges nothing",
+  // 2026-11-19, and its C reading: a mutant reached only by failing laws or
+  // broken files is blocked by them, as one reached only by nondeterministic
+  // tests is indeterminate). A mutant that nothing reached stays unreached.
+  const blockedAt = (site, kind) => {
+    if (kind === `killed` || judgedAt(site)) return kind
+    const atLoad = ranAtLoad(site)
+    const holds = [...owners(site.fnId)].some(
+      (file) =>
+        failingFiles.has(file) &&
+        (passingIn(file) === 0 ||
+          // Code that ran at load reaches a file's failing laws where it
+          // reaches its tests: in a file with a test of the plan (main's
+          // rule for code run at load).
+          (atLoad && plan.tests.some((t) => t.file === file)) ||
+          (holdsFailingLaw(plan, file) && lawReached.has(site.id))),
+    )
+    return holds ? `blocked` : kind
+  }
   const kindOf = (site) => {
     if (owners(site.fnId).size === 0) return `unowned`
     const tests = ownerTests(site.fnId)
@@ -5123,7 +5289,7 @@ function model(plan) {
       ? undefined
       : owners(site.fnId).size === 0
         ? `unowned`
-        : blockedOr(site.fnId, kindOf(site))
+        : blockedAt(site, kindOf(site))
     return {
       key: site.key,
       source: site.file,
@@ -5316,7 +5482,7 @@ function oracleTestFile(plan, file) {
   const out = [
     // A per-file environment, which Vitest reads from the file's text.
     ...(plan.pragma && file === `a` ? [`// @vitest-environment marked`] : []),
-    `import { ${plan.tests.some((t) => t.file === file && t.cleanupThrows) ? `afterEach, ` : ``}describe, expect, test${plan.tests.some((t) => t.file === file && (t.spies || t.timed === `spiedclock`)) ? `, vi` : ``} } from 'vitest'`,
+    `import { ${holdsFailingLaw(plan, file) && plan.failingLawHook !== `none` ? `${plan.failingLawHook}, ` : ``}${plan.tests.some((t) => t.file === file && t.cleanupThrows) ? `afterEach, ` : ``}describe, expect, test${plan.tests.some((t) => t.file === file && (t.spies || t.timed === `spiedclock`)) ? `, vi` : ``} } from 'vitest'`,
     ...(plan.tests.some((t) => t.file === file && t.shrinks)
       ? [`import fc from 'fast-check'`]
       : []),
@@ -5391,6 +5557,7 @@ function oracleTestFile(plan, file) {
       : file === `b`
         ? `strict`
         : `true`
+  if (plan.failingLawAt === `start`) out.push(...failingLawLines(plan, file))
   plan.tests.forEach((t, index) => {
     if (t.file !== file) return
     // A property judges, slows, and hangs only in runs with a positive `n`.
@@ -5647,7 +5814,53 @@ function oracleTestFile(plan, file) {
       `  process.stderr.write('raw stderr from a test\\n')`,
       `})`,
     )
+  if (plan.failingLawAt !== `start`) out.push(...failingLawLines(plan, file))
   return `${out.join(`\n`)}\n`
+}
+
+/**
+ * The failing law of oracle file `file` (`failingLaw`), if it holds one. On
+ * a reproducible route it calls production as `failingLawCalls` says (the
+ * first generated function, with 7), then, with no hook around it, reports a
+ * violation and throws, as a failing law does, so it fails in every run of
+ * its file, mutated or not: a runner that counted its verdict would see a
+ * kill under every mutant its file runs. Under a hook it passes itself, and
+ * the hook of its describe throws: a `beforeAll` before it runs, which skips
+ * it, or an `afterAll` after it passed.
+ */
+function failingLawLines(plan, file) {
+  if (!holdsFailingLaw(plan, file)) return []
+  const target = failingLawTarget(plan)
+  const calls =
+    target === undefined
+      ? []
+      : plan.failingLawCalls === `heavy`
+        ? [
+            `  for (let i = 0; i < ${HEAVY_CALLS}; i += 1) ${callFor(target)}(7, [])`,
+          ]
+        : [`  ${callFor(target)}(7, [])`]
+  const law = [
+    `test('${FAILING_LAW}', () => {`,
+    `  g.__oracleRoute?.('fixed seed')`,
+    ...calls,
+    ...(plan.failingLawHook === `none`
+      ? [
+          `  g.__oracleVerdict?.({ property: 'fixture-${file}', law: 'F', checkpoint: 'trace' })`,
+          `  throw new ${FAILING_ERROR.replace(`: `, `('`)}')`,
+        ]
+      : []),
+    `})`,
+  ]
+  return plan.failingLawHook === `none`
+    ? law
+    : [
+        `describe('${HOOKED_SUITE}', () => {`,
+        `  ${plan.failingLawHook}(() => {`,
+        `    throw new Error('${HOOK_ERROR}')`,
+        `  })`,
+        ...law.map((line) => `  ${line}`),
+        `})`,
+      ]
 }
 
 /**
@@ -6680,6 +6893,7 @@ export {
   FULL_LIMIT_MS,
   refusal,
   ownsNothing,
+  blockingOf,
   MODULE_DATA,
   EXPORT_FORMS,
   model,

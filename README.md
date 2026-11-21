@@ -48,10 +48,19 @@ agent.
   The report, on stdout and in `summary.md`, leads with the baseline: each
   test file's result with its test counts (ordinary files too), and for a
   failing file its failing test, its error, the law and counterexample of a
-  law violation, and a `replay:` command. An oracle file that fails with no
-  mutant active blocks only the mutants it owns: each that no passing owner
-  kills is a `blocked` gap, a `blocked` line names the file and its failing
-  test, the rest are judged, and the report says it is provisional. With
+  law violation, and a `replay:` command. A test of an oracle file that
+  fails with no mutant active (a failing law) judges nothing: it is left
+  out, as a nondeterministic test is, and the passing tests of its file
+  still judge the mutants the file owns; it keeps its reach and its work. A
+  test of a `describe` whose `beforeAll` or `afterAll` throws is a failing
+  law too. An owner file that fails outside its tests (it does not load, or
+  a file-level hook throws) is broken, and judges nothing. A mutant that no
+  deterministic passing owner test reached, held by a failing law that
+  reached it or by an owner file that judges nothing, and that nothing
+  kills, is a `blocked` gap whose directive names what it waits for. A
+  `blocked` line names each failing law by its file and test names (or a
+  broken file by its path), `results.json` lists each failing file's
+  `laws`, and the report says it is provisional. With
   `--only <id,...>`, the baseline runs only the owners of the selected
   mutants. A `crashed` gap is not a kill: production threw where no law
   judged it, and the error is on the gap's Detail line in `summary.md` and
@@ -107,7 +116,7 @@ agent.
   | `config`                                 | `oracle-gaps: config vitest.config.ts`, or `oracle-gaps: config none, Vitest's default discovery`                                                                                                                                                           |
   | `baseline`                               | `oracle-gaps: baseline pass tests/a.test.ts: 3 tests`, `oracle-gaps: baseline fail tests/b.test.ts: 1 of 2 tests failed`                                                                                                                                    |
   | `baseline` (decisive, before any mutant) | `oracle-gaps: baseline all 4 oracle files pass`, or `oracle-gaps: baseline 1 of 4 oracle files failed (provisional)`                                                                                                                                        |
-  | `blocked`                                | `oracle-gaps: blocked <file> fails with no mutant active at <test>, so the mutants it owns wait for it: …`                                                                                                                                                  |
+  | `blocked`                                | `oracle-gaps: blocked <file> > <test> fails with no mutant active, so it judges nothing: …`, one per failing law                                                                                                                                            |
   | `gap`                                    | `oracle-gaps: gap <kind> L<line> <id> <change>`                                                                                                                                                                                                             |
   | `progress`                               | `oracle-gaps: progress judged 25 of 120 mutants: 7 gaps so far, 18 not gaps`                                                                                                                                                                                |
   | `busy`                                   | `oracle-gaps: busy <mutant id or baseline> in <test file> for <n>s`                                                                                                                                                                                         |

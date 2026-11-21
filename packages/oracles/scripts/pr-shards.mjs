@@ -872,6 +872,10 @@ export const partitions = {
         'a declaration fault: nonLiteral',
         'a stop as the CLI starts',
         'a start refuses an unreadable claim',
+        "a failing law beside its file's passing laws",
+        'a heavy failing law at the start of its file, beside a passing law',
+        'a failing beforeAll around a law',
+        'a failing afterAll around a law that calls production',
       ]),
       8: anyOf([
         'a declaration fault: brokenVitest',
