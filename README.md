@@ -184,6 +184,10 @@ agent.
     for a daemon to start or to close, and for a daemon that holds its check
     to send anything; a test shortens it to outlast a paused daemon. It is a
     test-only knob, not a setting for users.
+  - `ORACLE_GAPS_TEST_STRING_LIMIT` (characters) makes the daemon's evidence
+    store throw where it makes or reads a string longer than this, as V8 does
+    past its own limit (about 512 MB), so a test meets that limit with a small
+    store. It is a test-only knob, not a setting for users.
   - `ORACLE_GAPS_TEST_SERVED_MARK` names a file the daemon writes its pid to
     after it answers a check, so a test can tell which daemon served an
     earlier check (the warm daemon that a later check's pause must match).
@@ -234,39 +238,55 @@ runs cold` and runs the check in its own process, which reports what the
   run's output directory, and serves the next check. On Windows, which has no process groups, the run is not
   supervised.
 
-  A check through the daemon reuses a run while its inputs are unchanged:
-  the modules the run loaded, and the files in the package that its tests
-  read through `fs` (`readFileSync`, `readFile`, `existsSync`, `statSync`,
-  and `fs/promises` `readFile` and `stat`), each by the content that the
-  run read. A run that an edit overlapped, because a file changed after the
-  run read it, is not reused. A directory that a test stats or tests for is
-  an input as a directory, not by its content.
+  A check through the daemon reuses a run while its inputs are unchanged.
+  Every read is an input (maintainer decision, 2026-11-16): the modules the
+  run loaded; the files its tests read through `fs` on any path, inside the
+  package or outside it, `node_modules` included (`readFileSync`,
+  `readFile`, `createReadStream`, `existsSync`, `statSync`, and
+  `fs/promises` `readFile` and `stat`), each by the content that the run
+  read; the directories its tests list (`readdir`, `readdirSync`, `opendir`,
+  `opendirSync`, and `fs/promises` `readdir` and `opendir`), each by its
+  entries' names and kinds; the environment variables its tests read, by
+  value, or all of them when a test lists them; and what Vitest, Vite, and
+  the config read in the CLI's process, while Vitest loads and the contexts
+  warm, and in each hook of every plugin, Vite's own (such as the
+  `tsconfig.json` that its esbuild plugin reads) and the config's alike. A
+  file that a reader wrote earlier in the check, before it read it or tested
+  whether it exists, is its own output and no input (maintainer decision,
+  2026-11-17). For a test, that includes a file that a Node process it
+  started wrote, at any depth: each such process preloads the runner's
+  write log through `NODE_OPTIONS` (maintainer decision, 2026-11-19). A
+  child started with an environment that drops `NODE_OPTIONS`, or a writer
+  that is not Node, is not seen, so its file stays an input. A file the
+  session wrote that is edited by hand afterwards is seen. Each check hashes
+  every file input from its content, so an edit that keeps a file's size and
+  modification time (`cp -p`, `rsync -t`, `touch -r`) is seen. A run that an
+  edit overlapped, because a file changed after the run read it, is not
+  reused. A directory that a test stats or tests for is an input as a
+  directory, not by its content.
 
-  Two kinds of input are not tracked yet. A Vite plugin whose output depends
-  on anything but a module's text, such as a sidecar file that it reads, can
-  make the daemon serve a run that read the plugin's old output. And the
-  daemon's environment is fixed when it starts, so an environment variable
-  that a later check sets does not reach the daemon's runs. After such a
-  change, run the check cold (without `--daemon`), or stop the daemon with
-  `oracle-gaps --stop-daemon --package <dir>`. The maintainer decided on
-  2026-11-13 that the daemon tracks both and restarts when they change; a
-  later release does that.
+  The daemon runs every check in the environment that the CLI asking for it
+  has. While a context warms, Vitest and Vite read every environment
+  variable by value, so a check from an environment that differs in any
+  variable, even one no test reads (`OLDPWD`, `SHLVL`, a terminal's session
+  id), starts a new daemon and runs every unit again, as a cold run does.
+  So does a check after a file that Vitest, the config, or a plugin read or
+  wrote has changed.
 
-  These reads are no input, so an edit to the file alone does not rerun the
-  tests that read it: a read outside the package or under `node_modules`; a
-  read from a worker thread or child process that the test starts; and a
-  read through any `fs` or `fs/promises` function other than the six above,
-  or through one of those six given a file descriptor. That catch-all
-  includes, for example, `readdir`, `opendir`, `glob`, `globSync`,
-  `createReadStream`, `realpath`, `lstat`, `access`, `open`, `read`,
-  `readSync`, `readv`, `fstat`, `fstatSync`, `copyFile`, `copyFileSync`, `cp`,
-  `cpSync`, `openAsBlob`, `statfs`, `readlink`, the callback `stat`,
-  `exists`, `watch`, and `watchFile`, and the `fs/promises` `readdir`,
-  `opendir`, `glob`, `lstat`, `realpath`, `readlink`, `access`, `open`,
-  `copyFile`, `cp`, `statfs`, and `watch`. Run the check cold (without
-  `--daemon`) after an edit to a file read that way. A later release records
-  all of them except `watch` and `watchFile`, which wait for future changes
-  and stay no input (maintainer decision, 2026-11-13, with `watchFile` in the
+  These reads are no input yet, so an edit to the file alone does not rerun
+  the tests that read it: a read from a worker thread or child process that
+  the test starts (#143); a read through a file descriptor, after `open`,
+  `openSync`, or the `fs/promises` `open` (#141); a link's target, or the
+  rest of the stat family, `lstat`, `readlink`, `realpath`, `access`, the
+  callback `stat`, and `exists` (#142); `glob`, `globSync`, `copyFile`,
+  `copyFileSync`, `cp`, `cpSync`, `openAsBlob`, `statfs`, and the
+  `fs/promises` `glob`, `copyFile`, `cp`, and `statfs` (#152); the
+  module-level reads of a test file whose tests are all skipped (#153); and
+  the earlier content of a file that a test appends to, partly writes, or
+  fails to write, then reads (#154). Run the check cold (without `--daemon`)
+  after an edit to a file read that way. A later release records all of
+  them except `watch` and `watchFile`, which wait for future changes and
+  stay no input (maintainer decision, 2026-11-13, with `watchFile` in the
   family of `watch`).
 
 - `packages/eslint-plugin-oracles` (`@tanstack/eslint-plugin-oracles`): the

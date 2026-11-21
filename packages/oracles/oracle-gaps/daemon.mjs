@@ -234,7 +234,12 @@ export async function requestDaemon(pkg, argv, code) {
     let reply
     const sent = Date.now()
     try {
-      reply = await send(pkg, { argv, cwd: process.cwd(), code }, true)
+      // The CLI's environment, which the daemon must run the check under.
+      reply = await send(
+        pkg,
+        { argv, cwd: process.cwd(), code, env: process.env },
+        true,
+      )
       held += Date.now() - sent
       // A daemon that stopped answering: the CLI checks cold (R39) and leaves
       // it; the daemon drops the check once it sees the CLI gone.
@@ -367,7 +372,13 @@ async function takeLock(lock, socket) {
   }
 }
 
+// An environment as one value: its names and values, in name order.
+const envKey = (env) => JSON.stringify(Object.entries(env ?? {}).sort())
+
 async function serve(pkg) {
+  // The environment this daemon runs its checks under, which the CLI that
+  // started it gave it, taken before the session sets anything in it.
+  const ownEnv = envKey(process.env)
   mkdirSync(stateDirOf(pkg), { recursive: true })
   const lock = join(stateDirOf(pkg), `daemon.lock`)
   const socket = socketOf(pkg)
@@ -476,8 +487,18 @@ async function serve(pkg) {
         // A daemon whose code changed, or that a CLI of other code asks (a
         // second install), declines this check and closes after the
         // requests already queued, each of which hears `closing`; the CLI
-        // then starts a daemon of its own code.
-        if (codeIdentity() !== code || message.code !== code) {
+        // then starts a daemon of its own code. So does a daemon asked from
+        // another environment than its own, or whose session read a file
+        // that changed since (check.mjs, inputsChanged): every read is a
+        // daemon input (maintainer decision, 2026-11-16), and a module or a
+        // plugin may keep what it read, so the CLI starts a daemon in its own
+        // environment, which reads them again.
+        if (
+          codeIdentity() !== code ||
+          message.code !== code ||
+          envKey(message.env) !== ownEnv ||
+          session.inputsChanged()
+        ) {
           closing = true
           queue = queue.then(() => shutdown(connection, { restart: true }))
           return

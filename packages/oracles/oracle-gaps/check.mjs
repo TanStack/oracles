@@ -9,16 +9,21 @@
 // units, the ownership, and the options. A cold run computes every unit. The
 // daemon keeps each unit in its evidence store with the hash of every module
 // the run imported, as Vitest reports them, and of what was served for each
-// instrumented or patched source; a stored unit is reused only while every
-// one of those hashes is unchanged. So a check through the daemon reports
-// what a cold run reports (the CLI oracle's law 9). Not covered: a file a
-// test reads through `fs`, an environment variable other than the seed, and
-// a new file that changes how an unchanged import resolves.
+// instrumented or patched source, and of every other read the run made: a
+// file its tests read through `fs` on any path, a variable they read, and
+// what the config and its plugins read in this process (inputs.mjs; every
+// read is a daemon input, maintainer decision, 2026-11-16). A stored unit is
+// reused only while every one of those hashes is unchanged. So a check
+// through the daemon reports what a cold run reports (the CLI oracle's law
+// 9). Not covered: a read through another fs API than those inputs.mjs
+// watches, one from a worker thread or a child process that a test starts,
+// and a new file that changes how an unchanged import resolves.
 //
 // A unit's identity also carries the global inputs: this CLI's own files,
 // the harness, the Vite config and the files it loads, the package's
 // manifest and the lockfile, the Node version, and the options that change a
 // run (the seed, the test timeout, and bail).
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
@@ -76,6 +81,7 @@ import {
   specifierOf,
 } from './paths.mjs'
 import { stateDirOf } from './evidence.mjs'
+import { envHash, inputHash, watchReads } from './inputs.mjs'
 import {
   baselineOf,
   blockedOr,
@@ -154,6 +160,8 @@ const ownFiles = [
   `stream.mjs`,
   `authored.mjs`,
   `capture-setup.mjs`,
+  `inputs.mjs`,
+  `child-writes.mjs`,
   `paths.mjs`,
   `evidence.mjs`,
   `daemon.mjs`,
@@ -207,10 +215,55 @@ class KeepOrder {
   }
 }
 
-/** Hashes of files by content, memoized by size and modification time. */
+/**
+ * Every plugin of a resolved config, Vite's and Vitest's own as well as the
+ * config's, with each hook run under `reading` (openSession), so what a hook
+ * reads is a session input: the tsconfig.json that Vite's esbuild plugin
+ * reads is an input as a sidecar of the config's own plugin is (review of
+ * #133, F1). A `load` or `transform` hook names the module it serves. The
+ * runner's own plugin is left as it is. A plugin is wrapped once; a hook is
+ * a function or an object with a `handler`, as Vite takes it.
+ */
+const hooked = new WeakSet()
+function pluginHooks(plugins, reading) {
+  for (const option of plugins) {
+    if (option.name === `oracle-gaps-schemata` || hooked.has(option)) continue
+    hooked.add(option)
+    hookPlugin(option, reading)
+  }
+}
+function hookPlugin(option, reading) {
+  for (const [name, hook] of Object.entries(option)) {
+    const handler = typeof hook === `function` ? hook : hook?.handler
+    if (typeof handler !== `function`) continue
+    const at = { load: 0, transform: 1 }[name]
+    const watched = function (...args) {
+      const id = at === undefined ? undefined : args[at]
+      return reading.run(
+        {
+          hook: true,
+          module:
+            typeof id === `string`
+              ? `fs:${posix(id.split(`?`)[0])}`
+              : undefined,
+        },
+        () => handler.apply(this, args),
+      )
+    }
+    option[name] =
+      typeof hook === `function` ? watched : { ...hook, handler: watched }
+  }
+}
+
+/**
+ * Hashes of files by content, memoized by size and modification time for
+ * one check (`forget`, which each check calls first): an edit between two
+ * checks that keeps a file's size and modification time, as `cp -p` leaves
+ * it, is still seen (D10; the TLA model's weakened-stamp run).
+ */
 function fileHashes() {
   const memo = new Map()
-  return (path) => {
+  const hashOf = (path) => {
     let stat
     try {
       stat = statSync(path)
@@ -233,6 +286,8 @@ function fileHashes() {
     memo.set(path, { stamp, hash })
     return hash
   }
+  hashOf.forget = () => memo.clear()
+  return hashOf
 }
 
 /** The lockfile that pins the package's dependencies, if any. */
@@ -433,11 +488,77 @@ export async function openSession(pkg, pause = async () => {}) {
       `the TypeScript this CLI depends on (${ts.version}) has no compiler API`,
       `Reinstall @tanstack/oracles, which depends on TypeScript 5.`,
     )
+  // What Vitest, the config, and the config's own plugins read in this
+  // process (`reading`): every plugin input is a daemon input (maintainer
+  // decision, 2026-11-16, "All of them"). What Vitest and Vite read while
+  // Vitest loads and while a context warms (`warmReads`, some hundred files
+  // and variables) is a global input of every unit (globalKey). What a hook
+  // of the config's own plugins reads (`hookReads`, pluginHooks), at any
+  // time, is an input of every unit that settles after it, with its hash
+  // from that read (settleIn). A daemon whose session read a file that has
+  // changed since is replaced (inputsChanged, daemon.mjs), since a plugin or
+  // a module may keep what it read. A load or transform hook's read of the
+  // module it serves is that module's own text, the module's input already.
+  // A file that the session wrote earlier in the check before it read it,
+  // such as the config Vite bundles into a temporary file, is the session's
+  // own output (maintainer decision, 2026-11-17, "Own writes aren't
+  // inputs": the same process, earlier in the check). Each check starts
+  // with no write (`wrote`), and a file the session wrote must still hold
+  // what it wrote at the next check (`written`, inputsChanged), since a
+  // hand edit of it is no write of the session. So is a variable that the
+  // CLI set (ORACLE_GAPS_STATE, which names each check's output), which a
+  // copy may read too. A read that comes after its warm ended, from work the
+  // warm left behind, is a hook's read, so the global inputs stay those of
+  // the warm itself.
+  const warmReads = new Map()
+  const hookReads = new Map()
+  // The hook reads in the order they came (`hookLog`), kept once in the
+  // store per session (`hook-log:<id>`): a unit names the part of the log
+  // that came before it settled (`hooks:<id>:<n>`), which is an input while
+  // every read in that part holds its hash, so no unit carries the reads
+  // themselves (about 3,000 on TanStack DB's suite; review of #133).
+  const hookLogId = sha1(`${process.pid}:${Date.now()}:${Math.random()}`)
+  const hookLog = []
+  // How much of the hook log the store holds (see check).
+  let hookLogStored = 0
+  // Per check: how far each session's log still holds (logHolds).
+  const holds = new Map()
+  const wrote = new Set()
+  const written = new Map()
+  const reading = new AsyncLocalStorage()
+  watchReads((key, write) => {
+    const at = reading.getStore()
+    if (write && key.startsWith(`env:`)) wrote.add(key)
+    const reads = at?.hook || at?.done ? hookReads : warmReads
+    if (at === undefined || at.discovery || key === at.module || reads.has(key))
+      return
+    if (write) wrote.add(key)
+    else if (!wrote.has(key)) {
+      const hash = key.startsWith(`env:`)
+        ? reads === hookReads
+          ? envHash(key.slice(4))
+          : null
+        : inputHash(key)
+      reads.set(key, hash)
+      if (reads === hookReads) hookLog.push([key, hash])
+    }
+  })
+  // Runs `work` as a warm under `reading`.
+  const warming = async (work) => {
+    const at = {}
+    try {
+      return await reading.run(at, work)
+    } finally {
+      at.done = true
+    }
+  }
+  globalThis.__oracleGapsPluginHooks = (plugins) =>
+    pluginHooks(plugins, reading)
   const requireTarget = createRequire(join(pkg, `package.json`))
   let createVitest
   try {
-    ;({ createVitest } = await import(
-      pathToFileURL(requireTarget.resolve(`vitest/node`)).href
+    ;({ createVitest } = await warming(
+      () => import(pathToFileURL(requireTarget.resolve(`vitest/node`)).href),
     ))
   } catch (error) {
     throw new Refusal(
@@ -478,7 +599,11 @@ export async function openSession(pkg, pause = async () => {}) {
   writeFileSync(join(home, `host`), hostname())
   const harness = join(home, `capture-setup.mjs`)
   copyFileSync(join(here, `capture-setup.mjs`), harness)
-  // The harness imports the path rule beside it (capture-setup.mjs).
+  // The harness imports the input rule and the path rule beside it, and
+  // preloads the child-write log into the processes a test starts
+  // (capture-setup.mjs).
+  copyFileSync(join(here, `inputs.mjs`), join(home, `inputs.mjs`))
+  copyFileSync(join(here, `child-writes.mjs`), join(home, `child-writes.mjs`))
   copyFileSync(join(here, `paths.mjs`), join(home, `paths.mjs`))
   // One wrapper config per context, over the package's own config (a path
   // relative to the package, or undefined for none). Each serves its own
@@ -522,6 +647,11 @@ export default async (env) => {
   plugins: [{
     name: 'oracle-gaps-schemata',
     enforce: 'pre',
+    // Every resolved plugin's hooks read their inputs under the runner's
+    // watch (check.mjs, pluginHooks).
+    configResolved(resolved) {
+      globalThis.__oracleGapsPluginHooks(resolved.plugins)
+    },
     // A workspace dependency loads from its one-file bundle
     // (workspaceBundles). A copy of a test file is not resolved here, so
     // Vite keeps the absolute path that Vitest imports it by, and \`load\`
@@ -583,10 +713,57 @@ export default async (env) => {
   // module by the text that its context serves.
   const servedHash = (path, index) => {
     if (path.startsWith(`fs:`)) return hashOf(path.slice(3))
+    // A variable by its value in the environment this check runs under, and
+    // a directory by its listing now.
+    if (path.startsWith(`env:`)) return envHash(path.slice(4))
+    if (path.startsWith(`hooks:`)) {
+      const [, id, n] = path.split(`:`)
+      return logHolds(id, Number(n)) >= Number(n) ? `held` : `changed`
+    }
+    if (path.startsWith(`shared:`)) return sharedHolds(path, index)
+    if (/^(dir|dirs|stat):/.test(path)) return inputHash(path)
     const text =
       globalThis.__oracleGapsServe[index]?.get(path) ??
       globalThis.__oracleGapsSchemata.get(path)
     return text === undefined ? hashOf(path) : sha1(text)
+  }
+  // The inputs that many units read alike, a variable or a file under
+  // node_modules, are stored once per distinct set (`shared:<hash>`, a row
+  // of the store) and named by each unit that read them (sharedInputs), so
+  // a unit keeps only the inputs that are its own (review of #133, M
+  // "Optimize #133 before merging"). A set holds while each of its inputs
+  // holds its hash, judged once per check and context.
+  const shared = new Map()
+  const sharedHolds = (path, index) => {
+    const key = `${path}:${index}`
+    if (!shared.has(key)) {
+      const inputs = currentStore?.get(path)?.variants[0]?.inputs
+      shared.set(
+        key,
+        inputs?.every(([input, hash]) => servedHash(input, index) === hash)
+          ? `held`
+          : `changed`,
+      )
+    }
+    return shared.get(key)
+  }
+  // How much of a session's hook log, from its start, still holds its
+  // hashes in this check: a unit that names `hooks:<id>:<n>` is unchanged
+  // while the first n reads hold. Another session's log is read from the
+  // store; the current one's grows while the check runs, so the count
+  // extends as later units ask.
+  let currentStore
+  const logHolds = (id, n) => {
+    const log =
+      id === hookLogId
+        ? hookLog
+        : (currentStore?.get(`hook-log:${id}`)?.variants[0]?.inputs ?? [])
+    const held = holds.get(id) ?? { count: 0, broken: false }
+    holds.set(id, held)
+    while (!held.broken && held.count < Math.min(n, log.length))
+      if (servedHash(log[held.count][0]) === log[held.count][1]) held.count += 1
+      else held.broken = true
+    return held.count
   }
   // A context transformed a module (its wrapper's transform hook): the hash
   // of what it then serves.
@@ -723,7 +900,12 @@ export default async (env) => {
     await new Promise((resolve) => service.on(`exit`, resolve))
     throw new Error(`The service was stopped`)
   }
-  async function warmContext(settings, index) {
+  // A context warms under `reading` (see warmReads): what its config, Vite,
+  // and Vitest read while it warms is a global input.
+  function warmContext(settings, index) {
+    return warming(() => warmIn(settings, index))
+  }
+  async function warmIn(settings, index) {
     await fromConfig(index, settings.config, warmProbe())
     writeWrapper(index, settings.config)
     // A context that fails to open gives its listener allowance back: one
@@ -748,6 +930,10 @@ export default async (env) => {
           teardownTimeout: settings.testTimeout,
           typecheck: { enabled: false },
           coverage: { enabled: false },
+          // The runner orders the files itself (KeepOrder), so Vitest's
+          // results cache, which it reads when a context warms and writes
+          // after each run, would only be an input that every run changes.
+          cache: false,
           // Vitest 5 caches transformed modules on disk by default, keyed by
           // the file, not by what this runner's plugin serves for it, so a
           // patched or instrumented source could come back as an earlier text.
@@ -775,6 +961,17 @@ export default async (env) => {
         throw error
       }),
     )
+    // Vitest's discovery of the test files lists the package's directories.
+    // Each check discovers them again, outside any warm (specsOf), so what a
+    // listing found is never stale: those listings are no global input. The
+    // `--out` directories that runs create beside the tests would otherwise
+    // change every unit's identity at every check.
+    for (const project of context.projects ?? []) {
+      const globFiles = project.globFiles
+      if (typeof globFiles === `function`)
+        project.globFiles = (...args) =>
+          reading.run({ discovery: true }, () => globFiles.apply(project, args))
+    }
     // Vitest 3 calls this step `init`; Vitest 4 renamed it `standalone`.
     await fromConfig(
       index,
@@ -1511,7 +1708,25 @@ export default async (env) => {
     return environments
   }
 
-  async function check(
+  // A check, after which each file the session wrote is known by its text.
+  async function check(...args) {
+    try {
+      return await checkIn(...args)
+    } finally {
+      for (const key of wrote)
+        if (key.startsWith(`fs:`)) written.set(key, inputHash(key))
+      // The session's hook log, for units that later sessions look up, once
+      // it has grown: a put marks the store to be written again, whole.
+      if (hookLog.length > hookLogStored) {
+        args[1]?.put(`hook-log:${hookLogId}`, {
+          inputs: [...hookLog],
+          unit: null,
+        })
+        hookLogStored = hookLog.length
+      }
+    }
+  }
+  async function checkIn(
     options,
     store,
     log = console.error,
@@ -1526,6 +1741,13 @@ export default async (env) => {
       if (gone()) throw new Error(`the check's caller has gone`)
     }
     stopIfGone()
+    // Each check hashes every input from its text (fileHashes), and starts
+    // with no write of its own.
+    hashOf.forget()
+    wrote.clear()
+    holds.clear()
+    shared.clear()
+    currentStore = store
     const authored = options.mutants ? loadAuthored(options.mutants) : []
     seedVariable = `${options.envPrefix}_SEED`
     if (options.hangLimit > options.mutantLimit)
@@ -1650,6 +1872,9 @@ export default async (env) => {
         ]
           .sort()
           .map((file) => [file, hashOf(file)]),
+        // What Vitest, Vite, and the config read while Vitest loaded and the
+        // contexts warmed (warmReads), each by its value now.
+        [...warmReads.keys()].sort().map((key) => [key, servedHash(key)]),
         process.version,
         options.seed ?? null,
         settings,
@@ -1714,11 +1939,20 @@ export default async (env) => {
     // its context's transform of it, or else its hash at the start, or now.
     // A path that changed while the run ran is invalidated, and the run is
     // not stored (undefined); nor is a run with no known input.
-    function settleIn(context, started, paths, readAt = {}) {
+    function settleIn(context, started, runPaths, runReadAt = {}) {
       const index = indexOf.get(context)
       const served = servedBy(index)
       const loads = globalThis.__oracleGapsLoads[index]
-      let stable = paths.length > 0
+      let stable = runPaths.length > 0
+      // What the config's plugins have read so far, each with its hash from
+      // its read: the run may have read through any of it (see hookReads).
+      // A variable that the CLI set (`wrote`) is its own output, which a
+      // copy may read too (the harness's fallback read of ORACLE_GAPS_STATE).
+      const hooks = `hooks:${hookLogId}:${hookLog.length}`
+      const paths = [...new Set([...runPaths, hooks])].filter(
+        (path) => !(path.startsWith(`env:`) && wrote.has(path)),
+      )
+      const readAt = { [hooks]: `held`, ...runReadAt }
       const inputs = paths.map((path) => {
         const now = servedHash(path, index)
         const hash =
@@ -1735,11 +1969,31 @@ export default async (env) => {
       })
       return stable ? inputs : undefined
     }
-    const remember = (id, unit, inputs) => {
+    // A unit is stored without the hashes of what its copy read (`readAt`),
+    // which only its settling used: the stored inputs hold them.
+    const remember = (id, { readAt, ...unit }, inputs) => {
       if (!inputs) return
-      const entry = { inputs, unit }
+      const entry = { inputs: sharedInputs(inputs), unit }
       hook?.stored(entry)
       store.put(id, entry)
+    }
+    // A unit's inputs with those that many units read alike (see
+    // sharedHolds) moved into one stored set, which the unit names.
+    const sharedInputs = (inputs) => {
+      const common = []
+      const own = []
+      for (const input of inputs)
+        (input[0].startsWith(`env:`) || input[0].includes(`/node_modules/`)
+          ? common
+          : own
+        ).push(input)
+      if (common.length < 2) return inputs
+      // In one order, so the copies of a file, which read the same modules
+      // in different orders, name one set.
+      common.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      const path = `shared:${sha1(JSON.stringify(common))}`
+      if (!store.get(path)) store.put(path, { inputs: common, unit: null })
+      return [...own, [path, `held`]]
     }
     // A batch run in a slot's context, with the inputs to store each item
     // under: the modules its file's unmutated run read, and those its copy
@@ -2693,7 +2947,17 @@ export default async (env) => {
     removeHome()
   }
 
-  return { check, close }
+  /**
+   * Whether a file the session read (warmReads, hookReads) or wrote
+   * (written) holds other text now: a
+   * daemon then serves no more checks, since a plugin or a module may keep
+   * what it read (daemon.mjs).
+   */
+  const inputsChanged = () =>
+    [...warmReads, ...hookReads, ...written].some(
+      ([key, hash]) => !key.startsWith(`env:`) && inputHash(key) !== hash,
+    )
+  return { check, close, inputsChanged }
 }
 
 /**

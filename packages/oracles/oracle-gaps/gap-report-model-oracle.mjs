@@ -13,10 +13,11 @@ import {
   rmSync,
   symlinkSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs'
 import { createRequire } from 'node:module'
-import { dirname, join } from 'node:path'
+import { dirname, join, posix as posixPath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import fc from 'fast-check'
 
@@ -522,6 +523,11 @@ const edits = [
 // `laterSteps` (the generator rule: new draws go last).
 const laterEdits = [`fsData`, `midrun`]
 const earlierEdits = edits.filter((edit) => !laterEdits.includes(edit))
+// The edit of the gate input that file b's verdict reads (`inputRead`),
+// which flips it between `open` and `shut`. It is drawn in its own field
+// (`inputSteps`), after `laterSteps`, so the fields before it draw as they
+// did (the generator rule: new draws go last).
+const inputEdits = [`inputGate`]
 // A history's no later edits, one value, so `histories` can take it back
 // (fc.constant takes back only its own reference).
 const NO_LATER_STEPS = Object.freeze([])
@@ -533,6 +539,12 @@ const NO_STOPS = Object.freeze([])
 const laterStepsOf = (history) =>
   history.witness === false && history.steps != null
     ? (history.laterSteps ?? [])
+    : []
+// The input edits a history takes after its later edits, by the same rule.
+const NO_INPUT_STEPS = Object.freeze([])
+const inputStepsOf = (history) =>
+  history.witness === false && history.steps != null
+    ? (history.inputSteps ?? [])
     : []
 // The steps that act on the daemon and change no file.
 const daemonEvents = new Set([
@@ -1102,6 +1114,103 @@ const drawn = fc.record({
     }),
     { maxLength: 8 },
   ),
+  // Every read is a daemon input (maintainer decision, 2026-11-16, "All of
+  // them"): a file a test reads through fs on any path, node_modules
+  // included; an environment variable a test reads; and what the config's
+  // own plugin reads. File b's verdicts also wait on one such gate input,
+  // which the `inputGate` edit flips between `open` and `shut` (law 9). The
+  // gate is a JSON file that the test reads with a sync read: in the
+  // package's tests (`inside`), beside the package and outside it
+  // (`outside`), or in a package under its node_modules (`module`); or the
+  // variable GAP_INPUT_GATE (`env`); or a file the config's own plugin
+  // reads, once when the config resolves (`pluginConfig`) or each time it
+  // transforms a test file (`pluginTransform`), and writes into the test's
+  // text; or the listing of a directory of the package's tests, which holds
+  // one empty file named `open` or `shut`, read by `readdirSync`
+  // (`listing`) or by `opendirSync` (`opendir`): the edit renames that file,
+  // so no file's text changes; or the package's gate file read through a
+  // stream (`stream`, createReadStream); or an input of Vite's own plugins,
+  // the package's tsconfig.json, whose useDefineForClassFields decides
+  // whether a declared class field is an own property (`tsconfig`); or a
+  // listing that the config makes when it loads and gives to the tests
+  // through `define` (`configListing`); or a file that the config's plugin
+  // writes when the config resolves, which the edit then changes by hand
+  // (`pluginWrite`: a cold run's plugin writes it again, so the cold result
+  // does not change, and the daemon must not read the hand edit). These fields change what a history runs, so
+  // they are drawn (maintainer decision, 2026-11-16, "Randomness wins"), and
+  // last.
+  inputRead: fc.constantFrom(
+    `none`,
+    `none`,
+    `none`,
+    `inside`,
+    `outside`,
+    `module`,
+    `env`,
+    `pluginConfig`,
+    `pluginTransform`,
+    `listing`,
+    `opendir`,
+    `stream`,
+    `tsconfig`,
+    `configListing`,
+    `pluginWrite`,
+  ),
+  // Each write of a gate file keeps its size (`open` and `shut` have one
+  // length) and gets back one fixed modification time, as `cp -p`, `rsync
+  // -t`, or `touch -r` leave a file: a cache keyed by size and time cannot
+  // tell the two texts apart (D10; the TLA model's weakened-stamp run).
+  keepStamp: fc.constantFrom(false, false, false, true),
+  // The input edits, which follow a history's steps and later edits.
+  inputSteps: fc.oneof(
+    { weight: 3, arbitrary: fc.constant(NO_INPUT_STEPS) },
+    {
+      weight: 1,
+      arbitrary: fc.array(fc.constantFrom(...inputEdits), {
+        minLength: 1,
+        maxLength: 2,
+      }),
+    },
+  ),
+  // Whether a daemon's checks run under a small test-only string limit
+  // (ORACLE_GAPS_TEST_STRING_LIMIT): V8 makes no string longer than about
+  // 512 MB, and a suite's store can pass that (#179), so a store that the
+  // daemon writes and reads as one string fails every check past it. The
+  // limit is longer than any one stored row of this history and shorter than
+  // the store. It switches a test-only knob, so only the constructed history
+  // "a daemon store longer than the string limit, reloaded after a restart"
+  // sets it.
+  storeLimit: fc.constant(false),
+  // Whether file b, as it loads, reads a file that its test's own child
+  // process wrote: a node child starts a node grandchild, which writes the
+  // file in a new temporary directory and prints the directory, and file b
+  // reads the file and removes the directory. A file that the test's own
+  // process tree wrote earlier in the check is its own output, no input
+  // (maintainer decisions "Own writes aren't inputs", 2026-11-17, and
+  // "Optimize #133 before merging", 2026-11-19), so an unchanged recheck
+  // through the daemon reuses file b's runs although the directory differs
+  // in every run. It changes what a history runs, so it is drawn (randomness
+  // wins, 2026-11-16), and last.
+  childWrite: fc.constantFrom(
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+  ),
+  // The Vite environment that file b runs in when it reads what its child
+  // process wrote (`childWrite`): the config's (`node`), or one that
+  // transforms its modules for the client (`client`), as a jsdom
+  // environment does. The client transform rewrites `new URL(<literal>,
+  // import.meta.url)` to a URL of the dev server, in the harness that runs in
+  // the file's environment too, so the harness's own path to the child
+  // preload must not take that form (TanStack DB's jsdom suite). Only file b
+  // takes it, and only where it reads no gate input or data, whose paths
+  // take that form in the file's own text.
+  childEnvironment: fc.constantFrom(`node`, `node`, `node`, `client`),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -1175,6 +1284,7 @@ const constructedNeutral = {
   slowStart: false,
   holdOverlap: false,
   shortWait: false,
+  storeLimit: false,
 }
 // A drawn history never switches a test-only hook either (randomness wins,
 // 2026-11-16; v21.2 I16). Two steps arm a daemon pause: `dieMidCheck` holds
@@ -1248,12 +1358,17 @@ const histories = drawn.map(
         ? whole
         : { ...whole, stopRuns, steps, tests }
     const later = (steps ?? []).filter((step) => laterEdits.includes(step))
-    if (later.length === 0) return taken
-    const earlier = steps.filter((step) => !laterEdits.includes(step))
+    // An input edit in `steps` moves to `inputSteps` in the same way.
+    const inputs = (steps ?? []).filter((step) => inputEdits.includes(step))
+    if (later.length === 0 && inputs.length === 0) return taken
+    const earlier = steps.filter(
+      (step) => !laterEdits.includes(step) && !inputEdits.includes(step),
+    )
     return {
       ...taken,
       steps: earlier.length > 0 ? earlier : null,
-      laterSteps: later,
+      ...(later.length > 0 ? { laterSteps: later } : {}),
+      ...(inputs.length > 0 ? { inputSteps: inputs } : {}),
     }
   },
 )
@@ -3418,7 +3533,11 @@ function resolveHistory(history) {
     template: history.template,
     fault: history.fault,
     stability: history.stability,
-    steps: [...(history.steps ?? []), ...laterStepsOf(history)],
+    steps: [
+      ...(history.steps ?? []),
+      ...laterStepsOf(history),
+      ...inputStepsOf(history),
+    ],
     pauseEngages: history.pauseEngages !== false,
     warmReplaced: history.warmReplaced === true,
     replyHeld: history.replyHeld === true,
@@ -3430,6 +3549,24 @@ function resolveHistory(history) {
     spinThrows: history.spinThrows === true,
     slowStart: history.slowStart ?? false,
     shortWait: history.shortWait === true,
+    storeLimit: history.storeLimit === true,
+    childWrite: history.childWrite === true,
+    childEnvironment:
+      history.childWrite === true &&
+      (history.inputRead ?? `none`) === `none` &&
+      (history.fsRead ?? `none`) === `none`
+        ? (history.childEnvironment ?? `node`)
+        : `node`,
+    // The gate input that file b's verdicts also wait on (`inputRead`), and
+    // whether each write of a gate file keeps its size and modification time
+    // (`keepStamp`).
+    // A plugin's gate needs a config to hold the plugin: with none, file b
+    // reads no gate.
+    inputRead:
+      configGated(history) && configOf(history).configPath === undefined
+        ? `none`
+        : (history.inputRead ?? `none`),
+    keepStamp: history.keepStamp === true,
     // Whether a step edits file b's helper during a check (`midrun`): then
     // file a loads the helper and holds the test that edits it.
     midrun: [...(history.steps ?? []), ...laterStepsOf(history)].includes(
@@ -5267,6 +5404,125 @@ const dataReads = {
   ],
 }
 
+// The gate input of file b's verdicts (`inputRead`): the variable that
+// `env` reads, and the file each other kind reads. A gate file holds
+// `open` or `shut`, two words of one length, so an edit keeps its size.
+const INPUT_GATE_VAR = `GAP_INPUT_GATE`
+const gateText = (open) =>
+  `${JSON.stringify({ gate: open ? `open` : `shut` })}\n`
+// The modification time, in seconds, that every write of a gate file gets
+// back under `keepStamp`.
+const GATE_STAMP = 1_700_000_000
+// A fixture path under the directory beside the package (`outsideOf`),
+// which is outside it; writeFixture places it there.
+const BESIDE = `<beside>/`
+/** The directory beside the package `dir` that holds its outside files. */
+const outsideOf = (dir) => `${dir}.outside`
+const gateFiles = {
+  inside: `tests/gate.json`,
+  stream: `tests/gate.json`,
+  outside: `${BESIDE}gate.json`,
+  module: `node_modules/gap-gate/gate.json`,
+  pluginConfig: `tests/plugin-gate.json`,
+  pluginTransform: `tests/plugin-gate.json`,
+}
+/** Whether the gate input is one that the config's own plugin reads. */
+const pluginGated = (history) =>
+  history.inputRead === `pluginConfig` ||
+  history.inputRead === `pluginTransform`
+/** Whether the gate lives in the config (a plugin, or the config's own listing). */
+const configGated = (history) =>
+  pluginGated(history) ||
+  history.inputRead === `configListing` ||
+  history.inputRead === `pluginWrite`
+// Whether a test's verdict waits on the gate input.
+const inputGated = (plan, file, t) =>
+  plan.inputRead !== `none` &&
+  file === `b` &&
+  t.judges &&
+  t.judgeBy === `verdict`
+// How file b reads its gate input, by each kind (`inputRead`). The outside
+// file lies in the directory beside the package, named by the package's
+// own directory with `.outside` after it. The plugin kinds read the text
+// that the config's plugin wrote in place of `__GAP_INPUT_GATE__`.
+const readGateFile = (path) =>
+  `const readInput = async () => ({ open: JSON.parse(readGate(${path}, 'utf8')).gate === 'open' })`
+const inputReads = {
+  inside: [
+    `import { readFileSync as readGate } from 'node:fs'`,
+    readGateFile(`new URL('./gate.json', import.meta.url)`),
+  ],
+  outside: [
+    `import { readFileSync as readGate } from 'node:fs'`,
+    `import { fileURLToPath as gatePackage } from 'node:url'`,
+    readGateFile(
+      `gatePackage(new URL('..', import.meta.url)).replace(/[\\\\/]+$/, '') + '.outside/gate.json'`,
+    ),
+  ],
+  module: [
+    `import { readFileSync as readGate } from 'node:fs'`,
+    readGateFile(
+      `new URL('../node_modules/gap-gate/gate.json', import.meta.url)`,
+    ),
+  ],
+  env: [
+    `const readInput = async () => ({ open: process.env.${INPUT_GATE_VAR} !== 'shut' })`,
+  ],
+  pluginConfig: [
+    `const readInput = async () => ({ open: __GAP_INPUT_GATE__ === 'open' })`,
+  ],
+  pluginTransform: [
+    `const readInput = async () => ({ open: __GAP_INPUT_GATE__ === 'open' })`,
+  ],
+  tsconfig: [
+    `class GateBase {}`,
+    `class GateField extends GateBase { field!: number }`,
+    `const readInput = async () => ({ open: Object.hasOwn(new GateField(), 'field') })`,
+  ],
+  configListing: [
+    `const readInput = async () => ({ open: __GAP_INPUT_GATE__ === 'open' })`,
+  ],
+  pluginWrite: [
+    `import { readFileSync as readGate } from 'node:fs'`,
+    readGateFile(`new URL('./gen.json', import.meta.url)`),
+  ],
+  stream: [
+    `import { createReadStream as streamGate } from 'node:fs'`,
+    `const readInput = async () => { const chunks: Array<Buffer> = []; for await (const chunk of streamGate(new URL('./gate.json', import.meta.url))) chunks.push(chunk as Buffer); return { open: JSON.parse(Buffer.concat(chunks).toString('utf8')).gate === 'open' } }`,
+  ],
+  listing: [
+    `import { readdirSync as listGate } from 'node:fs'`,
+    `const readInput = async () => ({ open: listGate(new URL('./gate-dir/', import.meta.url)).includes('open') })`,
+  ],
+  opendir: [
+    `import { opendirSync as openGate } from 'node:fs'`,
+    `const readInput = async () => { const dir = openGate(new URL('./gate-dir/', import.meta.url)); const names: Array<string> = []; for (let entry = dir.readSync(); entry; entry = dir.readSync()) names.push(entry.name); dir.closeSync(); return { open: names.includes('open') } }`,
+  ],
+}
+// File b's read of a file that its test's child process tree wrote
+// (`childWrite`): the grandchild writes `child.txt` in a new directory under
+// the OS temporary directory and prints the directory, which the child
+// passes on; file b tests that the file exists, which is a read of it by
+// existence and kind (G42's stat family), checks its text, and removes the
+// directory.
+const CHILD_WRITE = `const fs = require('node:fs'), os = require('node:os'), path = require('node:path'); const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gap-child-')); fs.writeFileSync(path.join(dir, 'child.txt'), 'written'); process.stdout.write(dir)`
+const CHILD_START = `process.stdout.write(require('node:child_process').execFileSync(process.execPath, ['-e', ${JSON.stringify(CHILD_WRITE)}], { encoding: 'utf8' }))`
+const childWriteRead = [
+  `import { execFileSync as runChild } from 'node:child_process'`,
+  `import { existsSync as childExists, readFileSync as readChild, rmSync as removeChild } from 'node:fs'`,
+  `import { join as joinChild } from 'node:path'`,
+  `const childDir = runChild(process.execPath, ['-e', ${JSON.stringify(CHILD_START)}], { encoding: 'utf8' })`,
+  `if (!childExists(joinChild(childDir, 'child.txt'))) throw new Error('the child process wrote no file')`,
+  `const childText = readChild(joinChild(childDir, 'child.txt'), 'utf8')`,
+  `removeChild(childDir, { recursive: true, force: true })`,
+  `if (childText !== 'written') throw new Error('the child process wrote another text')`,
+]
+/** The variables a check of `state` runs with: the gate's, under `env`. */
+const inputEnv = (plan, state) =>
+  plan.inputRead === `env`
+    ? { [INPUT_GATE_VAR]: state.inputOpen ? `open` : `shut` }
+    : {}
+
 function oracleTestFile(plan, file) {
   const sites = sitesOf(plan)
   const entries = [
@@ -5316,6 +5572,9 @@ function oracleTestFile(plan, file) {
   const out = [
     // A per-file environment, which Vitest reads from the file's text.
     ...(plan.pragma && file === `a` ? [`// @vitest-environment marked`] : []),
+    ...(plan.childEnvironment === `client` && file === `b`
+      ? [`// @vitest-environment client-marked`]
+      : []),
     `import { ${plan.tests.some((t) => t.file === file && t.cleanupThrows) ? `afterEach, ` : ``}describe, expect, test${plan.tests.some((t) => t.file === file && (t.spies || t.timed === `spiedclock`)) ? `, vi` : ``} } from 'vitest'`,
     ...(plan.tests.some((t) => t.file === file && t.shrinks)
       ? [`import fc from 'fast-check'`]
@@ -5369,6 +5628,10 @@ function oracleTestFile(plan, file) {
     `import * as sut from '../src/sut'`,
     ...(file === `b` ? [`import { strict } from './strict'`] : []),
     ...(file === `b` && plan.fsRead !== `none` ? dataReads[plan.fsRead] : []),
+    ...(file === `b` && plan.inputRead !== `none`
+      ? inputReads[plan.inputRead]
+      : []),
+    ...(file === `b` && plan.childWrite ? childWriteRead : []),
     ...stubs,
     // State that tests of this file share (the `w_shared` witness).
     `const shared = { value: 0 }`,
@@ -5545,7 +5808,7 @@ function oracleTestFile(plan, file) {
                 // A lazy gate is imported only where the output differs, so
                 // the unmutated run never loads it. It is open before any
                 // edit, so the model need not read it.
-                `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}${lazyGated(plan, file, t) ? ` && (await import('./lazy')).open` : ``}${fsGated(plan, file, t) ? ` && (await readData()).open` : ``}) {`,
+                `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}${lazyGated(plan, file, t) ? ` && (await import('./lazy')).open` : ``}${fsGated(plan, file, t) ? ` && (await readData()).open` : ``}${inputGated(plan, file, t) ? ` && (await readInput()).open` : ``}) {`,
                 `      g.__oracleVerdict?.({ property: 'fixture-${file}', law: '${t.law}', checkpoint: 'trace' })`,
                 `      throw new Error('violation')`,
                 `    }`,
@@ -5563,7 +5826,7 @@ function oracleTestFile(plan, file) {
         : []),
       t.asProp
         ? `  fcTest.prop([fcv.integer({ min: 0, max: 10 })], { numRuns: 20, seed: 1 })('${testName(t, index)}', async (n) => {`
-        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || t.timed || lazyGated(plan, file, t) || fsGated(plan, file, t) ? `async ` : ``}() => {`,
+        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || t.timed || lazyGated(plan, file, t) || fsGated(plan, file, t) || inputGated(plan, file, t) ? `async ` : ``}() => {`,
       ...partsOf(t).flatMap(campaign),
       `  })`,
       `})`,
@@ -5787,6 +6050,8 @@ const initialState = (plan) => ({
   lazyOpen: true,
   // What `tests/data.json` holds: whether file b's data gate is open.
   dataOpen: true,
+  // Whether file b's gate input reads `open` (`inputRead`).
+  inputOpen: true,
   // How many mid-run edits have landed (`midrun`).
   midruns: 0,
   seed: 1,
@@ -5817,17 +6082,49 @@ const PRE_PLUGIN = `{ name: 'gap-pre-rewrite', enforce: 'pre', transform(code, i
 // memory, so only the runner's own \`load\` can answer for it (review of #103).
 const LOAD_PLUGIN = `{ name: 'gap-own-load', load(id) { const path = id.split('?')[0]; return path.endsWith('.test.ts') ? readFileSync(path, 'utf8') : undefined } }`
 
+// The config's own plugin that reads the gate file (`inputRead`
+// `pluginConfig` or `pluginTransform`) and writes its word in place of
+// `__GAP_INPUT_GATE__` in each test file it transforms. It finds the file
+// from the config's own location (`gatePath`), not from a root, which a
+// config's test root moves. `pluginConfig` reads it once, when the config
+// resolves; `pluginTransform` reads it in each transform.
+const GATE_READ = `JSON.parse(readGate(gatePath, 'utf8')).gate`
+const gatePlugin = (plan) =>
+  plan.inputRead === `pluginWrite`
+    ? `{ name: 'gap-input-gate', configResolved() { writeGate(gatePath, '{"gate":"open"}\\n') } }`
+    : `(() => { let gate; return { name: 'gap-input-gate', configResolved() { ${plan.inputRead === `pluginConfig` ? `gate = ${GATE_READ}` : ``} }, transform(code, id) { return id.split('?')[0].endsWith('.test.ts') ? code.replaceAll('__GAP_INPUT_GATE__', JSON.stringify(${plan.inputRead === `pluginConfig` ? `gate` : GATE_READ})) : undefined } } })()`
+// The gate file's path from a config at `configPath` (in the package, or in
+// its parent, where the package is the directory `pkg`).
+const gateFromConfig = (configPath, target = `tests/plugin-gate.json`) =>
+  posixPath.relative(
+    posixPath.dirname(posixPath.join(`/pkg`, configPath)),
+    `/pkg/${target}`,
+  )
+// The file or directory the config reads or writes, by gate kind.
+const configTargets = {
+  configListing: `tests/gate-dir`,
+  pluginWrite: `tests/gen.json`,
+}
+
 /**
  * The text of the package's config, in its syntax (`configOf`), with the
  * fault, the top-level await, or the `require` calls the plan holds. `test`
  * is the config's `test` object.
  */
-function configText(plan, test) {
+function configText(plan, test, configPath = plan.configPath) {
   const commonjs = plan.configSyntax === `cjs`
   const plugins = [
     ...(plan.prePlugin ? [PRE_PLUGIN] : []),
     ...(plan.loadPlugin ? [LOAD_PLUGIN] : []),
+    ...(pluginGated(plan) || plan.inputRead === `pluginWrite`
+      ? [gatePlugin(plan)]
+      : []),
   ]
+  // The config's listing of the gate directory, given to the tests.
+  const define =
+    plan.inputRead === `configListing`
+      ? `, define: { __GAP_INPUT_GATE__: JSON.stringify(listGate(gatePath).includes('open') ? 'open' : 'shut') }`
+      : ``
   const config = `defineConfig(${
     { object: ``, function: `() => (`, async: `async () => (`, promise: `` }[
       plan.config
@@ -5836,7 +6133,7 @@ function configText(plan, test) {
     plan.fault === `projects`
       ? `{ projects: [{ test: { name: 'unit', ...${test} } }] }`
       : test
-  }${plugins.length > 0 ? `, plugins: [${plugins.join(`, `)}]` : ``} }${plan.config === `object` || plan.config === `promise` ? `` : `)`})`
+  }${plugins.length > 0 ? `, plugins: [${plugins.join(`, `)}]` : ``}${define} }${plan.config === `object` || plan.config === `promise` ? `` : `)`})`
   // A promise of the config, a null default, or a config cut off mid-object.
   const body =
     plan.fault === `configNull`
@@ -5855,6 +6152,17 @@ function configText(plan, test) {
       : [`import { fileURLToPath } from 'node:url'`]),
     // Only a config in ES module syntax has the load plugin (`loadPluginOf`).
     ...(plan.loadPlugin ? [`import { readFileSync } from 'node:fs'`] : []),
+    ...(configGated(plan)
+      ? commonjs
+        ? [
+            `const { readFileSync: readGate, readdirSync: listGate, writeFileSync: writeGate } = require('node:fs')`,
+            `const gatePath = require('node:path').join(__dirname, '${gateFromConfig(configPath, configTargets[plan.inputRead])}')`,
+          ]
+        : [
+            `import { readFileSync as readGate, readdirSync as listGate, writeFileSync as writeGate } from 'node:fs'`,
+            `const gatePath = new URL('${gateFromConfig(configPath, configTargets[plan.inputRead])}', import.meta.url)`,
+          ]
+      : []),
     ...(plan.fault === `configThrows`
       ? [`throw new Error('the fixture config broke')`]
       : []),
@@ -6048,6 +6356,7 @@ function fixtureFiles(plan, state = initialState(plan)) {
           [altConfigPath(plan)]: configText(
             plan,
             test.replace(`'tests/**/*.test.ts'`, `'tests/a.test.ts'`),
+            altConfigPath(plan),
           ),
         }
       : {}),
@@ -6071,6 +6380,30 @@ function fixtureFiles(plan, state = initialState(plan)) {
     ...(plan.fsRead !== `none`
       ? { 'tests/data.json': `${JSON.stringify({ open: state.dataOpen })}\n` }
       : {}),
+    // The gate file, which under `keepStamp` gets back one modification
+    // time each time it is written.
+    // The gate directory of a listing, which holds one empty file, named
+    // by the gate's word.
+    ...([`listing`, `opendir`, `configListing`].includes(plan.inputRead)
+      ? { [`tests/gate-dir/${state.inputOpen ? `open` : `shut`}`]: `` }
+      : {}),
+    // The package's tsconfig.json, read by Vite's own esbuild plugin.
+    ...(plan.inputRead === `tsconfig`
+      ? {
+          'tsconfig.json': `${JSON.stringify({ compilerOptions: { target: `ES2022`, useDefineForClassFields: state.inputOpen } })}\n`,
+        }
+      : {}),
+    // The file the config's plugin writes, as a hand edit leaves it.
+    ...(plan.inputRead === `pluginWrite`
+      ? { 'tests/gen.json': gateText(state.inputOpen) }
+      : {}),
+    ...(gateFiles[plan.inputRead] === undefined
+      ? {}
+      : {
+          [gateFiles[plan.inputRead]]: plan.keepStamp
+            ? { text: gateText(state.inputOpen), mtime: GATE_STAMP }
+            : gateText(state.inputOpen),
+        }),
     // A workspace dependency with module state, linked through node_modules.
     'deps/state-dep/package.json': manifest({
       name: `state-dep`,
@@ -6178,6 +6511,24 @@ function fixtureFiles(plan, state = initialState(plan)) {
             ].join(`\n`),
         }
       : {}),
+    // The client-transform environment that file b names when it reads what
+    // its child process wrote (`childEnvironment`).
+    ...(plan.childEnvironment === `client`
+      ? {
+          [`${testRoot.environments ?? `node_modules`}/vitest-environment-client-marked/package.json`]: `${JSON.stringify({ name: `vitest-environment-client-marked`, type: `module`, exports: `./index.js` })}\n`,
+          [`${testRoot.environments ?? `node_modules`}/vitest-environment-client-marked/index.js`]:
+            [
+              `export default {`,
+              `  name: 'client-marked',`,
+              `  viteEnvironment: 'client',`,
+              `  setup() {`,
+              `    return { teardown() {} }`,
+              `  },`,
+              `}`,
+              ``,
+            ].join(`\n`),
+        }
+      : {}),
     // A copy that a check which died left behind (the runner names its
     // copies `.oracle-gaps-<pid>-<n>-<file>`). It is no test file: a check
     // that took it for one would refuse the run.
@@ -6193,6 +6544,14 @@ function fixtureFiles(plan, state = initialState(plan)) {
   }
   for (const file of oracleFilesOf(plan))
     files[`tests/${file}.test.ts`] = oracleTestFile(plan, file)
+  // The hand edit of the file the plugin writes also changes file b's own
+  // text, so the daemon runs b again and reads the edited file.
+  if (
+    plan.inputRead === `pluginWrite` &&
+    files[`tests/b.test.ts`] !== undefined
+  )
+    files[`tests/b.test.ts`] +=
+      `// the plugin's file was edited to ${state.inputOpen ? `open` : `shut`}\n`
   // Each mid-run edit changes file a's own text too (a count of them), so
   // the daemon runs file a's tests again in the check the edit lands in,
   // instead of reusing their evidence: the marker sits in the daemon's
@@ -6263,6 +6622,11 @@ function removePath(path) {
 // The paths each fixture directory holds, so a state that lacks a file of
 // the state before it removes that file.
 const written = new Map()
+// Where a fixture path lies: in the package, or beside it (`BESIDE`).
+const placeOf = (dir, path) =>
+  path.startsWith(BESIDE)
+    ? join(outsideOf(dir), path.slice(BESIDE.length))
+    : join(dir, path)
 function writeFixture(dir, files) {
   for (const sub of [
     `src`,
@@ -6276,14 +6640,17 @@ function writeFixture(dir, files) {
   if (!existsSync(join(dir, `node_modules/state-dep`)))
     symlinkSync(`../deps/state-dep`, join(dir, `node_modules/state-dep`), `dir`)
   for (const path of written.get(dir) ?? [])
-    if (!(path in files)) removePath(join(dir, path))
-  for (const [path, text] of Object.entries(files)) {
-    const at = join(dir, path)
+    if (!(path in files)) removePath(placeOf(dir, path))
+  for (const [path, value] of Object.entries(files)) {
+    const at = placeOf(dir, path)
     mkdirSync(dirname(at), { recursive: true })
+    // A file may name the modification time it gets back (`keepStamp`).
+    const text = typeof value?.text === `string` ? value.text : value
     // An unchanged file keeps its modification time, as in a real package.
     if (typeof text === `string`) {
       if (!existsSync(at) || readFileSync(at, `utf8`) !== text)
         writeFileSync(at, text)
+      if (value.mtime !== undefined) utimesSync(at, value.mtime, value.mtime)
     } else if (linkTarget(at) !== text.link) {
       // A link that a later state points elsewhere is replaced.
       removePath(at)
@@ -6360,6 +6727,7 @@ function applyEdit(state, edit) {
       : { ...state, strict: !state.strict, midruns: state.midruns + 1 }
   if (edit === `lazy`) return { ...state, lazyOpen: !state.lazyOpen }
   if (edit === `fsData`) return { ...state, dataOpen: !state.dataOpen }
+  if (edit === `inputGate`) return { ...state, inputOpen: !state.inputOpen }
   if (edit === `seed`) return { ...state, seed: state.seed === 1 ? 2 : 1 }
   if (edit === `config`) return { ...state, altConfig: !state.altConfig }
   // A seed no other step uses, so the check has fresh work to be killed in.
@@ -6616,6 +6984,10 @@ export {
   drawn,
   NO_STOPS,
   NO_LATER_STEPS,
+  NO_INPUT_STEPS,
+  inputEdits,
+  inputEnv,
+  outsideOf,
   MIDRUN_EDITORS,
   captureWitness,
   outsideRepository,

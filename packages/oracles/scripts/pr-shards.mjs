@@ -27,6 +27,26 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+// The constructed histories of the edits of each kind of daemon input
+// (gap-report-oracle.property.test.mjs).
+const daemonInputUnits = [
+  'an edit to a file in the package that keeps its size and modification time',
+  'an edit to a file outside the package that a test reads',
+  'an edit to a file under node_modules that a test reads',
+  'an edit to an environment variable that a test reads',
+  "an edit to a file the config's plugin reads when the config resolves",
+  "an edit to a file the config's plugin reads when it transforms a test",
+  'an edit to a directory listing that a test reads',
+  'an edit to a directory a test reads through opendir',
+  'an edit to a file a test reads through a stream',
+  "an edit to the tsconfig that Vite's own plugin reads",
+  'an edit to a directory the config lists when it loads',
+  "a hand edit of a file the config's plugin writes",
+  // The evidence store under a test string limit (#179).
+  'a daemon store longer than the string limit, reloaded after a restart',
+  // A file the test's child process wrote (own writes of the process tree).
+  'a test that reads a file its child process wrote, rechecked through the daemon',
+]
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
 const anyOf = (names) => `(?:${names.map(escape).join(`|`)})`
 const rest = Symbol(`rest`)
@@ -391,6 +411,10 @@ export const partitions = {
       ]),
       // The rest: 401 s of weight, and any unit added later.
       4: rest,
+      // The edits of a daemon input that every read makes one (maintainer
+      // decision, 2026-11-16, "Every read is a daemon input"), one unit per
+      // kind of input: 73 s on the CI runner.
+      5: anyOf(daemonInputUnits),
     },
   },
   // The end-to-end gap oracle's random units, which every pull request runs
@@ -494,6 +518,8 @@ export const partitions = {
       ]),
       // The rest: 560 s of weight, and any unit added later.
       4: rest,
+      // The daemon-input units (see the fixed-seed partition).
+      5: anyOf(daemonInputUnits),
     },
   },
   // The end-to-end gap oracle's determinism units, which every pull request
@@ -616,6 +642,8 @@ export const partitions = {
       ]),
       // The rest: 471 s of weight, and any unit added later.
       7: rest,
+      // The daemon-input units (see the fixed-seed partition).
+      8: anyOf(daemonInputUnits.map((name) => `constructed history: ${name}`)),
     },
   },
   'oracle-gaps-static-windows': {
@@ -858,6 +886,11 @@ export const partitions = {
         'two runs on one output directory',
         'a stream log that cannot be written',
         'a start refuses an empty claim',
+        daemonInputUnits[0],
+        daemonInputUnits[1],
+        daemonInputUnits[9],
+        daemonInputUnits[12],
+        daemonInputUnits[13],
       ]),
       7: anyOf([
         'a daemon pause that cannot engage',
@@ -894,6 +927,10 @@ export const partitions = {
         'a stop with the default output directory',
         'a daemon check with the default output directory',
         'a daemon check with the default output directory, unsupervised',
+        daemonInputUnits[2],
+        daemonInputUnits[3],
+        daemonInputUnits[10],
+        daemonInputUnits[11],
       ]),
       9: anyOf([
         'a lazy module loaded before a hang in the same batch',
@@ -912,6 +949,11 @@ export const partitions = {
         'a stop before the CLI starts',
         'a stop by SIGTERM as the CLI starts',
         'a start refuses a dangling claim',
+        daemonInputUnits[4],
+        daemonInputUnits[5],
+        daemonInputUnits[6],
+        daemonInputUnits[7],
+        daemonInputUnits[8],
         'a stop before the CLI starts, after a stopped check',
         'a run after a killed CLI',
       ]),
