@@ -249,9 +249,9 @@ an oracle file name, since a glob with no files fails.
 ## 4. Write the agent instructions
 
 Add this block to whichever instruction file the repository uses:
-`AGENTS.md` or `CLAUDE.md`. If neither exists, ask the developer which file
-to create. On an upgrade, replace everything between the markers and keep
-the rest of the file.
+`AGENTS.md` or `CLAUDE.md`. If neither exists, create `AGENTS.md`.
+On an upgrade, replace everything between the markers and keep the rest
+of the file.
 
 ```md
 <!-- BEGIN @tanstack/oracles (template 4) -->
