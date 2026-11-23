@@ -1186,6 +1186,13 @@ const drawn = fc.record({
     0,
     HEAVY_CALLS,
   ),
+  // Whether the history owns a pair of oracle files, p and q, whose copies of
+  // the pair witness (`w_hangpair`) run in sorted owner order, where the
+  // runner's contexts may join them in another order (the join order is
+  // `passOf`'s, check.mjs `runAcross`). Drawn, and appended last (Randomness
+  // wins, 2026-11-16), so every earlier field keeps its draws. A constructed
+  // history sets it for its witness.
+  pair: fc.constantFrom(false, false, false, false, true),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -1353,15 +1360,10 @@ const histories = drawn.map(
     // time) is read as the drawn one, which never waits. A half of the
     // witness module (captureHalves, constructed only) comes back as the
     // whole module, which the arbitrary draws.
-    // The pair witness (`pair`, constructed only) comes back as the drawn
-    // `true` mode, which carries none of the pair's functions, as a half of
-    // the capture module comes back as the whole one.
     const taken = {
       ...(Object.hasOwn(captureHalves, plain.witness)
         ? { ...reset, witness: `capture` }
-        : plain.witness === `pair`
-          ? { ...reset, witness: true }
-          : reset),
+        : reset),
       stopRuns,
       steps,
     }
@@ -2176,11 +2178,11 @@ const witness = [
       judging(`q`, `fixed seed`, 7, { judges: false, loops: PAIR_LOOPS }),
     ],
   },
-  // The owners of the pair witness (the `pair` mode, constructed only): p's
-  // copy hangs where it would judge, and q's copy kills. Copies run in sorted
-  // owner order (register 2026-11-14, "Deterministic cuts, outcome rule"; G44),
-  // so p's hang is cut as no progress before q judges, however the contexts
-  // joined the files.
+  // The owners of the pair witness (`w_hangpair`, present when the history's
+  // drawn `pair` field is set): p's copy hangs where it would judge, and q's
+  // copy kills. Copies run in sorted owner order (register 2026-11-14,
+  // "Deterministic cuts, outcome rule"; G44), so p's hang is cut as no
+  // progress before q judges, however the contexts joined the files.
   {
     id: `w_hangpair`,
     owners: PAIR_FILES,
@@ -3194,7 +3196,7 @@ function resolveHistory(history) {
     ...exported,
     ...importer,
     ...dotGen,
-    ...(history.witness || stopsOnly(history)
+    ...(history.witness || history.pair || stopsOnly(history)
       ? witness
           .filter(
             (w) =>
@@ -3207,7 +3209,7 @@ function resolveHistory(history) {
               captureHalves[history.witness]?.has(w.id) ||
               (stopsOnly(history) && w.id === `w_stop`) ||
               (history.witness === `budget` && w.id === `w_slowpair`) ||
-              (history.witness === `pair` && w.id === `w_hangpair`),
+              (history.pair === true && w.id === `w_hangpair`),
           )
           .map((w) => ({
             ...w,

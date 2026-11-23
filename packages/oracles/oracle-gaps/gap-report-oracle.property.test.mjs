@@ -7086,8 +7086,11 @@ const oneOwnerHistory = (generated, fields) => ({
 const withDeclaration = (constructed) =>
   constructed.map((item, index) => ({
     ...item,
-    build: (generated) =>
-      item.build({
+    build: (generated) => ({
+      // A literal construction that does not name the pair witness's field
+      // (`pair`, drawn last) runs without it; one that names it keeps it.
+      pair: false,
+      ...item.build({
         ...generated,
         // The end-to-end dimensions a generated base may draw: a construction
         // that does not name them runs without them (review of #57, apiLess).
@@ -7097,10 +7100,12 @@ const withDeclaration = (constructed) =>
         stopWitness: false,
         claimScenario: false,
         psMissing: false,
+        pair: false,
         declaration: index % 2 === 0 ? `wrapper` : `oracleProperty`,
         ownerless: false,
         owners: [`a`, ...generated.owners.slice(1)],
       }),
+    }),
   }))
 
 // Law 9 over the witness module's outcome classes, along the one edit
@@ -7444,6 +7449,8 @@ oracleProperty({
           // #99's fields, at their neutral values.
           hangMs: null,
           heavy: 0,
+          // The pair witness's field (`pair`, drawn last), at its neutral value.
+          pair: false,
           stopRuns: NO_STOPS,
           laterSteps: NO_LATER_STEPS,
         },
@@ -10651,7 +10658,7 @@ oracleProperty({
           laterSteps: NO_LATER_STEPS,
         }),
       },
-      // The pair witness (`w_hangpair`, the `pair` mode): owner file p, the
+      // The pair witness (`w_hangpair`, the drawn `pair` field): owner file p, the
       // earlier path, hangs where it would judge, and owner file q kills. Four
       // contexts join the files in turn (check.mjs `runAcross`), so q's copy
       // joins ahead of p's. The copies still run in sorted owner order, so p's
@@ -10670,7 +10677,8 @@ oracleProperty({
         ],
         build: (generated) => ({
           ...soloKill(generated, [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }]),
-          witness: `pair`,
+          witness: false,
+          pair: true,
           contexts: 4,
           hangMs: null,
           heavy: 0,
