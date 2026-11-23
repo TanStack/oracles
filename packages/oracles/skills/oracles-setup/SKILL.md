@@ -50,7 +50,8 @@ Find out, and tell the developer:
 
 The packages are not on npm yet. Install both from pkg.pr.new, pinned to the
 same commit of TanStack/oracles. If you were not given one, use the current
-commit on main: the first 7 characters of the hash that
+commit on main (if its preview is missing, use the fallback below): the first
+7 characters of the hash that
 `git ls-remote https://github.com/TanStack/oracles refs/heads/main` prints.
 Tell the developer which commit you pinned.
 
@@ -60,13 +61,6 @@ pnpm add -D \
   https://pkg.pr.new/TanStack/oracles/@tanstack/eslint-plugin-oracles@<sha> \
   fast-check@^4 vitest@^4.1
 ```
-
-If `pkg.pr.new` returns HTTP 404 for the tip of `main`, its preview is still
-building or was skipped after a CI failure. Check recent commits on `main` for
-the latest one whose `Publish preview` check succeeded (or whose
-`https://pkg.pr.new/TanStack/oracles/@tanstack/oracles@<sha>` returns HTTP 200
-with `curl -sI`), pin both packages to that commit, and tell the developer
-which commit you pinned.
 
 Add `fast-check` and `vitest` beside them. The framework needs Vitest 4.1 or
 later. If the repository already runs an older Vitest, upgrading it is the
@@ -78,6 +72,16 @@ a prerelease otherwise. If the repository's ESLint is older than 9 (xo
 included), install every package here with `--legacy-peer-deps` (npm), and see
 the fallback in step 3. With that flag, npm skips peers, so check that
 Vitest's own peer `vite` is installed, and add it if it is not.
+
+If `pkg.pr.new` returns HTTP 404 for the tip of `main`, its preview has not
+published. `Publish preview` runs only after the jobs in its `needs` list pass
+(`.github/workflows/pr.yml`), so one red blocking job on the tip leaves no
+preview. For example, on `7b6bae16` the blocking `Gap report end-to-end
+oracle (random seed)` job failed, and the preview was skipped. Check recent
+commits on `main` for the latest one whose `Publish preview` check succeeded
+(or whose `https://pkg.pr.new/TanStack/oracles/@tanstack/oracles@<sha>`
+returns HTTP 200 with `curl -sI`), pin both packages to that commit, and tell
+the developer which commit you pinned.
 
 Never add, upgrade, or downgrade the repository's `typescript` for oracles.
 The gap check uses its own TypeScript and never reads the project's, from

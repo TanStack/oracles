@@ -25,8 +25,10 @@ Vitest 5 needs Node 22.12 or later. Which Node versions CI runs is a
 question for when the repository's setup is finished: do not raise it
 now.
 
-**`pkg.pr.new` returns HTTP 404 for the tip of `main`.** The preview for that
-commit is still building or was skipped after a CI failure. Check recent
+**`pkg.pr.new` returns HTTP 404 for the tip of `main`.** `Publish preview`
+runs only after the jobs in its `needs` list pass, so a red blocking job on
+the tip (for example, the random-seed gap job on `7b6bae16`) leaves no
+preview. Check recent
 commits on `main` in `TanStack/oracles` for the latest one whose `Publish
 preview` check succeeded (or whose `pkg.pr.new` URL returns HTTP 200 with
 `curl -sI`), pin both packages to that commit, and tell the developer which
