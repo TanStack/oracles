@@ -129,9 +129,11 @@ const TOP_LOOP = `<module>@..gen`
 // Whether this filesystem ignores letter case, so that `src/Sut.ts` names
 // `src/sut.ts`; the `cased` spelling applies only where it does.
 const caseless = existsSync(fileURLToPath(import.meta.url).toUpperCase())
-// The backstop base that the driver passes (`--hang-limit`): a copy that runs
-// past it, plus three seconds per second of its file's time, is cut.
-const FULL_LIMIT_MS = 20000
+// The backstop base that the driver passes (`--hang-limit`), the production
+// default (args.mjs BACKSTOP_BASE_MS, derived at check.mjs `limitFor`): a copy
+// that runs past it, plus three seconds per second of its file's time, is cut.
+// No legal history ends at it (M, 2026-11-23, "Backstops are fine, set high").
+const FULL_LIMIT_MS = 60000
 // How long a slow test waits, in real milliseconds, where its output differs.
 const SLOW_MS = 3000
 // The slow waits a drawn test holds: SLOW_MS and the 16 s wait.

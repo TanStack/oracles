@@ -10,6 +10,9 @@ import { posix, realPathOf } from './paths.mjs'
 import { Refusal } from './ending.mjs'
 
 const flags = new Set([`daemon`, `stop-daemon`, `ordinary`, `help`])
+// The backstop base of a copy, in ms: the production default, and the e2e
+// driver's base. Its derivation is at check.mjs `limitFor` (B2, M 2026-11-23).
+const BACKSTOP_BASE_MS = 60000
 // The options that take a positive whole number.
 const counts = [
   `contexts`,
@@ -233,12 +236,12 @@ function optionsOf(args, cwd) {
     // need Vitest's default limits, which would make each hang cost seconds.
     // Vitest's per-test limit, above the copies' backstop (`hangLimit` plus
     // five seconds, so a copy that waits for its backstop is cut by it first).
-    testTimeout: Number(args[`test-timeout`] ?? 65000),
+    testTimeout: Number(args[`test-timeout`] ?? BACKSTOP_BASE_MS + 5000),
     // The base of each mutant run's backstop time limit, in milliseconds; the
     // limit adds three times the file's unmutated duration (see limitFor). A
     // backstop reports a gap and never decides a kill (deterministic cuts,
     // option A, 2026-11-14).
-    hangLimit: Number(args[`hang-limit`] ?? 60000),
+    hangLimit: Number(args[`hang-limit`] ?? BACKSTOP_BASE_MS),
     // The `--first-limit` option is retired (option A): it is validated and
     // noted, and changes nothing.
     retiredFirstLimit: args[`first-limit`] !== undefined,

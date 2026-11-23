@@ -114,6 +114,11 @@ const cutVerdicts = (row, map = (key) => key) => [
 // in one test before it counts as a loop that never ends. A file's budget is
 // a hundred times the most calls any of its unmutated tests made, if more.
 const CALL_FLOOR = 100_000
+// The backstop's per-site allowance, in ms: the worst measured cost of one counted
+// site evaluation on CI's slowest runner (63 ns, Windows, 2026-11-23; the B2
+// per-call diagnostic) times a margin of 3, rounded up. It prices the call budget's
+// work above CALL_FLOOR (see `limitFor`).
+const SITE_BACKSTOP_MS = 0.0002
 // The least work (site evaluations) a mutant's copies may do together: the
 // larger of this and ten times their owner files' unmutated work (`workBudgetOf`).
 // It is the call floor: two copies that each stay inside their own call budget
@@ -1832,11 +1837,24 @@ export default async (env) => {
       })
       return stable ? inputs : undefined
     }
+    // A copy cut by a clock or by its call count: its own run's timeout, or
+    // Vitest's own limit ("Test timed out"), which the copy outlived. Such a
+    // copy is never charged, and it ends the mutant's copies (the outcome rule,
+    // register 2026-11-14, `Deterministic cuts, outcome rule`).
+    const cutByTime = (unit) =>
+      unit.cause === `backstop` ||
+      (unit.tests ?? []).some(
+        (test) =>
+          test.state === `failed` && /Test timed out/.test(test.message),
+      )
+    // A unit cut by the wall clock is not stored: a rerun on another machine
+    // can finish it, so the daemon reruns it rather than reuse a backstop
+    // decision (M, 2026-11-23; I8, I12). A count or state cut is stored.
     const remember = (id, unit, inputs) => {
       if (!inputs) return
       const entry = { inputs, unit }
       hook?.stored(entry)
-      store.put(id, entry)
+      if (!cutByTime(unit)) store.put(id, entry)
     }
     // A batch run in a slot's context, with the inputs to store each item
     // under: the modules its file's unmutated run read, and those its copy
@@ -2055,11 +2073,23 @@ export default async (env) => {
     // detect anything, and it may read source text that instrumentation
     // changes. Each file's unmutated duration sets a mutant run's time limit.
     const fileSeconds = new Map()
-    // A copy's time limit is a backstop: the full limit, which reports a gap and
-    // never decides a kill (deterministic cuts, option A, 2026-11-14). There is
-    // no first budget, so a copy runs once, to its end.
+    // A copy's wall-clock backstop reports a gap and never decides a kill, and no
+    // legal copy reaches it (M, 2026-11-23, "Backstops are fine, set high"). Its
+    // derivation (B2): the base, `--hang-limit` (args.mjs BACKSTOP_BASE_MS, 60 s),
+    // is the fixed allowance for a copy's start and its non-site waits, three times
+    // the longest legal wait the suite draws (16 s), rounded up. The file's unmutated
+    // seconds add three each, as a copy replays the file's waits and work. Its call
+    // budget above CALL_FLOOR adds SITE_BACKSTOP_MS per site, measured on CI. At
+    // CALL_FLOOR that term is 20 ms, so the base is the whole backstop for a
+    // small file. Its budget is computed before any copy runs (`callBudgetFor`).
+    // The most mutation-helper calls a file's unmutated tests made (filled once
+    // the baseline has run, below): the call budget is a hundred times this.
+    const mostCalls = new Map()
     const limitFor = (file) =>
-      options.hangLimit + 3000 * (fileSeconds.get(file) ?? 10)
+      options.hangLimit +
+      3000 * (fileSeconds.get(file) ?? 10) +
+      SITE_BACKSTOP_MS *
+        Math.max(0, 100 * (mostCalls.get(file) ?? 0) - CALL_FLOOR)
     // A mutant's work budget (maintainer disposition G1, option A): the larger of
     // WORK_FLOOR and ten times its owner files' unmutated work, in site
     // evaluations, each file counted by its most-working unmutated test.
@@ -2067,16 +2097,6 @@ export default async (env) => {
       Math.max(
         WORK_FLOOR,
         10 * files.reduce((sum, file) => sum + (mostCalls.get(file) ?? 0), 0),
-      )
-    // A copy cut by a clock or by its call count: its own run's timeout, or
-    // Vitest's own limit ("Test timed out"), which the copy outlived. Such a
-    // copy is never charged, and it ends the mutant's copies (the outcome rule,
-    // register 2026-11-14, `Deterministic cuts, outcome rule`).
-    const cutByTime = (unit) =>
-      unit.cause === `backstop` ||
-      (unit.tests ?? []).some(
-        (test) =>
-          test.state === `failed` && /Test timed out/.test(test.message),
       )
     // A copy's work: the calls of its deterministic, unclocked tests
     // (`baseline.work`, classify.mjs), so a row that a clock could move counts
@@ -2349,7 +2369,6 @@ export default async (env) => {
     // would cut its copies at the floor. A copy past it is spinning
     // (capture-setup.mjs), which fails bounded work only by a count that
     // cannot follow the clock (`countOnly`).
-    const mostCalls = new Map()
     for (const rows of [first.rows, second.rows])
       for (const [key, row] of rows)
         if (!row.background)
