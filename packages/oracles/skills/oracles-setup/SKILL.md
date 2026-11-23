@@ -148,10 +148,20 @@ If the production source uses syntax that Vite cannot parse (Flow types,
 for example), add a Vite plugin to the oracle config that strips it, such as
 one built on `flow-remove-types`.
 
-Add a script for it, such as `test:oracles`. Leave the existing suite
-unchanged. In a published package, keep the new files out of the published
-package (its `files` field or `.npmignore`): the configs, the instruction file,
-`.agents/`, and `.claude/`.
+Add a script for it, such as `test:oracles`, that runs the separate config
+(`"test:oracles": "vitest run --config vitest.oracle.config.ts"`). That config
+selects only the oracle files. Vitest treats positional CLI arguments as
+substring file filters, not globs or regexes: a quoted glob such as
+`vitest run 'tests/**/*oracle*.test.ts'` fails with `No test files found`, and
+`vitest run oracle` also runs any file whose path contains "oracle", such as
+`packages/oracles/tests/p.test.ts`. A filter is the only option when the
+config is shared with the existing suite. It selects only the oracle files
+when no other file path contains its substring, and it misses every oracle
+file whose name lacks that substring: `.oracle.test` misses `oracle-x.test.ts`
+and `x-oracle.test.ts`, which step 3's glob also matches. Check the file list
+the script prints before you rely on it. Leave the existing suite unchanged. In a published package, keep the new files out of
+the published package (its `files` field or `.npmignore`): the configs, the
+instruction file, `.agents/`, and `.claude/`.
 
 If the repository's own lint or formatter covers the oracle files (for
 example, an older ESLint with Prettier over `test/`), keep the oracle files
