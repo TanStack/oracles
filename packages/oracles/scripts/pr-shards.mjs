@@ -494,7 +494,7 @@ export const partitions = {
         `a declaration fault: projects`,
         `test.projects in a parent's config`,
         // #99's 16 s wait (67 s on the pool; this shard took 147 s).
-        'a slow kill after a 16 s wait',
+        'a slow kill after a 22 s wait, past the old backstop',
       ]),
       // The rest: 560 s of weight, and any unit added later.
       4: rest,
@@ -537,7 +537,7 @@ export const partitions = {
         `constructed history: a declaration fault: configSyntax`,
         `constructed history: a declaration fault: nonLiteral`,
         // #99's deterministic-cuts histories, the heavier (141 s on the pool at 83a0b3a8; this shard took 32 s).
-        'constructed history: a slow kill after a 16 s wait',
+        'constructed history: a slow kill after a 22 s wait, past the old backstop',
         'constructed history: a backstop cut ends the copies ahead of a later kill',
         "constructed history: a slow owner's kill and another owner's kill",
         'constructed history: a copy waiting on a timer',
@@ -989,6 +989,7 @@ export const partitions = {
         'a backstop cut ends the copies ahead of a later kill',
         'a kill past the work budget in a later owner',
         'a slow kill after a 16 s wait',
+        'a slow kill after a 22 s wait, past the old backstop',
         'a copy waiting on a timer',
         "a copy waiting on an unref'd timer",
         'a copy waiting on a pipe it opened',

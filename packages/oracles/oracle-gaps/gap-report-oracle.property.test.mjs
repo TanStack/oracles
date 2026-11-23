@@ -3604,6 +3604,8 @@ async function driver(plan, observe) {
     const killed = cli.report?.results?.some((r) => r.outcome === `killed`)
     if (killed && plan.history.tests.some((t) => t.slowMs === 16_000))
       states.add(`a slow kill after a 16 s wait killed`)
+    if (killed && plan.history.tests.some((t) => t.slowMs === 22_000))
+      states.add(`a slow kill after a 22 s wait killed`)
     if (killed && plan.history.tests.some((t) => t.timerWait))
       states.add(`a copy waiting on a timer killed`)
     if (killed && plan.history.tests.some((t) => t.timerWait?.unref))
@@ -6732,6 +6734,7 @@ const required = [
   `a hang in one owner and a kill in another killed`,
   `a slow owner's kill reported as when it did not wait`,
   `a slow kill after a 16 s wait killed`,
+  `a slow kill after a 22 s wait killed`,
   `a copy waiting on a timer killed`,
   `a copy waiting on an unref'd timer killed`,
   `a kill past the work budget in a later owner is a bounded-work kill`,
@@ -6926,6 +6929,7 @@ const separate = [
   `timeout`,
   `a slow owner's kill reported as when it did not wait`,
   `a slow kill after a 16 s wait killed`,
+  `a slow kill after a 22 s wait killed`,
   `a copy waiting on a timer killed`,
   `a copy waiting on an unref'd timer killed`,
   `a kill past the work budget in a later owner is a bounded-work kill`,
@@ -10644,6 +10648,25 @@ oracleProperty({
           stopRuns: NO_STOPS,
           laterSteps: NO_LATER_STEPS,
         }),
+      },
+      // A slow kill whose test waits 22 s where its output differs: a legal
+      // copy that terminates inside its call budget. The old 20 s base (with
+      // 3 s per second of the file's time, about 1 s here) gave its copy a
+      // horizon the wait passes, so the copy was idle and cut as no progress.
+      // No legal history ends at the backstop (M, 2026-11-23, "Backstops are
+      // fine, set high"), so the owner's kill decides (B2, K21).
+      {
+        name: `a slow kill after a 22 s wait, past the old backstop`,
+        enters: [`a slow kill after a 22 s wait killed`],
+        build: (generated) =>
+          soloKill(generated, [
+            {
+              ...judging(`a`, `fixed seed`, 7),
+              fn: 0,
+              slow: true,
+              slowMs: 22000,
+            },
+          ]),
       },
     ]),
   },

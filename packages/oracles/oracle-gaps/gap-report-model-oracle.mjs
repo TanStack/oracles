@@ -4761,26 +4761,6 @@ function runsOfTests(plan, tests, sites, active) {
         before += base.work * (1 + extra)
         after += mutated.work * (1 + extra + (changed ? (t.loops ?? 0) : 0))
       }
-      // A wait past the history's backstop (its `hangMs`, else the full limit)
-      // and a margin of 6 s for three seconds per second of a one-test file
-      // (the file's time is under 2 s) is past the copy's horizon: its timer is
-      // not due inside it, so the copy is idle and cut as no progress, by state
-      // (M entry "idle is decided by state only", 2026-11-15). Its outcome does
-      // not depend on load.
-      const backstopMs = plan.history.hangMs ?? FULL_LIMIT_MS
-      if (changed && t.slow && (t.slowMs ?? SLOW_MS) > backstopMs + 6000)
-        return {
-          clocked: readsClock(t) || waited,
-          rowClocked: readsClock(t) || waited || (changed && waitsIn(plan, t)),
-          t,
-          route,
-          hang: true,
-          cut: 'state',
-          verdicts: found,
-          changed: true,
-          work: after,
-          before,
-        }
       // A test that writes to the console and then waits on a timer due past
       // its horizon, while the runner's own write is pending (`pendingIo:
       // 'runner'`) or its own interval runs (`'runnerTimer'`), cannot make
