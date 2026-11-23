@@ -1127,6 +1127,14 @@ const drawn = fc.record({
   // that describe's laws own (the maintainer's decision "A broken owner file
   // judges nothing", 2026-11-19, scoped to the describe; review of #176, F4).
   failingLawHook: fc.constantFrom(`none`, `none`, `beforeAll`, `afterAll`),
+  // Whether a failing law that calls production once then repeats the call
+  // until its output is the unmutated one (up to `SPIN_BOUND` times): with
+  // no mutant active it stops at once, and under a mutant that changes that
+  // output it spins on instrumented code until its copy's call budget cuts
+  // it. A test left out of judging still runs, and a count cut it causes is
+  // a gap (the maintainer's decision "An excluded test still runs",
+  // 2026-11-23). Drawn last (the generator rule).
+  failingLawSpins: fc.boolean(),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -3478,6 +3486,7 @@ function resolveHistory(history) {
     failingLawAt: history.failingLawAt ?? `end`,
     failingLawCalls: history.failingLawCalls ?? `none`,
     failingLawHook: history.failingLawHook ?? `none`,
+    failingLawSpins: history.failingLawSpins === true,
     ordinary: history.ordinary === true,
     // The batch whose run rejects (a test-only fault; 0 is none).
     rejectBatch: history.rejectBatch ?? 0,
@@ -4750,21 +4759,44 @@ function filesRun(runs) {
  * confirming runs share its budget (`budgeted`); an authored mutant's runs
  * are each final at the full limit, so it has no confirmations to budget.
  */
-function judge(plan, tests, sites, active, { budgeted = true } = {}) {
+function judge(
+  plan,
+  tests,
+  sites,
+  active,
+  { budgeted = true, lawSpins = new Map() } = {},
+) {
   const runs = runsOf(plan, tests, sites, active)
   // A file's tests run in order, and a kill (a behavioral verdict on a
   // reproducible route) stops the file. A hang before that cuts the file's
   // run off, and a run that was cut off records nothing, not even its
   // earlier verdicts. A kill in another file still decides (a kill outranks
   // a timeout); failing that, the mutant is a timeout.
+  // A failing law runs too, though it judges nothing (`lawSpins`, the files
+  // whose failing law spins under the mutant, and where it sits): at the
+  // start of its file it cuts the file's run off before any test judges; at
+  // the end it does unless a test before it killed or hung.
   const hung = new Set()
   const slowed = new Map()
-  for (const file of new Set(runs.map((r) => r.t.file)))
+  for (const file of new Set([
+    ...runs.map((r) => r.t.file),
+    ...lawSpins.keys(),
+  ])) {
+    if (lawSpins.get(file) === `start`) {
+      hung.add(file)
+      continue
+    }
+    let ended = false
     for (const r of runs.filter((x) => x.t.file === file)) {
       if (r.slowed) slowed.set(file, r.t.slowMs ?? SLOW_MS)
       if (r.hang) hung.add(file)
-      if (r.hang || killsIn(r)) break
+      if (r.hang || killsIn(r)) {
+        ended = true
+        break
+      }
     }
+    if (!ended && lawSpins.get(file) === `end`) hung.add(file)
+  }
   const live = runs.filter((r) => !hung.has(r.t.file))
   const verdicts = (route) =>
     live.flatMap((r) =>
@@ -4884,6 +4916,10 @@ const HOOK_ERROR = `this hook fails with no mutant active`
 // How often a heavy failing law calls production: past the call floor
 // (check.mjs CALL_FLOOR, 100,000 site evaluations) in its own test.
 const HEAVY_CALLS = 110_000
+// How often a spinning failing law repeats its call at most: past any call
+// budget the grammar's files reach, so on instrumented code its copy is cut
+// first, while an authored mutant's copy, which counts nothing, ends it.
+const SPIN_BOUND = 10_000_000
 /** Whether oracle file `file` holds the failing law. */
 const holdsFailingLaw = (plan, file) =>
   plan.failingLaw === file ||
@@ -5147,6 +5183,28 @@ function model(plan) {
     lawTarget === undefined
       ? new Set()
       : interpret(plan, lawTarget, 7, sites).reached
+  // The owner files whose failing law spins under an operator mutant, and
+  // where it sits: its call spins, or, repeating its call (`failingLawSpins`,
+  // with one call), the mutant changed that call's output without a throw.
+  // It still runs ("An excluded test still runs", 2026-11-23).
+  const lawSpinsAt = (site) => {
+    if (lawTarget === undefined || !lawReached.has(site.id)) return new Map()
+    const base = interpret(plan, lawTarget, 7, sites)
+    const mutated = interpret(plan, lawTarget, 7, sites, { site: site.id })
+    const spins =
+      mutated.spun ||
+      (plan.failingLawSpins &&
+        plan.failingLawCalls === `once` &&
+        !mutated.threw &&
+        mutated.trace.join() !== base.trace.join())
+    return new Map(
+      spins
+        ? [...owners(site.fnId)]
+            .filter((file) => holdsFailingLaw(plan, file) && runsTests(file))
+            .map((file) => [file, plan.failingLawAt])
+        : [],
+    )
+  }
   // Whether a deterministic passing owner test judges an operator mutant:
   // one of the plan's that reached it, or, for code that ran at load, one
   // of an owner file that loads (main's rule for code run at load). A
@@ -5218,7 +5276,15 @@ function model(plan) {
           ),
         )
     if (reaching.every((t) => t.flaky)) return `indeterminate`
-    const kind = judge(plan, tests, sites, { site: site.id })
+    const kind = judge(
+      plan,
+      tests,
+      sites,
+      { site: site.id },
+      {
+        lawSpins: lawSpinsAt(site),
+      },
+    )
     if (kind !== `survived`) return kind
     // A test that reached it did more work, though nothing it observed
     // changed: the mutant deleted a shortcut for speed (maintainer decision,
@@ -5838,7 +5904,15 @@ function failingLawLines(plan, file) {
         ? [
             `  for (let i = 0; i < ${HEAVY_CALLS}; i += 1) ${callFor(target)}(7, [])`,
           ]
-        : [`  ${callFor(target)}(7, [])`]
+        : plan.failingLawSpins
+          ? [
+              `  for (let i = 0; i < ${SPIN_BOUND}; i += 1) {`,
+              `    const out: Array<string> = []`,
+              `    ${callFor(target)}(7, out)`,
+              `    if (JSON.stringify(out) === ${JSON.stringify(JSON.stringify(interpret(plan, target, 7, sitesOf(plan)).trace))}) break`,
+              `  }`,
+            ]
+          : [`  ${callFor(target)}(7, [])`]
   const law = [
     `test('${FAILING_LAW}', () => {`,
     `  g.__oracleRoute?.('fixed seed')`,

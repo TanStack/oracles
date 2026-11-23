@@ -876,6 +876,7 @@ export const partitions = {
         'a heavy failing law at the start of its file, beside a passing law',
         'a failing beforeAll around a law',
         'a failing afterAll around a law that calls production',
+        'a failing law that spins under a mutant before a passing law',
       ]),
       8: anyOf([
         'a declaration fault: brokenVitest',

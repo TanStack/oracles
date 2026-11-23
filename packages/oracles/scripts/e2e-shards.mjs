@@ -363,6 +363,9 @@ export const shards = {
     `fixed seed 20261105: a failing afterAll around a law that calls production`,
     `random seed: a failing afterAll around a law that calls production`,
     `determinism: constructed history: a failing afterAll around a law that calls production`,
+    `fixed seed 20261105: a failing law that spins under a mutant before a passing law`,
+    `random seed: a failing law that spins under a mutant before a passing law`,
+    `determinism: constructed history: a failing law that spins under a mutant before a passing law`,
     // The filed history of a stale authored mutant's fourth base (about 12 s).
     `fixed history: a filed base whose owner reads an absent object through ?.`,
     `determinism: fixed history: a filed base whose owner reads an absent object through ?.`,
