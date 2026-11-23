@@ -322,6 +322,11 @@ in the model.
   cannot collide with a generated value (a fixed boundary shape). Otherwise
   derive it from the generated history (for example "the initial value plus
   one").
+- **Annotate `constructed[].build` when TypeScript widens literals.** Inside
+  an unannotated `oracleProperty(...)` call, TypeScript can widen union
+  string literals or fixed-length tuples returned by `constructed[].build`.
+  Give `build` an explicit return type (`build: (base): History => ({ ... })`)
+  or use `as const` on narrowed literals so the file typechecks cleanly.
 - **Every arbitrary must take its histories back.** Each `fixed` and
   constructed history goes back through the arbitrary, and one that cannot
   fails when the file loads, naming the history. Give each `.map` its inverse
@@ -461,11 +466,15 @@ The options of `oracleProperty` are typed in
 `node_modules/@tanstack/oracles/src/oracle-property.ts`
 (`OraclePropertyOptions`). Read them there.
 
-**Lint as you go.** Run the repository's lint on each oracle file and each
-changed production file after you edit it, and again before you finish. Fix
-every report. Do not disable a rule.
+**Lint and typecheck as you go.** Run the repository's lint on each oracle
+file and each changed production file after you edit it, and again before
+you finish. Fix every report. Do not disable a rule.
 In a first session, the oracles lint plugin is not installed yet: run the
 repository's own lint, if it covers the oracle file, and go on.
+When the repository uses TypeScript 5 or newer, also run its typecheck
+(`tsc --noEmit`) on each oracle file after you edit it: Vitest strips types
+without checking them, so a passing run does not catch type errors. Do not
+hide errors with `@ts-ignore` or `@ts-expect-error`.
 
 Techniques: [guide § The driver and the check](../../docs/guide.md#the-driver-and-the-check).
 
