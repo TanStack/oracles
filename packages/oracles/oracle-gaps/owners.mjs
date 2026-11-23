@@ -56,8 +56,16 @@
 // top-level variable statement. A function that reads it brings it into its
 // tree, with what its initializer refers to outside the functions it holds,
 // and an owns entry may name it. A function its initializer holds, such as an
-// object literal's method, is a unit of its own, owned where something
-// refers to it, not because the declaration's text holds it. A mutant belongs to
+// object literal's method or function property, is a unit of its own, owned
+// where something refers to it, not because the declaration's text holds it:
+// a static property read (`obj.a` or `obj['a']`) brings only that property
+// and leaves sibling functions unowned, and naming the declaration in an
+// `owns` entry (`src/x.ts#TABLE`) leaves its functions to their callers.
+// When an owned body indexes a data declaration dynamically (`handlers[key]`)
+// or uses it as a whole value (`dispatch(handlers)`, `Object.values(handlers)`),
+// which member is called is unknown statically, so it brings every function
+// defined inside the declaration's initializer, just as a class passed as a
+// value brings all its methods. A mutant belongs to
 // the innermost unit whose lines hold it. Two functions may share a name, as a getter and
 // its setter do, or two nested helpers; each is still its own function, and
 // owns entry that names them owns them all. A function's owners are the
@@ -318,8 +326,12 @@ export function ownership(ts, program, pkg, oracles) {
   }
   // The package functions a declaration names: itself, or, for a class used
   // as a value, all its members. `new C()` names only C's constructor; C's
-  // members are owned where the tree refers to them.
-  const targetsOf = (declaration, constructed) => {
+  // members are owned where the tree refers to them. For a data declaration
+  // used dynamically (`obj[key]`) or as a whole value (`fn(obj)`), which
+  // member is called is unknown statically, so it brings every function
+  // defined inside its value; a static property read (`obj.a`, `obj['a']`)
+  // brings only the data unit itself.
+  const targetsOf = (declaration, constructed, wholeValue) => {
     const file = declaration.getSourceFile()
     if (!inPackage(file.fileName)) return []
     const functions = functionsOf(posix(relative(pkg, file.fileName)))
@@ -340,22 +352,106 @@ export function ownership(ts, program, pkg, oracles) {
           ? declaration.parent
           : declaration,
       )
+    const span =
+      wholeValue &&
+      !constructed &&
+      value !== undefined &&
+      !ts.isParameter(declaration)
+        ? [value.getStart(file), value.end]
+        : undefined
     return functions.filter(
-      (fn) => fn.node === declaration || fn.node === value,
+      (fn) =>
+        fn.node === declaration ||
+        fn.node === value ||
+        (span !== undefined && fn.start >= span[0] && fn.end <= span[1]),
     )
+  }
+  // The expression that evaluates a reference identifier: `a.b` for the
+  // property name `b`, unwrapped through parentheses, type assertions, and
+  // non-null assertions.
+  const referenceExpression = (child) => {
+    let ref =
+      ts.isPropertyAccessExpression(child.parent) && child.parent.name === child
+        ? child.parent
+        : child
+    while (
+      ref.parent &&
+      (ts.isParenthesizedExpression(ref.parent) ||
+        ts.isAsExpression(ref.parent) ||
+        ts.isSatisfiesExpression(ref.parent) ||
+        ts.isNonNullExpression(ref.parent) ||
+        ts.isTypeAssertionExpression(ref.parent))
+    )
+      ref = ref.parent
+    return ref
+  }
+  // Static string-literal element access (`obj['a']`) when the type checker
+  // resolves that property on `ref`.
+  const staticPropertySymbol = (ref) => {
+    if (
+      ref.parent &&
+      ts.isElementAccessExpression(ref.parent) &&
+      ref.parent.expression === ref &&
+      ts.isStringLiteralLike(ref.parent.argumentExpression)
+    )
+      return checker
+        .getTypeAtLocation(ref)
+        .getNonNullableType()
+        .getProperty(ref.parent.argumentExpression.text)
+    return undefined
+  }
+  // A static property access (`obj.a` or a resolved `obj['a']`), a type-only
+  // query (`typeof obj`), or a runtime `typeof obj` does not pass the whole
+  // object as a value; any other use (such as `obj[key]` or `fn(obj)`) does.
+  const isWholeValue = (ref, staticProp) =>
+    !ts.isPartOfTypeNode(ref) &&
+    !(ref.parent && ts.isTypeOfExpression(ref.parent)) &&
+    !(
+      ref.parent &&
+      ts.isPropertyAccessExpression(ref.parent) &&
+      ref.parent.expression === ref
+    ) &&
+    staticProp === undefined
+  const resolveUsage = (symbol, ref) => {
+    const constructed =
+      ref.parent !== undefined &&
+      ts.isNewExpression(ref.parent) &&
+      ref.parent.expression === ref
+    const staticProp = staticPropertySymbol(ref)
+    const wholeValue = !constructed && isWholeValue(ref, staticProp)
+    const resolved = []
+    for (const declaration of symbol?.declarations ?? [])
+      resolved.push(...targetsOf(declaration, constructed, wholeValue))
+    if (staticProp)
+      resolved.push(
+        ...resolveUsage(staticProp, referenceExpression(ref.parent)),
+      )
+    return resolved
   }
   // Every package function, method, or class an owned body refers to.
   const referencesOf = (node) => {
     const found = []
     const visit = (child) => {
-      if (ts.isIdentifier(child) || ts.isPrivateIdentifier(child)) {
-        let symbol = checker.getSymbolAtLocation(child)
+      // A property name in an object literal (`{ a: expr }`) declares the
+      // property rather than referring to it; a shorthand property (`{ a }`)
+      // also refers to the binding `a`.
+      const isPropertyName =
+        child.parent !== undefined &&
+        ts.isPropertyAssignment(child.parent) &&
+        child.parent.name === child
+      if (
+        (ts.isIdentifier(child) || ts.isPrivateIdentifier(child)) &&
+        !isPropertyName
+      ) {
+        let symbol =
+          child.parent !== undefined &&
+          ts.isShorthandPropertyAssignment(child.parent) &&
+          child.parent.name === child
+            ? checker.getShorthandAssignmentValueSymbol(child.parent)
+            : checker.getSymbolAtLocation(child)
         if (symbol && symbol.flags & ts.SymbolFlags.Alias)
           symbol = checker.getAliasedSymbol(symbol)
-        const constructed =
-          ts.isNewExpression(child.parent) && child.parent.expression === child
-        for (const declaration of symbol?.declarations ?? [])
-          found.push(...targetsOf(declaration, constructed))
+        found.push(...resolveUsage(symbol, referenceExpression(child)))
       }
       // A function in module data's initializer is a unit of its own,
       // reached only when something refers to it.
