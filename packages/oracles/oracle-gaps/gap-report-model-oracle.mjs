@@ -138,6 +138,42 @@ const FULL_LIMIT_MS = 60000
 const SLOW_MS = 3000
 // The slow waits a drawn test holds: SLOW_MS and the 16 s wait.
 const SLOW_WAITS = [SLOW_MS, 16_000]
+// The per-history backstop's floor (B2, M 2026-11-23): a copy's start and its
+// non-wait work, which are milliseconds in a fixture. The derivation of the
+// production base is check.mjs `limitFor`.
+const BACKSTOP_FLOOR_MS = 10_000
+// The longest legal wait of one test, in real milliseconds: a slow test's wait
+// (SLOW_MS where it waits on a heartbeat), a timer it waits on, and the I/O
+// it waits on (a child process or a pipe read, SLOW_MS at most, as w_iowait).
+// A `runner` or `runnerTimer` wait is the runner's, not the test's, and a
+// PAST_HORIZON wait is not legal, so neither is counted.
+const legalWaitOf = (test) =>
+  Math.max(
+    test.slow ? (test.slowMs ?? SLOW_MS) : 0,
+    test.ioWait || test.pendingIo === `test` || test.pendingIo === `short`
+      ? SLOW_MS
+      : 0,
+    test.timerWait?.waitMs ?? 0,
+  )
+/**
+ * A history's backstop, `--hang-limit` (M 2026-11-23, "Backstops are fine, set
+ * high"; check.mjs `limitFor` adds three seconds per second of the file's time).
+ * It is three times the history's longest legal wait, and at least the floor.
+ * Then every legal wait is due inside a copy's idle horizon, so no legal copy
+ * reaches the backstop, and a mutant hang that keeps a test-owned timer alive
+ * ends here, as a gap, at a cost of this one history's limit. SLOW_MS is the
+ * witness module's longest wait (its child processes and holds). A history's
+ * own explicit `hangMs` (a constructed backstop, or the drawn 40 s) replaces it.
+ */
+export function backstopOf(history) {
+  return (
+    history.hangMs ??
+    Math.max(
+      BACKSTOP_FLOOR_MS,
+      3 * Math.max(SLOW_MS, ...history.tests.map(legalWaitOf)),
+    )
+  )
+}
 // The `pendingIo: 'test'` and `'short'` witnesses' child (run with `node -e`,
 // given the sampler's count file and a count): it writes to its stdout once
 // the count has risen by that many samples, and gives up after 60 s, a
