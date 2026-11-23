@@ -4774,16 +4774,21 @@ function judge(
   // a timeout); failing that, the mutant is a timeout.
   // A failing law runs too, though it judges nothing (`lawSpins`, the files
   // whose failing law spins under the mutant, and where it sits): at the
-  // start of its file it cuts the file's run off before any test judges; at
-  // the end it does unless a test before it killed or hung.
+  // start of its file its count cut ends the file's run before any test
+  // judges; at the end it does unless a test before it killed or hung. A
+  // count cut a failing law causes blocks the mutant by that law (register
+  // C 2026-11-23, "A count cut caused by a failing law is blocked by it"):
+  // a gap, never `timeout`, which is only the backstop's (M-24), and never a
+  // kill, though a kill in another file still decides.
   const hung = new Set()
+  const cut = new Set()
   const slowed = new Map()
   for (const file of new Set([
     ...runs.map((r) => r.t.file),
     ...lawSpins.keys(),
   ])) {
     if (lawSpins.get(file) === `start`) {
-      hung.add(file)
+      cut.add(file)
       continue
     }
     let ended = false
@@ -4795,15 +4800,16 @@ function judge(
         break
       }
     }
-    if (!ended && lawSpins.get(file) === `end`) hung.add(file)
+    if (!ended && lawSpins.get(file) === `end`) cut.add(file)
   }
-  const live = runs.filter((r) => !hung.has(r.t.file))
+  const live = runs.filter((r) => !hung.has(r.t.file) && !cut.has(r.t.file))
   const verdicts = (route) =>
     live.flatMap((r) =>
       r.verdicts.filter((v) => v.route === route).map((v) => v.law),
     )
   const reproducible = verdicts(`reproducible`)
   if (reproducible.some((law) => law !== `reach agreement`)) return `killed`
+  if (cut.size > 0) return `blocked`
   if (hung.size > 0) return `timeout`
   // The runs that confirm a mutant's cut-off copies share its budget
   // (`--mutant-limit`, MUTANT_LIMIT_MS here; maintainer disposition G1,
