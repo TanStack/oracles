@@ -775,16 +775,18 @@ function failureOf(h, slot, tests, work = false) {
   const overBound = (x) => work && pastBound(h, slot, x)
   const lawOf = (x) =>
     CUT_LAW[under(x)] ?? (overBound(x) ? `work bound` : x.t.under[slot].law)
-  const verdictsIn = (kind) => [
-    ...ran.filter(
+  // In report order (law 7): the tests as `tests` lists them, by file path,
+  // whether a verdict or a cut names them, so the first is the one a gap names.
+  const verdictsIn = (kind) =>
+    tests.filter(
       (x) =>
-        (failing.includes(x) &&
-          under(x) === `verdict` &&
-          kindOf(x.t.under[slot].firedAt ?? x.t.route) === kind) ||
-        (overBound(x) && kindOf(x.t.route) === kind),
-    ),
-    ...cut.filter((x) => kindOf(x.t.route) === kind),
-  ]
+        (ran.includes(x) &&
+          ((failing.includes(x) &&
+            under(x) === `verdict` &&
+            kindOf(x.t.under[slot].firedAt ?? x.t.route) === kind) ||
+            (overBound(x) && kindOf(x.t.route) === kind))) ||
+        (cut.includes(x) && kindOf(x.t.route) === kind),
+    )
   const kills = verdictsIn(`reproducible`).map(lawOf)
   const behavioral = kills.filter((law) => law !== `reach agreement`)
   const decided = (failure) => ({ failure, ran })
@@ -2049,6 +2051,24 @@ async function driver(h, observe) {
       )
         states.add(`a work bound kill beside a changed value`)
     }
+    // A kill by unregistered verdicts, with a cut's test on an unknown route
+    // in an owner file that sorts before the file of a verdict on one.
+    const unknownIn = (fi, kind) =>
+      fi < h.files.length &&
+      h.files[fi].tests.some(
+        (t) => kindOf(t.route) === `unknown` && t.under[mi].kind === kind,
+      )
+    if (
+      result.outcome === `unregistered-kill` &&
+      h.mutants[mi].owners.some(
+        (a) =>
+          unknownIn(a, `runIdle`) &&
+          h.mutants[mi].owners.some(
+            (b) => fileName(h, a) < fileName(h, b) && unknownIn(b, `verdict`),
+          ),
+      )
+    )
+      states.add(`unregistered-kill named in report order`)
     if (result.class === `extra-work` && judgedRise) {
       if (judgedRise.t.bound !== undefined)
         states.add(`extra-work under a declared bound`)
@@ -3328,6 +3348,7 @@ const required = [
   `extra-work named past an unregistered rise`,
   `a rise exactly at the declared bound`,
   `authored agreement-only-kill`,
+  `unregistered-kill named in report order`,
 ]
 
 // One constructed history per outcome class: one mutant judged by one
@@ -4132,6 +4153,28 @@ const constructed = [
     {
       effect: { kind: `verdict`, law: `reach agreement` },
       authored: [{}],
+    },
+  ),
+  // Law 7 across a cut and a verdict (fix99-attr): both tests are on unknown
+  // routes. The cut's test is in the earlier file (tests/f0), the verdict's in
+  // the later one (tests/f1), so the gap names the cut's test `t0` in report
+  // order. The verdict's own test is named "it's t0".
+  twoOwners(
+    `an unregistered kill whose cut test is in an earlier file`,
+    [`unregistered-kill named in report order`],
+    {
+      test: { route: undefined },
+      effect: { kind: `runIdle` },
+      second: {
+        route: undefined,
+        under: slots({
+          kind: `verdict`,
+          law: `L`,
+          firedAt: undefined,
+          work: 0,
+          ms: 0,
+        }),
+      },
     },
   ),
 ]
