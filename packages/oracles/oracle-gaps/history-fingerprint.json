@@ -83,6 +83,7 @@
     ["optionalChains", "d383282128c31644"],
     ["hangMs", "0d53e8bb13182e66"],
     ["heavy", "803af343d7fb884e"],
+    ["pair", "673910841409978d"],
     ["tests.pendingIo", "02f66613e9490d15"]
   ],
   "histories": [
@@ -169,6 +170,7 @@
     ["optionalChains", "d383282128c31644"],
     ["hangMs", "0d53e8bb13182e66"],
     ["heavy", "803af343d7fb884e"],
+    ["pair", "673910841409978d"],
     ["tests.pendingIo", "02f66613e9490d15"]
   ]
 }

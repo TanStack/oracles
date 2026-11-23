@@ -340,6 +340,10 @@ export const shards = {
     `fixed seed 20261105: a later owner's test listed first beside an earlier owner's hang`,
     `random seed: a later owner's test listed first beside an earlier owner's hang`,
     `determinism: constructed history: a later owner's test listed first beside an earlier owner's hang`,
+    // The pair-witness history (w_hangpair): 3 s to 5 s here with GAP_E2E_SHRINKS=0.
+    `fixed seed 20261105: a later owner's kill joined before an earlier owner's hang under four contexts`,
+    `random seed: a later owner's kill joined before an earlier owner's hang under four contexts`,
+    `determinism: constructed history: a later owner's kill joined before an earlier owner's hang under four contexts`,
     // K21's flaky-loops history (cf0bd376): 3.5 s on the pool.
     `fixed seed 20261105: a flaky owner's loop calls under the call budget`,
     `random seed: a flaky owner's loop calls under the call budget`,

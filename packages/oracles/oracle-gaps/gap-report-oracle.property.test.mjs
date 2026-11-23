@@ -4373,6 +4373,10 @@ async function driver(plan, observe) {
         states.add(
           `a mutant's copies past its work budget killed by bounded work`,
         )
+      if (m.function === `w_hangpair` && m.laws?.includes(`no progress`))
+        states.add(
+          `an earlier owner's hang killed by no progress before a later owner's kill`,
+        )
       const named = {
         killed: `killed`,
         'random-only-kill': `random-only kill`,
@@ -6768,6 +6772,7 @@ const required = [
   `a spin after a short async read is indeterminate`,
   `an authored mutant killed by its spin`,
   `a copy cut as no progress before a later owner's spin`,
+  `an earlier owner's hang killed by no progress before a later owner's kill`,
   `a flaky owner's loop calls counted under the call budget`,
   `a hang in one owner and a survivor in another killed by no progress`,
   `a mutant's copies past its work budget killed by bounded work`,
@@ -6889,6 +6894,7 @@ const faults = [
 const ownHistoryStates = [
   `a flaky owner's loop calls counted under the call budget`,
   `a copy cut as no progress before a later owner's spin`,
+  `an earlier owner's hang killed by no progress before a later owner's kill`,
   `a run after a killed CLI that left its own session`,
   `two starts race for a stale claim`,
   `a start refuses a stale claim`,
@@ -7101,8 +7107,11 @@ const oneOwnerHistory = (generated, fields) => ({
 const withDeclaration = (constructed) =>
   constructed.map((item, index) => ({
     ...item,
-    build: (generated) =>
-      item.build({
+    build: (generated) => ({
+      // A literal construction that does not name the pair witness's field
+      // (`pair`, drawn last) runs without it; one that names it keeps it.
+      pair: false,
+      ...item.build({
         ...generated,
         // The end-to-end dimensions a generated base may draw: a construction
         // that does not name them runs without them (review of #57, apiLess).
@@ -7112,10 +7121,12 @@ const withDeclaration = (constructed) =>
         stopWitness: false,
         claimScenario: false,
         psMissing: false,
+        pair: false,
         declaration: index % 2 === 0 ? `wrapper` : `oracleProperty`,
         ownerless: false,
         owners: [`a`, ...generated.owners.slice(1)],
       }),
+    }),
   }))
 
 // Law 9 over the witness module's outcome classes, along the one edit
@@ -7465,6 +7476,8 @@ oracleProperty({
           // #99's fields, at their neutral values.
           hangMs: null,
           heavy: 0,
+          // The pair witness's field (`pair`, drawn last), at its neutral value.
+          pair: false,
           stopRuns: NO_STOPS,
           laterSteps: NO_LATER_STEPS,
         },
@@ -10672,27 +10685,6 @@ oracleProperty({
           laterSteps: NO_LATER_STEPS,
         }),
       },
-      // A slow kill whose test waits 22 s where its output differs: a legal
-      // copy that terminates inside its call budget. Its longest legal wait is
-      // its own 22 s, so its per-history backstop (backstopOf) is 66 s, and the
-      // wait is due inside the copy's horizon. A limit below the wait (the old
-      // 20 s base, or a floor) gave its copy a horizon the wait passes, so the
-      // copy was idle and cut as no progress. No legal history ends at the
-      // backstop (M, 2026-11-23, "Backstops are fine, set high"), so the
-      // owner's kill decides (B2, K21).
-      {
-        name: `a slow kill after a 22 s wait, past the old backstop`,
-        enters: [`a slow kill after a 22 s wait killed`],
-        build: (generated) =>
-          soloKill(generated, [
-            {
-              ...judging(`a`, `fixed seed`, 7),
-              fn: 0,
-              slow: true,
-              slowMs: 22000,
-            },
-          ]),
-      },
       {
         // The exact history of the seed 61620462, path 0 counterexample (the
         // random unit `every outcome class`), captured uncapped. Its one
@@ -11166,6 +11158,53 @@ oracleProperty({
           ],
           hangMs: null,
           heavy: 10000,
+        }),
+      },
+      // A slow kill whose test waits 22 s where its output differs: a legal
+      // copy that terminates inside its call budget. Its longest legal wait is
+      // its own 22 s, so its per-history backstop (backstopOf) is 66 s, and the
+      // wait is due inside the copy's horizon. A limit below the wait (the old
+      // 20 s base, or a floor) gave its copy a horizon the wait passes, so the
+      // copy was idle and cut as no progress. No legal history ends at the
+      // backstop (M, 2026-11-23, "Backstops are fine, set high"), so the
+      // owner's kill decides (B2, K21).
+      {
+        name: `a slow kill after a 22 s wait, past the old backstop`,
+        enters: [`a slow kill after a 22 s wait killed`],
+        build: (generated) =>
+          soloKill(generated, [
+            {
+              ...judging(`a`, `fixed seed`, 7),
+              fn: 0,
+              slow: true,
+              slowMs: 22000,
+            },
+          ]),
+      },
+      // The pair witness (`w_hangpair`, the drawn `pair` field): owner file p, the
+      // earlier path, hangs where it would judge, and owner file q kills. Four
+      // contexts join the files in turn (check.mjs `runAcross`), so q's copy
+      // joins ahead of p's. The copies still run in sorted owner order, so p's
+      // hang is cut as no progress before q judges.
+      //
+      // Why this history needs the join order: `passOf` sorts the units by
+      // path before their rows join the baseline map, so `reachedBy` and
+      // `targetsOf`'s `byPath` sort agree on every run. Removing only the
+      // `targetsOf` sort is an equivalent mutant (it survives this history and
+      // the classify oracle). Removing both sorts makes the owners run in join
+      // order, and this history kills that mutant.
+      {
+        name: `a later owner's kill joined before an earlier owner's hang under four contexts`,
+        enters: [
+          `an earlier owner's hang killed by no progress before a later owner's kill`,
+        ],
+        build: (generated) => ({
+          ...soloKill(generated, [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }]),
+          witness: false,
+          pair: true,
+          contexts: 4,
+          hangMs: null,
+          heavy: 0,
         }),
       },
     ]),

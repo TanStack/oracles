@@ -826,6 +826,7 @@ export const partitions = {
         "a flaky owner's loop calls under the call budget",
         "a property test's later run spins into bounded work",
         "a property test's count cut lands in its first part after a run with no positive n",
+        "a later owner's kill joined before an earlier owner's hang under four contexts",
       ]),
       4: anyOf(['every outcome class, the warm stop']),
       5: anyOf([

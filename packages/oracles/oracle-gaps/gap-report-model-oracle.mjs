@@ -256,7 +256,11 @@ const PAIR_FILES = [`p`, `q`]
 /** The oracle files a plan's fixture has. */
 const oracleFilesOf = (plan) => [
   ...ORACLE_FILES,
-  ...(plan.functions.some((fn) => fn.id === `w_slowpair`) ? PAIR_FILES : []),
+  ...(plan.functions.some(
+    (fn) => fn.id === `w_slowpair` || fn.id === `w_hangpair`,
+  )
+    ? PAIR_FILES
+    : []),
 ]
 const METHOD_NAMES = [`run`, `step`, `tick`]
 
@@ -1220,6 +1224,13 @@ const drawn = fc.record({
     0,
     HEAVY_CALLS,
   ),
+  // Whether the history owns a pair of oracle files, p and q, whose copies of
+  // the pair witness (`w_hangpair`) run in sorted owner order, where the
+  // runner's contexts may join them in another order (the join order is
+  // `passOf`'s, check.mjs `runAcross`). Drawn, and appended last (Randomness
+  // wins, 2026-11-16), so every earlier field keeps its draws. A constructed
+  // history sets it for its witness.
+  pair: fc.constantFrom(false, false, false, false, true),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -2203,6 +2214,20 @@ const witness = [
     tests: [
       judging(`p`, `fixed seed`, 7, { judges: false, loops: PAIR_LOOPS }),
       judging(`q`, `fixed seed`, 7, { judges: false, loops: PAIR_LOOPS }),
+    ],
+  },
+  // The owners of the pair witness (`w_hangpair`, present when the history's
+  // drawn `pair` field is set): p's copy hangs where it would judge, and q's
+  // copy kills. Copies run in sorted owner order (register 2026-11-14,
+  // "Deterministic cuts, outcome rule"; G44), so p's hang is cut as no
+  // progress before q judges, however the contexts joined the files.
+  {
+    id: `w_hangpair`,
+    owners: PAIR_FILES,
+    body: [kill],
+    tests: [
+      judging(`p`, `fixed seed`, 7, { judges: false, hangs: true }),
+      judging(`q`, `fixed seed`, 7),
     ],
   },
   // A kill as usual. In a run that the driver stops (`GAP_STOP_DIR` set),
@@ -3209,17 +3234,20 @@ function resolveHistory(history) {
     ...exported,
     ...importer,
     ...dotGen,
-    ...(history.witness || stopsOnly(history)
+    ...(history.witness || history.pair || stopsOnly(history)
       ? witness
           .filter(
             (w) =>
               // The budget witness's two copies make about 90,000 site
               // evaluations each, so only histories of the `budget` mode carry it.
-              (history.witness === true && w.id !== `w_slowpair`) ||
+              (history.witness === true &&
+                w.id !== `w_slowpair` &&
+                w.id !== `w_hangpair`) ||
               (history.witness === `capture` && captureWitness.has(w.id)) ||
               captureHalves[history.witness]?.has(w.id) ||
               (stopsOnly(history) && w.id === `w_stop`) ||
-              (history.witness === `budget` && w.id === `w_slowpair`),
+              (history.witness === `budget` && w.id === `w_slowpair`) ||
+              (history.pair === true && w.id === `w_hangpair`),
           )
           .map((w) => ({
             ...w,

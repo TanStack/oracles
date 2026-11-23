@@ -111,6 +111,8 @@
     "a later owner's test listed first beside an earlier owner's hang",
     "a flaky owner's loop calls under the call budget",
     "a property test's later run spins into bounded work",
-    "a property test's count cut lands in its first part after a run with no positive n"
+    "a property test's count cut lands in its first part after a run with no positive n",
+    "a slow kill after a 22 s wait, past the old backstop",
+    "a later owner's kill joined before an earlier owner's hang under four contexts"
   ]
 }
