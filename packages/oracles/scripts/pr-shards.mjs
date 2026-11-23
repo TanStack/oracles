@@ -526,9 +526,6 @@ export const partitions = {
     shards: {
       // 471 s of weight.
       1: anyOf([
-        // Block per law (#176): 128 s in CI at fd69ea2e, out of the rest
-        // shard (8m28s there).
-        `constructed history: a declaration fault: brokenOwner`,
         `generated 2`,
         `constructed history: an unchanged check through the daemon under a config's pre plugin`,
         `constructed history: an ambiguous authored mutant`,
@@ -605,6 +602,10 @@ export const partitions = {
       ]),
       // 471 s of weight.
       6: anyOf([
+        // Block per law (#176): 128 s in CI at fd69ea2e and 145 s at
+        // 331b3f34, beside "generated 2" (419 s there), so shard 1 reached
+        // 10m26s; this shard took 5m24s.
+        `constructed history: a declaration fault: brokenOwner`,
         `constructed history: a declaration fault: noTypescript`,
         `constructed history: a second daemon check of the budget witness`,
         `constructed history: a lazy module loaded before a hang in the same batch`,
