@@ -502,8 +502,12 @@ is not Vite's default name. The baseline prints which config it used.
   printed at the end. Nothing is written into the repository.
 - Pass `--daemon` when iterating on gaps in the same package: it keeps a
   per-package daemon running with warm Vitest workers and a disk evidence
-  store, so repeated checks reuse unchanged unit evidence and produce the
-  same report as a cold run. Stop it when done with
+  store, so repeated checks reuse unchanged unit evidence. The goal is that
+  repeated checks match a cold run, which needs every read to be a daemon
+  input. That waits on PR #133: until it lands, a daemon check can differ
+  from a cold run. The daemon is meant to restart whenever the CLI's
+  environment changes, a rule that PR #133 also builds. If the daemon stops
+  answering, the CLI runs the check cold. Stop it when done with
   `oracle-gaps --stop-daemon --package <dir>` (it also exits after 30 idle
   minutes).
 - Pass `--only <id,id>` (using the `<id>` from a `gap` line or the report's
