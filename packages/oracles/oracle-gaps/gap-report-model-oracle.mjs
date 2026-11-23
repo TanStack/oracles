@@ -4701,218 +4701,227 @@ class Spin extends Error {}
  * Each owner test's run under a mutant: whether it hung, crashed, or waited
  * slowly, its verdicts, and whether its output changed.
  */
+// A flaky test's runs count, and judge nothing (F1, #176: a test excluded
+// from judging still runs, so its calls count toward the copy's call budget,
+// as production's `mostCalls` and copy counts do). Its count is never charged
+// to the work budget (production charges only deterministic rows), and a spin
+// on it is a gap, since its count could not be told from the clock.
+const inertFlaky = (run) => ({
+  ...run,
+  verdicts: [],
+  crash: false,
+  changed: false,
+  hang: run.hang === true && run.cut === `count`,
+  clocked: true,
+  rowClocked: true,
+})
 function runsOf(plan, tests, sites, active) {
+  return runsOfTests(plan, tests, sites, active).map((run) =>
+    run.t.flaky ? inertFlaky(run) : run,
+  )
+}
+function runsOfTests(plan, tests, sites, active) {
   // A test runs its campaigns in order. Each failing judgment is a verdict
   // that carries its campaign's route; an assertion is a verdict under an
   // unnamed law. A verdict or a crash stops the test, except a soft
   // assertion, which lets it go on. A failed test's own route is the route
   // active when it ended. A slow test, or one that waits on a child
   // process, waits where its output changed, before it would hang or judge.
-  return tests
-    .filter((t) => !t.flaky)
-    .map((t) => {
-      // Whether the test's count could follow the clock when its run was cut
-      // (`clocked`): it reads the clock, makes a timer, or does I/O of its own
-      // anywhere in its run (`readsClock`, before production or after it), or
-      // it waited where an earlier campaign's output changed. Its count could
-      // then depend on time, so a spin there is no kill (M, 2026-11-16,
-      // "Count-only kills"): the call budget and the spin judge the test's
-      // count as a whole, and a clock read after the spin point still makes
-      // the unmutated count one that the clock could move (v21.1 R19a).
-      let waited = false
-      let changedAny = false
-      let slowed = false
-      const found = []
-      // The test's work, summed over its campaigns, with no mutant active and
-      // under the mutant. A test that only reads what an earlier test stored
-      // calls no production code, so it does none.
-      let before = 0
-      let after = 0
-      // A heavy test (`heavy`) calls its function HEAVY_CALLS more times before
-      // each campaign's own call, in every run.
-      const extra = heavyIn(t) ? t.heavy : 0
-      for (const part of partsOf(t)) {
-        const base = interpret(plan, t.fn, part.input, sites)
-        const mutated = interpret(plan, t.fn, part.input, sites, active)
-        const route = routeOf(t, part)
-        const changed =
-          !mutated.threw && mutated.trace.join() !== base.trace.join()
-        // Where the output differs, a `loops` witness calls the function that
-        // many more times, so its work is the call's work once per call.
-        if (!t.judgesShared) {
-          before += base.work * (1 + extra)
-          after += mutated.work * (1 + extra + (changed ? (t.loops ?? 0) : 0))
+  return tests.map((t) => {
+    // Whether the test's count could follow the clock when its run was cut
+    // (`clocked`): it reads the clock, makes a timer, or does I/O of its own
+    // anywhere in its run (`readsClock`, before production or after it), or
+    // it waited where an earlier campaign's output changed. Its count could
+    // then depend on time, so a spin there is no kill (M, 2026-11-16,
+    // "Count-only kills"): the call budget and the spin judge the test's
+    // count as a whole, and a clock read after the spin point still makes
+    // the unmutated count one that the clock could move (v21.1 R19a).
+    let waited = false
+    let changedAny = false
+    let slowed = false
+    const found = []
+    // The test's work, summed over its campaigns, with no mutant active and
+    // under the mutant. A test that only reads what an earlier test stored
+    // calls no production code, so it does none.
+    let before = 0
+    let after = 0
+    // A heavy test (`heavy`) calls its function HEAVY_CALLS more times before
+    // each campaign's own call, in every run.
+    const extra = heavyIn(t) ? t.heavy : 0
+    for (const part of partsOf(t)) {
+      const base = interpret(plan, t.fn, part.input, sites)
+      const mutated = interpret(plan, t.fn, part.input, sites, active)
+      const route = routeOf(t, part)
+      const changed =
+        !mutated.threw && mutated.trace.join() !== base.trace.join()
+      // Where the output differs, a `loops` witness calls the function that
+      // many more times, so its work is the call's work once per call.
+      if (!t.judgesShared) {
+        before += base.work * (1 + extra)
+        after += mutated.work * (1 + extra + (changed ? (t.loops ?? 0) : 0))
+      }
+      // A wait past the history's backstop (its `hangMs`, else the full limit)
+      // and a margin of 6 s for three seconds per second of a one-test file
+      // (the file's time is under 2 s) is past the copy's horizon: its timer is
+      // not due inside it, so the copy is idle and cut as no progress, by state
+      // (M entry "idle is decided by state only", 2026-11-15). Its outcome does
+      // not depend on load.
+      const backstopMs = plan.history.hangMs ?? FULL_LIMIT_MS
+      if (changed && t.slow && (t.slowMs ?? SLOW_MS) > backstopMs + 6000)
+        return {
+          clocked: readsClock(t) || waited,
+          rowClocked: readsClock(t) || waited || (changed && waitsIn(plan, t)),
+          t,
+          route,
+          hang: true,
+          cut: 'state',
+          verdicts: found,
+          changed: true,
+          work: after,
+          before,
         }
-        // A wait past the history's backstop (its `hangMs`, else the full limit)
-        // and a margin of 6 s for three seconds per second of a one-test file
-        // (the file's time is under 2 s) is past the copy's horizon: its timer is
-        // not due inside it, so the copy is idle and cut as no progress, by state
-        // (M entry "idle is decided by state only", 2026-11-15). Its outcome does
-        // not depend on load.
-        const backstopMs = plan.history.hangMs ?? FULL_LIMIT_MS
-        if (changed && t.slow && (t.slowMs ?? SLOW_MS) > backstopMs + 6000)
+      // A test that writes to the console and then waits on a timer due past
+      // its horizon, while the runner's own write is pending (`pendingIo:
+      // 'runner'`) or its own interval runs (`'runnerTimer'`), cannot make
+      // progress of its own: the runner's I/O and timers are not the test's,
+      // and the test's timer is not due inside its horizon, so the copy is
+      // idle and cut as no progress, by state (M entry "Idle counts only the
+      // test's I/O", 2026-11-15; C, timers by ownership, 2026-11-16).
+      if (
+        changed &&
+        (t.pendingIo === `runner` || t.pendingIo === `runnerTimer`)
+      )
+        return {
+          clocked: readsClock(t) || waited,
+          rowClocked: readsClock(t) || waited || (changed && waitsIn(plan, t)),
+          t,
+          route,
+          hang: true,
+          cut: 'state',
+          verdicts: found,
+          changed: true,
+          work: after,
+          before,
+        }
+      // A loop that never ends cuts the file's run off, as a hang does.
+      if (mutated.spun)
+        return {
+          clocked: readsClock(t) || waited,
+          rowClocked: readsClock(t) || waited || (changed && waitsIn(plan, t)),
+          t,
+          route,
+          hang: true,
+          cut: 'count',
+          verdicts: found,
+          changed: true,
+          work: after,
+          before,
+        }
+      changedAny ||= changed
+      slowed ||= changed && (t.slow || t.ioWait)
+      if (mutated.threw)
+        return {
+          clocked: readsClock(t) || waited,
+          rowClocked: readsClock(t) || waited || (changed && waitsIn(plan, t)),
+          t,
+          route,
+          crash: true,
+          verdicts: found,
+          changed: changedAny,
+          slowed,
+          work: after,
+          before,
+        }
+      // A test that hangs where another would judge never ends. Without a
+      // `pulse` it goes idle (no progress); with one, its timer keeps it busy,
+      // so only the backstop cuts it (a wall-clock cut).
+      if (changed && t.hangs)
+        return {
+          clocked: readsClock(t) || waited,
+          rowClocked: readsClock(t) || waited || (changed && waitsIn(plan, t)),
+          t,
+          route,
+          hang: true,
+          cut: t.pulse ? 'wall' : 'state',
+          verdicts: found,
+          changed: true,
+          work: after,
+          before,
+        }
+      // A verdict test of file b that reads the data spins there instead,
+      // while the data is open, which it is before any edit (`spinData`):
+      // a loop that never ends, cut by its call count, as above. A copy
+      // that first schedules its error (`spinThrows`) has made a timer, and
+      // one whose data read is async has had its own I/O complete first
+      // (C, 2026-11-17), so its count could follow the clock (v21.1 R19a):
+      // its spin is a gap.
+      if (changed && plan.spinData && fsGated(plan, t.file, t))
+        return {
+          clocked:
+            readsClock(t) || waited || plan.spinThrows || waitsIn(plan, t),
+          rowClocked:
+            readsClock(t) || waited || plan.spinThrows || waitsIn(plan, t),
+          t,
+          route,
+          hang: true,
+          cut: 'count',
+          verdicts: found,
+          changed: true,
+          work: after,
+          before,
+        }
+      if (changed && t.judges) {
+        found.push({
+          route,
+          law: t.judgeBy === `verdict` ? t.law : `(unnamed)`,
+        })
+        if (t.judgeBy !== `soft`)
           return {
             clocked: readsClock(t) || waited,
             rowClocked:
               readsClock(t) || waited || (changed && waitsIn(plan, t)),
             t,
             route,
-            hang: true,
-            cut: 'state',
             verdicts: found,
             changed: true,
-            work: after,
-            before,
-          }
-        // A test that writes to the console and then waits on a timer due past
-        // its horizon, while the runner's own write is pending (`pendingIo:
-        // 'runner'`) or its own interval runs (`'runnerTimer'`), cannot make
-        // progress of its own: the runner's I/O and timers are not the test's,
-        // and the test's timer is not due inside its horizon, so the copy is
-        // idle and cut as no progress, by state (M entry "Idle counts only the
-        // test's I/O", 2026-11-15; C, timers by ownership, 2026-11-16).
-        if (
-          changed &&
-          (t.pendingIo === `runner` || t.pendingIo === `runnerTimer`)
-        )
-          return {
-            clocked: readsClock(t) || waited,
-            rowClocked:
-              readsClock(t) || waited || (changed && waitsIn(plan, t)),
-            t,
-            route,
-            hang: true,
-            cut: 'state',
-            verdicts: found,
-            changed: true,
-            work: after,
-            before,
-          }
-        // A loop that never ends cuts the file's run off, as a hang does.
-        if (mutated.spun)
-          return {
-            clocked: readsClock(t) || waited,
-            rowClocked:
-              readsClock(t) || waited || (changed && waitsIn(plan, t)),
-            t,
-            route,
-            hang: true,
-            cut: 'count',
-            verdicts: found,
-            changed: true,
-            work: after,
-            before,
-          }
-        changedAny ||= changed
-        slowed ||= changed && (t.slow || t.ioWait)
-        if (mutated.threw)
-          return {
-            clocked: readsClock(t) || waited,
-            rowClocked:
-              readsClock(t) || waited || (changed && waitsIn(plan, t)),
-            t,
-            route,
-            crash: true,
-            verdicts: found,
-            changed: changedAny,
             slowed,
             work: after,
             before,
           }
-        // A test that hangs where another would judge never ends. Without a
-        // `pulse` it goes idle (no progress); with one, its timer keeps it busy,
-        // so only the backstop cuts it (a wall-clock cut).
-        if (changed && t.hangs)
-          return {
-            clocked: readsClock(t) || waited,
-            rowClocked:
-              readsClock(t) || waited || (changed && waitsIn(plan, t)),
-            t,
-            route,
-            hang: true,
-            cut: t.pulse ? 'wall' : 'state',
-            verdicts: found,
-            changed: true,
-            work: after,
-            before,
-          }
-        // A verdict test of file b that reads the data spins there instead,
-        // while the data is open, which it is before any edit (`spinData`):
-        // a loop that never ends, cut by its call count, as above. A copy
-        // that first schedules its error (`spinThrows`) has made a timer, and
-        // one whose data read is async has had its own I/O complete first
-        // (C, 2026-11-17), so its count could follow the clock (v21.1 R19a):
-        // its spin is a gap.
-        if (changed && plan.spinData && fsGated(plan, t.file, t))
-          return {
-            clocked:
-              readsClock(t) || waited || plan.spinThrows || waitsIn(plan, t),
-            rowClocked:
-              readsClock(t) || waited || plan.spinThrows || waitsIn(plan, t),
-            t,
-            route,
-            hang: true,
-            cut: 'count',
-            verdicts: found,
-            changed: true,
-            work: after,
-            before,
-          }
-        if (changed && t.judges) {
-          found.push({
-            route,
-            law: t.judgeBy === `verdict` ? t.law : `(unnamed)`,
-          })
-          if (t.judgeBy !== `soft`)
-            return {
-              clocked: readsClock(t) || waited,
-              rowClocked:
-                readsClock(t) || waited || (changed && waitsIn(plan, t)),
-              t,
-              route,
-              verdicts: found,
-              changed: true,
-              slowed,
-              work: after,
-              before,
-            }
-        }
-        if (changed && waitsIn(plan, t)) waited = true
       }
-      // A test that passed: its route is the last one it registered, and
-      // its work is judged against the bound it declared. The work law
-      // judges only operator mutants: an authored copy counts calls only for
-      // its call budget.
-      const route = routeOf(t, partsOf(t).at(-1))
-      // Only a route that oracleProperty registers for production can carry
-      // a bound, and a test whose row is clocked (it made a timer, read the
-      // clock, or its own I/O completed, here or where it waited) can do work
-      // that follows the clock, so neither judges work (the CLI's `!clocked`).
-      const judgesWork =
-        found.length === 0 &&
-        active?.site !== undefined &&
-        [`reproducible`, `random`].includes(route) &&
-        !readsClock(t) &&
-        !waited
-      return {
-        clocked: readsClock(t) || waited,
-        rowClocked: readsClock(t) || waited,
-        t,
-        route,
-        verdicts:
-          judgesWork &&
-          t.work !== null &&
-          t.registered &&
-          after > t.work * before
-            ? [{ route, law: `work bound` }]
-            : found,
-        changed: changedAny,
-        slowed,
-        rose: judgesWork && after > before,
-        work: after,
-        before,
-      }
-    })
+      if (changed && waitsIn(plan, t)) waited = true
+    }
+    // A test that passed: its route is the last one it registered, and
+    // its work is judged against the bound it declared. The work law
+    // judges only operator mutants: an authored copy counts calls only for
+    // its call budget.
+    const route = routeOf(t, partsOf(t).at(-1))
+    // Only a route that oracleProperty registers for production can carry
+    // a bound, and a test whose row is clocked (it made a timer, read the
+    // clock, or its own I/O completed, here or where it waited) can do work
+    // that follows the clock, so neither judges work (the CLI's `!clocked`).
+    const judgesWork =
+      found.length === 0 &&
+      active?.site !== undefined &&
+      [`reproducible`, `random`].includes(route) &&
+      !readsClock(t) &&
+      !waited
+    return {
+      clocked: readsClock(t) || waited,
+      rowClocked: readsClock(t) || waited,
+      t,
+      route,
+      verdicts:
+        judgesWork && t.work !== null && t.registered && after > t.work * before
+          ? [{ route, law: `work bound` }]
+          : found,
+      changed: changedAny,
+      slowed,
+      rose: judgesWork && after > before,
+      work: after,
+      before,
+    }
+  })
 }
 
 // Whether a test's count could follow the clock in every run: it reads the
