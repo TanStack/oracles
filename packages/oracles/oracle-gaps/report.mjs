@@ -277,6 +277,7 @@ export function renderReport({
   excluded,
   baseline = [],
   config,
+  typecheck,
 }) {
   const gaps = gapsOf(results)
   const guards = results.filter((r) => r.probeGuard)
@@ -327,6 +328,22 @@ export function renderReport({
     fence,
     ``,
   )
+  if (typecheck?.notes?.length > 0) {
+    lines.push(`## Typecheck notes`, ``)
+    for (const item of typecheck.skipped ?? [])
+      lines.push(
+        `- Skipped ${codeSpan(item.config)}: ${escapeControls(item.reason)}`,
+      )
+    for (const file of typecheck.uncovered ?? [])
+      lines.push(
+        `- ${codeSpan(file)} is not included in ${codeSpan(typecheck.config)}; \`tsc\` will not typecheck it.`,
+      )
+    for (const diag of typecheck.diagnostics ?? [])
+      lines.push(
+        `- ${codeSpan(`${diag.file}:${diag.line}:${diag.column}`)} TS${diag.code}: ${escapeControls(diag.message)}`,
+      )
+    lines.push(``)
+  }
   lines.push(
     `## How to use this report`,
     ``,
@@ -414,6 +431,7 @@ export function renderStdout({
   paths,
   baseline = [],
   config,
+  typecheck,
 }) {
   const gaps = gapsOf(results)
   const unowned = results.filter(
@@ -468,6 +486,7 @@ export function renderStdout({
         `left out, failing with no mutant active: ${excluded.join(`, `)}`,
       ),
     )
+  for (const note of typecheck?.notes ?? []) lines.push(note)
   lines.push(
     streamLine(`note`, `results ${escapeControls(posix(paths.results))}`),
   )

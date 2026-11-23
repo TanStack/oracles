@@ -64,6 +64,7 @@ import {
 } from './stream.mjs'
 import { analyze, isRunnerCopy } from './analysis.mjs'
 import { Refusal } from './ending.mjs'
+import { typecheckOracleFiles, typecheckRefusal } from './typecheck.mjs'
 import {
   baseOf,
   isWithin,
@@ -158,6 +159,7 @@ const ownFiles = [
   `evidence.mjs`,
   `daemon.mjs`,
   `ending.mjs`,
+  `typecheck.mjs`,
   `../src/oracle-property.ts`,
 ].map((file) => join(here, file))
 
@@ -1635,6 +1637,24 @@ export default async (env) => {
     )
     endPhase(`static analysis`, { mutants: mutants.length })
 
+    // TypeScript coverage and semantic check for TypeScript oracle files
+    // (typecheck.mjs). Without --typecheck, issues surface as notes; with
+    // --typecheck, any uncovered oracle file, incompatible tsconfig, or
+    // TypeScript error refuses the run before baseline tests execute.
+    const typecheck = typecheckOracleFiles(ts, pkg, [...declarations.keys()], {
+      config: options.tsconfig,
+    })
+    for (const line of typecheck.notes) log(line)
+    if (options.typecheck) {
+      const refusal = typecheckRefusal(ts, typecheck)
+      if (refusal) throw refusal
+    }
+    endPhase(`typecheck`, {
+      checked: typecheck.checked.length,
+      uncovered: typecheck.uncovered.length,
+      diagnostics: typecheck.diagnostics.length,
+    })
+
     // The global inputs of every unit.
     const lockfile = lockfileOf(pkg)
     const globalKey = sha1(
@@ -2643,6 +2663,17 @@ export default async (env) => {
           })),
           excluded,
           nondeterministic: [...nondeterministic],
+          ...(typecheck.found
+            ? {
+                typecheck: {
+                  config: typecheck.config,
+                  checked: typecheck.checked,
+                  uncovered: typecheck.uncovered,
+                  skipped: typecheck.skipped,
+                  diagnostics: typecheck.diagnostics,
+                },
+              }
+            : {}),
           mutantSeconds,
           // How the result was produced: units reused from the evidence
           // store and units run in this check, runs cut off at their time
@@ -2663,6 +2694,7 @@ export default async (env) => {
         excluded: excluded.map(relative),
         baseline: baselineFiles,
         config: options.config,
+        typecheck,
       }),
     )
     if (existsSync(testOutput) && statSync(testOutput).size > 0)
@@ -2679,6 +2711,7 @@ export default async (env) => {
       pkg,
       baseline: baselineFiles,
       config: options.config,
+      typecheck,
       paths: {
         report: escapeControls(posix(join(options.out, `summary.md`))),
         results: join(options.out, `results.json`),

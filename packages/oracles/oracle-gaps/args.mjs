@@ -9,7 +9,13 @@ import { stateDirOf } from './evidence.mjs'
 import { posix, realPathOf } from './paths.mjs'
 import { Refusal } from './ending.mjs'
 
-const flags = new Set([`daemon`, `stop-daemon`, `ordinary`, `help`])
+const flags = new Set([
+  `daemon`,
+  `stop-daemon`,
+  `ordinary`,
+  `typecheck`,
+  `help`,
+])
 // The options that take a positive whole number.
 const counts = [
   `contexts`,
@@ -33,19 +39,21 @@ const valued = new Set([
   `diff-base`,
   `pool`,
   `config`,
+  `tsconfig`,
 ])
 // The usage text `--help` prints (index.mjs).
 export const usage = `Usage: oracle-gaps --package <dir> --source <src/x.ts,...>
-  [--env-prefix <name>] [--daemon] [--ordinary] [--seed <n>] [--mutants <dir>]
-  [--out <dir>] [--only <id,id>] [--diff-base <rev>] [--test-timeout <ms>]
-  [--sample <n>] [--contexts <n>] [--pool threads|forks] [--config <file>]
+  [--env-prefix <name>] [--daemon] [--ordinary] [--typecheck]
+  [--tsconfig <file>] [--seed <n>] [--mutants <dir>] [--out <dir>]
+  [--only <id,id>] [--diff-base <rev>] [--test-timeout <ms>] [--sample <n>]
+  [--contexts <n>] [--pool threads|forks] [--config <file>]
   [--first-limit <ms>] [--hang-limit <ms>] [--mutant-limit <ms>]
   oracle-gaps --stop-daemon --package <dir>
   oracle-gaps --help
 
-The paths in --source and --config are relative to --package. Without
---config, the run loads the Vitest config that Vitest discovers for the
-package: in its directory, or else in the nearest parent directory that
+The paths in --source, --config, and --tsconfig are relative to --package.
+Without --config, the run loads the Vitest config that Vitest discovers for
+the package: in its directory, or else in the nearest parent directory that
 has one. Run the CLI from any directory.
 Every line the CLI writes for a check starts with \`oracle-gaps: \` and its
 kind (config, note, baseline, blocked, progress, gap, busy, done), on
@@ -176,6 +184,18 @@ function optionsOf(args, cwd) {
       `--config ${args.config} is not a file of the package`,
       `Pass --config the package's Vitest config file, relative to --package.`,
     )
+  // The TypeScript config used to check oracle files (`--tsconfig`); by
+  // default tsconfig.json in the package when present (typecheck.mjs).
+  const tsconfig =
+    args.tsconfig === undefined ? undefined : packagePath(pkg, args.tsconfig)
+  if (
+    tsconfig !== undefined &&
+    !statSync(join(pkg, tsconfig), { throwIfNoEntry: false })?.isFile()
+  )
+    throw new Refusal(
+      `--tsconfig ${args.tsconfig} is not a file of the package`,
+      `Pass --tsconfig the package's TypeScript config file, relative to --package.`,
+    )
   const mutants = args.mutants && resolve(cwd, args.mutants)
   if (mutants && !statSync(mutants, { throwIfNoEntry: false })?.isDirectory())
     throw new Refusal(
@@ -203,6 +223,9 @@ function optionsOf(args, cwd) {
     // Ordinary (non-oracle) test files run only when asked: they never close
     // a gap, and only report whether they would have caught a survivor.
     ordinary: args.ordinary === true,
+    // Refuse the run when TypeScript oracle files are excluded from tsconfig
+    // or have TypeScript errors (typecheck.mjs).
+    typecheck: args.typecheck === true,
     // Each warm context runs one mutant at a time with one worker. Measured on
     // offline-transactions' FIFO executor (163 mutants, 18 cores): 8 contexts
     // 124 s, 16 contexts 91 s, with identical classes.
@@ -240,6 +263,7 @@ function optionsOf(args, cwd) {
     // A directory of authored mutants (see loadAuthored).
     mutants,
     config,
+    tsconfig,
   }
 }
 
