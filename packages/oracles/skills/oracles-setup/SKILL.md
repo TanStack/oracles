@@ -1,6 +1,6 @@
 ---
 name: oracles-setup
-description: Finish setting up a repository for oracles with @tanstack/oracles. Pin the packages, add the lint preset and the Vitest config, write the AGENTS.md block, make the oracle skills findable by coding agents, and run the oracle through the gap check. Use when the developer wants to keep the work of a first session (a commit, or a pull request), when a repository adopts @tanstack/oracles, or when it upgrades its pinned commit. Its install and file-placement sections also cover the minimal setup that a first session needs.
+description: Finish setting up a repository for oracles with @tanstack/oracles. Pin the packages, add the lint preset and the Vitest config, write the agent instructions, make the oracle skills findable by coding agents, and run the oracle through the gap check. Use when the developer wants to keep the work of a first session (a commit, or a pull request), when a repository adopts @tanstack/oracles, or when it upgrades its pinned commit. Its install and file-placement sections also cover the minimal setup that a first session needs.
 ---
 
 # Finish setting up a repository for oracles
@@ -146,7 +146,7 @@ one built on `flow-remove-types`.
 
 Add a script for it, such as `test:oracles`. Leave the existing suite
 unchanged. In a published package, keep the new files out of the published
-package (its `files` field or `.npmignore`): the configs, `AGENTS.md`,
+package (its `files` field or `.npmignore`): the configs, the instruction file,
 `.agents/`, and `.claude/`.
 
 If the repository's own lint or formatter covers the oracle files (for
@@ -246,10 +246,12 @@ follows the fast-check import, so an `fc` that is not imported passes.
 Remove the probe again. Before the first oracle file exists, do this check through the linter's `--stdin` with
 an oracle file name, since a glob with no files fails.
 
-## 4. Write the AGENTS.md block
+## 4. Write the agent instructions
 
-Add this block to `AGENTS.md` (create the file if needed). On an upgrade,
-replace everything between the markers and keep the rest of the file.
+Add this block to whichever instruction file the repository uses:
+`AGENTS.md` or `CLAUDE.md`. If neither exists, create `AGENTS.md`.
+On an upgrade, replace everything between the markers and keep the rest
+of the file.
 
 ```md
 <!-- BEGIN @tanstack/oracles (template 4) -->
@@ -330,16 +332,9 @@ not available here (<the reason>)." Fill in the two placeholders in step 7,
 once their values exist. A run that stops before step 7 leaves them in
 place, and its report says so.
 
-Check for both `AGENTS.md` and `CLAUDE.md`. Claude Code reads `CLAUDE.md`,
-and most other agents read `AGENTS.md`. If both exist, put the block in
-`AGENTS.md` and make sure `CLAUDE.md` refers to it (a line `@AGENTS.md`
-imports it). If only `CLAUDE.md` exists, ask the developer which file gets the
-block. If neither exists, create `AGENTS.md` and a `CLAUDE.md` that holds
-only `@AGENTS.md`, after asking.
-
 In a workspace with a package-local install, put the block in the package's
-`AGENTS.md`, where its `node_modules` paths resolve. A root copy must use the
-full paths, such as `packages/<name>/node_modules/@tanstack/oracles/...`.
+instruction file, where its `node_modules` paths resolve. A root copy must
+use the full paths, such as `packages/<name>/node_modules/@tanstack/oracles/...`.
 
 ## 5. Make the skills findable
 
@@ -352,14 +347,14 @@ pointer. A pointer must read the copy that the chosen package installed:
   `<package dir>/node_modules/@tanstack/oracles/skills/<name>/SKILL.md`,
   for the package chosen in step 1. Check that the file exists there.
 
-Use that path in the `AGENTS.md` block (step 4) too. Offer the developer these
+Use that path in the instruction block (step 4) too. Offer the developer these
 choices. They can pick more than one.
 
-| Choice                  | Writes                                                                                                                                | Use when                                                                          |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| **AGENTS.md only**      | Step 4's block                                                                                                                        | The developer's agents read `AGENTS.md`. This is always done.                     |
-| **Repository pointers** | A pointer skill per skill in `.agents/skills/` and `.claude/skills/`                                                                  | Everyone who clones the repository gets the skills. Commit them.                  |
-| **Global pointers**     | A pointer skill per skill in `~/.agents/skills/` and `~/.claude/skills/` (and any other skills directory the developer's agents read) | The developer wants the skills in every repository that uses `@tanstack/oracles`. |
+| Choice                  | Writes                                                                                                                                | Use when                                                                            |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| **Instructions only**   | Step 4's block                                                                                                                        | The developer's agents read the repository's instruction file. This is always done. |
+| **Repository pointers** | A pointer skill per skill in `.agents/skills/` and `.claude/skills/`                                                                  | Everyone who clones the repository gets the skills. Commit them.                    |
+| **Global pointers**     | A pointer skill per skill in `~/.agents/skills/` and `~/.claude/skills/` (and any other skills directory the developer's agents read) | The developer wants the skills in every repository that uses `@tanstack/oracles`.   |
 
 Write a pointer skill as `<directory>/<name>/SKILL.md` for each of
 `oracles-explore`, `oracles-design`, `oracles-review`,
@@ -530,7 +525,7 @@ and rerun the oracle and the gap check. If a gap can be neither killed
 nor removed, stop work on that gap and report its key and evidence to the
 developer.
 
-Now fill in the two placeholders in the `AGENTS.md` block: the oracle file
+Now fill in the two placeholders in the instruction block: the oracle file
 glob and the gap check command you ran.
 
 ## 8. Report
