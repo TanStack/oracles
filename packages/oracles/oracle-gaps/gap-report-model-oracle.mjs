@@ -1120,7 +1120,13 @@ const drawn = fc.record({
   // once (so it reaches the sites of the first generated function, which
   // only it may reach), or `HEAVY_CALLS` times, past the call floor, as a
   // failing property that shrinks does (review of #176, F1 and F2).
-  failingLawCalls: fc.constantFrom(`none`, `once`, `heavy`),
+  // A heavy law runs in every copy of its file, about a second each (it
+  // still runs, "An excluded test still runs"), so it is drawn rarely: the
+  // determinism unit of a generated history with it took 419 s in CI.
+  failingLawCalls: fc.oneof(
+    { weight: 4, arbitrary: fc.constantFrom(`none`, `once`) },
+    { weight: 1, arbitrary: fc.constant(`heavy`) },
+  ),
   // Whether the failing law fails by itself, or a hook of a `describe`
   // around it does: a `beforeAll` that throws, which skips it, or an
   // `afterAll` that throws after it passed. Either is a failure that only
@@ -4925,7 +4931,7 @@ const HEAVY_CALLS = 110_000
 // How often a spinning failing law repeats its call at most: past any call
 // budget the grammar's files reach, so on instrumented code its copy is cut
 // first, while an authored mutant's copy, which counts nothing, ends it.
-const SPIN_BOUND = 10_000_000
+const SPIN_BOUND = 1_000_000
 /** Whether oracle file `file` holds the failing law. */
 const holdsFailingLaw = (plan, file) =>
   plan.failingLaw === file ||

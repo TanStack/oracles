@@ -83,9 +83,9 @@
     ["optionalChains", "92f0ef0b4dde6c60"],
     ["failingLaw", "08ec3fe6ce509633"],
     ["failingLawAt", "659b59760c27ad0f"],
-    ["failingLawCalls", "7e1501d9678edaaa"],
-    ["failingLawHook", "dd8ba7a2c8d6af12"],
-    ["failingLawSpins", "5dd46b11bdad8471"]
+    ["failingLawCalls", "3f853c3b6c6b89b5"],
+    ["failingLawHook", "4417bd05ca78a981"],
+    ["failingLawSpins", "a52fc926e1e1704b"]
   ],
   "histories": [
     ["functions", "66c0e9c56951c377"],
@@ -171,8 +171,8 @@
     ["optionalChains", "92f0ef0b4dde6c60"],
     ["failingLaw", "08ec3fe6ce509633"],
     ["failingLawAt", "659b59760c27ad0f"],
-    ["failingLawCalls", "7e1501d9678edaaa"],
-    ["failingLawHook", "dd8ba7a2c8d6af12"],
-    ["failingLawSpins", "5dd46b11bdad8471"]
+    ["failingLawCalls", "3f853c3b6c6b89b5"],
+    ["failingLawHook", "4417bd05ca78a981"],
+    ["failingLawSpins", "a52fc926e1e1704b"]
   ]
 }
