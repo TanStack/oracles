@@ -414,6 +414,13 @@ export const shards = {
     `random seed: a module data mutant whose owner file holds no plan test`,
     `determinism: constructed history: a module data mutant judged past nondeterministic plan tests`,
     `determinism: constructed history: a module data mutant whose owner file holds no plan test`,
+    // Histories replayed by history (#184, #116, #203): fixed units.
+    `fixed history: replay by history: #184 (h2, neutral main form)`,
+    `determinism: fixed history: replay by history: #184 (h2, neutral main form)`,
+    `fixed history: replay by history: #116 (D_OBJ field-drop, seed 333199054)`,
+    `determinism: fixed history: replay by history: #116 (D_OBJ field-drop, seed 333199054)`,
+    `fixed history: replay by history: #203 (D_PRIM bool-flip, seed 1606566214)`,
+    `determinism: fixed history: replay by history: #203 (D_PRIM bool-flip, seed 1606566214)`,
   ],
 }
 
