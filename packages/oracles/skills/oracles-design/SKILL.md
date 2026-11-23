@@ -621,6 +621,16 @@ comes with one instruction. Do what it says, within the rules below.
 Use the [mutant gap search](../../docs/instruments/mutant-gap-search.md) card for
 a survivor whose missing history is not obvious.
 
+For repeated gap-closing iterations on the same package, add `--daemon` so
+`oracle-gaps` keeps Vitest workers warm and reuses unchanged unit evidence
+across runs; stop it when done with
+`oracle-gaps --stop-daemon --package <dir>` (it also exits after 30 idle
+minutes). To verify a fix for one or a few specific mutants quickly before
+running the full check, pass `--only <id,id>` (from the `<id>` in a `gap`
+line or the report's `rerun: --only <id>`): it runs only those mutants and
+their owners' baseline, and marks the run as partial, so finish with a full
+check without `--only`.
+
 ## 9. Report the evidence
 
 The evidence counts only as a set. One item alone proves little. Give the
