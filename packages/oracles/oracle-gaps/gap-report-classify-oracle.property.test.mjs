@@ -1780,7 +1780,14 @@ function baselineFiles(h, printer) {
     const ordinary = !f.oracle
     if (f.baseline === `load`)
       return [
-        { file, ordinary, failure: `Error: cannot load the file`, tests: [] },
+        {
+          file,
+          ordinary,
+          failure: `Error: cannot load the file`,
+          // A file that does not load has no failing law to name.
+          laws: [],
+          tests: [],
+        },
       ]
     // A file whose baseline is `test` fails its marked tests, or its first
     // test when none is marked.
@@ -1801,6 +1808,15 @@ function baselineFiles(h, printer) {
         failure: first
           ? `${first.fullName}: ${first.message.split(`\n`)[0]}`
           : undefined,
+        // Its failing laws by file and test names, as the runner gives them
+        // (check.mjs `baselineFiles`).
+        ...(first
+          ? {
+              laws: tests
+                .filter((x) => x.state === `failed`)
+                .map((x) => [file, ...(x.names ?? [x.fullName])].join(` > `)),
+            }
+          : {}),
         tests,
       },
     ]
