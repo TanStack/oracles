@@ -934,6 +934,12 @@ function runCli(dir, files, how = {}) {
   const ranIn = out ?? chosenOut(child.stdout)
   const checkPid = ranIn === undefined ? undefined : checkPidOf(ranIn)
   const retention = linesOfRun(retentionLinesOf(hook), ranIn)
+  // The supervisor relays a child's stderr to stream.log as it relays it to
+  // stderr (index.mjs), so another writer's lines are in the log too: a
+  // foreign calibration puts them in both, before the done line.
+  const log = ranIn === undefined ? undefined : join(ranIn, `stream.log`)
+  if (how.foreign !== undefined && log !== undefined && existsSync(log))
+    writeFileSync(log, beforeLastLine(readFileSync(log, `utf8`), how.foreign))
   const run = readRun(
     dir,
     out,
@@ -1989,6 +1995,12 @@ const streamedGap =
 //   notes, and the empty lines between them.
 // - Vite's own line (`[vite] …` or `[vite:<plugin>] …`), with indented
 //   lines under it.
+// - Node's native backtrace of process.abort() on win32, the CLI's abort
+//   witness (ORACLE_GAPS_TEST_ABORT_AT): a CRLF blank line that opens it
+//   (`lead`, taken only when a native frame follows), its numbered native
+//   frames (` N: <16 hex digits> …`), the JavaScript stack's header, and its
+//   numbered frames with file, line and column. Every line ends CRLF. POSIX
+//   ends that abort with SIGABRT, which prints none.
 const v8Line =
   /^(?:<--- .* --->|----- .* -----|==== .* =+|\[\d+:0x[0-9a-f]+\] .*|FATAL ERROR: .*|\s*\d+: .*|Security context: .*)$/
 const exemptBlocks = [
@@ -1999,6 +2011,11 @@ const exemptBlocks = [
     head: /^(?:<--- Last few GCs --->|<--- JS stacktrace --->|FATAL ERROR: |----- Native stack trace -----)/,
     body: v8Line,
     blank: true,
+  },
+  {
+    lead: /^\r$/,
+    head: /^ {1,2}\d+: [0-9A-F]{16}(?: .*)?\r$/,
+    body: /^(?: {1,2}\d+: [0-9A-F]{16}(?: .*)?|----- JavaScript stack trace -----|\d+: .*:\d+:\d+\)?)\r$/,
   },
   {
     head: /^(?:✘|▲|X|!) \[(?:ERROR|WARNING)\] /,
@@ -2066,6 +2083,16 @@ function streamOf(lines, name) {
     if (line.startsWith(`refused: `)) inRefusal = true
     const ending = inRefusal
     if (line.startsWith(`fix: `)) inRefusal = false
+    // A block that a line opens only when its head follows that line (`lead`).
+    const opened = exemptBlocks.find(
+      (b) =>
+        b.lead?.test(line) &&
+        b.head.test(lines.slice(at + 1).find((l) => l !== ``) ?? ``),
+    )
+    if (opened !== undefined) {
+      block = opened
+      continue
+    }
     if (line === ``) {
       // An empty line belongs to a block that holds empty lines, or comes
       // right before the head of one (V8's fatal block starts so).
@@ -3685,14 +3712,14 @@ async function driver(plan, observe) {
         )
         const stopped = {
           ...run,
-          // An abort ends the process that runs the check. Unsupervised (every
-          // run on win32, and the test-only hook on POSIX), that process is the
-          // CLI's own, so the run is killed before it cleans up; supervised, the
-          // CLI outlives it.
+          // An abort ends the process that runs the check. Unsupervised (the
+          // test-only hook, which runs the check as the CLI's own process), that
+          // process is the CLI's own, so the run is killed before it cleans up;
+          // supervised (every run on POSIX, and on win32 since the supervisor
+          // covers it), the CLI outlives it and removes the session directory.
           killed:
             stop.when === `kill` ||
-            (stop.when === `abort` &&
-              (process.platform === `win32` || plan.unsupervised)),
+            (stop.when === `abort` && plan.unsupervised),
           sessions: {
             present: run.sessions.length,
             own: run.sessions.filter((name) => !before.includes(name)).length,
@@ -6133,6 +6160,18 @@ const foreignBlocks = {
     `    at emitWarning (node:internal/process/warning:190:3)`,
     `    at file:///tmp/package/tests/a.test.ts:3:9`,
   ],
+  // Node's native backtrace of process.abort() on win32, as CI captured it
+  // (the CLI's abort witness, after its session opens): every line ends CRLF,
+  // a blank line opens it, then its numbered native frames, the JavaScript
+  // stack's header, and its numbered frames with their file, line and column.
+  [`a win32 abort's native backtrace`]: [
+    `\r`,
+    ` 1: 00007FF686B89D86 node::GetNodeReport+74070\r`,
+    ` 2: 000001A6F574F64D \r`,
+    `----- JavaScript stack trace -----\r`,
+    `1: checkCold (<cli>/index.mjs:628:47)\r`,
+    `2: processTicksAndRejections (node:internal/process/task_queues:105:5)\r`,
+  ],
   // esbuild's block for a syntax error in a module the config imports, as
   // Vite 7.3.7 with esbuild 0.28.2 prints it.
   [`an esbuild block`]: [
@@ -6161,6 +6200,29 @@ calibrations.push(
     history: { constructed: `a batch whose run rejects` },
     driver: (plan, observe) =>
       driver({ ...plan, foreign: [`  ${ownLine}`] }, observe),
+  },
+  {
+    // The win32 backtrace's shape is exact: a line after its JavaScript frames
+    // that is no frame (no file, line and column) is our line, not Node's.
+    name: `a win32 abort's native backtrace with a line that is no frame`,
+    law: `greppable stream`,
+    difference: `that are not lines of the stream: ${JSON.stringify([`3: a line with no location\r`, ownLine])}`,
+    history: { constructed: `a batch whose run rejects` },
+    driver: (plan, observe) =>
+      driver(
+        {
+          ...plan,
+          foreign: [
+            ownLine,
+            `\r`,
+            ` 1: 00007FF686B89D86 node::GetNodeReport+74070\r`,
+            `----- JavaScript stack trace -----\r`,
+            `1: checkCold (<cli>/index.mjs:628:47)\r`,
+            `3: a line with no location\r`,
+          ],
+        },
+        observe,
+      ),
   },
 )
 

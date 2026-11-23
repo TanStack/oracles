@@ -170,6 +170,12 @@ if (process.env.ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED !== undefined) {
       throw new Error(`the hold after the started marker saw no stop in 60 s`)
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
+  // win32 has no signal to send, so the stop file stands for it: the hold ended
+  // by it, so it is kept as a signal is (an early stop). Without this the
+  // supervisor's poll of the file starts only after its child has been spawned,
+  // and the stop lands in a running child.
+  if (early === undefined && stopFile !== undefined && existsSync(stopFile))
+    keepEarly(`SIGINT`)
 }
 
 const { parseArgs, usage } = await import(`./args.mjs`)
@@ -621,9 +627,11 @@ async function checkCold(options) {
   const session = await openSession(options.pkg)
   // A test-only abort (ORACLE_GAPS_TEST_ABORT_AT=check, inert unless set), after
   // the session has begun, where a V8 out-of-memory abort would strike. The
-  // supervisor reports how the process ended. process.abort() prints a native
-  // backtrace on POSIX, which is no line of the stream, so POSIX sends itself a
-  // SIGABRT, which ends the process the same way; win32 has no such signal.
+  // supervisor reports how the process ended. win32 has no signal that ends a
+  // process as an abort does, so process.abort() ends it; before it ends, Node
+  // writes its native backtrace to stderr, a block P10 exempts as Node's own
+  // (the oracle's exemptBlocks). POSIX sends itself a SIGABRT, which ends the
+  // process the same way and writes nothing.
   if (process.env.ORACLE_GAPS_TEST_ABORT_AT === `check`) {
     if (process.platform === `win32`) process.abort()
     else process.kill(process.pid, `SIGABRT`)
