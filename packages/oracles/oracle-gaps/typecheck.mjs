@@ -6,14 +6,14 @@
 // This module uses the CLI's bundled TypeScript 5 (`ts`), never the package's
 // own `typescript`, so packages without TypeScript or on TypeScript 7 keep
 // working. When a package has no tsconfig.json (for example a JavaScript repo
-// or a synthetic fixture), default runs do nothing; `--typecheck` refuses.
-// When a tsconfig.json exists, default runs emit `oracle-gaps: note
-// typecheck: ...` lines for uncovered `.ts` oracle files, incompatible
-// tsconfig options (such as TypeScript 7's `contentMappers`), and TypeScript
-// errors in covered oracle files, while `--typecheck` refuses on any of them.
+// or a synthetic fixture), there is nothing to report. When it has one, each
+// run emits `oracle-gaps: note typecheck: ...` lines for uncovered `.ts`
+// oracle files, incompatible tsconfig options (such as TypeScript 7's
+// `contentMappers`), and TypeScript errors in covered oracle files. These are
+// reported in the output and never fail a run (maintainer decision of
+// 2026-11-23). Nothing is cached across runs: every check reads its inputs.
 import { existsSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
-import { Refusal } from './ending.mjs'
 import { posix, realPathOf, relativeWithin } from './paths.mjs'
 import { escapeControls, streamLine } from './stream.mjs'
 
@@ -52,54 +52,6 @@ function formatDiagnosticText(ts, diagnostic) {
       .replace(/\s+/g, ` `)
       .trim(),
   )
-}
-
-// One compiler-file cache per bundled TypeScript copy, caching only files
-// under `/node_modules/` keyed by language options and stat stamp so daemon
-// checks stay fast without ever returning stale project or dependency files.
-const nodeModulesCache = new WeakMap()
-function typecheckHostFor(ts, options) {
-  const base = ts.createCompilerHost(options)
-  if (!nodeModulesCache.has(ts)) nodeModulesCache.set(ts, new Map())
-  const cache = nodeModulesCache.get(ts)
-  return {
-    ...base,
-    getSourceFile(fileName, languageVersionOrOptions, onError, fresh) {
-      const normalized = posix(fileName)
-      if (fresh || !normalized.includes(`/node_modules/`))
-        return base.getSourceFile(
-          fileName,
-          languageVersionOrOptions,
-          onError,
-          fresh,
-        )
-      const stat = statSync(fileName, { throwIfNoEntry: false })
-      if (!stat?.isFile())
-        return base.getSourceFile(
-          fileName,
-          languageVersionOrOptions,
-          onError,
-          fresh,
-        )
-      const languageKey =
-        typeof languageVersionOrOptions === `object` &&
-        languageVersionOrOptions !== null
-          ? `${languageVersionOrOptions.languageVersion ?? ``}:${languageVersionOrOptions.impliedNodeFormat ?? ``}:${languageVersionOrOptions.jsDocParsingMode ?? ``}`
-          : String(languageVersionOrOptions)
-      const key = `${languageKey}\0${normalized}`
-      const stamp = `${stat.size}:${stat.mtimeMs}`
-      const cached = cache.get(key)
-      if (cached?.stamp === stamp) return cached.sourceFile
-      const sourceFile = base.getSourceFile(
-        fileName,
-        languageVersionOrOptions,
-        onError,
-        fresh,
-      )
-      if (sourceFile) cache.set(key, { stamp, sourceFile })
-      return sourceFile
-    },
-  }
 }
 
 /**
@@ -257,7 +209,7 @@ export function typecheckOracleFiles(
       const program = ts.createProgram({
         rootNames: cfg.fileNames,
         options: cfg.options,
-        host: typecheckHostFor(ts, cfg.options),
+        host: ts.createCompilerHost(cfg.options),
       })
       for (const { relativeFile, programFileName } of entries) {
         checked.push(relativeFile)
@@ -359,47 +311,4 @@ export function formatTypecheckNotes({
     )
   }
   return notes
-}
-
-/**
- * The Refusal for `--typecheck` when a package lacks a compatible tsconfig,
- * leaves a TypeScript oracle file out of it, or has TypeScript errors in an
- * oracle file. Undefined when every TypeScript oracle file passes cleanly.
- */
-export function typecheckRefusal(ts, result) {
-  if (!result.found)
-    return new Refusal(
-      `--typecheck requires ${escapeControls(result.config)} in the package`,
-      `Add ${escapeControls(result.config)} to the package, or pass --tsconfig <file> naming a TypeScript config inside the package.`,
-    )
-  if (result.skipped.length > 0) {
-    const first = result.skipped[0]
-    return new Refusal(
-      `${escapeControls(first.config)} cannot be typechecked with bundled TypeScript ${ts.version}: ${escapeControls(first.reason)}`,
-      `Fix ${escapeControls(first.config)}, or run the project's own TypeScript compiler instead of --typecheck.`,
-    )
-  }
-  if (result.uncovered.length > 0) {
-    const shown = result.uncovered.slice(0, 3).map(escapeControls).join(`, `)
-    const listed =
-      result.uncovered.length === 1
-        ? shown
-        : `${counted(result.uncovered.length, `oracle file`)} (${shown}${result.uncovered.length > 3 ? `, ...` : ``})`
-    return new Refusal(
-      `${escapeControls(result.config)} does not include ${listed}`,
-      `Include the oracle files in ${escapeControls(result.config)}, or pass --tsconfig <file> naming a TypeScript config that includes them.`,
-    )
-  }
-  if (result.diagnostics.length > 0) {
-    const first = result.diagnostics[0]
-    const more =
-      result.diagnostics.length > 1
-        ? ` (+${result.diagnostics.length - 1} more TypeScript ${result.diagnostics.length === 2 ? `error` : `errors`} in oracle files)`
-        : ``
-    return new Refusal(
-      `${escapeControls(first.file)}:${first.line}:${first.column}: TS${first.code}: ${escapeControls(first.message)}${more}`,
-      `Fix the TypeScript errors in the oracle files, then run the check again.`,
-    )
-  }
-  return undefined
 }

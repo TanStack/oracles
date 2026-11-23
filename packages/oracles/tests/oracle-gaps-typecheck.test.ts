@@ -13,10 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, test } from 'vitest'
 import ts from 'typescript-for-tanstack-oracles'
 import { parseArgs } from '../oracle-gaps/args.mjs'
-import {
-  typecheckOracleFiles,
-  typecheckRefusal,
-} from '../oracle-gaps/typecheck.mjs'
+import { typecheckOracleFiles } from '../oracle-gaps/typecheck.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const cliPath = join(here, `../oracle-gaps/index.mjs`)
@@ -73,7 +70,7 @@ ${body}
 `
 
 describe(`oracle-gaps typecheck`, () => {
-  test(`does nothing when the package has no tsconfig.json, and refuses with --typecheck`, () => {
+  test(`does nothing when the package has no tsconfig.json`, () => {
     const pkg = makeScratch(`no-tsconfig`)
     try {
       writeFiles(pkg, {
@@ -87,11 +84,6 @@ describe(`oracle-gaps typecheck`, () => {
       expect(result.notes).toEqual([])
       expect(result.diagnostics).toEqual([])
       expect(result.uncovered).toEqual([])
-
-      const refusal = typecheckRefusal(ts, result)
-      expect(refusal).toBeDefined()
-      expect(refusal?.message).toContain(`tsconfig.json`)
-      expect(refusal?.fix).not.toMatch(/\b(ignore|equivalent|skip)/i)
     } finally {
       rmSync(pkg, { recursive: true, force: true })
     }
@@ -139,12 +131,6 @@ describe(`oracle-gaps typecheck`, () => {
         ),
       ).toBe(true)
       expect(result.notes.some((line) => line.includes(`TS2345:`))).toBe(true)
-
-      const refusal = typecheckRefusal(ts, result)
-      expect(refusal).toBeDefined()
-      expect(refusal?.message).toContain(`tests/math.oracle.test.ts:2:`)
-      expect(refusal?.message).toContain(`TS2345`)
-      expect(refusal?.fix).not.toMatch(/\b(ignore|equivalent|skip)/i)
     } finally {
       rmSync(pkg, { recursive: true, force: true })
     }
@@ -180,10 +166,6 @@ describe(`oracle-gaps typecheck`, () => {
       expect(uncoveredResult.notes).toEqual([
         `oracle-gaps: note typecheck: tests/math.oracle.test.ts is not included in tsconfig.json; tsc will not typecheck it`,
       ])
-      const refusal = typecheckRefusal(ts, uncoveredResult)
-      expect(refusal?.message).toContain(`tests/math.oracle.test.ts`)
-      expect(refusal?.fix).not.toMatch(/\b(ignore|equivalent|skip)/i)
-
       // Passing --tsconfig tsconfig.test.json covers and checks the file cleanly.
       const coveredResult = typecheckOracleFiles(ts, pkg, [oracle], {
         config: `tsconfig.test.json`,
@@ -193,7 +175,6 @@ describe(`oracle-gaps typecheck`, () => {
       expect(coveredResult.checked).toEqual([`tests/math.oracle.test.ts`])
       expect(coveredResult.diagnostics).toEqual([])
       expect(coveredResult.notes).toEqual([])
-      expect(typecheckRefusal(ts, coveredResult)).toBeUndefined()
     } finally {
       rmSync(pkg, { recursive: true, force: true })
     }
@@ -291,9 +272,9 @@ describe(`oracle-gaps typecheck`, () => {
         `oracle-gaps: note typecheck: tests/uncovered.oracle.test.ts is not included in tsconfig.json; tsc will not typecheck it`,
       ])
 
-      const refusal = typecheckRefusal(ts, result)
-      expect(refusal?.message).toContain(`contentMappers`)
-      expect(refusal?.fix).not.toMatch(/\b(ignore|equivalent|skip)/i)
+      expect(result.skipped.map((item) => item.reason).join(`\n`)).toContain(
+        `contentMappers`,
+      )
     } finally {
       rmSync(pkg, { recursive: true, force: true })
     }
@@ -317,7 +298,6 @@ describe(`oracle-gaps typecheck`, () => {
       ])
       expect(jsOnly.found).toBe(true)
       expect(jsOnly.notes).toEqual([])
-      expect(typecheckRefusal(ts, jsOnly)).toBeUndefined()
 
       const badJson = typecheckOracleFiles(ts, pkg, [
         join(pkg, `tests/math.oracle.test.ts`),
@@ -334,7 +314,7 @@ describe(`oracle-gaps typecheck`, () => {
     }
   })
 
-  test(`parseArgs validates --typecheck and --tsconfig`, () => {
+  test(`parseArgs validates --tsconfig and rejects the removed --typecheck flag`, () => {
     const pkg = makeScratch(`args`)
     try {
       writeFiles(pkg, {
@@ -348,14 +328,18 @@ describe(`oracle-gaps typecheck`, () => {
           pkg,
           `--source`,
           `src/math.ts`,
-          `--typecheck`,
           `--tsconfig`,
           `tsconfig.test.json`,
         ],
         pkg,
       )
-      expect(parsed.typecheck).toBe(true)
       expect(parsed.tsconfig).toBe(`tsconfig.test.json`)
+      expect(() =>
+        parseArgs(
+          [`--package`, pkg, `--source`, `src/math.ts`, `--typecheck`],
+          pkg,
+        ),
+      ).toThrow(/unknown option --typecheck/)
 
       expect(() =>
         parseArgs(
@@ -388,7 +372,7 @@ describe(`oracle-gaps typecheck`, () => {
     }
   })
 
-  test(`CLI surfaces type errors by default, refuses with --typecheck, and stays consistent under --daemon`, () => {
+  test(`CLI reports type errors and still completes; --typecheck is an unknown option`, () => {
     const pkg = makeScratch(`cli-e2e`)
     try {
       writeFiles(pkg, {
@@ -459,7 +443,8 @@ describe(`oracle-gaps typecheck`, () => {
         }),
       ])
 
-      // 2. With --typecheck, the same package refuses (exit 2) before baseline runs.
+      // 2. The removed --typecheck flag is an unknown option: the run refuses
+      // (exit 2) before any check starts, with its done line alone on stdout.
       const outStrict = join(pkg, `out-strict`)
       const strictRun = runCli(pkg, [
         `--package`,
@@ -473,38 +458,26 @@ describe(`oracle-gaps typecheck`, () => {
         outStrict,
       ])
       expect(strictRun.status, strictRun.stderr).toBe(2)
-      expect(strictRun.stderr).toContain(
-        `oracle-gaps: note typecheck: tests/math.oracle.test.ts:`,
-      )
-      expect(strictRun.stderr).toContain(`refused: tests/math.oracle.test.ts:`)
-      expect(strictRun.stderr).toContain(`TS2322`)
-      expect(strictRun.stderr).toContain(`fix: `)
+      expect(strictRun.stderr).toContain(`refused: unknown option --typecheck`)
+      expect(strictRun.stderr).not.toContain(`oracle-gaps: baseline `)
       expect(strictRun.stderr).toContain(`oracle-gaps: done refused, report `)
       expect(strictRun.stdout).toContain(`oracle-gaps: done refused, report `)
-      expect(readFileSync(join(outStrict, `stream.log`), `utf8`)).toBe(
-        strictRun.stderr,
-      )
-      const strictResults = JSON.parse(
-        readFileSync(join(outStrict, `results.json`), `utf8`),
-      ) as { status: string; cause: string }
-      expect(strictResults.status).toBe(`refused`)
-      expect(strictResults.cause).toContain(`TS2322`)
 
-      // 3. Through --daemon: refuses while broken, then passes once fixed.
+      // 3. Through --daemon: the type error is still reported and never fails
+      // the run; once fixed, the notes are gone.
       const outDaemonBroken = join(pkg, `out-daemon-broken`)
       const daemonBroken = runCli(pkg, [
         `--package`,
         pkg,
         `--source`,
         `src/math.ts`,
-        `--typecheck`,
         `--daemon`,
         `--contexts`,
         `1`,
         `--out`,
         outDaemonBroken,
       ])
-      expect(daemonBroken.status, daemonBroken.stderr).toBe(2)
+      expect(daemonBroken.status, daemonBroken.stderr).toBe(0)
       expect(daemonBroken.stderr).toContain(`TS2322`)
 
       // Fix the type error and verify daemon sees the fresh file and passes.
@@ -519,7 +492,6 @@ describe(`oracle-gaps typecheck`, () => {
         pkg,
         `--source`,
         `src/math.ts`,
-        `--typecheck`,
         `--daemon`,
         `--contexts`,
         `1`,

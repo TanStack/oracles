@@ -9,13 +9,7 @@ import { stateDirOf } from './evidence.mjs'
 import { posix, realPathOf } from './paths.mjs'
 import { Refusal } from './ending.mjs'
 
-const flags = new Set([
-  `daemon`,
-  `stop-daemon`,
-  `ordinary`,
-  `typecheck`,
-  `help`,
-])
+const flags = new Set([`daemon`, `stop-daemon`, `ordinary`, `help`])
 // The options that take a positive whole number.
 const counts = [
   `contexts`,
@@ -43,10 +37,10 @@ const valued = new Set([
 ])
 // The usage text `--help` prints (index.mjs).
 export const usage = `Usage: oracle-gaps --package <dir> --source <src/x.ts,...>
-  [--env-prefix <name>] [--daemon] [--ordinary] [--typecheck]
-  [--tsconfig <file>] [--seed <n>] [--mutants <dir>] [--out <dir>]
-  [--only <id,id>] [--diff-base <rev>] [--test-timeout <ms>] [--sample <n>]
-  [--contexts <n>] [--pool threads|forks] [--config <file>]
+  [--env-prefix <name>] [--daemon] [--ordinary] [--tsconfig <file>]
+  [--seed <n>] [--mutants <dir>] [--out <dir>] [--only <id,id>]
+  [--diff-base <rev>] [--test-timeout <ms>] [--sample <n>] [--contexts <n>]
+  [--pool threads|forks] [--config <file>]
   [--first-limit <ms>] [--hang-limit <ms>] [--mutant-limit <ms>]
   oracle-gaps --stop-daemon --package <dir>
   oracle-gaps --help
@@ -223,9 +217,6 @@ function optionsOf(args, cwd) {
     // Ordinary (non-oracle) test files run only when asked: they never close
     // a gap, and only report whether they would have caught a survivor.
     ordinary: args.ordinary === true,
-    // Refuse the run when TypeScript oracle files are excluded from tsconfig
-    // or have TypeScript errors (typecheck.mjs).
-    typecheck: args.typecheck === true,
     // Each warm context runs one mutant at a time with one worker. Measured on
     // offline-transactions' FIFO executor (163 mutants, 18 cores): 8 contexts
     // 124 s, 16 contexts 91 s, with identical classes.

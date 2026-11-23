@@ -64,7 +64,7 @@ import {
 } from './stream.mjs'
 import { analyze, isRunnerCopy } from './analysis.mjs'
 import { Refusal } from './ending.mjs'
-import { typecheckOracleFiles, typecheckRefusal } from './typecheck.mjs'
+import { typecheckOracleFiles } from './typecheck.mjs'
 import {
   baseOf,
   isWithin,
@@ -1638,17 +1638,12 @@ export default async (env) => {
     endPhase(`static analysis`, { mutants: mutants.length })
 
     // TypeScript coverage and semantic check for TypeScript oracle files
-    // (typecheck.mjs). Without --typecheck, issues surface as notes; with
-    // --typecheck, any uncovered oracle file, incompatible tsconfig, or
-    // TypeScript error refuses the run before baseline tests execute.
+    // (typecheck.mjs). Its findings are reported as notes, the summary, and
+    // results.json; they never refuse or fail the run.
     const typecheck = typecheckOracleFiles(ts, pkg, [...declarations.keys()], {
       config: options.tsconfig,
     })
     for (const line of typecheck.notes) log(line)
-    if (options.typecheck) {
-      const refusal = typecheckRefusal(ts, typecheck)
-      if (refusal) throw refusal
-    }
     endPhase(`typecheck`, {
       checked: typecheck.checked.length,
       uncovered: typecheck.uncovered.length,
