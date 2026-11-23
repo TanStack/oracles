@@ -16,9 +16,9 @@
 // paths. Unowned warnings are counted per function. A gap is identified by an
 // anchor that survives unrelated edits and reformatting: the source file, the
 // function (`name`, or `Class.method`), the operator, and the tokens of the
-// innermost statement that holds the site, joined by single spaces and kept in
-// full, with `~n` for the nth repeat of one anchor in a function. An authored
-// mutant's key is its source and id (`source#authored:id`).
+// innermost statement or declaration that holds the site, joined by single
+// spaces and kept in full, with `~n` for the nth repeat of one anchor in a
+// function. An authored mutant's key is its source and id (`source#authored:id`).
 import {
   baselineLines,
   blockedLines,

@@ -75,23 +75,36 @@ const ordering = new Set([`<`, `<=`, `>`, `>=`])
 const DEAD_CODE = `dead code`
 const BOUNDARY_HINT = `boundary: -0`
 
-// A mutant's anchor is the innermost statement that holds its site, as its
-// tokens joined by single spaces, so formatting does not move it.
-function anchorOf(ts, file, node) {
-  let statement = node
-  while (
-    statement.parent &&
-    !(
-      statement.kind >= ts.SyntaxKind.FirstStatement &&
-      statement.kind <= ts.SyntaxKind.LastStatement
-    )
+// A mutant's anchor is the innermost statement or declaration that holds its
+// site (parameters, class fields, enum members, decorators, heritage clauses,
+// and computed member names included, since TypeScript's statement range
+// leaves them out), as its tokens joined by single spaces, so formatting does
+// not move it.
+function isAnchor(ts, node) {
+  return (
+    ts.isStatement(node) ||
+    ts.isParameter(node) ||
+    ts.isPropertyDeclaration(node) ||
+    ts.isEnumMember(node) ||
+    ts.isDecorator(node) ||
+    ts.isHeritageClause(node) ||
+    ts.isClassStaticBlockDeclaration(node) ||
+    ts.isAccessor(node) ||
+    (ts.isComputedPropertyName(node) &&
+      (ts.isClassElement(node.parent) ||
+        ts.isMethodDeclaration(node.parent) ||
+        ts.isAccessor(node.parent)))
   )
-    statement = statement.parent
+}
+
+function anchorOf(ts, file, node) {
+  let anchor = node
+  while (anchor.parent && !isAnchor(ts, anchor)) anchor = anchor.parent
   const scanner = ts.createScanner(
     ts.ScriptTarget.Latest,
     true,
     ts.LanguageVariant.Standard,
-    statement.getText(file),
+    anchor.getText(file),
   )
   const tokens = []
   for (
