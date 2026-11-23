@@ -446,9 +446,12 @@ pLimit` is `index.js#pLimit`. `exports.name = fn` is named `name`.
     it as a whole value (`dispatch(handlers)`, `Object.values(handlers)`)
     brings every function defined inside its initializer into the caller's
     tree, so owning the dispatch entry point (`src/index.ts#handleInputChunk`)
-    owns the whole dispatch table. A destructured declaration
-    (`const { a, b } = ...`) is not a unit: if a law depends on one, own the
-    whole file.
+    owns the whole dispatch table. Spreading it (`{ ...handlers }`) counts as
+    a whole-value use. This is the maintainer's ruling of 2026-11-23 (decisions
+    register, "Object-literal functions used dynamically are owned"), and the
+    static gap oracle's dispatch law (`gap-report-static-oracle-dispatch.property.test.mjs`)
+    judges it. A destructured declaration (`const { a, b } = ...`) is not a
+    unit: if a law depends on one, own the whole file.
   - When an entry pulls in another contract (a batching API in the same
     file, or a helper in a default export's call tree that serves another
     promise), write that contract's own oracle, or report its gaps as
