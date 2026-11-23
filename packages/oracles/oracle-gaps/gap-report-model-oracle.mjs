@@ -3601,10 +3601,10 @@ const holds = (a, op, b) =>
             ? a === b
             : a !== b
 // A test's campaigns: its own route and input, then an optional second one.
-const partsOf = (t) => [
-  { route: t.route, input: t.input },
-  ...(t.then ? [t.then] : []),
-]
+const partsOf = (t) =>
+  t.framework
+    ? []
+    : [{ route: t.route, input: t.input }, ...(t.then ? [t.then] : [])]
 // A campaign's route kind; a test that registered nothing has none.
 const routeOf = (t, part = t) =>
   !t.registered
@@ -4869,6 +4869,39 @@ function blockingOf(plan) {
 }
 
 /**
+ * The tests the fixture writes into a file beyond the plan's (`oracleTestFile`),
+ * each deterministic and passing: the console-stream test and the abort test
+ * of file a, the mid-run edit test of the file that lands the edit, and the
+ * failing owner's two passing tests. None calls the source under test, so each
+ * reaches it only at load. A file's load reach covers every test it holds (the
+ * load-time rule, M 2026-11-06), so these count as its tests. The placeholder
+ * of a file with no tests is skipped, so it judges nothing and is not listed.
+ * The failing owner's pair is listed for completeness only: a broken owner
+ * file judges nothing (M 2026-11-19), so `ownerTests` leaves it out. Per-law
+ * blocking (#176) would let the pair judge, which is that PR's rule to decide.
+ */
+function frameworkTestsOf(plan) {
+  const tests = []
+  const add = (file, name) =>
+    tests.push({
+      file,
+      name,
+      framework: true,
+      flaky: false,
+      registered: true,
+      route: `framework`,
+    })
+  if (plan.consoleOutput) add(`a`, `writes to the console streams`)
+  if (plan.aborts) add(`a`, `aborts the process when asked`)
+  if (plan.midrun) add(plan.midrunBy, MIDRUN_EDITORS[plan.midrunTarget].test)
+  if (plan.fault === `brokenOwner`) {
+    add(`b`, `fixed seed 999 again`)
+    add(`b`, `fixed seed 999`)
+  }
+  return tests
+}
+
+/**
  * Each test file's baseline (law 14): its tests that ran and those skipped
  * (a file with no tests of the plan holds one skipped placeholder), how
  * many failed, and its failing test, or that it did not load.
@@ -4996,8 +5029,9 @@ function model(plan) {
       .filter((f) => !f.ordinary)
       .map((f) => f.file),
   )
+  const census = [...plan.tests, ...frameworkTestsOf(plan)]
   const ownerTests = (id) =>
-    plan.tests.filter(
+    census.filter(
       (t) =>
         oracleFilesOf(plan).includes(t.file) &&
         owners(id).has(t.file) &&

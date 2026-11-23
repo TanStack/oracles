@@ -3958,6 +3958,28 @@ async function driver(plan, observe) {
         m.outcome === `killed`
       )
         states.add(`a mutant of module data killed through its reader`)
+      // A module-data mutant that the owner file's deterministic tests judge
+      // once its plan tests are all nondeterministic: the framework-added
+      // tests of the file (the console test, the abort test, the mid-run
+      // edit, the placeholder) are the deterministic judges.
+      const dataOf = (plan.data ?? []).find((d) => d.id === m.function)
+      if (
+        dataOf !== undefined &&
+        m.outcome !== `indeterminate` &&
+        dataOf.owners.some(
+          (file) =>
+            plan.tests.some((t) => t.file === file) &&
+            plan.tests.every((t) => t.file !== file || t.flaky),
+        )
+      )
+        states.add(
+          `a module data mutant judged past nondeterministic plan tests`,
+        )
+      if (
+        dataOf !== undefined &&
+        dataOf.owners.some((file) => !plan.tests.some((t) => t.file === file))
+      )
+        states.add(`a module data mutant whose owner file holds no plan test`)
       if (
         m.function === `w_memo` &&
         m.operator === `if-false` &&
@@ -6373,6 +6395,8 @@ const required = [
   `a kill in one owner after a gap in another`,
   `a slow kill past the first time limit killed`,
   `a mutant that changes a value only at load killed`,
+  `a module data mutant judged past nondeterministic plan tests`,
+  `a module data mutant whose owner file holds no plan test`,
   `a mutant that changes no value judged without a run`,
   `a boolean flip killed`,
   `a value-position call killed`,
@@ -6612,6 +6636,8 @@ const constructedOnly = [
   `a daemon pause that did not engage`,
   `a warm daemon was replaced before the pause`,
   `a probe branch's work under a generated test's bound judged nothing`,
+  `a module data mutant judged past nondeterministic plan tests`,
+  `a module data mutant whose owner file holds no plan test`,
 ]
 // The stop-specific states of `every outcome class`, split between its two halves.
 // The SIGTERM state is declared on POSIX only (posixStops), so only there is it named.
@@ -9405,6 +9431,48 @@ oracleProperty({
             { signal: `SIGINT`, pool: `threads`, when: `kill` },
             { signal: `SIGINT`, pool: `threads`, when: `run` },
           ],
+        }),
+      },
+      {
+        // Module data is read at load, so every owner file that imports it
+        // reaches it (the load-time rule, M 2026-11-06). Here file a holds the
+        // fixture's console-stream test, which is deterministic and passes,
+        // and its only plan test is nondeterministic. The mutant is judged by
+        // the console test, so the census must count the framework-added test
+        // (the model judged it indeterminate before the census change).
+        name: `a module data mutant judged past nondeterministic plan tests`,
+        enters: [
+          `a module data mutant judged past nondeterministic plan tests`,
+        ],
+        build: (generated) => ({
+          ...generated,
+          witness: false,
+          fault: `none`,
+          consoleOutput: true,
+          stopRuns: NO_STOPS,
+          steps: null,
+          laterSteps: NO_LATER_STEPS,
+          dataOwners: [`a`],
+          tests: [{ ...judging(`a`, `fixed seed`, 1), flaky: true, fn: 0 }],
+        }),
+      },
+      {
+        // File a holds no plan test, so its only test is the fixture's skipped
+        // placeholder. A skipped test judges nothing, so the mutant is unreached
+        // in production and in the model. This history guards the census: a
+        // census that counted the placeholder as a judge would owe not-distinguished.
+        name: `a module data mutant whose owner file holds no plan test`,
+        enters: [`a module data mutant whose owner file holds no plan test`],
+        build: (generated) => ({
+          ...generated,
+          witness: false,
+          fault: `none`,
+          consoleOutput: false,
+          stopRuns: NO_STOPS,
+          steps: null,
+          laterSteps: NO_LATER_STEPS,
+          dataOwners: [`a`],
+          tests: [{ ...judging(`b`, `fixed seed`, 1), fn: 0 }],
         }),
       },
     ]),
