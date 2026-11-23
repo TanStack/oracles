@@ -90,6 +90,27 @@
     "a ?. read of an object absent only at load",
     "a stop before the CLI starts, after a stopped check",
     "a run after a killed CLI",
-    "a property test's later run spins into bounded work"
+    "a slow owner's kill and another owner's kill",
+    "a backstop cut ends the copies ahead of a later kill",
+    "a kill past the work budget in a later owner",
+    "a slow kill after a 16 s wait",
+    "a copy waiting on a timer",
+    "a copy waiting on an unref'd timer",
+    "a copy waiting on a pipe it opened",
+    "a copy beside the runner's pending write",
+    "a copy beside the runner's pending timer",
+    "a clocked copy that spins",
+    "an authored mutant whose owner hangs",
+    "a stream log lost after its note, then stopped, unsupervised",
+    "a heavy test that reads the clock after its work",
+    "a heavy test that reads the clock first",
+    "a hang in a file whose test does a short read",
+    "a clocked owner beside a counted one under the work budget",
+    "a spin after a short async read",
+    "an authored mutant whose owner spins",
+    "a later owner's test listed first beside an earlier owner's hang",
+    "a flaky owner's loop calls under the call budget",
+    "a property test's later run spins into bounded work",
+    "a property test's count cut lands in its first part after a run with no positive n"
   ]
 }

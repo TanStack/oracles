@@ -480,7 +480,7 @@ const testCase = fc.record({
   // constructed histories use. A test that loops declares no work bound
   // (`resolve`), since the model judges no work in a generated test.
   slowMs: fc.constantFrom(...SLOW_WAITS),
-  loops: fc.constantFrom(0, 0, 0, 0, 0, 0, 0, 30_000),
+  loops: fc.constantFrom(0, 0, 0, 0, 0, 0, 0, 30_000, 19_999),
   timerWait: fc.oneof(
     { arbitrary: fc.constant(null), weight: 15 },
     {

@@ -49,6 +49,7 @@ export const shards = {
     `fixed seed 20261105: a stop before the CLI starts, after a stopped check`,
     `fixed seed 20261105: a run after a killed CLI`,
     `fixed seed 20261105: a property test's later run spins into bounded work`,
+    `fixed seed 20261105: a property test's count cut lands in its first part after a run with no positive n`,
     `fixed seed 20261105: a stop by SIGTERM as the CLI starts`,
     `fixed seed 20261105: an unsupervised run stopped after its note`,
     `fixed seed 20261105: a start refuses a dangling claim`,
@@ -62,6 +63,7 @@ export const shards = {
     `fixed seed 20261105: a declaration fault: projects`,
     `random seed: a config that --config names`,
     `random seed: a property test's later run spins into bounded work`,
+    `random seed: a property test's count cut lands in its first part after a run with no positive n`,
     `random seed: a declaration fault: badEntry`,
     `random seed: a failing owner under a config that --config names`,
     `random seed: a load failure beside a hang`,
@@ -75,6 +77,7 @@ export const shards = {
     `determinism: constructed history: a declaration fault: projects`,
     `determinism: constructed history: a package with no config`,
     `determinism: constructed history: a property test's later run spins into bounded work`,
+    `determinism: constructed history: a property test's count cut lands in its first part after a run with no positive n`,
     `determinism: constructed history: an edit sequence through the daemon`,
     // The witness module's edit sequence (option M): 189 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
