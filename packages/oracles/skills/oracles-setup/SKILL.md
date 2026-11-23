@@ -50,7 +50,8 @@ Find out, and tell the developer:
 
 The packages are not on npm yet. Install both from pkg.pr.new, pinned to the
 same commit of TanStack/oracles. If you were not given one, use the current
-commit on main: the first 7 characters of the hash that
+commit on main (if its preview is missing, use the fallback below): the first
+7 characters of the hash that
 `git ls-remote https://github.com/TanStack/oracles refs/heads/main` prints.
 Tell the developer which commit you pinned.
 
@@ -72,6 +73,16 @@ included), install every package here with `--legacy-peer-deps` (npm), and see
 the fallback in step 3. With that flag, npm skips peers, so check that
 Vitest's own peer `vite` is installed, and add it if it is not.
 
+If `pkg.pr.new` returns HTTP 404 for the tip of `main`, its preview has not
+published. `Publish preview` runs only after the jobs in its `needs` list pass
+(`.github/workflows/pr.yml`), so one red blocking job on the tip leaves no
+preview. For example, on `7b6bae16` the blocking `Gap report end-to-end
+oracle (random seed)` job failed, and the preview was skipped. Check recent
+commits on `main` for the latest one whose `Publish preview` check succeeded
+(or whose `https://pkg.pr.new/TanStack/oracles/@tanstack/oracles@<sha>`
+returns HTTP 200 with `curl -sI`), pin both packages to that commit, and tell
+the developer which commit you pinned.
+
 Never add, upgrade, or downgrade the repository's `typescript` for oracles.
 The gap check uses its own TypeScript and never reads the project's, from
 commit `d8adfee` on. Pin a commit at or after `d8adfee`. Oracle files need
@@ -88,7 +99,11 @@ repository's TypeScript, and do not add a typecheck that uses it.
 Use the repository's own package manager. With pnpm 11, an install that skips
 a dependency's build script stops every later pnpm command
 (`ERR_PNPM_IGNORED_BUILDS`), and pnpm writes an `allowBuilds` placeholder into
-`pnpm-workspace.yaml`. Answer it, usually `false`, and tell the developer.
+`pnpm-workspace.yaml`. Answer it, usually `false`, and tell the developer. With
+pnpm 12.18 or later, installing `@tanstack/oracles` prints `Agent skills awaiting approval:
+@tanstack/oracles` because the package ships `skills/`. The notice is harmless
+and does not block installs; the developer can run `pnpm approve` if they use
+pnpm's built-in skill approval, or leave it and use step 5's pointer files.
 
 A run that installs from a local tarball has no commit to pin or check. Say
 which tarball you installed, and note that `package.json` now points at a
@@ -144,10 +159,20 @@ If the production source uses syntax that Vite cannot parse (Flow types,
 for example), add a Vite plugin to the oracle config that strips it, such as
 one built on `flow-remove-types`.
 
-Add a script for it, such as `test:oracles`. Leave the existing suite
-unchanged. In a published package, keep the new files out of the published
-package (its `files` field or `.npmignore`): the configs, the instruction file,
-`.agents/`, and `.claude/`.
+Add a script for it, such as `test:oracles`, that runs the separate config
+(`"test:oracles": "vitest run --config vitest.oracle.config.ts"`). That config
+selects only the oracle files. Vitest treats positional CLI arguments as
+substring file filters, not globs or regexes: a quoted glob such as
+`vitest run 'tests/**/*oracle*.test.ts'` fails with `No test files found`, and
+`vitest run oracle` also runs any file whose path contains "oracle", such as
+`packages/oracles/tests/p.test.ts`. A filter is the only option when the
+config is shared with the existing suite. It selects only the oracle files
+when no other file path contains its substring, and it misses every oracle
+file whose name lacks that substring: `.oracle.test` misses `oracle-x.test.ts`
+and `x-oracle.test.ts`, which step 3's glob also matches. Check the file list
+the script prints before you rely on it. Leave the existing suite unchanged. In a published package, keep the new files out of
+the published package (its `files` field or `.npmignore`): the configs, the
+instruction file, `.agents/`, and `.claude/`.
 
 If the repository's own lint or formatter covers the oracle files (for
 example, an older ESLint with Prettier over `test/`), keep the oracle files
@@ -246,6 +271,26 @@ follows the fast-check import, so an `fc` that is not imported passes.
 Remove the probe again. Before the first oracle file exists, do this check through the linter's `--stdin` with
 an oracle file name, since a glob with no files fails.
 
+**Typecheck.** Vitest strips TypeScript types without checking them, so a
+passing oracle run does not prove that the oracle files typecheck. When the
+repository uses TypeScript 5 or newer:
+
+- Verify that its `tsconfig.json` (or its test tsconfig) includes the oracle
+  files, and run its typecheck (for example `tsc --noEmit`). If the main
+  `tsconfig.json` excludes tests, add the oracle glob to the test tsconfig
+  or add a small `tsconfig.oracles.json` that extends it.
+- When production files are `.js` or `.mjs` without matching `.d.ts` files,
+  import through the package's typed entry where one exists, or enable
+  `allowJs` in the test or oracle tsconfig so TypeScript does not reject
+  untyped relative imports.
+- When the repository uses TypeScript older than 5, or none, keep the oracle
+  files out of its `tsc` run (step 2) and do not add a typecheck that uses
+  the gap check's own `tsc`.
+
+The gap check reports TypeScript errors in oracle files in its output. It
+never blocks a run on them, so a run can finish with type errors in its
+report. Fix each one the report names.
+
 ## 4. Write the agent instructions
 
 Add this block to whichever instruction file the repository uses:
@@ -322,15 +367,18 @@ optimization project.
   full.
 - Lint each oracle file and each changed production file after you edit it.
   Fix every report. Do not disable a rule.
+- Typecheck each oracle file after you edit it (Vitest strips types without
+  checking them).
 - Oracle files: `<oracle file glob>`. Gap check: `<gap check command>`.
 
 <!-- END @tanstack/oracles -->
 ```
 
 If lint is an environment limit (step 3), replace the lint line with "Lint:
-not available here (<the reason>)." Fill in the two placeholders in step 7,
-once their values exist. A run that stops before step 7 leaves them in
-place, and its report says so.
+not available here (<the reason>)." If the repository does not use
+TypeScript 5 or newer, omit the typecheck line. Fill in the two placeholders
+in step 7, once their values exist. A run that stops before step 7 leaves
+them in place, and its report says so.
 
 In a workspace with a package-local install, put the block in the package's
 instruction file, where its `node_modules` paths resolve. A root copy must
@@ -338,8 +386,10 @@ use the full paths, such as `packages/<name>/node_modules/@tanstack/oracles/...`
 
 ## 5. Make the skills findable
 
-The skills ship inside the package, so agents find them only through a
-pointer. A pointer must read the copy that the chosen package installed:
+The skills ship inside the package, so agents normally find them through a
+pointer (on pnpm 12.18 or later, the developer may instead run `pnpm approve` for pnpm's
+built-in skill approval, as noted in step 2). A pointer must read the copy
+that the chosen package installed:
 
 - **One package, or a workspace with a root install:**
   `node_modules/@tanstack/oracles/skills/<name>/SKILL.md`.
@@ -501,6 +551,21 @@ is not Vite's default name. The baseline prints which config it used.
 - Pass `--seed`, so the baseline and every mutant run the same histories.
   The report goes to a directory in the OS temp directory, and its path is
   printed at the end. Nothing is written into the repository.
+- Pass `--daemon` when iterating on gaps in the same package: it keeps a
+  per-package daemon running with warm Vitest workers and a disk evidence
+  store, so repeated checks reuse unchanged unit evidence. The goal is that
+  repeated checks match a cold run, which needs every read to be a daemon
+  input. That waits on PR #133: until it lands, a daemon check can differ
+  from a cold run. The daemon is meant to restart whenever the CLI's
+  environment changes, a rule that PR #133 also builds. If the daemon stops
+  answering, the CLI runs the check cold. Stop it when done with
+  `oracle-gaps --stop-daemon --package <dir>` (it also exits after 30 idle
+  minutes).
+- Pass `--only <id,id>` (using the `<id>` from a `gap` line or the report's
+  `rerun: --only <id>`) to verify a targeted mutant fix quickly: it runs
+  only those mutants and runs the baseline only for their owning oracle
+  files. A `--only` run is partial, so run the full check without `--only`
+  before calling gaps closed.
 - Read the exit code. **0:** the run completed; work from its report.
   **2:** refused. It prints `refused: <cause>` and one `fix: <directive>`.
   Do what the `fix:` line says, then run again. **3:** an internal error, "a
