@@ -153,22 +153,6 @@ If the repository's own lint or formatter covers the oracle files (for
 example, an older ESLint with Prettier over `test/`), keep the oracle files
 out of its globs, or match its style. Say which in your report.
 
-**Typecheck.** Vitest strips TypeScript types without checking them, so a
-passing oracle run does not prove that the oracle files typecheck. When the
-repository uses TypeScript 5 or newer:
-
-- Verify that its `tsconfig.json` (or its test tsconfig) includes the oracle
-  files, and run its typecheck (for example `tsc --noEmit`). If the main
-  `tsconfig.json` excludes tests, add the oracle glob to the test tsconfig
-  or add a small `tsconfig.oracles.json` that extends it.
-- When production files are `.js` or `.mjs` without matching `.d.ts` files,
-  import through the package's typed entry where one exists, or enable
-  `allowJs` in the test or oracle tsconfig so TypeScript does not reject
-  untyped relative imports.
-- When the repository uses TypeScript older than 5, or none, keep the oracle
-  files out of its `tsc` run (step 2) and do not add a typecheck that uses
-  the gap check's own `tsc`.
-
 **Lint.** Add both presets to the ESLint flat config:
 
 ```js
@@ -261,6 +245,26 @@ error. Use `import fc from 'fast-check'` and then `fc.assert(...)`. The rule
 follows the fast-check import, so an `fc` that is not imported passes.
 Remove the probe again. Before the first oracle file exists, do this check through the linter's `--stdin` with
 an oracle file name, since a glob with no files fails.
+
+**Typecheck.** Vitest strips TypeScript types without checking them, so a
+passing oracle run does not prove that the oracle files typecheck. When the
+repository uses TypeScript 5 or newer:
+
+- Verify that its `tsconfig.json` (or its test tsconfig) includes the oracle
+  files, and run its typecheck (for example `tsc --noEmit`). If the main
+  `tsconfig.json` excludes tests, add the oracle glob to the test tsconfig
+  or add a small `tsconfig.oracles.json` that extends it.
+- When production files are `.js` or `.mjs` without matching `.d.ts` files,
+  import through the package's typed entry where one exists, or enable
+  `allowJs` in the test or oracle tsconfig so TypeScript does not reject
+  untyped relative imports.
+- When the repository uses TypeScript older than 5, or none, keep the oracle
+  files out of its `tsc` run (step 2) and do not add a typecheck that uses
+  the gap check's own `tsc`.
+
+The gap check reports TypeScript errors in oracle files in its output. It
+never blocks a run on them, so a run can finish with type errors in its
+report. Fix each one the report names.
 
 ## 4. Write the agent instructions
 

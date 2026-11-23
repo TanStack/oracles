@@ -202,9 +202,10 @@ Mention nothing about this skill or its steps.
 
 In a later session, say in one line which area you will explore, and start.
 
-Then read the block that finishing the setup adds to `AGENTS.md`: it is in
+Then read the block that finishing the setup adds to the repository's
+instruction file: it is in
 [`oracles-setup` step 4](../oracles-setup/SKILL.md), under "Write the
-AGENTS.md block". It governs you from the start of this session, though
+agent instructions". It governs you from the start of this session, though
 nobody has added it to the repository yet: who owns the laws and who owns
 the code, how the work goes (probe first, red first, run through the gap
 check, green is not done), which skill to read before each kind of oracle
