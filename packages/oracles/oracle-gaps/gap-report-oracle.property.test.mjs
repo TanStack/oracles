@@ -7683,6 +7683,9 @@ oracleProperty({
                 ),
                 owners: [`b`, ...generated.owners.slice(1)],
                 wholeFile: `none`,
+                // A drawn `spinData` would make file b's verdict test spin
+                // where it would judge, so its kill could not happen.
+                spinData: false,
                 tests: [
                   ...generated.tests.slice(0, 4),
                   { ...judging(`b`, `fixed seed`, 7), fn: 0 },
