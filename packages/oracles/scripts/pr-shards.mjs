@@ -419,7 +419,6 @@ export const partitions = {
       // 560 s of weight.
       1: anyOf([
         `every outcome class`,
-        `a declaration fault: brokenOwner`,
         `an edit sequence over the witness module, the first half`,
         `a check abandoned while a context warms in place of a cut one`,
         `a lazy module loaded before a hang in the same batch`,
@@ -444,6 +443,10 @@ export const partitions = {
       ]),
       // 560 s of weight.
       2: anyOf([
+        // Block per law (#176): file b's passing laws now judge the mutants
+        // it owns, so this unit runs them (238 s in CI run of fd69ea2e's
+        // shard 1, which reached 10m26s); it moved here from shard 1.
+        `a declaration fault: brokenOwner`,
         `a declaration fault: apiLessTypescript`,
         `a second daemon check of the budget witness`,
         `a declaration fault: brokenVitest`,
@@ -523,6 +526,9 @@ export const partitions = {
     shards: {
       // 471 s of weight.
       1: anyOf([
+        // Block per law (#176): 128 s in CI at fd69ea2e, out of the rest
+        // shard (8m28s there).
+        `constructed history: a declaration fault: brokenOwner`,
         `generated 2`,
         `constructed history: an unchanged check through the daemon under a config's pre plugin`,
         `constructed history: an ambiguous authored mutant`,
