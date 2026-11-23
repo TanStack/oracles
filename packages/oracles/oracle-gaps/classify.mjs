@@ -461,6 +461,22 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
     ),
     seconds: units.reduce((sum, u) => sum + u.seconds, 0),
   }
+  // A count cut by an excluded or clocked test, with no deterministic test
+  // reaching the mutant, judges nothing: it is indeterminate, not a timeout,
+  // because `timeout` is the backstop gap only (M-24, G11; "An excluded test
+  // still runs", M 2026-11-23).
+  if (
+    result.outcome === `timeout` &&
+    result.detail === `spin` &&
+    compared.every((k) => rows.get(k).clocked)
+  ) {
+    const open = { ...result, outcome: `survived`, class: `indeterminate` }
+    delete open.detail
+    open.nondeterministicBy = targets.oracleKeys.filter((k) =>
+      baseline.nondeterministic.has(k),
+    )
+    return open
+  }
   if (result.outcome !== `survived`) return result
   result.changedTests = changedIn(rows, compared, baseline)
   const roseIn = inReportOrder(
