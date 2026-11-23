@@ -18,9 +18,9 @@ jobs:
   # The docs-only gate (the maintainer's ruling of 2026-11-23, "Docs-only PRs:
   # light CI, merge on light checks"). A pull request whose changed files are
   # all docs skips the heavy jobs, which name this job in `needs` and skip on
-  # its output. Docs are skills (packages/*/skills/**), docs/**, and every
-  # *.md file. Any other file runs the full workflow, and so does every push
-  # to main, which keeps a preview for each commit.
+  # its output. Docs are docs/** and every *.md file. Any other file runs the
+  # full workflow, and so does every push to main, which keeps a preview for
+  # each commit.
   changes:
     name: Classify changes
     runs-on: ubuntu-latest
@@ -45,7 +45,7 @@ jobs:
             # --no-renames lists a moved file's old path too, so a code file
             # moved into docs is not taken for a doc.
             changed="$(git diff --name-only --no-renames "$BASE_SHA" HEAD)"
-            outside="$(printf '%s\n' "$changed" | grep -vE '^(packages/[^/]+/skills/|docs/)|\.md$' || true)"
+            outside="$(printf '%s\n' "$changed" | grep -vE '^docs/|\.md$' || true)"
             if [ -n "$changed" ] && [ -z "$outside" ]; then docs_only=true; fi
           fi
           echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
