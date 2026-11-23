@@ -505,11 +505,11 @@ export const partitions = {
   // blocking", 2026-11-16; v21.2 R55 (a)). Each unit runs one history twice
   // and compares the two traces: results and fixed lines, not the heartbeats,
   // which are progress (maintainer decision, 2026-11-14; v21.2 R52). 89
-  // units. Six shards hold 470 s of measured weight each, and the seventh
-  // (`rest`) the remaining 283 s and the untimed units (B3, a1e1c140: the
-  // per-unit times of CI run 45241549820, the per-backstop limit in place,
-  // when the determinism shards took 714 s, 573 s and 395 s and 264 to 323 s
-  // for the others). The witness module's edit sequence runs as two halves,
+  // units. Six shards hold 490 s of measured weight each, and the seventh
+  // (`rest`) the remaining 317 s and the untimed units. The weights are the
+  // mean of each unit's time in two CI runs at a1e1c140 and 4626959b (the
+  // per-backstop limit in place); the runs' job sums differed by about 10%.
+  // The witness module's edit sequence runs as two halves,
   // where the whole took 344 to 364 s on an Arclet (#106). Every unit is in
   // a shard: the daemon edit sequence (#92, fixed by #126) passed 4 of 4 and
   // the daemon pause that cannot engage (#105) 6 of 6 on this branch.
@@ -527,78 +527,78 @@ export const partitions = {
     // Every name is checked against the listed tests (partitionErrors).
     exactNames: true,
     shards: {
-      // 470 s of measured weight.
+      // 490 s of measured weight (the mean of two CI runs).
       1: anyOf([
         `constructed history: every outcome class`,
-        `constructed history: a slow but healthy warm-up`,
-        `constructed history: a daemon check with the default output directory`,
-        `constructed history: a copy waiting on a timer`,
-        `constructed history: a stop before the CLI starts, after a stopped check`,
-        `constructed history: an edit during a check through the daemon`,
-        `generated 2`,
-        `constructed history: a declaration fault: outsideSource`,
+        `constructed history: a declaration fault: apiLessTypescript`,
+        `constructed history: a flaky owner's loop calls under the call budget`,
+        `constructed history: a copy waiting on a pipe it opened`,
+        `constructed history: a run after a killed CLI`,
+        `constructed history: an edit to data that only a spun copy reads`,
+        `constructed history: an authored mutant whose owner spins`,
       ]),
-      // 470 s of measured weight.
+      // 490 s of measured weight (the mean of two CI runs).
       2: anyOf([
         `constructed history: an edit sequence over the witness module, the second half`,
         `constructed history: a slow kill after a 22 s wait, past the old backstop`,
-        `constructed history: a slow kill after a 16 s wait`,
+        `constructed history: a slow but healthy warm-up`,
         `constructed history: a test edits the data it read, during a check through the daemon`,
         `constructed history: a stale authored mutant and a reformat`,
-        `constructed history: a copy waiting on a pipe it opened`,
-        `constructed history: an edit to a module that only mutated runs load`,
-        `constructed history: a capture row read while the worker wrote it`,
-        `constructed history: a config fault in a run that owns nothing`,
+        `constructed history: a copy waiting on a timer`,
+        `constructed history: a backstop cut ends the copies ahead of a later kill`,
+        `constructed history: an edit to data a test reads through fs (promise)`,
+        `constructed history: a declaration fault: nonLiteral`,
       ]),
-      // 470 s of measured weight.
+      // 490 s of measured weight (the mean of two CI runs).
       3: anyOf([
         `constructed history: an edit sequence through the daemon`,
         `constructed history: a daemon pause that cannot engage`,
         `constructed history: a declaration fault: brokenVitest`,
         `constructed history: an edit that changed the cold result after a hang replaced the only context`,
         `constructed history: every outcome class, the abort stop`,
-        `constructed history: a copy waiting on an unref'd timer`,
-        `constructed history: an edit to data that only a copy spun alone reads`,
-        `constructed history: an edit to data a test reads through fs (sync)`,
-        `constructed history: a declaration fault: configThrows`,
+        `constructed history: a stop before the CLI starts, after a stopped check`,
+        `constructed history: an edit to a module that only mutated runs load`,
+        `constructed history: a daemon check with the default output directory, unsupervised`,
+        `constructed history: a config fault in a run that owns nothing`,
       ]),
-      // 470 s of measured weight.
+      // 490 s of measured weight (the mean of two CI runs).
       4: anyOf([
         `constructed history: a declaration fault: brokenOwner`,
         `constructed history: an edit sequence over the witness module, the first half`,
-        `constructed history: a check abandoned while a context warms in place of a cut one`,
-        `constructed history: a lazy module loaded before a hang in the same batch`,
-        `constructed history: a daemon start slower than the bound`,
-        `constructed history: an edit to data a test reads through fs (statDir)`,
-        `constructed history: a backstop cut ends the copies ahead of a later kill`,
-        `constructed history: a stop by SIGTERM as the CLI starts`,
-      ]),
-      // 470 s of measured weight.
-      5: anyOf([
-        `generated 1`,
-        `constructed history: a declaration fault: noTypescript`,
-        `constructed history: a declaration fault: apiLessTypescript`,
-        `constructed history: a check whose daemon stops answering`,
-        `constructed history: a run after a killed CLI`,
-        `constructed history: a test edits the helper it read, during a check through the daemon`,
-        `constructed history: a daemon check with the default output directory, unsupervised`,
-        `constructed history: a value change at a ?. read and at a return`,
-        `constructed history: a declaration fault: projects`,
-      ]),
-      // 470 s of measured weight.
-      6: anyOf([
-        `constructed history: a later owner's test listed first beside an earlier owner's hang`,
-        `constructed history: a check through the daemon that works past the bound`,
         `fixed history: a filed base whose owner reads an absent object through ?.`,
-        `constructed history: a flaky owner's loop calls under the call budget`,
-        `constructed history: a slow owner's kill and another owner's kill`,
-        `constructed history: a reset check after its warm daemon was replaced`,
-        `constructed history: an edit to data that only a spun copy reads`,
-        `constructed history: a failing owner under a config that --config names`,
-        `constructed history: test.projects in a parent's config`,
+        `constructed history: a daemon check with the default output directory`,
+        `constructed history: a daemon start slower than the bound`,
+        `constructed history: a test edits the helper it read, during a check through the daemon`,
+        `constructed history: an edit to data a test reads through fs (statDir)`,
+        `constructed history: a second daemon check of the budget witness`,
+        `constructed history: a declaration fault: outsideSource`,
         `constructed history: a stream log that cannot be written`,
       ]),
-      // The rest of the units (about 283 s measured, and the untimed ones).
+      // 490 s of measured weight (the mean of two CI runs).
+      5: anyOf([
+        `constructed history: a later owner's test listed first beside an earlier owner's hang`,
+        `generated 1`,
+        `constructed history: a check abandoned while a context warms in place of a cut one`,
+        `constructed history: a lazy module loaded before a hang in the same batch`,
+        `constructed history: a reset check after its warm daemon was replaced`,
+        `constructed history: an edit during a check through the daemon`,
+        `constructed history: an edit to data a test reads through fs (sync)`,
+        `constructed history: a capture row read while the worker wrote it`,
+        `constructed history: a declaration fault: missingSource`,
+      ]),
+      // 490 s of measured weight (the mean of two CI runs).
+      6: anyOf([
+        `constructed history: a check through the daemon that works past the bound`,
+        `constructed history: a declaration fault: noTypescript`,
+        `constructed history: a slow kill after a 16 s wait`,
+        `constructed history: a check whose daemon stops answering`,
+        `constructed history: a slow owner's kill and another owner's kill`,
+        `constructed history: a copy waiting on an unref'd timer`,
+        `constructed history: an edit to data that only a copy spun alone reads`,
+        `constructed history: an edit to data a test reads through fs (callback)`,
+        `constructed history: test.projects in a parent's config`,
+      ]),
+      // The rest of the units (about 317 s measured, and the untimed ones).
       7: rest,
     },
   },
