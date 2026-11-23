@@ -25,6 +25,15 @@ Vitest 5 needs Node 22.12 or later. Which Node versions CI runs is a
 question for when the repository's setup is finished: do not raise it
 now.
 
+**`pkg.pr.new` returns HTTP 404 for the tip of `main`.** `Publish preview`
+runs only after the jobs in its `needs` list pass, so a red blocking job on
+the tip (for example, the random-seed gap job on `7b6bae16`) leaves no
+preview. Check recent
+commits on `main` in `TanStack/oracles` for the latest one whose `Publish
+preview` check succeeded (or whose `pkg.pr.new` URL returns HTTP 200 with
+`curl -sI`), pin both packages to that commit, and tell the developer which
+commit you pinned.
+
 **An install fails.** Show the error in a line or two, say what you think
 caused it, and ask before you try anything that changes more than the
 packages the oracle needs. Once the install works, go on from where you
@@ -64,6 +73,24 @@ so in a line.
 suite (thousands of tests). Run it again with
 `NODE_OPTIONS=--max-old-space-size=8192`, or with `--contexts 2`. Keep
 every test and history: do not shrink the oracle to make it fit.
+
+**TypeScript reports untyped imports (`TS7016` / `TS7006`) on `.js` or `.mjs`
+production files.** Import through the package's typed entry where one
+exists instead of an untyped relative `.js` or `.mjs` path. When no typed
+entry covers the module, enable `allowJs` in the test or oracle tsconfig
+instead of hiding errors with `any` or `@ts-ignore`.
+
+**TypeScript rejects `constructed[].build` on a union literal or tuple.**
+Inside an unannotated `oracleProperty(...)` call, TypeScript can widen union
+string literals or fixed-length tuples returned by `build`. Give `build` an
+explicit return type (`build: (generated): History => ({ ... })`) or narrow
+the literal with `as const`.
+
+**The repository's `tsconfig.json` does not cover the oracle file.** Vitest
+strips types without checking them, so an excluded oracle file can pass
+`oracle-gaps` while failing `tsc --noEmit`. When the repository uses
+TypeScript 5 or newer, check that the oracle file typechecks under the
+repository's `tsc --noEmit` (or a test tsconfig that extends `tsconfig.json`).
 
 ## Probes
 
