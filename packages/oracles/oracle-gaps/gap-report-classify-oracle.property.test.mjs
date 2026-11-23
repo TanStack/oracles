@@ -738,7 +738,8 @@ function cutOf(h, fi, slot) {
   if (kinds.includes(`runTimeout`)) return { gap: `backstop` }
   const first = h.files[fi].tests.find((t) => CUT_LAW[t.under[slot].kind])
   if (first)
-    return first.under[slot].kind === `runSpin` && first.clocked !== `none`
+    return first.under[slot].kind === `runSpin` &&
+      (first.clocked !== `none` || first.flaky)
       ? { gap: `spin` }
       : { law: CUT_LAW[first.under[slot].kind], t: first }
   if (kinds.includes(`timeoutMessage`) && !kinds.includes(`setupError`))
@@ -775,16 +776,18 @@ function failureOf(h, slot, tests, work = false) {
   const overBound = (x) => work && pastBound(h, slot, x)
   const lawOf = (x) =>
     CUT_LAW[under(x)] ?? (overBound(x) ? `work bound` : x.t.under[slot].law)
-  const verdictsIn = (kind) => [
-    ...ran.filter(
+  // In report order (law 7): the tests as `tests` lists them, by file path,
+  // whether a verdict or a cut names them, so the first is the one a gap names.
+  const verdictsIn = (kind) =>
+    tests.filter(
       (x) =>
-        (failing.includes(x) &&
-          under(x) === `verdict` &&
-          kindOf(x.t.under[slot].firedAt ?? x.t.route) === kind) ||
-        (overBound(x) && kindOf(x.t.route) === kind),
-    ),
-    ...cut.filter((x) => kindOf(x.t.route) === kind),
-  ]
+        (ran.includes(x) &&
+          ((failing.includes(x) &&
+            under(x) === `verdict` &&
+            kindOf(x.t.under[slot].firedAt ?? x.t.route) === kind) ||
+            (overBound(x) && kindOf(x.t.route) === kind))) ||
+        (cut.includes(x) && kindOf(x.t.route) === kind),
+    )
   const kills = verdictsIn(`reproducible`).map(lawOf)
   const behavioral = kills.filter((law) => law !== `reach agreement`)
   const decided = (failure) => ({ failure, ran })
@@ -802,7 +805,10 @@ function failureOf(h, slot, tests, work = false) {
       laws: [...new Set(behavioral)].sort(),
       lawsMayBePart: true,
     })
-  // A gap cut: the timeout names the first (classify.mjs).
+  // A gap cut: the timeout names the first (classify.mjs). A spin gap with no
+  // deterministic, unclocked test reaching the mutant is indeterminate, not a
+  // timeout: `timeout` is the backstop only (M-24), and an excluded or clocked
+  // test judges nothing (M, 2026-11-23, "An excluded test still runs").
   if (timedOut) return decided({ outcome: `timeout`, detail: timedOut })
   if (kills.length > 0)
     return naming(`agreement-only-kill`, verdictsIn(`reproducible`), {
@@ -898,12 +904,19 @@ function judgedOutcome(h, mi, owners) {
     ).failure
     return { ...failure, laws: inRun.laws, ownerFiles }
   }
-  if (failure) return { ...failure, ownerFiles }
   // A survivor. Only reaching, deterministic owner tests judge it; code that
   // ran when a file loaded the module reaches every test of that file.
   const compared = ran.filter(
     (x) => (x.t.reaches[mi] || h.files[x.fi].background[mi]) && !x.t.flaky,
   )
+  // A spin gap (a count cut by a clocked or excluded test) is a timeout only
+  // when a deterministic, unclocked test reaches the mutant; otherwise the
+  // mutant is indeterminate (M-24: `timeout` is the backstop only).
+  const spinOpen =
+    failure?.outcome === `timeout` &&
+    failure.detail === `spin` &&
+    !compared.some((x) => x.t.clocked === `none`)
+  if (failure && !spinOpen) return { ...failure, ownerFiles }
   const changed = compared.find((x) =>
     [`changed`, `observedChanged`].includes(x.t.under[mi].kind),
   )
@@ -922,7 +935,7 @@ function judgedOutcome(h, mi, owners) {
         `Make a law in \`${shownName(h, changed.fi, changed.ti)}\` reject the changed value.`,
       ],
     })
-  if (compared.length === 0) {
+  if (compared.length === 0 || spinOpen) {
     // The message names every nondeterministic owner test that reached the
     // mutant, in report order, or, when none did, the line.
     const flaky = reachingTests(h, mi, owners, true).filter(({ t }) => t.flaky)
@@ -2019,12 +2032,13 @@ async function driver(h, observe) {
       units.some((u) => u.builtIn !== undefined)
     )
       states.add(`a random-only kill by a built-in law`)
-    // A spin whose count could follow the clock: a gap, not a kill.
+    // A count cut by an excluded or clocked test, with no deterministic test
+    // reaching the mutant: a gap that judges nothing, so indeterminate.
     if (
-      result.outcome === `timeout` &&
+      result.class === `indeterminate` &&
       units.some((u) => u.cause === `spin` && u.builtIn === undefined)
     )
-      states.add(`a spin whose count could follow the clock timed out`)
+      states.add(`a count cut with no deterministic reach is indeterminate`)
     // The work law's states (laws 3 and 5): a kill by a work bound, alone
     // or beside a changed value that would otherwise be not-judged, a work
     // bound on the random campaign, and survivors whose work rose under a
@@ -2049,6 +2063,24 @@ async function driver(h, observe) {
       )
         states.add(`a work bound kill beside a changed value`)
     }
+    // A kill by unregistered verdicts, with a cut's test on an unknown route
+    // in an owner file that sorts before the file of a verdict on one.
+    const unknownIn = (fi, kind) =>
+      fi < h.files.length &&
+      h.files[fi].tests.some(
+        (t) => kindOf(t.route) === `unknown` && t.under[mi].kind === kind,
+      )
+    if (
+      result.outcome === `unregistered-kill` &&
+      h.mutants[mi].owners.some(
+        (a) =>
+          unknownIn(a, `runIdle`) &&
+          h.mutants[mi].owners.some(
+            (b) => fileName(h, a) < fileName(h, b) && unknownIn(b, `verdict`),
+          ),
+      )
+    )
+      states.add(`unregistered-kill named in report order`)
     if (result.class === `extra-work` && judgedRise) {
       if (judgedRise.t.bound !== undefined)
         states.add(`extra-work under a declared bound`)
@@ -3263,7 +3295,7 @@ const required = [
   `killed by bounded work`,
   `killed by no progress`,
   `a random-only kill by a built-in law`,
-  `a spin whose count could follow the clock timed out`,
+  `a count cut with no deterministic reach is indeterminate`,
   `owners declared against file order name another first changed test`,
   `baseline records against file order name another first changed test`,
   `a mutant run's records against the baseline's name another first changed test`,
@@ -3328,6 +3360,7 @@ const required = [
   `extra-work named past an unregistered rise`,
   `a rise exactly at the declared bound`,
   `authored agreement-only-kill`,
+  `unregistered-kill named in report order`,
 ]
 
 // One constructed history per outcome class: one mutant judged by one
@@ -3489,7 +3522,7 @@ const constructed = [
   ),
   single(
     `a clocked copy cut by its call count`,
-    [`a spin whose count could follow the clock timed out`],
+    [`a count cut with no deterministic reach is indeterminate`],
     { test: { clocked: `timer` }, effect: { kind: `runSpin` } },
   ),
   single(
@@ -4132,6 +4165,39 @@ const constructed = [
     {
       effect: { kind: `verdict`, law: `reach agreement` },
       authored: [{}],
+    },
+  ),
+  // Law 7 across a cut and a verdict (fix99-attr): both tests are on unknown
+  // routes. The cut's test is in the earlier file (tests/f0), the verdict's in
+  // the later one (tests/f1), so the gap names the cut's test `t0` in report
+  // order. The verdict's own test is named "it's t0".
+  twoOwners(
+    `an unregistered kill whose cut test is in an earlier file`,
+    [`unregistered-kill named in report order`],
+    {
+      test: { route: undefined },
+      effect: { kind: `runIdle` },
+      second: {
+        route: undefined,
+        under: slots({
+          kind: `verdict`,
+          law: `L`,
+          firedAt: undefined,
+          work: 0,
+          ms: 0,
+        }),
+      },
+    },
+  ),
+  // #200's shape (fix99-attr): the only test that reaches the mutant is flaky,
+  // and its copy is cut by its call count. The CLI drops the named test of a
+  // cut whose test is outside the baseline's work, so the cut names none.
+  single(
+    `a count cut by a flaky test with no deterministic reach`,
+    [`a count cut with no deterministic reach is indeterminate`],
+    {
+      test: { flaky: true },
+      effect: { kind: `runSpin` },
     },
   ),
 ]

@@ -824,6 +824,8 @@ export const partitions = {
         'a declaration fault: noTypescript',
         "a later owner's test listed first beside an earlier owner's hang",
         "a flaky owner's loop calls under the call budget",
+        "a property test's later run spins into bounded work",
+        "a property test's count cut lands in its first part after a run with no positive n",
       ]),
       4: anyOf(['every outcome class, the warm stop']),
       5: anyOf([
