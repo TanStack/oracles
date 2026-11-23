@@ -551,6 +551,8 @@ export const partitions = {
         // of the rest shard's units (about 89 s on the pool) come here too.
         'constructed history: a daemon pause that cannot engage',
         'constructed history: every outcome class, the abort stop',
+        // #182's constructed history (166.6 s on the pool at 86afd018; moved out of the rest shard, 7/7).
+        "constructed history: a later owner's test listed first beside an earlier owner's hang",
       ]),
       // 471 s of weight.
       2: anyOf([
