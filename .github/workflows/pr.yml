@@ -218,6 +218,22 @@ jobs:
         working-directory: packages/oracles
         env:
           SUITE: ${{ matrix.suite }}
+  # The gap report's TypeScript oracle: each history runs the CLI on a small
+  # package, so it has a job of its own (oracle-gaps/gap-report-typecheck-oracle.property.test.mjs).
+  test-oracle-gaps-typecheck:
+    name: Gap report TypeScript oracle
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Tools
+        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
+      - run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-typecheck
+        working-directory: packages/oracles
+
   preview:
     name: Publish preview
     # Only a commit that passes every check gets an installable preview.
@@ -229,6 +245,7 @@ jobs:
       - test-oracle-gaps-end-to-end
       - test-oracle-gaps-random
       - test-oracle-gaps-determinism
+      - test-oracle-gaps-typecheck
       - test-vitest-5
       # The blocking Windows jobs (the non-blocking end-to-end job is not a
       # dependency until it is green).
