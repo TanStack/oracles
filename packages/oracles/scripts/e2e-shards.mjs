@@ -221,6 +221,8 @@ export const shards = {
     `calibration: a traced warning's frames beside our own line with no prefix`,
     `calibration: an esbuild block beside our own line with no prefix`,
     `calibration: our own indented line with no prefix`,
+    `calibration: a win32 abort's native backtrace beside our own line with no prefix`,
+    `calibration: a win32 abort's native backtrace with a line that is no frame`,
     `fixed seed 20261105: a check whose daemon stops answering`,
     `random seed: a check whose daemon stops answering`,
     `determinism: constructed history: a check whose daemon stops answering`,

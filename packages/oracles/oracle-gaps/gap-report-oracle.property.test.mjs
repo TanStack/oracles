@@ -1999,8 +1999,9 @@ const streamedGap =
 //   witness (ORACLE_GAPS_TEST_ABORT_AT): a CRLF blank line that opens it
 //   (`lead`, taken only when a native frame follows), its numbered native
 //   frames (` N: <16 hex digits> …`), the JavaScript stack's header, and its
-//   numbered frames with file, line and column. Every line ends CRLF. POSIX
-//   ends that abort with SIGABRT, which prints none.
+//   numbered frames with file, line and column. Every line ends CRLF, and a
+//   blank CRLF line may separate its parts (the frames from the JavaScript
+//   header). POSIX ends that abort with SIGABRT, which prints none.
 const v8Line =
   /^(?:<--- .* --->|----- .* -----|==== .* =+|\[\d+:0x[0-9a-f]+\] .*|FATAL ERROR: .*|\s*\d+: .*|Security context: .*)$/
 const exemptBlocks = [
@@ -2015,7 +2016,7 @@ const exemptBlocks = [
   {
     lead: /^\r$/,
     head: /^ {1,2}\d+: [0-9A-F]{16}(?: .*)?\r$/,
-    body: /^(?: {1,2}\d+: [0-9A-F]{16}(?: .*)?|----- JavaScript stack trace -----|\d+: .*:\d+:\d+\)?)\r$/,
+    body: /^(?:\r|(?: {1,2}\d+: [0-9A-F]{16}(?: .*)?|----- JavaScript stack trace -----|\d+: .*:\d+:\d+\)?)\r)$/,
   },
   {
     head: /^(?:✘|▲|X|!) \[(?:ERROR|WARNING)\] /,
@@ -6168,8 +6169,9 @@ const foreignBlocks = {
     `\r`,
     ` 1: 00007FF686B89D86 node::GetNodeReport+74070\r`,
     ` 2: 000001A6F574F64D \r`,
+    `\r`,
     `----- JavaScript stack trace -----\r`,
-    `1: checkCold (<cli>/index.mjs:628:47)\r`,
+    `1: checkCold (<cli>/index.mjs:636:47)\r`,
     `2: processTicksAndRejections (node:internal/process/task_queues:105:5)\r`,
   ],
   // esbuild's block for a syntax error in a module the config imports, as
