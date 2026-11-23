@@ -409,6 +409,20 @@ const changedIn = (rows, keys, baseline) =>
     baseline,
   )
 
+// The tests of `rows` that reached a mutant: those its targets name, and,
+// where a file's loaded code reached it, every test of that file (maintainer
+// decision, 2026-11-06). Only these can judge it.
+function reachingIn(rows, targets) {
+  const reached = new Set(targets.oracleKeys)
+  const loadedIn = new Set(
+    targets.oracleKeys.filter((k) => k.endsWith(` > (background)`)).map(fileOf),
+  )
+  return [...rows.keys()].filter(
+    (k) =>
+      !rows.get(k).background && (reached.has(k) || loadedIn.has(fileOf(k))),
+  )
+}
+
 /**
  * An operator mutant's outcome from the units of its owner files. A mutant
  * with no owner is `unowned`, and one that no owner test reached is
@@ -431,18 +445,8 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
   if (owners.size === 0) return { outcome: `unowned` }
   if (targets.oracleKeys.length === 0) return { outcome: `unreached` }
   const rows = new Map(units.flatMap((u) => u.rows ?? []))
-  // Only owner tests that reach the site can judge it. Code that ran when a
-  // file loaded the module reaches every test of that file (maintainer
-  // decision, 2026-11-06).
-  const reaching = new Set(targets.oracleKeys)
-  const loadedIn = new Set(
-    targets.oracleKeys.filter((k) => k.endsWith(` > (background)`)).map(fileOf),
-  )
-  const compared = [...rows.keys()].filter(
-    (k) =>
-      (reaching.has(k) || loadedIn.has(fileOf(k))) &&
-      !rows.get(k).background &&
-      !baseline.leftOut.has(k),
+  const compared = reachingIn(rows, targets).filter(
+    (k) => !baseline.leftOut.has(k),
   )
   // A compared test's work judges the mutant when the two unmutated runs
   // agree on it, no run's count could follow the clock, and its route is
@@ -537,30 +541,36 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
  * none, a mutant that nothing reached stays unreached. An authored
  * mutant's copy records no reach (`targets` undefined), so it is judged by
  * every test of its owners, and blocked when no owner file has a passing
- * test.
+ * test. A failing law still runs in its file's copies ("An excluded test
+ * still runs", 2026-11-23): one whose run a count cut ended (`units`, the
+ * mutant's runs, their `spunBy`) blocks the mutant by itself.
  */
-export function blockersOf(owners, { failing, passing }, targets, baseline) {
+export function blockersOf(
+  owners,
+  { failing, passing },
+  targets,
+  baseline,
+  units = [],
+) {
   const all = [...owners]
-  const lawsOf = (file, reaching) =>
-    passing.has(file)
-      ? (failing.get(file) ?? []).filter((k) => reaching.has(k))
-      : (failing.get(file) ?? [])
+  const laws = new Set([...failing.values()].flat())
+  // A count cut that a failing law caused blocks the mutant by that law,
+  // whoever else reached it (register C 2026-11-23, "A count cut caused by
+  // a failing law is blocked by it").
+  const cutBy = units.flatMap((u) => (laws.has(u.spunBy) ? [u.spunBy] : []))
+  if (cutBy.length > 0) return cutBy
   if (targets === undefined)
     return all.some((file) => passing.has(file))
       ? []
       : all.flatMap((file) => failing.get(file) ?? [])
-  const rows = baseline.firstRows
-  const reaching = new Set(targets.oracleKeys)
-  const loadedIn = new Set(
-    targets.oracleKeys.filter((k) => rows.get(k)?.background).map(fileOf),
-  )
-  if (loadedIn.size > 0)
-    for (const [k, row] of rows)
-      if (loadedIn.has(fileOf(k)) && !row.background) reaching.add(k)
-  for (const k of reaching) if (rows.get(k)?.background) reaching.delete(k)
+  const reaching = new Set(reachingIn(baseline.firstRows, targets))
   return [...reaching].some((k) => !baseline.leftOut.has(k))
     ? []
-    : all.flatMap((file) => lawsOf(file, reaching))
+    : all.flatMap((file) =>
+        (failing.get(file) ?? []).filter(
+          (k) => !passing.has(file) || reaching.has(k),
+        ),
+      )
 }
 
 /**

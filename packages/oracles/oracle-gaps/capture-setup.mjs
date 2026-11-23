@@ -481,7 +481,9 @@ function spin() {
     spun = true
     appendFileSync(
       state.capture,
-      `${JSON.stringify({ file: thisFile, spin: true })}\n`,
+      // The test that ran past the budget: a failing law's cut blocks its
+      // mutant by that law (classify.mjs blockersOf).
+      `${JSON.stringify({ file: thisFile, spin: true, key: currentTask && testKey(currentTask) })}\n`,
     )
   }
   throw new Error(

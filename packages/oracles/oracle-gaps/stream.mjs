@@ -256,20 +256,15 @@ export function verdictLine(files) {
  * tests are.
  */
 export function blockedLines(files) {
-  return files.flatMap(({ file, ordinary, failure, laws, tests }) => {
+  return files.flatMap(({ file, ordinary, failure, laws }) => {
     if (ordinary || failure === undefined) return []
-    const named =
-      laws ??
-      tests
-        .filter((t) => t.state === `failed`)
-        .map((t) => [file, ...(t.names ?? [t.fullName])].join(` > `))
     const line = (name, what) =>
       streamLine(
         `blocked`,
         `${codeSpan(escapeControls(name))} fails with no mutant active, so ${what}: a mutant that no passing owner test reached waits for it. Make it pass, then check again.`,
       )
-    return named.length === 0
+    return laws.length === 0
       ? [line(file, `none of its tests judges`)]
-      : named.map((name) => line(name, `it judges nothing`))
+      : laws.map((name) => line(name, `it judges nothing`))
   })
 }

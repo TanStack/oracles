@@ -963,8 +963,16 @@ export default async (env) => {
     clearTimeout(timer)
     clearTimeout(poller)
     const seconds = (Date.now() - started) / 1000
-    // A run that spun is a timeout as it stands, even one that then ended.
+    // A run that spun is a timeout as it stands, even one that then ended,
+    // and names the test that ran past the budget.
     const spun = spinRow()
+    const spunBy = spun
+      ? readFileSync(capture, `utf8`)
+          .split(`\n`)
+          .filter(Boolean)
+          .map((line) => JSON.parse(line))
+          .find((row) => row.spin)?.key
+      : undefined
     const profiled = {
       file: baseOf(file),
       mutant,
@@ -980,7 +988,12 @@ export default async (env) => {
       forceCancel(context)
       span(`run`, started, { ...profiled, timedOut: true })
       rmSync(capture, { force: true })
-      return { file, timedOut: true, seconds, ...(spun ? { spin: true } : {}) }
+      return {
+        file,
+        timedOut: true,
+        seconds,
+        ...(spun ? { spin: true, spunBy } : {}),
+      }
     }
     // The result also lists test modules from earlier runs, with their old
     // results. Only this run's file counts.
@@ -1009,12 +1022,12 @@ export default async (env) => {
         .filter(Boolean)) {
         const row = JSON.parse(line)
         // A closing row marks the end of a file for a batch's watchdog.
-        if (!row.closed && !row.idle) rows.push([row.key, row])
+        if (!row.closed && !row.idle && !row.spin) rows.push([row.key, row])
         if (row.closed && row.file === file) closing = row
       }
       rmSync(capture)
     }
-    if (spun) return spunRun(file, seconds, modules, closing)
+    if (spun) return spunRun(file, seconds, modules, closing, spunBy)
     const tests = modules.flatMap((module) =>
       [...module.children.allTests()].map((testCase) => {
         const testResult = testCase.result()
@@ -1084,11 +1097,12 @@ export default async (env) => {
    * a timeout. It ended, so its closing row names what it read, which it is
    * stored under (F-D).
    */
-  function spunRun(file, seconds, modules, closing = {}) {
+  function spunRun(file, seconds, modules, closing = {}, spunBy = undefined) {
     return {
       file,
       timedOut: true,
       spin: true,
+      spunBy,
       seconds,
       inputs: importsOf(file, modules, closing),
       readAt: closing.readAt,
@@ -1215,6 +1229,7 @@ export default async (env) => {
     // at once (capture-setup.mjs).
     const idle = new Set()
     const spun = new Set()
+    const spunBy = new Map()
     // When each copy's spin row was first seen. The budget's throw usually
     // ends the loop and the copy finishes on its own; a copy still running
     // IDLE_MS after it spun swallowed the throw and is cut off.
@@ -1296,7 +1311,10 @@ export default async (env) => {
             )
             if (copy && row.skipped) skipped.add(copy)
             if (copy && row.closed) closings.set(copy, row)
-            if (copy && row.spin) spun.add(copy)
+            if (copy && row.spin) {
+              spun.add(copy)
+              if (row.key) spunBy.set(copy, row.key)
+            }
             if (copy && !row.closed && !row.idle && !row.spin && !row.started)
               rows.get(copy).push(row)
           }
@@ -1327,7 +1345,15 @@ export default async (env) => {
             // ended the loop and let it finish, is a timeout as it stands (a
             // count, not a clock: no confirming run).
             if (spun.has(copies[i]))
-              return spunRun(item.file, seconds, [], closings.get(copies[i]))
+              return spunRun(
+                item.file,
+                seconds,
+                [],
+                closings.get(copies[i]),
+                spunBy.has(copies[i])
+                  ? keyFor(copies[i], item.file)(spunBy.get(copies[i]))
+                  : undefined,
+              )
             const map = keyFor(copies[i], item.file)
             const own = rows
               .get(copies[i])
@@ -1372,7 +1398,15 @@ export default async (env) => {
           const copy = copies[i]
           if (skipped.has(copy)) return skippedUnit(item)
           if (spun.has(copy))
-            return spunRun(item.file, seconds, [], closings.get(copy))
+            return spunRun(
+              item.file,
+              seconds,
+              [],
+              closings.get(copy),
+              spunBy.has(copy)
+                ? keyFor(copy, item.file)(spunBy.get(copy))
+                : undefined,
+            )
           const map = keyFor(copy, item.file)
           const modules = result.testModules.filter((m) => m.moduleId === copy)
           return {
@@ -2516,7 +2550,7 @@ export default async (env) => {
               baseline,
               mutants,
             }),
-            blockersOf(st.owners, first, st.targets, baseline),
+            blockersOf(st.owners, first, st.targets, baseline, st.units),
           ),
         }
         if (needsOrdinary(st.result, st.targets))
