@@ -4872,17 +4872,24 @@ function blockingOf(plan) {
  * The tests the fixture writes into a file beyond the plan's (`oracleTestFile`),
  * each deterministic and passing: the console-stream test and the abort test
  * of file a, the mid-run edit test of the file that lands the edit, and the
- * failing owner's two passing tests. None calls the source under test, so each
- * reaches it only at load. A file's load reach covers every test it holds (the
- * load-time rule, M 2026-11-06), so these count as its tests. The placeholder
- * of a file with no tests is skipped, so it judges nothing and is not listed.
+ * failing owner's two passing tests. None calls the source under test.
+ *
+ * Load reach goes to every test of an owner file that imports the module
+ * (M 2026-11-06). A file imports it only when a plan test calls a function of
+ * the module: the fixture's `import * as sut` is elided when no test uses it
+ * (a file with only framework tests, or only a placeholder, does not import the
+ * module, and production reports its mutants unreached). So a file's framework
+ * tests count only where the file has a plan test.
+ *
  * The failing owner's pair is listed for completeness only: a broken owner
  * file judges nothing (M 2026-11-19), so `ownerTests` leaves it out. Per-law
  * blocking (#176) would let the pair judge, which is that PR's rule to decide.
  */
 function frameworkTestsOf(plan) {
   const tests = []
+  const importers = new Set(plan.tests.map((t) => t.file))
   const add = (file, name) =>
+    importers.has(file) &&
     tests.push({
       file,
       name,

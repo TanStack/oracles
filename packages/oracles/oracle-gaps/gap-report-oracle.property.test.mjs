@@ -9457,10 +9457,12 @@ oracleProperty({
         }),
       },
       {
-        // File a holds no plan test, so its only test is the fixture's skipped
-        // placeholder. A skipped test judges nothing, so the mutant is unreached
-        // in production and in the model. This history guards the census: a
-        // census that counted the placeholder as a judge would owe not-distinguished.
+        // File a holds no plan test, so it calls no function of the module and its
+        // import is elided: it does not load the module. Its only test is the skipped
+        // placeholder, which judges nothing, so the mutant is unreached in production
+        // and in the model. This history guards the census: a census that counted the
+        // framework or placeholder tests of a file that does not import the module
+        // would owe not-distinguished.
         name: `a module data mutant whose owner file holds no plan test`,
         enters: [`a module data mutant whose owner file holds no plan test`],
         build: (generated) => ({
