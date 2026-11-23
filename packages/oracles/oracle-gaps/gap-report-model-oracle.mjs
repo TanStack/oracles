@@ -737,15 +737,17 @@ const drawn = fc.record({
           // once the run has printed its completed line, while its process
           // holds its exit (`after`, review of #46, F3), or while the run
           // warms its config (`warm`, re-review N1). Or no signal: the check's
-          // process aborts (`abort`, through the CLI's own test hook, as a V8
-          // out-of-memory abort does; the coordinator's decision of 2026-11-12
-          // on P10). The abort is a CLI event, not a test's, so it happens
-          // whatever the test files do (issues #117 and #137).
+          // A drawn history never aborts a run's process. The abort is the
+          // CLI's own test hook (ORACLE_GAPS_TEST_ABORT_AT), and a drawn field
+          // switches no test-only hook on ("Randomness wins for new fields",
+          // M 2026-11-12; I16). Only a constructed history with hookStops
+          // draws that stop: `every outcome class, the abort stop`, and the
+          // setup-file history of issues #117 and #137.
           // `after` switches the test-only hold ORACLE_GAPS_TEST_HOLD_UNTIL,
           // so only a constructed history sets it (the maintainer's decision
           // "Randomness wins for new fields": a drawn field never switches a
           // test-only hook); the take-back reads it as `run` (plainStops).
-          when: fc.constantFrom(`run`, `run`, `warm`, `abort`),
+          when: fc.constantFrom(`run`, `run`, `warm`),
         }),
         { minLength: 1, maxLength: 5 },
       ),
@@ -1186,7 +1188,7 @@ const constructedNeutral = {
 // that gate their states take them. A stop after the completed line holds the
 // run's exit (ORACLE_GAPS_TEST_HOLD_UNTIL) and a stop while the config warms
 // waits at the warm probe (ORACLE_GAPS_TEST_WARM_PROBE), so a drawn history's
-// stops are stops while the witness spins and aborts (`warm` becomes `run`;
+// stops are stops while the witness spins (`warm` becomes `run`;
 // the grammar draws no `after`, and a constructed one is taken back as `run`).
 // On win32 every stop goes through the test stop file; the driver runs a
 // stop there only for a history that sets `hookStops`, so the histories are
@@ -1199,9 +1201,10 @@ const plainSteps = (steps) => {
   const kept = steps.filter((step) => !hookSteps.has(step))
   return kept.length > 0 ? kept : null
 }
-// The plain stops: a stop while the witness spins (`run`) and an abort; every
-// other stop (`warm`, and a constructed `after` or `note`) is read as `run`.
-const plainWhens = new Set([`run`, `abort`])
+// The plain stops: a stop while the witness spins (`run`); every other stop
+// (`warm`, a constructed `abort`, `after` or `note`) is read as `run`. An abort
+// needs the CLI's test hook, so a taken-back history is not one that aborts.
+const plainWhens = new Set([`run`])
 const plainStops = (stopRuns) =>
   stopRuns.some((stop) => !plainWhens.has(stop.when))
     ? stopRuns.map((stop) =>

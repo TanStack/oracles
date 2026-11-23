@@ -1615,7 +1615,8 @@ const pidFree = (value) =>
  * watchdog (index.mjs) ends its group within a tick of losing its supervisor, so
  * the child must be gone within 5 s. The supervisor's own claim is left as a
  * SIGKILL leaves it: a stale claim, which the next run refuses (the stale-claim
- * histories). POSIX only: win32 has no supervisor until #79 (platform-scoped reach).
+ * histories). On win32 the supervisor's kill is TerminateProcess, and the child's
+ * watchdog ends its tree with taskkill (index.mjs, watchSupervisor).
  */
 async function supervisorDeathRuns(dir, files, how) {
   const { args } = cliArgs(dir, files, { ...how, outName: `out-death` })
@@ -2016,7 +2017,11 @@ const exemptBlocks = [
   {
     lead: /^\r$/,
     head: /^ {1,2}\d+: [0-9A-F]{16}(?: .*)?\r$/,
-    body: /^(?:\r|(?: {1,2}\d+: [0-9A-F]{16}(?: .*)?|----- JavaScript stack trace -----|\d+: .*:\d+:\d+\)?)\r)$/,
+    // Node's frames: a native frame is its index, 16 hex digits of address and
+    // a symbol that may be absent. A JavaScript frame is `N: name (file:line:col)`
+    // or, when anonymous, `N: file:line:col`, with no space outside the name's
+    // parentheses. A CRLF blank line may separate the parts.
+    body: /^(?:\r|(?: {1,2}\d+: [0-9A-F]{16}(?: .*)?|----- JavaScript stack trace -----|\d+: (?:(?:new )?[^\s()]+ \(\S+:\d+:\d+\)|\S+:\d+:\d+))\r)$/,
   },
   {
     head: /^(?:✘|▲|X|!) \[(?:ERROR|WARNING)\] /,
@@ -2104,7 +2109,8 @@ function streamOf(lines, name) {
       continue
     }
     if (!block?.body.test(line)) block = undefined
-    block ??= exemptBlocks.find((b) => b.head.test(line))
+    // A lead block opens only at its lead (below), never by its head alone.
+    block ??= exemptBlocks.find((b) => !b.lead && b.head.test(line))
     if (ending || block || kinds.test(line)) continue
     strays.add(name(line).slice(0, 300))
   }
@@ -3581,10 +3587,9 @@ async function driver(plan, observe) {
       observe(`claimScenario`, claim)
       states.add(claimStateOf[claim.scenario])
     }
-    // Platform-scoped reach: win32 has no supervisor until #79, so the state is
-    // not reached there, and the law has no observation to judge. The reason is
-    // recorded in the PR's Limits.
-    if (plan.supervisorDeath && process.platform !== `win32`) {
+    // Every platform has the supervisor (#201 ports it to win32), so the
+    // witness runs on each: a win32 child's watchdog ends its tree by taskkill.
+    if (plan.supervisorDeath) {
       observe(`supervisorDeath`, await supervisorDeathRuns(dir, files, how))
       states.add(`a supervised child exits when its supervisor is killed`)
     }
@@ -3597,7 +3602,7 @@ async function driver(plan, observe) {
     }
     if (plan.outMode === `default`)
       states.add(`a run with the default output directory`)
-    // The cold run is supervised off win32, and its PATH named no command.
+    // The cold run is supervised, and its PATH named no command (POSIX: no `ps`).
     if (plan.psMissing && process.platform !== `win32` && cli.exit === 0)
       states.add(`a supervised check with no ps on its PATH`)
     // A blocked log refuses the run before its check starts, and only an
@@ -3671,9 +3676,14 @@ async function driver(plan, observe) {
     // session directory of a run on this host whose process was killed
     // before it cleaned up: a dead pid's directory with its `host` file, as
     // SIGKILL leaves it. The stopped run must remove it (law 10).
-    // On win32 every stop goes through the CLI's test stop file
-    // (ORACLE_GAPS_TEST_STOP), so it runs only for a history that sets
-    // `hookStops`: a drawn history switches no hook on (v21.2 I16).
+    // A drawn history switches no test-only hook on (v21.2 I16): its abort is
+    // the CLI's own hook, so only a constructed history with `hookStops` may
+    // carry one. Every stop of a win32 history goes through the test stop file,
+    // so without `hookStops` a win32 history runs none (the same rule).
+    if (!plan.hookStops && plan.stopRuns.some((stop) => stop.when === `abort`))
+      throw new Error(
+        `a history without hookStops drew an abort stop: a drawn field switched the abort hook on (I16)`,
+      )
     const stops =
       process.platform === `win32` && !plan.hookStops ? [] : plan.stopRuns
     if (cli.exit === 0 && stopIds.length > 0)
@@ -6226,6 +6236,60 @@ calibrations.push(
         observe,
       ),
   },
+  {
+    // A frame-shaped line of ours (`N: text at file:line:col`, the form Node
+    // never prints: a JavaScript frame names a function in parentheses, or
+    // is `file:line:col` alone) is a stray, not a Node frame.
+    name: `a win32 abort's native backtrace with a frame-shaped line of ours`,
+    law: `greppable stream`,
+    difference: `that are not lines of the stream: ${JSON.stringify(
+      [`3: our own message at x.mjs:1:2\r`, ownLine].sort(),
+    )}`,
+    history: { constructed: `a batch whose run rejects` },
+    driver: (plan, observe) =>
+      driver(
+        {
+          ...plan,
+          foreign: [
+            ownLine,
+            `\r`,
+            ` 1: 00007FF686B89D86 node::GetNodeReport+74070\r`,
+            `----- JavaScript stack trace -----\r`,
+            `1: checkCold (<cli>/index.mjs:636:47)\r`,
+            `3: our own message at x.mjs:1:2\r`,
+          ],
+        },
+        observe,
+      ),
+  },
+  {
+    // The lead is required: a native frame that opens no CRLF blank line is
+    // no part of Node's backtrace, so its lines are strays.
+    name: `a win32 abort's native frames without their CRLF lead are strays`,
+    law: `greppable stream`,
+    difference: `that are not lines of the stream: ${JSON.stringify(
+      [
+        ` 1: 00007FF686B89D86 node::GetNodeReport+74070\r`,
+        `----- JavaScript stack trace -----\r`,
+        `1: checkCold (<cli>/index.mjs:636:47)\r`,
+        ownLine,
+      ].sort(),
+    )}`,
+    history: { constructed: `a batch whose run rejects` },
+    driver: (plan, observe) =>
+      driver(
+        {
+          ...plan,
+          foreign: [
+            ownLine,
+            ` 1: 00007FF686B89D86 node::GetNodeReport+74070\r`,
+            `----- JavaScript stack trace -----\r`,
+            `1: checkCold (<cli>/index.mjs:636:47)\r`,
+          ],
+        },
+        observe,
+      ),
+  },
 )
 
 // The states of a config's test root, one for each shape (`testRoots` in the
@@ -6315,15 +6379,15 @@ const staticStates = [
   `a class passed as a value brings its methods`,
   `owned through bind`,
 ]
-// The supervisor-death state exists only where a supervisor does: win32 has no
-// supervisor until #79, so there the state is not required and no history
-// enters it (platform-scoped reach, register "Platform-scoped reach (#73)").
-const posixSupervision =
-  process.platform === `win32`
-    ? []
-    : [`a supervised child exits when its supervisor is killed`]
+// The supervisor-death state: a supervised child ends when its supervisor is
+// killed. Every platform runs a supervisor (#201), so the state is required on
+// each (I11, R56: no OS lacks the mechanism).
+const supervision = [`a supervised child exits when its supervisor is killed`]
 // A supervised check with no `ps` on its PATH (review of #57, A7) exists only
 // where a supervisor does, for the same reason (#79).
+// The `ps` witness is POSIX only for a reason the OS gives: `ps` is a POSIX
+// tool, and the watchdog reads a pid's liveness with signal 0 (paths.mjs, alive),
+// which needs no `ps` on either platform.
 const posixPs =
   process.platform === `win32`
     ? []
@@ -6370,7 +6434,7 @@ const required = [
   `a start refuses a stale claim`,
   `a start refuses an empty claim`,
   `a start refuses an unreadable claim`,
-  ...posixSupervision,
+  ...supervision,
   `a stream log lost after its note, then stopped`,
   `a stream log lost after its note, then completed`,
   `a stop as the CLI starts`,
@@ -6579,7 +6643,7 @@ const ownHistoryStates = [
   `a start refuses a stale claim`,
   `a start refuses an empty claim`,
   `a start refuses an unreadable claim`,
-  ...posixSupervision,
+  ...supervision,
   `a stream log lost after its note, then stopped`,
   `a stream log lost after its note, then completed`,
   `a stop as the CLI starts`,
@@ -8792,7 +8856,7 @@ oracleProperty({
         // A supervised check whose supervisor is killed with SIGKILL: its child exits
         // within the watchdog's tick, so no run's process outlives its CLI (POSIX).
         name: `a supervised child exits when its supervisor is killed`,
-        enters: posixSupervision,
+        enters: supervision,
         build: (generated) => ({
           ...generated,
           functions: [[{ kind: `push`, quote: `'` }]],
@@ -9472,6 +9536,24 @@ oracleProperty({
             { signal: `SIGINT`, pool: `threads`, when: `kill` },
             { signal: `SIGINT`, pool: `threads`, when: `run` },
           ],
+        }),
+      },
+      {
+        // The abort stop of a run whose setup file throws (issues #117 and
+        // #137). The CLI's own abort, after its completed check blocked the
+        // mutants of the throwing file, ends the stopped run with one error
+        // line on each stream. A drawn history draws no abort (v21.2 I16), so
+        // only this constructed history names it.
+        name: `a declaration fault: setupThrows, then the abort stop`,
+        enters: [`blocked by setupThrows`, `a run whose process aborted`],
+        build: (generated) => ({
+          ...generated,
+          fault: `setupThrows`,
+          witness: false,
+          stopWitness: true,
+          steps: null,
+          hookStops: true,
+          stopRuns: [{ signal: `SIGINT`, pool: `threads`, when: `abort` }],
         }),
       },
     ]),
