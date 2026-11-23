@@ -383,7 +383,7 @@ oracleProperty<History, Array<string | null>>({
       {
         name: builtAfterRoute,
         enters: [builtAfterRoute],
-        build: (generated): History => ({
+        build: (generated) => ({
           ...generated,
           calls: [
             { call: `route`, route: `fixed seed` },
@@ -395,7 +395,7 @@ oracleProperty<History, Array<string | null>>({
       {
         name: lostDeclaration,
         enters: [lostDeclaration],
-        build: (generated): History => ({
+        build: (generated) => ({
           ...generated,
           calls: [
             { call: `property options` },
@@ -416,7 +416,7 @@ oracleProperty<History, Array<string | null>>({
       {
         name: declaredFixedSeed,
         enters: [declaredFixedSeed],
-        build: (generated): History => ({
+        build: (generated) => ({
           ...generated,
           calls: [
             { call: `random parameters` },

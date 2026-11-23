@@ -404,7 +404,7 @@ oracleProperty<History, Array<Result>>({
       {
         name: selectionChange,
         enters: [selectionChange],
-        build: (generated): History => [
+        build: (generated) => [
           { do: `read`, reader: `replay requested` },
           { do: `environment`, replay: `ORACLE`, calibration: `none` },
           { do: `configure`, prefix: `ORACLE`, registry: false },

@@ -620,7 +620,7 @@ export interface GeneratedHistories<THistory> {
   runs: number
   /** One fixed-seed campaign per seed, beside the random campaign. */
   fixedSeeds: ReadonlyArray<number>
-  constructed?: ReadonlyArray<ConstructedHistory<THistory>>
+  constructed?: NoInfer<ReadonlyArray<ConstructedHistory<THistory>>>
   /**
    * How many bases each constructed history runs in each campaign: the first
    * `bases` draws of the arbitrary's sample at the campaign's seed plus the
@@ -637,7 +637,7 @@ export interface GeneratedHistories<THistory> {
    * run to run. A whole number of at least 0; 0 when absent.
    */
   drawnBases?: number
-  fixed?: ReadonlyArray<FixedHistory<THistory>>
+  fixed?: NoInfer<ReadonlyArray<FixedHistory<THistory>>>
 }
 
 /**
@@ -701,26 +701,26 @@ export interface OraclePropertyOptions<THistory, TExpected, TPlan = THistory> {
     | EnumeratedHistories<THistory>
     | GeneratedHistories<THistory>
   /** A short, unique test name for an enumerated history. */
-  label?: (history: THistory) => string
+  label?: (history: NoInfer<THistory>) => string
   /** The plan of concrete actions; required when Plan is not History. */
-  resolve?: (history: THistory) => TPlan
-  model: (plan: TPlan, trace: ReadonlyArray<Observation>) => TExpected
+  resolve?: (history: NoInfer<THistory>) => TPlan
+  model: (plan: NoInfer<TPlan>, trace: ReadonlyArray<Observation>) => TExpected
   /** The states the history entered. Defaults to the trace's `reach` values. */
   reached?: (
-    plan: TPlan,
+    plan: NoInfer<TPlan>,
     trace: ReadonlyArray<Observation>,
-    expected: TExpected,
+    expected: NoInfer<TExpected>,
   ) => Iterable<string>
   driver: (
-    plan: TPlan,
+    plan: NoInfer<TPlan>,
     observe: (checkpoint: string, value: unknown) => void,
   ) => Promise<void> | void
   check: (
-    plan: TPlan,
+    plan: NoInfer<TPlan>,
     observations: ReadonlyArray<Observation>,
-    expected: TExpected,
+    expected: NoInfer<TExpected>,
   ) => Verdict
-  calibrations?: ReadonlyArray<Calibration<THistory, TPlan>>
+  calibrations?: NoInfer<ReadonlyArray<Calibration<THistory, TPlan>>>
   /**
    * Opt each probe-bound state into direct forced controls. Entirely unbound
    * states retain search with warnings during the consumer migration.
@@ -730,7 +730,7 @@ export interface OraclePropertyOptions<THistory, TExpected, TPlan = THistory> {
    * Whether the history enters each probe-bound state, from the plan alone:
    * a prediction never sees the trace, so it cannot follow production.
    */
-  predict?: (plan: TPlan) => Readonly<Record<string, boolean>>
+  predict?: (plan: NoInfer<TPlan>) => Readonly<Record<string, boolean>>
   /**
    * Each registered test's limit in milliseconds; 120 seconds by default, and
    * none at 0 or less. Each unit of a campaign stops shrinking at half of it.

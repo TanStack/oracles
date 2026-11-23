@@ -1,0 +1,432 @@
+import { expectTypeOf } from 'vitest'
+import fc from 'fast-check'
+import { oracleProperty, pass } from '../src/index.js'
+import type { Observation } from '../src/index.js'
+
+type VariantHistory =
+  | {
+      kind: `a`
+      mode: `fast` | `safe`
+      mask: [boolean, boolean]
+      items: Array<number>
+    }
+  | {
+      kind: `b`
+      count: number
+      pair: [`left` | `right`, [number, number]]
+    }
+
+const variantArbitrary: fc.Arbitrary<VariantHistory> = fc.oneof(
+  fc.record({
+    kind: fc.constant(`a` as const),
+    mode: fc.constantFrom(`fast` as const, `safe` as const),
+    mask: fc.tuple(fc.boolean(), fc.boolean()),
+    items: fc.array(fc.integer()),
+  }),
+  fc.record({
+    kind: fc.constant(`b` as const),
+    count: fc.integer(),
+    pair: fc.tuple(
+      fc.constantFrom(`left` as const, `right` as const),
+      fc.tuple(fc.integer(), fc.integer()),
+    ),
+  }),
+)
+
+const law = {
+  statement: `type inference regression`,
+  authority: `oracleProperty type signature`,
+  limits: `compile-time only`,
+}
+
+// Type-level regressions checked by `tsc --noEmit` (not executed at runtime).
+export function checkOraclePropertyInference(): void {
+  // 1. Generated histories with discriminated unions and fixed-length tuples:
+  //    `fixed[].history` and `constructed[].build` get contextual typing from
+  //    `arbitrary` without interfering with `THistory` inference.
+  oracleProperty({
+    id: `type.generated`,
+    law,
+    histories: {
+      arbitrary: variantArbitrary,
+      runs: 10,
+      fixedSeeds: [1],
+      states: [`a-fast`, `b-left`],
+      constructed: [
+        {
+          name: `a-fast`,
+          enters: [`a-fast`],
+          build: (base) =>
+            base.kind === `a`
+              ? { ...base, mode: `fast`, mask: [true, false] }
+              : {
+                  kind: `a`,
+                  mode: `fast`,
+                  mask: [true, false],
+                  items: [base.count],
+                },
+        },
+        {
+          name: `b-left`,
+          enters: [`b-left`],
+          build: (_base) => ({
+            kind: `b`,
+            count: 2,
+            pair: [`left`, [0, 1]],
+          }),
+        },
+        {
+          name: `block-body`,
+          enters: [`a-fast`],
+          build: (base) => {
+            if (base.kind === `a`) {
+              return { ...base, mode: `safe`, mask: [false, true] }
+            }
+            return { kind: `b`, count: base.count, pair: [`right`, [1, 2]] }
+          },
+        },
+      ],
+      fixed: [
+        {
+          name: `fixed-a`,
+          history: {
+            kind: `a`,
+            mode: `safe`,
+            mask: [false, true],
+            items: [1, 2],
+          },
+        },
+        {
+          name: `fixed-b`,
+          history: {
+            kind: `b`,
+            count: 3,
+            pair: [`right`, [4, 5]],
+          },
+        },
+      ],
+    },
+    label: (history) => {
+      expectTypeOf(history).toEqualTypeOf<VariantHistory>()
+      return history.kind
+    },
+    model: (plan, trace) => {
+      expectTypeOf(plan).toEqualTypeOf<VariantHistory>()
+      expectTypeOf(trace).toEqualTypeOf<ReadonlyArray<Observation>>()
+      return plan.kind === `a`
+        ? { tag: plan.mode, flags: plan.mask }
+        : { tag: plan.pair[0], count: plan.count }
+    },
+    reached: (plan, _trace, expected) => {
+      expectTypeOf(plan).toEqualTypeOf<VariantHistory>()
+      expectTypeOf(expected.tag).toEqualTypeOf<
+        `fast` | `safe` | `left` | `right`
+      >()
+      expectTypeOf(expected.flags).toEqualTypeOf<
+        [boolean, boolean] | undefined
+      >()
+      expectTypeOf(expected.count).toEqualTypeOf<number | undefined>()
+      return [plan.kind, expected.tag]
+    },
+    driver: (plan, observe) => {
+      expectTypeOf(plan).toEqualTypeOf<VariantHistory>()
+      observe(`kind`, plan.kind)
+    },
+    check: (plan, _observations, expected) => {
+      expectTypeOf(plan).toEqualTypeOf<VariantHistory>()
+      expectTypeOf(expected.tag).toEqualTypeOf<
+        `fast` | `safe` | `left` | `right`
+      >()
+      expectTypeOf(expected.flags).toEqualTypeOf<
+        [boolean, boolean] | undefined
+      >()
+      expectTypeOf(expected.count).toEqualTypeOf<number | undefined>()
+      return pass
+    },
+    predict: (plan) => {
+      expectTypeOf(plan).toEqualTypeOf<VariantHistory>()
+      return { 'a-fast': plan.kind === `a` && plan.mode === `fast` }
+    },
+    calibrations: [
+      {
+        name: `corrupt-calibration`,
+        law: `type.generated`,
+        corrupt: (trace, plan) => {
+          expectTypeOf(plan).toEqualTypeOf<VariantHistory>()
+          return trace
+        },
+      },
+      {
+        name: `driver-calibration`,
+        law: `type.generated`,
+        driver: (plan, observe) => {
+          expectTypeOf(plan).toEqualTypeOf<VariantHistory>()
+          observe(`kind`, plan.kind)
+        },
+      },
+    ],
+  })
+
+  // 2. With `resolve`: `THistory` comes from `histories.arbitrary`, `TPlan`
+  //    comes from `resolve`, and downstream callbacks + `calibrations` receive
+  //    `TPlan` without polluting inference.
+  oracleProperty({
+    id: `type.resolved`,
+    law,
+    histories: {
+      arbitrary: variantArbitrary,
+      runs: 10,
+      fixedSeeds: [1],
+      constructed: [
+        {
+          name: `c`,
+          enters: [],
+          build: (base) =>
+            base.kind === `a`
+              ? { ...base, mode: `fast`, mask: [true, true] }
+              : { ...base, pair: [`left`, [0, 0]] },
+        },
+      ],
+      fixed: [
+        {
+          name: `f`,
+          history: { kind: `b`, count: 0, pair: [`left`, [1, 2]] },
+        },
+      ],
+    },
+    resolve: (history) => {
+      expectTypeOf(history).toEqualTypeOf<VariantHistory>()
+      const bounds: [number, number] =
+        history.kind === `a` ? [0, history.items.length] : history.pair[1]
+      return {
+        resolvedKind: history.kind,
+        bounds,
+      }
+    },
+    model: (plan) => {
+      expectTypeOf(plan).toEqualTypeOf<{
+        resolvedKind: `a` | `b`
+        bounds: [number, number]
+      }>()
+      return plan.bounds[1] - plan.bounds[0]
+    },
+    reached: (plan, _trace, expected) => {
+      expectTypeOf(plan.resolvedKind).toEqualTypeOf<`a` | `b`>()
+      expectTypeOf(expected).toEqualTypeOf<number>()
+      return [plan.resolvedKind]
+    },
+    driver: (plan, observe) => {
+      expectTypeOf(plan.bounds).toEqualTypeOf<[number, number]>()
+      observe(`kind`, plan.resolvedKind)
+    },
+    check: (plan, _trace, expected) => {
+      expectTypeOf(plan.bounds).toEqualTypeOf<[number, number]>()
+      expectTypeOf(expected).toEqualTypeOf<number>()
+      return pass
+    },
+    predict: (plan) => {
+      expectTypeOf(plan.resolvedKind).toEqualTypeOf<`a` | `b`>()
+      return { ok: plan.resolvedKind === `a` }
+    },
+    calibrations: [
+      {
+        name: `corrupt-resolved`,
+        law: `type.resolved`,
+        corrupt: (trace, plan) => {
+          expectTypeOf(plan.bounds).toEqualTypeOf<[number, number]>()
+          return trace
+        },
+      },
+      {
+        name: `driver-resolved`,
+        law: `type.resolved`,
+        driver: (plan, observe) => {
+          expectTypeOf(plan.resolvedKind).toEqualTypeOf<`a` | `b`>()
+          observe(`bounds`, plan.bounds)
+        },
+      },
+    ],
+  })
+
+  // 3. Enumerated histories (plain array and `{ enumerated }`).
+  const enumeratedList: ReadonlyArray<VariantHistory> = [
+    { kind: `a`, mode: `fast`, mask: [true, false], items: [] },
+    { kind: `b`, count: 1, pair: [`left`, [0, 1]] },
+  ]
+  oracleProperty({
+    id: `type.enumerated`,
+    law,
+    histories: { enumerated: enumeratedList, states: [`seen`] },
+    label: (history) => {
+      expectTypeOf(history).toEqualTypeOf<VariantHistory>()
+      return history.kind
+    },
+    model: (plan) => plan.kind,
+    driver: (plan, observe) => {
+      expectTypeOf(plan).toEqualTypeOf<VariantHistory>()
+      observe(`kind`, plan.kind)
+    },
+    check: (plan, _trace, expected) => {
+      expectTypeOf(plan).toEqualTypeOf<VariantHistory>()
+      expectTypeOf(expected).toEqualTypeOf<`a` | `b`>()
+      return pass
+    },
+  })
+
+  // 4. Explicit type arguments remain backwards-compatible, including 0-arg
+  //    `build` callbacks.
+  oracleProperty<VariantHistory, boolean>({
+    id: `type.explicit`,
+    law,
+    histories: {
+      arbitrary: variantArbitrary,
+      runs: 10,
+      fixedSeeds: [1],
+      constructed: [
+        {
+          name: `zero-arg`,
+          enters: [],
+          build: () => ({ kind: `b`, count: 0, pair: [`right`, [0, 1]] }),
+        },
+      ],
+      fixed: [
+        {
+          name: `fixed`,
+          history: { kind: `a`, mode: `fast`, mask: [true, false], items: [] },
+        },
+      ],
+    },
+    model: (plan) => plan.kind === `a`,
+    driver: () => {},
+    check: (_plan, _trace, expected) => {
+      expectTypeOf(expected).toEqualTypeOf<boolean>()
+      return pass
+    },
+  })
+
+  // 5. Negative checks: invalid union literals, wrong tuple lengths, and
+  //    mismatched callback/calibration parameter types are still rejected.
+  oracleProperty({
+    id: `type.error.constructed-discriminant`,
+    law,
+    // @ts-expect-error invalid union literal returned from constructed[].build
+    histories: {
+      arbitrary: variantArbitrary,
+      runs: 10,
+      fixedSeeds: [1],
+      constructed: [
+        {
+          name: `bad-discriminant`,
+          enters: [],
+          build: (base) =>
+            base.kind === `a`
+              ? { ...base, mode: `invalid`, mask: [true, false] }
+              : base,
+        },
+      ],
+    },
+    model: (plan) => plan.kind,
+    driver: () => {},
+    check: () => pass,
+  })
+
+  oracleProperty({
+    id: `type.error.constructed-tuple`,
+    law,
+    // @ts-expect-error wrong tuple length returned from constructed[].build
+    histories: {
+      arbitrary: variantArbitrary,
+      runs: 10,
+      fixedSeeds: [1],
+      constructed: [
+        {
+          name: `bad-tuple`,
+          enters: [],
+          build: (base) =>
+            base.kind === `a` ? { ...base, mode: `fast`, mask: [true] } : base,
+        },
+      ],
+    },
+    model: (plan) => plan.kind,
+    driver: () => {},
+    check: () => pass,
+  })
+
+  oracleProperty({
+    id: `type.error.fixed-discriminant`,
+    law,
+    // @ts-expect-error invalid union literal in fixed[].history
+    histories: {
+      arbitrary: variantArbitrary,
+      runs: 10,
+      fixedSeeds: [1],
+      fixed: [
+        {
+          name: `bad-fixed-discriminant`,
+          history: {
+            kind: `a`,
+            mode: `invalid`,
+            mask: [true, false],
+            items: [],
+          },
+        },
+      ],
+    },
+    model: (plan) => plan.kind,
+    driver: () => {},
+    check: () => pass,
+  })
+
+  oracleProperty({
+    id: `type.error.fixed-tuple`,
+    law,
+    // @ts-expect-error wrong tuple length in fixed[].history
+    histories: {
+      arbitrary: variantArbitrary,
+      runs: 10,
+      fixedSeeds: [1],
+      fixed: [
+        {
+          name: `bad-fixed-tuple`,
+          history: {
+            kind: `a`,
+            mode: `fast`,
+            mask: [true],
+            items: [],
+          },
+        },
+      ],
+    },
+    model: (plan) => plan.kind,
+    driver: () => {},
+    check: () => pass,
+  })
+
+  oracleProperty({
+    id: `type.error.callbacks`,
+    law,
+    histories: {
+      arbitrary: variantArbitrary,
+      runs: 10,
+      fixedSeeds: [1],
+    },
+    model: (plan) => plan.kind,
+    // @ts-expect-error mismatched driver parameter type without resolve
+    driver: (_plan: { unrelated: string }) => {},
+    check: () => pass,
+    calibrations: [
+      {
+        name: `bad-calibration-corrupt`,
+        law: `type.error.callbacks`,
+        // @ts-expect-error mismatched calibration plan parameter
+        corrupt: (_trace, _plan: { unrelated: string }) => undefined,
+      },
+      {
+        name: `bad-calibration-driver`,
+        law: `type.error.callbacks`,
+        // @ts-expect-error mismatched calibration driver parameter
+        driver: (_plan: { unrelated: string }) => {},
+      },
+    ],
+  })
+}
