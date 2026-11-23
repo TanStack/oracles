@@ -1067,11 +1067,11 @@ async function stoppedRun(
   // (ORACLE_GAPS_TEST_PAUSE_AT=note), the driver sends the stop, and then
   // releases the hold, so the stop is taken before the check starts any process.
   const atNote = when === `note`
-  // With `abort`, no signal comes: a test of file a aborts the run's
-  // process (`GAP_ABORT`), in worker threads, so the abort ends the process
-  // that runs the check, as a V8 out-of-memory abort does. The run then
-  // ends with one error line per stream that names how its process ended,
-  // and exits 3 (the coordinator's decision of 2026-11-12 on P10).
+  // With `abort`, no signal comes: the CLI aborts its check's process after the
+  // session has begun (`ORACLE_GAPS_TEST_ABORT_AT`), as a V8 out-of-memory
+  // abort does, whatever the test files do. The run then ends with one error
+  // line per stream that names how its process ended, and exits 3 (the
+  // coordinator's decision of 2026-11-12 on P10).
   const abort = when === `abort`
   const kill = when === `kill`
   writeFixture(dir, files)
@@ -1141,7 +1141,7 @@ async function stoppedRun(
       : warm
         ? { ...base, ORACLE_GAPS_TEST_WARM_PROBE: join(pids, `warming`) }
         : abort
-          ? { ...base, GAP_ABORT: `1` }
+          ? { ...base, ORACLE_GAPS_TEST_ABORT_AT: `check` }
           : { ...base, GAP_STOP_DIR: pids }),
   }
   if (win) env.ORACLE_GAPS_TEST_STOP = stopFile
@@ -5058,7 +5058,10 @@ function check(plan, observations, expected) {
       value.when === `after`
         ? `oracle-gaps: done completed`
         : value.when === `abort`
-          ? `oracle-gaps: done error, the run's process exited with SIGABRT`
+          ? process.platform === `win32`
+            ? // win32 has no signal that ends a process: the exit code names the abort.
+              `oracle-gaps: done error, the run's process exited with code `
+            : `oracle-gaps: done error, the run's process exited with SIGABRT`
           : `oracle-gaps: done stopped (${value.signal})`
     if (value.spun && value.when === `warm` && value.refused)
       return violation(

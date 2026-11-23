@@ -736,9 +736,11 @@ const drawn = fc.record({
           // When the signal comes: while the stop witness spins (`run`),
           // once the run has printed its completed line, while its process
           // holds its exit (`after`, review of #46, F3), or while the run
-          // warms its config (`warm`, re-review N1). Or no signal: a test
-          // aborts the run's process (`abort`, as a V8 out-of-memory abort
-          // does; the coordinator's decision of 2026-11-12 on P10).
+          // warms its config (`warm`, re-review N1). Or no signal: the check's
+          // process aborts (`abort`, through the CLI's own test hook, as a V8
+          // out-of-memory abort does; the coordinator's decision of 2026-11-12
+          // on P10). The abort is a CLI event, not a test's, so it happens
+          // whatever the test files do (issues #117 and #137).
           // `after` switches the test-only hold ORACLE_GAPS_TEST_HOLD_UNTIL,
           // so only a constructed history sets it (the maintainer's decision
           // "Randomness wins for new fields": a drawn field never switches a
@@ -3444,9 +3446,6 @@ function resolveHistory(history) {
     midrunBy: history.midrunBy ?? `a`,
     midrunTarget: midrunTargetOf(history),
     consoleOutput: history.consoleOutput === true,
-    // Whether a run aborts its process (a stop run `abort`): then file a has
-    // the test that aborts when the driver asks.
-    aborts: (history.stopRuns ?? []).some((stop) => stop.when === `abort`),
     ordinary: history.ordinary === true,
     // The batch whose run rejects (a test-only fault; 0 is none).
     rejectBatch: history.rejectBatch ?? 0,
@@ -4877,13 +4876,11 @@ function baselineOf(plan) {
   const failing = blockingOf(plan)
   return [...oracleFilesOf(plan), `c`].map((file) => {
     // File a's tests beyond the plan's run in every baseline too: the mid-run
-    // edit test, the one that writes to the console streams, and the one
-    // that aborts when the driver asks.
+    // edit test, and the one that writes to the console streams.
     const own =
       plan.tests.filter((t) => t.file === file).length +
       (plan.midrun && file === plan.midrunBy ? 1 : 0) +
-      (file === `a` && plan.consoleOutput ? 1 : 0) +
-      (file === `a` && plan.aborts ? 1 : 0)
+      (file === `a` && plan.consoleOutput ? 1 : 0)
     const broken = failing.find((f) => f.file === file)
     // The failing owner's suite holds two tests and a third of its name.
     const extra = broken?.test === undefined ? 0 : 3
@@ -5620,21 +5617,11 @@ function oracleTestFile(plan, file) {
       `  writeEdit(marker, 'done\\n')`,
       `})`,
     )
-  // A test that ends the run's process by SIGABRT when the driver asks
-  // (`GAP_ABORT`), as a V8 out-of-memory abort does: in worker threads its
-  // process is the run's, and `process.abort()` is unavailable there. It
-  // runs and passes in every other run.
-  if (file === `a` && plan.aborts)
-    out.push(
-      `test('aborts the process when asked', () => {`,
-      `  if (process.env.GAP_ABORT === '1') process.kill(process.pid, 'SIGABRT')`,
-      `})`,
-    )
   // A file with no tests still loads, so the CLI can read what it owns.
   if (
     !plan.tests.some((t) => t.file === file) &&
     !(plan.midrun && file === plan.midrunBy) &&
-    !(file === `a` && (plan.consoleOutput || plan.aborts))
+    !(file === `a` && plan.consoleOutput)
   )
     out.push(`test.skip('no tests', () => {})`)
   // A test that writes to the process's own streams, as a test's debugging
