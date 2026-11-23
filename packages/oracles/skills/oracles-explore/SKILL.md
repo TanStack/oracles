@@ -547,6 +547,13 @@ them and stop.
    generated inputs and sequences, the driver calls their real code, and the
    check compares the two at each step.
 
+   When the repository uses TypeScript 5 or newer, check that the oracle
+   file passes its typecheck (`tsc --noEmit`) as well as runs: Vitest
+   strips types without checking them. Where production files are `.js` or
+   `.mjs` and the package has a typed entry, import through that entry
+   instead of untyped relative paths (see
+   [Problems you may hit](references/problems.md)).
+
    Writing the oracle can take a while, so keep the developer with you:
    send a short update at each part, or every few minutes, on what you are
    building and what you are finding out about their code. For example:

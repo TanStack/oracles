@@ -153,6 +153,22 @@ If the repository's own lint or formatter covers the oracle files (for
 example, an older ESLint with Prettier over `test/`), keep the oracle files
 out of its globs, or match its style. Say which in your report.
 
+**Typecheck.** Vitest strips TypeScript types without checking them, so a
+passing oracle run does not prove that the oracle files typecheck. When the
+repository uses TypeScript 5 or newer:
+
+- Verify that its `tsconfig.json` (or its test tsconfig) includes the oracle
+  files, and run its typecheck (for example `tsc --noEmit`). If the main
+  `tsconfig.json` excludes tests, add the oracle glob to the test tsconfig
+  or add a small `tsconfig.oracles.json` that extends it.
+- When production files are `.js` or `.mjs` without matching `.d.ts` files,
+  import through the package's typed entry where one exists, or enable
+  `allowJs` in the test or oracle tsconfig so TypeScript does not reject
+  untyped relative imports.
+- When the repository uses TypeScript older than 5, or none, keep the oracle
+  files out of its `tsc` run (step 2) and do not add a typecheck that uses
+  the gap check's own `tsc`.
+
 **Lint.** Add both presets to the ESLint flat config:
 
 ```js
@@ -322,15 +338,18 @@ optimization project.
   full.
 - Lint each oracle file and each changed production file after you edit it.
   Fix every report. Do not disable a rule.
+- Typecheck each oracle file after you edit it (Vitest strips types without
+  checking them).
 - Oracle files: `<oracle file glob>`. Gap check: `<gap check command>`.
 
 <!-- END @tanstack/oracles -->
 ```
 
 If lint is an environment limit (step 3), replace the lint line with "Lint:
-not available here (<the reason>)." Fill in the two placeholders in step 7,
-once their values exist. A run that stops before step 7 leaves them in
-place, and its report says so.
+not available here (<the reason>)." If the repository does not use
+TypeScript 5 or newer, omit the typecheck line. Fill in the two placeholders
+in step 7, once their values exist. A run that stops before step 7 leaves
+them in place, and its report says so.
 
 In a workspace with a package-local install, put the block in the package's
 instruction file, where its `node_modules` paths resolve. A root copy must

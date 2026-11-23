@@ -65,6 +65,24 @@ suite (thousands of tests). Run it again with
 `NODE_OPTIONS=--max-old-space-size=8192`, or with `--contexts 2`. Keep
 every test and history: do not shrink the oracle to make it fit.
 
+**TypeScript reports untyped imports (`TS7016` / `TS7006`) on `.js` or `.mjs`
+production files.** Import through the package's typed entry where one
+exists instead of an untyped relative `.js` or `.mjs` path. When no typed
+entry covers the module, enable `allowJs` in the test or oracle tsconfig
+instead of hiding errors with `any` or `@ts-ignore`.
+
+**TypeScript rejects `constructed[].build` on a union literal or tuple.**
+Inside an unannotated `oracleProperty(...)` call, TypeScript can widen union
+string literals or fixed-length tuples returned by `build`. Give `build` an
+explicit return type (`build: (generated): History => ({ ... })`) or narrow
+the literal with `as const`.
+
+**The repository's `tsconfig.json` does not cover the oracle file.** Vitest
+strips types without checking them, so an excluded oracle file can pass
+`oracle-gaps` while failing `tsc --noEmit`. When the repository uses
+TypeScript 5 or newer, check that the oracle file typechecks under the
+repository's `tsc --noEmit` (or a test tsconfig that extends `tsconfig.json`).
+
 ## Probes
 
 **The tests import a build that is not built yet.** Import the source that
