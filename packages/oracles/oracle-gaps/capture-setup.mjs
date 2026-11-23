@@ -24,12 +24,14 @@
 // In a mutant run, fast-check stops a property at its first failure instead
 // of shrinking it: a kill needs one failing history, not the smallest one.
 import { createHash } from 'node:crypto'
-import fs, { appendFileSync, readFileSync } from 'node:fs'
+import { appendFileSync, readFileSync } from 'node:fs'
 import { createRequire, syncBuiltinESMExports } from 'node:module'
-import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { dirname, isAbsolute, join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { threadId } from 'node:worker_threads'
 import { afterAll, beforeEach, chai, expect, inject, vi } from 'vitest'
-import { posix, writeWhole } from './paths.mjs'
+import { inputHash, keepProperties, watchReads } from './inputs.mjs'
+import { writeWhole } from './paths.mjs'
 
 const run =
   inject(`oracleGaps`) ??
@@ -68,14 +70,7 @@ const realUse = real.use
 
 // A wrapper keeps every own property of the function it wraps, such as
 // `util.promisify.custom`, so `util.promisify(setTimeout)` still resolves
-// with its value under the capture (law 3: a test that passes alone passes
-// under the CLI).
-function keepProperties(from, to) {
-  for (const key of Reflect.ownKeys(from))
-    if (key !== `prototype`)
-      Object.defineProperty(to, key, Object.getOwnPropertyDescriptor(from, key))
-  return to
-}
+// with its value under the capture (inputs.mjs, keepProperties).
 
 // The timers that code in this worker has pending, counted where they are
 // made, each with when it is next due: Node's resource list does not
@@ -274,70 +269,62 @@ function appendClosingRow(row) {
   writeWhole(`${hold}.${marker}`, ``)
   appendFileSync(state.capture, row.slice(half))
 }
-// The files this copy reads through fs inside the package: by a sync, a
-// promise, or a callback read, or a check of whether a file exists or what
-// it is. The daemon stores the run under them as it does the modules the
-// copy evaluated (the closing row's `loaded`), so an edit of only such a
-// file runs it again, as a cold run sees the edit (law 9). Reads under
-// node_modules and of the runner's own files are left out. Each path keeps
-// its hash from the copy's first read of it, taken as the runner hashes an
-// input (check.mjs, fileHashes), so the run is stored under the text it
-// read and not under an edit that lands later in the run (review of #55,
-// F1).
+// What this copy reads: each file through fs, on any path, node_modules
+// included, by a sync, a promise, or a callback read, or a check of whether
+// a file exists or what it is; and each environment variable, or the set of
+// names when the copy lists them (inputs.mjs). Every read is a daemon input
+// (maintainer decision, 2026-11-16): the daemon stores the run under them as
+// it does the modules the copy evaluated (the closing row's `loaded`), so an
+// edit of only such an input runs it again, as a cold run sees the edit
+// (law 9). A file keeps its hash from the copy's first read of it, so the
+// run is stored under the text it read and not under an edit that lands
+// later in the run (review of #55, F1). A variable's hash is the runner's,
+// from the environment it gives the check (check.mjs, servedHash). A file
+// that the copy, or a process it started at any depth, wrote before the copy
+// read it is its own output, no input, whether the copy reads its text or
+// tests whether it exists (`stat:`).
 globalThis.__oracleGapsReads = new Map()
-if (!globalThis.__oracleGapsReading) {
-  globalThis.__oracleGapsReading = true
-  // A read's key follows the gap CLI's path rule (paths.mjs, copied beside
-  // this file with it). The file system gets the native path.
-  const root = `${posix(process.cwd()).replace(/\/+$/, ``)}/`
-  const { readFileSync: readNow, statSync: statNow } = fs
-  const hashNow = (path) => {
-    try {
-      return statNow(path).isFile()
-        ? createHash(`sha1`).update(readNow(path)).digest(`hex`)
-        : `not a file`
-    } catch {
-      return `missing`
-    }
+const wrote = new Set()
+// The child processes' writes: every Node process a test starts preloads
+// child-writes.mjs, which each of its own children inherits through
+// NODE_OPTIONS, and appends the key of each file it writes to this copy's
+// log, in the session directory beside this file.
+// The session directory, from this file's path. Not `new URL(<literal>,
+// import.meta.url)`: a client-transform environment (jsdom) rewrites that
+// form to a URL of Vite's dev server.
+const home = dirname(fileURLToPath(import.meta.url))
+const childLog = join(
+  home,
+  `child-writes-${process.pid}-${threadId}-${(globalThis.__oracleGapsCopies = (globalThis.__oracleGapsCopies ?? 0) + 1)}.log`,
+)
+let childRead = 0
+/** Whether the copy or a process it started wrote the file `key` names. */
+function ownOutput(key) {
+  const file = key.replace(/^stat:/, `fs:`)
+  if (wrote.has(file)) return true
+  let text
+  try {
+    text = globalThis.__oracleGapsOriginalFs.readFileSync(childLog, `utf8`)
+  } catch {
+    return false
   }
-  const record = (target) => {
-    let path
-    try {
-      if (target instanceof URL) path = fileURLToPath(target)
-      else if (typeof target === `string`) path = resolvePath(target)
-      else if (Buffer.isBuffer(target)) path = resolvePath(target.toString())
-    } catch {
-      return
-    }
-    if (path === undefined) return
-    const key = posix(path)
-    const reads = globalThis.__oracleGapsReads
-    if (
-      key.startsWith(root) &&
-      !key.includes(`/node_modules/`) &&
-      !key.includes(`/.oracle-gaps`) &&
-      !reads.has(key)
-    )
-      reads.set(key, hashNow(path))
-  }
-  // A wrapper keeps the function's own properties (its name and length,
-  // which code that dispatches on arity reads), so a test that passes alone
-  // passes under the capture (law 3; review of #55).
-  for (const [owner, names] of [
-    [fs, [`readFileSync`, `readFile`, `existsSync`, `statSync`]],
-    [fs.promises, [`readFile`, `stat`]],
-  ])
-    for (const name of names) {
-      const original = owner[name]
-      owner[name] = keepProperties(original, function (target, ...rest) {
-        record(target)
-        return original.call(this, target, ...rest)
-      })
-    }
-  // An ES module's `import { readFileSync } from 'node:fs'` (and from
-  // 'node:fs/promises') reads these from now on.
-  syncBuiltinESMExports()
+  for (const line of text.slice(childRead).split(`\n`))
+    if (line !== ``) wrote.add(line)
+  childRead = text.length
+  return wrote.has(file)
 }
+watchReads((key, write) => {
+  const reads = globalThis.__oracleGapsReads
+  if (write) wrote.add(key)
+  else if (!reads.has(key) && !wrote.has(key) && !ownOutput(key))
+    reads.set(key, key.startsWith(`env:`) ? null : inputHash(key))
+})
+if (!globalThis.__oracleGapsChildren) {
+  globalThis.__oracleGapsChildren = true
+  process.env.NODE_OPTIONS =
+    `${process.env.NODE_OPTIONS ?? ``} --import=${pathToFileURL(join(home, `child-writes.mjs`)).href}`.trim()
+}
+process.env.ORACLE_GAPS_CHILD_WRITES = childLog
 // A test's own writes to the process's stdout and stderr (a debugging
 // `process.stdout.write`) go to the run's test-output.log, beside its
 // capture, not to the CLI's streams, whose every line is a line of the
@@ -1165,13 +1152,9 @@ afterAll(() => {
   // The hash of each file the copy read, from its first read, under its own
   // key (`fs:<path>`): a test's read of a file is another input than the
   // module that its context serves from that file, which can differ from
-  // the file's text (fourth review of #55, F-A2).
-  const readAt = Object.fromEntries(
-    [...globalThis.__oracleGapsReads].map(([path, hash]) => [
-      `fs:${path}`,
-      hash,
-    ]),
-  )
+  // the file's text (fourth review of #55, F-A2). A variable it read has no
+  // hash here (`env:<name>`, null).
+  const readAt = Object.fromEntries(globalThis.__oracleGapsReads)
   appendClosingRow(
     `${JSON.stringify({ file: thisFile, closed: true, loaded, readAt, ...(skippedCopy ? { skipped: true } : {}) })}\n`,
   )

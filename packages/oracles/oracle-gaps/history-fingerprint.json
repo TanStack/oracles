@@ -80,7 +80,13 @@
     ["slowStart", "ed6866229ecc4969"],
     ["shortWait", "ed6866229ecc4969"],
     ["absentObjects", "b9e3dd12df07d597"],
-    ["optionalChains", "92f0ef0b4dde6c60"]
+    ["optionalChains", "92f0ef0b4dde6c60"],
+    ["inputRead", "5684eb5ba5dfefcd"],
+    ["keepStamp", "56ab48b583bcfac8"],
+    ["inputSteps", "d0b00193871ff120"],
+    ["storeLimit", "ed6866229ecc4969"],
+    ["childWrite", "b5de417f8ab99e7a"],
+    ["childEnvironment", "6f44f756ac5ac6ef"]
   ],
   "histories": [
     ["functions", "66c0e9c56951c377"],
@@ -163,6 +169,12 @@
     ["slowStart", "ed6866229ecc4969"],
     ["shortWait", "ed6866229ecc4969"],
     ["absentObjects", "b9e3dd12df07d597"],
-    ["optionalChains", "92f0ef0b4dde6c60"]
+    ["optionalChains", "92f0ef0b4dde6c60"],
+    ["inputRead", "5684eb5ba5dfefcd"],
+    ["keepStamp", "56ab48b583bcfac8"],
+    ["inputSteps", "d0b00193871ff120"],
+    ["storeLimit", "ed6866229ecc4969"],
+    ["childWrite", "b5de417f8ab99e7a"],
+    ["childEnvironment", "6f44f756ac5ac6ef"]
   ]
 }
