@@ -25,6 +25,13 @@ Vitest 5 needs Node 22.12 or later. Which Node versions CI runs is a
 question for when the repository's setup is finished: do not raise it
 now.
 
+**`pkg.pr.new` returns HTTP 404 for the tip of `main`.** The preview for that
+commit is still building or was skipped after a CI failure. Check recent
+commits on `main` in `TanStack/oracles` for the latest one whose `Publish
+preview` check succeeded (or whose `pkg.pr.new` URL returns HTTP 200 with
+`curl -sI`), pin both packages to that commit, and tell the developer which
+commit you pinned.
+
 **An install fails.** Show the error in a line or two, say what you think
 caused it, and ask before you try anything that changes more than the
 packages the oracle needs. Once the install works, go on from where you

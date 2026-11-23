@@ -61,6 +61,13 @@ pnpm add -D \
   fast-check@^4 vitest@^4.1
 ```
 
+If `pkg.pr.new` returns HTTP 404 for the tip of `main`, its preview is still
+building or was skipped after a CI failure. Check recent commits on `main` for
+the latest one whose `Publish preview` check succeeded (or whose
+`https://pkg.pr.new/TanStack/oracles/@tanstack/oracles@<sha>` returns HTTP 200
+with `curl -sI`), pin both packages to that commit, and tell the developer
+which commit you pinned.
+
 Add `fast-check` and `vitest` beside them. The framework needs Vitest 4.1 or
 later. If the repository already runs an older Vitest, upgrading it is the
 developer's decision: ask, and with no developer present, do not upgrade. Report it as
