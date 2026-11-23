@@ -1851,3 +1851,282 @@ oracleProperty({
   calibrations,
   timeout: 120_000,
 })
+
+// ## Mutant anchors stay inside their declaration
+//
+// This oracle owns the anchor that the gap report gives each mutant of a
+// source: the tokens of the innermost statement or declaration that holds the
+// mutant's site. The anchor is part of the mutant's key (report.mjs
+// `assignKeys`), so an anchor that spans the whole file makes the key change
+// with every edit to the file. The static analysis (analysis.mjs `analyze`)
+// computes the anchors. TypeScript's statement range does not cover a default
+// parameter, a property declaration, an enum member, a decorator, or a heritage
+// clause, so a walk up from one of their sites that stops at a statement
+// reaches the file, and the anchor becomes the whole file's tokens.
+//
+// The contract at a glance, one generated source each:
+//
+//   `export function p(a = 100 > 1) {}`  // → its `>` anchors to `a = 100 > 1`
+//   `export enum E { M = 101 > 1 }`      // → its `>` anchors to `M = 101 > 1`
+//   `export class C { x = 102 > 1 }`     // → its `>` anchors to `x = 102 > 1`
+//   `export function s(q: number) { return q > 103 }` // → `return q > 103`
+//
+// No mutant outside a statement anchors to the whole file (decision by the
+// maintainers on PR #196, 2026-11-23: a mutant outside a statement anchors to
+// its nearest declaration, never the whole file; the one-time change of gap
+// keys that follows is accepted and disclosed in its changeset).
+//
+// The history grammar writes one declaration per line, each with a distinct
+// number so that no two anchors match, and records the tokens that the
+// declaration spans, as TypeScript's parser would split them. The model
+// reads those tokens, never the production scanner, so its expected anchor is
+// the declared spelling. The driver writes the rendered file to a scratch
+// package, runs the static analysis, and observes each mutant's line and
+// anchor. The check compares each mutant's anchor with its line's declared
+// anchor, rejects an anchor equal to the whole file's tokens, and rejects a
+// declaration with no mutant, so a check that finds nothing cannot pass.
+//
+// Limits: one declaration per line, with no nested declarations, so the walk
+// is tested at its first level only. The `~n` suffix of a repeated anchor, the
+// function part of a key, and ownership are not judged here: the end-to-end and
+// static laws above own them. A declaration whose operators are not `>`
+// comparisons takes the same walk, but only comparisons are generated.
+
+const anchorKinds = [
+  `parameter`,
+  `property`,
+  `enumMember`,
+  `decorator`,
+  `heritage`,
+  `statement`,
+]
+const anchorSite = fc.record({
+  kind: fc.constantFrom(...anchorKinds),
+  typed: fc.boolean(),
+  isStatic: fc.boolean(),
+})
+const anchorHistories = fc.record({
+  sites: fc.array(anchorSite, { minLength: 1, maxLength: 6 }),
+})
+
+// The history grammar: the rendered file, each line's declared tokens, and
+// the tokens of the whole file. A declaration's tokens are its spelling.
+const anchorPrelude = [
+  [`declare`, `function`, `dec`, `(`, `v`, `:`, `any`, `)`, `:`, `any`],
+  [`export`, `class`, `B`, `{`, `}`],
+  [`export`, `class`, `B2`, `{`, `}`],
+]
+function anchorDeclaration({ kind, typed, isStatic }, n) {
+  const constant = `${100 + n}`
+  switch (kind) {
+    case `parameter`:
+      return {
+        text: `export function p${n}(a${n}${typed ? ` : number` : ``} = ${constant} > 1) {}`,
+        tokens: [
+          `a${n}`,
+          ...(typed ? [`:`, `number`] : []),
+          `=`,
+          constant,
+          `>`,
+          `1`,
+        ],
+      }
+    case `property`:
+      return {
+        text: `export class C${n} { ${isStatic ? `static ` : ``}x${n}${typed ? ` : number` : ``} = ${constant} > 1 }`,
+        tokens: [
+          ...(isStatic ? [`static`] : []),
+          `x${n}`,
+          ...(typed ? [`:`, `number`] : []),
+          `=`,
+          constant,
+          `>`,
+          `1`,
+        ],
+      }
+    case `enumMember`:
+      return {
+        text: `export enum E${n} { M${n} = ${constant} > 1 }`,
+        tokens: [`M${n}`, `=`, constant, `>`, `1`],
+      }
+    case `decorator`:
+      return {
+        text: `export class D${n} { @dec(${constant} > 1) m${n}() {} }`,
+        tokens: [`@`, `dec`, `(`, constant, `>`, `1`, `)`],
+      }
+    case `heritage`:
+      return {
+        text: `export class H${n} extends (${constant} > 1 ? B : B2) {}`,
+        tokens: [`extends`, `(`, constant, `>`, `1`, `?`, `B`, `:`, `B2`, `)`],
+      }
+    case `statement`:
+      return {
+        text: `export function s${n}(q${n}: number) { return q${n} > ${constant} }`,
+        tokens: [`return`, `q${n}`, `>`, constant],
+      }
+    default:
+      throw new Error(`unknown anchor kind: ${kind}`)
+  }
+}
+function anchorFixture({ sites }) {
+  const declared = [
+    ...anchorPrelude.map((tokens) => ({ tokens, kind: `prelude` })),
+    ...sites.map((site, n) => ({
+      ...anchorDeclaration(site, n),
+      kind: site.kind,
+    })),
+  ]
+  return {
+    text: declared.map((d) => d.text ?? d.tokens.join(` `)).join(`\n`),
+    lines: declared.map((d, i) => ({
+      line: i + 1,
+      kind: d.kind,
+      anchor: d.tokens.join(` `),
+    })),
+    whole: declared.flatMap((d) => d.tokens).join(` `),
+  }
+}
+
+async function anchorDriver(plan, observe) {
+  const scratch = realpathSync(mkdtempSync(join(here, `.scratch-`)))
+  try {
+    writeFileSync(
+      join(scratch, `package.json`),
+      `{"name":"fixture","private":true}\n`,
+    )
+    mkdirSync(join(scratch, `src`))
+    mkdirSync(join(scratch, `tests`))
+    writeFileSync(join(scratch, `src/x.ts`), anchorFixture(plan).text)
+    const test = join(scratch, `tests/x.test.ts`)
+    writeFileSync(
+      test,
+      `declare const w: (o: unknown) => void\nw({ owns: ['src/x.ts'] })\n`,
+    )
+    const { mutants } = analyze(ts, scratch, [`src/x.ts`], [test])
+    keyAndSelect(mutants, { sources: [`src/x.ts`] })
+    observe(
+      `anchors`,
+      mutants.map((m) => ({
+        line: m.line,
+        operator: m.operator,
+        anchor: m.anchor,
+        key: m.key,
+      })),
+    )
+    for (const site of plan.sites) observe(`reach`, `anchor ${site.kind}`)
+  } finally {
+    rmSync(scratch, { recursive: true, force: true })
+  }
+}
+
+function anchorCheck(plan, observations, expected) {
+  const got = observations.find((o) => o.checkpoint === `anchors`)?.value
+  if (!got)
+    return violation(`anchors`, `no analysis was observed`, `completion`)
+  for (const m of got) {
+    const owed = expected.lines.find((l) => l.line === m.line)
+    if (!owed || owed.kind === `prelude`)
+      return violation(
+        `anchors`,
+        `line ${m.line}: a ${m.operator} mutant outside the generated declarations`,
+        `anchor scope`,
+      )
+    if (m.anchor === expected.whole)
+      return violation(
+        `anchors`,
+        `line ${m.line}: a ${m.operator} mutant anchors to the whole file`,
+        `anchor scope`,
+        { actual: m.anchor, expected: owed.anchor },
+      )
+    if (m.anchor !== owed.anchor)
+      return violation(
+        `anchors`,
+        `line ${m.line}: a ${m.operator} mutant anchors to ${JSON.stringify(m.anchor)}, owed ${JSON.stringify(owed.anchor)}`,
+        `anchor scope`,
+        { actual: m.anchor, expected: owed.anchor },
+      )
+  }
+  // A declaration with no mutant would let the anchor law pass unjudged.
+  for (const owed of expected.lines)
+    if (owed.kind !== `prelude` && !got.some((m) => m.line === owed.line))
+      return violation(
+        `anchors`,
+        `line ${owed.line}: no mutant was generated for ${owed.kind}`,
+        `anchor scope`,
+      )
+  return pass
+}
+
+const corruptAnchors = (change) => (trace, plan) => {
+  const index = trace.findIndex((o) => o.checkpoint === `anchors`)
+  if (index < 0) return undefined
+  const value = structuredClone(trace[index].value)
+  if (change(value, anchorFixture(plan)) === false) return undefined
+  return trace.map((o, i) => (i === index ? { ...o, value } : o))
+}
+const anchorCalibrations = [
+  {
+    name: `a declaration's mutant anchors to the whole file, as the old walk did`,
+    law: `anchor scope`,
+    history: { constructed: `anchor parameter` },
+    corrupt: corruptAnchors((mutants, fixture) => {
+      const m = mutants.find(
+        (x) => fixture.lines[x.line - 1]?.kind === `parameter`,
+      )
+      if (!m) return false
+      m.anchor = fixture.whole
+    }),
+  },
+  {
+    name: `a declaration's mutants are dropped`,
+    law: `anchor scope`,
+    history: { constructed: `anchor enumMember` },
+    corrupt: corruptAnchors((mutants, fixture) => {
+      const kept = mutants.filter(
+        (x) => fixture.lines[x.line - 1]?.kind !== `enumMember`,
+      )
+      if (kept.length === mutants.length) return false
+      mutants.splice(0, mutants.length, ...kept)
+    }),
+  },
+]
+
+oracleProperty({
+  id: `oracle-gaps.report-anchor-scope`,
+  law: {
+    statement: `No mutant outside a top-level statement anchors to the whole file: each mutant's anchor is the tokens of the innermost statement or declaration that holds its site, so a default parameter, a property declaration, an enum member, a decorator, or a heritage clause anchors to its own declaration, and a statement's mutant anchors to that statement.`,
+    authority: `Decision by the maintainers on PR #196, 2026-11-23: a mutant outside a statement anchors to its nearest declaration (parameter, property, enum member, decorator, heritage clause), never the whole file; the one-time change of gap keys is accepted and disclosed in the changeset.`,
+    limits: `One declaration per line with no nested declarations. The ~n suffix of a repeated anchor, the function part of a key, and ownership are not judged here.`,
+  },
+  histories: {
+    arbitrary: anchorHistories,
+    states: anchorKinds.map((kind) => `anchor ${kind}`),
+    runs: 30,
+    fixedSeeds: [20261123],
+    constructed: [
+      ...anchorKinds.map((kind) => ({
+        name: `anchor ${kind}`,
+        enters: [`anchor ${kind}`],
+        build: () => ({
+          sites: [{ kind, typed: true, isStatic: true }],
+        }),
+      })),
+      {
+        name: `every anchor kind in one file`,
+        enters: anchorKinds.map((kind) => `anchor ${kind}`),
+        build: () => ({
+          sites: anchorKinds.map((kind) => ({
+            kind,
+            typed: false,
+            isStatic: false,
+          })),
+        }),
+      },
+    ],
+  },
+  model: (plan) => anchorFixture(plan),
+  driver: anchorDriver,
+  check: anchorCheck,
+  calibrations: anchorCalibrations,
+  timeout: 120_000,
+})
