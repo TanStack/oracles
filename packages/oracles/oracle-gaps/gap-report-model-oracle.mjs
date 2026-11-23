@@ -5394,7 +5394,24 @@ function model(plan) {
           ),
         )
     if (reaching.every((t) => t.flaky)) return `indeterminate`
-    const kind = judge(plan, tests, sites, { site: site.id })
+    const judged = {}
+    const kind = judge(
+      plan,
+      tests,
+      sites,
+      { site: site.id },
+      { detail: judged },
+    )
+    // A spin whose count only an excluded or clocked test made (no reaching
+    // test that is deterministic and unclocked) judges nothing: indeterminate,
+    // not a timeout, which is the backstop only (M-24; "An excluded test still
+    // runs", M 2026-11-23). Classify's rule, in the e2e model.
+    if (
+      kind === `timeout` &&
+      judged.cause === `spin` &&
+      !reaching.some((t) => !t.flaky && !readsClock(t))
+    )
+      return `indeterminate`
     if (kind !== `survived`) return kind
     // A test that reached it did more work, though nothing it observed
     // changed: the mutant deleted a shortcut for speed (maintainer decision,

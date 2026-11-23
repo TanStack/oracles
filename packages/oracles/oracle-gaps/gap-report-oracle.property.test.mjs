@@ -3642,36 +3642,31 @@ async function driver(plan, observe) {
       )
     )
       states.add(`an authored mutant killed by no progress`)
-    // A spin whose test read the clock first is a timeout by its spin.
+    // A spin whose test read the clock first, and that no deterministic test
+    // reached, is indeterminate (M-24: timeout is the backstop only).
     if (
-      plan.history.tests.some((t) => t.timed === `clock`) &&
-      cli.report?.results?.some(
-        (r) => r.outcome === `timeout` && r.detail === `spin`,
-      )
+      plan.history.tests.some((t) => t.timed === `clock` && !t.flaky) &&
+      cli.report?.results?.some((r) => r.class === `indeterminate`)
     )
-      states.add(`a spin whose count could follow the clock timed out`)
+      states.add(`a count cut with no deterministic reach is indeterminate`)
     // Count-only kills (M, 2026-11-16) judge a test's count as a whole: a heavy
     // test that reads the clock only after its work has clocked unmutated rows,
     // so its copy's spin, which comes before that read, is a gap.
     if (
       plan.history.tests.some((t) => t.timed === `after`) &&
-      cli.report?.results?.some(
-        (r) => r.outcome === `timeout` && r.detail === `spin`,
-      )
+      cli.report?.results?.some((r) => r.class === `indeterminate`)
     )
       states.add(
-        `a spin of a test that reads the clock after its work timed out`,
+        `a spin of a test that reads the clock after its work is indeterminate`,
       )
     // A spin after the test's own short async read: the read completed during
     // the test, so its count could follow the clock, on every run (C,
     // 2026-11-17: clocked by state, not by what a sample saw).
     if (
       plan.history.tests.some((t) => t.timed === `read`) &&
-      cli.report?.results?.some(
-        (r) => r.outcome === `timeout` && r.detail === `spin`,
-      )
+      cli.report?.results?.some((r) => r.class === `indeterminate`)
     )
-      states.add(`a spin after a short async read timed out`)
+      states.add(`a spin after a short async read is indeterminate`)
     // An authored mutant whose owner test spins on the function it changed:
     // its copy counts calls as an operator copy does, so its spin is cut by
     // its call budget and kills by count (v21.2 R50; M "Count-only kills"),
@@ -6739,13 +6734,13 @@ const required = [
   `a copy waiting on I/O it opened killed`,
   `a copy beside the runner's pending write cut as no progress`,
   `a copy beside the runner's pending timer cut as no progress`,
-  `a spin whose count could follow the clock timed out`,
+  `a count cut with no deterministic reach is indeterminate`,
   `an authored mutant killed by no progress`,
-  `a spin of a test that reads the clock after its work timed out`,
+  `a spin of a test that reads the clock after its work is indeterminate`,
   `a heavy clocked test's copy past the call floor killed by its law`,
   `a clocked owner's work left out of the work budget`,
   `a hang in a file whose test did a short read killed by no progress`,
-  `a spin after a short async read timed out`,
+  `a spin after a short async read is indeterminate`,
   `an authored mutant killed by its spin`,
   `a copy cut as no progress before a later owner's spin`,
   `a flaky owner's loop calls counted under the call budget`,
@@ -6933,13 +6928,13 @@ const separate = [
   `a copy waiting on I/O it opened killed`,
   `a copy beside the runner's pending write cut as no progress`,
   `a copy beside the runner's pending timer cut as no progress`,
-  `a spin whose count could follow the clock timed out`,
+  `a count cut with no deterministic reach is indeterminate`,
   `an authored mutant killed by no progress`,
-  `a spin of a test that reads the clock after its work timed out`,
+  `a spin of a test that reads the clock after its work is indeterminate`,
   `a heavy clocked test's copy past the call floor killed by its law`,
   `a clocked owner's work left out of the work budget`,
   `a hang in a file whose test did a short read killed by no progress`,
-  `a spin after a short async read timed out`,
+  `a spin after a short async read is indeterminate`,
   `an authored mutant killed by its spin`,
   // The config and contexts states have constructed histories of their own.
   `a config that --config names ran`,
@@ -10109,7 +10104,7 @@ oracleProperty({
       // a timeout whose cause is the spin, a gap.
       {
         name: `a clocked copy that spins`,
-        enters: [`a spin whose count could follow the clock timed out`],
+        enters: [`a count cut with no deterministic reach is indeterminate`],
         build: (generated) => ({
           ...soloKill(generated, [
             { ...judging(`a`, `fixed seed`, 1), fn: 0, timed: `clock` },
@@ -10177,7 +10172,7 @@ oracleProperty({
       {
         name: `a heavy test that reads the clock after its work`,
         enters: [
-          `a spin of a test that reads the clock after its work timed out`,
+          `a spin of a test that reads the clock after its work is indeterminate`,
         ],
         build: (generated) => ({
           ...soloKill(generated, [
@@ -10304,7 +10299,7 @@ oracleProperty({
       // gap on another.
       {
         name: `a spin after a short async read`,
-        enters: [`a spin after a short async read timed out`],
+        enters: [`a spin after a short async read is indeterminate`],
         build: (generated) => ({
           ...soloKill(generated, [
             { ...judging(`a`, `fixed seed`, 1), fn: 0, timed: `read` },
