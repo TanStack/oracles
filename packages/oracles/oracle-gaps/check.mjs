@@ -2202,31 +2202,28 @@ export default async (env) => {
     // comes from the first pass alone, so every mutant's selections are
     // known before the second, and their checks run beside it, on the
     // contexts it leaves idle.
-    // A failing law judges nothing, so it is left out of every selection
-    // too, and a file that has one runs without it where the rest
-    // reproduces (review of #176, F3); the file runs whole otherwise, its
-    // failing laws ignored.
-    const laws = new Set([...first.failing.values()].flat())
+    // A test left out of judging (a failing law, a nondeterministic test)
+    // still runs in its file's copies, as any test after the first reaching
+    // one does, so a count cut it causes is a gap (maintainer decision "An
+    // excluded test still runs", 2026-11-23).
     const selectionOf = (file, keys) => {
+      if (keys.some((k) => k === `${file} > (background)`)) return null
       const all = [...first.rows.keys()].filter(
         (k) => fileOf(k) === file && !first.rows.get(k).background,
       )
       const reaching = new Set(keys)
-      const at = reaching.has(`${file} > (background)`)
-        ? 0
-        : Math.max(
-            0,
-            all.findIndex((k) => reaching.has(k)),
-          )
-      const rest = all.slice(at).filter((k) => !laws.has(k))
-      return rest.length === 0 || rest.length === all.length ? null : rest
+      const at = all.findIndex((k) => reaching.has(k))
+      return at <= 0 ? null : all.slice(at)
     }
     const selectionId = (file, selection) => `${file}\0${selection.join(`\0`)}`
     const reproduces = (selection, run) => {
       const rows = new Map(run.rows ?? [])
       return (
         !run.timedOut &&
-        outcomeOf([run]).outcome === `survived` &&
+        // A failing law in the selection fails as it did with no mutant
+        // active, and judges nothing.
+        outcomeOf([run], new Set([...first.failing.values()].flat()))
+          .outcome === `survived` &&
         // Its work too, which a work bound judges (classify.mjs): a skipped
         // test that warmed a cache leaves a later test more to do.
         selection.every(
