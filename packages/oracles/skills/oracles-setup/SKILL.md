@@ -88,7 +88,11 @@ repository's TypeScript, and do not add a typecheck that uses it.
 Use the repository's own package manager. With pnpm 11, an install that skips
 a dependency's build script stops every later pnpm command
 (`ERR_PNPM_IGNORED_BUILDS`), and pnpm writes an `allowBuilds` placeholder into
-`pnpm-workspace.yaml`. Answer it, usually `false`, and tell the developer.
+`pnpm-workspace.yaml`. Answer it, usually `false`, and tell the developer. With
+pnpm 12.18 or later, installing `@tanstack/oracles` prints `Agent skills awaiting approval:
+@tanstack/oracles` because the package ships `skills/`. The notice is harmless
+and does not block installs; the developer can run `pnpm approve` if they use
+pnpm's built-in skill approval, or leave it and use step 5's pointer files.
 
 A run that installs from a local tarball has no commit to pin or check. Say
 which tarball you installed, and note that `package.json` now points at a
@@ -338,8 +342,10 @@ use the full paths, such as `packages/<name>/node_modules/@tanstack/oracles/...`
 
 ## 5. Make the skills findable
 
-The skills ship inside the package, so agents find them only through a
-pointer. A pointer must read the copy that the chosen package installed:
+The skills ship inside the package, so agents normally find them through a
+pointer (on pnpm 12.18 or later, the developer may instead run `pnpm approve` for pnpm's
+built-in skill approval, as noted in step 2). A pointer must read the copy
+that the chosen package installed:
 
 - **One package, or a workspace with a root install:**
   `node_modules/@tanstack/oracles/skills/<name>/SKILL.md`.
