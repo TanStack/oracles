@@ -500,6 +500,17 @@ is not Vite's default name. The baseline prints which config it used.
 - Pass `--seed`, so the baseline and every mutant run the same histories.
   The report goes to a directory in the OS temp directory, and its path is
   printed at the end. Nothing is written into the repository.
+- Pass `--daemon` when iterating on gaps in the same package: it keeps a
+  per-package daemon running with warm Vitest workers and a disk evidence
+  store, so repeated checks reuse unchanged unit evidence and produce the
+  same report as a cold run. Stop it when done with
+  `oracle-gaps --stop-daemon --package <dir>` (it also exits after 30 idle
+  minutes).
+- Pass `--only <id,id>` (using the `<id>` from a `gap` line or the report's
+  `rerun: --only <id>`) to verify a targeted mutant fix quickly: it runs
+  only those mutants and runs the baseline only for their owning oracle
+  files. A `--only` run is partial, so run the full check without `--only`
+  before calling gaps closed.
 - Read the exit code. **0:** the run completed; work from its report.
   **2:** refused. It prints `refused: <cause>` and one `fix: <directive>`.
   Do what the `fix:` line says, then run again. **3:** an internal error, "a

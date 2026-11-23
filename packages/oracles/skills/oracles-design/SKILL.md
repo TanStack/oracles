@@ -526,6 +526,16 @@ refusal: do what its `fix:` line says. Exit 3 is a CLI bug: report it with
 `<out>/error.log`, and do not change the oracle. Every gap
 comes with one instruction. Do what it says, within the rules below.
 
+For repeated gap-closing iterations on the same package, add `--daemon` so
+`oracle-gaps` keeps Vitest workers warm and reuses unchanged unit evidence
+across runs; stop it when done with
+`oracle-gaps --stop-daemon --package <dir>` (it also exits after 30 idle
+minutes). To verify a fix for one or a few specific mutants quickly before
+running the full check, pass `--only <id,id>` (from the `<id>` in a `gap`
+line or the report's `rerun: --only <id>`): it runs only those mutants and
+their owners' baseline, and marks the run as partial, so finish with a full
+check without `--only`.
+
 - **There are no equivalent mutants.** A surviving mutant shows a missing
   history, observation, or law, or it shows dead code.
 - **An `extra-work` gap is a fast path.** The change gives the same results
