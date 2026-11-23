@@ -4714,6 +4714,7 @@ const inertFlaky = (run) => ({
   hang: run.hang === true && run.cut === `count`,
   clocked: true,
   rowClocked: true,
+  rose: false,
 })
 function runsOf(plan, tests, sites, active) {
   return runsOfTests(plan, tests, sites, active).map((run) =>

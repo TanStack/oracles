@@ -334,6 +334,10 @@ export const shards = {
     `fixed seed 20261105: a later owner's test listed first beside an earlier owner's hang`,
     `random seed: a later owner's test listed first beside an earlier owner's hang`,
     `determinism: constructed history: a later owner's test listed first beside an earlier owner's hang`,
+    // K21's flaky-loops history (cf0bd376): 3.5 s on the pool.
+    `fixed seed 20261105: a flaky owner's loop calls under the call budget`,
+    `random seed: a flaky owner's loop calls under the call budget`,
+    `determinism: constructed history: a flaky owner's loop calls under the call budget`,
   ],
   // 522 s in the measured run, about 221 s idle.
   'e2e-5': [
