@@ -299,7 +299,7 @@ On an upgrade, replace everything between the markers and keep the rest
 of the file.
 
 ```md
-<!-- BEGIN @tanstack/oracles (template 4) -->
+<!-- BEGIN @tanstack/oracles (template 5) -->
 
 ## Oracle tests
 
@@ -343,7 +343,11 @@ optimization project.
   can take minutes: start it in the background with output to a log at a
   path of its own (never a fixed path under `/tmp`), and read the new lines
   every few seconds, acting on a failure first. Stop a
-  run only by the process ID you recorded, never by name.
+  run only by the process ID you recorded, never by name. The one
+  exception: to read a failing test more closely than the gap check's lines
+  show it (a value cut short, its stack, its own output), run the `replay:`
+  command that the gap check printed under it, as printed, then go back to
+  the gap check.
 - **Green is not done.** A gap is a change to the owned code that no law
   notices. There are no equivalent mutants: never call one equivalent.
   Widen the histories or the check until the oracle sees it, and keep going
