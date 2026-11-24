@@ -243,6 +243,70 @@ string (`['']` becomes `[]`) or split one tag in two (`['a\u0000b']` becomes
 Other useful relations: an incremental result equals a recompute from scratch,
 and the order of independent updates does not change the final state.
 
+### A reference that must be awaited
+
+The model is synchronous: `model(plan, trace)` returns the expected value,
+never a promise. The framework calls it after the driver has finished, on the
+trace the driver recorded, and again on the traces that calibrations corrupt,
+so nothing awaits it. A promise returned from a model reaches the check as the
+expected value. TypeScript rejects a check that reads a field of it, but a
+JavaScript oracle file gets no such error, and a check that rejects only the
+values it recognizes then passes every history.
+
+Some relations need a reference that only awaited work can compute: the same
+code run without instrumentation, a cold start beside a warm one, or a second
+entry point. Run the reference in the driver, record it under a checkpoint of
+its own before the run it judges, and let the check compare the two
+checkpoints, as in the round trip above. The reference is something production
+showed, so it belongs to the check, not to the model: the model still predicts
+only what it can from the plan.
+
+Law: "For every program, the instrumented copy returns what the program
+returns when it runs as written (README, Instrumentation)."
+
+```ts
+type Plan = { source: string; input: number }
+
+// The driver awaits both runs. The reference comes first, under its own
+// checkpoint, so a trace cut short after it still holds it.
+async function driver(
+  plan: Plan,
+  observe: (checkpoint: string, value: unknown) => void,
+) {
+  observe('reference', await runAsWritten(plan.source, plan.input))
+  observe('result', await runInstrumented(plan.source, plan.input))
+}
+
+// The check compares the two runs. A trace without both fails.
+function check(_plan: Plan, trace: ReadonlyArray<Observation>): Verdict {
+  const at = (checkpoint: string) =>
+    trace.find((o) => o.checkpoint === checkpoint)
+  const reference = at('reference')
+  const result = at('result')
+  if (reference === undefined || result === undefined)
+    return violation('result', 'the trace lacks a run', LAW)
+  return differs('result', LAW, result.value, reference.value) ?? pass
+}
+```
+
+This costs the oracle its independent model: the owed value is now something
+production computed, so a defect that both runs share agrees with itself, and
+the law says nothing about what the reference returns. Keep it honest:
+
+- **Keep the owned code off the reference's path.** The reference must not run
+  through the code that the law judges. A mutant of shared code changes both
+  runs alike, so no history can see it, and the gap check reports it. Name in
+  `owns` only the code that differs between the two runs.
+- **Pin the reference with a law of its own.** Predict at least part of the
+  reference from the plan, such as its type, a value the plan fixes, or a
+  relation between two references, so that a reference that returns nothing
+  useful fails.
+- **Calibrate both sides.** One calibration corrupts the `result` checkpoint,
+  and another corrupts `reference`. Each must be rejected, which shows that the
+  check reads both.
+- **Say so in `limits`.** Name the reference and what the law does not
+  establish about it.
+
 ## 6. An allowed set of outcomes
 
 Use this when the contract leaves a choice open. Predict every allowed
