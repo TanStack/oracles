@@ -47,8 +47,10 @@ agent.
 
   The report, on stdout and in `summary.md`, leads with the baseline: each
   test file's result with its test counts (ordinary files too), and for a
-  failing file its failing test, its error, the law and counterexample of a
-  law violation, and a `replay:` command. A test of an oracle file that
+  failing file each of its failing tests, in file order: its error, the law,
+  difference, and counterexample of a law violation, with the observed and
+  owed values (`observed:` and `owed:`) of a violation that compares two
+  values, and a `replay:` command that runs that test alone. A test of an oracle file that
   fails with no mutant active (a failing law) judges nothing: it is left
   out, as a nondeterministic test is, and the passing tests of its file
   still judge the mutants the file owns; it keeps its reach and its work. A
@@ -128,7 +130,8 @@ agent.
   | `done` (last)                            | `oracle-gaps: done completed, 12 gaps, report <path>/summary.md` (`(provisional)` after the count when an oracle file failed), `oracle-gaps: done refused[, report <path>]`, `oracle-gaps: done error, log <path>`, or `oracle-gaps: done stopped (SIGINT)` |
 
   Only these lines have no prefix: the lines indented under a failing
-  baseline file (`failing:`, `law:`, `counterexample:`, `replay:`), a
+  baseline file (`failing:`, `law:`, `observed:`, `owed:`,
+  `counterexample:`, `replay:`), a
   refusal's `refused:` and `fix:` block on stderr, `--help`'s usage text,
   and lines that Node, V8, esbuild, or Vite print on the CLI's streams
   (a warning, V8's out-of-memory block, esbuild's error block). The CLI
