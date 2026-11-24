@@ -2588,6 +2588,20 @@ function check(h, observations, expected) {
     return violation(`classified`, stdoutProblem, `stdout`, {
       actual: stdout,
     })
+  // Each class present has its own legend line, named by the class: the
+  // count alone accepts a line under another name.
+  const unnamed = [...kinds].find(
+    (kind) =>
+      legend.filter((line) => line.startsWith(`oracle-gaps: legend ${kind}: `))
+        .length !== 1,
+  )
+  if (unnamed !== undefined)
+    return violation(
+      `classified`,
+      `the class ${unnamed} has no legend line of its own`,
+      `stdout`,
+      { actual: stdout },
+    )
   // One loop (the v20 freeze, 2026-11-10: test results and gaps together):
   // the stdout leads with the baseline, then names each oracle file that
   // fails with no mutant active and its failing test, with the step that
@@ -3210,6 +3224,16 @@ const calibrations = [
       if (totals <= 0) return undefined
       return [...lines.slice(totals), ...lines.slice(0, totals)].join(`\n`)
     }),
+  },
+  {
+    name: `a legend line names a class the report does not have`,
+    law: `stdout`,
+    // The count of legend lines stays; the line no longer names its class.
+    corrupt: corruptStdout((stdout) =>
+      /^oracle-gaps: legend [a-z-]+: /m.test(stdout)
+        ? stdout.replace(/^(oracle-gaps: legend [a-z-]+)(: )/m, `$1-renamed$2`)
+        : undefined,
+    ),
   },
   {
     name: `the timeout legend line leaves out the three hangs`,
