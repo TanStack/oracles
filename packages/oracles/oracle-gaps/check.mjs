@@ -2455,6 +2455,12 @@ export default async (env) => {
       !u.builtIn?.every((v) => !v.clocked && baseline.work.has(v.key))
         ? { ...u, builtIn: undefined }
         : u
+    // A count cut that a failing law's spin caused (C 2026-11-23, "Count-cut
+    // label precedence", step 1): the mutant is blocked by that law, whatever
+    // a later copy would kill, and so no later copy runs (step 3 never sees it).
+    const failingLaws = new Set([...first.failing.values()].flat())
+    const lawCut = (u) =>
+      u?.timedOut && u.cause === `spin` && failingLaws.has(u.spunBy)
     const changesNothing = (mutant, targets) =>
       targets.oracleTargets.every(
         (file) =>
@@ -2582,6 +2588,10 @@ export default async (env) => {
           }
           // A spin judges only by a count that cannot follow the clock.
           got[i] = countOnly(got[i])
+          if (lawCut(got[i])) {
+            st.units.push(got[i])
+            break
+          }
           // A copy cut by the backstop is a timeout, uncharged, and no
           // later copy runs (the outcome rule).
           if (cutByTime(got[i])) {
