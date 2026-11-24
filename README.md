@@ -107,6 +107,12 @@ agent.
   constructed or fixed history isolates it. An authored mutant's copy is
   not instrumented, so a work bound does not judge it.
 
+  An authored mutant (`--mutants`) is applied only where an owner's copy
+  loads its source as a module, through an import. A test that reads the
+  file through `fs`, and a child process that reads it, see the original
+  text. An authored mutant whose source no owner's copy loaded never ran,
+  so it is `unreached`, not a survivor.
+
   Every line the CLI writes for a check, on stdout and stderr alike, starts
   with `oracle-gaps: ` and its kind, so an agent can act on the results as
   they stream with `grep '^oracle-gaps: '`, and filter one kind:

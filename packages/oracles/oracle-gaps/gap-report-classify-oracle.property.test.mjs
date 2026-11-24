@@ -228,9 +228,12 @@
  * Authored mutants (written by someone other than the oracle's author,
  * authored.mjs) follow laws 1 to 4 over every test of their owner files,
  * because their copy is not instrumented and records no reach: no owner is
- * `unowned`, and a `find` that does not apply is `does-not-apply`. A
- * survivor is `not-judged` when a deterministic owner test's observation
- * changed, and `not-observed` otherwise.
+ * `unowned`, and a `find` that does not apply is `does-not-apply`. The
+ * runner applies the patch only where an owner's copy loads the mutant's
+ * source as a module, so a survivor that no owner's copy loaded never ran
+ * the patch, and is `unreached`, with the unreached directive on its line.
+ * Any other survivor is `not-judged` when a deterministic owner test's
+ * observation changed, and `not-observed` otherwise.
  *
  * Authority: the maintainer's gap-check decisions (design runs v11, v14,
  * and v19), as for oracle-gaps.report; ORC-006's outcome kinds; the frozen
@@ -289,6 +292,8 @@ import * as report from './report.mjs'
 
 const MUTANTS = 4
 const AUTHORED = 2
+// The mutated source, as the runner names a module a copy loaded.
+const SOURCE_PATH = `/pkg/src/x.ts`
 // Each test's effect under each mutant: the operator mutants first, then
 // the authored ones.
 const SLOTS = MUTANTS + AUTHORED
@@ -608,6 +613,14 @@ const records = fc.record({
   fileStems: fc.uniqueArray(fc.constantFrom(...fileStems), {
     minLength: 3,
     maxLength: 3,
+  }),
+  // For each authored mutant, the owner files whose copy did not load its
+  // source, so the patch never ran there: a file that only reads the source
+  // through fs, or imports nothing of it. Drawn last, so the fixed seed's
+  // earlier draws stay as they were.
+  unloaded: fc.array(fc.array(fc.nat({ max: 2 }), { maxLength: 2 }), {
+    minLength: AUTHORED,
+    maxLength: AUTHORED,
   }),
 })
 
@@ -1008,7 +1021,9 @@ function judgedOutcome(h, mi, owners) {
 
 // An authored mutant's outcome: laws 1 to 4 over every test of its owner
 // files (its copy records no reach), and a survivor is not-judged when a
-// deterministic owner test's observation changed, not-observed otherwise.
+// deterministic owner test's observation changed, not-observed otherwise. A
+// survivor that no owner's copy loaded the source in is unreached: the patch
+// never ran.
 function modelAuthored(h, ai) {
   const a = h.authored[ai]
   if (!a.applies) return { outcome: `does-not-apply` }
@@ -1018,13 +1033,14 @@ function modelAuthored(h, ai) {
     ),
   ].sort(byPath(h))
   if (owners.length === 0) return { outcome: `unowned` }
+  const judged = owners.filter((fi) => loads(h, fi))
+  const result = judgedAuthored(h, ai, judged)
   return modelBlocked(
     h,
-    judgedAuthored(
-      h,
-      ai,
-      owners.filter((fi) => loads(h, fi)),
-    ),
+    result.outcome === `survived` &&
+      judged.every((fi) => h.unloaded[ai].includes(fi))
+      ? { outcome: `unreached`, mention: [`line ${a.line + 1}`] }
+      : result,
     authoredBlockers(h, owners),
   )
 }
@@ -1713,6 +1729,14 @@ function unitOf(h, fi, slot) {
     file: fileName(h, fi),
     timedOut: false,
     seconds: 1,
+    // The modules the copy loaded, as the runner gathers them: its own file,
+    // and the source unless an authored mutant's owner did not load it.
+    inputs: [
+      fileName(h, fi),
+      ...(slot >= MUTANTS && h.unloaded[slot - MUTANTS].includes(fi)
+        ? []
+        : [SOURCE_PATH]),
+    ],
     setupErrors: loadFailed ? [`Error: cannot load the file`] : [],
     unhandled: tests.some((t) => under(t).kind === `unhandled`)
       ? [`unhandled rejection`]
@@ -2220,6 +2244,7 @@ async function driver(h, observe) {
               .filter((fi) => !failing.includes(fi))
               .map((fi) => unitOf(h, fi, MUTANTS + ai)),
             baseline,
+            SOURCE_PATH,
           ),
           blockersOf(new Set(owners.map((fi) => fileName(h, fi))), first),
         ),
@@ -3160,6 +3185,16 @@ const corruptStdout = (change) => (trace) => {
 }
 const calibrations = [
   {
+    name: `an authored mutant that no owner loaded is reported as not-observed`,
+    law: `classification`,
+    corrupt: corrupt((v) => {
+      const o = v.outcomes.findLast((x) => x.outcome === `unreached`)
+      if (!o) return false
+      o.outcome = `survived`
+      o.class = `not-observed`
+    }),
+  },
+  {
     name: `the stdout ends without its completion line`,
     law: `stdout`,
     corrupt: corruptStdout((stdout) =>
@@ -3354,6 +3389,7 @@ const required = [
   `authored random-only-kill`,
   `authored does-not-apply`,
   `authored unowned`,
+  `authored unreached`,
   `a gap line cut at 60 characters`,
   `a gap line of code on several lines`,
   `not-infected operands that String conflates`,
@@ -3430,6 +3466,7 @@ const single = (
     more = [],
     baseline = `pass`,
     authored = [],
+    unloaded = [[], []],
   } = {},
 ) => ({
   name,
@@ -3481,6 +3518,7 @@ const single = (
     })),
     baselineOrder: [0, 0, 0],
     fileStems: [`f0`, `f1`, `f2`],
+    unloaded,
   }),
 })
 // Law 7: two owner files whose tests have one effect, named apart so that a
@@ -4008,6 +4046,13 @@ const constructed = [
   single(`an authored mutant with no owner`, [`authored unowned`], {
     authored: [{ owners: [] }],
   }),
+  // Its owner's copy read the source through fs, or imported nothing of
+  // it, so the patch never ran there.
+  single(
+    `an authored mutant whose owner did not load its source`,
+    [`authored unreached`],
+    { authored: [{}], unloaded: [[0], []] },
+  ),
   // Law 8: code past the cut and across lines, and an intent past it.
   single(
     `a gap whose code is long and spans lines`,

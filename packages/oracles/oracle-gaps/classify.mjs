@@ -603,14 +603,19 @@ export const judgeOrdinary = (units) =>
 /**
  * An authored mutant's outcome from its owners' units. Its copy is not
  * instrumented, so no `if` outcomes or infections are measured for it: a
- * survivor is `not-judged` (a changed observation) or `not-observed`.
+ * survivor is `not-judged` (a changed observation) or `not-observed`. The
+ * runner serves its patch only where a copy loads `path`, its source, as a
+ * module, so a survivor that no owner's copy loaded never ran the patch:
+ * it is `unreached`, as an operator mutant that no owner test reached is.
  */
-export function judgeAuthored(units, baseline) {
+export function judgeAuthored(units, baseline, path) {
   const result = {
     ...outcomeOf(units, baseline.leftOut),
     seconds: units.reduce((sum, u) => sum + u.seconds, 0),
   }
   if (result.outcome !== `survived`) return result
+  if (!units.some((u) => u.inputs?.includes(path)))
+    return { outcome: `unreached`, seconds: result.seconds }
   const rows = new Map(units.flatMap((u) => u.rows ?? []))
   result.changedTests = changedIn(
     rows,

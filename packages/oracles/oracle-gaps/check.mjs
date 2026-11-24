@@ -2690,7 +2690,7 @@ export default async (env) => {
       Object.assign(
         job.result,
         blockedOr(
-          judgeAuthored(job.units, baseline),
+          judgeAuthored(job.units, baseline, posix(job.path)),
           blockersOf(job.owners, first),
         ),
       )
