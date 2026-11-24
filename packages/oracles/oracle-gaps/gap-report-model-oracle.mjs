@@ -5019,8 +5019,8 @@ function blockingOf(plan) {
 
 /**
  * The tests the fixture writes into a file beyond the plan's (`oracleTestFile`),
- * each deterministic and passing: the console-stream test and the abort test
- * of file a, the mid-run edit test of the file that lands the edit, and the
+ * each deterministic and passing: the console-stream test of file a, the
+ * mid-run edit test of the file that lands the edit, and the
  * failing owner's two passing tests. None calls the source under test. The
  * mid-run test is the baseline's passing test (law 14): its file reads the
  * edited text only after the edit lands, so a later check may see it fail;
@@ -5051,7 +5051,6 @@ function frameworkTestsOf(plan) {
       route: `framework`,
     })
   if (plan.consoleOutput) add(`a`, `writes to the console streams`)
-  if (plan.aborts) add(`a`, `aborts the process when asked`)
   if (plan.midrun) add(plan.midrunBy, MIDRUN_EDITORS[plan.midrunTarget].test)
   if (plan.fault === `brokenOwner`) {
     add(`b`, `fixed seed 999 again`)
