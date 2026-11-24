@@ -268,3 +268,5 @@ export function blockedLines(files) {
       : laws.map((name) => line(name, `it judges nothing`))
   })
 }
+
+// Probe: a comment-only line in the gap report, so its jobs run.
