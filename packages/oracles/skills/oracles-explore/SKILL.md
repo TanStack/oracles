@@ -278,6 +278,25 @@ the unchanged code. If the import or Node gets in the way, open
 [Problems you may hit](references/problems.md). Keep each probe and its
 output.
 
+Every probe in a scratch directory needs two things, so settle them before
+the first one ([Problems you may hit](references/problems.md), "Probes",
+has the details):
+
+- **The repository's packages.** The probe cannot import them by name.
+  Load them with `createRequire`, anchored at the absolute path of the
+  `package.json` that lists them (in a workspace, that package's, not the
+  root's): `const require = createRequire('<pkg>/package.json')`, then
+  `require('fast-check')`. A package whose `exports` has only an `import`
+  condition cannot be required: import its file by absolute path instead.
+  Import the code under test by its absolute path too.
+- **TypeScript.** Name the probe `probe.mts`, so that it is an ES module
+  wherever it runs. Run it with the repository's own `tsx` when it has one
+  (`<pkg>/node_modules/.bin/tsx probe.mts`, or the workspace root's
+  `node_modules/.bin/tsx`). Otherwise Node 22.18 and 23.6
+  or later strip types on their own, within limits. `npx -y tsx` downloads
+  tsx from outside the repository's lockfile: use it only when neither
+  works, and say so in a line.
+
 **Every finding needs a probe.** A claim without one is a suspicion: say so,
 or leave it out.
 
