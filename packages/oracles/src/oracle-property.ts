@@ -41,7 +41,11 @@
  * - `check` compares the observations with the model and returns a verdict.
  *   Only the check can report a violation of the law. A violation that gives
  *   the `actual` and `expected` values gets the test runner's usual diff;
- *   `differs` builds one from an exact comparison.
+ *   `differs` builds one from an exact comparison. Its message also names
+ *   them, after its `Difference:` line, as `Observed: <value>` and
+ *   `Owed: <value>`, each the value's data encoding on one line (at most
+ *   2,000 characters), which tells apart what the diff may print alike:
+ *   `-0` and `0`, or the string `"0"` and the number `0`.
  *
  * Observations and enumerated histories are data (maintainer decision,
  * 2026-11-08): primitives, with -0, NaN, the infinities, bigints, and
@@ -2293,6 +2297,14 @@ function violationError<THistory>(
       `${id} violated at checkpoint "${verdict.checkpoint}"${verdict.law ? ` (law: ${verdict.law})` : ``}.`,
       `Law: ${law.statement}`,
       `Difference: ${verdict.difference}`,
+      // The values as data, which Vitest's diff can print alike (a string
+      // without its quotes); a runner that reads only the message sees them.
+      ...(verdict.values
+        ? [
+            `Observed: ${reportText(verdict.values.actual)}`,
+            `Owed: ${reportText(verdict.values.expected)}`,
+          ]
+        : []),
       `History: ${reportText(history)}`,
       `Authority: ${law.authority}`,
       `Known limits: ${law.limits}`,

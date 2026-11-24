@@ -205,10 +205,15 @@
  *    line is a command, which the exit law does not read.
  * 9. Before any mutant, each test file's baseline is printed, an ordinary
  *    file marked `(ordinary)`: `pass` with its test count, or `fail` with how
- *    many of its tests failed, its first failing test and that test's error,
- *    the law, difference, and counterexample of a law violation (read from
- *    the framework's message), and the command that replays its first
- *    failing test; a file that did not load says so. That
+ *    many of its tests failed, then each of its failing tests in file order:
+ *    the test and its error, the law, difference, and counterexample of a
+ *    law violation (read from the framework's message), and between the
+ *    difference and the counterexample, when the violation names them, its
+ *    observed and owed values, each a code span of the framework's text of
+ *    the value, past 400 code points its first 397 and `...`, a control
+ *    character or a line or paragraph separator as its `\uXXXX` escape; then
+ *    the command that replays that test; a file that did not load says so.
+ *    That
  *    command, read as a POSIX shell reads it, is `vitest run <file>`, with
  *    a `-t` pattern when a test failed: Vitest then runs exactly that test
  *    of the file, whether it matches the pattern against the names of the
@@ -464,6 +469,26 @@ const effect = fc.record({
   work: fc.constantFrom(0, 0, 0, -1, 1, 4, 7, 150),
   ms: fc.nat({ max: 40 }),
 })
+// The observed and owed values a violation's message names, as the
+// framework writes them (oracle-property.ts \`violationError\`: each the
+// value's data encoding): none; values a formatter prints alike (\`-0\`
+// and \`0\`, a string and a number); a backtick, which a code span must
+// fence; a value past the line's 400 code points; and a string that holds a
+// paragraph separator, which the encoding leaves as it is.
+// Law 9's states of a failing file's lines: each of several failing tests,
+// and the observed and owed values a violation names, one cut or escaped.
+const severalFailing = `a baseline file with several failing tests`
+const valuesNamed = `a baseline violation that names its observed and owed values`
+const valueCutOrEscaped = `a baseline value cut at 400 code points or escaped`
+const VALUES = [
+  undefined,
+  [`-0`, `0`],
+  [`"0"`, `0`],
+  [`{"u":undefined,"v":-0}`, `Map{"k"=>12n}`],
+  ['["a`b",NaN]', `Set{-Infinity}`],
+  [`"${`x`.repeat(450)}"`, `"x"`],
+  [`"a\u2029b"`, `undefined`],
+]
 const testRecord = fc.record({
   route: fc.constantFrom(...routes),
   flaky: fc.constantFrom(false, false, false, true),
@@ -485,6 +510,9 @@ const testRecord = fc.record({
   // A tail after its index, so that one test's name can end with another's.
   tail: fc.constantFrom(``, ``, ` t0`),
   fails: fc.boolean(),
+  // The observed and owed values a failing test's violation names, as the
+  // framework writes them (an index of VALUES; 0: none).
+  values: fc.nat({ max: VALUES.length - 1 }),
   // The test's place among its file's records in a mutant run (ties keep the
   // file's order).
   runOrder: fc.nat({ max: 2 }),
@@ -1285,18 +1313,21 @@ const VIOLATION = {
   difference: `the output is ["b"], owed ["a"] or none`,
   history: `{"input":7,"name":"one \`tick\` or two"}`,
 }
-const violationText = () =>
+const violationText = (values) =>
   [
     `OracleViolation: fixture violated at checkpoint "${VIOLATION.checkpoint}" (law: ${VIOLATION.law}).`,
     `Law: the outputs agree.`,
     `Difference: ${VIOLATION.difference}`,
+    ...(values ? [`Observed: ${values[0]}`, `Owed: ${values[1]}`] : []),
     `History: ${VIOLATION.history}`,
     `Authority: the contract.`,
     `Known limits: none.`,
     `Rerun: -t '^t0$'`,
   ].join(`\n`)
-const failureText = (f) =>
-  f.failure === `violation` ? violationText() : `Error: violation`
+const failureText = (f, t) =>
+  f.failure === `violation`
+    ? violationText(VALUES[t.values ?? 0])
+    : `Error: violation`
 
 function model(h) {
   const operatorOutcomes = h.mutants.map((m, mi) => modelOutcome(h, mi))
@@ -1692,7 +1723,7 @@ function baselineUnitsOf(h, pass) {
             key: keyOf(h, fi, ti),
             fullName: nameOf(h, fi, ti),
             state: failsAlone(f, t, ti) ? `failed` : `passed`,
-            message: failsAlone(f, t, ti) ? failureText(f) : ``,
+            message: failsAlone(f, t, ti) ? failureText(f, t) : ``,
           }))
         : [],
       rows: [...rows],
@@ -1797,7 +1828,7 @@ function baselineFiles(h, printer) {
     const tests = f.tests.map((t, ti) => ({
       fullName: nameOf(h, fi, ti),
       state: fails(t, ti) ? `failed` : `passed`,
-      message: fails(t, ti) ? failureText(f) : ``,
+      message: fails(t, ti) ? failureText(f, t) : ``,
       names: printer?.testNamesOf?.(testCaseOf(h, fi, ti)),
     }))
     const first = tests.find((x) => x.state === `failed`)
@@ -2350,6 +2381,13 @@ async function driver(h, observe) {
       states.add(`an ordinary file's failing baseline test`)
     if (f.baseline === `test` && f.failure === `violation`)
       states.add(`a baseline law violation with its counterexample`)
+    const failing = f.tests.filter((t, ti) => failsAlone(f, t, ti))
+    if (failing.length > 1) states.add(severalFailing)
+    if (f.baseline === `test` && f.failure === `violation`) {
+      if (failing.some((t) => (t.values ?? 0) > 0)) states.add(valuesNamed)
+      if (failing.some((t) => t.values === 5 || t.values === 6))
+        states.add(valueCutOrEscaped)
+    }
     if (!f.oracle || f.baseline === `pass`) continue
     if (f.baseline === `load`) states.add(`a baseline file that did not load`)
     else {
@@ -2832,8 +2870,10 @@ function printedBreach(h, lines, expected, platform) {
     )
     if (at < 0) return breach(`no baseline line for ${file}`)
     // Each file's line gives its test counts; a failing file's lines under
-    // it name its failing test and its error, and, for a law violation, the
-    // law, the difference, and the counterexample, then the replay.
+    // it give each of its failing tests in file order: the test and its
+    // error, and, for a law violation, the law, the difference, the
+    // observed and owed values when it names them, and the counterexample,
+    // then that test's replay.
     const block = []
     for (let i = at + 1; lines[i]?.startsWith(`  `); i += 1)
       block.push(lines[i])
@@ -2855,113 +2895,140 @@ function printedBreach(h, lines, expected, platform) {
       owed.test === undefined ? !lines[at].startsWith(head) : lines[at] !== head
     )
       return breach(`${file} fails, and its line is ${lines[at]}, not ${head}`)
-    if (owed.test !== undefined) {
-      const failing = block.find((line) => line.startsWith(`  failing: `))
-      const name = failing && readSpan(failing.slice(`  failing: `.length))
+    if (owed.test === undefined) {
+      const replayed = replayBreach(h, owed, file, block, platform, undefined)
+      if (replayed) return breach(replayed)
+      continue
+    }
+    // The block, split at each failing line: one group per failing test.
+    const groups = []
+    for (const line of block)
+      if (line.startsWith(`  failing: `)) groups.push([line])
+      else if (groups.length > 0) groups.at(-1).push(line)
+      else
+        return breach(
+          `${file}'s baseline prints ${JSON.stringify(line)} before its first failing test`,
+        )
+    if (groups.length !== owed.laws.length)
+      return breach(
+        `${file} has ${owed.laws.length} failing tests, and its baseline names ${groups.length}: ${JSON.stringify(block)}`,
+      )
+    for (const [gi, ti] of owed.laws.entries()) {
+      const group = groups[gi]
+      const failing = group[0]
+      const name = readSpan(failing.slice(`  failing: `.length))
       const error =
         name && readSpan(failing.slice(`  failing: `.length + name.length + 2))
+      const values = VALUES[h.files[owed.fi].tests[ti].values ?? 0]
       const firstLine = owed.violation
-        ? violationText().split(`\n`)[0]
+        ? violationText(values).split(`\n`)[0]
         : `Error: violation`
       if (
-        name?.content !== shownName(h, owed.fi, owed.test) ||
+        name?.content !== shownName(h, owed.fi, ti) ||
         error?.content !== firstLine
       )
         return breach(
-          `${file}'s failing line ${JSON.stringify(failing)} does not name ${shownName(h, owed.fi, owed.test)} and its error`,
+          `${file}'s failing line ${JSON.stringify(failing)} does not name ${shownName(h, owed.fi, ti)} and its error`,
         )
-      const law = block.find((line) => line.startsWith(`  law: `))
-      const counterexample = block.find((line) =>
-        line.startsWith(`  counterexample: `),
-      )
-      const owedLaw = `  law: ${codeSpanOf(VIOLATION.law)} at ${codeSpanOf(VIOLATION.checkpoint)}: ${codeSpanOf(VIOLATION.difference)}`
-      const owedCounterexample = `  counterexample: ${codeSpanOf(VIOLATION.history)}`
-      if (
-        owed.violation
-          ? law !== owedLaw || counterexample !== owedCounterexample
-          : law !== undefined || counterexample !== undefined
-      )
+      // The lines between the failing line and the replay, in order.
+      const told = group.slice(1).filter((line) => !/^  replay/.test(line))
+      const owedTold = owed.violation
+        ? [
+            `  law: ${codeSpanOf(VIOLATION.law)} at ${codeSpanOf(VIOLATION.checkpoint)}: ${codeSpanOf(VIOLATION.difference)}`,
+            ...(values
+              ? [
+                  `  observed: ${codeSpanOf(oneLineValue(values[0]))}`,
+                  `  owed: ${codeSpanOf(oneLineValue(values[1]))}`,
+                ]
+              : []),
+            `  counterexample: ${codeSpanOf(VIOLATION.history)}`,
+          ]
+        : []
+      if (JSON.stringify(told) !== JSON.stringify(owedTold))
         return breach(
           owed.violation
-            ? `${file} fails by a law violation, and its baseline does not give its law, difference, and counterexample: ${JSON.stringify(block)}`
-            : `${file} fails by an error, and its baseline names a law: ${JSON.stringify(block)}`,
+            ? `${file}'s failing test ${shownName(h, owed.fi, ti)} fails by a law violation, and its baseline gives ${JSON.stringify(told)}, owed its law, difference, ${values ? `observed and owed values, ` : ``}and counterexample ${JSON.stringify(owedTold)}`
+            : `${file}'s failing test ${shownName(h, owed.fi, ti)} fails by an error, and its baseline names a law: ${JSON.stringify(told)}`,
         )
-    }
-    // The platform's replay lines: one POSIX line, or on Windows one line for
-    // PowerShell and one for cmd. Each reads as the same words.
-    const replays = replayLinesOf(block, platform)
-    if (replays === undefined)
-      return breach(
-        `${file}'s replay lines are not the platform's: ${JSON.stringify(block.filter((line) => line.startsWith(`  replay`)))}`,
-      )
-    for (const { command, read } of replays) {
-      // cmd has no form for a word with a double quote, `%`, or `!`: its line says so,
-      // and only such a test may print that line.
-      // A CLI line has no environment values, so cmd always has its form: the
-      // `-t` argument carries no shell-hostile character (review option c). No
-      // fallback line may print for it.
-      if (command === CMD_FALLBACK) {
-        // The printer's cmd line has no form when a word has `"`, `%`, or `!`:
-        // the file path can carry one (the -t argument never does).
-        if (/["%!]/.test(relativeName(h, owed.fi))) continue
-        return breach(
-          `the replay of ${file} says cmd cannot replay it, but no word of it has a hostile character`,
-        )
-      }
-      const words = read(command)
-      if (!words)
-        return breach(
-          `the replay of ${file} is ${JSON.stringify(command)}, which the shell does not read as plain words`,
-        )
-      const [vitest, run, target, flag, pattern, ...more] = words
-      // The -t argument is safe in every shell: no double quote, `%`, `!`, or
-      // curly quote (the regular expression's `.` stands in for each).
-      if (
-        pattern !== undefined &&
-        /["%!\u2018\u2019\u201A\u201B]/.test(pattern)
-      )
-        return breach(
-          `the replay of ${file} puts ${JSON.stringify(pattern)} in its -t argument, which a shell reads unsafely`,
-        )
-      const path = relativeName(h, owed.fi)
-      if (vitest !== `vitest` || run !== `run` || target !== path)
-        return breach(`the replay of ${file} is not \`vitest run ${path}\``)
-      if (owed.test === undefined) {
-        if (flag !== undefined)
-          return breach(
-            `${file} did not load, and its replay selects tests: ${command}`,
-          )
-        continue
-      }
-      if (flag !== `-t` || pattern === undefined || more.length > 0)
-        return breach(
-          `the replay of ${file} has no single -t pattern: ${command}`,
-        )
-      for (const join of [` `, ` > `]) {
-        let selected
-        try {
-          selected = selectedBy(h, owed.fi, pattern, join)
-        } catch (error) {
-          return breach(
-            `the replay pattern ${pattern} is not a regular expression: ${error.message}`,
-          )
-        }
-        // The owed test, and any test whose joined names equal its own, which
-        // no pattern can tell apart from it.
-        const owedSet = sameNamed(h, owed.fi, owed.test, join)
-        if (JSON.stringify(selected) !== JSON.stringify(owedSet))
-          return breach(
-            `the replay pattern ${JSON.stringify(pattern)} of ${file} runs tests ${JSON.stringify(selected)} when Vitest joins names with ${JSON.stringify(join)}, owed ${JSON.stringify(owedSet)}`,
-          )
-      }
+      const replayed = replayBreach(h, owed, file, group, platform, ti)
+      if (replayed) return breach(replayed)
     }
   }
   return undefined
 }
 
-// The replay lines the platform prints, each with the reader of its shell:
-// one POSIX line elsewhere; on Windows a PowerShell line and a cmd line.
-// Undefined when the block holds a different set of forms.
+// A value as the baseline's line shows it: past 400 code points, its first
+// 397 and `...`; then each control character, and each line or paragraph
+// separator, as its `\uXXXX` escape, so the value stays on its line.
+function oneLineValue(text) {
+  const points = [...text]
+  const kept =
+    points.length > 400 ? `${points.slice(0, 397).join(``)}...` : text
+  return [...kept]
+    .map((c) =>
+      /[\u0000-\u001f\u007f\u2028\u2029]/.test(c)
+        ? `\\u${c.charCodeAt(0).toString(16).padStart(4, `0`)}`
+        : c,
+    )
+    .join(``)
+}
+
+// The platform's replay lines of one failing test (`ti`), or of a file that
+// did not load (`ti` undefined), read as the platform's shell reads them:
+// each runs exactly that test, or the whole file. A difference when not.
+function replayBreach(h, owed, file, block, platform, ti) {
+  // One POSIX line, or on Windows one line for PowerShell and one for cmd.
+  // Each reads as the same words.
+  const replays = replayLinesOf(block, platform)
+  if (replays === undefined)
+    return `${file}'s replay lines are not the platform's: ${JSON.stringify(block.filter((line) => line.startsWith(`  replay`)))}`
+  for (const { command, read } of replays) {
+    // cmd has no form for a word with a double quote, `%`, or `!`: its line says so,
+    // and only such a test may print that line.
+    // A CLI line has no environment values, so cmd always has its form: the
+    // `-t` argument carries no shell-hostile character (review option c). No
+    // fallback line may print for it.
+    if (command === CMD_FALLBACK) {
+      // The printer's cmd line has no form when a word has `"`, `%`, or `!`:
+      // the file path can carry one (the -t argument never does).
+      if (/["%!]/.test(relativeName(h, owed.fi))) continue
+      return `the replay of ${file} says cmd cannot replay it, but no word of it has a hostile character`
+    }
+    const words = read(command)
+    if (!words)
+      return `the replay of ${file} is ${JSON.stringify(command)}, which the shell does not read as plain words`
+    const [vitest, run, target, flag, pattern, ...more] = words
+    // The -t argument is safe in every shell: no double quote, `%`, `!`, or
+    // curly quote (the regular expression's `.` stands in for each).
+    if (pattern !== undefined && /["%!‘’‚‛]/.test(pattern))
+      return `the replay of ${file} puts ${JSON.stringify(pattern)} in its -t argument, which a shell reads unsafely`
+    const path = relativeName(h, owed.fi)
+    if (vitest !== `vitest` || run !== `run` || target !== path)
+      return `the replay of ${file} is not \`vitest run ${path}\``
+    if (ti === undefined) {
+      if (flag !== undefined)
+        return `${file} did not load, and its replay selects tests: ${command}`
+      continue
+    }
+    if (flag !== `-t` || pattern === undefined || more.length > 0)
+      return `the replay of ${file} has no single -t pattern: ${command}`
+    for (const join of [` `, ` > `]) {
+      let selected
+      try {
+        selected = selectedBy(h, owed.fi, pattern, join)
+      } catch (error) {
+        return `the replay pattern ${pattern} is not a regular expression: ${error.message}`
+      }
+      // The owed test, and any test whose joined names equal its own, which
+      // no pattern can tell apart from it.
+      const owedSet = sameNamed(h, owed.fi, ti, join)
+      if (JSON.stringify(selected) !== JSON.stringify(owedSet))
+        return `the replay pattern ${JSON.stringify(pattern)} of ${file} runs tests ${JSON.stringify(selected)} when Vitest joins names with ${JSON.stringify(join)}, owed ${JSON.stringify(owedSet)}`
+    }
+  }
+  return undefined
+}
+
 function replayLinesOf(block, platform) {
   const forms =
     platform === `win32`
@@ -3158,7 +3225,68 @@ const corruptStdout = (change) => (trace) => {
   value.stdout = changed
   return trace.map((o, i) => (i === index ? { ...o, value } : o))
 }
+// A wrong baseline: the printer's lines changed, at the host's checkpoint,
+// and alike in the stdout and summary.md that lead with them, so only the
+// baseline law can see it.
+const corruptBaseline = (change) => (trace) => {
+  const index = trace.findIndex((o) => o.checkpoint === `baseline`)
+  if (index < 0) return undefined
+  const value = change(trace[index].value)
+  if (value === undefined) return undefined
+  const text = (whole) =>
+    typeof whole === `string`
+      ? (change(whole.split(`\n`)) ?? whole.split(`\n`)).join(`\n`)
+      : whole
+  return trace.map((o, i) =>
+    i === index
+      ? { ...o, value }
+      : o.checkpoint === `classified`
+        ? {
+            ...o,
+            value: {
+              ...o.value,
+              stdout: text(o.value.stdout),
+              summaryText: text(o.value.summaryText),
+            },
+          }
+        : o,
+  )
+}
 const calibrations = [
+  {
+    // Main before this law: a failing file's first failing test alone.
+    name: `the baseline names only a failing file's first failing test`,
+    law: `baseline`,
+    corrupt: corruptBaseline((lines) => {
+      const kept = []
+      let failing = 0
+      for (const line of lines) {
+        if (!line.startsWith(`  `)) failing = 0
+        if (line.startsWith(`  failing: `)) failing += 1
+        if (failing < 2) kept.push(line)
+      }
+      return kept.length === lines.length ? undefined : kept
+    }),
+  },
+  {
+    name: `the baseline leaves out a violation's observed and owed values`,
+    law: `baseline`,
+    corrupt: corruptBaseline((lines) => {
+      const kept = lines.filter((line) => !/^ {2}(observed|owed): /.test(line))
+      return kept.length === lines.length ? undefined : kept
+    }),
+  },
+  {
+    // As Vitest's formatter prints a value: -0's sign kept, a string's
+    // quotes dropped.
+    name: `the baseline prints a string's value without its quotes`,
+    law: `baseline`,
+    corrupt: corruptBaseline((lines) => {
+      const at = lines.findIndex((line) => line === `  observed: \` "0" \``)
+      if (at < 0) return undefined
+      return lines.map((line, i) => (i === at ? `  observed: \` 0 \`` : line))
+    }),
+  },
   {
     name: `the stdout ends without its completion line`,
     law: `stdout`,
@@ -3370,6 +3498,9 @@ const required = [
   `authored blocked`,
   `killed by one owner beside a failing owner`,
   `a baseline law violation with its counterexample`,
+  severalFailing,
+  valuesNamed,
+  valueCutOrEscaped,
   `an ordinary file's failing baseline test`,
   `extra-work`,
   `extra-work under a declared bound`,
@@ -3409,6 +3540,7 @@ const plainTest = (effect = {}, test = {}) => ({
   label: ``,
   tail: ``,
   fails: false,
+  values: 0,
   runOrder: 0,
   work: 10,
   workFlaky: false,
@@ -4216,6 +4348,37 @@ const constructed = [
           { ...base.mutants[0], owners: [1], line: 1 },
           { ...base.mutants[0], anchor: `x \`\` y` },
           { ...base.mutants[0], line: 1, anchor: `x \`\` y` },
+        ],
+      }
+    },
+  },
+  // Law 9: a file with two failing laws, each a violation that names its
+  // observed and owed values, one past 400 code points, beside a passing
+  // test; and a file whose failing law's value holds a paragraph separator.
+  // A printer that named only the first failing test, or no values, fails.
+  // Appended at the end of the list.
+  {
+    name: `failing laws that name their observed and owed values`,
+    enters: [severalFailing, valuesNamed, valueCutOrEscaped],
+    build: () => {
+      const base = single(`x`, [], {
+        baseline: `test`,
+        test: { fails: true, values: 1 },
+        more: [
+          plainTest({}, { label: `it's ` }),
+          plainTest({}, { fails: true, values: 5, label: `(a|b) ` }),
+        ],
+      }).build()
+      const [file] = base.files
+      return {
+        ...base,
+        files: [
+          { ...file, failure: `violation` },
+          {
+            ...file,
+            failure: `violation`,
+            tests: [{ ...file.tests[0], values: 6, suites: [`s (1)`] }],
+          },
         ],
       }
     },

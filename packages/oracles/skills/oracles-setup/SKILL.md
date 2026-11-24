@@ -487,8 +487,9 @@ kill until the check rejects the recorded error.
 The gap check is also how you run the oracles. Every line it prints
 starts with `oracle-gaps: <kind>`. It runs every test file first and prints
 one line for each (`oracle-gaps: baseline pass <file>: …`, or `baseline
-fail <file>`, followed by indented lines with the failing law, its
-counterexample, and a replay command), then one decisive line: `baseline all
+fail <file>`, followed by indented lines for each failing law: its error,
+its observed and owed values, its counterexample, and a replay command),
+then one decisive line: `baseline all
 <n> oracle files pass`, or `baseline <k> of <n> oracle files failed
 (provisional)`. A failing law (a test that fails with no mutant active)
 judges nothing, and its file's passing tests still judge; only a mutant

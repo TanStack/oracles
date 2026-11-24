@@ -144,39 +144,60 @@ const cut = (text, most) => {
     : text
 }
 
-// The law, difference, and counterexample of a test that failed by a law
-// violation, read from the framework's message (oracle-property.ts
-// `failure`): its first line names the checkpoint and the law, and its
-// `Difference:` and `History:` lines the difference and the history that
-// failed. Any other failure gives none.
+// The law, difference, observed and owed values, and counterexample of a
+// test that failed by a law violation, read from the framework's message
+// (oracle-property.ts `violationError`): its first line names the checkpoint
+// and the law, and its `Difference:`, `Observed:`, `Owed:`, and `History:`
+// lines the difference, the two values a comparison found apart (only a
+// violation that carries values has them), and the history that failed.
+// A field is read up to the message's next line break: a value's data
+// encoding may hold a line or paragraph separator, which prints as its
+// escape. Any other failure gives none.
 function violationLines(message) {
-  const head = message
-    .split(`\n`)[0]
-    .match(/violated at checkpoint "([^"]*)"(?: \(law: (.*)\))?\.$/)
+  const lines = message.split(`\n`)
+  const head = lines[0].match(
+    /violated at checkpoint "([^"]*)"(?: \(law: (.*)\))?\.$/,
+  )
   if (!head) return []
-  const line = (label) =>
-    escapeControls(
-      cut(message.match(new RegExp(`^${label}: (.*)$`, `m`))?.[1] ?? ``, 400),
+  // The fields come in this order after the law's statement, which is the
+  // author's text, so each is read after the one before it.
+  let from = 0
+  const field = (label) => {
+    const at = lines.findIndex(
+      (line, index) => index >= from && line.startsWith(`${label}: `),
     )
+    if (at < 0) return undefined
+    from = at + 1
+    return lines[at].slice(label.length + 2)
+  }
+  const shown = (text) => codeSpan(escapeControls(cut(text ?? ``, 400)))
+  const difference = field(`Difference`)
+  const observed = field(`Observed`)
+  const owed = observed === undefined ? undefined : field(`Owed`)
+  const history = field(`History`)
   return [
-    `  law: ${codeSpan(escapeControls(head[2] ?? `(unnamed)`))} at ${codeSpan(escapeControls(head[1]))}: ${codeSpan(line(`Difference`))}`,
-    `  counterexample: ${codeSpan(line(`History`))}`,
+    `  law: ${codeSpan(escapeControls(head[2] ?? `(unnamed)`))} at ${codeSpan(escapeControls(head[1]))}: ${shown(difference)}`,
+    ...(observed === undefined || owed === undefined
+      ? []
+      : [`  observed: ${shown(observed)}`, `  owed: ${shown(owed)}`]),
+    `  counterexample: ${shown(history)}`,
   ]
 }
 
 /**
  * The baseline before any mutant: each test file's result with its test
- * counts, an ordinary file marked as such, and for a failing file its first
- * failing test and that test's error, the law, difference, and
- * counterexample of a law violation, and the command that replays the
- * test, which pastes into a POSIX shell. `files` names each test file,
- * relative to the package, with whether it is ordinary, its first failure
- * (undefined when it passed), and its tests, each with its state, its
- * error, and its names (`testNamesOf`). A file with no failing test (one
- * that did not load) replays whole. A control character in a name or a
- * failure prints as its escape, so each line stays one line. `config` is
- * the config `--config` named, relative to the package: Vitest would
- * discover another config or none, so the replay names it too.
+ * counts, an ordinary file marked as such, and for a failing file each of
+ * its failing tests, in its file's order: the test and its error, the law,
+ * difference, observed and owed values, and counterexample of a law
+ * violation, and the command that replays that test alone, which pastes
+ * into a POSIX shell. `files` names each test file, relative to the
+ * package, with whether it is ordinary, its first failure (undefined when
+ * it passed), and its tests, each with its state, its error, and its names
+ * (`testNamesOf`). A file with no failing test (one that did not load)
+ * replays whole. A control character in a name or a failure prints as its
+ * escape, so each line stays one line. `config` is the config `--config`
+ * named, relative to the package: Vitest would discover another config or
+ * none, so the replay names it too.
  */
 export function baselineLines(files, config, platform = process.platform) {
   const vitest =
@@ -197,8 +218,7 @@ export function baselineLines(files, config, platform = process.platform) {
         ),
       ]
     const failed = tests.filter((t) => t.state === `failed`)
-    const first = failed[0]
-    if (first === undefined)
+    if (failed.length === 0)
       return [
         streamLine(
           `baseline`,
@@ -206,24 +226,28 @@ export function baselineLines(files, config, platform = process.platform) {
         ),
         ...replayLines([...vitest, file], platform),
       ]
-    const message = first.message ?? ``
     return [
       streamLine(
         `baseline`,
         `fail ${name}: ${failed.length} of ${counted(ran.length, `test`)} failed`,
       ),
-      `  failing: ${codeSpan(escapeControls((first.names ?? [first.fullName]).join(` > `)))}: ${codeSpan(escapeControls(message.split(`\n`)[0]))}`,
-      ...violationLines(message),
-      ...replayLines(
-        [
-          ...vitest,
-          file,
-          ...(first.names === undefined
-            ? []
-            : [`-t`, escapeControls(replayPattern(first.names))]),
-        ],
-        platform,
-      ),
+      ...failed.flatMap((test) => {
+        const message = test.message ?? ``
+        return [
+          `  failing: ${codeSpan(escapeControls((test.names ?? [test.fullName]).join(` > `)))}: ${codeSpan(escapeControls(message.split(`\n`)[0]))}`,
+          ...violationLines(message),
+          ...replayLines(
+            [
+              ...vitest,
+              file,
+              ...(test.names === undefined
+                ? []
+                : [`-t`, escapeControls(replayPattern(test.names))]),
+            ],
+            platform,
+          ),
+        ]
+      }),
     ]
   })
 }
