@@ -43,7 +43,8 @@ export const usage = `Usage: oracle-gaps --package <dir> --source <src/x.ts,...>
   oracle-gaps --stop-daemon --package <dir>
   oracle-gaps --help
 
-The paths in --source and --config are relative to --package. Without
+The paths in --source and --config are relative to --package; --config
+may name a file outside it, such as a temporary config. Without
 --config, the run loads the Vitest config that Vitest discovers for the
 package: in its directory, or else in the nearest parent directory that
 has one. Run the CLI from any directory.
@@ -164,17 +165,20 @@ function optionsOf(args, cwd) {
       `--pool must be threads or forks, not "${args.pool}"`,
       `Pass --pool threads, or --pool forks for a package with a native addon.`,
     )
-  // The Vitest config the run loads, a file of the package (`--config`); by
-  // default the one Vitest discovers there (check.mjs).
+  // The Vitest config the run loads (`--config`), by default the one Vitest
+  // discovers (check.mjs). It is named relative to the package, as a config
+  // that Vitest finds in a parent directory is, and may lie outside it: the
+  // run loads it by its path, with the package as Vitest's root, so a
+  // temporary config can stay out of the repository.
   const config =
-    args.config === undefined ? undefined : packagePath(pkg, args.config)
+    args.config === undefined ? undefined : configPath(pkg, args.config)
   if (
     config !== undefined &&
-    !statSync(join(pkg, config), { throwIfNoEntry: false })?.isFile()
+    !statSync(resolve(pkg, config), { throwIfNoEntry: false })?.isFile()
   )
     throw new Refusal(
-      `--config ${args.config} is not a file of the package`,
-      `Pass --config the package's Vitest config file, relative to --package.`,
+      `--config ${args.config} is not a file`,
+      `Pass --config the Vitest config file, relative to --package.`,
     )
   const mutants = args.mutants && resolve(cwd, args.mutants)
   if (mutants && !statSync(mutants, { throwIfNoEntry: false })?.isDirectory())
@@ -266,6 +270,18 @@ export function packagePath(pkg, path) {
       `Name a file inside the package, relative to --package.`,
     )
   return posix(named)
+}
+
+/**
+ * The file `--config` names, relative to the package in forward slashes,
+ * by its native real path once it exists; outside the package it starts
+ * with `..`, and on another Windows drive it is absolute.
+ */
+function configPath(pkg, path) {
+  const absolute = resolve(pkg, path)
+  return posix(
+    relative(pkg, existsSync(absolute) ? realPathOf(absolute) : absolute),
+  )
 }
 
 /** A run's directory name: its start time, then random bytes, unique per run. */

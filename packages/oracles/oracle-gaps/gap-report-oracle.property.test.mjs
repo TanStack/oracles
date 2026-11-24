@@ -104,7 +104,11 @@
  *    (maintainer decision, 2026-11-11), so a parent's config that defines
  *    `test.projects` refuses the run too; or the one `--config`
  *    names, relative to `--package`, even where Vitest would discover
- *    another (maintainer finding F12, 2026-11-10),
+ *    another (maintainer finding F12, 2026-11-10), in the package or in a
+ *    directory beside it (a temporary config kept out of the repository;
+ *    proposed with the fix that lifts the refusal, awaiting the
+ *    maintainer's approval), where the package is still Vitest's root and
+ *    a failing owner's replay, pasted in the package, runs its test,
  *    as Vitest loads it, in its own format: an `.mjs` or `.mts` config, or
  *    a `.js` or `.ts` one in a package whose module type is `module`, is an
  *    ES module, so a top-level await in it loads, even in a package with no
@@ -3430,10 +3434,10 @@ async function incremental(dir, plan, cli, copy, observe, states) {
 async function driver(plan, observe) {
   // Calls are counted within this history, so two runs of one history name the same directories.
   runSeq = 0
-  // A package that resolves no TypeScript, has no config, or has its
-  // config in its parent directory lives outside this repository
-  // (`outsideRepository`); the last in a directory `pkg` of the scratch
-  // directory, which holds its config. A package whose config's test root is
+  // A package that resolves no TypeScript, has no config, has its config
+  // in its parent directory, or has a named config beside it lives outside
+  // this repository (`outsideRepository`); the last two in a directory `pkg`
+  // of the scratch directory, which holds its config. A package whose config's test root is
   // the directory above it (`testRoots`) lies in `pkg` too, so the root holds
   // only the package.
   const scratch = realpathSync(
@@ -3446,7 +3450,9 @@ async function driver(plan, observe) {
     ),
   )
   const dir =
-    plan.configPlace === `parent` || plan.testRoot === `parent`
+    plan.configPlace === `parent` ||
+    plan.configOutside ||
+    plan.testRoot === `parent`
       ? join(scratch, `pkg`)
       : scratch
   mkdirSync(dir, { recursive: true })
@@ -3958,6 +3964,14 @@ async function driver(plan, observe) {
       states.add(`a failing owner replayed under a config that --config names`)
     if (
       plan.fault === `brokenOwner` &&
+      plan.configOutside &&
+      replay !== undefined
+    )
+      states.add(
+        `a failing owner replayed under a config that --config names outside the package`,
+      )
+    if (
+      plan.fault === `brokenOwner` &&
       plan.configPlace === `parent` &&
       replay !== undefined
     )
@@ -4425,6 +4439,8 @@ async function driver(plan, observe) {
         states.add(`a config in vitest.config.ts ran`)
       if (plan.configPlace === `named`)
         states.add(`a config that --config names ran`)
+      if (plan.configOutside)
+        states.add(`a config that --config names outside the package ran`)
       if (plan.configPlace === `none`)
         states.add(`a package with no config ran`)
       if (plan.configPlace === `parent`)
@@ -6725,6 +6741,8 @@ const required = [
   `a config exported as an async function ran`,
   `a config in vitest.config.ts ran`,
   `a config that --config names ran`,
+  `a config that --config names outside the package ran`,
+  `a failing owner replayed under a config that --config names outside the package`,
   `a package with no config ran`,
   `a package whose parent directory has its config ran`,
   `a failing owner replayed under its parent's config`,
@@ -6889,6 +6907,8 @@ const separate = [
   `a refused run whose package lies inside the CLI's directory`,
   // The config and contexts states have constructed histories of their own.
   `a config that --config names ran`,
+  `a config that --config names outside the package ran`,
+  `a failing owner replayed under a config that --config names outside the package`,
   ...Object.values(testRootStates),
   loadPluginState,
   `a package with no config ran`,
@@ -7044,6 +7064,7 @@ const withDeclaration = (constructed) =>
         failingLawCalls: `none`,
         failingLawHook: `none`,
         failingLawSpins: false,
+        configOutside: false,
         declaration: index % 2 === 0 ? `wrapper` : `oracleProperty`,
         ownerless: false,
         owners: [`a`, ...generated.owners.slice(1)],
@@ -7341,6 +7362,7 @@ oracleProperty({
           failingLawCalls: `none`,
           failingLawHook: `none`,
           failingLawSpins: false,
+          configOutside: false,
           stopRuns: NO_STOPS,
           laterSteps: NO_LATER_STEPS,
         },
@@ -7550,6 +7572,7 @@ oracleProperty({
           failingLawCalls: 'none',
           failingLawHook: 'none',
           failingLawSpins: false,
+          configOutside: false,
         },
       },
       {
@@ -7715,6 +7738,7 @@ oracleProperty({
           failingLawCalls: 'none',
           failingLawHook: 'none',
           failingLawSpins: false,
+          configOutside: false,
         },
       },
       {
@@ -7907,6 +7931,7 @@ oracleProperty({
           failingLawCalls: 'none',
           failingLawHook: 'none',
           failingLawSpins: false,
+          configOutside: false,
         },
       },
     ],
@@ -10544,6 +10569,43 @@ oracleProperty({
           tests: [{ ...judging(`b`, `fixed seed`, 1), flaky: true, fn: 0 }],
         }),
       },
+      // A temporary config kept out of the repository: one that only
+      // `--config` names, in a directory beside the package, which the run
+      // loads, and under which a failing owner's replay, pasted in the
+      // package, finds its test. Each kills a push in one owned function, as
+      // the config histories above do. Appended at the end of the list.
+      ...[
+        [
+          `a config that --config names outside the package`,
+          `a config that --config names outside the package ran`,
+          { setupGlobal: true },
+        ],
+        [
+          `a failing owner under a config that --config names outside the package`,
+          `a failing owner replayed under a config that --config names outside the package`,
+          { fault: `brokenOwner` },
+        ],
+      ].map(([name, state, fields]) => ({
+        name,
+        enters: [state],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          wholeFile: `none`,
+          witness: false,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: null,
+          fault: `none`,
+          stability: `none`,
+          steps: null,
+          configPlace: `named`,
+          configOutside: true,
+          ...fields,
+        }),
+      })),
     ]),
   },
   resolve: resolveHistory,

@@ -1145,6 +1145,11 @@ const drawn = fc.record({
   // a gap (the maintainer's decision "An excluded test still runs",
   // 2026-11-23). Drawn last (the generator rule).
   failingLawSpins: fc.boolean(),
+  // Whether the config that only `--config` names (`configPlace: named`)
+  // sits outside the package, in a directory beside it, as a temporary
+  // config kept out of the repository does; `--config` names it relative
+  // to `--package`, through `..`. Drawn last (the generator rule).
+  configOutside: fc.constantFrom(false, false, false, true),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -2848,9 +2853,15 @@ function configOf(history) {
       : (history.configPlace ?? `discovered`)
   const packageType = history.packageType ?? `module`
   const named = history.configFile ?? `vite.config.ts`
-  // A config in the parent directory has no package.json beside or above
-  // it, so Node and Vite read its `.js` or `.ts` name as CommonJS.
-  const format = formatOf(named, place === `parent` ? `commonjs` : packageType)
+  // A named config outside the package (`configOutside`).
+  const outside = place === `named` && history.configOutside === true
+  // A config in the parent directory, or in a directory beside the package,
+  // has no package.json beside or above it, so Node and Vite read its `.js`
+  // or `.ts` name as CommonJS.
+  const format = formatOf(
+    named,
+    place === `parent` || outside ? `commonjs` : packageType,
+  )
   const discovered =
     history.fault === `configNoDefault` && format === `cjs`
       ? named.replace(/\.c?js$/, (ext) => (ext === `.cjs` ? `.cts` : `.ts`))
@@ -2859,7 +2870,7 @@ function configOf(history) {
     place === `none`
       ? undefined
       : place === `named`
-        ? `config/gap-vitest.${discovered.split(`.`).at(-1)}`
+        ? `${outside ? `../` : ``}config/gap-vitest.${discovered.split(`.`).at(-1)}`
         : place === `parent`
           ? `../${discovered}`
           : discovered
@@ -2867,6 +2878,7 @@ function configOf(history) {
     configFile: discovered,
     configPath,
     configPlace: place,
+    configOutside: outside,
     packageType,
     configFormat: format,
     // CommonJS syntax: a JavaScript config in CommonJS.
@@ -6214,28 +6226,32 @@ function configText(plan, test) {
 /** The fixture package's files in one state. */
 /**
  * Whether the scratch package lies outside this repository: one that must
- * resolve no TypeScript, one with no Vitest config, and one whose config is
- * in its parent directory. Vitest looks for a config in the package's parent
- * directories too (its cli-api's find-up over `configFiles`), so a package
- * with no config inside the CLI's directory would run under the CLI's own
- * config; outside, "no config" is what Vitest sees, and a parent's config
- * is the only one above the package. A package whose config is in its
- * parent lies in a directory of a temporary directory, which holds the
+ * resolve no TypeScript, one with no Vitest config, one whose config is
+ * in its parent directory, and one whose named config sits beside it
+ * (`configOutside`), which no package.json above may make an ES module.
+ * Vitest looks for a config in the package's parent directories too (its
+ * cli-api's find-up over `configFiles`), so a package with no config
+ * inside the CLI's directory would run under the CLI's own config;
+ * outside, "no config" is what Vitest sees, and a parent's config is the
+ * only one above the package. A package whose config is in its parent, or
+ * beside it, lies in a directory of a temporary directory, which holds the
  * config and the linked dependencies (`parentModules`).
  */
 const outsideRepository = (plan) =>
   plan.fault === `noTypescript` ||
   plan.configPlace === `none` ||
-  plan.configPlace === `parent`
+  plan.configPlace === `parent` ||
+  plan.configOutside === true
 
 /**
  * Where an outside package's linked dependencies live: in the package, or,
- * for a package whose config is in its parent directory, in the parent, so
- * that the config resolves them as the package does. The package's own
+ * for a package whose config is in its parent directory or beside it, in
+ * the parent, so that the config resolves them as the package does. The package's own
  * Vitest after `fixSession` is the package's.
  */
 const parentModules = (plan, state) =>
-  plan.configPlace === `parent` && !state.linked
+  (plan.configPlace === `parent` || plan.configOutside === true) &&
+  !state.linked
     ? `../node_modules`
     : `node_modules`
 
@@ -6462,9 +6478,11 @@ function fixtureFiles(plan, state = initialState(plan)) {
     ...(outsideRepository(plan)
       ? { [`${parentModules(plan, state)}/vite`]: link(ROOT_VITE) }
       : {}),
-    // A parent's config imports `vitest/config` from the parent directory,
-    // which a broken Vitest in the package does not change.
-    ...(plan.configPlace === `parent` && plan.fault === `brokenVitest`
+    // A parent's config, or a named one beside the package, imports
+    // `vitest/config` from the parent directory, which a broken Vitest in
+    // the package does not change.
+    ...((plan.configPlace === `parent` || plan.configOutside === true) &&
+    plan.fault === `brokenVitest`
       ? { '../node_modules/vitest': link(join(OWN_MODULES, `vitest`)) }
       : {}),
     ...(plan.native === `gyp`

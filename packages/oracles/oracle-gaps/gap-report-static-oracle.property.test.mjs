@@ -304,10 +304,11 @@ function helpOf(dir) {
 // framework's `${prefix}_SEED` rule), the counts and limits (`--contexts`,
 // `--sample`, `--test-timeout`, `--hang-limit`, `--first-limit`) are
 // positive integers, `--pool` is `threads` or `forks`, `--config` names a
-// file of the package (relative to `--package`; maintainer finding F12,
-// 2026-11-10), `--mutants` names a
-// directory that exists and holds valid authored mutants (authored.mjs: JSON,
-// every field, ids of their own), an option that takes a value has one, and
+// file (relative to `--package`; maintainer finding F12, 2026-11-10),
+// inside the package or outside it (the end-to-end oracle runs one outside),
+// `--mutants` names a directory that exists and holds valid authored
+// mutants (authored.mjs: JSON, every field, ids of their own), an option
+// that takes a value has one, and
 // no other option exists. Arguments that break one of these refuse the run
 // (law 12, gap-report-model-oracle.mjs), and the cause names what the author
 // wrote wrong: the option, the path, or the mutant file. Each history
@@ -467,7 +468,7 @@ function argumentFault(bad, dir, sources) {
     ],
     // A directory of the package, not a file.
     directorySource: [[`--package`, dir, `--source`, `tests`], `tests`],
-    // A --config that names no file of the package, or a directory.
+    // A --config that names no file, or a directory.
     missingConfig: [
       [...valid, `--config`, `missing.config.mjs`],
       `missing.config.mjs`,
@@ -787,11 +788,14 @@ const dataReach = [
 ]
 
 async function driver(plan, observe) {
-  // A package whose config is in its parent directory is a directory `pkg`
-  // of the scratch directory, which holds that config, as in the end-to-end
-  // driver.
+  // A package whose config is in its parent directory, or whose named config
+  // sits beside it, is a directory `pkg` of the scratch directory, which
+  // holds that config, as in the end-to-end driver.
   const scratch = realpathSync(mkdtempSync(join(here, `.scratch-`)))
-  const dir = plan.configPlace === `parent` ? join(scratch, `pkg`) : scratch
+  const dir =
+    plan.configPlace === `parent` || plan.configOutside
+      ? join(scratch, `pkg`)
+      : scratch
   mkdirSync(dir, { recursive: true })
   // Every package has a manifest, which the CLI refuses without (args.mjs);
   // the fixture's content is unchanged, so its histories are too.

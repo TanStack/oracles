@@ -890,6 +890,8 @@ export const partitions = {
         'a failing afterAll around a law that calls production',
         'a failing law that spins under a mutant before a passing law',
         "module data that only the failing owner's passing pair judges",
+        'a config that --config names outside the package',
+        'a failing owner under a config that --config names outside the package',
       ]),
       8: anyOf([
         'a declaration fault: brokenVitest',
