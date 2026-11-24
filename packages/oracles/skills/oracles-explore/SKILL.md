@@ -149,6 +149,8 @@ repository, change only these:
 
 - the minimal installs that an oracle needs to run: `@tanstack/oracles`,
   `fast-check`, and `vitest` when `package.json` does not list them
+- an older Vitest, upgraded to 4.1 in the working tree, uncommitted (see
+  [Problems you may hit](references/problems.md))
 - a minimal Vitest config that picks up the oracle file, only when the
   repository's own config does not
 - oracle files, with their prose
@@ -191,8 +193,9 @@ in a short paragraph and a short list:
   oracle for the rules you agree on, which checks those rules over many
   generated inputs and holds them for every later change
 - what you will add to the repository: the test packages it needs
-  (`@tanstack/oracles`, with Vitest and fast-check if they are not there),
-  one oracle file, and production changes only for bugs they confirm
+  (`@tanstack/oracles`, with Vitest and fast-check if they are not there,
+  or a newer Vitest if theirs is older than 4.1), one oracle file, and
+  production changes only for bugs they confirm
 - the milestones (see "Your goal"), and your rough estimate, from the size
   of the code, of how long the first oracle will take
 - that it all runs on their machine, and nothing is published or committed
@@ -227,6 +230,13 @@ a search for "fix":
 `git log -i --grep fix --name-only --format= | sort | uniq -c | sort -rn | head`.
 It is a starting point: skip build and config files, and read the commits
 that changed the public API.
+
+Check which Vitest the package runs: `pnpm exec vitest --version`, or
+`npx --no-install vitest --version` with npm (`--no-install` keeps npx from
+downloading one). The oracle needs 4.1 or later. If theirs is older, raise
+the upgrade with the spots you present, so the developer decides both at
+once and the build does not wait on a second question. [Problems you may hit](references/problems.md) has the rule for
+the upgrade, with or without a developer.
 
 Look for behavior that is easy to break, and whose right answer is simpler
 to state than the code that produces it. Rank the candidates by how much a

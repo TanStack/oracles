@@ -31,7 +31,9 @@ Find out, and tell the developer:
   workspace. For a workspace, ask which package to start in.
 - The test runner. The framework runs on Vitest 4.1 or later, with fast-check 4.
   If the package uses another runner, oracles run in a separate Vitest config
-  beside it. Do not change the existing suite.
+  beside it. Do not change the existing suite. If it runs Vitest, check which
+  (`pnpm exec vitest --version`). If it is older than 4.1, raise the upgrade
+  now, with your first decision question: step 2 has the rule.
 - Where production source lives (for example `src/`).
 - The lint setup: ESLint 9 or later with a flat config, an older ESLint with
   `.eslintrc`, or no ESLint (for example Biome only).
@@ -62,10 +64,26 @@ pnpm add -D \
   fast-check@^4 vitest@^4.1
 ```
 
-Add `fast-check` and `vitest` beside them. The framework needs Vitest 4.1 or
-later. If the repository already runs an older Vitest, upgrading it is the
-developer's decision: ask, and with no developer present, do not upgrade. Report it as
-a blocker. For lint, also add `eslint@^9`
+Add `fast-check` and `vitest` beside them. The framework and the gap check
+need Vitest 4.1 or later, installed in the package itself: nothing beside
+an older Vitest works. If the repository already runs an older one,
+upgrading it changes the runner for their own suite too. The rule:
+
+- With a developer present, offer the upgrade with your first decision
+  question, and upgrade when they agree.
+- With no developer present, upgrade in the working tree, and go on.
+- Either way, run their existing suite before and after the upgrade, and
+  report both results with the oracle work, so that a test that failed
+  before is not blamed on the upgrade.
+- Never commit the upgrade without the developer: leave it uncommitted,
+  and say so.
+
+Install `vitest@^4.1` in the same command as the two packages: npm refuses
+to install `@tanstack/oracles` next to the old Vitest (`ERESOLVE`). If the
+lockfile holds a Vite older than 6 (`pnpm why vite`; under Vitest 1 and 2 it
+always does), add `vite@^7` to that command. pnpm keeps the old Vite
+otherwise, and Vitest 4 stops at startup with `Package subpath
+'./module-runner' is not defined`. For lint, also add `eslint@^9`
 if the repository has no ESLint, and `@typescript-eslint/parser@^8` if
 nothing parses TypeScript yet. Name those majors: a package manager can pick
 a prerelease otherwise. If the repository's ESLint is older than 9 (xo

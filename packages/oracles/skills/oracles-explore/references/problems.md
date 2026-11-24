@@ -10,11 +10,30 @@ what to tell the developer.
 is only the oracle files. Their own suite and runner stay as they are. Tell
 the developer this in one line as you install.
 
-**The repository runs a Vitest older than 4.1.** This is the developer's
-decision. Tell them that the oracle needs Vitest 4.1 or later, and that
-upgrading changes the runner for their own suite too. Offer to upgrade and
-then run their suite, to show whether it still passes. Do not upgrade until
-they agree.
+**The repository runs a Vitest older than 4.1.** The oracle and the gap
+check need Vitest 4.1 or later, installed in the package itself, so the way
+is to upgrade it, and that changes the runner for their own suite too.
+Nothing beside the old Vitest works: under Vitest 1 the oracle's generated
+tests fail, under Vitest 3.2 the gap check stops after its baseline, a
+second Vitest run with `npx vitest@4` does not load the oracle's tests, and
+a separate package for the oracles cannot reach the source (the gap check
+refuses a `--source` outside its `--package`). The rule:
+
+- With a developer present, offer the upgrade with your first decision
+  question, and upgrade when they agree.
+- With no developer present, upgrade in the working tree, and go on.
+- Either way, run their existing suite before and after the upgrade, and
+  report both results with the oracle work, so that a test that failed
+  before is not blamed on the upgrade.
+- Never commit the upgrade without the developer: leave it uncommitted,
+  and say so.
+
+Install `vitest@^4.1` in the same command as `@tanstack/oracles`: npm
+refuses to install the oracle package next to the old Vitest (`ERESOLVE`).
+If the lockfile holds a Vite older than 6 (`pnpm why vite`; under Vitest 1
+and 2 it always does), add `vite@^7` to that command. pnpm keeps the old
+Vite otherwise, and Vitest 4 stops at startup with `Package subpath
+'./module-runner' is not defined`.
 
 **npm installed `fast-check` and `vitest` already.** npm installs the peers
 of `@tanstack/oracles` without listing them. Check `package.json`, not
