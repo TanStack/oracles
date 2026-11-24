@@ -12464,7 +12464,7 @@ oracleProperty({
       },
     },
   ],
-  owns: [`src/oracle-property.ts`],
+  owns: [`src/oracle-property.ts`, `src/oracle-data.ts`],
   // Each history spawns one to five child Vitest runs.
   timeout: 600_000,
 })
