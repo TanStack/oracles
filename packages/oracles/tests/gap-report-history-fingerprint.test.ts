@@ -196,4 +196,36 @@ describe(`the gap oracle's history grammar`, () => {
         for (const stop of record.stopRuns) expect(stop.when).not.toBe(`after`)
     }
   })
+
+  // A drawn stop never aborts (I16; M 2026-11-12 "Randomness wins for new
+  // fields"; M-25): the CLI's abort hook (ORACLE_GAPS_TEST_ABORT_AT) is switched
+  // on only by a constructed history with `hookStops`. A generated law over the
+  // histories the oracle takes, at the fixed seed and at the random seeds of the
+  // open counterexamples (#202, #203, #205, #184), so a model that draws an
+  // abort again fails here whichever seed would reach it. The drawn records are
+  // checked too: they hold no abort at all.
+  test(`draws no abort stop unless the history sets hookStops`, () => {
+    for (const seed of [
+      FIXED_SEED,
+      215206945,
+      863655198,
+      1690128638,
+      1606566214,
+      1,
+      2,
+    ]) {
+      const taken = fc.sample(histories, { seed, numRuns: 2000 }) as Array<{
+        hookStops: boolean
+        stopRuns: Array<{ when: string }>
+      }>
+      for (const history of taken)
+        for (const stop of history.stopRuns)
+          if (stop.when === `abort`) expect(history.hookStops).toBe(true)
+      const records = fc.sample(drawn, { seed, numRuns: 2000 }) as Array<{
+        stopRuns: Array<{ when: string }>
+      }>
+      for (const record of records)
+        expect(record.stopRuns.map((stop) => stop.when)).not.toContain(`abort`)
+    }
+  })
 })
