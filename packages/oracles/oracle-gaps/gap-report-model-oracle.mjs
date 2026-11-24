@@ -5176,7 +5176,7 @@ function judge(plan, tests, sites, active, { budgeted = true, detail } = {}) {
     return `killed`
   }
   if (gapCause) {
-    if (detail) Object.assign(detail, { cause: gapCause, cut: hung })
+    if (detail) detail.cause = gapCause
     return `timeout`
   }
   // No wall-clock budget decides here (maintainer decision, deterministic
@@ -5489,6 +5489,15 @@ function model(plan) {
     site.fnId === `<module>` ||
     site.data !== undefined ||
     loadRuns.some((run) => run.reached.has(site.id))
+  // A test set's judged kind with the count-cut rule: `timeout` with cause
+  // `spin` is indeterminate (see the rule in kindOf).
+  const judgedKind = (tests, active, options) => {
+    const detail = {}
+    const kind = judge(plan, tests, sites, active, { ...options, detail })
+    return kind === `timeout` && detail.cause === `spin`
+      ? `indeterminate`
+      : kind
+  }
   const kindOf = (site) => {
     if (owners(site.fnId).size === 0) return `unowned`
     const tests = ownerTests(site.fnId)
@@ -5531,21 +5540,12 @@ function model(plan) {
       { site: site.id },
       { detail: judged },
     )
-    // A spin whose count only an excluded or clocked test made (no reaching
-    // test that is deterministic and unclocked) judges nothing: indeterminate,
-    // not a timeout, which is the backstop only (M-24; "An excluded test still
-    // runs", M 2026-11-23). Classify's rule, in the e2e model. A copy that the
-    // count cut records nothing (judge's `cut`), so a deterministic test in it
-    // did not reach the mutant as the run observed it: classify compares only
-    // the rows that the copies recorded (classify.mjs judgeMutant, `compared`).
-    if (
-      kind === `timeout` &&
-      judged.cause === `spin` &&
-      !reaching.some(
-        (t) => !t.flaky && !readsClock(t) && !judged.cut.has(t.file),
-      )
-    )
-      return `indeterminate`
+    // A count cut that the clock can reach is indeterminate, whichever sibling
+    // tests ran before it (C 2026-11-23, "A count cut's label never depends on
+    // timing"): `timeout` is only the backstop (M-24), and the label uses the
+    // cut's clocked status alone. A count cut that is not clocked is a kill,
+    // judged by judge. Classify's rule, in the e2e model.
+    if (kind === `timeout` && judged.cause === `spin`) return `indeterminate`
     if (kind !== `survived`) return kind
     // A test that reached it did more work, though nothing it observed
     // changed: the mutant deleted a shortcut for speed (maintainer decision,
@@ -5660,12 +5660,12 @@ function model(plan) {
         ? `unowned`
         : ((kind) =>
             blockedOr(a.fn, kind === `survived` ? `not-observed` : kind))(
-            judge(
-              plan,
+            judgedKind(
               ownerTests(a.fn),
-              sites,
               { authored: a.label },
-              { budgeted: false },
+              {
+                budgeted: false,
+              },
             ),
           ),
     line: a.applies ? a.line : undefined,
