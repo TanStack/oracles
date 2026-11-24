@@ -129,30 +129,94 @@ const TOP_LOOP = `<module>@..gen`
 // Whether this filesystem ignores letter case, so that `src/Sut.ts` names
 // `src/sut.ts`; the `cased` spelling applies only where it does.
 const caseless = existsSync(fileURLToPath(import.meta.url).toUpperCase())
-// The full limit of a cut-off copy's confirmation that the driver passes
-// (`--hang-limit`), and, under one budget, the first budget too.
-const FULL_LIMIT_MS = 20000
-// How long a slow test waits, in real milliseconds: past the 1 s first
-// budget that the driver passes (`--first-limit`), within the full limit.
+// The backstop base that the driver passes (`--hang-limit`), the production
+// default (args.mjs BACKSTOP_BASE_MS, derived at check.mjs `limitFor`): a copy
+// that runs past it, plus three seconds per second of its file's time, is cut.
+// No legal history ends at it (M, 2026-11-23, "Backstops are fine, set high").
+const FULL_LIMIT_MS = 60000
+// How long a slow test waits, in real milliseconds, where its output differs.
 const SLOW_MS = 3000
-// How long each slow test of `w_slowpair` waits: past its file's first
-// budget (the 1 s `--first-limit` plus three times its one-test file's
-// unmutated time t), so its copy is always cut and confirmed; past half the
-// mutant's budget, so two such confirmations never fit it; and under the
-// full limit, so each would fit alone. The window holds while t < 3 s and
-// ten times the two files' time stays under 2 × 10 s (their sum under 2 s).
-const PAIR_SLOW_MS = 10000
-// A mutant's budget for the runs that confirm its cut-off copies, which the
-// driver passes (`--mutant-limit`): one slow owner's confirmation fits it
-// (SLOW_MS), and two of `w_slowpair`'s do not. Ten times the fixture's
-// one-test files' time stays under it, so the floor is the budget.
+// The mutant budget for the runs that confirm cut-off copies (`--mutant-limit`,
+// G1, 2026-11-11), as the CLI's floor.
 const MUTANT_LIMIT_MS = 15000
+// The slow waits a drawn test holds: SLOW_MS and the 16 s wait.
+const SLOW_WAITS = [SLOW_MS, 16_000]
+// The per-history backstop's floor (B2, M 2026-11-23): a copy's start and its
+// non-wait work, which are milliseconds in a fixture. The derivation of the
+// production base is check.mjs `limitFor`.
+const BACKSTOP_FLOOR_MS = 10_000
+// The longest legal wait of one test, in real milliseconds: a slow test's wait
+// (SLOW_MS where it waits on a heartbeat), a timer it waits on, and the I/O
+// it waits on (a child process or a pipe read, SLOW_MS at most, as w_iowait).
+// A `runner` or `runnerTimer` wait is the runner's, not the test's, and a
+// PAST_HORIZON wait is not legal, so neither is counted.
+const legalWaitOf = (test) =>
+  Math.max(
+    test.slow ? (test.slowMs ?? SLOW_MS) : 0,
+    test.ioWait || test.pendingIo === `test` || test.pendingIo === `short`
+      ? SLOW_MS
+      : 0,
+    test.timerWait?.waitMs ?? 0,
+  )
+/**
+ * A history's backstop, `--hang-limit` (M 2026-11-23, "Backstops are fine, set
+ * high"; check.mjs `limitFor` adds three seconds per second of the file's time).
+ * It is three times the history's longest legal wait, and at least the floor.
+ * Then every legal wait is due inside a copy's idle horizon, so no legal copy
+ * reaches the backstop, and a mutant hang that keeps a test-owned timer alive
+ * ends here, as a gap, at a cost of this one history's limit. SLOW_MS is the
+ * witness module's longest wait (its child processes and holds). A history's
+ * own explicit `hangMs` (a constructed backstop, or the drawn 40 s) replaces it.
+ */
+export function backstopOf(history) {
+  return (
+    history.hangMs ??
+    Math.max(
+      BACKSTOP_FLOOR_MS,
+      3 * Math.max(SLOW_MS, ...history.tests.map(legalWaitOf)),
+    )
+  )
+}
+// The `pendingIo: 'test'` and `'short'` witnesses' child (run with `node -e`,
+// given the sampler's count file and a count): it writes to its stdout once
+// the count has risen by that many samples, and gives up after 60 s, a
+// backstop that leaves the read pending, so the witness then fails loudly.
+const SAMPLE_HOLD = `const read = () => { try { return Number(require('fs').readFileSync(process.argv[1], 'utf8')) } catch { return 0 } }; const from = read(); setInterval(() => { if (read() >= from + Number(process.argv[2])) process.stdout.write('go', () => process.exit(0)) }, 10); setTimeout(() => process.exit(1), 60000)`
+// How many of the sampler's samples each pipe read holds: the `test` witness's
+// read waits past the 500 ms idle window, and a `short` read only two samples,
+// so the sampler sees it once or twice.
+const SAMPLES_HELD = { test: 20, short: 2 }
+// The calls a heavy test (`heavy`) makes before each campaign's own call, with
+// the same input, in every run: its unmutated work is then that many calls'
+// more. The `until` function evaluates about eleven sites a call, so a heavy
+// test of it does about 110,000, past CALL_FLOOR: its copies' call budget is
+// a hundred times that (G6), and a copy that does a third more is inside it.
+const HEAVY_CALLS = 10_000
+// A wait long past any copy's horizon (the full limit and 3 s per second of
+// the file's time).
+const PAST_HORIZON_MS = 600_000
+// The calls that each copy of `w_slowpair` makes beyond its first: its test
+// calls the function this many more times where its output differs. A call
+// evaluates two or three instrumented sites, so a copy makes 60,000 to 90,000
+// site evaluations: inside its call budget (CALL_FLOOR in check.mjs, 100,000),
+// and the two copies together past the mutant's work budget (WORK_FLOOR).
+// Work is counted, not timed, so the outcome is the same on any machine.
+const PAIR_LOOPS = 30_000
+// A mutant's work budget (maintainer disposition G1, under the deterministic
+// cuts decision of 2026-11-14): the larger of this floor and ten times its
+// owner files' unmutated work, in site evaluations. The floor is the copies'
+// call budget, so two copies that each stay inside theirs can pass it.
+const WORK_FLOOR = 100_000
+// The least call budget a copy gets (check.mjs CALL_FLOOR): site evaluations in
+// one copy's runs before it counts as a loop that never ends. A file's budget
+// is a hundred times the most its unmutated tests did, if more. Past it, the
+// copy is cut by count (a spin) and charged nothing (the outcome rule, item 4).
+const CALL_FLOOR = 100_000
 // How often the CLI says which mutant a busy copy runs (its heartbeat): the
 // driver shortens it from 30 s (`ORACLE_GAPS_HEARTBEAT_MS`), so that a slow
 // test's wait of SLOW_MS passes it. A copy beats once its own run has lasted
-// an interval, so the interval is twice the 1 s first budget: a copy cut at
-// its first budget never lasts it, and whether a run beats is a function of
-// the history, not of the machine's load, as the determinism tests require.
+// an interval, and whether a run beats is a function of the history, not of
+// the machine's load, as the determinism tests require.
 const HEARTBEAT_MS = 2000
 // The slow kill's hold (#84; v21.2 R57, the register's C entry "Determinism
 // under load covers witnesses too"). A wait of SLOW_MS spans the heartbeat
@@ -195,7 +259,11 @@ const PAIR_FILES = [`p`, `q`]
 /** The oracle files a plan's fixture has. */
 const oracleFilesOf = (plan) => [
   ...ORACLE_FILES,
-  ...(plan.functions.some((fn) => fn.id === `w_slowpair`) ? PAIR_FILES : []),
+  ...(plan.functions.some(
+    (fn) => fn.id === `w_slowpair` || fn.id === `w_hangpair`,
+  )
+    ? PAIR_FILES
+    : []),
 ]
 const METHOD_NAMES = [`run`, `step`, `tick`]
 
@@ -448,6 +516,32 @@ const testCase = fc.record({
   // Only a witness waits on a timer, sleeps, reads the clock, or waits a
   // turn: its work could follow the clock.
   timed: fc.constant(false),
+  // The deterministic-cuts fields, drawn (M, 2026-11-16, "Randomness wins"),
+  // appended last: a slow test's wait (only a witness is slow), the extra
+  // calls a test makes where its output differs, a timer it waits on there
+  // (rare, since each wait costs real time on every mutant that changes its
+  // output), and a repeating timer kept due while a hang waits (rare, since
+  // such a hang runs to the backstop). Each set holds the values the
+  // constructed histories use. A test that loops declares no work bound
+  // (`resolve`), since the model judges no work in a generated test.
+  slowMs: fc.constantFrom(...SLOW_WAITS),
+  loops: fc.constantFrom(0, 0, 0, 0, 0, 0, 0, 30_000, 19_999),
+  timerWait: fc.oneof(
+    { arbitrary: fc.constant(null), weight: 15 },
+    {
+      arbitrary: fc.record({
+        waitMs: fc.constantFrom(600, 3000),
+        unref: fc.boolean(),
+      }),
+      weight: 1,
+    },
+  ),
+  pulse: fc.constantFrom(false, false, false, false, false, false, false, true),
+  // What else is pending while a test waits (`pendingIo`: its own I/O, the
+  // runner's write, or the runner's timer). Each value switches a test-only
+  // hook, so it stays a constant that only constructed histories set (the
+  // hook exception of "Randomness wins").
+  pendingIo: fc.constant(null),
 })
 // Law 9's edits. Each content edit changes what some evidence depends on:
 // a test file, a source statement, the source's line numbers, an owns list,
@@ -596,9 +690,10 @@ const drawn = fc.record({
   tests: fc.array(testCase, { minLength: 1, maxLength: 5 }),
   // The witness module: all of it, or only the functions whose outcomes
   // need real test runs (see `captureWitness`).
-  // The budget witness alone (`budget`) costs two 10 s confirmations per
-  // mutant in every CLI run of a history, so generated histories rarely
-  // draw it; its constructed history (the daemon recheck) always does.
+  // The budget witness alone (`budget`) makes two copies of about 90,000
+  // site evaluations each in every CLI run of a history, so generated
+  // histories rarely draw it; its constructed history (the daemon recheck)
+  // always does.
   witness: fc.oneof(
     { weight: 30, arbitrary: fc.constantFrom(false, true, `capture`) },
     { weight: 1, arbitrary: fc.constant(`budget`) },
@@ -718,9 +813,9 @@ const drawn = fc.record({
   // module loads, with 0. A mutant under which it throws then fails every
   // file that imports the module, before any test runs.
   boot: fc.constantFrom(false, false, false, true),
-  // The run's time budgets: a short first budget confirmed by a run alone
-  // with the full limit, or one budget (`--first-limit` equal to
-  // `--hang-limit`), where a run past it is a timeout at once.
+  // The run's budget mode: `one` passes the retired `--first-limit`, which
+  // the CLI checks and notes and which changes nothing; `two` passes no
+  // retired option.
   budget: fc.constantFrom(`two`, `two`, `two`, `one`),
   // Runs that the driver stops by a signal while the stop witness's test
   // spins (`w_stop`), each in a pool: Vitest's workers as child processes or
@@ -1106,6 +1201,43 @@ const drawn = fc.record({
     }),
     { maxLength: 8 },
   ),
+  // The history's backstop (`--hang-limit`), drawn (M, 2026-11-16, "Randomness
+  // wins"): null is the full limit, and a longer one moves no copy into the
+  // backstop band. The constructed backstop of 2 s is taken back as null.
+  hangMs: fc.constantFrom(null, null, null, 40_000),
+  // Whether each of the history's own tests calls its function HEAVY_CALLS
+  // more times before each campaign's call (`heavy`; `resolve` gives it to
+  // each test of `tests`, never to the witness module's), so that its
+  // unmutated work passes CALL_FLOOR and its copies' call budget is its own
+  // hundred times (G6, under M "Count-only kills", 2026-11-16). Drawn, rarely
+  // (M, 2026-11-16, "Randomness wins"), and appended last (C-6), so every
+  // earlier field keeps its draws. A constructed history whose work budget
+  // decides its state sets it to 0.
+  heavy: fc.constantFrom(
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    HEAVY_CALLS,
+  ),
+  // Whether the history owns a pair of oracle files, p and q, whose copies of
+  // the pair witness (`w_hangpair`) run in sorted owner order, where the
+  // runner's contexts may join them in another order (the join order is
+  // `passOf`'s, check.mjs `runAcross`). Drawn, and appended last (Randomness
+  // wins, 2026-11-16), so every earlier field keeps its draws. A constructed
+  // history sets it for its witness.
+  pair: fc.constantFrom(false, false, false, false, true),
   // The oracle files that hold a law that fails with no mutant active
   // (`FAILING_LAW`), beside the plan's tests: file a, file b, both, or
   // neither. A failing law judges nothing, and its file's passing tests
@@ -1153,7 +1285,7 @@ const drawn = fc.record({
 // only file b, so the daemon reuses file a's timed-out runs; the revert
 // returns to a state that the daemon has seen. The budget witness alone
 // (`budget`) takes its own one step instead: a second daemon check with
-// nothing changed, which reuses the confirmations that the first check ran.
+// nothing changed, which reuses the results that the first check ran.
 const witnessSteps = [`test`, `helper`, `revert`]
 const budgetSteps = [`recheck`]
 // The stop witness alone takes no steps, so it counts only where the history
@@ -1178,8 +1310,8 @@ const keepsSteps = (history) => {
 // witness module" takes `witnessSteps`, so every campaign still judges law
 // 9 over the witness module's outcome classes, along one short sequence
 // (maintainer decision, 2026-11-11, option M of the CI plan; a stated
-// limit of the property). The budget witness's confirmations cost about
-// 15 s a mutant, so its histories follow the same rule, and its constructed
+// limit of the property). The budget witness's two copies make about 90,000
+// site evaluations each, so its histories follow the same rule, and its constructed
 // history "a second daemon check of the budget witness" takes
 // `budgetSteps` (the review of the gap CLI's runtime fixes, 2026-11-12,
 // P1-a: the budget witness only in its own histories). The map is its own
@@ -1201,6 +1333,25 @@ const keepsSteps = (history) => {
 // (`constructedNeutral`, as `logLost` does): a shrink switches no hook on.
 // The drawn fields (`warmReplaced`, `testRoot`, `loadPlugin`, `spinData`,
 // `siblingDir`, `spinThrows`) come back as they are.
+// A constructed history may set `slowTwin`, which no generated history
+// draws, and which is taken back without it. Its tests may set `pendingIo`, a hook switch the drawn test
+// record holds at null, a clock path (`timed`, drawn as false), and a timer
+// wait written without `unref`, which is taken back as a ref'd one.
+const takenBack = (t) => ({
+  ...t,
+  // A constructed test's clock path (the clocked spin) is not drawn.
+  timed: false,
+  slow: false,
+  // A constructed test may leave a drawn field out, or set a wait the draw
+  // does not hold (#131's 10 s wait): it holds the neutral value.
+  slowMs: SLOW_WAITS.includes(t.slowMs) ? t.slowMs : SLOW_MS,
+  loops: t.loops ?? 0,
+  pulse: t.pulse ?? false,
+  timerWait: t.timerWait
+    ? { waitMs: t.timerWait.waitMs, unref: t.timerWait.unref === true }
+    : null,
+  pendingIo: null,
+})
 // The neutral value of each constructed-only field: a drawn record holds it,
 // and the take-back maps a constructed history back to it.
 const constructedNeutral = {
@@ -1268,29 +1419,39 @@ const histories = drawn.map(
       )
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
+    // A constructed backstop outside the drawn set (`hangMs`) comes back as null.
+    const { slowTwin, hangMs, ...drawnValue } =
+      /** @type {Record<string, unknown>} */ (value)
+    const tests = /** @type {Record<string, unknown>[]} */ (drawnValue.tests)
+    const plain =
+      /** @type {{ steps: unknown[] | null, stopRuns: Array<{ when: string }> } & Record<string, unknown>} */ ({
+        ...drawnValue,
+        hangMs: hangMs === 40_000 ? hangMs : null,
+        tests: tests.map(takenBack),
+      })
+    // Take-back into the drawn language: a disarmed pause (pauseEngages false,
+    // only the constructed history sets it) comes back as engaged, and a
+    // rejected batch (rejectBatch, likewise) as none, so the arbitrary can
+    // shrink it. Neither is therefore kept by a shrink.
     const reset = Object.entries(constructedNeutral).every(
-      ([field, neutral]) => history[field] === neutral,
+      ([field, neutral]) => plain[field] === neutral,
     )
-      ? value
-      : { ...history, ...constructedNeutral }
-    const stopRuns = plainStops(history.stopRuns ?? NO_STOPS)
-    const steps = plainSteps(history.steps)
-    // A constructed slow test (a wait where the output differs, seconds of
-    // real time) is read as the drawn one, which never waits.
-    const tests = history.tests.some((test) => test.slow)
-      ? history.tests.map(({ slowMs, ...test }) => ({ ...test, slow: false }))
-      : history.tests
-    // A half of the witness module (captureHalves, constructed only) comes
-    // back as the whole module, which the arbitrary draws.
-    const whole = Object.hasOwn(captureHalves, history.witness)
-      ? { ...reset, witness: `capture` }
-      : reset
-    const taken =
-      stopRuns === history.stopRuns &&
-      steps === history.steps &&
-      tests === history.tests
-        ? whole
-        : { ...whole, stopRuns, steps, tests }
+      ? plain
+      : { ...plain, ...constructedNeutral }
+    const stopRuns = plainStops(plain.stopRuns ?? NO_STOPS)
+    const steps = plainSteps(plain.steps)
+    // A constructed test's fields come back as drawn ones (`takenBack`): a
+    // constructed slow test (a wait where the output differs, seconds of real
+    // time) is read as the drawn one, which never waits. A half of the
+    // witness module (captureHalves, constructed only) comes back as the
+    // whole module, which the arbitrary draws.
+    const taken = {
+      ...(Object.hasOwn(captureHalves, plain.witness)
+        ? { ...reset, witness: `capture` }
+        : reset),
+      stopRuns,
+      steps,
+    }
     const later = (steps ?? []).filter((step) => laterEdits.includes(step))
     if (later.length === 0) return taken
     const earlier = steps.filter((step) => !laterEdits.includes(step))
@@ -2022,9 +2183,10 @@ const witness = [
       judging(`a`, `fixed seed`, 7, { judgesShared: true }),
     ],
   },
-  // Hangs. A test that hangs where it would judge cuts its file's run off
-  // at the time limit. Alone, the mutant is a timeout; a kill in another
-  // owner still decides, and a survivor in another owner does not.
+  // Hangs. A test that hangs where it would judge makes no progress: its copy
+  // is idle by state, and the built-in law no progress kills the mutant on the
+  // test's route (M, 2026-11-16). Owner a's copy runs first, so a's hang
+  // decides beside another owner's kill or survivor alike.
   // A module imported through a query is loaded by Vite as written: the
   // owner's test reads it with `?raw` and must see the module's own text,
   // which the instrumented copy does not change. The judging test kills the
@@ -2081,33 +2243,38 @@ const witness = [
     body: [kill],
     tests: [judging(`a`, `random seed`, 7), judging(`b`, `fixed seed`, 7)],
   },
-  // A slow kill: the run ends after the first budget, within the full
-  // limit, so the confirming rerun kills it (a run is a timeout only when
-  // it passes the full limit alone).
+  // A slow kill: its owner test waits 3 s where its output differs, then
+  // judges, so its copy runs to its end and the kill decides.
   {
     id: `w_slowkill`,
     owners: [`a`],
     body: [kill],
     tests: [judging(`a`, `fixed seed`, 7, { slow: true })],
   },
-  // Slow in both owners, and judged by neither: each owner's copy is cut at
-  // its first budget, and the two confirmations together need more than the
-  // mutant's budget, so the mutant is a timeout, not a survivor.
+  // Slow in both owners, and judged by neither: each owner's copy makes
+  // 30,000 more calls, and the two copies together pass the work budget, so
+  // the built-in law bounded work kills the mutant (M, 2026-11-16).
   {
     id: `w_slowpair`,
     owners: PAIR_FILES,
     body: [kill],
     tests: [
-      judging(`p`, `fixed seed`, 7, {
-        judges: false,
-        slow: true,
-        slowMs: PAIR_SLOW_MS,
-      }),
-      judging(`q`, `fixed seed`, 7, {
-        judges: false,
-        slow: true,
-        slowMs: PAIR_SLOW_MS,
-      }),
+      judging(`p`, `fixed seed`, 7, { judges: false, loops: PAIR_LOOPS }),
+      judging(`q`, `fixed seed`, 7, { judges: false, loops: PAIR_LOOPS }),
+    ],
+  },
+  // The owners of the pair witness (`w_hangpair`, present when the history's
+  // drawn `pair` field is set): p's copy hangs where it would judge, and q's
+  // copy kills. Copies run in sorted owner order (register 2026-11-14,
+  // "Deterministic cuts, outcome rule"; G44), so p's hang is cut as no
+  // progress before q judges, however the contexts joined the files.
+  {
+    id: `w_hangpair`,
+    owners: PAIR_FILES,
+    body: [kill],
+    tests: [
+      judging(`p`, `fixed seed`, 7, { judges: false, hangs: true }),
+      judging(`q`, `fixed seed`, 7),
     ],
   },
   // A kill as usual. In a run that the driver stops (`GAP_STOP_DIR` set),
@@ -2200,8 +2367,8 @@ const witness = [
     tests: [judging(`a`, `fixed seed`, 1)],
   },
   // A test that waits on a child process where the output differs: an I/O
-  // handle is open, so its copy is busy, never cut for idleness, and the
-  // confirming run kills it.
+  // handle is open, so its copy is busy, never cut for idleness, and its
+  // kill decides.
   {
     id: `w_iowait`,
     owners: [`a`],
@@ -3114,17 +3281,20 @@ function resolveHistory(history) {
     ...exported,
     ...importer,
     ...dotGen,
-    ...(history.witness || stopsOnly(history)
+    ...(history.witness || history.pair || stopsOnly(history)
       ? witness
           .filter(
             (w) =>
-              // The budget witness costs two 10 s confirmations per mutant,
-              // so only histories of the `budget` mode carry it.
-              (history.witness === true && w.id !== `w_slowpair`) ||
+              // The budget witness's two copies make about 90,000 site
+              // evaluations each, so only histories of the `budget` mode carry it.
+              (history.witness === true &&
+                w.id !== `w_slowpair` &&
+                w.id !== `w_hangpair`) ||
               (history.witness === `capture` && captureWitness.has(w.id)) ||
               captureHalves[history.witness]?.has(w.id) ||
               (stopsOnly(history) && w.id === `w_stop`) ||
-              (history.witness === `budget` && w.id === `w_slowpair`),
+              (history.witness === `budget` && w.id === `w_slowpair`) ||
+              (history.pair === true && w.id === `w_hangpair`),
           )
           .map((w) => ({
             ...w,
@@ -3385,7 +3555,9 @@ function resolveHistory(history) {
       // its input is a multiple of 3: derived from the plan, not drawn, so
       // the grammar's generated histories, and their cost, stay those of
       // the grammar without the work law.
-      work: t.work ?? (t.input % 3 === 0 ? 1 : null),
+      work: t.work ?? (t.input % 3 === 0 && !t.loops ? 1 : null),
+      // The history's heavy calls (`heavy`), for its own tests only.
+      heavy: history.heavy ?? 0,
     })),
     ...functions.flatMap((fn) =>
       fn.generated ? [] : fn.tests.map((t) => ({ ...t, fn: t.fn ?? fn.id })),
@@ -4646,94 +4818,262 @@ class Spin extends Error {}
  * Each owner test's run under a mutant: whether it hung, crashed, or waited
  * slowly, its verdicts, and whether its output changed.
  */
+// A flaky test's runs count, and judge nothing (F1, #176: a test excluded
+// from judging still runs, so its calls count toward the copy's call budget,
+// as production's `mostCalls` and copy counts do). Its count is never charged
+// to the work budget (production charges only deterministic rows), and a spin
+// on it is a gap, since its count could not be told from the clock.
+const inertFlaky = (run) => ({
+  ...run,
+  verdicts: [],
+  crash: false,
+  changed: false,
+  hang: run.hang === true && run.cut === `count`,
+  clocked: true,
+  rowClocked: true,
+  rose: false,
+})
+// The fixture's property (the campaign emitter writes `fcTest.prop` with this
+// arbitrary and these parameters). An `asProp` test runs once per run of that
+// property, so its runs are fast-check's run sequence under the same seed: a
+// run whose `n` is positive judges and loops, and the others do the call
+// alone. The sequence is computed by fast-check itself, with the emitter's
+// parameters. It matches the wrapper's first runs (@fast-check/vitest's
+// `test.prop` under seed 1, checked 2026-11-23: runs 8 10 0 1 3 ... both ways).
+const PROPERTY = { min: 0, max: 10, numRuns: 20, seed: 1 }
+const propertyNs = fc.sample(
+  fc.integer({ min: PROPERTY.min, max: PROPERTY.max }),
+  { seed: PROPERTY.seed, numRuns: PROPERTY.numRuns },
+)
+const propertyRunsOf = (t) => (t.asProp ? propertyNs : [undefined])
 function runsOf(plan, tests, sites, active) {
+  return runsOfTests(plan, tests, sites, active).map((run) =>
+    run.t.flaky ? inertFlaky(run) : run,
+  )
+}
+function runsOfTests(plan, tests, sites, active) {
   // A test runs its campaigns in order. Each failing judgment is a verdict
   // that carries its campaign's route; an assertion is a verdict under an
   // unnamed law. A verdict or a crash stops the test, except a soft
   // assertion, which lets it go on. A failed test's own route is the route
   // active when it ended. A slow test, or one that waits on a child
   // process, waits where its output changed, before it would hang or judge.
-  return tests
-    .filter((t) => !t.flaky)
-    .map((t) => {
-      let changedAny = false
-      let slowed = false
-      const found = []
-      // The test's work, summed over its campaigns, with no mutant active and
-      // under the mutant. A test that only reads what an earlier test stored
-      // calls no production code, so it does none.
-      let before = 0
-      let after = 0
+  return tests.map((t) => {
+    // Whether the test's count could follow the clock when its run was cut
+    // (`clocked`): it reads the clock, makes a timer, or does I/O of its own
+    // anywhere in its run (`readsClock`, before production or after it), or
+    // it waited where an earlier campaign's output changed. Its count could
+    // then depend on time, so a spin there is no kill (M, 2026-11-16,
+    // "Count-only kills"): the call budget and the spin judge the test's
+    // count as a whole, and a clock read after the spin point still makes
+    // the unmutated count one that the clock could move (v21.1 R19a).
+    let waited = false
+    let changedAny = false
+    let slowed = false
+    const found = []
+    // The test's work, summed over its campaigns, with no mutant active and
+    // under the mutant. A test that only reads what an earlier test stored
+    // calls no production code, so it does none.
+    let before = 0
+    let after = 0
+    // The route of each part with the cumulative work at its end (the route a count cut names).
+    const marks = []
+    // A heavy test (`heavy`) calls its function HEAVY_CALLS more times before
+    // each campaign's own call, in every run.
+    const extra = heavyIn(t) ? t.heavy : 0
+    for (const n of propertyRunsOf(t)) {
       for (const part of partsOf(t)) {
         const base = interpret(plan, t.fn, part.input, sites)
         const mutated = interpret(plan, t.fn, part.input, sites, active)
-        if (!t.judgesShared) {
-          before += base.work
-          after += mutated.work
-        }
         const route = routeOf(t, part)
+        const changed =
+          !mutated.threw &&
+          mutated.trace.join() !== base.trace.join() &&
+          (n === undefined || n > 0)
+        // Where the output differs, a `loops` witness calls the function that
+        // many more times, so its work is the call's work once per call.
+        if (!t.judgesShared) {
+          before += base.work * (1 + extra)
+          after += mutated.work * (1 + extra + (changed ? (t.loops ?? 0) : 0))
+        }
+        marks.push({ route, work: after })
+        // A test that writes to the console and then waits on a timer due past
+        // its horizon, while the runner's own write is pending (`pendingIo:
+        // 'runner'`) or its own interval runs (`'runnerTimer'`), cannot make
+        // progress of its own: the runner's I/O and timers are not the test's,
+        // and the test's timer is not due inside its horizon, so the copy is
+        // idle and cut as no progress, by state (M entry "Idle counts only the
+        // test's I/O", 2026-11-15; C, timers by ownership, 2026-11-16).
+        if (
+          changed &&
+          (t.pendingIo === `runner` || t.pendingIo === `runnerTimer`)
+        )
+          return {
+            clocked: readsClock(t) || waited,
+            rowClocked:
+              readsClock(t) || waited || (changed && waitsIn(plan, t)),
+            t,
+            marks,
+            route,
+            hang: true,
+            cut: 'state',
+            verdicts: found,
+            changed: true,
+            work: after,
+            before,
+          }
         // A loop that never ends cuts the file's run off, as a hang does.
         if (mutated.spun)
-          return { t, route, hang: true, verdicts: found, changed: true }
-        const changed =
-          !mutated.threw && mutated.trace.join() !== base.trace.join()
+          return {
+            clocked: readsClock(t) || waited,
+            rowClocked:
+              readsClock(t) || waited || (changed && waitsIn(plan, t)),
+            t,
+            marks,
+            route,
+            hang: true,
+            cut: 'count',
+            verdicts: found,
+            changed: true,
+            work: after,
+            before,
+          }
         changedAny ||= changed
         slowed ||= changed && (t.slow || t.ioWait)
         if (mutated.threw)
           return {
+            clocked: readsClock(t) || waited,
+            rowClocked:
+              readsClock(t) || waited || (changed && waitsIn(plan, t)),
             t,
+            marks,
             route,
             crash: true,
             verdicts: found,
             changed: changedAny,
             slowed,
+            work: after,
+            before,
           }
-        // A test that hangs where another would judge never ends.
+        // A test that hangs where another would judge never ends. Without a
+        // `pulse` it goes idle (no progress); with one, its timer keeps it busy,
+        // so only the backstop cuts it (a wall-clock cut).
         if (changed && t.hangs)
-          return { t, route, hang: true, verdicts: found, changed: true }
+          return {
+            clocked: readsClock(t) || waited,
+            rowClocked:
+              readsClock(t) || waited || (changed && waitsIn(plan, t)),
+            t,
+            marks,
+            route,
+            hang: true,
+            cut: t.pulse ? 'wall' : 'state',
+            verdicts: found,
+            changed: true,
+            work: after,
+            before,
+          }
         // A verdict test of file b that reads the data spins there instead,
         // while the data is open, which it is before any edit (`spinData`):
-        // a loop that never ends, as above.
+        // a loop that never ends, cut by its call count, as above. A copy
+        // that first schedules its error (`spinThrows`) has made a timer, and
+        // one whose data read is async has had its own I/O complete first
+        // (C, 2026-11-17), so its count could follow the clock (v21.1 R19a):
+        // its spin is a gap.
         if (changed && plan.spinData && fsGated(plan, t.file, t))
-          return { t, route, hang: true, verdicts: found, changed: true }
+          return {
+            clocked:
+              readsClock(t) || waited || plan.spinThrows || waitsIn(plan, t),
+            rowClocked:
+              readsClock(t) || waited || plan.spinThrows || waitsIn(plan, t),
+            t,
+            marks,
+            route,
+            hang: true,
+            cut: 'count',
+            verdicts: found,
+            changed: true,
+            work: after,
+            before,
+          }
         if (changed && t.judges) {
           found.push({
             route,
             law: t.judgeBy === `verdict` ? t.law : `(unnamed)`,
           })
           if (t.judgeBy !== `soft`)
-            return { t, route, verdicts: found, changed: true, slowed }
+            return {
+              clocked: readsClock(t) || waited,
+              rowClocked:
+                readsClock(t) || waited || (changed && waitsIn(plan, t)),
+              t,
+              marks,
+              route,
+              verdicts: found,
+              changed: true,
+              slowed,
+              work: after,
+              before,
+            }
         }
+        if (changed && waitsIn(plan, t)) waited = true
       }
-      // A test that passed: its route is the last one it registered, and
-      // its work is judged against the bound it declared. An authored
-      // mutant's copy is not instrumented, so it counts no work, and the
-      // work law judges only operator mutants.
-      const route = routeOf(t, partsOf(t).at(-1))
-      // Only a route that oracleProperty registers for production can carry
-      // a bound, and a test that made a timer can do work that follows the
-      // clock, so neither judges work.
-      const judgesWork =
-        found.length === 0 &&
-        active?.site !== undefined &&
-        [`reproducible`, `random`].includes(route) &&
-        (!t.timed || t.timed === `turn`)
-      return {
-        t,
-        route,
-        verdicts:
-          judgesWork &&
-          t.work !== null &&
-          t.registered &&
-          after > t.work * before
-            ? [{ route, law: `work bound` }]
-            : found,
-        changed: changedAny,
-        slowed,
-        rose: judgesWork && after > before,
-      }
-    })
+    }
+    // A test that passed: its route is the last one it registered, and
+    // its work is judged against the bound it declared. The work law
+    // judges only operator mutants: an authored copy counts calls only for
+    // its call budget.
+    const route = routeOf(t, partsOf(t).at(-1))
+    // Only a route that oracleProperty registers for production can carry
+    // a bound, and a test whose row is clocked (it made a timer, read the
+    // clock, or its own I/O completed, here or where it waited) can do work
+    // that follows the clock, so neither judges work (the CLI's `!clocked`).
+    const judgesWork =
+      found.length === 0 &&
+      active?.site !== undefined &&
+      [`reproducible`, `random`].includes(route) &&
+      !readsClock(t) &&
+      !waited
+    return {
+      clocked: readsClock(t) || waited,
+      rowClocked: readsClock(t) || waited,
+      t,
+      marks,
+      route,
+      verdicts:
+        judgesWork && t.work !== null && t.registered && after > t.work * before
+          ? [{ route, law: `work bound` }]
+          : found,
+      changed: changedAny,
+      slowed,
+      rose: judgesWork && after > before,
+      work: after,
+      before,
+    }
+  })
 }
+
+// Whether a test's count could follow the clock in every run: it reads the
+// clock or makes a timer (`timed`, except a turn, which waits no time),
+// before it runs production or after it (`after`), or its own I/O completes
+// during it (`timed: 'read'`, a short async read, and `pendingIo: 'short'`,
+// a pipe read), whatever a sample saw (C, 2026-11-17: clocked by state). And whether it waits
+// on a timer or on I/O where its output changed.
+const readsClock = (t) =>
+  (Boolean(t.timed) && t.timed !== `turn`) || t.pendingIo === `short`
+// A verdict test of file b that reads the data with an async read (`fsRead`
+// promise or callback) where its output differs has I/O of its own that
+// completes there (C, 2026-11-17: clocked by state).
+const waitsIn = (plan, t) =>
+  Boolean(t.slow || t.timerWait || t.ioWait || t.pendingIo === `test`) ||
+  (fsGated(plan, t.file, t) &&
+    (plan.fsRead === `promise` || plan.fsRead === `callback`))
+// Whether a test makes its heavy calls (`heavy`): a test that calls
+// production on its own input, once per run (a test.prop runs its body many
+// times, and the shared-state witness calls it only after another test, so
+// neither is heavy).
+const heavyIn = (t) =>
+  Boolean(t.heavy) && !t.judgesShared && !t.readsShared && !t.asProp
 
 // A kill: a behavioral verdict on a reproducible route.
 const killsIn = (r) =>
@@ -4762,63 +5102,184 @@ function filesRun(runs) {
   return ran
 }
 
+// The built-in law that each cut by count or by state fails (M, 2026-11-16,
+// "Spin, no progress and the work budget are kills", restoring v21.1 K1 and
+// P3): a spin past the call budget, and a copy whose work passes the
+// mutant's work budget, fail bounded work; a copy idle by state fails no
+// progress. Only a wall-clock cut (the backstop) is a gap, a `timeout`.
+const BUILT_IN = [`bounded work`, `no progress`]
+
 /**
- * A mutant's kind from its owner tests' runs. An operator mutant's
- * confirming runs share its budget (`budgeted`); an authored mutant's runs
- * are each final at the full limit, so it has no confirmations to budget.
+ * A mutant's kind from its owner tests' runs. An operator mutant's copies
+ * share its work budget (`budgeted`); an authored mutant's copies are judged
+ * alone, with no budget. `detail` receives a timeout's cause and, for a kill,
+ * the built-in law that decided it (`builtIn`, null for a behavioral law).
  */
+// The route a count cut names: the route of the part in which the copy's
+// cumulative work first passes its call budget (capture-setup.mjs `spin`,
+// which names the route active at the cut). A cut that ends at the last part
+// names it too.
+const cutRouteOf = (r, budget) =>
+  (r.marks.find((m) => m.work > budget) ?? r.marks.at(-1)).route
 function judge(
   plan,
   tests,
   sites,
   active,
-  { budgeted = true, lawSpins = new Map() } = {},
+  { budgeted = true, detail, lawSpins = new Map() } = {},
 ) {
   const runs = runsOf(plan, tests, sites, active)
   // A file's tests run in order, and a kill (a behavioral verdict on a
+  // reproducible route) stops the file. A cut copy records nothing, not even
+  // its earlier verdicts. A cut by count or by state is a verdict of a
+  // built-in law on the route of the test that was running, so it kills on a
+  // reproducible route and decides the mutant; on another route the next
+  // owner's copy still runs. A wall-clock cut (the backstop) ends the owner
+  // files after it, and the mutant is a timeout unless a copy before it
+  // killed.
   // reproducible route) stops the file. A hang before that cuts the file's
   // run off, and a run that was cut off records nothing, not even its
   // earlier verdicts. A kill in another file still decides (a kill outranks
   // a timeout); failing that, the mutant is a timeout.
   // A failing law runs too, though it judges nothing (`lawSpins`, the files
-  // whose failing law spins under the mutant, and where it sits): at the
-  // start of its file its count cut ends the file's run before any test
-  // judges; at the end it does unless a test before it killed or hung. A
-  // count cut a failing law causes blocks the mutant by that law (register
-  // C 2026-11-23, "A count cut caused by a failing law is blocked by it"):
-  // a gap, never `timeout`, which is only the backstop's (M-24), and never a
-  // kill, though a kill in another file still decides.
+  // whose failing law spins under the mutant, its spin's work, and where it
+  // sits). Its spin cuts its file's copy only when that work passes the
+  // copy's call budget (G6). At the start of its file the cut ends the file's
+  // run before any test judges; at the end it does unless a test before it
+  // killed or hung. A count cut a failing law causes blocks the mutant by that
+  // law (register C 2026-11-23, "A count cut caused by a failing law is blocked
+  // by it"): a gap, never `timeout`, which is only the backstop's (M-24), and
+  // never a kill. The copies stop at the cut, so a kill in a later file does
+  // not decide it, while a kill in an earlier copy did (step 1 before step 3).
   const hung = new Set()
-  const cut = new Set()
+  const builtIns = []
+  let wallCut = false
+  // The cause of a timeout, the first gap cut in owner order: the backstop,
+  // or a spin whose count could depend on time (M, 2026-11-16, "Count-only
+  // kills"), which ends its copy as a gap and lets the next owner run.
+  let gapCause
+  // The mutant's work budget (G1): its owner files' copies are counted in
+  // their order, each copy's work being the site evaluations of its runs up
+  // to a cut or a kill. The copy whose work passes the budget fails bounded
+  // work on the routes of its tests that did work, its own verdicts do not
+  // count, and no later copy runs. The budget is the larger of WORK_FLOOR and
+  // ten times the owner files' unmutated work, where a file's unmutated work
+  // is its most-working test's.
+  // Copies run in sorted owner order (register 2026-11-14, "Deterministic cuts,
+  // outcome rule"; G44), the order production takes by path, whatever order the
+  // history lists its tests in. A failing law's file runs too (`lawSpins`).
+  // A file whose failing law cuts its copy at the start is cut before any test.
+  // A failing law's spin cuts its file's copy only when its calls pass the
+  // copy's call budget, as any test's do (`callBudget` below). Under a mutant
+  // that changes its output the law repeats its call SPIN_BOUND times, so a
+  // budget above that work does not cut it (the copy's work counts toward
+  // nothing but the budget, and its verdict is left out).
   const slowed = new Map()
-  for (const file of new Set([
-    ...runs.map((r) => r.t.file),
-    ...lawSpins.keys(),
-  ])) {
-    if (lawSpins.get(file) === `start`) {
-      cut.add(file)
-      continue
+  const files = [
+    ...new Set([...runs.map((r) => r.t.file), ...lawSpins.keys()]),
+  ].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+  // A file's most-working unmutated test, in site evaluations.
+  const mostBefore = (file) =>
+    Math.max(0, ...runs.filter((r) => r.t.file === file).map((r) => r.before))
+  const callBudgetOf = (file) => Math.max(CALL_FLOOR, 100 * mostBefore(file))
+  const lawCuts = (file) =>
+    lawSpins.has(file) && lawSpins.get(file).work > callBudgetOf(file)
+  const unmutated = files.reduce((sum, file) => sum + mostBefore(file), 0)
+  const workBudget = Math.max(WORK_FLOOR, 10 * unmutated)
+  const counted = new Set()
+  // A count cut that a failing law's spin caused ends the mutant's copies at
+  // that file, as production does: a mutant it cuts is blocked, and no later
+  // copy runs (C 2026-11-23, "Count-cut label precedence", step 1).
+  let lawCut = false
+  let spent = 0
+  for (const file of files) {
+    if (lawCuts(file) && lawSpins.get(file).at === `start`) {
+      lawCut = true
+      break
     }
     let ended = false
+    let work = 0
+    const callBudget = Math.max(CALL_FLOOR, 100 * mostBefore(file))
+    let builtIn
+    let countGap = false
     for (const r of runs.filter((x) => x.t.file === file)) {
       if (r.slowed) slowed.set(file, r.t.slowMs ?? SLOW_MS)
-      if (r.hang) hung.add(file)
-      if (r.hang || killsIn(r)) {
+      // A test whose calls pass its call budget is cut by count, where the
+      // run goes past it (the CLI's spin row; the budget is per test). An
+      // authored mutant's copy counts calls too (issue #167), so it spins as
+      // an operator copy does.
+      const spun = !r.hang && r.work > callBudget
+      const byCount = spun || (r.hang && r.cut === `count`)
+      if (r.hang && r.cut === `wall`) wallCut = true
+      // A count that could depend on time kills nothing: a gap.
+      else if (byCount && r.clocked) countGap = true
+      else if (r.hang || spun)
+        builtIn = {
+          route: r.hang ? r.route : cutRouteOf(r, callBudget),
+          law: byCount ? `bounded work` : `no progress`,
+        }
+      if (r.hang || spun) {
+        hung.add(file)
+        ended = true
+        break
+      }
+      // Only a count that does not depend on time is charged to the budget.
+      work += r.rowClocked ? 0 : r.work
+      if (killsIn(r)) {
         ended = true
         break
       }
     }
-    if (!ended && lawSpins.get(file) === `end`) cut.add(file)
+    if (!ended && lawCuts(file) && lawSpins.get(file).at === `end`) {
+      lawCut = true
+      break
+    }
+    if (wallCut) {
+      gapCause ??= `backstop`
+      break
+    }
+    if (countGap) {
+      gapCause ??= `spin`
+      continue
+    }
+    if (builtIn) {
+      builtIns.push(builtIn)
+      if (builtIn.route === `reproducible`) break
+      continue
+    }
+    if (budgeted && spent + work > workBudget) {
+      for (const r of runs.filter(
+        (x) => x.t.file === file && x.work > 0 && !x.rowClocked,
+      ))
+        builtIns.push({ route: r.route, law: `bounded work` })
+      break
+    }
+    spent += work
+    counted.add(file)
   }
-  const live = runs.filter((r) => !hung.has(r.t.file) && !cut.has(r.t.file))
+  const live = [
+    ...runs.filter((r) => counted.has(r.t.file) && !hung.has(r.t.file)),
+    ...builtIns.map((v) => ({ route: v.route, verdicts: [v], changed: true })),
+  ]
   const verdicts = (route) =>
     live.flatMap((r) =>
       r.verdicts.filter((v) => v.route === route).map((v) => v.law),
     )
   const reproducible = verdicts(`reproducible`)
-  if (reproducible.some((law) => law !== `reach agreement`)) return `killed`
-  if (cut.size > 0) return `blocked`
-  if (hung.size > 0) return `timeout`
+  if (reproducible.some((law) => law !== `reach agreement`)) {
+    if (detail)
+      detail.builtIn =
+        reproducible.find((law) => BUILT_IN.includes(law)) ?? null
+    return `killed`
+  }
+  // A count cut that a failing law caused blocks the mutant by that law: a
+  // gap, never `timeout` (M-24), and never a kill (C 2026-11-23, "Count-cut
+  // label precedence", step 1). A kill in a copy before the cut decided first.
+  if (lawCut) return `blocked`
+  if (gapCause) {
+    if (detail) detail.cause = gapCause
+    return `timeout`
+  }
   // The runs that confirm a mutant's cut-off copies share its budget
   // (`--mutant-limit`, MUTANT_LIMIT_MS here; maintainer disposition G1,
   // 2026-11-11). Under two budgets, a slow owner file is cut at its first
@@ -4833,6 +5294,10 @@ function judge(
     [...slowed.values()].reduce((sum, ms) => sum + ms, 0) >= MUTANT_LIMIT_MS
   )
     return `timeout`
+  // No wall-clock budget decides here (maintainer decision, deterministic
+  // cuts, option A, 2026-11-14): a slow copy runs to its end, and the mutant
+  // budget is a work count (above). The wall-clock backstops report a gap no
+  // history here reaches, so a slow owner's wait never makes a timeout.
   if (reproducible.length > 0) return `agreement-only-kill`
   if (verdicts(`random`).length > 0) return `random-only-kill`
   if (verdicts(`unknown`).length > 0) return `unregistered-kill`
@@ -4929,7 +5394,8 @@ const HOOKED_SUITE = `hooked`
 const HOOK_ERROR = `this hook fails with no mutant active`
 // How often a heavy failing law calls production: past the call floor
 // (check.mjs CALL_FLOOR, 100,000 site evaluations) in its own test.
-const HEAVY_CALLS = 110_000
+// A failing law that calls production past the call floor (#176, F1).
+const LAW_HEAVY_CALLS = 110_000
 // How often a spinning failing law repeats its call at most: past any call
 // budget the grammar's files reach, so on instrumented code its copy is cut
 // first, while an authored mutant's copy, which counts nothing, ends it.
@@ -5233,6 +5699,15 @@ function model(plan) {
     site.fnId === `<module>` ||
     site.data !== undefined ||
     loadRuns.some((run) => run.reached.has(site.id))
+  // A test set's judged kind with the count-cut rule: `timeout` with cause
+  // `spin` is indeterminate (see the rule in kindOf).
+  const judgedKind = (tests, active, options) => {
+    const detail = {}
+    const kind = judge(plan, tests, sites, active, { ...options, detail })
+    return kind === `timeout` && detail.cause === `spin`
+      ? `indeterminate`
+      : kind
+  }
   // The sites the failing law reaches, when it calls production (input 7);
   // a `beforeAll` that throws skips it, so it reaches nothing then.
   const lawTarget = failingLawTarget(plan)
@@ -5254,11 +5729,12 @@ function model(plan) {
         plan.failingLawCalls === `once` &&
         !mutated.threw &&
         mutated.trace.join() !== base.trace.join())
+    const work = mutated.spun ? Infinity : SPIN_BOUND * mutated.work
     return new Map(
       spins
         ? [...owners(site.fnId)]
             .filter((file) => holdsFailingLaw(plan, file) && runsTests(file))
-            .map((file) => [file, plan.failingLawAt])
+            .map((file) => [file, { at: plan.failingLawAt, work }])
         : [],
     )
   }
@@ -5336,15 +5812,20 @@ function model(plan) {
           ),
         )
     if (reaching.every((t) => t.flaky)) return `indeterminate`
+    const judged = {}
     const kind = judge(
       plan,
       tests,
       sites,
       { site: site.id },
-      {
-        lawSpins: lawSpinsAt(site),
-      },
+      { detail: judged, lawSpins: lawSpinsAt(site) },
     )
+    // A count cut that the clock can reach is indeterminate, whichever sibling
+    // tests ran before it (C 2026-11-23, "A count cut's label never depends on
+    // timing"): `timeout` is only the backstop (M-24), and the label uses the
+    // cut's clocked status alone. A count cut that is not clocked is a kill,
+    // judged by judge. Classify's rule, in the e2e model.
+    if (kind === `timeout` && judged.cause === `spin`) return `indeterminate`
     if (kind !== `survived`) return kind
     // A test that reached it did more work, though nothing it observed
     // changed: the mutant deleted a shortcut for speed (maintainer decision,
@@ -5410,6 +5891,13 @@ function model(plan) {
     `indeterminate`,
     `unreached`,
   ])
+  // A timeout's cause (the backstop), and the built-in law of a kill that one
+  // decided (`judge`).
+  const detailOf = (tests, active, options) => {
+    const detail = {}
+    judge(plan, tests, sites, active, { ...options, detail })
+    return detail
+  }
   const mutants = sites.map((site) => {
     const kind = site.probe
       ? undefined
@@ -5426,6 +5914,14 @@ function model(plan) {
       ordinal: site.ordinal,
       probe: site.probe,
       kind,
+      cause:
+        kind === `timeout`
+          ? detailOf(ownerTests(site.fnId), { site: site.id }).cause
+          : undefined,
+      builtIn:
+        kind === `killed`
+          ? detailOf(ownerTests(site.fnId), { site: site.id }).builtIn
+          : undefined,
       ordinaryOutcome:
         plan.ordinary && survivorKinds.has(kind) && ordinaryReaches(site),
     }
@@ -5435,23 +5931,29 @@ function model(plan) {
   const authoredAll = plan.authoredList.map((a) => ({
     id: a.id,
     key: `${SOURCE}#authored:${a.id}`,
-    // An authored mutant is not instrumented, so a survivor is not-judged
-    // (a changed observation) or not-observed (the patch changed the code).
+    // An authored mutant's copy counts calls only, with no value changes
+    // recorded, so a survivor is not-judged (a changed observation) or
+    // not-observed (the patch changed the code).
     kind: !a.applies
       ? `does-not-apply`
       : owners(a.fn).size === 0
         ? `unowned`
         : ((kind) =>
             blockedOr(a.fn, kind === `survived` ? `not-observed` : kind))(
-            judge(
-              plan,
+            judgedKind(
               ownerTests(a.fn),
-              sites,
               { authored: a.label },
-              { budgeted: false },
+              {
+                budgeted: false,
+              },
             ),
           ),
     line: a.applies ? a.line : undefined,
+    cause:
+      a.applies && owners(a.fn).size > 0
+        ? detailOf(ownerTests(a.fn), { authored: a.label }, { budgeted: false })
+            .cause
+        : undefined,
   }))
   const authored = authoredAll[0]?.kind
   const isGap = (kind) =>
@@ -5612,8 +6114,24 @@ function oracleTestFile(plan, file) {
     ...(plan.tests.some((t) => t.file === file && t.shrinks)
       ? [`import fc from 'fast-check'`]
       : []),
-    ...(plan.tests.some((t) => t.file === file && (t.ioWait || t.stops))
+    ...(plan.tests.some(
+      (t) =>
+        t.file === file &&
+        (t.ioWait ||
+          t.stops ||
+          t.pendingIo === `test` ||
+          t.pendingIo === `short`),
+    )
       ? [`import { spawn } from 'node:child_process'`]
+      : []),
+    ...(plan.tests.some(
+      (t) =>
+        t.file === file && (t.pendingIo === `test` || t.pendingIo === `short`),
+    )
+      ? [
+          `import { join as samplesPath } from 'node:path'`,
+          `import { threadId } from 'node:worker_threads'`,
+        ]
       : []),
     ...(plan.tests.some((t) => t.file === file && t.timed === `sleep`)
       ? [`import { setTimeout as sleep } from 'node:timers/promises'`]
@@ -5624,6 +6142,7 @@ function oracleTestFile(plan, file) {
           `import { setTimeout as nodeSetTimeout } from 'node:timers'`,
           `import { uptime as osUptime } from 'node:os'`,
           `import { monitorEventLoopDelay } from 'node:perf_hooks'`,
+          `import { readFile as readFileAsync } from 'node:fs/promises'`,
         ]
       : []),
     ...(plan.tests.some((t) => t.file === file && t.stops)
@@ -5701,8 +6220,9 @@ function oracleTestFile(plan, file) {
         ...(t.registered && t.work !== null
           ? [`    g.__oracleWorkBound?.(${t.work})`]
           : []),
-        // A test that waits on a timer before it runs production.
-        ...(t.timed
+        // A test that waits on a timer before it runs production (a test that
+        // reads the clock `after` its work does so below).
+        ...(t.timed && t.timed !== `after`
           ? [
               {
                 timer: `    if ((await promisify(setTimeout)(0, 'v')) !== 'v') throw new Error('promisify(setTimeout) lost its value')`,
@@ -5716,8 +6236,25 @@ function oracleTestFile(plan, file) {
                 waitasync: `    if (Atomics.waitAsync(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 0).value !== 'timed-out') throw new Error('waitAsync did not time out')`,
                 wait: `    if (Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 0) !== 'timed-out') throw new Error('wait did not time out')`,
                 loopdelay: `    { const delay = monitorEventLoopDelay(); delay.enable(); delay.disable() }`,
+                // A short async read of its own (a millisecond, which the
+                // sampler rarely sees): I/O that completes during the test.
+                read: `    if ((await readFileAsync(new URL('../package.json', import.meta.url), 'utf8')).length === 0) throw new Error('the package file is empty')`,
                 turn: `    await new Promise((r) => setImmediate(r))`,
               }[t.timed],
+            ]
+          : []),
+        // A short read of a pipe the test opened, before it runs production,
+        // in every run: held for two of the sampler's samples (a count), so
+        // the test's unmutated rows record I/O of its own.
+        ...(t.pendingIo === `short`
+          ? [
+              `    await new Promise((r) => { const child = spawn(process.execPath, ['-e', ${JSON.stringify(SAMPLE_HOLD)}, samplesPath(process.env.ORACLE_GAPS_TEST_SAMPLES ?? '', \`\${process.pid}-\${threadId}\`), '${SAMPLES_HELD.short}'], { stdio: ['ignore', 'pipe', 'ignore'] }); child.unref(); child.stdout.once('data', r) })`,
+            ]
+          : []),
+        // A heavy test's calls before its own (`heavy`), in every run.
+        ...(heavyIn(t)
+          ? [
+              `    for (let h${i} = 0; h${i} < ${t.heavy}; h${i} += 1) ${callFor(t.fn)}(${part.input}, [])`,
             ]
           : []),
         `    const ${out}: Array<string> = []`,
@@ -5769,13 +6306,66 @@ function oracleTestFile(plan, file) {
               `    if (reads${i} !== 0) throw new Error('the payload was read')`,
             ]
           : []),
-        // A slow test waits past the first budget, within the full limit,
-        // where the output differs; it then judges as usual. The slow kill
+        // A slow test waits where the output differs; it then judges as usual. The slow kill
         // (`w_slowkill`, no `slowMs`) waits on the CLI instead of the clock
         // where the driver names the run's stream log (`beatHeld`).
         ...(t.slow
           ? [
               `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await ${t.slowMs === undefined ? `beatHeld()` : `new Promise((r) => setTimeout(r, ${t.slowMs}))`}`,
+            ]
+          : []),
+        // Where its output differs, a test that calls the function `loops`
+        // more times: each call is work the copy does, and the work budget
+        // counts it.
+        ...(t.loops
+          ? [
+              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) for (let k${i} = 0; k${i} < ${t.loops}; k${i} += 1) ${callFor(t.fn)}(${part.input}, [])`,
+            ]
+          : []),
+        // A test that reads the clock only after its work (`after`), in every
+        // run it reaches here: its unmutated rows are clocked, while a copy
+        // that spins before this line never reads it.
+        ...(t.timed === `after`
+          ? [
+              `    if (Date.now() < 0) throw new Error('the clock reads before 1970')`,
+            ]
+          : []),
+        // Where its output differs, a test that waits on one timer due well
+        // inside its horizon. Nothing else keeps it busy: no load is in the test
+        // (a loaded variant would be a CPU hog outside the worker), so the timer
+        // check alone stands between this copy and an idle cut.
+        ...(t.timerWait
+          ? [
+              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await new Promise((r) => setTimeout(r, ${t.timerWait.waitMs})${t.timerWait.unref ? `.unref()` : ``})`,
+            ]
+          : []),
+        // Where its output differs, a test that reads a pipe it opened: the
+        // stdout of a child it unrefs, so that only the read is active. The
+        // child writes once the copy's sampler has judged the test 20 more
+        // times (ORACLE_GAPS_TEST_SAMPLES), a count of samples at least 50 ms
+        // apart, past the 500 ms idle window, so the state is held by a count
+        // and not by a time. A copy that wrongly goes idle stops its sampler's
+        // count, so the read never ends and the copy is cut. The test then
+        // judges as usual.
+        ...(t.pendingIo === `test`
+          ? [
+              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await new Promise((r) => { const child = spawn(process.execPath, ['-e', ${JSON.stringify(SAMPLE_HOLD)}, samplesPath(process.env.ORACLE_GAPS_TEST_SAMPLES ?? '', \`\${process.pid}-\${threadId}\`), '${SAMPLES_HELD.test}'], { stdio: ['ignore', 'pipe', 'ignore'] }); child.unref(); child.stdout.once('data', r) })`,
+            ]
+          : []),
+        // Where its output differs, a test that writes to the console and then
+        // waits on an unref'd timer due long past its horizon, while the
+        // runner holds its own write pending (ORACLE_GAPS_TEST_RUNNER_WRITE).
+        ...(t.pendingIo === `runner`
+          ? [
+              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) { console.log('waiting past the horizon'); await new Promise((r) => setTimeout(r, ${PAST_HORIZON_MS}).unref()) }`,
+            ]
+          : []),
+        // Where its output differs, a test that waits on a ref'd timer due long
+        // past its horizon, while the runner keeps its own interval running
+        // (ORACLE_GAPS_TEST_RUNNER_TIMER), as Vitest's task-update timer can be.
+        ...(t.pendingIo === `runnerTimer`
+          ? [
+              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await new Promise((r) => setTimeout(r, ${PAST_HORIZON_MS}))`,
             ]
           : []),
         // A test that waits on I/O (a child process, about 3 s) where the
@@ -5806,10 +6396,14 @@ function oracleTestFile(plan, file) {
               `    }`,
             ]
           : []),
-        // A flaky test never hangs: the model leaves flaky tests out.
+        // A flaky test never hangs: the model leaves flaky tests out. A
+        // `pulse` hang keeps a repeating timer due inside its horizon, so the
+        // copy is never idle, and it never finishes: only the backstop cuts it.
         ...(t.hangs && !t.flaky
           ? [
-              `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await new Promise(() => {})`,
+              t.pulse
+                ? `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) { setInterval(() => {}, 100); await new Promise(() => {}) }`
+                : `    if (${when} && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) await new Promise(() => {})`,
             ]
           : []),
         // Where the output differs and the data is open, a verdict test of
@@ -5855,8 +6449,8 @@ function oracleTestFile(plan, file) {
           ]
         : []),
       t.asProp
-        ? `  fcTest.prop([fcv.integer({ min: 0, max: 10 })], { numRuns: 20, seed: 1 })('${testName(t, index)}', async (n) => {`
-        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || t.timed || lazyGated(plan, file, t) || fsGated(plan, file, t) ? `async ` : ``}() => {`,
+        ? `  fcTest.prop([fcv.integer({ min: ${PROPERTY.min}, max: ${PROPERTY.max} })], { numRuns: ${PROPERTY.numRuns}, seed: ${PROPERTY.seed} })('${testName(t, index)}', async (n) => {`
+        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || t.timerWait || t.pendingIo || t.timed || lazyGated(plan, file, t) || fsGated(plan, file, t) ? `async ` : ``}() => {`,
       ...partsOf(t).flatMap(campaign),
       `  })`,
       `})`,
@@ -5952,7 +6546,7 @@ function failingLawLines(plan, file) {
       ? []
       : plan.failingLawCalls === `heavy`
         ? [
-            `  for (let i = 0; i < ${HEAVY_CALLS}; i += 1) ${callFor(target)}(7, [])`,
+            `  for (let i = 0; i < ${LAW_HEAVY_CALLS}; i += 1) ${callFor(target)}(7, [])`,
           ]
         : plan.failingLawSpins
           ? [
@@ -6990,6 +7584,7 @@ export {
   kill,
   push,
   judging,
+  HEAVY_CALLS,
   witness,
   probeText,
   guardText,
@@ -7012,7 +7607,6 @@ export {
   ownersOf,
   interpret,
   judge,
-  MUTANT_LIMIT_MS,
   HEARTBEAT_MS,
   FULL_LIMIT_MS,
   refusal,

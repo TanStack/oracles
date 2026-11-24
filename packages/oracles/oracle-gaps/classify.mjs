@@ -33,6 +33,17 @@ function routeOf(registered) {
   return `unknown`
 }
 
+// The built-in law each cut by count or by state fails (M, 2026-11-16, "Spin,
+// no progress and the work budget are kills", restoring v21.1 K1 and P3): a
+// spin past the call budget and a copy past the mutant's work budget fail
+// bounded work, and a copy idle by state fails no progress. Only the backstop,
+// a wall-clock cut, is a gap.
+const BUILT_IN = {
+  spin: `bounded work`,
+  'work budget': `bounded work`,
+  'no progress': `no progress`,
+}
+
 /**
  * A mutant's outcome from its units. A test whose observations varied
  * between the two unmutated runs is nondeterministic: its failures judge
@@ -47,16 +58,43 @@ export function outcomeOf(
   assertions = false,
   pastBound = () => false,
 ) {
-  // A run that timed out recorded nothing. A kill in another run still
-  // decides; failing that, the mutant is `timeout`.
-  const timeout = units.some((unit) => unit.timedOut)
-    ? { outcome: `timeout`, detail: `run time limit` }
+  // A run that the backstop cut recorded nothing, and a test that Vitest's own
+  // limit ended (`Test timed out`) is the same kind of backstop (deterministic
+  // cuts, 2026-11-14): a gap that never keeps a kill from deciding. A kill in
+  // another run still decides; failing that, the mutant is `timeout`.
+  const timedOutTest = (test) =>
+    test.state === `failed` && /Test timed out/.test(test.message)
+  // The timeout's detail is the cause of the first gap cut in report order:
+  // the backstop, or a spin whose count could follow the clock (`spin`).
+  const cut = [...units]
+    .sort((a, b) => byPath(a.file, b.file))
+    .find(
+      (unit) =>
+        (unit.timedOut && !(BUILT_IN[unit.cause] && unit.builtIn?.length)) ||
+        (unit.tests ?? []).some(timedOutTest),
+    )
+  const timeout = cut
+    ? { outcome: `timeout`, detail: cut.timedOut ? cut.cause : `backstop` }
     : undefined
   const failures = []
   // By file path (report order, `inReportOrder`), in whatever order the
   // runner gathered the units.
   for (const unit of [...units].sort((a, b) => byPath(a.file, b.file))) {
-    if (unit.timedOut) continue
+    // A copy cut by its call count or by no progress, and the copy whose
+    // work passed the mutant's work budget, record nothing of their own: each
+    // test the cut names fails the built-in law on its route. A spin whose
+    // count could follow the clock names none, and is a timeout (a gap).
+    if (unit.timedOut) {
+      for (const v of BUILT_IN[unit.cause] ? (unit.builtIn ?? []) : []) {
+        const route = routeOf(v.route)
+        failures.push({
+          test: v.test ?? `(unnamed test)`,
+          route,
+          verdicts: [{ law: BUILT_IN[unit.cause], route }],
+        })
+      }
+      continue
+    }
     const rows = new Map(unit.rows)
     for (const message of unit.setupErrors)
       failures.push({ setup: true, message })
@@ -87,7 +125,6 @@ export function outcomeOf(
           // fast-check's wrapper text ("Property failed …") is not an
           // assertion; the wrapped error, which its message quotes, decides.
           /AssertionError|expected .+ to /.test(test.message),
-        timeout: /Test timed out/.test(test.message),
         // fast-check quotes the error its predicate threw after its own
         // header; that error is the cause the report shows.
         message: (
@@ -153,9 +190,7 @@ export function outcomeOf(
       laws: lawsOf(unregistered),
     }
   const tests = failures.filter((f) => f.test)
-  if (tests.length > 0 && tests.every((f) => f.timeout))
-    return { outcome: `timeout`, by: tests.map((f) => f.test) }
-  const crashed = tests.filter((f) => f.route !== `framework` && !f.timeout)
+  const crashed = tests.filter((f) => f.route !== `framework`)
   if (crashed.length > 0)
     return {
       outcome: `crashed`,
@@ -322,7 +357,9 @@ export function targetsOf(mutant, baseline, owners, oracleFiles) {
   return {
     oracleKeys,
     testKeys,
-    oracleTargets: [...new Set(oracleKeys.map(fileOf))],
+    // Report order (byPath), so a mutant's owners are summed in one order
+    // however its copies ran.
+    oracleTargets: [...new Set(oracleKeys.map(fileOf))].sort(byPath),
     testTargets: [...new Set(testKeys.map(fileOf))],
   }
 }
@@ -472,6 +509,18 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
     ),
     seconds: units.reduce((sum, u) => sum + u.seconds, 0),
   }
+  // A count cut whose copy the clock can reach is indeterminate, whichever
+  // sibling tests ran before it: the label uses the cut's clocked status alone
+  // (C 2026-11-23, "A count cut's label never depends on timing"; `timeout` is
+  // the backstop only, M-24, and an excluded test still runs, M 2026-11-23).
+  if (result.outcome === `timeout` && result.detail === `spin`) {
+    const open = { ...result, outcome: `survived`, class: `indeterminate` }
+    delete open.detail
+    open.nondeterministicBy = targets.oracleKeys.filter((k) =>
+      baseline.nondeterministic.has(k),
+    )
+    return open
+  }
   if (result.outcome !== `survived`) return result
   result.changedTests = changedIn(rows, compared, baseline)
   const roseIn = inReportOrder(
@@ -610,6 +659,13 @@ export function judgeAuthored(units, baseline) {
     ...outcomeOf(units, baseline.leftOut),
     seconds: units.reduce((sum, u) => sum + u.seconds, 0),
   }
+  // A count cut whose copy the clock can reach is indeterminate, as in
+  // judgeMutant (C 2026-11-23, "A count cut's label never depends on timing").
+  if (result.outcome === `timeout` && result.detail === `spin`) {
+    const open = { ...result, outcome: `survived`, class: `indeterminate` }
+    delete open.detail
+    return open
+  }
   if (result.outcome !== `survived`) return result
   const rows = new Map(units.flatMap((u) => u.rows ?? []))
   result.changedTests = changedIn(
@@ -619,8 +675,9 @@ export function judgeAuthored(units, baseline) {
     ),
     baseline,
   )
-  // An authored mutant is not instrumented, so only its changed observations
-  // are measured: the rest is `not-observed`, the patch changed the code.
+  // An authored mutant's copy counts calls only (check.mjs), so only its
+  // changed observations are measured: the rest is `not-observed`, the patch
+  // changed the code.
   result.class = result.changedTests.length > 0 ? `not-judged` : `not-observed`
   return result
 }

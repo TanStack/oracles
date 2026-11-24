@@ -48,7 +48,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Refusal } from './ending.mjs'
 import { removeSocket, socketOf, stateDirOf } from './evidence.mjs'
-import { realPathOf } from './paths.mjs'
+import { alive, realPathOf } from './paths.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const idleMs = 30 * 60_000
@@ -283,7 +283,10 @@ export async function requestDaemon(pkg, argv, code) {
 
 /**
  * Stops the package's daemon, if one runs, after its current check, and
- * returns once it has closed: its socket answers no more.
+ * returns once it has closed: its socket answers no more. A daemon that holds
+ * the lock while no socket answers is starting, or has lost its socket, and
+ * still runs: the stop waits for it to listen, and fails when none does
+ * within the wait, rather than report that no daemon runs.
  */
 export async function stopDaemon(pkg) {
   for (let waited = 0; waited <= WAIT_MS; waited += 100) {
@@ -292,13 +295,21 @@ export async function stopDaemon(pkg) {
       if (!reply.closing && !reply.died) return
     } catch (error) {
       if (!absent(error)) throw error
-      return
+      if (!lockHeld(pkg)) return
     }
     await sleep(100)
   }
   throw new Error(
-    `the package's daemon did not finish closing within ${WAIT_MS / 1000} s`,
+    `the package's daemon did not finish closing or answer the stop within ${WAIT_MS / 1000} s`,
   )
+}
+
+/** Whether a live process holds the package's lock. */
+const lockHeld = (pkg) => {
+  const pid = Number(
+    readText(join(stateDirOf(pkg), `daemon.lock`))?.split(`:`)[0],
+  )
+  return Number.isInteger(pid) && pid > 0 && alive(pid)
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -530,7 +541,10 @@ async function serve(pkg) {
     })
   })
   // Close the contexts and flush the evidence, then release the socket and
-  // the lock (when they are still this daemon's), then answer.
+  // the lock, then answer. Only the lock's holder closes the server: closing
+  // it unlinks the socket path, and a daemon that lost its lock may find the
+  // path taken by the successor that holds the lock now, whose socket it
+  // would remove.
   async function shutdown(connection, value = { exitCode: 0 }) {
     closing = true
     clearInterval(watch)
@@ -538,9 +552,9 @@ async function serve(pkg) {
     await store?.close()
     if (readText(lock) === token) {
       removeSocket(socket)
+      server.close()
       rmSync(lock, { force: true })
     }
-    server.close()
     if (connection) await reply(connection, value)
     process.exit(0)
   }
