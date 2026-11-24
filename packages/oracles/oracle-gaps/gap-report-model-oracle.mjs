@@ -1243,11 +1243,17 @@ const plainSteps = (steps) => {
 // The plain stops: a stop while the witness spins (`run`); every other stop
 // (`warm`, a constructed `abort`, `after` or `note`) is read as `run`. An abort
 // needs the CLI's test hook, so a taken-back history is not one that aborts.
+// A constructed `crash` names the signal its test sends its own process
+// (SIGTRAP), which no drawn stop sends, so it is read as a SIGINT stop.
 const plainWhens = new Set([`run`])
 const plainStops = (stopRuns) =>
   stopRuns.some((stop) => !plainWhens.has(stop.when))
     ? stopRuns.map((stop) =>
-        plainWhens.has(stop.when) ? stop : { ...stop, when: `run` },
+        plainWhens.has(stop.when)
+          ? stop
+          : stop.when === `crash`
+            ? { ...stop, signal: `SIGINT`, when: `run` }
+            : { ...stop, when: `run` },
       )
     : stopRuns.length === 0
       ? NO_STOPS
@@ -5161,6 +5167,39 @@ const verdictLine = (files, failing) =>
 const doneLine = (gaps, provisional, out) =>
   `oracle-gaps: done completed, ${gaps} gap${gaps === 1 ? `` : `s`}${provisional ? ` (provisional)` : ``}, report ${out.replaceAll(`\\`, `/`)}/summary.md`
 
+// The signals a native crash ends a POSIX process with: abort() (SIGABRT,
+// which a failed CHECK in Node or V8 and a heap out of memory both raise), a
+// trap or an illegal instruction (SIGTRAP, SIGILL: how V8 ends the process on
+// a failed `Check failed` on arm64 and x64), and a bad access or arithmetic
+// (SIGSEGV, SIGBUS, SIGFPE). A stop's signal (SIGINT, SIGTERM) and a kill
+// from outside (SIGKILL) are none of them.
+const NATIVE_CRASHES = [
+  `SIGABRT`,
+  `SIGBUS`,
+  `SIGFPE`,
+  `SIGILL`,
+  `SIGSEGV`,
+  `SIGTRAP`,
+]
+/**
+ * The done line of a run whose process `signal` ended while its Vitest
+ * workers ran in `pool`, with no stop and no out-of-memory message before it:
+ * the signal, and for a native crash, what it is and the one step to take.
+ * Under threads, a worker thread's crash ends the run's process with every
+ * thread in it, so the step is the forks pool, where a crash ends only its own
+ * worker (whose mutants the run reports), or another Node version; under
+ * forks, the crash was the run's own process, so the step is another Node
+ * version.
+ */
+const crashLine = (signal, pool) =>
+  `oracle-gaps: done error, the run's process exited with ${signal}${
+    !NATIVE_CRASHES.includes(signal)
+      ? ``
+      : pool === `threads`
+        ? `: a native crash, a fault in Node, V8 or a native addon, which ends every worker thread with it; rerun with --pool forks, where it ends only its worker, or with another Node version`
+        : `: a native crash, a fault in Node, V8 or a native addon; rerun with another Node version`
+  }`
+
 function model(plan) {
   const refused = refusal(plan)
   // The config the run names (F12) once its contexts have loaded it: the
@@ -5796,8 +5835,12 @@ function oracleTestFile(plan, file) {
         // process, records its own process id and the child's in the
         // directory the driver names, and spins where its output differs.
         // In any other run it judges as usual.
+        // In a run the driver crashes (`GAP_CRASH_SIGNAL` set), it ends its
+        // own process with that signal there, as a native crash does: under
+        // threads that process is the run's own.
         ...(t.stops
           ? [
+              `    if (${when} && process.env.GAP_CRASH_SIGNAL && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) process.kill(process.pid, process.env.GAP_CRASH_SIGNAL)`,
               `    if (${when} && process.env.GAP_STOP_DIR && JSON.stringify(${out}) !== ${JSON.stringify(expected)}) {`,
               `      const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })`,
               `      recordPid(pidPath(process.env.GAP_STOP_DIR, String(child.pid)), '')`,
@@ -6987,6 +7030,7 @@ export {
   baselineVerdict,
   verdictLine,
   doneLine,
+  crashLine,
   kill,
   push,
   judging,

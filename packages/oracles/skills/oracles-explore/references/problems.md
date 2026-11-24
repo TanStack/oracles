@@ -74,6 +74,14 @@ suite (thousands of tests). Run it again with
 `NODE_OPTIONS=--max-old-space-size=8192`, or with `--contexts 2`. Keep
 every test and history: do not shrink the oracle to make it fit.
 
+**The gap check dies with a native crash**: `done error, the run's process
+exited with SIGTRAP` (or SIGSEGV, SIGILL, SIGBUS, SIGABRT), often after a
+V8 `# Fatal error ... Check failed:` block. That is a fault in Node, V8 or
+a native addon, not in the oracle. Do what the done line says: under the
+default `--pool threads`, a crash in one worker thread ends the whole run,
+so run it again with `--pool forks`, where it ends only its worker; or run
+it under another Node version. Keep every test and history.
+
 **TypeScript reports untyped imports (`TS7016` / `TS7006`) on `.js` or `.mjs`
 production files.** Import through the package's typed entry where one
 exists instead of an untyped relative `.js` or `.mjs` path. When no typed

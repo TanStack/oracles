@@ -183,6 +183,17 @@ const { endRun, Refusal } = await import(`./ending.mjs`)
 // ending.mjs loads stream.mjs, so this import costs no load of its own.
 const { escapeControls, streamLine } = await import(`./stream.mjs`)
 
+// The signals a native crash ends a process with: abort() (a failed CHECK in
+// Node or V8, a heap out of memory), a trap or an illegal instruction (V8's
+// `Check failed`), and a bad access or arithmetic.
+const NATIVE_CRASHES = new Set([
+  `SIGABRT`,
+  `SIGBUS`,
+  `SIGFPE`,
+  `SIGILL`,
+  `SIGSEGV`,
+  `SIGTRAP`,
+])
 // How long the group has to end after a stop signal before it is killed.
 const STOP_GRACE_MS = 2000
 
@@ -415,7 +426,7 @@ function exitWhenFlushed(code) {
  * process resolved (review of #57, F2). The child's session directory in `pkg`
  * goes with the child, however the child ended.
  */
-function superviseRun(out, pkg) {
+function superviseRun(out, pkg, pool) {
   let child
   let stopped
   // How the run ended: its exit code, or the signal that ended it.
@@ -428,6 +439,20 @@ function superviseRun(out, pkg) {
   // of memory.
   let outOfMemory = false
   let stderrTail = ``
+  // The step that avoids how the run's process ended, when the CLI knows one:
+  // more memory after V8 said it ran out, and after any other native crash
+  // another pool or Node version. A worker thread's crash (a V8 `Check
+  // failed` is a SIGTRAP or a SIGILL) ends the process with every thread in
+  // it; under forks a crash ends only its worker, which the run goes on
+  // without, so a crash under forks was the run's own process.
+  const remedyOf = (how) =>
+    outOfMemory
+      ? `: it ran out of memory; give Node more (NODE_OPTIONS=--max-old-space-size=<MB>) or run fewer --contexts`
+      : !NATIVE_CRASHES.has(how)
+        ? ``
+        : pool === `threads`
+          ? `: a native crash, a fault in Node, V8 or a native addon, which ends every worker thread with it; rerun with --pool forks, where it ends only its worker, or with another Node version`
+          : `: a native crash, a fault in Node, V8 or a native addon; rerun with another Node version`
   // Whether the run's streams and channel have closed.
   let closed = false
   // Ends the CLI once the run has ended (or the grace has passed), with what
@@ -435,8 +460,8 @@ function superviseRun(out, pkg) {
   // line, so the CLI ends with its code and writes none. Every other end gets
   // one done line from the CLI, on both streams: a stop ended the run
   // (stopped); a run whose process ended on its own (a signal, a code, a V8
-  // out-of-memory abort) is an error, exit 3, with the remedy when it ran out
-  // of memory.
+  // out-of-memory abort) is an error, exit 3, with the step that avoids it
+  // when the CLI knows one (remedyOf).
   let finishing = false
   const finish = () => {
     if (finishing) return
@@ -456,7 +481,7 @@ function superviseRun(out, pkg) {
       const how = ended?.signal ?? (ended ? `code ${ended.code}` : `no exit`)
       const line = stopped
         ? `oracle-gaps: done stopped (${stopped})\n`
-        : `oracle-gaps: done error, the run's process exited with ${how}${outOfMemory ? `: it ran out of memory; give Node more (NODE_OPTIONS=--max-old-space-size=<MB>) or run fewer --contexts` : ``}\n`
+        : `oracle-gaps: done error, the run's process exited with ${how}${remedyOf(how)}\n`
       process.stdout.write(line, () => {
         // The log was opened before the run started (startLog). A log that
         // cannot take the line does not change the ending: both streams still
@@ -731,7 +756,7 @@ async function run() {
       } catch (error) {
         return endWith(error, checking.out)
       }
-      return superviseRun(checking.out, checking.pkg)
+      return superviseRun(checking.out, checking.pkg, checking.pool)
     }
   }
   if (supervisor !== undefined) {
