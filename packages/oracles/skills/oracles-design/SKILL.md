@@ -398,7 +398,13 @@ Techniques: [guide § Histories](../../docs/guide.md#histories).
     prototypes. `instanceof` follows a corrupted prototype chain.
   - It awaits the work it starts.
   - It bounds its own run time and work, and throws a structured error when
-    a bound is passed.
+    a bound is passed. It waits on a promise from production with
+    `withinTurns(promise, turns)` and records a promise still pending as an
+    observation. It takes at most one item more than the history can
+    produce from anything production hands out (a generator, an iterator, a
+    stream), and records that extra item as an observation. A mutant that
+    never settles the promise, or never ends the sequence, then fails a law
+    instead of hanging the run.
   - It waits on events, never on the wall clock. Control time with fake
     timers, a virtual clock, or deferred promises, so that load on the
     machine cannot change a result.
@@ -611,10 +617,22 @@ comes with one instruction. Do what it says, within the rules below.
 - **Never write "equivalent" or "needs a maintainer's decision" in your
   report.** For a survivor you cannot kill, give the histories you tried and
   what they showed, and follow its directive.
-- **Temporary, a CLI limitation:** a mutant that makes production loop forever
-  synchronously shows as a timeout. The framework's breakage laws will judge
-  it, and they are not built yet. Report it as a known CLI limitation, not an
-  oracle gap. Do not add driver timeouts for it, and keep working.
+- **A `timeout` gap is one of three hangs.** Read the mutated line to tell
+  which.
+  - The mutant removes a `resolve` or `reject`, or a call that settles a
+    promise, and a driver awaits that promise: the driver's wait is
+    unbounded. Wait with `withinTurns(promise, turns)`, record "still
+    pending" as an observation, and let a law reject it. This is an oracle
+    gap.
+  - The mutant makes a generator, an iterator, or a stream that production
+    hands out never end, and the driver's `for … of` keeps taking items: the
+    driver's loop is unbounded. Take at most one item more than the history
+    can produce, record the extra item as an observation, and let a law
+    reject it. This is an oracle gap.
+  - **Temporary, a CLI limitation:** the mutant makes production loop
+    forever in its own code. The framework's breakage laws will judge it,
+    and they are not built yet. Report it as a known CLI limitation, not an
+    oracle gap. Do not add driver timeouts for it, and keep working.
 - **Temporary, a known CLI bug:** a gap on a guard that is constant under
   TypeScript's narrowing is an invalid mutant that the CLI should not have
   generated. Two forms: a branch after `x satisfies never`, and the test for
