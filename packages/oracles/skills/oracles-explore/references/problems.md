@@ -27,6 +27,9 @@ refuses a `--source` outside its `--package`). The rule:
   before is not blamed on the upgrade.
 - Never commit the upgrade without the developer: leave it uncommitted,
   and say so.
+- If CI runs a Node older than 20, Vitest 4 cannot run their suite there:
+  say so with the question, since that job must change before the upgrade
+  is committed.
 
 Install `vitest@^4.1` in the same command as `@tanstack/oracles`: npm
 refuses to install the oracle package next to the old Vitest (`ERESOLVE`).
@@ -37,7 +40,9 @@ older than 22.12, where Vite 7 does not run. pnpm keeps the old Vite
 otherwise, and Vitest 4 stops at startup with `Package subpath
 './module-runner' is not defined`.
 When `package.json` lists a Vite older than 6, upgrading it is part of the
-same decision: say so with the question.
+same decision: say so with the question. The same holds for the `@vitest/*`
+packages it lists (`@vitest/coverage-v8`, `@vitest/ui`): put each in the
+command at `^4.1`, or npm refuses the install (`ERESOLVE`).
 
 **npm installed `fast-check` and `vitest` already.** npm installs the peers
 of `@tanstack/oracles` without listing them. Check `package.json`, not
