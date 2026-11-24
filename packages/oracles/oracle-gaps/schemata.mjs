@@ -88,8 +88,6 @@ function isAnchor(ts, node) {
     ts.isEnumMember(node) ||
     ts.isDecorator(node) ||
     ts.isHeritageClause(node) ||
-    ts.isClassStaticBlockDeclaration(node) ||
-    ts.isAccessor(node) ||
     (ts.isComputedPropertyName(node) &&
       (ts.isClassElement(node.parent) ||
         ts.isMethodDeclaration(node.parent) ||

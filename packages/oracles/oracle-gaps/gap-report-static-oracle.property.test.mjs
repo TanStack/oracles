@@ -1887,10 +1887,22 @@ oracleProperty({
 // declaration with no mutant, so a check that finds nothing cannot pass.
 //
 // Limits: one declaration per line, with no nested declarations, so the walk
-// is tested at its first level only. The `~n` suffix of a repeated anchor, the
-// function part of a key, and ownership are not judged here: the end-to-end and
-// static laws above own them. A declaration whose operators are not `>`
-// comparisons takes the same walk, but only comparisons are generated.
+// is tested at its first level only. Operators are `>` comparisons only. The
+// generated kinds are the walk's reachable branches: a parameter, a property,
+// an enum member, a decorator, a heritage clause, a class or object computed
+// name (method, property, object method, object getter), an export default
+// expression, and a statement. Static blocks and accessors are not generated:
+// no site can anchor to them, because their parts are statements, parameters,
+// decorators, or computed names that the walk meets first (their branches were
+// deleted as unreachable). A computed name in an object-literal property
+// (`{ [k]: v }`) is not generated. The constructed histories' `build` ignores
+// the generated base, so their five bases are the same fixture, and the
+// generated campaigns are the only variety. Reach is counted from the plan:
+// the driver reports each kind the plan holds, and the per-line check that
+// a mutant was generated for each declaration is what ties that to production.
+// The `~n` suffix of a repeated anchor, the function part of a key, and
+// ownership are not judged here. The gap check cannot judge the gap CLI's own
+// sources: no owns entry names them, so the check refuses.
 
 const anchorKinds = [
   `parameter`,
@@ -1899,6 +1911,11 @@ const anchorKinds = [
   `decorator`,
   `heritage`,
   `statement`,
+  `computedMethod`,
+  `computedProperty`,
+  `computedObjectMethod`,
+  `computedGetter`,
+  `exportDefault`,
 ]
 const anchorSite = fc.record({
   kind: fc.constantFrom(...anchorKinds),
@@ -1906,7 +1923,7 @@ const anchorSite = fc.record({
   isStatic: fc.boolean(),
 })
 const anchorHistories = fc.record({
-  sites: fc.array(anchorSite, { minLength: 1, maxLength: 6 }),
+  sites: fc.array(anchorSite, { minLength: 1, maxLength: anchorKinds.length }),
 })
 
 // The history grammar: the rendered file, each line's declared tokens, and
@@ -1963,6 +1980,37 @@ function anchorDeclaration({ kind, typed, isStatic }, n) {
       return {
         text: `export function s${n}(q${n}: number) { return q${n} > ${constant} }`,
         tokens: [`return`, `q${n}`, `>`, constant],
+      }
+    // A computed name is not a statement, and TypeScript's statement range
+    // leaves it out: the walk must stop at it, in a class method, a class
+    // property, an object method, and an object accessor (empty bodies, so
+    // no statement shares the line).
+    case `computedMethod`:
+      return {
+        text: `export class N${n} { [${constant} > 1]() {} }`,
+        tokens: [`[`, constant, `>`, `1`, `]`],
+      }
+    case `computedProperty`:
+      return {
+        text: `export class N${n} { [${constant} > 1] = 1 }`,
+        tokens: [`[`, constant, `>`, `1`, `]`],
+      }
+    case `computedObjectMethod`:
+      return {
+        text: `export const O${n} = { [${constant} > 1]() {} }`,
+        tokens: [`[`, constant, `>`, `1`, `]`],
+      }
+    case `computedGetter`:
+      return {
+        text: `export const G${n} = { get [${constant} > 1]() {} }`,
+        tokens: [`[`, constant, `>`, `1`, `]`],
+      }
+    // An export default expression is an ExportAssignment, which TypeScript's
+    // statement range leaves out.
+    case `exportDefault`:
+      return {
+        text: `export default (${constant} > 1)`,
+        tokens: [`export`, `default`, `(`, constant, `>`, `1`, `)`],
       }
     default:
       throw new Error(`unknown anchor kind: ${kind}`)
@@ -2096,7 +2144,7 @@ oracleProperty({
   law: {
     statement: `No mutant outside a top-level statement anchors to the whole file: each mutant's anchor is the tokens of the innermost statement or declaration that holds its site, so a default parameter, a property declaration, an enum member, a decorator, or a heritage clause anchors to its own declaration, and a statement's mutant anchors to that statement.`,
     authority: `Decision by the maintainers on PR #196, 2026-11-23: a mutant outside a statement anchors to its nearest declaration (parameter, property, enum member, decorator, heritage clause), never the whole file; the one-time change of gap keys is accepted and disclosed in the changeset.`,
-    limits: `One declaration per line with no nested declarations. The ~n suffix of a repeated anchor, the function part of a key, and ownership are not judged here.`,
+    limits: `One declaration per line with no nested declarations; operators are > comparisons only. Static blocks and accessors are not generated (no site can anchor to them; their branches were removed). Computed names in object-literal properties are not generated. Constructed histories ignore their base, so their bases repeat one fixture. Reach is counted from the plan, and the per-line check ties it to production. The ~n suffix of a repeated anchor, the function part of a key, and ownership are not judged here, and the gap check refuses on the gap CLI's sources (no owns entry).`,
   },
   histories: {
     arbitrary: anchorHistories,
