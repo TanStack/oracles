@@ -569,18 +569,22 @@ export class OracleModelError extends Error {
 }
 
 /**
+ * The same shape with every property read-only, so a literal that a
+ * `const` type parameter infers (readonly tuples included) is a valid
+ * result of `build`. A function-valued property keeps its type: a mapped
+ * type over a function has no keys, so it would accept any value there.
+ * The history itself is still a `THistory`.
+ */
+export type ReadonlyHistory<T> = T extends (...args: Array<never>) => unknown
+  ? T
+  : T extends object
+    ? { readonly [K in keyof T]: ReadonlyHistory<T[K]> }
+    : T
+
+/**
  * A history built from a generated one so that it reaches the states the
  * laws need. The driver reports reached states with `observe("reach", state)`.
  */
-/**
- * The same shape with every property read-only, so a literal that a
- * `const` type parameter infers (readonly tuples included) is a valid
- * result of `build`. The history itself is still a `THistory`.
- */
-export type ReadonlyHistory<T> = T extends object
-  ? { readonly [K in keyof T]: ReadonlyHistory<T[K]> }
-  : T
-
 export interface ConstructedHistory<THistory> {
   name: string
   enters: ReadonlyArray<string>
@@ -650,7 +654,7 @@ export interface GeneratedHistories<THistory> {
    * run to run. A whole number of at least 0; 0 when absent.
    */
   drawnBases?: number
-  fixed?: NoInfer<ReadonlyArray<FixedHistory<THistory>>>
+  fixed?: ReadonlyArray<FixedHistory<THistory>>
 }
 
 /**

@@ -33,6 +33,18 @@ const variantArbitrary: fc.Arbitrary<VariantHistory> = fc.oneof(
   }),
 )
 
+// Mutable-array parameters, for the break's cases: a literal-inferred history's
+// arrays are read-only, so they do not pass here without a copy.
+function takesMutable(xs: Array<number>): number {
+  return xs.length
+}
+function firstOf<T extends Array<number>>(xs: T): number {
+  return xs.length
+}
+function identity<T>(x: T): T {
+  return x
+}
+
 const law = {
   statement: `type inference regression`,
   authority: `oracleProperty type signature`,
@@ -402,6 +414,10 @@ export function checkOraclePropertyInference(): void {
     check: () => pass,
   })
 
+  // R7 weakening, accepted with the break (maintainers, 2026-11-23): the four
+  // negative checks that rejected mismatched annotated callbacks are removed.
+  // Main compiles those programs, and the maintainer said behavior holds.
+
   // 6. Main-compatible callbacks. An annotated callback whose parameter is
   //    not the history type still compiles, as it does on main: the
   //    annotation is not checked against the history the driver receives.
@@ -499,6 +515,303 @@ export function checkOraclePropertyInference(): void {
     model: (plan) => {
       const items: Array<number> = [...plan.items]
       items.push(2)
+      return plan.kind
+    },
+    driver: () => {},
+    check: () => pass,
+  })
+
+  // 10. Function-valued properties keep their type under ReadonlyHistory. A
+  //     wrong value in a function field is rejected, as on main. (A mapped
+  //     type over a function has no keys, so the read-only view must keep
+  //     the function type.)
+  type FnHistory = {
+    kind: `f`
+    fn: () => number
+    inner: { fn: () => number }
+    run: () => number
+  }
+  const fnArbitrary: fc.Arbitrary<FnHistory> = fc.record({
+    kind: fc.constant(`f` as const),
+    fn: fc.constant(() => 1),
+    inner: fc.record({ fn: fc.constant(() => 1) }),
+    run: fc.constant(() => 1),
+  })
+  oracleProperty({
+    id: `type.fn.correct`,
+    law,
+    histories: {
+      arbitrary: fnArbitrary,
+      runs: 10,
+      fixedSeeds: [1],
+      constructed: [
+        {
+          name: `fn-correct`,
+          enters: [],
+          build: () => ({
+            kind: `f`,
+            fn: () => 1,
+            inner: { fn: () => 1 },
+            run: () => 1,
+          }),
+        },
+      ],
+    },
+    model: (plan) => plan.kind,
+    driver: () => {},
+    check: () => pass,
+  })
+  oracleProperty({
+    id: `type.error.fn-number`,
+    law,
+    // @ts-expect-error a number where a function-valued field is required
+    histories: {
+      arbitrary: fnArbitrary,
+      runs: 10,
+      fixedSeeds: [1],
+      constructed: [
+        {
+          name: `fn-number`,
+          enters: [],
+          build: () => ({
+            kind: `f`,
+            fn: 123,
+            inner: { fn: () => 1 },
+            run: () => 1,
+          }),
+        },
+      ],
+    },
+    model: (plan) => plan.kind,
+    driver: () => {},
+    check: () => pass,
+  })
+  oracleProperty({
+    id: `type.error.fn-string`,
+    law,
+    // @ts-expect-error a string where a function-valued field is required
+    histories: {
+      arbitrary: fnArbitrary,
+      runs: 10,
+      fixedSeeds: [1],
+      constructed: [
+        {
+          name: `fn-string`,
+          enters: [],
+          build: () => ({
+            kind: `f`,
+            fn: `str`,
+            inner: { fn: () => 1 },
+            run: () => 1,
+          }),
+        },
+      ],
+    },
+    model: (plan) => plan.kind,
+    driver: () => {},
+    check: () => pass,
+  })
+  oracleProperty({
+    id: `type.error.fn-nested`,
+    law,
+    // @ts-expect-error a number in a nested function-valued field
+    histories: {
+      arbitrary: fnArbitrary,
+      runs: 10,
+      fixedSeeds: [1],
+      constructed: [
+        {
+          name: `fn-nested`,
+          enters: [],
+          build: () => ({
+            kind: `f`,
+            fn: () => 1,
+            inner: { fn: 5 },
+            run: () => 1,
+          }),
+        },
+      ],
+    },
+    model: (plan) => plan.kind,
+    driver: () => {},
+    check: () => pass,
+  })
+  oracleProperty({
+    id: `type.error.fn-method`,
+    law,
+    // @ts-expect-error a number where a method is required
+    histories: {
+      arbitrary: fnArbitrary,
+      runs: 10,
+      fixedSeeds: [1],
+      constructed: [
+        {
+          name: `fn-method`,
+          enters: [],
+          build: () => ({
+            kind: `f`,
+            fn: () => 1,
+            inner: { fn: () => 1 },
+            run: 5,
+          }),
+        },
+      ],
+    },
+    model: (plan) => plan.kind,
+    driver: () => {},
+    check: () => pass,
+  })
+
+  // 11. Main-compatible: a fixed history's literal keeps mutable arrays, so
+  //     a model may mutate it, as on main. (Main-compatibility, not a witness
+  //     of any wrapper: the fixed literal's type is inferred the same way with
+  //     or without NoInfer, so `fixed` has no NoInfer.)
+  oracleProperty({
+    id: `type.fixed.mutable`,
+    law,
+    histories: {
+      arbitrary: variantArbitrary,
+      runs: 10,
+      fixedSeeds: [1],
+      fixed: [
+        {
+          name: `mutable-fixed`,
+          history: { kind: `a`, mode: `fast`, mask: [true, false], items: [1] },
+        },
+      ],
+    },
+    model: (plan) => {
+      if (plan.kind === `a`) plan.items.push(2)
+      return plan.kind
+    },
+    driver: () => {},
+    check: () => pass,
+  })
+
+  // 12. The break, class: a literal-inferred array passed to a mutable-array
+  //     parameter. The migration copies the array.
+  oracleProperty({
+    id: `type.break.mutable-parameter`,
+    law,
+    histories: {
+      enumerated: [
+        { kind: `a`, mode: `fast`, mask: [true, false], items: [1] },
+      ],
+      states: [],
+    },
+    model: (plan) => {
+      // @ts-expect-error a literal history's array is read-only
+      takesMutable(plan.items)
+      return plan.kind
+    },
+    driver: () => {},
+    check: () => pass,
+  })
+  oracleProperty({
+    id: `type.break.mutable-parameter-migrated`,
+    law,
+    histories: {
+      enumerated: [
+        { kind: `a`, mode: `fast`, mask: [true, false], items: [1] },
+      ],
+      states: [],
+    },
+    model: (plan) => {
+      takesMutable([...plan.items])
+      return plan.kind
+    },
+    driver: () => {},
+    check: () => pass,
+  })
+
+  // 13. The break, class: a discriminated-union branch. Each branch keeps its
+  //     own read-only array; the migration copies it inside the branch.
+  oracleProperty({
+    id: `type.break.union-branch`,
+    law,
+    histories: {
+      enumerated: [
+        { kind: `a`, items: [1] },
+        { kind: `b`, count: 1 },
+      ],
+      states: [],
+    },
+    model: (plan) => {
+      if (plan.kind === `a`) {
+        // @ts-expect-error the branch's array is read-only
+        takesMutable(plan.items)
+      }
+      return plan.kind
+    },
+    driver: () => {},
+    check: () => pass,
+  })
+  oracleProperty({
+    id: `type.break.union-branch-migrated`,
+    law,
+    histories: {
+      enumerated: [
+        { kind: `a`, items: [1] },
+        { kind: `b`, count: 1 },
+      ],
+      states: [],
+    },
+    model: (plan) => {
+      if (plan.kind === `a`) takesMutable([...plan.items])
+      return plan.kind
+    },
+    driver: () => {},
+    check: () => pass,
+  })
+
+  // 14. The break, class: a generic constrained to a mutable array. The
+  //     migration copies the array.
+  oracleProperty({
+    id: `type.break.constrained-generic`,
+    law,
+    histories: {
+      enumerated: [
+        { kind: `a`, mode: `fast`, mask: [true, false], items: [1] },
+      ],
+      states: [],
+    },
+    model: (plan) => {
+      // @ts-expect-error a read-only array does not satisfy number[]
+      firstOf(plan.items)
+      return plan.kind
+    },
+    driver: () => {},
+    check: () => pass,
+  })
+  oracleProperty({
+    id: `type.break.constrained-generic-migrated`,
+    law,
+    histories: {
+      enumerated: [
+        { kind: `a`, mode: `fast`, mask: [true, false], items: [1] },
+      ],
+      states: [],
+    },
+    model: (plan) => {
+      firstOf([...plan.items])
+      return plan.kind
+    },
+    driver: () => {},
+    check: () => pass,
+  })
+
+  // 15. Unbroken: a generic with no array constraint keeps the read-only type.
+  oracleProperty({
+    id: `type.generic-identity`,
+    law,
+    histories: {
+      enumerated: [
+        { kind: `a`, mode: `fast`, mask: [true, false], items: [1] },
+      ],
+      states: [],
+    },
+    model: (plan) => {
+      identity(plan.items)
       return plan.kind
     },
     driver: () => {},
