@@ -64,14 +64,19 @@ export function loadAuthored(directory) {
   return mutants
 }
 
-/** The patched source text, or undefined when `find` does not occur once. */
+/**
+ * The patched source text, with the line and column (each counted from 1)
+ * where `find` starts, or undefined when `find` does not occur once.
+ */
 export function applyAuthored(text, mutant) {
   const at = text.indexOf(mutant.find)
   if (at < 0 || text.indexOf(mutant.find, at + 1) >= 0) return undefined
+  const lines = text.slice(0, at).split(`\n`)
   return {
     text:
       text.slice(0, at) + mutant.replace + text.slice(at + mutant.find.length),
-    line: text.slice(0, at).split(`\n`).length,
+    line: lines.length,
+    column: lines.at(-1).length + 1,
     position: at,
   }
 }

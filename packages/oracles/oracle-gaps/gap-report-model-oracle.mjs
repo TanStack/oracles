@@ -3420,6 +3420,9 @@ function resolveHistory(history) {
           : `out.push('x');`,
       applies: source.split(find).length - 1 === 1,
       line: source.slice(0, source.indexOf(find)).split(`\n`).length,
+      // Where its `find` starts on that line, counted from 1.
+      column:
+        source.slice(0, source.indexOf(find)).split(`\n`).at(-1).length + 1,
       kind: spec.kind,
     }
   }
@@ -5452,6 +5455,7 @@ function model(plan) {
             ),
           ),
     line: a.applies ? a.line : undefined,
+    column: a.applies ? a.column : undefined,
   }))
   const authored = authoredAll[0]?.kind
   const isGap = (kind) =>

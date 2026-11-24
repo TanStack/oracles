@@ -673,9 +673,11 @@ export const partitions = {
           'random seed: no owns entry refuses the run',
         ],
         ...[
+          'calibration: a column counted from 0',
           'calibration: a key drops its statement',
           'calibration: a refusal prints a stack trace, as a crash does',
           'calibration: the instrumented derived class differs with no mutant active',
+          'calibration: two links of one optional chain share a column',
           'determinism: constructed history: a derived class calling super after &&',
           'determinism: constructed history: a source through a link to the package',
           'determinism: constructed history: an owns that is not a literal in a expect-argument assertion refuses nothing',

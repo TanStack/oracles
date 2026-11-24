@@ -48,15 +48,19 @@ export function change(result) {
 }
 
 /**
- * One gap as one line: its kind, line, short id (the rerun's `--only` id),
- * and the change. A mutant that never applied (an authored `find` that no
- * longer matches) has no line, and says so. Printed as each mutant is judged,
- * and again in the summary.
+ * One gap as one line: its kind, place, short id (the rerun's `--only` id),
+ * and the change. The place is `L<line>:C<column>`, where the code the
+ * mutant replaces starts, so two sites of one change on one line (two `?.`
+ * of one chain) print apart. A mutant that never applied (an authored `find`
+ * that no longer matches) has no place, and says so: `L?`. Printed as each
+ * mutant is judged, and again in the summary.
  */
 export function gapLine(result) {
+  const place =
+    result.line === undefined ? `?` : `${result.line}:C${result.column}`
   return streamLine(
     `gap`,
-    `${kindOf(result)} L${result.line ?? `?`} ${result.id} ${change(result)}`,
+    `${kindOf(result)} L${place} ${result.id} ${change(result)}`,
   )
 }
 

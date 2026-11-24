@@ -140,7 +140,12 @@ export function instrument(ts, path, text, source, offset = 0) {
   const svelte = /\.svelte\.[cm]?[jt]s$/.test(path)
   const isRune = (call) =>
     svelte && placedRune.test(call.expression.getText(file))
-  const lineOf = (pos) => file.getLineAndCharacterOfPosition(pos).line + 1
+  // A position's line and column, each counted from 1; a column counts
+  // UTF-16 code units, as TypeScript and editors do.
+  const placeOf = (pos) => {
+    const { line, character } = file.getLineAndCharacterOfPosition(pos)
+    return { line: line + 1, column: character + 1 }
+  }
   const arithmetic = new Set([
     ts.SyntaxKind.PlusToken,
     ts.SyntaxKind.MinusToken,
@@ -206,11 +211,22 @@ export function instrument(ts, path, text, source, offset = 0) {
       }
     return false
   }
-  // `at` is the node whose line the mutant reports: the operator token for a
-  // swap and the condition for an `if`, as the earlier runner reported them.
+  // `at` is the node whose position names the mutant's function: the
+  // operator token for a swap and the condition for an `if`, as the earlier
+  // runner reported them. `code` is where the code it replaces starts, the
+  // line and column the report gives (`at` itself, but for a `?.` link the
+  // `?.`, since the links of one chain all start where the chain does).
   // `evidence` is a hint for the report, and never changes whether a site is
   // emitted: see `evidenceOf`, and neither does `outside`.
-  const add = (at, operator, original, replacement, evidence, outside) => {
+  const add = (
+    at,
+    operator,
+    original,
+    replacement,
+    evidence,
+    outside,
+    code = at,
+  ) => {
     if (mentionsSuper && superGuarded(at)) return undefined
     const probeGuard = guarded
     const local = mutants.length + 1
@@ -220,7 +236,7 @@ export function instrument(ts, path, text, source, offset = 0) {
       id: `${source.replace(/^src\//, ``)}:M${local}`,
       number: id,
       source,
-      line: lineOf(at.getStart(file)),
+      ...placeOf(code.getStart(file)),
       // Where the site starts, which names its function (owners.mjs).
       position: at.getStart(file),
       operator,
@@ -1192,6 +1208,8 @@ export function instrument(ts, path, text, source, offset = 0) {
         `?.`,
         `.`,
         constant ? DEAD_CODE : undefined,
+        undefined,
+        node.questionDotToken,
       )
       linkIds.set(node, ids.chain)
     }

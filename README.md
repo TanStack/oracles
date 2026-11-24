@@ -117,7 +117,7 @@ agent.
   | `baseline`                               | `oracle-gaps: baseline pass tests/a.test.ts: 3 tests`, `oracle-gaps: baseline fail tests/b.test.ts: 1 of 2 tests failed`                                                                                                                                    |
   | `baseline` (decisive, before any mutant) | `oracle-gaps: baseline all 4 oracle files pass`, or `oracle-gaps: baseline 1 of 4 oracle files failed (provisional)`                                                                                                                                        |
   | `blocked`                                | `oracle-gaps: blocked <file> > <test> fails with no mutant active, so it judges nothing: …`, one per failing law                                                                                                                                            |
-  | `gap`                                    | `oracle-gaps: gap <kind> L<line> <id> <change>`                                                                                                                                                                                                             |
+  | `gap`                                    | `oracle-gaps: gap <kind> L<line>:C<column> <id> <change>`                                                                                                                                                                                                   |
   | `progress`                               | `oracle-gaps: progress judged 25 of 120 mutants: 7 gaps so far, 18 not gaps`                                                                                                                                                                                |
   | `busy`                                   | `oracle-gaps: busy <mutant id or baseline> in <test file> for <n>s`                                                                                                                                                                                         |
   | `note`                                   | `oracle-gaps: note …`: the `--hang-limit` note, Vite's own messages (`note vite: …`), ordinary files left out, the provisional count, unowned counts, the results' path, and where the tests' console output went (`note test output in <path>`)            |
@@ -126,6 +126,12 @@ agent.
   | `function`                               | `oracle-gaps: function fn <name> (<source>) (owners: <files>)`, the heading over that function's gap lines                                                                                                                                                  |
   | `error`                                  | `oracle-gaps: error <message>: a bug in oracle-gaps, not in your oracle; its stack is in <path>/error.log`, once, before the done line of an internal error                                                                                                 |
   | `done` (last)                            | `oracle-gaps: done completed, 12 gaps, report <path>/summary.md` (`(provisional)` after the count when an oracle file failed), `oracle-gaps: done refused[, report <path>]`, `oracle-gaps: done error, log <path>`, or `oracle-gaps: done stopped (SIGINT)` |
+
+  A gap line's `L<line>:C<column>` is where the code the mutant replaces
+  starts, each counted from 1, the column in UTF-16 code units as TypeScript
+  and editors count it, so two sites of one change on one line (two `?.` of
+  one chain) print apart; an authored mutant whose `find` no longer applies
+  prints `L?`. `results.json` gives the same `line` and `column`.
 
   Only these lines have no prefix: the lines indented under a failing
   baseline file (`failing:`, `law:`, `counterexample:`, `replay:`), a
