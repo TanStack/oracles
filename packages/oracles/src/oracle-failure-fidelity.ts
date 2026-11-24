@@ -1,3 +1,5 @@
+import { reportText } from './oracle-data.js'
+
 /**
  * Preserve an oracle's first violated law and checkpoint while fast-check
  * reduces its input (oracle rubric ORC-010). These are test-harness facts, not
@@ -84,10 +86,16 @@ export class OracleFailureReport extends AggregateError {
   }
 }
 
-/** One instance belongs to one campaign, including its shrink attempts. */
+/**
+ * One instance belongs to one campaign, including its shrink attempts. A
+ * trace describes its history, by default as an `oracleProperty` failure's
+ * History line does: JSON data as its JSON text, and -0, NaN, the
+ * infinities, undefined, bigints, Maps, and Sets as the data encoding spells
+ * them, in full, never throwing.
+ */
 export function createOracleFailureFidelity<THistory>(
   describeHistory: (history: THistory) => string = (history) =>
-    JSON.stringify(history),
+    reportText(history, Infinity),
 ) {
   let original: FailureEvidence | undefined
   let reduced: FailureEvidence | undefined
