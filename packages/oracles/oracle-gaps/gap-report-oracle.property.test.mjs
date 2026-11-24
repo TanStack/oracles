@@ -3409,10 +3409,14 @@ async function incremental(dir, plan, cli, copy, observe, states) {
     stop()
     if (other !== undefined) rmSync(other, { recursive: true, force: true })
     // One daemon serves a package, so once it is stopped none is left. A
-    // daemon that exits takes a moment to close its contexts.
+    // daemon that exits takes a moment to close its contexts, and a daemon
+    // that is still starting holds the lock before it listens: a stop that
+    // reaches it then finds no listener and returns, so the stop is repeated
+    // until the lock is clear (a daemon that started after the first stop).
     let left = daemonsOf(dir)
     for (let waited = 0; left.length > 0 && waited < 20_000; waited += 250) {
       await new Promise((r) => setTimeout(r, 250))
+      stop()
       left = daemonsOf(dir)
     }
     observe(`daemons`, { left: left.length })
