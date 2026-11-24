@@ -220,7 +220,13 @@
  *    test's suites and its own joined by a space (Vitest 4) or by ` > `
  *    (Vitest 5). A file that failed with no failing test (it did not load)
  *    replays whole, with no `-t`. Every baseline line is one line, even when
- *    a test's name holds a newline or a tab.
+ *    a test's name holds a newline or a tab. results.json's baseline keeps
+ *    the same failing tests of each file, in file order, each with its
+ *    names, its error's first line, the law, checkpoint, difference,
+ *    observed and owed values, and counterexample of a law violation as the
+ *    framework wrote them (no cut, no escape), and its replay as the
+ *    command's words, which run exactly that test as the line's command
+ *    does.
  * 6. A survivor or an unreached mutant that ordinary tests reached gets
  *    their outcome for information, where an assertion failure counts on the
  *    test's route; it never changes the class.
@@ -276,6 +282,7 @@
  * prints it as text, and its author is not shortened.
  */
 import { createHash } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import fc from 'fast-check'
 import { oracleProperty, pass, violation } from '../src/oracle-property.ts'
 import {
@@ -2317,6 +2324,11 @@ async function driver(h, observe) {
     `baseline-win32`,
     printer?.baselineLines(baselineGiven, undefined, `win32`) ?? [],
   )
+  // Each file's failing tests as results.json keeps them (law 9).
+  observe(
+    `baseline-records`,
+    baselineGiven.map((f) => printer?.failingTests?.(f) ?? null),
+  )
   for (const r of results) {
     states.add(
       r.authored ? `authored ${r.class ?? r.outcome}` : (r.class ?? r.outcome),
@@ -2846,6 +2858,59 @@ function baselineBreach(h, observations, expected) {
     const breach = printedBreach(h, lines, expected, platform)
     if (breach) return breach
   }
+  return recordsBreach(h, observations, expected)
+}
+
+// Law 9's record: results.json keeps each failing test of each file, in
+// file order, with its names and its error's first line, and for a law
+// violation the law, checkpoint, difference, observed and owed values (when
+// the violation names them), and counterexample, each the framework's text
+// as it is: no cut, no escape. Its replay is the command's words, which run
+// exactly that test. A file that passed or did not load keeps none.
+function recordsBreach(h, observations, expected) {
+  const records = observations.find(
+    (o) => o.checkpoint === `baseline-records`,
+  )?.value
+  const breach = (difference) =>
+    violation(`baseline-records`, difference, `baseline`, { actual: records })
+  for (const owed of expected.baseline) {
+    const file = relativeName(h, owed.fi)
+    // As results.json holds it: a field the record leaves undefined is gone.
+    const got =
+      records?.[owed.fi] && JSON.parse(JSON.stringify(records[owed.fi]))
+    const laws = owed.fails && owed.test !== undefined ? owed.laws : []
+    if (!Array.isArray(got) || got.length !== laws.length)
+      return breach(
+        `${file} has ${laws.length} failing tests, and results.json keeps ${JSON.stringify(got)}`,
+      )
+    for (const [gi, ti] of laws.entries()) {
+      const { replay, ...kept } = got[gi]
+      const values = VALUES[h.files[owed.fi].tests[ti].values ?? 0]
+      const owedKept = {
+        test: namesOf(h, owed.fi, ti),
+        error: owed.violation
+          ? violationText(values).split(`\n`)[0]
+          : `Error: violation`,
+        ...(owed.violation
+          ? {
+              law: VIOLATION.law,
+              checkpoint: VIOLATION.checkpoint,
+              difference: VIOLATION.difference,
+              ...(values ? { observed: values[0], owed: values[1] } : {}),
+              counterexample: VIOLATION.history,
+            }
+          : {}),
+      }
+      if (!isDeepStrictEqual(kept, owedKept))
+        return breach(
+          `results.json keeps ${file}'s failing test ${shownName(h, owed.fi, ti)} as ${JSON.stringify(kept)}, owed ${JSON.stringify(owedKept)}`,
+        )
+      const wrong = Array.isArray(replay)
+        ? wordsBreach(h, owed, file, replay, ti, JSON.stringify(replay))
+        : `results.json keeps no replay words for ${file}'s failing test ${shownName(h, owed.fi, ti)}`
+      if (wrong) return breach(`results.json: ${wrong}`)
+    }
+  }
   return undefined
 }
 
@@ -2997,34 +3062,43 @@ function replayBreach(h, owed, file, block, platform, ti) {
     const words = read(command)
     if (!words)
       return `the replay of ${file} is ${JSON.stringify(command)}, which the shell does not read as plain words`
-    const [vitest, run, target, flag, pattern, ...more] = words
-    // The -t argument is safe in every shell: no double quote, `%`, `!`, or
-    // curly quote (the regular expression's `.` stands in for each).
-    if (pattern !== undefined && /["%!‘’‚‛]/.test(pattern))
-      return `the replay of ${file} puts ${JSON.stringify(pattern)} in its -t argument, which a shell reads unsafely`
-    const path = relativeName(h, owed.fi)
-    if (vitest !== `vitest` || run !== `run` || target !== path)
-      return `the replay of ${file} is not \`vitest run ${path}\``
-    if (ti === undefined) {
-      if (flag !== undefined)
-        return `${file} did not load, and its replay selects tests: ${command}`
-      continue
+    const wrong = wordsBreach(h, owed, file, words, ti, command)
+    if (wrong) return wrong
+  }
+  return undefined
+}
+
+// A replay's words (`command` as it was given): `vitest run <file>`, and for
+// a failing test (`ti`) one `-t` pattern, safe in every shell, that runs
+// exactly that test under either Vitest's join of its names; for a file that
+// did not load (`ti` undefined), nothing more. A difference when not.
+function wordsBreach(h, owed, file, words, ti, command) {
+  const [vitest, run, target, flag, pattern, ...more] = words
+  // The -t argument is safe in every shell: no double quote, `%`, `!`, or
+  // curly quote (the regular expression's `.` stands in for each).
+  if (pattern !== undefined && /["%!‘’‚‛]/.test(pattern))
+    return `the replay of ${file} puts ${JSON.stringify(pattern)} in its -t argument, which a shell reads unsafely`
+  const path = relativeName(h, owed.fi)
+  if (vitest !== `vitest` || run !== `run` || target !== path)
+    return `the replay of ${file} is not \`vitest run ${path}\``
+  if (ti === undefined)
+    return flag === undefined
+      ? undefined
+      : `${file} did not load, and its replay selects tests: ${command}`
+  if (flag !== `-t` || pattern === undefined || more.length > 0)
+    return `the replay of ${file} has no single -t pattern: ${command}`
+  for (const join of [` `, ` > `]) {
+    let selected
+    try {
+      selected = selectedBy(h, owed.fi, pattern, join)
+    } catch (error) {
+      return `the replay pattern ${pattern} is not a regular expression: ${error.message}`
     }
-    if (flag !== `-t` || pattern === undefined || more.length > 0)
-      return `the replay of ${file} has no single -t pattern: ${command}`
-    for (const join of [` `, ` > `]) {
-      let selected
-      try {
-        selected = selectedBy(h, owed.fi, pattern, join)
-      } catch (error) {
-        return `the replay pattern ${pattern} is not a regular expression: ${error.message}`
-      }
-      // The owed test, and any test whose joined names equal its own, which
-      // no pattern can tell apart from it.
-      const owedSet = sameNamed(h, owed.fi, ti, join)
-      if (JSON.stringify(selected) !== JSON.stringify(owedSet))
-        return `the replay pattern ${JSON.stringify(pattern)} of ${file} runs tests ${JSON.stringify(selected)} when Vitest joins names with ${JSON.stringify(join)}, owed ${JSON.stringify(owedSet)}`
-    }
+    // The owed test, and any test whose joined names equal its own, which
+    // no pattern can tell apart from it.
+    const owedSet = sameNamed(h, owed.fi, ti, join)
+    if (JSON.stringify(selected) !== JSON.stringify(owedSet))
+      return `the replay pattern ${JSON.stringify(pattern)} of ${file} runs tests ${JSON.stringify(selected)} when Vitest joins names with ${JSON.stringify(join)}, owed ${JSON.stringify(owedSet)}`
   }
   return undefined
 }
@@ -3252,7 +3326,70 @@ const corruptBaseline = (change) => (trace) => {
         : o,
   )
 }
+// A wrong results.json baseline: the failing tests it keeps, changed.
+const corruptRecords = (change) => (trace) => {
+  const index = trace.findIndex((o) => o.checkpoint === `baseline-records`)
+  if (index < 0) return undefined
+  const value = structuredClone(trace[index].value)
+  if (change(value) === false) return undefined
+  return trace.map((o, i) => (i === index ? { ...o, value } : o))
+}
+// The first failing test that results.json keeps and `test` accepts.
+const firstRecord = (records, test) =>
+  records.flatMap((r) => r ?? []).find(test)
 const calibrations = [
+  {
+    // #223's results.json: a failing file's count and its laws' names, no
+    // record of each failing test.
+    name: `results.json keeps no failing test`,
+    law: `baseline`,
+    corrupt: corruptRecords((records) => {
+      if (!records.some((r) => r?.length > 0)) return false
+      records.fill(null)
+    }),
+  },
+  {
+    name: `results.json keeps only a failing file's first failing test`,
+    law: `baseline`,
+    corrupt: corruptRecords((records) => {
+      if (!records.some((r) => r?.length > 1)) return false
+      records.forEach((r) => r?.splice(1))
+    }),
+  },
+  {
+    // The stream's cut, which results.json does not make.
+    name: `results.json keeps a value cut at 400 code points`,
+    law: `baseline`,
+    corrupt: corruptRecords((records) => {
+      const record = firstRecord(
+        records,
+        (r) => [...(r.observed ?? ``)].length > 400,
+      )
+      if (!record) return false
+      record.observed = `${[...record.observed].slice(0, 397).join(``)}...`
+    }),
+  },
+  {
+    // The stream's escape, which results.json does not make.
+    name: `results.json keeps a paragraph separator as its escape`,
+    law: `baseline`,
+    corrupt: corruptRecords((records) => {
+      const record = firstRecord(records, (r) =>
+        /\u2029/.test(r.observed ?? ``),
+      )
+      if (!record) return false
+      record.observed = record.observed.replaceAll(`\u2029`, `\\u2029`)
+    }),
+  },
+  {
+    name: `results.json's replay of a failing test runs its whole file`,
+    law: `baseline`,
+    corrupt: corruptRecords((records) => {
+      const record = firstRecord(records, (r) => r.replay?.includes(`-t`))
+      if (!record) return false
+      record.replay.splice(record.replay.indexOf(`-t`))
+    }),
+  },
   {
     // Main before this law: a failing file's first failing test alone.
     name: `the baseline names only a failing file's first failing test`,
@@ -4388,7 +4525,7 @@ const constructed = [
 oracleProperty({
   id: `oracle-gaps.report-classify`,
   law: {
-    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, extra-work, dead-code, outside-annotation, branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only; a test whose property declares a work bound, whose work judges the mutant, and whose work (site evaluations, never time) passes the bound's ratio of its unmutated work reports a verdict under law work bound on its route, and a survivor whose work rose in such a test, with no changed observation, is extra-work, whose directive names that test, both counts, and the bound to declare that rejects it. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed.`,
+    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, extra-work, dead-code, outside-annotation, branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only; a test whose property declares a work bound, whose work judges the mutant, and whose work (site evaluations, never time) passes the bound's ratio of its unmutated work reports a verdict under law work bound on its route, and a survivor whose work rose in such a test, with no changed observation, is extra-work, whose directive names that test, both counts, and the bound to declare that rejects it. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed. results.json's baseline keeps every failing test of each file in file order, with its names, its error, the law, checkpoint, difference, observed and owed values, and counterexample of a violation as the framework wrote them, and replay words that run exactly that test.`,
     authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the oracle rubric's outcome kinds (ORC-006); the frozen design's oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); the maintainer's findings F22 and the leftovers of #12 (2026-11-10); for the work law, the maintainer's decision of 2026-11-12 that a speed shortcut reported as not-observed is a gap CLI bug, and the design decided with it: a cost law, never an exit, judged by a deterministic count; for report order, the gap CLI's determinism requirement (oracle-gaps.report's determinism test and law 9, and the runner's "listed alike in every run") and the maintainer's decision of 2026-11-11 that the tests a report names depend on neither --contexts, worker timing, nor how owners are declared; Vitest's runner (@vitest/runner 4.1: -t is a regular expression matched against getTaskFullName, the suites' names and the test's joined by a space); POSIX.1-2017 Shell Command Language 2.2 and 2.6 for the replay's quoting.`,
     limits: `That real runs produce these records is oracle-gaps.report's, and so is a real replay. The driver encodes operands as capture-setup.mjs \`shown\` does, by a copy of it; long strings are told apart by a 32-bit digest; no symbol operand is generated, and two symbols of one description print alike. Only the runner's single-file path records a test's names, and only it feeds the baseline. Test names hold no backtick and no \` > \`, and names within a file are distinct; the replay's file argument is judged as text, not as Vitest's substring filter over every file. Authored intents hold no word that the exit law forbids, and an author is not shortened. Report order within a file is the baseline's record order: that a file whose tests run concurrently writes its records in one order is not judged, and a failing test is ordered within its file as the reporter lists it, which a run cut off by a hang takes from the records. The "Changed observations in" list is the changed tests' first three, and only its first is compared. A test that only a mutant run records is not generated. A file that does not load keeps its records here, which the runner drops, and the driver leaves it out of every target, as the runner does; a failing law keeps its records and its reach, as the runner keeps them. The refusal text and the summary's left-out list are not judged, only the list of failing files they print. A failing law is generated only as a whole test of a file whose baseline is test: a describe's failing hook, a failing law's leftover state, and how the runner selects the tests of a file that has failing laws are oracle-gaps.report's. Work arrives as counts: that the capture counts site evaluations, and which work it does not count, is oracle-gaps.report's; a test that reaches a site but did no work is generated, which no real run records; an authored mutant's copy counts no work, so the work law does not judge it.`,
   },

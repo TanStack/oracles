@@ -375,6 +375,14 @@ export const shards = {
     `fixed seed 20261105: module data that only the failing owner's passing pair judges`,
     `random seed: module data that only the failing owner's passing pair judges`,
     `determinism: constructed history: module data that only the failing owner's passing pair judges`,
+    // results.json's failing tests (law 14): a failing owner file with a
+    // failing law, and its calibrations.
+    `fixed seed 20261105: a failing owner file with a failing law`,
+    `random seed: a failing owner file with a failing law`,
+    `determinism: constructed history: a failing owner file with a failing law`,
+    `calibration: results.json keeps no failing tests`,
+    `calibration: results.json keeps only a file's first failing test`,
+    `calibration: results.json's replay runs every test of the failing owner file`,
     // The filed history of a stale authored mutant's fourth base (about 12 s).
     `fixed history: a filed base whose owner reads an absent object through ?.`,
     `determinism: fixed history: a filed base whose owner reads an absent object through ?.`,

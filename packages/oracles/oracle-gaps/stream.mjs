@@ -144,21 +144,21 @@ const cut = (text, most) => {
     : text
 }
 
-// The law, difference, observed and owed values, and counterexample of a
-// test that failed by a law violation, read from the framework's message
-// (oracle-property.ts `violationError`): its first line names the checkpoint
-// and the law, and its `Difference:`, `Observed:`, `Owed:`, and `History:`
-// lines the difference, the two values a comparison found apart (only a
-// violation that carries values has them), and the history that failed.
-// A field is read up to the message's next line break: a value's data
-// encoding may hold a line or paragraph separator, which prints as its
-// escape. Any other failure gives none.
-function violationLines(message) {
+// The law, checkpoint, difference, observed and owed values, and
+// counterexample of a test that failed by a law violation, read from the
+// framework's message (oracle-property.ts `violationError`): its first line
+// names the checkpoint and the law, and its `Difference:`, `Observed:`,
+// `Owed:`, and `History:` lines the difference, the two values a comparison
+// found apart (only a violation that carries values has them), and the
+// history that failed. A field is read up to the message's next line break:
+// a value's data encoding may hold a line or paragraph separator. Any other
+// failure gives none. A field the message lacks is left out.
+function violationOf(message) {
   const lines = message.split(`\n`)
   const head = lines[0].match(
     /violated at checkpoint "([^"]*)"(?: \(law: (.*)\))?\.$/,
   )
-  if (!head) return []
+  if (!head) return {}
   // The fields come in this order after the law's statement, which is the
   // author's text, so each is read after the one before it.
   let from = 0
@@ -170,17 +170,73 @@ function violationLines(message) {
     from = at + 1
     return lines[at].slice(label.length + 2)
   }
-  const shown = (text) => codeSpan(escapeControls(cut(text ?? ``, 400)))
   const difference = field(`Difference`)
   const observed = field(`Observed`)
   const owed = observed === undefined ? undefined : field(`Owed`)
-  const history = field(`History`)
+  return {
+    law: head[2],
+    checkpoint: head[1],
+    difference,
+    ...(owed === undefined ? {} : { observed, owed }),
+    counterexample: field(`History`),
+  }
+}
+
+/**
+ * Each failing test of a baseline file (one of `baselineLines`' `files`), in
+ * its file's order, as results.json keeps it: its names, its error's first
+ * line, the law, checkpoint, difference, observed and owed values, and
+ * counterexample of a law violation, each the framework's text as it is,
+ * and the words of the command that replays that test alone (`config` as
+ * for `baselineLines`). A test whose names the runner did not record
+ * replays its whole file.
+ */
+export function failingTests({ file, tests }, config) {
+  return tests
+    .filter((t) => t.state === `failed`)
+    .map((test) => {
+      const message = test.message ?? ``
+      return {
+        test: test.names ?? [test.fullName],
+        error: message.split(`\n`)[0],
+        ...violationOf(message),
+        replay: [
+          ...vitestRun(config),
+          file,
+          ...(test.names === undefined
+            ? []
+            : [`-t`, replayPattern(test.names)]),
+        ],
+      }
+    })
+}
+
+// The command that runs Vitest under the config the run loaded.
+const vitestRun = (config) =>
+  config === undefined
+    ? [`vitest`, `run`]
+    : [`vitest`, `run`, `--config`, config]
+
+// A failing test's lines: the test and its error, the law, difference,
+// observed and owed values, and counterexample of a law violation, each on
+// one line, past 400 code points cut, and its replay.
+function failingLines(failing, platform) {
+  const shown = (text) => codeSpan(escapeControls(cut(text ?? ``, 400)))
   return [
-    `  law: ${codeSpan(escapeControls(head[2] ?? `(unnamed)`))} at ${codeSpan(escapeControls(head[1]))}: ${shown(difference)}`,
-    ...(observed === undefined || owed === undefined
+    `  failing: ${codeSpan(escapeControls(failing.test.join(` > `)))}: ${codeSpan(escapeControls(failing.error))}`,
+    ...(failing.checkpoint === undefined
       ? []
-      : [`  observed: ${shown(observed)}`, `  owed: ${shown(owed)}`]),
-    `  counterexample: ${shown(history)}`,
+      : [
+          `  law: ${codeSpan(escapeControls(failing.law ?? `(unnamed)`))} at ${codeSpan(escapeControls(failing.checkpoint))}: ${shown(failing.difference)}`,
+          ...(failing.owed === undefined
+            ? []
+            : [
+                `  observed: ${shown(failing.observed)}`,
+                `  owed: ${shown(failing.owed)}`,
+              ]),
+          `  counterexample: ${shown(failing.counterexample)}`,
+        ]),
+    ...replayLines(failing.replay.map(escapeControls), platform),
   ]
 }
 
@@ -200,11 +256,8 @@ function violationLines(message) {
  * none, so the replay names it too.
  */
 export function baselineLines(files, config, platform = process.platform) {
-  const vitest =
-    config === undefined
-      ? [`vitest`, `run`]
-      : [`vitest`, `run`, `--config`, config]
-  return files.flatMap(({ file, ordinary, failure, tests }) => {
+  return files.flatMap((baseline) => {
+    const { file, ordinary, failure, tests } = baseline
     const name = `${file}${ordinary ? ` (ordinary)` : ``}`
     const ran = tests.filter(
       (t) => t.state === `passed` || t.state === `failed`,
@@ -217,37 +270,21 @@ export function baselineLines(files, config, platform = process.platform) {
           `pass ${name}: ${counted(ran.length, `test`)}${skipped > 0 ? `, ${skipped} skipped` : ``}`,
         ),
       ]
-    const failed = tests.filter((t) => t.state === `failed`)
+    const failed = failingTests(baseline, config)
     if (failed.length === 0)
       return [
         streamLine(
           `baseline`,
           `fail ${name}: ${tests.length === 0 ? `did not load` : `failed outside its tests`}: ${codeSpan(escapeControls(failure.split(`\n`)[0]))}`,
         ),
-        ...replayLines([...vitest, file], platform),
+        ...replayLines([...vitestRun(config), file], platform),
       ]
     return [
       streamLine(
         `baseline`,
         `fail ${name}: ${failed.length} of ${counted(ran.length, `test`)} failed`,
       ),
-      ...failed.flatMap((test) => {
-        const message = test.message ?? ``
-        return [
-          `  failing: ${codeSpan(escapeControls((test.names ?? [test.fullName]).join(` > `)))}: ${codeSpan(escapeControls(message.split(`\n`)[0]))}`,
-          ...violationLines(message),
-          ...replayLines(
-            [
-              ...vitest,
-              file,
-              ...(test.names === undefined
-                ? []
-                : [`-t`, escapeControls(replayPattern(test.names))]),
-            ],
-            platform,
-          ),
-        ]
-      }),
+      ...failed.flatMap((failing) => failingLines(failing, platform)),
     ]
   })
 }

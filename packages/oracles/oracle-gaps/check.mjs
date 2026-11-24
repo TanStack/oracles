@@ -56,6 +56,7 @@ import {
   baselineLines,
   blockedLines,
   escapeControls,
+  failingTests,
   gapLine,
   progressLine,
   streamLine,
@@ -2180,13 +2181,15 @@ export default async (env) => {
             const t = tests.find((x) => x.key === key)
             return [relative(file), ...(t.names ?? [t.fullName])].join(` > `)
           })
-      return {
+      const baseline = {
         file: relative(file),
         ordinary: !oracleFiles.has(file),
         failure: first.failed.get(file),
         ...(first.failed.has(file) ? { laws } : {}),
         tests,
       }
+      // Each failing test as the stream prints it, for results.json.
+      return { ...baseline, failing: failingTests(baseline, options.config) }
     })
     for (const line of [
       ...baselineLines(baselineFiles, options.config),
@@ -2716,7 +2719,7 @@ export default async (env) => {
           options: { ...options, only: options.only && [...options.only] },
           // A report with a failing oracle file is provisional: its failing
           // laws judge nothing (Block per law). Each test file's baseline, as
-          // the report leads with it.
+          // the report leads with it, with each of its failing tests.
           provisional,
           baseline: baselineFiles.map(({ tests, ...file }) => ({
             ...file,
