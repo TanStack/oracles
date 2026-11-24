@@ -158,6 +158,9 @@ const meanings = {
   // A builtin counts as one site, so a tight bound is a poor witness of its
   // cost (maintainer, 2026-11-12).
   'extra-work': `A call to a builtin counts as one site evaluation, whatever it costs (\`Object.defineProperty\`): where a shortcut's cost is in one, make that cost an observation of the driver, such as a count of those calls, and let a law judge it, in place of a very tight bound. `,
+  // A changed asserted value or property observation with no failure
+  // (classify.mjs, \`changedIn\`): the directive alone does not say so.
+  'not-judged': `An owner test recorded different observations under this mutant, and every law of that test still passed: its driver saw the difference, and no law judges it. `,
 }
 
 // The directive for an operator whose infection is not measured: the input
