@@ -62,7 +62,17 @@ agent.
   broken file by its path), `results.json` lists each failing file's
   `laws`, and the report says it is provisional. With
   `--only <id,...>`, the baseline runs only the owners of the selected
-  mutants. A `crashed` gap is not a kill: production threw where no law
+  mutants. With `--baseline-only`, the run is that baseline alone: every
+  test file runs once with no mutant active, ordinary ones too, as a full
+  check's baseline runs them, and no mutant is judged. It prints the same
+  baseline lines, writes `results.json` (with `"baselineOnly": true` and no
+  results) and `summary.md`, and ends with
+  `oracle-gaps: done completed, baseline only, report <path>`, exit 0
+  whether the baseline passed or failed. Use it to see which laws fail
+  before a change (the red state) across every oracle file. It refuses
+  `--only`, `--sample`, `--mutants`, and `--diff-base`, which choose or mark
+  mutants; `--daemon` and `--ordinary` are accepted (the baseline runs the
+  ordinary files either way). A `crashed` gap is not a kill: production threw where no law
   judged it, and the error is on the gap's Detail line in `summary.md` and
   in its `detail` in `results.json`. Record the error in the driver, and
   state the law that decides that input's outcome.

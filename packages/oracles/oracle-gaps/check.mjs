@@ -2194,6 +2194,21 @@ export default async (env) => {
       ...blockedLines(baselineFiles),
     ])
       log(line)
+    // Only the baseline (`--baseline-only`): it is the full run's first pass,
+    // and the run ends here, with no mutant judged.
+    if (options.baselineOnly)
+      return baselineOnlyEnd({
+        options,
+        runIdentity,
+        baselineFiles,
+        oracleFiles,
+        first,
+        evidence,
+        store,
+        testOutput,
+        checkStarted,
+        log,
+      })
     // A failing law judges nothing, so it is left out per test, as a
     // nondeterministic test is, and its file's passing tests still judge the
     // mutants the file owns; a mutant with no passing owner test is blocked,
@@ -2770,6 +2785,83 @@ export default async (env) => {
     })
   }
 
+  /**
+   * The end of a baseline-only run: results.json and summary.md as a
+   * completed check writes them, with no mutant, and the stdout's baseline
+   * and done line.
+   */
+  async function baselineOnlyEnd({
+    options,
+    runIdentity,
+    baselineFiles,
+    oracleFiles,
+    first,
+    evidence,
+    store,
+    testOutput,
+    checkStarted,
+    log,
+  }) {
+    await store.flush?.()
+    writeFileSync(
+      join(options.out, `results.json`),
+      JSON.stringify(
+        {
+          run: runIdentity,
+          options: { ...options, only: undefined },
+          baselineOnly: true,
+          // Whether an oracle file failed, as a full run's report says it.
+          provisional: [...first.failed.keys()].some((file) =>
+            oracleFiles.has(file),
+          ),
+          baseline: baselineFiles.map(({ tests, ...file }) => ({
+            ...file,
+            passed: tests.filter((t) => t.state === `passed`).length,
+            failed: tests.filter((t) => t.state === `failed`).length,
+            skipped: tests.filter((t) => t.state === `skipped`).length,
+          })),
+          evidence,
+          results: [],
+        },
+        null,
+        1,
+      ),
+    )
+    span(`check`, checkStarted, { evidence })
+    writeFileSync(
+      join(options.out, `summary.md`),
+      renderReport({
+        results: [],
+        run: runIdentity,
+        excluded: [],
+        baseline: baselineFiles,
+        config: options.config,
+        baselineOnly: true,
+      }),
+    )
+    if (existsSync(testOutput) && statSync(testOutput).size > 0)
+      log(
+        streamLine(
+          `note`,
+          `test output in ${escapeControls(posix(testOutput))}`,
+        ),
+      )
+    return renderStdout({
+      results: [],
+      run: runIdentity,
+      excluded: [],
+      pkg,
+      baseline: baselineFiles,
+      config: options.config,
+      baselineOnly: true,
+      paths: {
+        report: escapeControls(posix(join(options.out, `summary.md`))),
+        results: join(options.out, `results.json`),
+        out: options.out,
+      },
+    })
+  }
+
   async function close() {
     await closeContexts()
     process.off(`exit`, removeHome)
@@ -2808,7 +2900,7 @@ function identityOf(options, authored, testFiles, oracleCount) {
   hash.update(JSON.stringify({ ...decisive, only: [...(options.only ?? [])] }))
   return {
     id: hash.digest(`hex`).slice(0, 12),
-    inputs: `${options.sources.length} source files, ${oracleCount} oracle files, ${testFiles.length - oracleCount} ordinary test files, ${authored.length} authored mutants, seed ${options.seed ?? `(none)`}, pool ${options.pool}${options.only || options.sample !== undefined ? `; a partial run (--only or --sample)` : ``}`,
+    inputs: `${options.sources.length} source files, ${oracleCount} oracle files, ${testFiles.length - oracleCount} ordinary test files, ${authored.length} authored mutants, seed ${options.seed ?? `(none)`}, pool ${options.pool}${options.only || options.sample !== undefined ? `; a partial run (--only or --sample)` : ``}${options.baselineOnly ? `; the baseline only (--baseline-only)` : ``}`,
   }
 }
 

@@ -645,7 +645,10 @@ minutes). To verify a fix for one or a few specific mutants quickly before
 running the full check, pass `--only <id,id>` (from the `<id>` in a `gap`
 line or the report's `rerun: --only <id>`): it runs only those mutants and
 their owners' baseline, and marks the run as partial, so finish with a full
-check without `--only`.
+check without `--only`. To record the red state of a change (which laws
+fail on unchanged production) across every oracle file, pass
+`--baseline-only`: it runs every test file's baseline, as a full check
+does, prints it with each failing law, and judges no mutant.
 
 ## 9. Report the evidence
 

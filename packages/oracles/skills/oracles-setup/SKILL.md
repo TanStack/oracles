@@ -566,6 +566,11 @@ is not Vite's default name. The baseline prints which config it used.
   only those mutants and runs the baseline only for their owning oracle
   files. A `--only` run is partial, so run the full check without `--only`
   before calling gaps closed.
+- Pass `--baseline-only` to run only the baseline of every test file, as a
+  full check runs it, and judge no mutant: the red state before a change,
+  with each failing law named. It ends with
+  `oracle-gaps: done completed, baseline only, report <path>`. It refuses
+  `--only`, `--sample`, `--mutants`, and `--diff-base`.
 - Read the exit code. **0:** the run completed; work from its report.
   **2:** refused. It prints `refused: <cause>` and one `fix: <directive>`.
   Do what the `fix:` line says, then run again. **3:** an internal error, "a

@@ -279,7 +279,9 @@ export function renderReport({
   excluded,
   baseline = [],
   config,
+  baselineOnly = false,
 }) {
+  if (baselineOnly) return baselineOnlyReport({ run, baseline, config })
   const gaps = gapsOf(results)
   const guards = results.filter((r) => r.probeGuard)
   const unowned = results.filter(
@@ -311,22 +313,13 @@ export function renderReport({
       `Ordinary test files left out because they fail with no mutant active: ${excluded.join(`, `)}.`,
       ``,
     )
-  // The baseline, before the gaps, in a fence that no backtick in it closes.
+  // The baseline, before the gaps.
   const section = baselineSection(results, baseline, config)
-  const longest = Math.max(
-    0,
-    ...section.lines.flatMap((line) =>
-      (line.match(/`+/g) ?? []).map((run) => run.length),
-    ),
-  )
-  const fence = `\``.repeat(Math.max(3, longest + 1))
   lines.push(
     `## Baseline`,
     ``,
     ...(section.provisional ? [section.provisional, ``] : []),
-    `${fence}text`,
-    ...section.lines,
-    fence,
+    ...fenced(section.lines),
     ``,
   )
   lines.push(
@@ -402,6 +395,37 @@ export function renderReport({
   return lines.join(`\n`)
 }
 
+/** Lines in a text fence that no backtick in them closes. */
+function fenced(lines) {
+  const longest = Math.max(
+    0,
+    ...lines.flatMap((line) =>
+      (line.match(/`+/g) ?? []).map((run) => run.length),
+    ),
+  )
+  const fence = `\``.repeat(Math.max(3, longest + 1))
+  return [`${fence}text`, ...lines, fence]
+}
+
+/**
+ * The report of a baseline-only run (`--baseline-only`): the baseline as a
+ * full run's report leads with it, and no mutant.
+ */
+function baselineOnlyReport({ run, baseline, config }) {
+  const { lines } = baselineSection([], baseline, config)
+  return [
+    `# Oracle check report`,
+    ``,
+    `Run ${run.id}. Inputs: ${run.inputs}.`,
+    ``,
+    `The baseline only: every test file ran once with no mutant active, and no mutant was judged. Run the check without \`--baseline-only\` to judge mutants.`,
+    ``,
+    `## Baseline`,
+    ``,
+    ...fenced(lines),
+  ].join(`\n`)
+}
+
 /**
  * The stdout summary: the totals, one legend line per class present, every
  * gap once under its function (owners printed once per function), the
@@ -416,7 +440,15 @@ export function renderStdout({
   paths,
   baseline = [],
   config,
+  baselineOnly = false,
 }) {
+  if (baselineOnly)
+    return [
+      ...baselineSection([], baseline, config).lines,
+      streamLine(`summary`, `${run.id}: no mutant judged. ${run.inputs}.`),
+      streamLine(`note`, `results ${escapeControls(posix(paths.results))}`),
+      streamLine(`done`, `completed, baseline only, report ${paths.report}`),
+    ].join(`\n`)
   const gaps = gapsOf(results)
   const unowned = results.filter(
     (r) => !r.probeGuard && r.outcome === `unowned`,

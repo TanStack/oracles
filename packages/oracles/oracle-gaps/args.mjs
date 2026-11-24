@@ -9,7 +9,16 @@ import { stateDirOf } from './evidence.mjs'
 import { posix, realPathOf } from './paths.mjs'
 import { Refusal } from './ending.mjs'
 
-const flags = new Set([`daemon`, `stop-daemon`, `ordinary`, `help`])
+const flags = new Set([
+  `daemon`,
+  `stop-daemon`,
+  `ordinary`,
+  `baseline-only`,
+  `help`,
+])
+// The options that choose or mark mutants. A baseline-only run judges no
+// mutant, so each refuses beside `--baseline-only`.
+const mutantOptions = [`only`, `sample`, `mutants`, `diff-base`]
 // The options that take a positive whole number.
 const counts = [
   `contexts`,
@@ -40,6 +49,7 @@ export const usage = `Usage: oracle-gaps --package <dir> --source <src/x.ts,...>
   [--out <dir>] [--only <id,id>] [--diff-base <rev>] [--test-timeout <ms>]
   [--sample <n>] [--contexts <n>] [--pool threads|forks] [--config <file>]
   [--first-limit <ms>] [--hang-limit <ms>] [--mutant-limit <ms>]
+  [--baseline-only]
   oracle-gaps --stop-daemon --package <dir>
   oracle-gaps --help
 
@@ -47,6 +57,12 @@ The paths in --source and --config are relative to --package. Without
 --config, the run loads the Vitest config that Vitest discovers for the
 package: in its directory, or else in the nearest parent directory that
 has one. Run the CLI from any directory.
+--baseline-only runs every test file once with no mutant active, as the
+baseline of a full check does, prints that baseline, and judges no
+mutant; it refuses --only, --sample, --mutants, and --diff-base, which
+choose or mark mutants. Its last line is
+\`oracle-gaps: done completed, baseline only, report <path>\`, and it
+exits 0 whether the baseline passed or failed.
 Every line the CLI writes for a check starts with \`oracle-gaps: \` and its
 kind (config, note, baseline, blocked, progress, gap, busy, done), on
 stdout and stderr alike, so \`grep '^oracle-gaps: '\` finds them. Before any
@@ -159,6 +175,13 @@ function optionsOf(args, cwd) {
         `--${name} must be a positive whole number, not "${args[name]}"`,
         `Pass --${name} a positive whole number, ${help}.`,
       )
+  if (args[`baseline-only`])
+    for (const name of mutantOptions)
+      if (args[name] !== undefined)
+        throw new Refusal(
+          `--baseline-only judges no mutant, so --${name} has nothing to act on`,
+          `Drop --${name}, or drop --baseline-only to judge mutants.`,
+        )
   if (args.pool !== undefined && ![`threads`, `forks`].includes(args.pool))
     throw new Refusal(
       `--pool must be threads or forks, not "${args.pool}"`,
@@ -203,6 +226,9 @@ function optionsOf(args, cwd) {
     // Ordinary (non-oracle) test files run only when asked: they never close
     // a gap, and only report whether they would have caught a survivor.
     ordinary: args.ordinary === true,
+    // Only the baseline: every test file once with no mutant active, and no
+    // mutant judged (check.mjs).
+    baselineOnly: args[`baseline-only`] === true,
     // Each warm context runs one mutant at a time with one worker. Measured on
     // offline-transactions' FIFO executor (163 mutants, 18 cores): 8 contexts
     // 124 s, 16 contexts 91 s, with identical classes.

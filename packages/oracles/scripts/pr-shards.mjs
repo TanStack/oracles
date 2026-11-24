@@ -652,6 +652,7 @@ export const partitions = {
           'determinism: constructed history: bad arguments: directoryConfig',
           'determinism: constructed history: bad arguments: mutantLacksField',
           'determinism: constructed history: bad arguments: repeatedMutantIds',
+          'determinism: constructed history: bad arguments: baselineOnlyWith',
           'determinism: constructed history: no oracle file refuses the run',
           'determinism: generated 1',
           'fixed seed 20261105: a declaration fault: outsideSource',
@@ -661,6 +662,7 @@ export const partitions = {
           'fixed seed 20261105: bad arguments: directoryConfig',
           'fixed seed 20261105: bad arguments: mutantLacksField',
           'fixed seed 20261105: bad arguments: repeatedMutantIds',
+          'fixed seed 20261105: bad arguments: baselineOnlyWith',
           'fixed seed 20261105: module data owned by readers and by name',
           'random seed: a bad entry in a run with no owner names the bad entry',
           'random seed: a derived class calling super after ||',
@@ -795,6 +797,7 @@ export const partitions = {
           'random seed: bad arguments: directoryConfig',
           'random seed: bad arguments: mutantLacksField',
           'random seed: bad arguments: repeatedMutantIds',
+          'random seed: bad arguments: baselineOnlyWith',
           'random seed: module data owned by readers and by name',
         ],
         ...[
@@ -890,6 +893,7 @@ export const partitions = {
         'a failing afterAll around a law that calls production',
         'a failing law that spins under a mutant before a passing law',
         "module data that only the failing owner's passing pair judges",
+        'a baseline-only run beside a failing law',
       ]),
       8: anyOf([
         'a declaration fault: brokenVitest',
