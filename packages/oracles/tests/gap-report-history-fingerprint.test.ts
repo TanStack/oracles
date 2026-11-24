@@ -203,7 +203,8 @@ describe(`the gap oracle's history grammar`, () => {
   // histories the oracle takes, at the fixed seed and at the random seeds of the
   // open counterexamples (#202, #203, #205, #184), so a model that draws an
   // abort again fails here whichever seed would reach it. The drawn records are
-  // checked too: they hold no abort at all.
+  // checked too: they hold no abort at all. It samples 28,000 histories, which
+  // can pass Vitest's 5 s default on a loaded machine, so it has its own limit.
   test(`draws no abort stop unless the history sets hookStops`, () => {
     for (const seed of [
       FIXED_SEED,
@@ -227,5 +228,5 @@ describe(`the gap oracle's history grammar`, () => {
       for (const record of records)
         expect(record.stopRuns.map((stop) => stop.when)).not.toContain(`abort`)
     }
-  })
+  }, 120_000)
 })

@@ -413,6 +413,21 @@ export const shards = {
     // with the daemon fix of fix/daemon-current-inputs.
     `random seed: an edit sequence over the witness module, the first half`,
     `random seed: an edit sequence over the witness module, the second half`,
+    // The module data census (the framework-added tests of an owner file, and
+    // the placeholder guard): three units each, in fixed, random, determinism.
+    `fixed seed 20261105: a module data mutant judged past nondeterministic plan tests`,
+    `fixed seed 20261105: a module data mutant whose owner file holds no plan test`,
+    `random seed: a module data mutant judged past nondeterministic plan tests`,
+    `random seed: a module data mutant whose owner file holds no plan test`,
+    `determinism: constructed history: a module data mutant judged past nondeterministic plan tests`,
+    `determinism: constructed history: a module data mutant whose owner file holds no plan test`,
+    // Histories replayed by history (#184, #116, #203): fixed units.
+    `fixed history: a module array mutant judged past nondeterministic plan tests under a daemon pause`,
+    `determinism: fixed history: a module array mutant judged past nondeterministic plan tests under a daemon pause`,
+    `fixed history: a module object field-drop judged past a console test`,
+    `determinism: fixed history: a module object field-drop judged past a console test`,
+    `fixed history: a module boolean flip judged past a console test`,
+    `determinism: fixed history: a module boolean flip judged past a console test`,
   ],
 }
 
