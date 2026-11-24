@@ -4925,6 +4925,8 @@ function refusal(plan) {
 // describe `HOOKED_SUITE`, passes itself, and the hook throws `HOOK_ERROR`.
 const FAILING_LAW = `a law that fails with no mutant active`
 const FAILING_ERROR = `Error: this law fails with no mutant active`
+// The error of the failing owner's failing test (`brokenOwner`).
+const OWNER_ERROR = `Error: this owner fails with no mutant active`
 const HOOKED_SUITE = `hooked`
 const HOOK_ERROR = `this hook fails with no mutant active`
 // How often a heavy failing law calls production: past the call floor
@@ -4986,32 +4988,36 @@ function blockingOf(plan) {
       plan.failingLawAt === `start`
         ? [...failing, ...broken]
         : [...broken, ...failing]
-    // The first failing test: the failing law throws itself only with no
-    // hook around it.
+    // Its failing tests, in file order, each with its error: the failing
+    // law throws itself only with no hook around it.
     const lawFails = law && plan.failingLawHook === `none`
-    const first = laws.find((name) =>
-      name === failingLawName(plan) ? lawFails : true,
+    const failingTests = laws.flatMap((name) =>
+      name !== failingLawName(plan)
+        ? [{ test: name, error: OWNER_ERROR }]
+        : lawFails
+          ? [{ test: name, error: FAILING_ERROR }]
+          : [],
     )
+    const first = failingTests[0]
     return [
       {
         file,
         laws,
+        failingTests,
         // How many of its tests fail, which the baseline counts.
-        failed: broken.length + (lawFails ? 1 : 0),
+        failed: failingTests.length,
         hook: law && plan.failingLawHook !== `none` ? HOOK_ERROR : undefined,
         ...(first === undefined
           ? {}
-          : first === failingLawName(plan)
-            ? {
-                test: first,
-                error: FAILING_ERROR,
-                replayed: owner ? [FAILING_LAW] : undefined,
-              }
-            : {
-                test: first,
-                error: `Error: this owner fails with no mutant active`,
-                replayed: [`${BROKEN_SUITE} fixed seed 999`],
-              }),
+          : {
+              ...first,
+              replayed:
+                first.error === OWNER_ERROR
+                  ? [`${BROKEN_SUITE} fixed seed 999`]
+                  : owner
+                    ? [FAILING_LAW]
+                    : undefined,
+            }),
       },
     ]
   })
@@ -5062,8 +5068,9 @@ function frameworkTestsOf(plan) {
 /**
  * Each test file's baseline (law 14): its tests that ran and those skipped
  * (a file with no tests of the plan holds one skipped placeholder), how
- * many failed, and its failing test, or that it did not load, or that it
- * failed outside its tests (a describe's hook).
+ * many failed, and its first failing test, or that it did not load, or that
+ * it failed outside its tests (a describe's hook), and each of its failing
+ * tests in file order.
  */
 function baselineOf(plan) {
   const failing = blockingOf(plan)
@@ -5092,6 +5099,8 @@ function baselineOf(plan) {
       fails: entry !== undefined,
       test: entry?.test,
       error: entry?.error,
+      // Each of its failing tests, as results.json keeps them.
+      failingTests: entry?.failingTests ?? [],
       hook: entry?.hook,
     }
   })

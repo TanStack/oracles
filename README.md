@@ -62,7 +62,10 @@ agent.
   kills, is a `blocked` gap whose directive names what it waits for. A
   `blocked` line names each failing law by its file and test names (or a
   broken file by its path), `results.json` lists each failing file's
-  `laws`, and the report says it is provisional. With
+  `laws` and, under `failing`, each of its failing tests with its names
+  (`test`), its `error`, the `law`, `checkpoint`, `difference`, `observed`,
+  `owed`, and `counterexample` of a law violation (uncut and unescaped),
+  and the `replay` command's words, and the report says it is provisional. With
   `--only <id,...>`, the baseline runs only the owners of the selected
   mutants. A `crashed` gap is not a kill: production threw where no law
   judged it, and the error is on the gap's Detail line in `summary.md` and

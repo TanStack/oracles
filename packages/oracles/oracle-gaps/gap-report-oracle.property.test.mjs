@@ -369,7 +369,11 @@
  *    granularity of a test). A mutant with no passing owner test, that a
  *    failing law or a file that did not load holds, and that nothing kills,
  *    is `blocked`, a gap; the rest are judged, and the report is
- *    provisional (a RED baseline gives a provisional report). With `--only`, the baseline
+ *    provisional (a RED baseline gives a provisional report). results.json's
+ *    baseline keeps each failing test of each file, in file order, with its
+ *    names, its error, and the words of a command that runs exactly that
+ *    test (a downstream project's finding: the count and one name left
+ *    the other failing tests to a Vitest run alone). With `--only`, the baseline
  *    runs only the selected mutants' owners (and the ordinary files with
  *    `--ordinary`), and each selected mutant is judged as the full run
  *    judges it. The last stdout line is the run's done line (law 15),
@@ -1395,6 +1399,36 @@ function replayed(dir, command) {
   }
 }
 
+/**
+ * The tests that a replay's words run: `vitest` is the package's own
+ * Vitest, run by Node with no shell, so each word reaches it as it is.
+ */
+function replayedWords(dir, words) {
+  if (!Array.isArray(words) || words[0] !== `vitest`) return undefined
+  const scratch = mkdtempSync(join(realpathSync(tmpdir()), `gap-replay-`))
+  try {
+    const report = join(scratch, `report.json`)
+    spawnSync(
+      process.execPath,
+      [
+        join(here, `..`, `node_modules`, `vitest`, `vitest.mjs`),
+        ...words.slice(1),
+        `--reporter=json`,
+        `--outputFile=${report}`,
+      ],
+      { cwd: dir, encoding: `utf8`, timeout: 120_000, env: cleanEnv() },
+    )
+    if (!existsSync(report)) return []
+    return JSON.parse(readFileSync(report, `utf8`))
+      .testResults.flatMap((file) => file.assertionResults)
+      .filter((test) => test.status === `passed` || test.status === `failed`)
+      .map((test) => test.fullName)
+      .sort()
+  } finally {
+    rmSync(scratch, { recursive: true, force: true })
+  }
+}
+
 /** Relative paths of the files under a directory, not inside node_modules. */
 function filesUnder(root, within = ``) {
   return readdirSync(join(root, within), { withFileTypes: true }).flatMap(
@@ -2387,6 +2421,11 @@ function readRunIn(dir, out, status, stderr, cli, stdout, derived) {
         : `${status === 3 && existsSync(join(out, `error.log`)) ? `error.log: ${name(readFileSync(join(out, `error.log`), `utf8`)).slice(0, 2000)}\n` : ``}${named.slice(-1500)}`,
     reported: results !== undefined,
     reportState,
+    // Each test file's failing tests as results.json keeps them (law 14).
+    baselineRecords: report?.baseline?.map(({ file, failing }) => ({
+      file,
+      failing,
+    })),
     streamed,
     // Law 9 compares everything the run reports except how it was
     // produced: durations, the options it was given (the output directory
@@ -3572,8 +3611,15 @@ async function driver(plan, observe) {
       }),
     )
     // A failing owner's replay, run as the author would run it (law 3).
-    if (plan.fault === `brokenOwner`)
+    if (plan.fault === `brokenOwner`) {
       observe(`replay`, { command: replay, ran: replayed(dir, replay) })
+      // The replay results.json keeps for the failing owner file's first
+      // failing test, run as its words say, with no shell (law 14).
+      const words = cli.baselineRecords?.find(
+        (b) => b.file === `tests/b.test.ts`,
+      )?.failing?.[0]?.replay
+      observe(`replay-record`, { words, ran: replayedWords(dir, words) })
+    }
     // Reach comes from what the CLI reported, mapped onto the plan.
     const states = new Set()
     if (
@@ -3962,6 +4008,8 @@ async function driver(plan, observe) {
       replay !== undefined
     )
       states.add(`a failing owner replayed under its parent's config`)
+    if (cli.baselineRecords?.some((b) => b.failing?.length > 1))
+      states.add(`results.json kept a file's several failing tests`)
     // A parent's config that defines test.projects: Vitest loads it, so the
     // run refuses as for the package's own (law 3).
     if (
@@ -5589,7 +5637,9 @@ function endsBreach(run, { checked = true } = {}) {
  * nothing, and gives the step that unblocks it; then, when
  * an oracle file failed, the provisional status with how many mutants are
  * blocked. Its last line says the check completed, with its gap count. A
- * failing owner's replay runs exactly its failing test. A partial run
+ * failing owner's replay runs exactly its failing test. results.json's
+ * baseline keeps each failing test of a file, in file order, with its names,
+ * its error, and the words of a command that runs exactly it. A partial run
  * (`--only`) runs the baseline of the selected mutants' owners alone, and
  * judges each selected mutant as the full run does.
  */
@@ -5627,6 +5677,47 @@ function leadBreach(plan, cli, observations, expected) {
       return breach(
         `the baseline of ${name} does not name its failing test ${b.test} and its error`,
       )
+    // results.json keeps each failing test of the file, in file order: its
+    // names and error, no law (the fixture's tests fail by a plain error),
+    // and the words of a command that runs it.
+    const kept = cli.baselineRecords?.find((r) => r.file === b.file)?.failing
+    if (!Array.isArray(kept))
+      return breach(`results.json keeps no failing tests for ${name}`)
+    const told = kept.map((r) => ({
+      test: Array.isArray(r.test) ? r.test.join(` > `) : r.test,
+      error: r.error,
+      fields: Object.keys(r).sort(),
+    }))
+    const owedTold = b.failingTests.map((t) => ({
+      ...t,
+      fields: [`error`, `replay`, `test`],
+    }))
+    if (JSON.stringify(told) !== JSON.stringify(owedTold))
+      return breach(
+        `results.json keeps ${JSON.stringify(told)} as the failing tests of ${name}, owed ${JSON.stringify(owedTold)}`,
+      )
+    for (const r of kept) {
+      const [vitest, run, ...rest] = Array.isArray(r.replay) ? r.replay : []
+      const [file, flag, pattern] = rest.slice(-3)
+      const matches = (join) => {
+        try {
+          return new RegExp(pattern).test(r.test.join(join))
+        } catch {
+          return false
+        }
+      }
+      if (
+        vitest !== `vitest` ||
+        run !== `run` ||
+        file !== b.file ||
+        flag !== `-t` ||
+        !matches(` `) ||
+        !matches(` > `)
+      )
+        return breach(
+          `results.json's replay of ${name} > ${r.test.join(` > `)} is ${JSON.stringify(r.replay)}, not \`vitest run\` of the file with a -t pattern that matches the test`,
+        )
+    }
   }
   // The one decisive baseline line (law 15): every oracle file passed, or
   // how many failed.
@@ -5707,6 +5798,18 @@ function leadBreach(plan, cli, observations, expected) {
         `the replay command ${JSON.stringify(replay?.command)} ran ${JSON.stringify(replay?.ran)}, owed only ${JSON.stringify(expected.replayed)}`,
         `ownership`,
         { actual: replay?.ran, expected: expected.replayed },
+      )
+    // results.json's replay words of the failing owner file's first failing
+    // test run exactly that test (law 14).
+    const record = observations.find(
+      (o) => o.checkpoint === `replay-record`,
+    )?.value
+    if (JSON.stringify(record?.ran) !== JSON.stringify(expected.replayed))
+      return violation(
+        `replay-record`,
+        `results.json's replay ${JSON.stringify(record?.words)} ran ${JSON.stringify(record?.ran)}, owed only ${JSON.stringify(expected.replayed)}`,
+        `baseline lead`,
+        { actual: record?.ran, expected: expected.replayed },
       )
   }
   const partial = observations.find((o) => o.checkpoint === `partial`)?.value
@@ -5884,6 +5987,44 @@ const calibrations = [
       const kept = value.mutants.find((m) => keys.has(m.key))
       if (!kept) return undefined
       kept.key = `${kept.key}~moved`
+      return trace.map((o, i) => (i === index ? { ...o, value } : o))
+    },
+  },
+  // Law 14's results.json, on the failing owner file with a failing law.
+  {
+    // #223's results.json: each file's count and its laws' names, and no
+    // record of each failing test.
+    name: `results.json keeps no failing tests`,
+    law: `baseline lead`,
+    history: { constructed: `a failing owner file with a failing law` },
+    corrupt: corruptCli((cli) => {
+      if (!cli.baselineRecords?.some((b) => b.failing?.length > 0))
+        return undefined
+      cli.baselineRecords = cli.baselineRecords.map(({ file }) => ({ file }))
+      return cli
+    }),
+  },
+  {
+    name: `results.json keeps only a file's first failing test`,
+    law: `baseline lead`,
+    history: { constructed: `a failing owner file with a failing law` },
+    corrupt: corruptCli((cli) => {
+      const several = cli.baselineRecords?.find((b) => b.failing?.length > 1)
+      if (!several) return undefined
+      several.failing.splice(1)
+      return cli
+    }),
+  },
+  {
+    // Words that run the whole file, as a replay with no -t would.
+    name: `results.json's replay runs every test of the failing owner file`,
+    law: `baseline lead`,
+    history: { constructed: `a failing owner file with a failing law` },
+    corrupt: (trace) => {
+      const index = trace.findIndex((o) => o.checkpoint === `replay-record`)
+      if (index < 0) return undefined
+      const value = structuredClone(trace[index].value)
+      value.ran = [...(value.ran ?? []), `another test of the file`]
       return trace.map((o, i) => (i === index ? { ...o, value } : o))
     },
   },
@@ -6786,6 +6927,7 @@ const required = [
   `a check through the daemon worked past its CLI's bound`,
   `a slow daemon start was served by the daemon`,
   `a check abandoned while a context warmed in place of a cut one wrote nothing more`,
+  `results.json kept a file's several failing tests`,
 ]
 // The faults the CLI analyzes anyway: a package's TypeScript is no input.
 const analyzedFaults = [`noTypescript`, `apiLessTypescript`]
@@ -6878,6 +7020,9 @@ const separate = [
   `a failing describe hook made its laws fail`,
   `a failing law that spins under a mutant cut its copy`,
   `the failing owner's passing pair judged module data beside its failing law`,
+  // Entered only by its own constructed history, a failing owner file with
+  // a failing law, so "every outcome class" does not name it.
+  `results.json kept a file's several failing tests`,
   `a partial run of one function`,
   `a partial run beside a failing owner`,
   ...analyzedFaults.map((fault) => `analyzed ${fault}`),
@@ -10543,6 +10688,24 @@ oracleProperty({
           dataOwners: [`b`],
           tests: [{ ...judging(`b`, `fixed seed`, 1), flaky: true, fn: 0 }],
         }),
+      },
+      {
+        // Law 14's results.json: the failing owner file b holds its failing
+        // owner test and, at its end, a failing law, so two of its tests
+        // fail, and results.json keeps both in file order; the first one's
+        // replay words run it alone. Built on the one-owner base, so a random
+        // base cannot take the state away, and appended at the end of the
+        // list.
+        name: `a failing owner file with a failing law`,
+        enters: [`results.json kept a file's several failing tests`],
+        build: (generated) =>
+          oneOwnerHistory(generated, {
+            functions: [[kill], [push]],
+            owners: [`a`, `b`],
+            tests: [{ ...judging(`a`, `fixed seed`, 7), fn: 0 }],
+            fault: `brokenOwner`,
+            failingLaw: `b`,
+          }),
       },
     ]),
   },
