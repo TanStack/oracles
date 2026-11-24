@@ -257,6 +257,10 @@
  *   missed its state, or
  *   one law, a smaller history that fails another way counts as passing, so
  *   the reported counterexample still shows the first failure (ORC-010).
+ *   A smaller history can break that law at another checkpoint, or for
+ *   another reason, so a report whose counterexample is not the first
+ *   failing history also prints a `First failure:` line with the first
+ *   violation's checkpoint, law, difference, and history.
  *   Within one history a driver error decides first, then a law violation,
  *   then a constructed history that missed its state.
  * - **Shrinking ends in time.** A unit starts no shrink run once half its
@@ -2723,6 +2727,9 @@ function generatedTests<THistory, TExpected, TPlan>(
       // built again, once, now that the path is known; without a path it
       // prints no rerun line.
       const thrown = violations.get(details.errorInstance)
+      // A shrink keeps the first failure's law, not its checkpoint or its
+      // reason, so a smaller history's failure names the first one beside it.
+      const [first] = violations.values()
       const cause: unknown =
         random && thrown
           ? violationError(options, thrown.verdict, thrown.history, replay)
@@ -2730,6 +2737,11 @@ function generatedTests<THistory, TExpected, TPlan>(
       throw new Error(
         [
           report,
+          ...(first && thrown && first !== thrown
+            ? [
+                `First failure: checkpoint "${first.verdict.checkpoint}" (law: ${lawOf(first.verdict)}). Difference: ${first.verdict.difference}. History: ${reportText(first.history)}`,
+              ]
+            : []),
           ...(drawn
             ? [
                 `Drawn base: example ${at} is base ${at} of constructed history "${unit}" drawn from the run's random seed ${drawnFrom} (its ORACLE_SEED line), not from seed ${seed}. The counterexample above is its full history, and the Replay line runs it with the run's seed; a rerun draws other bases, so it would hide this failure. Before you rerun, replay this history on the base commit: the Replay line, or the counterexample as a fixed history. If the base fails too, the failure is not this change's: file it with its full history, or find its issue, and do not block on it (R42; base replay is not automated).`,

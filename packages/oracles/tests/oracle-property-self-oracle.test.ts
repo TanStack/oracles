@@ -75,6 +75,12 @@
  * - `shrink`: a unit's reported failure keeps the kind and law of its own first
  *   failure, and its counterexample still has them. Each unit decides its own first
  *   failure: a failure in one unit does not change another unit's outcome.
+ * - `first failure`: a campaign unit whose reported counterexample is not its first failing
+ *   history, and whose first failure violates a law, prints beside it the first failure's
+ *   checkpoint, law, difference, and history, so a shrink that moved to another checkpoint of the
+ *   same law still shows the failure the unit first found. A unit whose reported counterexample is
+ *   its first failing history prints no such line. (Proposed for approval with the change that
+ *   adds the line; the authority is that change's header text.)
  * - `shrink budget`: a campaign whose first failure is judged in time reports
  *   that failure's kind and law, with a counterexample that replays, before
  *   its timeout, however long shrinking would take: it starts no shrink run
@@ -1477,6 +1483,8 @@ type Outcome = {
   dataKind?: string
   /** A campaign's owed counterexample, where the model knows it. */
   counterexample?: SyntheticHistory
+  /** A campaign's first failing history, when it violates a law. */
+  first?: { history: SyntheticHistory; law: string; checkpoint: string }
 }
 type LogEntry = {
   id: string
@@ -2703,12 +2711,24 @@ function predictSpec(
       ({ name }) => name === unitOf(test)!.name,
     )
     for (const history of streams.get(test)!) {
+      const judgment = judged(spec, history)
       const {
         cause: _shrinkableCause,
         causeMessage: _shrinkableCauseMessage,
         checkpoint: _shrinkableCheckpoint,
         ...verdict
-      } = judged(spec, history)
+      } = judgment
+      // The first failure, which a report of a smaller one names beside it.
+      const first =
+        verdict.kind === `violation` && judgment.checkpoint !== undefined
+          ? {
+              first: {
+                history,
+                law: verdict.law ?? judgment.checkpoint,
+                checkpoint: judgment.checkpoint,
+              },
+            }
+          : {}
       // Without a budget, a constructed history's failure shrinks to the
       // end. No smaller history is a constructed one, so a missed state
       // keeps the constructed history itself.
@@ -2717,7 +2737,11 @@ function predictSpec(
           ? { counterexample: example }
           : {}
       if (verdict.kind !== `pass`)
-        return { ...verdict, ...shrunk(unboundedShrink(spec, history)) }
+        return {
+          ...verdict,
+          ...first,
+          ...shrunk(unboundedShrink(spec, history)),
+        }
       if (construction && !reaches(spec, history, construction.enters))
         return {
           kind: `constructed-reach`,
@@ -3061,6 +3085,7 @@ const frameworkStates = [
   `campaign-setup-failure`,
   `slow-shrink-campaign-failure`,
   `unbudgeted-campaign-shrunk`,
+  `shrink-moved-checkpoint`,
   `replay-probe`,
   `rerun-probe`,
   `cause-attached`,
@@ -3730,6 +3755,16 @@ function frameworkReach(
       if (spec.slowShrink && isCampaign(name) && outcome.kind !== `pass`)
         reached.add(`slow-shrink-campaign-failure`)
       if (outcome.counterexample) reached.add(`unbudgeted-campaign-shrunk`)
+      // Shrinking reaches a smaller history that breaks the first failure's
+      // law at another checkpoint.
+      if (isCampaign(name) && outcome.first) {
+        const smallest = unboundedShrink(spec, outcome.first.history)
+        if (
+          smallest &&
+          judged(spec, smallest).checkpoint !== outcome.first.checkpoint
+        )
+          reached.add(`shrink-moved-checkpoint`)
+      }
       if (outcome.cause) reached.add(`cause-attached`)
       if (outcome.kind === `timeout`) reached.add(`timeout`)
       if (outcome.kind === `model-not-total`) reached.add(`model-not-total`)
@@ -4277,6 +4312,12 @@ type Failure = {
   showsHistory?: boolean
   /** Whether a model error quotes this machine's paths. */
   machinePath?: boolean
+  /** A campaign's first failure, as its report names it beside a smaller one. */
+  firstFailure?: {
+    checkpoint: string
+    law: string
+    history: SyntheticHistory | null
+  }
 }
 type SuiteRun = {
   files: Record<
@@ -4751,6 +4792,10 @@ function classify(
     )
   const law = /\(law: ([^)]+)\)/.exec(text)?.[1]
   const checkpoint = /violated at checkpoint "([^"]+)"/.exec(text)?.[1]
+  const firstLine =
+    /^First failure: checkpoint "([^"]+)" \(law: ([^)]+)\)\. Difference: .*\. History: (.*)$/m.exec(
+      outer,
+    )
   const diagnosis = /was never reached/.test(text)
     ? (`never-reached` as const)
     : /was reached with a false condition/.test(text)
@@ -4795,6 +4840,15 @@ function classify(
       : {}),
     ...(law ? { law } : {}),
     ...(checkpoint ? { checkpoint } : {}),
+    ...(firstLine
+      ? {
+          firstFailure: {
+            checkpoint: firstLine[1]!,
+            law: firstLine[2]!,
+            history: reportedItems(firstLine[3]!),
+          },
+        }
+      : {}),
     ...(diagnosis ? { diagnosis } : {}),
     ...(inner.name === `OracleDataError` && data
       ? { dataPath: data[1], dataKind: data[2] }
@@ -5223,6 +5277,17 @@ const counterexampleItems = (text: string): SyntheticHistory | null => {
     .map((token) =>
       token === `Number.NaN` ? 1 : token === `-0` ? 2 : Number(token),
     )
+}
+// The items of a history as a report's History text prints it: the first
+// bracketed list of integers, where the lossy form's `NaN` is a 1 and its
+// `-0` a 2.
+const reportedItems = (text: string): SyntheticHistory | null => {
+  const list = /\[((?:-?\d+|NaN)(?:,(?:-?\d+|NaN))*)?\]/.exec(text)
+  if (!list) return null
+  return (list[1] ?? ``)
+    .split(`,`)
+    .filter(Boolean)
+    .map((token) => (token === `NaN` ? 1 : token === `-0` ? 2 : Number(token)))
 }
 const statesIn = (report: Report, plan: Plan, files: Array<string>) =>
   plan.specs.flatMap((spec, index) =>
@@ -7632,6 +7697,27 @@ function checkSuite(
             `shrink`,
           )
       }
+      // Law `first failure`: a counterexample other than the first failing
+      // history is reported beside the first failure's checkpoint, law, and
+      // history; the first failing history itself is reported alone.
+      if (failure?.counterexample && outcome.first) {
+        const shrunk = counterexampleItems(failure.counterexample)
+        if (shrunk) {
+          const { checkpoint, law, history } = outcome.first
+          const owedFirst =
+            JSON.stringify(shrunk) === JSON.stringify(history)
+              ? null
+              : { checkpoint, law, history }
+          const seenFirst = failure.firstFailure ?? null
+          if (JSON.stringify(seenFirst) !== JSON.stringify(owedFirst))
+            return violation(
+              `run`,
+              `${spec.id} "${test.name}" reported counterexample ${failure.counterexample} beside the first failure ${JSON.stringify(seenFirst)}, owed ${JSON.stringify(owedFirst)}`,
+              `first failure`,
+              { actual: seenFirst, expected: owedFirst },
+            )
+        }
+      }
     }
     // Law `units`: each passing unit ran exactly the stream the model draws,
     // and a failing unit that stream up to its first failure. A slow spec's
@@ -8060,6 +8146,15 @@ function checkSuite(
         checkpoint,
         `${probe.id}: the replay first ran ${JSON.stringify(probe.ran?.[0] ?? null)}, not the counterexample ${JSON.stringify(counterexample)}`,
         `replay`,
+      )
+    // Law `first failure`: a path replay's first failure is the
+    // counterexample it replays, so it names no other.
+    if (probe.failure.firstFailure)
+      return violation(
+        checkpoint,
+        `${probe.id}: the replay named the first failure ${JSON.stringify(probe.failure.firstFailure)} beside the counterexample it replays`,
+        `first failure`,
+        { actual: probe.failure.firstFailure, expected: null },
       )
   }
   return checkEnvironment(plan, trace, expected) ?? pass
@@ -10804,6 +10899,12 @@ oracleProperty({
         [`campaign-violation`, `replay-probe`],
         generatedDraft({ constructed: [{ prefix: [4, 3], enters: [] }] }),
       ),
+      // [0,3,x] breaks law three at item 1; its shrink [3] breaks it at item 0.
+      fixedHistory(
+        `a shrunk failure names the first failure beside it`,
+        [`shrink-moved-checkpoint`, `campaign-violation`],
+        generatedDraft({ constructed: [{ prefix: [0, 3], enters: [] }] }),
+      ),
       fixedHistory(
         `a replayed campaign failure reproduces its path`,
         [`replay-probe`, `unit-replay-constructed`],
@@ -12238,6 +12339,54 @@ oracleProperty({
         return altered
       },
     })),
+    {
+      name: `reject a shrunk failure without its first failure`,
+      history: {
+        fixed: `a shrunk failure names the first failure beside it`,
+      },
+      law: `first failure`,
+      corrupt: (trace) => {
+        const altered = structuredClone([...trace])
+        const run = altered.find(({ checkpoint }) => checkpoint === `run`)!
+          .value as SuiteRun
+        for (const file of Object.values(run.files))
+          for (const test of file.tests) delete test.failure?.firstFailure
+        return altered
+      },
+    },
+    {
+      name: `reject a first failure at the shrunk checkpoint`,
+      history: {
+        fixed: `a shrunk failure names the first failure beside it`,
+      },
+      law: `first failure`,
+      corrupt: (trace) => {
+        const altered = structuredClone([...trace])
+        const run = altered.find(({ checkpoint }) => checkpoint === `run`)!
+          .value as SuiteRun
+        for (const file of Object.values(run.files))
+          for (const test of file.tests)
+            if (test.failure?.firstFailure)
+              test.failure.firstFailure.checkpoint = test.failure.checkpoint!
+        return altered
+      },
+    },
+    {
+      name: `reject a replay that names a first failure`,
+      history: { fixed: `shrinking keeps the first failure's law` },
+      law: `first failure`,
+      corrupt: (trace) => {
+        const altered = structuredClone([...trace])
+        const probe = altered.find(({ checkpoint }) => checkpoint === `replay`)!
+          .value as ProbeRun
+        probe.failure!.firstFailure = {
+          checkpoint: `item 0`,
+          law: `four`,
+          history: [4, 3],
+        }
+        return altered
+      },
+    },
     {
       name: `reject seedless first primary error`,
       history: {
