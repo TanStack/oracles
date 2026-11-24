@@ -917,6 +917,7 @@ export const partitions = {
         'a lazy module loaded before a hang in the same batch',
         'an edit during a check through the daemon',
         'an ambiguous authored mutant',
+        'an authored mutant that no owner loads',
         'an edit to data a test reads through fs (sync)',
         "a failing owner under its parent's config",
         'a config that --config names',

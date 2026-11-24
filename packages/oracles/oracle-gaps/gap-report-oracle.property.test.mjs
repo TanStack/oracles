@@ -215,8 +215,12 @@
  * 5. **Authored mutants.** An authored mutant whose text occurs exactly once
  *    is judged by law 4 against the owners of the function it edits, without
  *    the branch-never-taken class, and is reported at the line of its edit; one
- *    whose text occurs zero or several times is `does-not-apply`. Its key is
- *    its id, whatever its file is called.
+ *    whose text occurs zero or several times is `does-not-apply`. Its patch
+ *    reaches only a copy that loads its source as a module, so a survivor
+ *    that no owner's copy loaded never ran the patch and is `unreached`, not
+ *    a survivor: an owner file that calls nothing of the source does not
+ *    load it (its unused import is elided). Its key is its id, whatever its
+ *    file is called.
  * 6. **Keys.** Each mutant's key is its anchor:
  *    `file#function:operator:statement`, where `statement` is the text of the
  *    innermost statement that holds the site, as tokens joined by single
@@ -4040,6 +4044,8 @@ async function driver(plan, observe) {
           )
         )
           states.add(`two authored mutants judged apart`)
+        if (m.outcome === `unreached`)
+          states.add(`an authored mutant that no owner loaded`)
         states.add(
           m.outcome !== `does-not-apply`
             ? `authored mutant`
@@ -6687,6 +6693,7 @@ const required = [
   `ordinary tests run when asked`,
   `ordinary tests left out by default`,
   `two authored mutants judged apart`,
+  `an authored mutant that no owner loaded`,
   `timeout`,
   `a kill after a nondeterministic verdict in its file`,
   `a kill in one owner after a gap in another`,
@@ -6855,6 +6862,7 @@ const separate = [
   loadOnlyAbsent,
   `ordinary tests left out by default`,
   `two authored mutants judged apart`,
+  `an authored mutant that no owner loaded`,
   `a package with a prebuilt addon deep in its tree ran in child processes`,
   `a setup error`,
   `a setup error beside a timeout under one budget`,
@@ -10542,6 +10550,39 @@ oracleProperty({
           laterSteps: NO_LATER_STEPS,
           dataOwners: [`b`],
           tests: [{ ...judging(`b`, `fixed seed`, 1), flaky: true, fn: 0 }],
+        }),
+      },
+      {
+        // An authored mutant whose only owner, file b, holds no plan test,
+        // so its import of the source is unused and its copy never loads
+        // the source: the patch never runs, and the mutant is unreached,
+        // not a survivor. File a calls the function and owns nothing.
+        name: `an authored mutant that no owner loads`,
+        enters: [`an authored mutant that no owner loaded`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`b`],
+          library: [],
+          libraryOwners: [],
+          dataOwners: [],
+          exportOwners: [],
+          importer: `none`,
+          wholeFile: `none`,
+          witness: false,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: { stmt: 0, kind: `apply` },
+          secondAuthored: false,
+          declaration: `wrapper`,
+          ownerless: false,
+          fault: `none`,
+          failingLaw: `none`,
+          onlyRun: false,
+          stability: `none`,
+          steps: null,
+          laterSteps: NO_LATER_STEPS,
         }),
       },
     ]),

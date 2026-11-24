@@ -5430,19 +5430,37 @@ function model(plan) {
         plan.ordinary && survivorKinds.has(kind) && ordinaryReaches(site),
     }
   })
+  // An owner file whose copy loads the source as a module, where the runner
+  // serves an authored mutant's patch: a file that loads, with a plan test
+  // (each calls the source through its import) or a failing law that calls
+  // production. Any other file's import of the source is unused, so it is
+  // elided, and its copy never loads the source.
+  const loadsSource = (file) =>
+    entryOf(file)?.loads === true &&
+    (plan.tests.some((t) => t.file === file) ||
+      (holdsFailingLaw(plan, file) && failingLawTarget(plan) !== undefined))
   // Each authored mutant is judged alone, against the original source with
   // only its own edit.
   const authoredAll = plan.authoredList.map((a) => ({
     id: a.id,
     key: `${SOURCE}#authored:${a.id}`,
     // An authored mutant is not instrumented, so a survivor is not-judged
-    // (a changed observation) or not-observed (the patch changed the code).
+    // (a changed observation) or not-observed (the patch changed the code),
+    // unless no owner's copy loaded the source: the patch never ran there,
+    // so it is unreached.
     kind: !a.applies
       ? `does-not-apply`
       : owners(a.fn).size === 0
         ? `unowned`
         : ((kind) =>
-            blockedOr(a.fn, kind === `survived` ? `not-observed` : kind))(
+            blockedOr(
+              a.fn,
+              kind !== `survived`
+                ? kind
+                : [...owners(a.fn)].some(loadsSource)
+                  ? `not-observed`
+                  : `unreached`,
+            ))(
             judge(
               plan,
               ownerTests(a.fn),
