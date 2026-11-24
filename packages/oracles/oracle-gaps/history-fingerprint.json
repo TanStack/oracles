@@ -84,6 +84,11 @@
     ["hangMs", "0d53e8bb13182e66"],
     ["heavy", "803af343d7fb884e"],
     ["pair", "673910841409978d"],
+    ["failingLaw", "ae90eaa2c4e112b4"],
+    ["failingLawAt", "4a3188b42225f039"],
+    ["failingLawCalls", "ff0d269a8d93ea9f"],
+    ["failingLawHook", "7cf5f2bd7c4336db"],
+    ["failingLawSpins", "362980c5da04e1a1"],
     ["tests.pendingIo", "02f66613e9490d15"]
   ],
   "histories": [
@@ -171,6 +176,11 @@
     ["hangMs", "0d53e8bb13182e66"],
     ["heavy", "803af343d7fb884e"],
     ["pair", "673910841409978d"],
+    ["failingLaw", "ae90eaa2c4e112b4"],
+    ["failingLawAt", "4a3188b42225f039"],
+    ["failingLawCalls", "ff0d269a8d93ea9f"],
+    ["failingLawHook", "7cf5f2bd7c4336db"],
+    ["failingLawSpins", "362980c5da04e1a1"],
     ["tests.pendingIo", "02f66613e9490d15"]
   ]
 }

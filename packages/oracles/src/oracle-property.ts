@@ -569,13 +569,30 @@ export class OracleModelError extends Error {
 }
 
 /**
+ * The same shape with every property read-only, so a literal that a
+ * `const` type parameter infers (readonly tuples included) is a valid
+ * result of `build`. A function-valued property keeps its type: a mapped
+ * type over a function has no keys, so it would accept any value there.
+ * The history itself is still a `THistory`.
+ */
+export type ReadonlyHistory<T> = T extends (...args: Array<never>) => unknown
+  ? T
+  : T extends object
+    ? { readonly [K in keyof T]: ReadonlyHistory<T[K]> }
+    : T
+
+/**
  * A history built from a generated one so that it reaches the states the
  * laws need. The driver reports reached states with `observe("reach", state)`.
  */
 export interface ConstructedHistory<THistory> {
   name: string
   enters: ReadonlyArray<string>
-  build: (generated: THistory) => THistory
+  /**
+   * Returns the history, which may be written as a literal: under `const`
+   * inference, that literal is read-only (`ReadonlyHistory`).
+   */
+  build: (generated: THistory) => THistory | ReadonlyHistory<THistory>
   /**
    * This history's own number of bases drawn from the run's random seed,
    * which replaces the property's `drawnBases` for it: for a history whose
@@ -848,7 +865,7 @@ interface PropertyTest {
   replays: ReadonlyArray<string>
 }
 
-export function oracleProperty<THistory, TExpected, TPlan = THistory>(
+export function oracleProperty<const THistory, TExpected, TPlan = THistory>(
   options: OraclePropertyOptions<THistory, TExpected, TPlan>,
 ): void {
   // Every source names a registered property, so its replay and manifest
@@ -1826,7 +1843,7 @@ function buildBases<THistory>(
   try {
     histories = fc
       .sample(arbitrary, { seed, numRuns: count })
-      .map((generated) => construction.build(generated))
+      .map((generated) => construction.build(generated) as THistory)
   } catch (error) {
     if (!registering) throw error
     throw new Error(

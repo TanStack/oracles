@@ -141,7 +141,7 @@ oracleProperty({
       {
         name: alreadyNoTurns,
         enters: [alreadyNoTurns],
-        build: (generated): History => ({
+        build: (generated) => ({
           ...generated,
           settles: `already`,
           turns: 0,
@@ -150,7 +150,7 @@ oracleProperty({
       {
         name: noTurnCount,
         enters: [noTurnCount],
-        build: (generated): History => ({ ...generated, turns: 1.5 }),
+        build: (generated) => ({ ...generated, turns: 1.5 }),
       },
     ],
     // A fractional count once waited two turns, and a negative one none.

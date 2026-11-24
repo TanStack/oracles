@@ -80,6 +80,7 @@ import { stateDirOf } from './evidence.mjs'
 import {
   baselineOf,
   blockedOr,
+  blockersOf,
   judgeAuthored,
   judgeMutant,
   judgeOrdinary,
@@ -1002,8 +1003,15 @@ export default async (env) => {
     clearTimeout(poller)
     const seconds = (Date.now() - started) / 1000
     // A run that spun fails bounded work as it stands, even one that then
-    // ended.
+    // ended, and names the test that ran past the budget.
     const spun = spinRow()
+    const spunBy = spun
+      ? readFileSync(capture, `utf8`)
+          .split(`\n`)
+          .filter(Boolean)
+          .map((line) => JSON.parse(line))
+          .find((row) => row.spin)?.key
+      : undefined
     const profiled = {
       file: baseOf(file),
       mutant,
@@ -1024,7 +1032,9 @@ export default async (env) => {
         timedOut: true,
         seconds,
         cause: spun ? `spin` : `backstop`,
-        ...(spun ? { builtIn: cutVerdicts(JSON.parse(spun)) } : {}),
+        ...(spun
+          ? { builtIn: cutVerdicts(JSON.parse(spun)), spin: true, spunBy }
+          : {}),
       }
     }
     // The result also lists test modules from earlier runs, with their old
@@ -1067,6 +1077,7 @@ export default async (env) => {
         modules,
         closing,
         cutVerdicts(JSON.parse(spun)),
+        spunBy,
       )
     const tests = modules.flatMap((module) =>
       [...module.children.allTests()].map((testCase) => {
@@ -1104,6 +1115,24 @@ export default async (env) => {
       setupErrors: modules.flatMap((m) =>
         (m.errors?.() ?? []).map((error) => error.message),
       ),
+      // Each describe whose own hook failed (a `beforeAll` or `afterAll`):
+      // its error, and the tests it holds, whose laws fail with it (review of
+      // #176, F4). A file-level hook's error is the module's, above.
+      hooks: modules.flatMap((m) =>
+        [...m.children.allSuites()].flatMap((suite) => {
+          const errors = suite.errors?.() ?? []
+          return errors.length === 0
+            ? []
+            : [
+                {
+                  error: errors[0].message,
+                  keys: [...suite.children.allTests()].map(
+                    (t) => `${m.moduleId} > ${t.fullName}`,
+                  ),
+                },
+              ]
+        }),
+      ),
       tests,
       unhandled: (result.unhandledErrors ?? []).map((error) =>
         String(error?.message ?? error),
@@ -1119,12 +1148,14 @@ export default async (env) => {
    * a timeout. It ended, so its closing row names what it read, which it is
    * stored under (F-D).
    */
-  function spunRun(file, seconds, modules, closing = {}, builtIn) {
+  function spunRun(file, seconds, modules, closing = {}, builtIn, spunBy) {
     return {
       file,
       timedOut: true,
       cause: `spin`,
       builtIn,
+      spin: true,
+      spunBy,
       seconds,
       inputs: importsOf(file, modules, closing),
       readAt: closing.readAt,
@@ -1253,6 +1284,7 @@ export default async (env) => {
     const spun = new Set()
     // Each cut copy's spin or idle row: the test it ended and its route.
     const cutRows = new Map()
+    const spunBy = new Map()
     // When each copy's spin row was first seen. The budget's throw usually
     // ends the loop and the copy finishes on its own; a copy still running
     // IDLE_MS after it spun swallowed the throw and is cut off.
@@ -1352,6 +1384,7 @@ export default async (env) => {
             if (copy && row.spin) {
               spun.add(copy)
               cutRows.set(copy, row)
+              if (row.key) spunBy.set(copy, row.key)
             }
             if (copy && !row.closed && !row.idle && !row.spin && !row.started)
               rows.get(copy).push(row)
@@ -1393,6 +1426,9 @@ export default async (env) => {
                   cutRows.get(copies[i]),
                   keyFor(copies[i], item.file),
                 ),
+                spunBy.has(copies[i])
+                  ? keyFor(copies[i], item.file)(spunBy.get(copies[i]))
+                  : undefined,
               )
             const map = keyFor(copies[i], item.file)
             const own = rows
@@ -1452,6 +1488,9 @@ export default async (env) => {
               [],
               closings.get(copy),
               cutVerdicts(cutRows.get(copy), keyFor(copy, item.file)),
+              spunBy.has(copy)
+                ? keyFor(copy, item.file)(spunBy.get(copy))
+                : undefined,
             )
           const map = keyFor(copy, item.file)
           const modules = result.testModules.filter((m) => m.moduleId === copy)
@@ -2145,7 +2184,7 @@ export default async (env) => {
     const runAcross = async (files, pass, after = async () => {}) => {
       const parts = contexts.map(() => [])
       files.forEach((file, index) => parts[index % contexts.length].push(file))
-      const { units, rows, failed } = passOf(
+      const { units, rows, failed, failing, passing } = passOf(
         await eachSlot(async (context, index) => {
           const done = []
           for (const file of parts[index])
@@ -2163,6 +2202,8 @@ export default async (env) => {
         rows,
         units,
         failed,
+        failing,
+        passing,
         seconds: Math.max(0, ...units.map((u) => u.seconds)),
       }
     }
@@ -2208,28 +2249,44 @@ export default async (env) => {
             sites: row.siteHistories,
           })
     // The baseline first: each test file's result, a failing test's error,
-    // law, and counterexample, and its replay; then each failing oracle
-    // file, with the step that unblocks what it owns (G13).
-    const baselineFiles = firstFiles.map((file) => ({
-      file: relative(file),
-      ordinary: !oracleFiles.has(file),
-      failure: first.failed.get(file),
-      tests: first.units.find((u) => u.file === file)?.tests ?? [],
-    }))
+    // law, and counterexample, and its replay; then each failing law of an
+    // oracle file, or the file when it failed outside its tests, with the
+    // step that unblocks it (G13).
+    const outsideTests = (file) => first.failing.get(file)?.[0] === file
+    const baselineFiles = firstFiles.map((file) => {
+      const tests = first.units.find((u) => u.file === file)?.tests ?? []
+      // Its failing laws, by file and test names: none for a broken file.
+      const laws = outsideTests(file)
+        ? []
+        : (first.failing.get(file) ?? []).map((key) => {
+            const t = tests.find((x) => x.key === key)
+            return [relative(file), ...(t.names ?? [t.fullName])].join(` > `)
+          })
+      return {
+        file: relative(file),
+        ordinary: !oracleFiles.has(file),
+        failure: first.failed.get(file),
+        ...(first.failed.has(file) ? { laws } : {}),
+        tests,
+      }
+    })
     for (const line of [
       ...baselineLines(baselineFiles, options.config),
       verdictLine(baselineFiles),
       ...blockedLines(baselineFiles),
     ])
       log(line)
-    // An oracle file that fails with no mutant active judges nothing, so it
-    // blocks the mutants it owns, and the rest are judged; the report is
-    // provisional (maintainer disposition G5; the v20 freeze's decision 2,
-    // Vitest's model: a failing baseline does not stop the run). A failing
-    // ordinary file is left out. Neither runs again, and an ordinary file
-    // runs again only with --ordinary.
-    const blocking = new Set(
-      [...first.failed.keys()].filter((file) => oracleFiles.has(file)),
+    // A failing law judges nothing, so it is left out per test, as a
+    // nondeterministic test is, and its file's passing tests still judge the
+    // mutants the file owns; a mutant with no passing owner test is blocked,
+    // and the report is provisional (maintainer decision "Block per law",
+    // 2026-11-18, which replaces the file-level block of disposition G5 and
+    // of the v20 freeze's decision 2; Vitest's model: a failing baseline does
+    // not stop the run). An oracle file that failed outside its tests, and a
+    // failing ordinary file, are left out and do not run again; an ordinary
+    // file runs again only with --ordinary.
+    const provisional = [...first.failed.keys()].some((file) =>
+      oracleFiles.has(file),
     )
     const excluded = [...first.failed.keys()].filter(
       (file) => !oracleFiles.has(file),
@@ -2243,18 +2300,15 @@ export default async (env) => {
       )
     for (const file of firstFiles)
       if (
-        first.failed.has(file) ||
-        (!options.ordinary && !oracleFiles.has(file))
+        outsideTests(file) ||
+        (!oracleFiles.has(file) &&
+          (first.failed.has(file) || !options.ordinary))
       ) {
         fileSpecs.delete(file)
         for (const key of [...first.rows.keys()])
           if (fileOf(key) === file) first.rows.delete(key)
       }
     const files = firstFiles.filter((file) => fileSpecs.has(file))
-    // A mutant's owners that failed: their rows are gone, so its targets
-    // name only its passing owners.
-    const blockersOf = (owners) =>
-      [...owners].filter((file) => blocking.has(file))
     // The tests of a file that a mutant must run: every test from the first
     // one that reached its site. A later test can see the mutant through
     // state that a reaching test changed, so only the tests before the
@@ -2264,6 +2318,10 @@ export default async (env) => {
     // comes from the first pass alone, so every mutant's selections are
     // known before the second, and their checks run beside it, on the
     // contexts it leaves idle.
+    // A test left out of judging (a failing law, a nondeterministic test)
+    // still runs in its file's copies, as any test after the first reaching
+    // one does, so a count cut it causes is a gap (maintainer decision "An
+    // excluded test still runs", 2026-11-23).
     const selectionOf = (file, keys) => {
       if (keys.some((k) => k === `${file} > (background)`)) return null
       const all = [...first.rows.keys()].filter(
@@ -2278,7 +2336,10 @@ export default async (env) => {
       const rows = new Map(run.rows ?? [])
       return (
         !run.timedOut &&
-        outcomeOf([run]).outcome === `survived` &&
+        // A failing law in the selection fails as it did with no mutant
+        // active, and judges nothing.
+        outcomeOf([run], new Set([...first.failing.values()].flat()))
+          .outcome === `survived` &&
         // Its work too, which a work bound judges (classify.mjs): a skipped
         // test that warmed a cache leaves a later test more to do.
         selection.every(
@@ -2343,12 +2404,17 @@ export default async (env) => {
       files: files.length,
       selections: planned.size,
     })
-    const baseline = baselineOf(first.rows, second.rows)
+    const baseline = baselineOf(
+      first.rows,
+      second.rows,
+      [...first.failing.values()].flat(),
+    )
     const { nondeterministic } = baseline
-    // A nondeterministic test judges nothing, so its verdict must not stop
-    // a run at its first kill: a later test of the file may decide.
+    // A nondeterministic test and a failing law judge nothing, so their
+    // verdicts must not stop a run at its first kill: a later test of the
+    // file may decide.
     const ignoredIn = (file) =>
-      [...nondeterministic].filter((key) => fileOf(key) === file).sort()
+      [...baseline.leftOut].filter((key) => fileOf(key) === file).sort()
     // The mutants that change a value somewhere in each file's unmutated
     // runs (both passes), at load or in a test (capture-setup.mjs). A mutant
     // that changes no value in any of its owners' runs runs exactly as the
@@ -2444,12 +2510,11 @@ export default async (env) => {
     // verdicts of its own yet.
     const kills = (u) =>
       !u.skipped &&
-      outcomeOf([countOnly(u)], baseline.nondeterministic).outcome === `killed`
-    // A mutant's copies run in their owner files' order and are summed in that
-    // order (the work budget, below). The order is the report's, so it does not
-    // depend on the timing of the copies. A later owner's kill does not count
-    // once the budget is passed; that is deterministic because the work is a
-    // count, and it is the rule the design note (option A) states.
+      !u.cut &&
+      // A mutant's copies run in their owner files' order: the kill check reads
+      // a copy's built-in verdict only as a count that the clock cannot reach
+      // (`countOnly`). A failing law's copy is left out (`leftOut`).
+      outcomeOf([countOnly(u)], baseline.leftOut).outcome === `killed`
     const runOwners = async (slot, states, filesOf, keysOf) => {
       const active = states.filter((st) => !st.done)
       const requests = []
@@ -2596,7 +2661,7 @@ export default async (env) => {
               baseline,
               mutants,
             }),
-            blockersOf(st.owners),
+            blockersOf(st.owners, first, st.targets, baseline, st.units),
           ),
         }
         if (needsOrdinary(st.result, st.targets))
@@ -2757,7 +2822,10 @@ export default async (env) => {
     for (const job of authoredJobs)
       Object.assign(
         job.result,
-        blockedOr(judgeAuthored(job.units, baseline), blockersOf(job.owners)),
+        blockedOr(
+          judgeAuthored(job.units, baseline),
+          blockersOf(job.owners, first),
+        ),
       )
     endPhase(`authored mutants`, { mutants: authored.length })
     // Every authored gap is streamed once, judged or not (a stale `find` is
@@ -2779,10 +2847,10 @@ export default async (env) => {
         {
           run: runIdentity,
           options: { ...options, only: options.only && [...options.only] },
-          // A report with a failing oracle file is provisional: the mutants
-          // it owns are blocked (G5). Each test file's baseline, as the
-          // report leads with it.
-          provisional: blocking.size > 0,
+          // A report with a failing oracle file is provisional: its failing
+          // laws judge nothing (Block per law). Each test file's baseline, as
+          // the report leads with it.
+          provisional,
           baseline: baselineFiles.map(({ tests, ...file }) => ({
             ...file,
             passed: tests.filter((t) => t.state === `passed`).length,

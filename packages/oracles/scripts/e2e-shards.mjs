@@ -371,6 +371,29 @@ export const shards = {
     `fixed seed 20261105: a ?. read of an object absent only at load`,
     `random seed: a ?. read of an object absent only at load`,
     `determinism: constructed history: a ?. read of an object absent only at load`,
+    // A failing law beside its file's passing laws: two small functions
+    // (about 2 s on an Arclet).
+    `fixed seed 20261105: a failing law beside its file's passing laws`,
+    `random seed: a failing law beside its file's passing laws`,
+    `determinism: constructed history: a failing law beside its file's passing laws`,
+    // The failing law's position, calls and hooks: one or two small
+    // functions each, about 2 s on an Arclet (the heavy law's loop adds
+    // about a second).
+    `fixed seed 20261105: a heavy failing law at the start of its file, beside a passing law`,
+    `random seed: a heavy failing law at the start of its file, beside a passing law`,
+    `determinism: constructed history: a heavy failing law at the start of its file, beside a passing law`,
+    `fixed seed 20261105: a failing beforeAll around a law`,
+    `random seed: a failing beforeAll around a law`,
+    `determinism: constructed history: a failing beforeAll around a law`,
+    `fixed seed 20261105: a failing afterAll around a law that calls production`,
+    `random seed: a failing afterAll around a law that calls production`,
+    `determinism: constructed history: a failing afterAll around a law that calls production`,
+    `fixed seed 20261105: a failing law that spins under a mutant before a passing law`,
+    `random seed: a failing law that spins under a mutant before a passing law`,
+    `determinism: constructed history: a failing law that spins under a mutant before a passing law`,
+    `fixed seed 20261105: module data that only the failing owner's passing pair judges`,
+    `random seed: module data that only the failing owner's passing pair judges`,
+    `determinism: constructed history: module data that only the failing owner's passing pair judges`,
     // The filed history of a stale authored mutant's fourth base (about 12 s).
     `fixed history: a filed base whose owner reads an absent object through ?.`,
     `determinism: fixed history: a filed base whose owner reads an absent object through ?.`,

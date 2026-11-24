@@ -351,14 +351,21 @@
  *    test file runs once with no mutant active, an ordinary file too. The
  *    stdout opens with each file's result and its test counts, a failing
  *    file's failing test and its error, and its replay command; then one
- *    line for each failing oracle file that names it, its failing test, and
- *    the step that unblocks the mutants it owns (G13); then, when an oracle
- *    file failed, `Provisional:` with how many mutants are blocked. A
- *    failing oracle file, or a setup file that throws and fails every file,
- *    refuses nothing: a mutant that a failing oracle file owns and no
- *    passing owner kills is `blocked`, a gap, and the rest are judged
- *    (maintainer disposition G5, 2026-11-11, and the freeze's decision 2: a
- *    RED baseline gives a provisional report). With `--only`, the baseline
+ *    `blocked` line for each failing law of an oracle file, which names it
+ *    by its file and test names, and one for each oracle file that did not
+ *    load, which names the file, each with the step that unblocks it (G13);
+ *    then, when an oracle file failed, `Provisional:` with how many mutants
+ *    are blocked. A failing law, a failing owner file, or a setup file that
+ *    throws and fails every file, refuses nothing. A test that fails with no
+ *    mutant active judges nothing: it is left out per test, as a
+ *    nondeterministic test is, and the passing tests of its file still
+ *    judge the mutants the file owns (the maintainer's decision "Block per
+ *    law", 2026-11-18, which replaces the file-level block of disposition
+ *    G5, 2026-11-11, and of the freeze's decision 2, v21.2 R11, at the
+ *    granularity of a test). A mutant with no passing owner test, that a
+ *    failing law or a file that did not load holds, and that nothing kills,
+ *    is `blocked`, a gap; the rest are judged, and the report is
+ *    provisional (a RED baseline gives a provisional report). With `--only`, the baseline
  *    runs only the selected mutants' owners (and the ordinary files with
  *    `--ordinary`), and each selected mutant is judged as the full run
  *    judges it. The last stdout line is the run's done line (law 15),
@@ -577,6 +584,7 @@ import {
   baselineVerdict,
   verdictLine,
   doneLine,
+  kill,
   push,
   judging,
   HEAVY_CALLS,
@@ -587,6 +595,7 @@ import {
   interpret,
   refusal,
   ownsNothing,
+  blockingOf,
   MODULE_DATA,
   model,
   edited,
@@ -4037,13 +4046,118 @@ async function driver(plan, observe) {
     // reached its fault.
     if (plan.fault !== `none` && cli.exit !== 0 && !logRefused)
       states.add(`refused ${plan.fault}`)
-    // A failing owner and a throwing setup file block mutants (law 14).
+    // A throwing setup file blocks mutants (law 14).
     if (
       blockingFaults.includes(plan.fault) &&
       cli.exit === 0 &&
       cli.mutants.some((m) => m.outcome === `blocked`)
     )
       states.add(`blocked by ${plan.fault}`)
+    // Block per law (law 14; the maintainer's decision of 2026-11-18): a
+    // mutant every one of whose owner files holds a failing law, killed, so
+    // a passing law of a file that also holds a failing law judged it; and a
+    // mutant blocked where its owners' failures are failing laws, so no
+    // passing owner test was left to judge it.
+    const lawFiles = new Set(
+      blockingOf(plan)
+        .filter((f) => !f.ordinary && f.laws !== undefined)
+        .map((f) => f.file),
+    )
+    const ownedBy = ownersOf(plan)
+    if (
+      cli.exit === 0 &&
+      cli.mutants.some((m) => {
+        const files = [...ownedBy(m.function)]
+        return (
+          m.source === SOURCE &&
+          m.outcome === `killed` &&
+          files.length > 0 &&
+          files.every((file) => lawFiles.has(file))
+        )
+      })
+    )
+      states.add(`a failing law left its file's other laws judging`)
+    if (
+      cli.exit === 0 &&
+      lawFiles.size > 0 &&
+      cli.mutants.some((m) => m.outcome === `blocked`)
+    )
+      states.add(`blocked by a failing law`)
+    // The failing law's own dimensions (review of #176): a failing law that
+    // calls production past the call floor beside a passing law that kills
+    // (F1: its work is no copy's spin); a mutant of the function only the
+    // failing law calls, owned by files whose plan tests pass, blocked by
+    // that law (F2: no false unreached); and a describe whose hook fails,
+    // whose laws the baseline names as failing (F4).
+    const lawRuns =
+      plan.failingLawHook !== `beforeAll` ? plan.failingLawCalls : `none`
+    const lawHolders = [`a`, `b`].filter(
+      (file) =>
+        (plan.failingLaw === file || plan.failingLaw === `both`) &&
+        plan.fault !== `setupThrows`,
+    )
+    if (
+      cli.exit === 0 &&
+      lawRuns === `heavy` &&
+      cli.mutants.some((m) => {
+        const files = [...ownedBy(m.function)]
+        return (
+          m.source === SOURCE &&
+          m.outcome === `killed` &&
+          files.length > 0 &&
+          files.every((file) => lawHolders.includes(file))
+        )
+      })
+    )
+      states.add(`a heavy failing law left its file's other laws judging`)
+    const lawTarget = plan.functions.find((fn) => fn.generated)?.id
+    if (
+      cli.exit === 0 &&
+      lawRuns !== `none` &&
+      cli.mutants.some((m) => {
+        const files = [...ownedBy(m.function)]
+        return (
+          m.source === SOURCE &&
+          m.function === lawTarget &&
+          m.outcome === `blocked` &&
+          files.length > 0 &&
+          files.every(
+            (file) =>
+              lawHolders.includes(file) &&
+              plan.tests.some((t) => t.file === file),
+          )
+        )
+      })
+    )
+      states.add(`a mutant that only a failing law reached was blocked by it`)
+    if (
+      cli.exit === 0 &&
+      plan.failingLawHook !== `none` &&
+      cli.lead.some(
+        (line) =>
+          line.startsWith(`oracle-gaps: blocked `) &&
+          line.includes(` > hooked > `),
+      )
+    )
+      states.add(`a failing describe hook made its laws fail`)
+    // A failing law that spins under a mutant still runs, before the passing
+    // law that would kill it, so the count cut it causes is a gap ("An
+    // excluded test still runs", 2026-11-23): the mutant is blocked by that
+    // law (C 2026-11-23, "A count cut caused by a failing law is blocked by
+    // it"), though a passing law reaches it too.
+    if (
+      cli.exit === 0 &&
+      plan.failingLawSpins &&
+      plan.failingLawAt === `start` &&
+      lawRuns === `once` &&
+      cli.mutants.some(
+        (m) =>
+          m.source === SOURCE &&
+          m.function === lawTarget &&
+          m.outcome === `blocked`,
+      )
+    )
+      states.add(`a failing law that spins under a mutant cut its copy`)
     // A refused run's output is recorded with its scratch paths named, and
     // this package lies inside the CLI's directory: the case in which the
     // naming order decides whether a random name stays in the trace. The
@@ -4254,6 +4368,22 @@ async function driver(plan, observe) {
         dataOf.owners.some((file) => !plan.tests.some((t) => t.file === file))
       )
         states.add(`a module data mutant whose owner file holds no plan test`)
+      // Per-law blocking with #204's census (#186): module data owned by
+      // file b, whose plan tests are all nondeterministic, beside the
+      // failing owner's law. The failing owner's two passing tests count and
+      // judge the load's reach, so the mutant is judged, not blocked.
+      if (
+        dataOf !== undefined &&
+        plan.fault === `brokenOwner` &&
+        dataOf.owners.includes(`b`) &&
+        m.outcome !== `blocked` &&
+        m.outcome !== `indeterminate` &&
+        plan.tests.some((t) => t.file === `b`) &&
+        plan.tests.every((t) => t.file !== `b` || t.flaky)
+      )
+        states.add(
+          `the failing owner's passing pair judged module data beside its failing law`,
+        )
       if (
         m.function === `w_memo` &&
         m.operator === `if-false` &&
@@ -5788,8 +5918,9 @@ function endsBreach(run, { checked = true } = {}) {
 /**
  * Law 14: the report leads with the baseline. The stdout opens with each
  * test file's result and its test counts, a failing file's failing test and
- * its error, and a line for each failing oracle file that names it, its
- * failing test, and the step that unblocks the mutants it owns; then, when
+ * its error, and a line for each failing law of an oracle file (and each
+ * oracle file that did not load) that names it, says that it judges
+ * nothing, and gives the step that unblocks it; then, when
  * an oracle file failed, the provisional status with how many mutants are
  * blocked. Its last line says the check completed, with its gap count. A
  * failing owner's replay runs exactly its failing test. A partial run
@@ -5809,11 +5940,16 @@ function leadBreach(plan, cli, observations, expected) {
         line.startsWith(`oracle-gaps: baseline fail ${name}: `),
     )
     if (at < 0) return breach(`the stdout gives no baseline line for ${name}`)
+    // A file whose only failure is a describe's hook failed outside its
+    // tests, and names the hook's error.
+    const outside = b.loads && b.fails && b.failed === 0
     const owed = !b.loads
       ? `oracle-gaps: baseline fail ${name}: did not load: `
-      : b.failed > 0
-        ? `oracle-gaps: baseline fail ${name}: ${b.failed} of ${counted(b.ran, `test`)} failed`
-        : `oracle-gaps: baseline pass ${name}: ${counted(b.ran, `test`)}${b.skipped > 0 ? `, ${b.skipped} skipped` : ``}`
+      : outside
+        ? `oracle-gaps: baseline fail ${name}: failed outside its tests: ${span(b.hook)}`
+        : b.failed > 0
+          ? `oracle-gaps: baseline fail ${name}: ${b.failed} of ${counted(b.ran, `test`)} failed`
+          : `oracle-gaps: baseline pass ${name}: ${counted(b.ran, `test`)}${b.skipped > 0 ? `, ${b.skipped} skipped` : ``}`
     if (b.loads ? cli.lead[at] !== owed : !cli.lead[at].startsWith(owed))
       return breach(
         `the baseline line of ${name} is ${cli.lead[at]}, owed ${owed}`,
@@ -5840,22 +5976,35 @@ function leadBreach(plan, cli, observations, expected) {
   const blocked = cli.lead.filter((line) =>
     line.startsWith(`oracle-gaps: blocked `),
   )
-  if (blocked.length !== expected.blocking.length)
+  // One blocked line per failing law, named by its file and test names, and
+  // one per oracle file that did not load, which has no law to name (Block
+  // per law, 2026-11-18).
+  const owedBlocked = expected.blocking.flatMap((f) =>
+    f.laws === undefined
+      ? [
+          {
+            named: `tests/${f.file}.test.ts`,
+            head: `oracle-gaps: blocked ${span(`tests/${f.file}.test.ts`)} fails with no mutant active, so none of its tests judges: `,
+          },
+        ]
+      : f.laws.map((law) => ({
+          named: `tests/${f.file}.test.ts > ${law}`,
+          head: `oracle-gaps: blocked ${span(`tests/${f.file}.test.ts > ${law}`)} fails with no mutant active, so it judges nothing: `,
+        })),
+  )
+  if (blocked.length !== owedBlocked.length)
     return breach(
-      `${blocked.length} blocked lines for ${expected.blocking.length} failing oracle files`,
+      `${blocked.length} blocked lines for ${owedBlocked.length} failing laws and files that did not load`,
     )
-  for (const f of expected.blocking) {
-    const at = f.test === undefined ? `` : ` at ${span(f.test)}`
-    const line = `oracle-gaps: blocked ${span(`tests/${f.file}.test.ts`)} fails with no mutant active${at}, `
+  for (const { named, head } of owedBlocked)
     if (
       !blocked.some(
-        (l) => l.startsWith(line) && l.endsWith(`then check again.`),
+        (l) => l.startsWith(head) && l.endsWith(`then check again.`),
       )
     )
       return breach(
-        `no blocked line names tests/${f.file}.test.ts, its failing test, and the step that unblocks it`,
+        `no blocked line names ${named}, that it judges nothing, and the step that unblocks it`,
       )
-  }
   const blockedCount = expected.entries.filter(
     (e) => e.kind === `blocked`,
   ).length
@@ -6861,7 +7010,24 @@ const required = [
   `refused badEntry`,
   `refused missingSource`,
   `refused nonLiteral`,
-  `blocked by brokenOwner`,
+  // Block per law (law 14; the maintainer's decision of 2026-11-18): the
+  // two states that replace "blocked by brokenOwner", whose failing owner
+  // always leaves passing tests in its file, so that it blocks nothing
+  // under that decision (a repair under the register's M "P7
+  // clarification", v21.2 R7: each narrowed case has its own state and a
+  // witness, the constructed history "a failing law beside its file's
+  // passing laws").
+  `a failing law left its file's other laws judging`,
+  `blocked by a failing law`,
+  // The failing law's position, production calls and hook (review of #176,
+  // F1 to F4), each entered by its constructed history.
+  `a heavy failing law left its file's other laws judging`,
+  `a mutant that only a failing law reached was blocked by it`,
+  `a failing describe hook made its laws fail`,
+  // A failing law still runs ("An excluded test still runs", 2026-11-23).
+  `a failing law that spins under a mutant cut its copy`,
+  // #204's census under per-law blocking (#186).
+  `the failing owner's passing pair judged module data beside its failing law`,
   `killed on both routes`,
   `killed under an unnamed law`,
   `second campaign's route attributed`,
@@ -7008,9 +7174,11 @@ const required = [
 ]
 // The faults the CLI analyzes anyway: a package's TypeScript is no input.
 const analyzedFaults = [`noTypescript`, `apiLessTypescript`]
-// The faults that fail test files with no mutant active, which block the
-// mutants those files own and refuse nothing (law 14).
-const blockingFaults = [`brokenOwner`, `setupThrows`]
+// The fault that fails every test file with no mutant active, so no owner
+// test passes: it blocks every owned mutant and refuses nothing (law 14). A
+// failing owner (`brokenOwner`) refuses nothing either, and leaves passing
+// tests in its file, which judge the mutants it owns (Block per law).
+const blockingFaults = [`setupThrows`]
 // The faults found when the package's Vitest and config load, before the
 // analysis.
 const configFaults = [
@@ -7086,10 +7254,19 @@ const separate = [
   ...faults
     .filter(
       (fault) =>
-        !analyzedFaults.includes(fault) && !blockingFaults.includes(fault),
+        !analyzedFaults.includes(fault) &&
+        !blockingFaults.includes(fault) &&
+        fault !== `brokenOwner`,
     )
     .map((fault) => `refused ${fault}`),
   ...blockingFaults.map((fault) => `blocked by ${fault}`),
+  `a failing law left its file's other laws judging`,
+  `blocked by a failing law`,
+  `a heavy failing law left its file's other laws judging`,
+  `a mutant that only a failing law reached was blocked by it`,
+  `a failing describe hook made its laws fail`,
+  `a failing law that spins under a mutant cut its copy`,
+  `the failing owner's passing pair judged module data beside its failing law`,
   `a partial run of one function`,
   `a partial run beside a failing owner`,
   ...analyzedFaults.map((fault) => `analyzed ${fault}`),
@@ -7279,6 +7456,11 @@ const withDeclaration = (constructed) =>
         claimScenario: false,
         psMissing: false,
         pair: false,
+        failingLaw: `none`,
+        failingLawAt: `end`,
+        failingLawCalls: `none`,
+        failingLawHook: `none`,
+        failingLawSpins: false,
         declaration: index % 2 === 0 ? `wrapper` : `oracleProperty`,
         ownerless: false,
         owners: [`a`, ...generated.owners.slice(1)],
@@ -7388,7 +7570,7 @@ oracleProperty({
   law: {
     statement: `The gap report enumerates the promised operator mutants, leaves out exactly the probe-only code, discovers every oracle that owns a function's call tree and refuses broken ownership, judges each mutant only by its owners' tests on their registered routes and counts only law verdicts on reproducible routes as kills, which outrank a run that never ends, anchors each mutant by its function and normalized statement, lists every gap and unowned mutant once with consistent counts, keeps keys stable under unrelated edits, reports through one daemon per package what a cold run reports at every state of a sequence of edits, and bounds a mutant's copies by one work budget per mutant (site evaluations, never time) and names in each heartbeat a mutant that is running, in a file that runs it, leaves nothing in the package and writes nothing where Vitest's include could find it while it runs, leaves no process running once it is stopped, runs the package as Vitest does from any install path and any --source spelling: one instance of each workspace dependency, no refusal over an unbuildable devDependency, child processes for a native addon anywhere in the tree, a capture that a test's builtin spies cannot see, and a refusal of test.projects; leads its report with every test file's baseline, blocks only the mutants a failing oracle file owns and judges the rest, prints every line of its stream with the prefix oracle-gaps: and its kind, one decisive baseline line before any mutant, and a done line last, and every run that does not complete ends, cold or through the daemon, with a refusal that exits 2, prints a refused: block and one fix: directive with no stack trace, and writes the refusal to the run's output directory.`,
     authority: `The maintainer's decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), not in this package's records, including that a kill by reach agreement alone is a gap and that an incremental run through the daemon equals a cold one (v19.3); the project's oracle guide on quiet exclusions; the oracle rubric's outcome kinds (ORC-006); the CLI's documented operator list in schemata.mjs; the maintainer's dispositions G1, G2, G4, G5, G6, and G13 of the framework papercut ledger (2026-11-11) and the v20 freeze's namespacing, one-loop, and provisional-report decisions (2026-11-10); the maintainer's request for a greppable stream (2026-11-12, relayed by the coordinator with its decisions of that day: the same prefixes on stdout and stderr, a done line for a stopped run, and no --max-gaps).`,
-    limits: `Not reached: the work-budget overflow names one route per row (the capture's row keeps the route at the test's end), where check.mjs names every route of the copy's tests that did counted calls. The witness that reaches it is a constructed history whose copy passes its mutant's work budget across owner files, each under its own call budget, with counted calls in a non-last part of a test on a registered route and the route at the end unregistered. Until that history is in, that gap is open. Law 12 judges refusals. The one internal error a history reaches is the constructed rejected-batch history (rejectBatch, a test-only fault that rejects a batch's run after its copies are in Vitest's and Vite's state). Its run is judged in this order: the output namespace, process warnings, and config lines, as for any run; then bounded retention, which owes the rejected batch's own line with its state after retirement; then the stream law (law 15) on both streams, as for any run, so its error line and its done line carry the prefix, and no other line does not, which the state \`a run ended in an internal error\` declares; then exit 3 with an internal error's done line last on both streams, no stack frame on stderr, and an error.log in its output directory. What the error.log's stack says is not judged. An internal error that no fault constructs is a completion failure, reported before the stream law; an internal error through the daemon is reached by no history, and its ending is the same function's (endRun), by inspection. The internal error's lines follow the register's C entry "The internal-error line" (2026-11-16): the general law (endsBreach) owes every run that ends through endRun one error line on stderr naming the done line's log, the output directory's error.log, and none on stdout, and owes the supervisor's own exit 3 none. The message's escape is witnessed by the fault's message, which holds a line break and a forged done line after it; the log path's escape only on POSIX, where the rejected batch's output directory holds a line break (a name on win32 cannot). Paths in a completed run's lines (the results note, the done line's report, the test-output note) are escaped the same way, by inspection: no completed history names such a directory. P10's exempt lines (v21.2 P10 and I3) are read by their own shapes (exemptBlocks), never by indentation alone: a baseline failure's indented details, a refusal's block, Node's warning with its \`--trace-warnings\` frames and its hint, V8's fatal block, esbuild's message block, and Vite's own \`[vite]\` line. The V8, traced-warning, and esbuild blocks are calibrated beside our own line with no prefix (the stream calibrations put them before the rejected-batch run's done line, and the law must name our line alone); no generated history prints any of them or a Vite line, and a shape of those tools that exemptBlocks does not name is read as a stray. The stdout summary's exemption is unused and not exercised: the CLI prefixes every summary line (its summary, legend, and function kinds). \`--help\` prints its usage text with no prefix and no done line, exempt by the register's M entry "\`--help\` is exempt" (2026-11-16), and the static oracle's Help law owes exactly that text; \`--stop-daemon\` prints nothing and exits 0, read the same way as a command outside the run protocol (C, pending ratification), and this oracle runs it without observing its streams. A syntax error in a module that the config imports lets the esbuild that Vite bundles configs with print its block before the refusal (trace, Vite 7.3.7, esbuild 0.28.2: \`✘ [ERROR] Unexpected end of file\`, an empty line, \`    helper.ts:2:0:\`, the code frame, then the refused block): its lines are exempt by the register's M entry "Other tools' output is exempt" (2026-11-16), the refusal and the done line around them keep the prefix, and no history generates it. Bounded retention reads the hook's lines (retention-hook.mjs). Its count of one line per batch (runner law L2) rests on the index the hook takes when a batch starts, so a CLI that skipped a batch's index and its line together, or that omitted only the line of a check's last batch, keeps the indices 0..n-1 and is not seen; a check that ended before its report (the rejected batch, a stopped run) and a daemon the driver killed are judged for at most one line per index, since the batches they were running at their end owe none. A line's process is told by check.pid, which the check writes, and the driver itself knows only the daemon it killed. The cold store's law (held) counts the entries given to the store's put that a full collection leaves reachable, so a store that kept only a part of an entry (its unit without the entry) is not seen; staleOpen reads Vitest's own close state (closingPromise, set when close starts), so a close that starts and never resolves is the runner oracle's (L8); and a context replaced after a check's last batch is observed only by a later check's first batch through the daemon. The run whose process aborts is declared on every platform. Its win32 witness (process.abort through ORACLE_GAPS_TEST_ABORT_AT, under the win32 supervisor) lands in #79; until then the Windows end-to-end job is non-blocking (C entry (c)). On win32 Node cannot deliver SIGTERM (its kill is TerminateProcess, which ends the process with no stopped line), so the stop states that name SIGTERM are required on POSIX only, and a stop there goes through the CLI's test stop hook and is observed as SIGINT, which owes its done line as any stop does (no history sends a win32 child.kill, the SIGKILL-equivalent that owes none); every SIGINT state stays required on win32. A stop as the CLI starts lands only in one of two holds: the driver's own preload before the CLI's first statement (outcome a, nothing written; POSIX only, since its witness is a signal's default action), or the CLI's hold after its started marker, which the stop the CLI keeps releases (outcome b, judged only when the supervisor started no child); a stop during Node's own start between the two is not generated, since its outcome follows timing. The drawn spawn delay is a wait inside a hold, so it cannot move a stop out of it. Stop runs that land while the config warms (ORACLE_GAPS_TEST_WARM_PROBE) are still drawn, and on win32 every drawn stop goes through ORACLE_GAPS_TEST_STOP: each is a test-only hook that a drawn field switches, main's pattern, which the review of #57 (A3) brought to the maintainer; only the stop after the completed line (ORACLE_GAPS_TEST_HOLD_UNTIL) was made constructed-only. A missing \`ps\` is generated only as a PATH that names no command, on POSIX, where the run is supervised. The unsupervised path (stopNow, every win32 stop) is reached on POSIX by one constructed history whose stop is held at the run's note, before the check starts a process, and by one whose stream log is lost after the note, where the stop is the run's one ending whatever the log (a check error after the stop's line and before its streams flush is not reached, so a stop that only swallowed the log's error survives): an unsupervised POSIX run has no group to end, so a stop while the witness's test spins leaves that test's own child (measured; C 2026-11-13, Windows (e)), which win32 ends with the job object libuv puts its children in. Argument refusals are the static oracle's; the check's rejection of a stack trace, a missing fix, and a wrong exit code is calibrated in the static oracle, through the same refusalBreach, and here only a refused run reported as complete is calibrated, because each calibration here runs real CLI histories. Law 15's stdout gap lines are judged against each completed run's own results.json, by id: the cold run, and each check through the daemon (every step's check and the check that a mid-run edit overlaps); a stopped run and a refusal list no gaps and are not judged so. A line's change is read loosely: its code on one line, whole or cut after a kept part and ended with \`...\`; where the printer cuts (60 code points, kept 57) is the classify oracle's law 8 (\`shortened\`), in-process. A timeout's line names its cause as \` (cause: <cause>)\` after its change, judged equal to results.json's \`detail\`; a line with any other text after its change does not read and fails loudly. Hangs only as an owner test that awaits a promise that never settles, under a 20 s full limit, and a slow run only as two witnesses whose tests wait where the output changed, 3 s in one that then judges and 10 s in two one-test owners of one that does not; busy loops only on instrumented code (cut by the call budget), heavy tests (\`heavy\`, drawn for 1 history in 16, for its own tests) only as 10,000 more calls before each campaign's call, never in a test.prop or the shared-state witness; a test that reads the clock only after its work makes its spin a gap although its count up to the spin did not follow the clock, a conservative reading accepted under M "Count-only kills" (coordinator, 2026-11-17), since the CLI sees only that its rows are clocked; a row is clocked by state (C, 2026-11-17): the test read the clock, made a timer, or its own I/O ran a callback while it ran (async_hooks), so a sync read, which makes no resource, leaves it unclocked, and a short async read is witnessed by \`a spin after a short async read\`, no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests (so a nondeterministic test's no-progress kill, which its ordinary failures would not give, is not seen: issue #149), setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; --only only in a stopped run and a partial run of one function's mutants, and no --sample or --diff-base; the baseline's failures only as one failing owner test that throws an error and a setup file that throws, so a baseline law violation's law and counterexample lines are the classify oracle's; a derived class's file is instrumented and its sites are judged as unowned, but no test imports or constructs the class, so its no-mutant and super-region behavior is the static oracle's (in-process), not this oracle's; package configs only as vite.config or vitest.config with one of the extensions .ts, .mts, .cts, .js, .mjs, and .cjs (not every pair), as config/gap-vitest with the same extension through --config, or none, as an object or a sync or async function, with no plugins of their own except one enforce: 'pre' transform that appends a comment to each module of the package (prePlugin) and a plugin whose load reads each test file with a sync read (loadPlugin), drawn for a config in ES module syntax and reached by its own constructed history too; a plugin whose output depends on anything but the module's text (a sidecar file it reads) and an environment variable that changes between checks are not generated, since the runner tracks neither yet and the daemon's environment is fixed when it starts (F-A1: the maintainer decided on 2026-11-13 that the daemon tracks both and restarts when they change, in the next pull request); and test.projects only as a refusal, and only under the package's own package.json; the supervisor-death state is required and entered only off win32: win32 has no supervisor until #79, so there the state is not reached and its history is not judged (platform-scoped reach; the win32 run is unsupervised, which register C entry (e) of #58 records as not guaranteeing that no process outlives the CLI); a config's test.root only in four shapes, drawn for an ES module config that Vitest discovers in the package (the randomness-wins decision, 2026-11-16) and each reached by its own constructed history of one owner and one context, where the test files' globs and the setup file are relative to the root (issue #101): the directory that holds the tests, the directory above the package, a directory of the package that holds no test file, and the package's tests as a symbolic link to the directory that holds them (required on every platform, since Windows creates the link as the driver's other links); not under --config (nor in a history whose config edit names a second config), a CommonJS config, a parent's config, test.projects, several contexts with different roots, or a root that is the filesystem's root; the runner serves each copy of a test file by its absolute path, through its pre plugin's load (which answers before the config's own plugins) and through its read of the copy's path for Vitest's pragma read (serveCopies), and histories run copies only in Vite's server environments (node and the pragma's ssr environment): jsdom and happy-dom, Vite's client environment, are not generated (the #103 merge-gate review ran jsdom by hand under all five root shapes, and the copies loaded in each); a top-level await only in an ES module config and require only in a CommonJS one, as Vitest itself loads no other; a --config outside the package is refused by design, through the rule for paths outside the package (args.mjs), and no history generates one; contexts only one, four, or eleven, and process warnings judged only as MaxListenersExceededWarning on the CLI's own stderr (a daemon's process warnings go to its log); a context that fails to open gives back its listener allowance, which no observation shows (a kept allowance only raises the limit, so no warning follows), so that accounting is fixed by inspection; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9 judges the witness module's outcome classes along one constructed edit sequence only (a test edit, a helper edit, and a revert), which runs as two constructed histories, one for each half of the module (captureA and captureB, whose union is the module and which share no function; a function stays with the functions its tests or statements read), since the whole module along it took one CI job (#106, #145; maintainer decision "A one-history job over budget is cut by cost", 2026-11-16), so an interaction between functions of different halves, beyond the ones the split keeps together, is not judged along the sequence (the whole module runs together in \`every outcome class\` and in generated histories, which take no steps); and the budget witness's outcome classes along one constructed second check with nothing changed, because a generated history with the witness module or the budget witness takes no steps (maintainer decision, 2026-11-11, and the runtime review's P1-a, 2026-11-12; this oracle owns the gap); the state "a timed-out run reused after an edit" counts only runs cut by their call budget (the spin, in the first half), a count the CLI records, by the maintainer's decision "#104 state narrowed, #99 restores" (2026-11-17), which narrows "#90 job stays blocking" for that state only: the reuse of a run cut by the clock (a hang) is judged by law 9 but not required, because on main a hang's timeout is stored only when the sampler saw the copy idle, which load decides, and otherwise its confirmation is cut short by its mutant's budget and not kept (#104); #99 makes a hang a state-based no-progress kill and restores the reach as "a run killed for no progress, reused after an edit" (#156); law 9's edits come between checks, except one, midrun, which lands during a check through the daemon: a test of file a, whose context has loaded file b's helper, rewrites the helper in the baseline's first run of file a, before file b's runs read it, in one context or several; or a test of file b rewrites its own helper, or the data file that its verdict read through a sync fs read, after file b's judged tests read them, in the run that judges with the old text (review of #55, F1); that check must report, for each mutant, what a cold run of the state before the edit or of the state after it reports, and exit as one of them does (third review of #55, F-C), compared per mutant result rather than per file; when file b's own test lands the edit, b's baseline reads the old text and b's mutant runs read the new one, so b's own mutants in that check are not judged, since their results legitimately mix the two texts (maintainer decision, 2026-11-13), while every other mutant there is judged against both cold runs, with the check's exit code, its mutants' keys, and its stream; the stronger follow-up compares each run's raw outcome with the cold outcome of the state that run read; and the next check, with nothing changed, must equal a cold run of the state after the edit, compared for equality of results only, not for what the daemon reused or computed (the runner's rule: a run whose input changed after the run read it is invalidated and not stored, settleIn); a check through the daemon of a state that nothing changed must compute no run that was not cut off, judged where no test reads the clock (F-A, F-A2), and a test's fs read of a file and the module that the context serves from it are two inputs, each under its own hash (F-A2); an edit during a mutant run is not generated, and a file is edited mid-run only by the run's own tests, not by another process at an arbitrary time; a file that a test reads through fs is edited only as one JSON file that file b's verdict reads by a sync, a promise, or a callback read, or by a sync read after it stats its own directory and tests that it exists (statDir: the directory is an input as a directory, not by its content, and is not itself edited), each read first checking that its fs function keeps its own name and length (the runner stores a run under the files in the package that its copy reads with readFileSync, readFile, existsSync, or statSync, or the fs/promises readFile or stat, each with its hash at the copy's first read; a read outside the package or under node_modules, from a worker thread or a child process that a test starts, or through any other fs API, which includes readdir, opendir, glob, globSync, createReadStream, realpath, lstat, access, open, a read through a file descriptor (read, readSync, readv, fstat, fstatSync, and readFileSync or readFile given a file descriptor), copyFile and copyFileSync, cp and cpSync, openAsBlob, statfs, readlink, the callback stat, exists, watch, watchFile, and the fs/promises access, open, and glob, is no input, and none is generated: the maintainer decided on 2026-11-13 that every fs read except watch and watchFile is an input, which a follow-up of #55 implements, and until then this oracle owns the gap); a run cut off by its clock writes no closing row, so it is stored under its file's known inputs only, while a run that spun ends and keeps the inputs it named (F-D), in a batch as alone; a spun copy that reads a file that its file's unmutated run never reads is generated (spinData: file b's verdict tests that read the data spin on the function they test while it is open), and the data's edit is judged by law 9 for copies that spin in a batch; a copy that spins alone (runAlone, after a batch with an error outside any test) is generated too (spinThrows: each spun copy schedules an error that fires after its test), and its data's edit is judged the same way; an error outside any test only from a copy that spins, so the alone path's other units (a slow copy's confirmation) stay unwitnessed; a test that rewrites a file it read with the same text makes the next check compute that run again (1 run in the self-edit histories), since the edit changes the file's modification time: the daemon is conservative there, nothing goes stale, and content keys (D10) remove it, with a selfWrite dimension in that pull request; the mid-run marker sits in the daemon's session directory, .oracle-gaps-<pid>, whose location predates #55; the runner's hash memo knows a file by its size and modification time, so an edit that keeps both is not seen, and no history makes one (D10, planned in phase 2, A5); law 9's edits leave out other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages; a scratch package lies in the CLI's directory (.scratch-*), in a directory beside it whose name extends the CLI directory's name (siblingDir, drawn), or in the OS temp directory, so the driver's inside-the-CLI label is judged against a prefix that is not a parent; a CLI path spelled with another drive-letter case or separator than the package's is win32-only and not generated; daemon races (two CLIs reading one error file, a CLI hearing closing from the failing daemon it started, a reset connection on macOS) fixed by inspection; a daemon that stops answering only at four holds, each released by a count, never by time: a fresh daemon's first check held before it runs until the daemon accepts the driver's next request (ORACLE_GAPS_TEST_HOLD_OVERLAP), which stands in for a session slower to open than the bound while the CLI carries the warm-up pause; and, after a warm check with the pause disarmed (ORACLE_GAPS_TEST_PAUSE_ARM), the daemon's own pauses (pauseAt): before a check runs (daemon-check), before a check that reuses every run warms its contexts (daemon-warm), and before a context warms in place of one that a cut stopped, after the test edit (daemon-replace), each released by the driver's file once the CLI has ended; the CLI's bound is the socket's idle timeout on a daemon that sends nothing (60 s; these histories shorten it to 3 s), a wall-clock bound that changes the run's path and never its outcome; its cold check must equal a cold run (law 9's cold fallback, R39), and it never holds, since only the daemon gives its session the pauses (G43: a hook changes no outcome); the daemon must still run after the fallback, must leave the run's --out as the CLI left it once released (every file's text, with a poison the driver writes into its results.json and error.log), and must serve the next check (its served mark); the daemon drops a check whose CLI has gone before it runs, at each phase's end, and after each context that warms in place of a cut one, which is the one stretch inside a phase with no running copy to beat, and a check ends only once every context's share of a phase has; not witnessed: a gone CLI found while two contexts are both warming in place of cut ones (the wait for every context's share is by inspection), and a copy that starts in the moment between the CLI's bound and the daemon's reading of the closed connection, which runs to its end and writes into the run's --out (the race is the bound's own, a wall clock's, and no history generates it); the held warm-up and the held re-warm rely on the warm daemon's check reaching its hold within the 3 s bound, as the shortWait history relies on its first copy starting within it, and the driver's wait for the hold fails loudly otherwise; the one beat left, a running copy's poll, is witnessed by a warm daemon's check under the 3 s bound while a copy waits 10 s (shortWait); a CLI whose daemon is closing and hung waits 60 s and fails with an internal error rather than checking cold, and --stop-daemon against a hung daemon has no bound (merge gate F3; owed: a constructed history that closes a held daemon, issue #135); a fallback whose cold check refuses is not generated (law 9's refusal-notes comparison would see the fallback note); the runner's copies of the test files exist only in memory, and its harness and Vitest configs sit in the package's .oracle-gaps-<pid>, which the next run removes once a killed run has left it (judged after two stopped runs, not after a SIGKILL); a default --out is judged here too: the default-directory histories (a stop, a daemon check, and the unsupervised daemon check) run without --out, and their directory is named <default out> in the trace; the namespace is checked after each run and, in a stopped run, while the run runs; a kill in a later owner, after earlier owners' copies spent the work budget, is not counted (owner order; the count is deterministic; generated histories never reach the budget; not generated); the Vitest 5 path of the copies' pragma read and of the runner is verified from Vitest 5's source only, since the Vitest 5 CI job runs no gap oracle; a batch whose run reports an error outside any test reruns each copy alone (unitsBatch, runAlone) with its backstop, since a copy has no first budget (option A); a copy run alone has no idle detection, so a hang there runs to its backstop, and its spin row is read without the whole-row guard (issue #149; no history reaches the path with a hang); stale-session removal is scoped to this host's session directories (a host file), and is not judged across pid namespaces; a generated history stops only while the witness spins, or aborts, and on win32 not at all, since every other stop switches a test-only hook (the hold after the completed line, the warm probe, and on win32 the test stop file; randomness wins, 2026-11-16), so only the halves of every outcome class stop with one; the stop law covers SIGTERM and SIGINT sent to the CLI; a SIGKILL of a supervisor is witnessed on POSIX by the constructed history "a supervised child exits when its supervisor is killed" (its child exits within the watchdog tick), and a signal sent to the daemon is not witnessed here, and its witness is one test that spins synchronously and starts one child process; a config only in the package's parent directory is generated one level up, in a temporary directory with no package.json (so its .js or .ts name is CommonJS), as a plain config, one that throws, one with no default export, or one that defines test.projects; a config two or more levels up, or a parent config beside a package config, is not generated, and the order in one directory follows Vitest's configFiles list by inspection; a package with no config lives in a temporary directory, where no parent has a config; a counterexample shrinks through at most six histories, and within half the unit's timeout, so it can be larger than the smallest that fails; in CI's random units it does not shrink (GAP_E2E_SHRINKS=0, the maintainer's decision "Shrink briefly in CI", 2026-11-17), and its history is filed whole; module-level data only as four \`const\` declarations of the main source (an object literal, an array that holds a function, a boolean, and an object of two methods), read in place, with no data imported from another file, destructured, reassigned, or declared as an enum or a default export; the work law only through shortcut witnesses (an early return before a counting loop with a bound twin of ratio 2, and a push beside one that calls String with a bound twin of ratio 1), the early return in tests that reach the clock by each watched path and in tests that wait a turn, a generated test's bound of 1 derived from its plan; probe code is never work (maintainer decision, 2026-11-16), so the model and the capture count no probe-only site, and only a constructed history (a probe branch under a generated test's work bound) reaches a probe branch beside a bound: the fixed seeds' generated histories reach neither that state nor \`killed by a work bound in a generated function\`, which stays measured; work counts are observed only through a bound's ratio and a rise, never as numbers (v21.2 O1), so a counter that skips every site on a probe's line, which drops only the condition sites of an elseIf that run once on both sides, survives (mutant M6, equivalent under these observations), while one that skips every site of a function that holds probe code is killed (M7), and one warm-cache witness whose selection reproduces observations but not work; work is the capture's count of site evaluations per test, so code with no site (a plain assignment, a for...of pass, a builtin's own work) counts nothing and a test's histories are summed, and a test whose work varies between the unmutated runs while its observations agree is not generated. The skip law (law 4: a mutant is judged without a run only where no owner's unmutated run reached its site with a value that the mutant changes) is judged through the kills, crashes, and setup errors of mutants whose value changed, and through the survivors of those whose value did not: for \`?.\` on an \`undefined\` and a \`null\` object (the drawn \`absentObjects\`), on an absent object two or three links deep, and past a link whose object is absent, where JavaScript short-circuits the rest of the chain so a plain read there changes nothing (the drawn \`optionalChains\`), and for a returned value made \`undefined\`, in the constructed history \`a value change at a ?. read and at a return\`; for a \`?.\` whose object is absent only while the module loads (a booted first function), in \`a ?. read of an object absent only at load\`, whose mutant throws as the module loads and is a setup error; and for a comparison swap, a dropped \`!\`, a skipped call, a boolean flip, a forced \`if\`, a loop that never runs, a dropped field, a value-position call, and an arithmetic swap, by the witness module's kills under \`every outcome class\`. A logical operator's swap (\`&&\`, \`||\`, \`??\`) has no killable site in the grammar (its only sites are probe guards and the old probe form), so that its switch infects the site on every reach is fixed by inspection. The switch's extra infection (it infects on every reach, including a \`return-undefined\` of a value that is already \`undefined\`) costs a run and changes no outcome only because its active form computes exactly the mutated expression; the \`?.\` helper's active form throws wherever it infects, so it infects exactly where the link's own object is absent and no earlier link of the chain short-circuited, and the outer links' helpers are told of an earlier link's short-circuit. An optional element read (\`a?.[k]\`) is not generated: it goes through the same capture helper as \`a?.b\`, so under its mutant an absent object throws before the key expression runs, where the plain read \`a[k]\` evaluates the key first; a key with an observed effect or a throw of its own is judged by that order, which differs from the real mutant's, and no history reaches it. An optional call (\`f?.()\`) is no site; where it feeds a later \`?.\` link, it passes its short-circuit on to that link, so the link's mutant is skipped where the call's method is absent, and runs where the call ran; this is judged for a method that returns an object or nothing, absent itself or behind an absent object (the drawn \`call\` and \`returns\` of \`optionalChains\`), and for a plain read of \`v\` after the call. The generated calls take no arguments; the spread that marks a call as run comes before any argument, so a call's arguments run only where it does, as before. The pass-through keeps, per call site, a stack of the open evaluations' records, so a record pairs with its evaluation only where evaluations of the same expression nest and each one ends. Four cases break the pairing, and no history generates any of them: an evaluation of the same expression nested in the receiver, or in the method lookup, that throws and is caught there after its call ran leaves a run record open, so an outer evaluation whose method is absent reads it as run (a false infection, and a false throw under the next link's mutant, P3); one nested in the call's arguments or in the method's body that throws before its call runs leaves a not-run record open, so an outer evaluation whose call ran reads it as skipped (a false skip: the next link's mutant is judged without a run, the class of issue #109, P5); and two async evaluations of the same expression interleaved at an \`await\` close each other's records (a false skip or a false throw). Each is filed for an owner as issue #162. Open Limits, owned by the in-process runner oracle (L1, state \"torn tail at a cut-off read\"; RED: captureLines without the guard): (a) the batch's cut-off read (runBatch's rowsOf after the cut-off) drops a partial last row, and no witness reaches that drop yet, because a copy held half written across the cut-off did not observe its release in the harness; (b) a short fragment on the strict path, which the no-newline mutant does not reach. The strict read after a finished run (a fragment is an internal error) is witnessed by the no-newline mutant. Idle and the runner's I/O (M entries "idle is decided by state only" and "Idle counts only the test's I/O", 2026-11-15): the sampler (capture-setup.mjs) counts a copy idle after 500 ms with none of its test's own timers due inside its horizon and none of its test's own I/O active (C, timers by ownership, 2026-11-16), where a timer, handle or request is the test's when the test's or production's code was on the stack when Node made it, or when the resource that triggered it is the test's. No progress is decided per copy, never per file: \`a hang in a file whose test does a short read\` holds the test's own pipe read for two samples before production in every run, and its copy that hangs is killed by no progress. Three constructed histories hold the other states by count and by state: \`a copy beside the runner's pending timer\` (a 100 ms interval the runner keeps through the test, beside the test's ref'd timer past its horizon), \`a copy waiting on a pipe it opened\` (the test's own pipe read, released after 20 samples) \`a copy beside the runner's pending write\` (a write the runner holds pending through the test, as Vitest's forwarded output can stay pending on win32; Windows shard 7, run 43778323034). Not witnessed: a handle whose owner keeps its wrap elsewhere than \`_handle\` (a dgram socket) is not found as the test's, so a test that waits only on it looks idle; a test that awaits only a reply over the runner's own channel (a file snapshot) looks idle on every platform, and since idle is a kill (M-24) a test that waits longer than the 500 ms idle window for such a reply (a file snapshot, a dynamic import(), vi.importActual, a mocked module's importOriginal, each a module fetch over the runner's RPC) is killed by no progress, which on a loaded machine follows load (issue #148 owns it); a resource whose stack frames all lie in node_modules machinery (vitest, Vite's module runner, fast-check, chai, this package) is the runner's even when a test's call led to it, so in a package under test that uses Vite as a library (a plugin test that calls createServer or build), or in this package's own sources when the CLI runs on them, a production timer or I/O request is the runner's unless its trigger chain is the test's, a wait on it alone is a no-progress kill, and a production clock read there leaves the row unclocked (no history generates either); a timer's due time is read from Node's own timer fields (\`_idleStart\`, \`_idleTimeout\`) against the sampler's interval, so a late sample sees a timer as due later, which matters only within a sample's lateness of the horizon, the backstop band. A run killed before it cleans up may leave its own directory: the CLI killed with SIGKILL (\`kill\`, constructed only), the unsupervised abort, and every abort on win32. The constructed history \`a run after a killed CLI\` kills the CLI and its check's group while the witness spins, and the run after it must remove the directory the killed CLI wrote, through the \`host\` file that CLI wrote. Every other stop run that opens a session also finds a killed run's directory that the driver wrote, under a pid that no process can have (above Linux's pid_max and macOS's 99999, and not a multiple of 4 as every win32 pid is). The abort's killed directory is never followed by a run. Whether a run is killed is read from the stop and the platform, not observed, so a win32 supervisor (#79) must narrow it to the unsupervised abort. A run stopped before its first statement can remove nothing, so a killed run followed by such a stop would keep the killed run's directory whatever the CLI does; no history has that order (a stop before the CLI starts is the last run of its history, and the killed runs are not followed by one). On POSIX a supervised run's directory is removed by its supervisor once the child ends, whatever ended it; an unsupervised run removes its own when its process exits, and that path is judged on win32 alone (its hookStops histories), since POSIX's one unsupervised history is stopped at its note, before a session opens. No history makes a removal fail or reuses a pid, so the catch and the live-pid guard of removeSession are not judged; their witnesses are owed (#168). Flaky tests (flaky: true) are excluded from judgment and from hangs in the model (the generator never draws a flaky hang): a flaky test's calls count toward the call budget and its runs judge nothing, so a flaky no-progress hang is judged as finishing while production kills it (L1, owner #149); no oracle sees it. An excluded test still runs (register 2026-11-23, M). A mutant hang that keeps a test-owned timer alive ends only at the backstop, as a gap: its history's per-history limit (backstopOf, three times the history's longest legal wait, at least 10 s, and the drawn or constructed hangMs when set) is the cost, not the production default (register 2026-11-23, M, "Backstops are fine, set high"). No history's legal wait reaches its limit, so only a mutant hang is cut there. Platform scopes (R56): 'a run stopped by SIGTERM while a worker spun' is judged on POSIX only, because Node cannot be sent SIGTERM on win32 (C-26, ratified by M-29; the win32 stop is the SIGINT of the test stop file). 'a supervised check with no ps on its PATH' is judged on POSIX only, because ps is a POSIX tool and the win32 watchdog reads liveness with signal 0; the other supervision states, including the supervisor-death witness, are judged on every platform.`,
+    limits: `Law 12 judges refusals. The one internal error a history reaches is the constructed rejected-batch history (rejectBatch, a test-only fault that rejects a batch's run after its copies are in Vitest's and Vite's state). Its run is judged in this order: the output namespace, process warnings, and config lines, as for any run; then bounded retention, which owes the rejected batch's own line with its state after retirement; then the stream law (law 15) on both streams, as for any run, so its error line and its done line carry the prefix, and no other line does not, which the state \`a run ended in an internal error\` declares; then exit 3 with an internal error's done line last on both streams, no stack frame on stderr, and an error.log in its output directory. What the error.log's stack says is not judged. An internal error that no fault constructs is a completion failure, reported before the stream law; an internal error through the daemon is reached by no history, and its ending is the same function's (endRun), by inspection. The internal error's lines follow the register's C entry "The internal-error line" (2026-11-16): the general law (endsBreach) owes every run that ends through endRun one error line on stderr naming the done line's log, the output directory's error.log, and none on stdout, and owes the supervisor's own exit 3 none. The message's escape is witnessed by the fault's message, which holds a line break and a forged done line after it; the log path's escape only on POSIX, where the rejected batch's output directory holds a line break (a name on win32 cannot). Paths in a completed run's lines (the results note, the done line's report, the test-output note) are escaped the same way, by inspection: no completed history names such a directory. P10's exempt lines (v21.2 P10 and I3) are read by their own shapes (exemptBlocks), never by indentation alone: a baseline failure's indented details, a refusal's block, Node's warning with its \`--trace-warnings\` frames and its hint, V8's fatal block, esbuild's message block, and Vite's own \`[vite]\` line. The V8, traced-warning, and esbuild blocks are calibrated beside our own line with no prefix (the stream calibrations put them before the rejected-batch run's done line, and the law must name our line alone); no generated history prints any of them or a Vite line, and a shape of those tools that exemptBlocks does not name is read as a stray. The stdout summary's exemption is unused and not exercised: the CLI prefixes every summary line (its summary, legend, and function kinds). \`--help\` prints its usage text with no prefix and no done line, exempt by the register's M entry "\`--help\` is exempt" (2026-11-16), and the static oracle's Help law owes exactly that text; \`--stop-daemon\` prints nothing and exits 0, read the same way as a command outside the run protocol (C, pending ratification), and this oracle runs it without observing its streams. A syntax error in a module that the config imports lets the esbuild that Vite bundles configs with print its block before the refusal (trace, Vite 7.3.7, esbuild 0.28.2: \`✘ [ERROR] Unexpected end of file\`, an empty line, \`    helper.ts:2:0:\`, the code frame, then the refused block): its lines are exempt by the register's M entry "Other tools' output is exempt" (2026-11-16), the refusal and the done line around them keep the prefix, and no history generates it. Bounded retention reads the hook's lines (retention-hook.mjs). Its count of one line per batch (runner law L2) rests on the index the hook takes when a batch starts, so a CLI that skipped a batch's index and its line together, or that omitted only the line of a check's last batch, keeps the indices 0..n-1 and is not seen; a check that ended before its report (the rejected batch, a stopped run) and a daemon the driver killed are judged for at most one line per index, since the batches they were running at their end owe none. A line's process is told by check.pid, which the check writes, and the driver itself knows only the daemon it killed. The cold store's law (held) counts the entries given to the store's put that a full collection leaves reachable, so a store that kept only a part of an entry (its unit without the entry) is not seen; staleOpen reads Vitest's own close state (closingPromise, set when close starts), so a close that starts and never resolves is the runner oracle's (L8); and a context replaced after a check's last batch is observed only by a later check's first batch through the daemon. The run whose process aborts is declared on every platform. Its win32 witness (process.abort through ORACLE_GAPS_TEST_ABORT_AT, under the win32 supervisor) lands in #79; until then the Windows end-to-end job is non-blocking (C entry (c)). On win32 Node cannot deliver SIGTERM (its kill is TerminateProcess, which ends the process with no stopped line), so the stop states that name SIGTERM are required on POSIX only, and a stop there goes through the CLI's test stop hook and is observed as SIGINT, which owes its done line as any stop does (no history sends a win32 child.kill, the SIGKILL-equivalent that owes none); every SIGINT state stays required on win32. A stop as the CLI starts lands only in one of two holds: the driver's own preload before the CLI's first statement (outcome a, nothing written; POSIX only, since its witness is a signal's default action), or the CLI's hold after its started marker, which the stop the CLI keeps releases (outcome b, judged only when the supervisor started no child); a stop during Node's own start between the two is not generated, since its outcome follows timing. The drawn spawn delay is a wait inside a hold, so it cannot move a stop out of it. Stop runs that land while the config warms (ORACLE_GAPS_TEST_WARM_PROBE) are still drawn, and on win32 every drawn stop goes through ORACLE_GAPS_TEST_STOP: each is a test-only hook that a drawn field switches, main's pattern, which the review of #57 (A3) brought to the maintainer; only the stop after the completed line (ORACLE_GAPS_TEST_HOLD_UNTIL) was made constructed-only. A missing \`ps\` is generated only as a PATH that names no command, on POSIX, where the run is supervised. The unsupervised path (stopNow, every win32 stop) is reached on POSIX by one constructed history whose stop is held at the run's note, before the check starts a process: an unsupervised POSIX run has no group to end, so a stop while the witness's test spins leaves that test's own child (measured; C 2026-11-13, Windows (e)), which win32 ends with the job object libuv puts its children in. Argument refusals are the static oracle's; the check's rejection of a stack trace, a missing fix, and a wrong exit code is calibrated in the static oracle, through the same refusalBreach, and here only a refused run reported as complete is calibrated, because each calibration here runs real CLI histories. Law 15's stdout gap lines are judged against each completed run's own results.json, by id: the cold run, and each check through the daemon (every step's check and the check that a mid-run edit overlaps); a stopped run and a refusal list no gaps and are not judged so. A line's change is read loosely: its code on one line, whole or cut after a kept part and ended with \`...\`; where the printer cuts (60 code points, kept 57) is the classify oracle's law 8 (\`shortened\`), in-process. A line with any text after its change does not read and fails loudly: the \` (cause: <cause>)\` suffix that #99 adds to timeout lines is not read yet, so whichever of #99 and #115 lands second extends readGapLine. Hangs only as an owner test that awaits a promise that never settles, under a 1 s first budget and a 20 s full limit, and a slow run only as two witnesses whose tests wait where the output changed, 3 s in one that then judges and 10 s in two one-test owners of one that does not; busy loops only on instrumented code (cut by the call budget), no slow runs past the full limit that would end, hangs in ordinary or nondeterministic tests, setup errors other than a throw at module load, loops, multi-line conditions, two functions on one line, or await, new, and void statements; nested functions, object-literal methods, accessors, and class-field arrows only where no test calls them (their ownership is the static oracle's); two source files of one package, with no re-exports, namespace imports, or calls into another package; --only only in a stopped run and a partial run of one function's mutants, and no --sample or --diff-base; the baseline's failures only as one failing owner test that throws an error and a setup file that throws, so a baseline law violation's law and counterexample lines are the classify oracle's; a derived class's file is instrumented and its sites are judged as unowned, but no test imports or constructs the class, so its no-mutant and super-region behavior is the static oracle's (in-process), not this oracle's; package configs only as vite.config or vitest.config with one of the extensions .ts, .mts, .cts, .js, .mjs, and .cjs (not every pair), as config/gap-vitest with the same extension through --config, or none, as an object or a sync or async function, with no plugins of their own except one enforce: 'pre' transform that appends a comment to each module of the package (prePlugin) and a plugin whose load reads each test file with a sync read (loadPlugin), drawn for a config in ES module syntax and reached by its own constructed history too; a plugin whose output depends on anything but the module's text (a sidecar file it reads) and an environment variable that changes between checks are not generated, since the runner tracks neither yet and the daemon's environment is fixed when it starts (F-A1: the maintainer decided on 2026-11-13 that the daemon tracks both and restarts when they change, in the next pull request); and test.projects only as a refusal, and only under the package's own package.json; the supervisor-death state is required and entered only off win32: win32 has no supervisor until #79, so there the state is not reached and its history is not judged (platform-scoped reach; the win32 run is unsupervised, which register C entry (e) of #58 records as not guaranteeing that no process outlives the CLI); a config's test.root only in four shapes, drawn for an ES module config that Vitest discovers in the package (the randomness-wins decision, 2026-11-16) and each reached by its own constructed history of one owner and one context, where the test files' globs and the setup file are relative to the root (issue #101): the directory that holds the tests, the directory above the package, a directory of the package that holds no test file, and the package's tests as a symbolic link to the directory that holds them (required on every platform, since Windows creates the link as the driver's other links); not under --config (nor in a history whose config edit names a second config), a CommonJS config, a parent's config, test.projects, several contexts with different roots, or a root that is the filesystem's root; the runner serves each copy of a test file by its absolute path, through its pre plugin's load (which answers before the config's own plugins) and through its read of the copy's path for Vitest's pragma read (serveCopies), and histories run copies only in Vite's server environments (node and the pragma's ssr environment): jsdom and happy-dom, Vite's client environment, are not generated (the #103 merge-gate review ran jsdom by hand under all five root shapes, and the copies loaded in each); a top-level await only in an ES module config and require only in a CommonJS one, as Vitest itself loads no other; a --config outside the package is refused by design, through the rule for paths outside the package (args.mjs), and no history generates one; contexts only one, four, or eleven, and process warnings judged only as MaxListenersExceededWarning on the CLI's own stderr (a daemon's process warnings go to its log); a context that fails to open gives back its listener allowance, which no observation shows (a kept allowance only raises the limit, so no warning follows), so that accounting is fixed by inspection; no probe-bound states, so reach agreement's killing of probe mutants is not checked; no gap answers or gate; law 9 judges the witness module's outcome classes along one constructed edit sequence only (a test edit, a helper edit, and a revert), which runs as two constructed histories, one for each half of the module (captureA and captureB, whose union is the module and which share no function; a function stays with the functions its tests or statements read), since the whole module along it took one CI job (#106, #145; maintainer decision "A one-history job over budget is cut by cost", 2026-11-16), so an interaction between functions of different halves, beyond the ones the split keeps together, is not judged along the sequence (the whole module runs together in \`every outcome class\` and in generated histories, which take no steps); and the budget witness's outcome classes along one constructed second check with nothing changed, because a generated history with the witness module or the budget witness takes no steps (maintainer decision, 2026-11-11, and the runtime review's P1-a, 2026-11-12; this oracle owns the gap); the state "a timed-out run reused after an edit" counts only runs cut by their call budget (the spin, in the first half), a count the CLI records, by the maintainer's decision "#104 state narrowed, #99 restores" (2026-11-17), which narrows "#90 job stays blocking" for that state only: the reuse of a run cut by the clock (a hang) is judged by law 9 but not required, because on main a hang's timeout is stored only when the sampler saw the copy idle, which load decides, and otherwise its confirmation is cut short by its mutant's budget and not kept (#104); #99 makes a hang a state-based no-progress kill and restores the reach as "a run killed for no progress, reused after an edit" (#156); law 9's edits come between checks, except one, midrun, which lands during a check through the daemon: a test of file a, whose context has loaded file b's helper, rewrites the helper in the baseline's first run of file a, before file b's runs read it, in one context or several; or a test of file b rewrites its own helper, or the data file that its verdict read through a sync fs read, after file b's judged tests read them, in the run that judges with the old text (review of #55, F1); that check must report, for each mutant, what a cold run of the state before the edit or of the state after it reports, and exit as one of them does (third review of #55, F-C), compared per mutant result rather than per file; when file b's own test lands the edit, b's baseline reads the old text and b's mutant runs read the new one, so b's own mutants in that check are not judged, since their results legitimately mix the two texts (maintainer decision, 2026-11-13), while every other mutant there is judged against both cold runs, with the check's exit code, its mutants' keys, and its stream; the stronger follow-up compares each run's raw outcome with the cold outcome of the state that run read; and the next check, with nothing changed, must equal a cold run of the state after the edit, compared for equality of results only, not for what the daemon reused or computed (the runner's rule: a run whose input changed after the run read it is invalidated and not stored, settleIn); a check through the daemon of a state that nothing changed must compute no run that was not cut off, judged where no test reads the clock (F-A, F-A2), and a test's fs read of a file and the module that the context serves from it are two inputs, each under its own hash (F-A2); an edit during a mutant run is not generated, and a file is edited mid-run only by the run's own tests, not by another process at an arbitrary time; a file that a test reads through fs is edited only as one JSON file that file b's verdict reads by a sync, a promise, or a callback read, or by a sync read after it stats its own directory and tests that it exists (statDir: the directory is an input as a directory, not by its content, and is not itself edited), each read first checking that its fs function keeps its own name and length (the runner stores a run under the files in the package that its copy reads with readFileSync, readFile, existsSync, or statSync, or the fs/promises readFile or stat, each with its hash at the copy's first read; a read outside the package or under node_modules, from a worker thread or a child process that a test starts, or through any other fs API, which includes readdir, opendir, glob, globSync, createReadStream, realpath, lstat, access, open, a read through a file descriptor (read, readSync, readv, fstat, fstatSync, and readFileSync or readFile given a file descriptor), copyFile and copyFileSync, cp and cpSync, openAsBlob, statfs, readlink, the callback stat, exists, watch, watchFile, and the fs/promises access, open, and glob, is no input, and none is generated: the maintainer decided on 2026-11-13 that every fs read except watch and watchFile is an input, which a follow-up of #55 implements, and until then this oracle owns the gap); a run cut off by its clock writes no closing row, so it is stored under its file's known inputs only, while a run that spun ends and keeps the inputs it named (F-D), in a batch as alone; a spun copy that reads a file that its file's unmutated run never reads is generated (spinData: file b's verdict tests that read the data spin on the function they test while it is open), and the data's edit is judged by law 9 for copies that spin in a batch; a copy that spins alone (runAlone, after a batch with an error outside any test) is generated too (spinThrows: each spun copy schedules an error that fires after its test), and its data's edit is judged the same way; an error outside any test only from a copy that spins, so the alone path's other units (a slow copy's confirmation) stay unwitnessed; a test that rewrites a file it read with the same text makes the next check compute that run again (1 run in the self-edit histories), since the edit changes the file's modification time: the daemon is conservative there, nothing goes stale, and content keys (D10) remove it, with a selfWrite dimension in that pull request; the mid-run marker sits in the daemon's session directory, .oracle-gaps-<pid>, whose location predates #55; the runner's hash memo knows a file by its size and modification time, so an edit that keeps both is not seen, and no history makes one (D10, planned in phase 2, A5); law 9's edits leave out other environment variables, new files that change how an unchanged import resolves, Vite config and installed-package changes, and concurrent checks other than two that start the daemon; cut-off charging judged only under one budget; native addons only as a binding.gyp or a prebuilt .node file, not as optional platform packages; a scratch package lies in the CLI's directory (.scratch-*), in a directory beside it whose name extends the CLI directory's name (siblingDir, drawn), or in the OS temp directory, so the driver's inside-the-CLI label is judged against a prefix that is not a parent; a CLI path spelled with another drive-letter case or separator than the package's is win32-only and not generated; daemon races (two CLIs reading one error file, a CLI hearing closing from the failing daemon it started, a reset connection on macOS) fixed by inspection; a daemon that stops answering only at four holds, each released by a count, never by time: a fresh daemon's first check held before it runs until the daemon accepts the driver's next request (ORACLE_GAPS_TEST_HOLD_OVERLAP), which stands in for a session slower to open than the bound while the CLI carries the warm-up pause; and, after a warm check with the pause disarmed (ORACLE_GAPS_TEST_PAUSE_ARM), the daemon's own pauses (pauseAt): before a check runs (daemon-check), before a check that reuses every run warms its contexts (daemon-warm), and before a context warms in place of one that a cut stopped, after the test edit (daemon-replace), each released by the driver's file once the CLI has ended; the CLI's bound is the socket's idle timeout on a daemon that sends nothing (60 s; these histories shorten it to 3 s), a wall-clock bound that changes the run's path and never its outcome; its cold check must equal a cold run (law 9's cold fallback, R39), and it never holds, since only the daemon gives its session the pauses (G43: a hook changes no outcome); the daemon must still run after the fallback, must leave the run's --out as the CLI left it once released (every file's text, with a poison the driver writes into its results.json and error.log), and must serve the next check (its served mark); the daemon drops a check whose CLI has gone before it runs, at each phase's end, and after each context that warms in place of a cut one, which is the one stretch inside a phase with no running copy to beat, and a check ends only once every context's share of a phase has; not witnessed: a gone CLI found while two contexts are both warming in place of cut ones (the wait for every context's share is by inspection), and a copy that starts in the moment between the CLI's bound and the daemon's reading of the closed connection, which runs to its end and writes into the run's --out (the race is the bound's own, a wall clock's, and no history generates it); the held warm-up and the held re-warm rely on the warm daemon's check reaching its hold within the 3 s bound, as the shortWait history relies on its first copy starting within it, and the driver's wait for the hold fails loudly otherwise; the one beat left, a running copy's poll, is witnessed by a warm daemon's check under the 3 s bound while a copy waits 10 s (shortWait); a CLI whose daemon is closing and hung waits 60 s and fails with an internal error rather than checking cold, and --stop-daemon against a hung daemon has no bound (merge gate F3; owed: a constructed history that closes a held daemon, issue #135); a fallback whose cold check refuses is not generated (law 9's refusal-notes comparison would see the fallback note); the runner's copies of the test files exist only in memory, and its harness and Vitest configs sit in the package's .oracle-gaps-<pid>, which the next run removes once a killed run has left it (judged after two stopped runs, not after a SIGKILL); a default --out is judged here too: the default-directory histories (a stop, a daemon check, and the unsupervised daemon check) run without --out, and their directory is named <default out> in the trace; the namespace is checked after each run and, in a stopped run, while the run runs; a slow kill in a later owner, after earlier owners' confirmations spent the budget, becomes a timeout (owner order; not generated); the Vitest 5 path of the copies' pragma read and of the runner is verified from Vitest 5's source only, since the Vitest 5 CI job runs no gap oracle; a batch whose run reports an error outside any test reruns each copy alone (unitsBatch, runAlone) with its first budget, and a copy cut there is kept as a timeout with no confirmation, a defect older than this oracle's budget work that no history reaches (no history has an error outside any test beside a slow copy), recorded here with that trace for the maintainer; stale-session removal is scoped to this host's session directories (a host file), and is not judged across pid namespaces; a generated history stops only while the witness spins, or aborts, and on win32 not at all, since every other stop switches a test-only hook (the hold after the completed line, the warm probe, and on win32 the test stop file; randomness wins, 2026-11-16), so only the halves of every outcome class stop with one; the stop law covers SIGTERM and SIGINT sent to the CLI; a SIGKILL of a supervisor is witnessed on POSIX by the constructed history "a supervised child exits when its supervisor is killed" (its child exits within the watchdog tick), and a signal sent to the daemon is not witnessed here, and its witness is one test that spins synchronously and starts one child process; the mutant budget is witnessed as two slow owners whose confirmations pass the --mutant-limit floor, not through its multiple of the owners' unmutated time, and authored mutants have no confirmations to budget; the witness w_slowpair is a wall-clock window, since the CLI's budget has no controlled clock and a fixture cannot see the time the CLI measures for its file: with one-test owner files p and q of measured unmutated time t each (a file first in its context pays the instrumented transform too), a wait W of 10 s, a 20 s --hang-limit and a 15 s --mutant-limit, it tells a budget from none only while (a) its first attempt is cut, W > 1 s + 3t, (b) its two confirmations do not fit the budget, 2W > max(15 s, 10 x 2t), and (c) each would fit its own full limit, W < 20 s + 3t; (b) is the binding one, so it holds while the two files' time stays under about 2 s together (about 1 s each, some 20 times the authoring machine's idle and 5 to 10 times its loaded measurements), and under one budget a run's overhead must stay under 10 s + 3t; CI runners measure 1.5 to 2.3 times the idle machine; beyond that w_slowpair would read not-judged; heartbeats are checked for shape only (maintainer decision "Heartbeats are progress, not outcome", 2026-11-14): each names a mutant of the run, or the baseline, in a file that runs it, and a beat after its mutant's own gap line is a breach, while their set and count, which depend on timing, are not compared and no busy mutant's beat is owed; the shape law reads "was running" only against a mutant's own streamed gap line, so a beat that names a killed mutant (which streams no line) after it finished, or a mutant that has not started, is not a breach; the state "a heartbeat named a busy mutant" is required (maintainer decision "#90 job stays blocking", 2026-11-16) and is entered only through a deterministic hold (#84): the slow kill's test, where its output differs, holds until the run's stream log has one more heartbeat that names a mutant in its file, released by the CLI's own line and never by the clock, so a cold run that holds it has such a beat on any machine; the state is entered only by a cold run that has the slow kill and named its stream log to the hold (\`every outcome class\`, which pins its own --out, and drawn histories with the slow kill and an --out), and a beat anywhere else enters nothing: a check through the daemon (a daemon keeps the environment of the call that started it), a stop run, a run with the default output directory, and the first half of the witness sequence (no slow kill; its I/O wait spans the interval by timing) run unheld, and their beats are progress only; a held copy that no beat releases is cut by the CLI's budget and is judged \`timeout, owed killed\` (the bound of 2,400 polls on the hold is a backstop that the CLI's 15 s budget and 20 s limit always reach first); a config only in the package's parent directory is generated one level up, in a temporary directory with no package.json (so its .js or .ts name is CommonJS), as a plain config, one that throws, one with no default export, or one that defines test.projects; a config two or more levels up, or a parent config beside a package config, is not generated, and the order in one directory follows Vitest's configFiles list by inspection; a package with no config lives in a temporary directory, where no parent has a config; a counterexample shrinks through at most six histories, and within half the unit's timeout, so it can be larger than the smallest that fails; in CI's random units it does not shrink (GAP_E2E_SHRINKS=0, the maintainer's decision "Shrink briefly in CI", 2026-11-17), and its history is filed whole; module-level data only as four \`const\` declarations of the main source (an object literal, an array that holds a function, a boolean, and an object of two methods), read in place, with no data imported from another file, destructured, reassigned, or declared as an enum or a default export; the work law only through shortcut witnesses (an early return before a counting loop with a bound twin of ratio 2, and a push beside one that calls String with a bound twin of ratio 1), the early return in tests that reach the clock by each watched path and in tests that wait a turn, a generated test's bound of 1 derived from its plan; probe code is never work (maintainer decision, 2026-11-16), so the model and the capture count no probe-only site, and only a constructed history (a probe branch under a generated test's work bound) reaches a probe branch beside a bound: the fixed seeds' generated histories reach neither that state nor \`killed by a work bound in a generated function\`, which stays measured; work counts are observed only through a bound's ratio and a rise, never as numbers (v21.2 O1), so a counter that skips every site on a probe's line, which drops only the condition sites of an elseIf that run once on both sides, survives (mutant M6, equivalent under these observations), while one that skips every site of a function that holds probe code is killed (M7), and one warm-cache witness whose selection reproduces observations but not work; work is the capture's count of site evaluations per test, so code with no site (a plain assignment, a for...of pass, a builtin's own work) counts nothing and a test's histories are summed, and a test whose work varies between the unmutated runs while its observations agree is not generated. The skip law (law 4: a mutant is judged without a run only where no owner's unmutated run reached its site with a value that the mutant changes) is judged through the kills, crashes, and setup errors of mutants whose value changed, and through the survivors of those whose value did not: for \`?.\` on an \`undefined\` and a \`null\` object (the drawn \`absentObjects\`), on an absent object two or three links deep, and past a link whose object is absent, where JavaScript short-circuits the rest of the chain so a plain read there changes nothing (the drawn \`optionalChains\`), and for a returned value made \`undefined\`, in the constructed history \`a value change at a ?. read and at a return\`; for a \`?.\` whose object is absent only while the module loads (a booted first function), in \`a ?. read of an object absent only at load\`, whose mutant throws as the module loads and is a setup error; and for a comparison swap, a dropped \`!\`, a skipped call, a boolean flip, a forced \`if\`, a loop that never runs, a dropped field, a value-position call, and an arithmetic swap, by the witness module's kills under \`every outcome class\`. A logical operator's swap (\`&&\`, \`||\`, \`??\`) has no killable site in the grammar (its only sites are probe guards and the old probe form), so that its switch infects the site on every reach is fixed by inspection. The switch's extra infection (it infects on every reach, including a \`return-undefined\` of a value that is already \`undefined\`) costs a run and changes no outcome only because its active form computes exactly the mutated expression; the \`?.\` helper's active form throws wherever it infects, so it infects exactly where the link's own object is absent and no earlier link of the chain short-circuited, and the outer links' helpers are told of an earlier link's short-circuit. An optional element read (\`a?.[k]\`) is not generated: it goes through the same capture helper as \`a?.b\`, so under its mutant an absent object throws before the key expression runs, where the plain read \`a[k]\` evaluates the key first; a key with an observed effect or a throw of its own is judged by that order, which differs from the real mutant's, and no history reaches it. An optional call (\`f?.()\`) is no site; where it feeds a later \`?.\` link, it passes its short-circuit on to that link, so the link's mutant is skipped where the call's method is absent, and runs where the call ran; this is judged for a method that returns an object or nothing, absent itself or behind an absent object (the drawn \`call\` and \`returns\` of \`optionalChains\`), and for a plain read of \`v\` after the call. The generated calls take no arguments; the spread that marks a call as run comes before any argument, so a call's arguments run only where it does, as before. The pass-through keeps, per call site, a stack of the open evaluations' records, so a record pairs with its evaluation only where evaluations of the same expression nest and each one ends. Four cases break the pairing, and no history generates any of them: an evaluation of the same expression nested in the receiver, or in the method lookup, that throws and is caught there after its call ran leaves a run record open, so an outer evaluation whose method is absent reads it as run (a false infection, and a false throw under the next link's mutant, P3); one nested in the call's arguments or in the method's body that throws before its call runs leaves a not-run record open, so an outer evaluation whose call ran reads it as skipped (a false skip: the next link's mutant is judged without a run, the class of issue #109, P5); and two async evaluations of the same expression interleaved at an \`await\` close each other's records (a false skip or a false throw). Each is filed for an owner as issue #162. Open Limits, owned by the in-process runner oracle (L1, state \"torn tail at a cut-off read\"; RED: captureLines without the guard): (a) the batch's cut-off read (runBatch's rowsOf after the cut-off) drops a partial last row, and no witness reaches that drop yet, because a copy held half written across the cut-off did not observe its release in the harness; (b) a short fragment on the strict path, which the no-newline mutant does not reach. The strict read after a finished run (a fragment is an internal error) is witnessed by the no-newline mutant. Windows idle gap (recorded, not witnessed): the state \`a hang cut off for idleness\` is required on every platform, and win32 reaches it (run 43683794816, job 132719872988), so it is not platform-scoped. The sampler (capture-setup.mjs) counts a copy idle only after 500 ms with no late tick, no non-quiet handle, utilization at most 5%, and no timer due, so \`every outcome class\` reaches the state only when the sampler sees that window. On win32 the check missed it once (run 43683794816, job 132719872940); the cause is not confirmed (a late tick on a shared runner, or a stdio handle outside \`quiet\` for this file's console output, are the candidates). Its witness, a test-only hold at the hang until the window is seen, is owed, and that is a timing dependency the determinism-under-load rule forbids; the maintainer decides whether it lands before the Windows job becomes blocking. A run killed before it cleans up may leave its own directory: the CLI killed with SIGKILL (\`kill\`, constructed only), the unsupervised abort, and every abort on win32. The constructed history \`a run after a killed CLI\` kills the CLI and its check's group while the witness spins, and the run after it must remove the directory the killed CLI wrote, through the \`host\` file that CLI wrote. Every other stop run that opens a session also finds a killed run's directory that the driver wrote, under a pid that no process can have (above Linux's pid_max and macOS's 99999, and not a multiple of 4 as every win32 pid is). The abort's killed directory is never followed by a run. Whether a run is killed is read from the stop and the platform, not observed, so a win32 supervisor (#79) must narrow it to the unsupervised abort. A run stopped before its first statement can remove nothing, so a killed run followed by such a stop would keep the killed run's directory whatever the CLI does; no history has that order (a stop before the CLI starts is the last run of its history, and the killed runs are not followed by one). On POSIX a supervised run's directory is removed by its supervisor once the child ends, whatever ended it; an unsupervised run removes its own when its process exits, and that path is judged on win32 alone (its hookStops histories), since POSIX's one unsupervised history is stopped at its note, before a session opens. No history makes a removal fail or reuses a pid, so the catch and the live-pid guard of removeSession are not judged; their witnesses are owed (#168). Block per law (2026-11-18) and "A broken owner file judges nothing" (2026-11-19): a failing law is drawn as one test of file a or b, at the start or the end of its file, calling the first generated function not at all, once (and maybe repeating it until the unmutated output), or past the call floor, or as a describe's law whose beforeAll or afterAll throws. A failing law still runs in its file's copies ("An excluded test still runs", 2026-11-23), and a failing law that spins under a mutant is drawn only through its own call repeated until the unmutated output (failingLawSpins) or a call that spins; a failing law that changes state a later test reads is not generated, so a kill by a passing law that reads such state is not judged (review of #176, round 1 F3: a failing fast-check property's shrink state, or an abandoned async body after a per-test timeout, feeding a later passing law's kill, whose replay of that law alone does not reproduce). Its witness needs a drawn field where a failing law writes a module-level value that a later passing law reads; owner: issue #210. A file-level beforeEach or afterEach that throws fails every test, and its report names one failing law per test, not the hook; it is not generated. A describe's failing hook fails only that describe's laws; a hook that fails only under a mutant is not read. Load reach follows the maintainer's decision "Load reach goes to every owner file" (2026-11-23, #186): the model's census counts every test of an owner file that loads the module (#204), the failing owner's passing pair included under per-law blocking, so code run at load in a file with a failing law is judged by that file's passing tests. A file whose tests fail and that also errs outside its tests is left out whole, and is not generated. Platform scopes (R56): 'a run stopped by SIGTERM while a worker spun' is judged on POSIX only, because Node cannot be sent SIGTERM on win32 (C-26, ratified by M-29; the win32 stop is the SIGINT of the test stop file). 'a supervised check with no ps on its PATH' is judged on POSIX only, because ps is a POSIX tool and the win32 watchdog reads liveness with signal 0; the other supervision states, including the supervisor-death witness, are judged on every platform. #99's limits (per-history backstop, timing-independent count-cut labels, and the wait of a cut copy) are in its pull request body; a clocked count cut is indeterminate, whichever sibling ran.`,
   },
   histories: {
     // A failing history shrinks through at most six smaller ones. Each runs
@@ -7440,6 +7622,12 @@ oracleProperty({
         name: `a filed base whose owner reads an absent object through ?.`,
         history: {
           ...{
+            pair: false,
+            failingLaw: 'none',
+            failingLawAt: 'end',
+            failingLawCalls: 'none',
+            failingLawHook: 'none',
+            failingLawSpins: false,
             functions: [
               [{ kind: 'optional' }],
               [{ kind: 'probeBlock', op: '<=', k: 6 }],
@@ -7635,6 +7823,11 @@ oracleProperty({
           heavy: 0,
           // The pair witness's field (`pair`, drawn last), at its neutral value.
           pair: false,
+          failingLaw: `none`,
+          failingLawAt: `end`,
+          failingLawCalls: `none`,
+          failingLawHook: `none`,
+          failingLawSpins: false,
           stopRuns: NO_STOPS,
           laterSteps: NO_LATER_STEPS,
         },
@@ -7857,6 +8050,11 @@ oracleProperty({
             { links: 2, level: 2, call: 'none', returns: 'nothing' },
             { links: 1, level: 2, call: 'none', returns: 'nothing' },
           ],
+          failingLaw: 'none',
+          failingLawAt: 'end',
+          failingLawCalls: 'none',
+          failingLawHook: 'none',
+          failingLawSpins: false,
         },
       },
       {
@@ -8030,6 +8228,11 @@ oracleProperty({
             { links: 2, level: 2, call: 'none', returns: 'nothing' },
             { links: 1, level: 2, call: 'none', returns: 'nothing' },
           ],
+          failingLaw: 'none',
+          failingLawAt: 'end',
+          failingLawCalls: 'none',
+          failingLawHook: 'none',
+          failingLawSpins: false,
         },
       },
       {
@@ -8235,6 +8438,11 @@ oracleProperty({
           shortWait: false,
           absentObjects: [],
           optionalChains: [],
+          failingLaw: 'none',
+          failingLawAt: 'end',
+          failingLawCalls: 'none',
+          failingLawHook: 'none',
+          failingLawSpins: false,
         },
       },
     ],
@@ -8642,13 +8850,14 @@ oracleProperty({
         name: `a failing owner under a config that --config names`,
         enters: [
           `a failing owner replayed under a config that --config names`,
-          `blocked by brokenOwner`,
           `a partial run of one function`,
           `a partial run beside a failing owner`,
         ],
         // The failing owner, file b, owns the second function and nothing
-        // else that the generated base could leave out: so a mutant that
-        // only it owns is blocked whatever the base holds.
+        // else that the generated base could leave out. Its suite's two
+        // passing tests judge that function's mutants (Block per law,
+        // 2026-11-18), so none is blocked; its partial run is of file a's
+        // function.
         build: (generated) => ({
           ...generated,
           functions: [
@@ -8703,29 +8912,31 @@ oracleProperty({
           ? [`analyzed ${fault}`]
           : blockingFaults.includes(fault)
             ? [`blocked by ${fault}`]
-            : [
-                `refused ${fault}`,
-                // The CLI runs from this directory, so the scratch package
-                // lies inside it.
-                ...(fault === `badEntry`
-                  ? [
-                      `a refused run whose package lies inside the CLI's directory`,
-                    ]
-                  : []),
-                ...(fault === `brokenVitest`
-                  ? [
-                      `two checks at once on a session that cannot open`,
-                      `a session failure larger than a socket buffer`,
-                      `edit fixSession changed the cold result`,
-                      `a check after the session's failure was fixed`,
-                    ]
-                  : []),
-                // A config the session cannot load is refused through the
-                // daemon with the cold run's lines (law 15; review F4).
-                ...(daemonConfigFaults.includes(fault)
-                  ? [`a config refusal through the daemon`]
-                  : []),
-              ],
+            : fault === `brokenOwner`
+              ? [`a failing law left its file's other laws judging`]
+              : [
+                  `refused ${fault}`,
+                  // The CLI runs from this directory, so the scratch package
+                  // lies inside it.
+                  ...(fault === `badEntry`
+                    ? [
+                        `a refused run whose package lies inside the CLI's directory`,
+                      ]
+                    : []),
+                  ...(fault === `brokenVitest`
+                    ? [
+                        `two checks at once on a session that cannot open`,
+                        `a session failure larger than a socket buffer`,
+                        `edit fixSession changed the cold result`,
+                        `a check after the session's failure was fixed`,
+                      ]
+                    : []),
+                  // A config the session cannot load is refused through the
+                  // daemon with the cold run's lines (law 15; review F4).
+                  ...(daemonConfigFaults.includes(fault)
+                    ? [`a config refusal through the daemon`]
+                    : []),
+                ],
         // A session that cannot open is checked through the daemon too, and
         // fixed once; a long failure is heard by two checks at once, then by
         // a fresh daemon's check (fixing it reruns the whole generated
@@ -8733,6 +8944,33 @@ oracleProperty({
         build: (generated) => ({
           ...generated,
           fault,
+          // The failing owner, file b, owns the first function, which no
+          // other function calls (calls go only to later functions), in
+          // place of the base's: an `if` that a passing test of file b,
+          // which takes the base's last test's place, kills. File b's
+          // passing laws still judge it beside the failing one (Block per
+          // law, 2026-11-18). The history keeps the grammar's bounds, so the
+          // arbitrary takes it back.
+          ...(fault === `brokenOwner`
+            ? {
+                functions: [[kill], ...generated.functions.slice(1)],
+                containers: generated.containers.map((c, i) =>
+                  i === 0 ? `free` : c,
+                ),
+                overloads: generated.overloads.map((o, i) =>
+                  i === 0 ? false : o,
+                ),
+                owners: [`b`, ...generated.owners.slice(1)],
+                wholeFile: `none`,
+                // A drawn `spinData` would make file b's verdict test spin
+                // where it would judge, so its kill could not happen.
+                spinData: false,
+                tests: [
+                  ...generated.tests.slice(0, 4),
+                  { ...judging(`b`, `fixed seed`, 7), fn: 0 },
+                ],
+              }
+            : {}),
           // Its package lies in the CLI's directory, so it is not placed
           // beside it (`siblingDir`, drawn).
           ...(fault === `badEntry`
@@ -10645,6 +10883,245 @@ oracleProperty({
         }),
       },
       {
+        // The abort stop of a run whose setup file throws (issues #117 and
+        // #137). The CLI's own abort, after its completed check blocked the
+        // mutants of the throwing file, ends the stopped run with one error
+        // line on each stream. A drawn history draws no abort (v21.2 I16), so
+        // only this constructed history names it.
+        name: `a declaration fault: setupThrows, then the abort stop`,
+        enters: [`blocked by setupThrows`, `a run whose process aborted`],
+        build: (generated) => ({
+          ...generated,
+          fault: `setupThrows`,
+          witness: false,
+          stopWitness: true,
+          steps: null,
+          hookStops: true,
+          stopRuns: [{ signal: `SIGINT`, pool: `threads`, when: `abort` }],
+        }),
+      },
+      // Constructed histories added by the deterministic-cuts change follow.
+      // Owner a's copy never finishes and never goes idle: it awaits a promise
+      // that never resolves, while a repeating timer stays due inside its
+      // horizon (`pulse`). So it is cut only by the 2 s backstop, on every
+      // machine, and owner b would kill. The cut ends the copies, so b does
+      // not run: the mutant is a backstop gap (a timeout), never a kill.
+      {
+        // Module data is read at load, so every owner file that imports it
+        // reaches it (the load-time rule, M 2026-11-06). Here file a holds the
+        // fixture's console-stream test, which is deterministic and passes,
+        // and its only plan test is nondeterministic. The mutant is judged by
+        // the console test, so the census must count the framework-added test
+        // (the model judged it indeterminate before the census change).
+        name: `a module data mutant judged past nondeterministic plan tests`,
+        enters: [
+          `a module data mutant judged past nondeterministic plan tests`,
+        ],
+        build: (generated) => ({
+          ...generated,
+          witness: false,
+          fault: `none`,
+          consoleOutput: true,
+          stopRuns: NO_STOPS,
+          steps: null,
+          laterSteps: NO_LATER_STEPS,
+          dataOwners: [`a`],
+          tests: [{ ...judging(`a`, `fixed seed`, 1), flaky: true, fn: 0 }],
+        }),
+      },
+      // Owner a's copy makes 30,000 extra calls (under its budget), and so does
+      // owner b's, which would kill. Together they pass the work budget, so b's
+      // kill does not count: b's copy fails bounded work instead, a kill by
+      // count.
+      {
+        // File a holds no plan test, so it calls no function of the module and its
+        // import is elided: it does not load the module. Its tests are framework-added
+        // (the console test, set here), so the mutant is unreached in production and in
+        // the model. A census that counted a non-importing file's framework tests would
+        // owe not-distinguished, so this history kills the no-import-rule mutant.
+        name: `a module data mutant whose owner file holds no plan test`,
+        enters: [`a module data mutant whose owner file holds no plan test`],
+        build: (generated) => ({
+          ...generated,
+          witness: false,
+          fault: `none`,
+          consoleOutput: true,
+          stopRuns: NO_STOPS,
+          steps: null,
+          laterSteps: NO_LATER_STEPS,
+          dataOwners: [`a`],
+          tests: [{ ...judging(`b`, `fixed seed`, 1), fn: 0 }],
+        }),
+      },
+      // A slow kill whose test waits 16 s where its output differs: no
+      // wall-clock limit decides an outcome, so the mutant is still killed.
+      {
+        // Block per law (law 14; the maintainer's decision "Block per law",
+        // 2026-11-18): each oracle file holds a law that fails with no
+        // mutant active. File a also holds a passing law, which kills the
+        // first function's mutants: a failing law judges nothing, and its
+        // file's other laws still judge. File b holds the failing law alone,
+        // so the second function, which only file b owns, has no passing
+        // owner test, and its mutants are blocked by that law. The baseline
+        // names both failing laws, and the report is provisional. Built on
+        // the one-owner base, so a random base cannot take the states away,
+        // and appended at the end of the list, so the earlier constructed
+        // histories keep their bases.
+        name: `a failing law beside its file's passing laws`,
+        enters: [
+          `a failing law left its file's other laws judging`,
+          `blocked by a failing law`,
+        ],
+        build: (generated) =>
+          oneOwnerHistory(generated, {
+            functions: [[kill], [push]],
+            owners: [`a`, `b`],
+            tests: [{ ...judging(`a`, `fixed seed`, 7), fn: 0 }],
+            failingLaw: `both`,
+          }),
+      },
+      // A copy whose test starts a timer due inside its horizon, then waits
+      // for it: the copy is never idle, and the mutant is killed.
+      {
+        // A failing law at the start of file a that calls the first function
+        // 110,000 times, past the call floor, before it fails: a failing
+        // property that shrinks does as much. File a's passing law, after
+        // it, kills the second function's mutants, and only the failing law
+        // calls the first, so the first's mutants are blocked by it, not
+        // unreached (review of #176, F1, F2 and F3). Appended at the end of
+        // the list.
+        name: `a heavy failing law at the start of its file, beside a passing law`,
+        enters: [
+          `a heavy failing law left its file's other laws judging`,
+          `a mutant that only a failing law reached was blocked by it`,
+        ],
+        build: (generated) =>
+          oneOwnerHistory(generated, {
+            functions: [[push], [kill]],
+            owners: [`a`, `a`],
+            tests: [{ ...judging(`a`, `fixed seed`, 7), fn: 1 }],
+            failingLaw: `a`,
+            failingLawAt: `start`,
+            failingLawCalls: `heavy`,
+          }),
+      },
+      // The same wait on an unref'd timer: the timer is not listed among the
+      // process's active resources, so only the copy's own pending timers
+      // keep it busy (the held state, deterministic cuts, 2026-11-15).
+      {
+        // A describe in file a whose `beforeAll` throws, around a law that
+        // it skips: its laws fail, outside any test, and file a's passing
+        // law still kills (review of #176, F4). Appended at the end of the
+        // list.
+        name: `a failing beforeAll around a law`,
+        enters: [
+          `a failing describe hook made its laws fail`,
+          `a failing law left its file's other laws judging`,
+        ],
+        build: (generated) =>
+          oneOwnerHistory(generated, {
+            functions: [[kill]],
+            tests: [{ ...judging(`a`, `fixed seed`, 7), fn: 0 }],
+            failingLaw: `a`,
+            failingLawHook: `beforeAll`,
+          }),
+      },
+      // Idle counts only the test's I/O (M entry, 2026-11-15). A copy whose
+      // test reads a pipe it opened, the stdout of a child it unrefs, is busy
+      // while the read is pending, and nothing else keeps it busy: the read is
+      // released by a count of the sampler's samples past the idle window, not
+      // by a time. The mutant is killed.
+      {
+        // A describe in file a whose `afterAll` throws after its law passed,
+        // a law that calls the first function once: its laws fail, the
+        // first function, which only that law reaches, is blocked by it, and
+        // file a's passing law kills the second's mutants (review of #176,
+        // F2 and F4). Appended at the end of the list.
+        name: `a failing afterAll around a law that calls production`,
+        enters: [
+          `a failing describe hook made its laws fail`,
+          `a mutant that only a failing law reached was blocked by it`,
+        ],
+        build: (generated) =>
+          oneOwnerHistory(generated, {
+            functions: [[push], [kill]],
+            owners: [`a`, `a`],
+            tests: [{ ...judging(`a`, `fixed seed`, 7), fn: 1 }],
+            failingLaw: `a`,
+            failingLawCalls: `once`,
+            failingLawHook: `afterAll`,
+          }),
+      },
+      // A copy whose test writes to the console and then waits on an unref'd
+      // timer due long past its horizon, while the runner holds its own write
+      // pending through the test, as Vitest's forwarded output can be on
+      // win32: the runner's write is not the test's I/O, so the copy is idle
+      // and the mutant is killed by no progress, not a backstop gap. The
+      // package has a native addon, so its tests run in child processes, whose
+      // output Vitest forwards over their IPC channel, as on Windows shard 7.
+      {
+        // A failing law at the start of file a that repeats its one call of
+        // the first function until the output is the unmutated one, before
+        // file a's passing law, which kills that function's mutants where
+        // their output differs. With no mutant active it stops at once.
+        // Under such a mutant it spins on instrumented code, and it still
+        // runs, though it judges nothing, so its copy is cut by its call
+        // budget before the passing law runs: a gap, not a kill (the
+        // maintainer's decision "An excluded test still runs", 2026-11-23),
+        // and the mutant is blocked by that law, not a timeout (C
+        // 2026-11-23, "A count cut caused by a failing law is blocked by
+        // it"). A runner that left the failing law out of the copy would
+        // report the kill. Appended at the end of the list.
+        name: `a failing law that spins under a mutant before a passing law`,
+        enters: [`a failing law that spins under a mutant cut its copy`],
+        build: (generated) =>
+          oneOwnerHistory(generated, {
+            functions: [[kill]],
+            tests: [{ ...judging(`a`, `fixed seed`, 7), fn: 0 }],
+            failingLaw: `a`,
+            failingLawAt: `start`,
+            failingLawCalls: `once`,
+            failingLawSpins: true,
+          }),
+      },
+      // Timers by ownership (C, 2026-11-16, under both idle M entries): a copy
+      // whose test waits on a ref'd timer due long past its horizon, while the
+      // runner keeps its own 100 ms interval running through the test, as
+      // Vitest's task-update timer can be pending. Neither timer can let the
+      // test progress inside the horizon: the test's is due past it, and the
+      // runner's is not the test's. The mutant is killed by no progress.
+      {
+        // #204's census under per-law blocking (#186): module data owned by
+        // file b, the failing owner, whose only plan test is nondeterministic,
+        // so the failing owner's two passing tests are the only deterministic
+        // judges of the load's reach. They count ("Load reach goes to every
+        // owner file", 2026-11-23), and the failing law beside them judges
+        // nothing, so the mutant is judged by them, not blocked by the law. A
+        // census that left the pair out would block it. Appended at the end of
+        // the list.
+        name: `module data that only the failing owner's passing pair judges`,
+        enters: [
+          `the failing owner's passing pair judged module data beside its failing law`,
+        ],
+        build: (generated) => ({
+          ...generated,
+          witness: false,
+          fault: `brokenOwner`,
+          consoleOutput: false,
+          spinData: false,
+          stopRuns: NO_STOPS,
+          steps: null,
+          laterSteps: NO_LATER_STEPS,
+          dataOwners: [`b`],
+          tests: [{ ...judging(`b`, `fixed seed`, 1), flaky: true, fn: 0 }],
+        }),
+      },
+      // Count-only kills (M, 2026-11-16): a copy whose test reads the clock
+      // before it runs production, and then spins past its call budget in
+      // instrumented code (the until loop without its push), could have a
+      // count that follows the clock, so the spin kills nothing: the mutant is
+      // a timeout whose cause is the spin, a gap.
+      {
         // A determinism check (the determinism under load law, 2026-11-13):
         // file a's random-route test and file b's fixed-seed test both kill
         // one mutant (as w_crosskill does). In the slow twin, a's test waits
@@ -10691,12 +11168,10 @@ oracleProperty({
           slowTwin: true,
         }),
       },
-      // Constructed histories added by the deterministic-cuts change follow.
-      // Owner a's copy never finishes and never goes idle: it awaits a promise
-      // that never resolves, while a repeating timer stays due inside its
-      // horizon (`pulse`). So it is cut only by the 2 s backstop, on every
-      // machine, and owner b would kill. The cut ends the copies, so b does
-      // not run: the mutant is a backstop gap (a timeout), never a kill.
+      // An authored mutant whose owner test hangs where its output changed: its
+      // copy makes no progress, as an operator mutant's does, so it is killed
+      // by no progress on the test's route (v21.2 R50, which names no
+      // exception for an authored mutant), not cut by the backstop.
       {
         name: `a backstop cut ends the copies ahead of a later kill`,
         enters: [
@@ -10744,10 +11219,12 @@ oracleProperty({
           hangMs: 2_000,
         }),
       },
-      // Owner a's copy makes 30,000 extra calls (under its budget), and so does
-      // owner b's, which would kill. Together they pass the work budget, so b's
-      // kill does not count: b's copy fails bounded work instead, a kill by
-      // count.
+      // The unsupervised stop after a lost stream log (the path every win32 run
+      // takes; ORACLE_GAPS_TEST_UNSUPERVISED on POSIX). The run's own process
+      // writes its stopped line (stopNow) to stdout, to stderr, and to a stream
+      // log that is now a directory. Once that stop has begun, nothing else ends
+      // the run (P10, v21.2 R10 and I7): the failed log write is no second
+      // ending, so each stream holds one done line, the stopped line.
       {
         name: `a kill past the work budget in a later owner`,
         enters: [
@@ -10795,8 +11272,15 @@ oracleProperty({
           heavy: 0,
         }),
       },
-      // A slow kill whose test waits 16 s where its output differs: no
-      // wall-clock limit decides an outcome, so the mutant is still killed.
+      // Count-only kills (M, 2026-11-16) judge a test's count as a whole (v21.1
+      // R19a): a test that reads the clock anywhere in its run has a count that
+      // could follow the clock. This heavy test (HEAVY_CALLS more calls of the
+      // until loop, about 110,000 site evaluations) reads it only after its
+      // work. Its copies' call budget is still a hundred times its unmutated
+      // work (G6), counted over every unmutated test; a copy that spins does
+      // so before the clock read, and it is a gap, not a bounded-work kill.
+      // The test judges nothing, so a copy that does a third more work (the
+      // loop's `<=`) is not judged, and no copy is killed by count.
       {
         name: `a slow kill after a 16 s wait`,
         enters: [`a slow kill after a 16 s wait killed`],
@@ -10810,8 +11294,11 @@ oracleProperty({
             },
           ]),
       },
-      // A copy whose test starts a timer due inside its horizon, then waits
-      // for it: the copy is never idle, and the mutant is killed.
+      // The same heavy test, reading the clock before its work and judging.
+      // Its copies' call budget is a hundred times its unmutated work, not
+      // CALL_FLOOR: a copy that does a third more work (past 100,000 site
+      // evaluations) runs to its end and is killed by the test's law, and only
+      // the copy that spins forever is a gap.
       {
         name: `a copy waiting on a timer`,
         enters: [`a copy waiting on a timer killed`],
@@ -10824,9 +11311,13 @@ oracleProperty({
             },
           ]),
       },
-      // The same wait on an unref'd timer: the timer is not listed among the
-      // process's active resources, so only the copy's own pending timers
-      // keep it busy (the held state, deterministic cuts, 2026-11-15).
+      // No progress is decided per copy, by state and the test's own I/O (v21.2
+      // R50, R51; M entries "Idle is decided by state only" and "Idle counts
+      // only the test's I/O"), never per file. The test reads a pipe it opened
+      // before it runs production, in every run, for two of the sampler's
+      // samples (a count), so its unmutated rows record I/O of its own. Its
+      // copy that hangs where the output changed has no I/O open then, so it
+      // is idle and killed by no progress, not cut by the backstop.
       {
         name: `a copy waiting on an unref'd timer`,
         enters: [`a copy waiting on an unref'd timer killed`],
@@ -10839,11 +11330,14 @@ oracleProperty({
             },
           ]),
       },
-      // Idle counts only the test's I/O (M entry, 2026-11-15). A copy whose
-      // test reads a pipe it opened, the stdout of a child it unrefs, is busy
-      // while the read is pending, and nothing else keeps it busy: the read is
-      // released by a count of the sampler's samples past the idle window, not
-      // by a time. The mutant is killed.
+      // The work budget charges only counts that cannot follow the clock (M,
+      // 2026-11-16, "Count-only kills"; v21.2 G6). Owner a's copy reads the
+      // clock first and makes 30,000 extra calls, and owner b's makes 30,000
+      // too: the two together would pass the work budget, but a's count is
+      // charged nothing, so b's copy stays inside it, and the mutant that
+      // forces the if false is judged by the owners' laws: neither judges, so
+      // it is not judged. (The mutant that deletes the push makes each copy
+      // pass its call budget alone: a's spin is clocked, a gap, and b's kills.)
       {
         name: `a copy waiting on a pipe it opened`,
         enters: [`a copy waiting on I/O it opened killed`],
@@ -10856,13 +11350,13 @@ oracleProperty({
             },
           ]),
       },
-      // A copy whose test writes to the console and then waits on an unref'd
-      // timer due long past its horizon, while the runner holds its own write
-      // pending through the test, as Vitest's forwarded output can be on
-      // win32: the runner's write is not the test's I/O, so the copy is idle
-      // and the mutant is killed by no progress, not a backstop gap. The
-      // package has a native addon, so its tests run in child processes, whose
-      // output Vitest forwards over their IPC channel, as on Windows shard 7.
+      // Clocked by state (C, 2026-11-17, under M "Count-only kills" and I15):
+      // a test whose own I/O completes during it has a count that could
+      // follow the clock, whatever the sampler saw. This test reads the
+      // package file asynchronously before production (a millisecond, which a
+      // 50 ms sample rarely sees), and its copy that spins (the until loop
+      // without its push) is a gap on every run, never a kill on one and a
+      // gap on another.
       {
         name: `a copy beside the runner's pending write`,
         enters: [`a copy beside the runner's pending write cut as no progress`],
@@ -10878,12 +11372,12 @@ oracleProperty({
           native: `gyp`,
         }),
       },
-      // Timers by ownership (C, 2026-11-16, under both idle M entries): a copy
-      // whose test waits on a ref'd timer due long past its horizon, while the
-      // runner keeps its own 100 ms interval running through the test, as
-      // Vitest's task-update timer can be pending. Neither timer can let the
-      // test progress inside the horizon: the test's is due past it, and the
-      // runner's is not the test's. The mutant is killed by no progress.
+      // An authored mutant whose owner spins (issue #167, a random seed of #99):
+      // file b's verdict test reads its data (a sync read, so its count cannot
+      // follow the clock) and, while the data is open, spins on the function
+      // whose output the authored patch changed (`spinData`). Its copy is
+      // owed a kill by bounded work, by count (v21.2 R50, G6; M "Count-only
+      // kills"); the backstop must never decide it.
       {
         name: `a copy beside the runner's pending timer`,
         enters: [`a copy beside the runner's pending timer cut as no progress`],
@@ -10897,11 +11391,14 @@ oracleProperty({
             },
           ]),
       },
-      // Count-only kills (M, 2026-11-16): a copy whose test reads the clock
-      // before it runs production, and then spins past its call budget in
-      // instrumented code (the until loop without its push), could have a
-      // count that follows the clock, so the spin kills nothing: the mutant is
-      // a timeout whose cause is the spin, a gap.
+      // A later owner's test listed first beside an earlier owner's hang (issue
+      // #182, the random seed of #99 that the capture drew). The history lists
+      // file b's test before the witness's tests, so a copy order taken from the
+      // listing would run b first. Owner a's copy of w_hangkill hangs where it
+      // would judge and is cut as no progress by state. Copies run in sorted owner
+      // order (register 2026-11-14, "Deterministic cuts, outcome rule"; G44), so
+      // a decides the mutant before b's copy spins on the function (`spinData`),
+      // which would be a cut by count.
       {
         name: `a clocked copy that spins`,
         enters: [`a count cut with no deterministic reach is indeterminate`],
@@ -10912,10 +11409,9 @@ oracleProperty({
           functions: [[{ kind: `until`, quote: `'` }]],
         }),
       },
-      // An authored mutant whose owner test hangs where its output changed: its
-      // copy makes no progress, as an operator mutant's does, so it is killed
-      // by no progress on the test's route (v21.2 R50, which names no
-      // exception for an authored mutant), not cut by the backstop.
+      // A flaky owner's 30,000 loop calls under a mutant, with the copy under the call
+      // budget: the copy must finish, and its owner's kill decides (K21: a backstop cut
+      // in a constructed history is a defect). Replayed from the #184 seed -606020990.
       {
         name: `an authored mutant whose owner hangs`,
         enters: [`an authored mutant killed by no progress`],
@@ -10926,12 +11422,6 @@ oracleProperty({
           authored: { stmt: 0, kind: `apply` },
         }),
       },
-      // The unsupervised stop after a lost stream log (the path every win32 run
-      // takes; ORACLE_GAPS_TEST_UNSUPERVISED on POSIX). The run's own process
-      // writes its stopped line (stopNow) to stdout, to stderr, and to a stream
-      // log that is now a directory. Once that stop has begun, nothing else ends
-      // the run (P10, v21.2 R10 and I7): the failed log write is no second
-      // ending, so each stream holds one done line, the stopped line.
       {
         name: `a stream log lost after its note, then stopped, unsupervised`,
         enters: [`an unsupervised run stopped after its stream log was lost`],
@@ -10960,15 +11450,6 @@ oracleProperty({
           unsupervised: true,
         }),
       },
-      // Count-only kills (M, 2026-11-16) judge a test's count as a whole (v21.1
-      // R19a): a test that reads the clock anywhere in its run has a count that
-      // could follow the clock. This heavy test (HEAVY_CALLS more calls of the
-      // until loop, about 110,000 site evaluations) reads it only after its
-      // work. Its copies' call budget is still a hundred times its unmutated
-      // work (G6), counted over every unmutated test; a copy that spins does
-      // so before the clock read, and it is a gap, not a bounded-work kill.
-      // The test judges nothing, so a copy that does a third more work (the
-      // loop's `<=`) is not judged, and no copy is killed by count.
       {
         name: `a heavy test that reads the clock after its work`,
         enters: [
@@ -10987,11 +11468,14 @@ oracleProperty({
           heavy: HEAVY_CALLS,
         }),
       },
-      // The same heavy test, reading the clock before its work and judging.
-      // Its copies' call budget is a hundred times its unmutated work, not
-      // CALL_FLOOR: a copy that does a third more work (past 100,000 site
-      // evaluations) runs to its end and is killed by the test's law, and only
-      // the copy that spins forever is a gap.
+      // A slow kill whose test waits 22 s where its output differs: a legal
+      // copy that terminates inside its call budget. Its longest legal wait is
+      // its own 22 s, so its per-history backstop (backstopOf) is 66 s, and the
+      // wait is due inside the copy's horizon. A limit below the wait (the old
+      // 20 s base, or a floor) gave its copy a horizon the wait passes, so the
+      // copy was idle and cut as no progress. No legal history ends at the
+      // backstop (M, 2026-11-23, "Backstops are fine, set high"), so the
+      // owner's kill decides (B2, K21).
       {
         name: `a heavy test that reads the clock first`,
         enters: [
@@ -11009,13 +11493,18 @@ oracleProperty({
           heavy: HEAVY_CALLS,
         }),
       },
-      // No progress is decided per copy, by state and the test's own I/O (v21.2
-      // R50, R51; M entries "Idle is decided by state only" and "Idle counts
-      // only the test's I/O"), never per file. The test reads a pipe it opened
-      // before it runs production, in every run, for two of the sampler's
-      // samples (a count), so its unmutated rows record I/O of its own. Its
-      // copy that hangs where the output changed has no I/O open then, so it
-      // is idle and killed by no progress, not cut by the backstop.
+      // The pair witness (`w_hangpair`, the drawn `pair` field): owner file p, the
+      // earlier path, hangs where it would judge, and owner file q kills. Four
+      // contexts join the files in turn (check.mjs `runAcross`), so q's copy
+      // joins ahead of p's. The copies still run in sorted owner order, so p's
+      // hang is cut as no progress before q judges.
+      //
+      // Why this history needs the join order: `passOf` sorts the units by
+      // path before their rows join the baseline map, so `reachedBy` and
+      // `targetsOf`'s `byPath` sort agree on every run. Removing only the
+      // `targetsOf` sort is an equivalent mutant (it survives this history and
+      // the classify oracle). Removing both sorts makes the owners run in join
+      // order, and this history kills that mutant.
       {
         name: `a hang in a file whose test does a short read`,
         enters: [
@@ -11031,14 +11520,6 @@ oracleProperty({
             },
           ]),
       },
-      // The work budget charges only counts that cannot follow the clock (M,
-      // 2026-11-16, "Count-only kills"; v21.2 G6). Owner a's copy reads the
-      // clock first and makes 30,000 extra calls, and owner b's makes 30,000
-      // too: the two together would pass the work budget, but a's count is
-      // charged nothing, so b's copy stays inside it, and the mutant that
-      // forces the if false is judged by the owners' laws: neither judges, so
-      // it is not judged. (The mutant that deletes the push makes each copy
-      // pass its call budget alone: a's spin is clocked, a gap, and b's kills.)
       {
         name: `a clocked owner beside a counted one under the work budget`,
         enters: [`a clocked owner's work left out of the work budget`],
@@ -11090,13 +11571,6 @@ oracleProperty({
           heavy: 0,
         }),
       },
-      // Clocked by state (C, 2026-11-17, under M "Count-only kills" and I15):
-      // a test whose own I/O completes during it has a count that could
-      // follow the clock, whatever the sampler saw. This test reads the
-      // package file asynchronously before production (a millisecond, which a
-      // 50 ms sample rarely sees), and its copy that spins (the until loop
-      // without its push) is a gap on every run, never a kill on one and a
-      // gap on another.
       {
         name: `a spin after a short async read`,
         enters: [`a spin after a short async read is indeterminate`],
@@ -11107,12 +11581,6 @@ oracleProperty({
           functions: [[{ kind: `until`, quote: `'` }]],
         }),
       },
-      // An authored mutant whose owner spins (issue #167, a random seed of #99):
-      // file b's verdict test reads its data (a sync read, so its count cannot
-      // follow the clock) and, while the data is open, spins on the function
-      // whose output the authored patch changed (`spinData`). Its copy is
-      // owed a kill by bounded work, by count (v21.2 R50, G6; M "Count-only
-      // kills"); the backstop must never decide it.
       {
         name: `an authored mutant whose owner spins`,
         enters: [`an authored mutant killed by its spin`],
@@ -11153,14 +11621,6 @@ oracleProperty({
           heavy: 0,
         }),
       },
-      // A later owner's test listed first beside an earlier owner's hang (issue
-      // #182, the random seed of #99 that the capture drew). The history lists
-      // file b's test before the witness's tests, so a copy order taken from the
-      // listing would run b first. Owner a's copy of w_hangkill hangs where it
-      // would judge and is cut as no progress by state. Copies run in sorted owner
-      // order (register 2026-11-14, "Deterministic cuts, outcome rule"; G44), so
-      // a decides the mutant before b's copy spins on the function (`spinData`),
-      // which would be a cut by count.
       {
         name: `a later owner's test listed first beside an earlier owner's hang`,
         enters: [`a copy cut as no progress before a later owner's spin`],
@@ -11176,14 +11636,17 @@ oracleProperty({
           heavy: 0,
         }),
       },
-      // A flaky owner's 30,000 loop calls under a mutant, with the copy under the call
-      // budget: the copy must finish, and its owner's kill decides (K21: a backstop cut
-      // in a constructed history is a defect). Replayed from the #184 seed -606020990.
       {
         name: `a flaky owner's loop calls under the call budget`,
         enters: [`a flaky owner's loop calls counted under the call budget`],
         build: () => ({
           ...{
+            pair: false,
+            failingLaw: 'none',
+            failingLawAt: 'end',
+            failingLawCalls: 'none',
+            failingLawHook: 'none',
+            failingLawSpins: false,
             functions: [
               [
                 { kind: 'push', quote: "'" },
@@ -11453,6 +11916,12 @@ oracleProperty({
         name: `a property test's later run spins into bounded work`,
         enters: [`a property test's later run spins into bounded work`],
         build: () => ({
+          pair: false,
+          failingLaw: 'none',
+          failingLawAt: 'end',
+          failingLawCalls: 'none',
+          failingLawHook: 'none',
+          failingLawSpins: false,
           functions: [
             [{ kind: 'loop', quote: "'" }],
             [{ kind: 'helperCall', helper: 'report' }],
@@ -11690,6 +12159,12 @@ oracleProperty({
           `a property test's count cut lands in its first part after a run with no positive n`,
         ],
         build: () => ({
+          pair: false,
+          failingLaw: 'none',
+          failingLawAt: 'end',
+          failingLawCalls: 'none',
+          failingLawHook: 'none',
+          failingLawSpins: false,
           functions: [
             [{ kind: 'loop', quote: "'" }],
             [{ kind: 'helperCall', helper: 'report' }],
@@ -11915,14 +12390,6 @@ oracleProperty({
           heavy: 10000,
         }),
       },
-      // A slow kill whose test waits 22 s where its output differs: a legal
-      // copy that terminates inside its call budget. Its longest legal wait is
-      // its own 22 s, so its per-history backstop (backstopOf) is 66 s, and the
-      // wait is due inside the copy's horizon. A limit below the wait (the old
-      // 20 s base, or a floor) gave its copy a horizon the wait passes, so the
-      // copy was idle and cut as no progress. No legal history ends at the
-      // backstop (M, 2026-11-23, "Backstops are fine, set high"), so the
-      // owner's kill decides (B2, K21).
       {
         name: `a slow kill after a 22 s wait, past the old backstop`,
         enters: [`a slow kill after a 22 s wait killed`],
@@ -11936,18 +12403,6 @@ oracleProperty({
             },
           ]),
       },
-      // The pair witness (`w_hangpair`, the drawn `pair` field): owner file p, the
-      // earlier path, hangs where it would judge, and owner file q kills. Four
-      // contexts join the files in turn (check.mjs `runAcross`), so q's copy
-      // joins ahead of p's. The copies still run in sorted owner order, so p's
-      // hang is cut as no progress before q judges.
-      //
-      // Why this history needs the join order: `passOf` sorts the units by
-      // path before their rows join the baseline map, so `reachedBy` and
-      // `targetsOf`'s `byPath` sort agree on every run. Removing only the
-      // `targetsOf` sort is an equivalent mutant (it survives this history and
-      // the classify oracle). Removing both sorts makes the owners run in join
-      // order, and this history kills that mutant.
       {
         name: `a later owner's kill joined before an earlier owner's hang under four contexts`,
         enters: [
@@ -11960,67 +12415,6 @@ oracleProperty({
           contexts: 4,
           hangMs: null,
           heavy: 0,
-        }),
-      },
-      {
-        // File a holds no plan test, so it calls no function of the module and its
-        // import is elided: it does not load the module. Its tests are framework-added
-        // (the console test, set here), so the mutant is unreached in production and in
-        // the model. A census that counted a non-importing file's framework tests would
-        // owe not-distinguished, so this history kills the no-import-rule mutant.
-        name: `a module data mutant whose owner file holds no plan test`,
-        enters: [`a module data mutant whose owner file holds no plan test`],
-        build: (generated) => ({
-          ...generated,
-          witness: false,
-          fault: `none`,
-          consoleOutput: true,
-          stopRuns: NO_STOPS,
-          steps: null,
-          laterSteps: NO_LATER_STEPS,
-          dataOwners: [`a`],
-          tests: [{ ...judging(`b`, `fixed seed`, 1), fn: 0 }],
-        }),
-      },
-      {
-        // Module data is read at load, so every owner file that imports it
-        // reaches it (the load-time rule, M 2026-11-06). Here file a holds the
-        // fixture's console-stream test, which is deterministic and passes,
-        // and its only plan test is nondeterministic. The mutant is judged by
-        // the console test, so the census must count the framework-added test
-        // (the model judged it indeterminate before the census change).
-        name: `a module data mutant judged past nondeterministic plan tests`,
-        enters: [
-          `a module data mutant judged past nondeterministic plan tests`,
-        ],
-        build: (generated) => ({
-          ...generated,
-          witness: false,
-          fault: `none`,
-          consoleOutput: true,
-          stopRuns: NO_STOPS,
-          steps: null,
-          laterSteps: NO_LATER_STEPS,
-          dataOwners: [`a`],
-          tests: [{ ...judging(`a`, `fixed seed`, 1), flaky: true, fn: 0 }],
-        }),
-      },
-      {
-        // The abort stop of a run whose setup file throws (issues #117 and
-        // #137). The CLI's own abort, after its completed check blocked the
-        // mutants of the throwing file, ends the stopped run with one error
-        // line on each stream. A drawn history draws no abort (v21.2 I16), so
-        // only this constructed history names it.
-        name: `a declaration fault: setupThrows, then the abort stop`,
-        enters: [`blocked by setupThrows`, `a run whose process aborted`],
-        build: (generated) => ({
-          ...generated,
-          fault: `setupThrows`,
-          witness: false,
-          stopWitness: true,
-          steps: null,
-          hookStops: true,
-          stopRuns: [{ signal: `SIGINT`, pool: `threads`, when: `abort` }],
         }),
       },
     ]),
