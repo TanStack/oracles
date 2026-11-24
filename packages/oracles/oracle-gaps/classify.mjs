@@ -635,28 +635,13 @@ export function blockersOf(
  * gives a provisional report that lists the blocked mutants and judges the
  * rest). A kill stands.
  */
-// The failing laws whose spin cut a copy of this mutant (`spunBy`): a count
-// cut that a failing law caused blocks the mutant by that law, whoever else
-// reached it, and a kill by a passing law does not outrank it (C 2026-11-23,
-// "Count-cut label precedence", step 1).
-export const cutBlockersOf = (units, failing) => {
-  const laws = new Set([...failing.values()].flat())
-  return units.flatMap((u) => (laws.has(u.spunBy) ? [u.spunBy] : []))
-}
-export const blockedOr = (judged, blockers, cutBy = []) =>
-  cutBy.length > 0
-    ? {
+export const blockedOr = (judged, blockers) =>
+  blockers.length === 0 || judged.outcome === `killed`
+    ? judged
+    : {
         outcome: `blocked`,
-        blockedBy: [...new Set(cutBy)].sort((a, b) =>
-          byPath(fileOf(a), fileOf(b)),
-        ),
+        blockedBy: [...blockers].sort((a, b) => byPath(fileOf(a), fileOf(b))),
       }
-    : blockers.length === 0 || judged.outcome === `killed`
-      ? judged
-      : {
-          outcome: `blocked`,
-          blockedBy: [...blockers].sort((a, b) => byPath(fileOf(a), fileOf(b))),
-        }
 
 /** Whether the ordinary tests run, for information: only for a survivor. */
 export const needsOrdinary = (result, targets) =>
