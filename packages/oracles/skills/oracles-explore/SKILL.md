@@ -130,7 +130,8 @@ credibility. So every finding needs a probe that the developer can run again.
 
 ## Where you stop
 
-Stop and wait only when the developer must decide:
+Stop and wait only when the developer must decide (with no developer
+present, see "No developer in the loop" below):
 
 - which of the spots you present to dig into
 - whether a finding is a bug, or intended
@@ -141,6 +142,40 @@ Stop and wait only when the developer must decide:
   keep the work (a commit, or a pull request)
 
 Between those points, keep working, and keep telling them what you are doing.
+
+## No developer in the loop
+
+Some runs have no one to answer: an agent working for another agent, or a
+run told to go on unattended. What the request already decided (an area,
+approved laws) still counts as the developer's answer. Every other stop
+becomes an entry in a decision list, and you go on:
+
+- **The spot:** take the one your ranking puts first (step 2), and say in a
+  line why.
+- **The laws:** adopt only a `stated` law whose authority you quote, with
+  file and line, from the docs, the changelog, a test, or a public type.
+  Mark each one "adopted by the agent, pending maintainer confirmation", in
+  its `law` option's `authority` and in your report. This is an exception
+  to adopting a law only with the maintainers' approval, and it lasts until
+  they answer. Say "pending confirmation" for milestone 2. An `observed` or
+  `open` law, a law change, and a more complex design stay proposals, and
+  the oracle file states what they would decide as limits.
+- **Build and run** the oracle on those laws through the gap check (step
+  5), and close the gaps that its passing laws own.
+- **A bug the oracle confirms stays unfixed.** The oracle stays red, with its smallest
+  failing case and the share of histories that failed. This is an exception
+  to fixing production at once: whether it is a bug or intended is the
+  maintainers' decision, and a fix would make it for them.
+- **Never weaken an oracle to make it green:** no skip, no `test.fails`, no
+  narrowed history or loosened check.
+- Keep no feedback log file: put its entries in the report.
+
+When the gaps that its passing laws own are closed, end with the report
+(step 6), then one numbered list of every open decision, most important
+first, so a maintainer can answer by number: the spot you chose, each
+pending law, each possible bug (a bug, or intended?), each design question,
+each upgrade the run needed and did not make, and whether to finish setting
+up.
 
 ## What you change
 
@@ -255,8 +290,8 @@ proves it later.
 Present two or three spots, a short paragraph each: what the code seems to
 promise, where that is stated, why a bug there would matter, and why it
 would make a good oracle. Recommend one, and stop for their choice. If they
-already asked you to choose ("surprise me"), say in a line which spot you
-picked and why, and go on to probe it.
+already asked you to choose ("surprise me"), or no developer is present,
+say in a line which spot you picked and why, and go on to probe it.
 
 ## 3. Probe
 
@@ -371,7 +406,9 @@ For example:
 > they check only the first delay. **How often:** 412 of the 2,000 schedules
 > I tried.
 
-For a possible bug, ask: "Is this a bug, or is it intended?"
+For a possible bug, ask: "Is this a bug, or is it intended?" With no
+developer present, it goes into the decision list ("No developer in the
+loop").
 
 **Oracle first.** When a probe finds a bug, do not fix production yet, even
 when the fix is obvious. The bug goes into the oracle: a law that it breaks,
@@ -525,8 +562,9 @@ Then ask the developer to approve the potential laws that the authority
 decides. When the developer approves a potential law, it becomes an adopted
 law, and the oracle file records their decision. If they do not maintain the
 repository, its maintainers confirm the laws when they review the pull
-request. Potential laws have no default: with no developer present, propose
-them and stop.
+request. Potential laws have no default: with no developer present, adopt
+only those that "No developer in the loop" allows, pending confirmation,
+and propose the rest.
 
 ## 5. Build and run
 
@@ -588,7 +626,9 @@ them and stop.
    oracle already fails on it. Make the smallest production fix, rerun the
    oracle until it passes, and show both runs: the failure before, the pass
    after. Follow the defect path in `oracles-design` step 7. With the
-   oracle failing first, the fix is proved.
+   oracle failing first, the fix is proved. With no developer present,
+   nobody confirms it: leave production unfixed ("No developer in the
+   loop").
 
    (first session) After the first fix, offer the walk-through at once. The
    oracle is at its simplest now, so it is the best moment to see how it is
