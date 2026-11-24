@@ -120,7 +120,7 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
   test-oracle-gaps-fast:
-    name: Gap report oracles (${{ matrix.shard }}/3)
+    name: Gap report oracles (${{ matrix.shard }}/4)
     # Heavy: skipped on a docs-only pull request.
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
@@ -128,7 +128,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -137,15 +137,15 @@ jobs:
       - name: Setup Tools
         uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
       # The gap report's own oracles also run real Vitest runs on fixture
-      # packages (test:oracle-gaps:fast): the static oracle in two shards,
-      # and the classify, probe-form, mutant-validity, and path-spelling
-      # oracles, with the object-literal dispatch oracle, in a third. The
+      # packages (test:oracle-gaps:fast): the static oracle in three shards (CI-timed, each about
+      # 5 minutes), and the classify, probe-form, mutant-validity, and path-spelling
+      # oracles, with the object-literal dispatch oracle, in a fourth. The
       # dispatch oracle is outside the static shards' name patterns, so it
       # runs whole here. Packed with the first static shard, that job ran
       # 8m10s and 9m08s on #122's CI, within a minute of the limit, so it
       # runs apart.
       - run: |
-          if [ "$SHARD" = 3 ]; then
+          if [ "$SHARD" = 4 ]; then
             exec pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-classify gap-report-probe-form gap-report-mutant-validity gap-report-path-spelling gap-report-static-oracle-dispatch
           fi
           pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-static -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-static "$SHARD")"
