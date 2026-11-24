@@ -425,6 +425,18 @@ Techniques: [guide § Histories](../../docs/guide.md#histories).
   (`src/x.ts#run`, `src/x.ts#Class.method`). Own only what the laws cover. The
   gap check judges only owned code, and the gap check's `--source` selects
   files.
+  - A class is a unit too: `src/x.ts#Failure` owns the whole class, its
+    constructor, methods, accessors, field initializers, static blocks, and
+    `extends` clause, with what each refers to. Name a member
+    (`src/x.ts#Failure.constructor`) to own only that member's tree: the
+    constructor's entry does not own the field initializers, which run on
+    `new` but belong to the class. A class passed as a value brings the whole
+    class; `new Failure()` brings only its constructor.
+  - A statement at the top of a module that is neither a function nor data
+    (`Failure.prototype.name = 'Failure'` after the class, a top-level
+    `if` or loop) belongs to no named unit. Only a whole-file entry
+    (`src/x.ts`) owns it; otherwise its mutants are reported as unowned
+    `<module>` code.
   - A method of an object that a function returns (`createEmitter().emit`)
     has no name of its own. Own it through the enclosing function
     (`src/index.ts#createEmitter`).

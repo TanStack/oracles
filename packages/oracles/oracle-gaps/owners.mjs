@@ -24,15 +24,16 @@
 // Each
 // entry is a source path relative to the package, in any spelling that
 // names the package's file (args.mjs, packagePath), either alone (the whole
-// file) or with an entry function after the first `#` (`src/x.ts#run`,
-// `src/x.ts#Class.method`, `src/x.ts#Class.#private`).
+// file) or with an entry unit after the first `#` (`src/x.ts#run`,
+// `src/x.ts#Class`, `src/x.ts#Class.method`, `src/x.ts#Class.#private`).
 // Owning an entry function owns its text, every function defined inside it
 // whether or not anything refers to it, and its static reference tree within
 // the package, as the TypeScript type checker resolves it: every function, method, or
 // class that its body refers to, whether it calls it by name, through an
 // import or its alias, through `this` or a typed field, through `.bind`, or
-// passes it as a value. A class passed as a value brings all its methods;
-// `new C()` brings only C's constructor (maintainer decision). The tree
+// passes it as a value. A class passed as a value brings the whole class,
+// its own text and all its members; `new C()` brings only C's constructor
+// (maintainer decision). The tree
 // is read from the source, not from what any test ran, so code an oracle
 // never reaches stays owned and shows up as a gap rather than dropping out of
 // the oracle's scope. It stops at the package's boundary: a declaration
@@ -50,6 +51,13 @@
 // `exports.name = <function>` (so `exports.default` is `default`; F24),
 // through parentheses and chained assignments. An import of it reaches it
 // through its export.
+// A named class declaration is a unit of its own too, named by its class
+// (`src/x.ts#Class`): its own text is the code of the class that no member
+// holds (field initializers, static blocks, its `extends` clause), and
+// owning it owns that text, every member, and what each refers to. A
+// statement at the top of a module that is neither a function nor data,
+// such as `Class.prototype.name = '…'` after the class, is in no unit: it is
+// the module's (`<module>`), owned only by a whole-file entry.
 // Module-level data is a unit of its
 // own, as a function is: a variable declared at the top of a module whose
 // initializer is not a function, named by its variable (`src/x.ts#TABLE`), in a
@@ -57,7 +65,9 @@
 // tree, with what its initializer refers to outside the functions it holds,
 // and an owns entry may name it. A function its initializer holds, such as an
 // object literal's method or function property, is a unit of its own, owned
-// where something refers to it, not because the declaration's text holds it:
+// where something refers to it, not because the declaration's text holds it
+// (an unnamed function called in place is no unit, so what it refers to is
+// the declaration's):
 // a static property read (`obj.a` or `obj['a']`) brings only that property
 // and leaves sibling functions unowned, and naming the declaration in an
 // `owns` entry (`src/x.ts#TABLE`) leaves its functions to their callers.
@@ -266,6 +276,9 @@ export function functionsIn(ts, file) {
         ts.isPropertyAssignment(node)) &&
       isFunction(node.initializer) &&
       (ts.isIdentifier(node.name) || ts.isPrivateIdentifier(node.name))
+    // A named class declaration: its own text, the code that no member
+    // holds (field initializers, static blocks, its extends clause).
+    const isClass = ts.isClassDeclaration(node) && node.name !== undefined
     // Module-level data: a top-level variable whose value is not a function.
     // Its node is the declaration, whose initializer is its text.
     const data =
@@ -284,7 +297,7 @@ export function functionsIn(ts, file) {
         end: node.end,
       })
     else if (
-      (hasBody || valued || data) &&
+      (hasBody || valued || data || isClass) &&
       (node.name || ts.isConstructorDeclaration(node))
     )
       functions.push({
@@ -324,9 +337,10 @@ export function ownership(ts, program, pkg, oracles) {
     }
     return indexed.get(source)
   }
-  // The package functions a declaration names: itself, or, for a class used
-  // as a value, all its members. `new C()` names only C's constructor; C's
-  // members are owned where the tree refers to them. For a data declaration
+  // The package units a declaration names: itself, or, for a class used as
+  // a value, the whole class: its own text and all its members. `new C()`
+  // names only C's constructor; C's members are owned where the tree refers
+  // to them. For a data declaration
   // used dynamically (`obj[key]`) or as a whole value (`fn(obj)`), which
   // member is called is unknown statically, so it brings every function
   // defined inside its value; a static property read (`obj.a`, `obj['a']`)
@@ -336,10 +350,10 @@ export function ownership(ts, program, pkg, oracles) {
     if (!inPackage(file.fileName)) return []
     const functions = functionsOf(posix(relative(pkg, file.fileName)))
     if (ts.isClassDeclaration(declaration) && declaration.name)
-      return functions.filter(
-        (fn) =>
-          fn.cls === declaration &&
-          (!constructed || ts.isConstructorDeclaration(fn.node)),
+      return functions.filter((fn) =>
+        constructed
+          ? fn.cls === declaration && ts.isConstructorDeclaration(fn.node)
+          : fn.node === declaration || fn.cls === declaration,
       )
     // An unnamed export is reached through its export: an export
     // assignment, a CommonJS assignment, or, for `exports.name`, the
@@ -453,13 +467,25 @@ export function ownership(ts, program, pkg, oracles) {
           symbol = checker.getAliasedSymbol(symbol)
         found.push(...resolveUsage(symbol, referenceExpression(child)))
       }
-      // A function in module data's initializer is a unit of its own,
-      // reached only when something refers to it.
-      if (!(data && ts.isFunctionLike(child))) ts.forEachChild(child, visit)
+      // A unit in module data's initializer or in a class's own text, such
+      // as a member, is reached only when something refers to it. A
+      // function that is no unit, such as an unnamed arrow called in place,
+      // is that text's own code, so what it refers to is followed.
+      if (child === node || !units?.has(child)) ts.forEachChild(child, visit)
     }
-    // A function's body, or module data's initializer.
+    // A function's body, module data's initializer, or a class's own text
+    // (its units aside).
     const data = node.body === undefined
-    const text = node.body ?? node.initializer
+    const units = data
+      ? new Set(
+          functionsOf(posix(relative(pkg, node.getSourceFile().fileName))).map(
+            (fn) => fn.node,
+          ),
+        )
+      : undefined
+    const text = ts.isClassDeclaration(node)
+      ? node
+      : (node.body ?? node.initializer)
     if (text) visit(text)
     return found
   }
@@ -483,8 +509,9 @@ export function ownership(ts, program, pkg, oracles) {
         if (seen.has(fn)) return
         seen.add(fn)
         add(fn, oracle)
-        // The functions in a function's text follow it in document order.
-        // Module data owns only its own sites, not the functions it holds.
+        // The units in a function's or a class's text follow it in document
+        // order. Module data owns only its own sites, not the functions it
+        // holds.
         const functions = ts.isVariableDeclaration(fn.node)
           ? []
           : functionsOf(posix(relative(pkg, fn.node.getSourceFile().fileName)))
