@@ -42,6 +42,7 @@ import {
   isAbsolute,
   join,
   relative as relativePath,
+  resolve as resolvePath,
 } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { applyAuthored, loadAuthored } from './authored.mjs'
@@ -405,7 +406,7 @@ function discoveredConfig(pkg) {
 function isModuleConfig(pkg, config) {
   if (/\.c[jt]s$/.test(config)) return false
   if (/\.m[jt]s$/.test(config)) return true
-  let dir = dirname(join(pkg, config))
+  let dir = dirname(resolvePath(pkg, config))
   while (!existsSync(join(dir, `package.json`)) && dirname(dir) !== dir)
     dir = dirname(dir)
   const manifest = join(dir, `package.json`)
@@ -504,7 +505,7 @@ import { mergeConfig } from 'vitest/config'
 import { posix } from './paths.mjs'
 ${
   config
-    ? `import * as config from ${JSON.stringify(specifierOf(home, join(pkg, config)))}
+    ? `import * as config from ${JSON.stringify(specifierOf(home, resolvePath(pkg, config)))}
 // The package's config, read from its namespace at run time: a config with
 // no default export then fails as it fails under Vitest, when it loads, and
 // not when Vite bundles this wrapper, which esbuild reports on stderr
@@ -638,7 +639,10 @@ export default async (env) => {
         `the package's Vitest config (${name}) failed to load: ${String(
           error?.message ?? error,
         )
-          .replaceAll(wrapper, config === undefined ? name : join(pkg, config))
+          .replaceAll(
+            wrapper,
+            config === undefined ? name : resolvePath(pkg, config),
+          )
           .replaceAll(basename(wrapper), name)}`,
         `Fix the error that the message names in ${name}, then run the check again.`,
       )
@@ -685,7 +689,7 @@ export default async (env) => {
       return
     }
     try {
-      await esbuild.transform(readFileSync(join(pkg, config), `utf8`), {
+      await esbuild.transform(readFileSync(resolvePath(pkg, config), `utf8`), {
         loader: /\.[cm]?ts$/.test(config) ? `ts` : `js`,
         logLevel: `silent`,
         sourcefile: config,

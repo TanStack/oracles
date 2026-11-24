@@ -19,7 +19,8 @@ agent.
   `oracle-gaps --package <dir> --source <src/x.ts,...>`, with
   `--env-prefix` set to the prefix that the project passes to
   `configureOracles`. `--config <file>`, relative to `--package`, selects the
-  Vitest config; without it, the run loads the config that Vitest discovers,
+  Vitest config, which may lie outside the package (a temporary config need
+  not be written into the repository); without it, the run loads the config that Vitest discovers,
   in the package's directory or else the nearest parent directory that has
   one, and the baseline output names the config it loaded. Each run writes its report to
   a directory of its own in the OS temp directory (or to `--out`), and

@@ -100,7 +100,8 @@
 //     [--pool threads|forks]  (Vitest's pool; default threads, or forks when
 //                              a native addon is anywhere in the package's
 //                              dependency tree)
-//     [--config <file>]       (the Vitest config, relative to <dir>; default
+//     [--config <file>]       (the Vitest config, relative to <dir>, inside
+//                              the package or outside it; default
 //                              the one Vitest discovers; the baseline names
 //                              the config it loaded, or says it found none)
 //   oracle-gaps --stop-daemon --package <dir>

@@ -543,7 +543,10 @@ pnpm exec oracle-gaps --package <package dir> --source <src/file.ts> \
 ```
 
 Add `--config <file>` (relative to the package) when the oracle Vitest config
-is not Vite's default name. The baseline prints which config it used.
+is not Vite's default name. The file may lie outside the package, so a
+temporary config (one that includes a single oracle file, say) can live in a
+scratch directory; its `include` globs still resolve against the package. The
+baseline prints which config it used.
 
 - `--source` selects files. `owns` can name a single function in a file, so
   the report judges only the owned functions. Code in the file that no oracle
