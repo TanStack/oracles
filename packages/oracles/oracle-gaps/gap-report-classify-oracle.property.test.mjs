@@ -200,7 +200,9 @@
  *    the same lines, before its gaps (the freeze's one loop, 2026-11-10).
  *    The legend line for `crashed` says first that a crash is a gap, not a
  *    kill, and that its error is on the gap's Detail line (G3; the freeze,
- *    P3 and C1). The last stdout line is `oracle-gaps: done completed, <n>
+ *    P3 and C1). The legend line for `not-judged` says first that an owner
+ *    test recorded different observations under the mutant, and that every
+ *    law of that test still passed. The last stdout line is `oracle-gaps: done completed, <n>
  *    gaps[ (provisional)], report <path>` (G6). A replay
  *    line is a command, which the exit law does not read.
  * 9. Before any mutant, each test file's baseline is printed, an ordinary
@@ -1447,11 +1449,17 @@ const directives = {
 // in the gap's Detail line. The extra-work line says first that a builtin
 // counts as one site, so a shortcut whose cost is in one is owed an
 // observation of that cost, not a very tight bound (maintainer, 2026-11-12).
+// The not-judged line says first what happened, which its directive alone
+// leaves out: an owner test's recorded observations changed under the
+// mutant, and no law rejected them (a downstream project's report,
+// 2026-11-24).
 const meanings = {
   crashed:
     /^Production threw where no law judged it: a gap, not a kill\. Its error is on the gap's Detail line in summary\.md, and in its `detail` in results\.json\. /,
   'extra-work':
     /^A call to a builtin counts as one site evaluation, whatever it costs \(`Object\.defineProperty`\): where a shortcut's cost is in one, make that cost an observation of the driver, such as a count of those calls, and let a law judge it, in place of a very tight bound\. /,
+  'not-judged':
+    /^An owner test recorded different observations under this mutant, and every law of that test still passed: its driver saw the difference, and no law judges it\. /,
 }
 // A count of things, as the report words it.
 const counted = (n, thing) => `${n} ${thing}${n === 1 ? `` : `s`}`
@@ -2629,6 +2637,9 @@ function check(h, observations, expected) {
   const workLegend = legend.find((line) =>
     line.startsWith(`oracle-gaps: legend extra-work: `),
   )
+  const judgedLegend = legend.find((line) =>
+    line.startsWith(`oracle-gaps: legend not-judged: `),
+  )
   const leadProblem =
     stdoutLines.slice(0, baselineGot.length).join(`\n`) !==
     baselineGot.join(`\n`)
@@ -2673,7 +2684,14 @@ function check(h, observations, expected) {
                         ),
                       )
                     ? `the extra-work legend line does not say that a builtin counts as one site, and what is owed for its cost`
-                    : undefined
+                    : judgedLegend !== undefined &&
+                        !meanings[`not-judged`].test(
+                          judgedLegend.slice(
+                            `oracle-gaps: legend not-judged: `.length,
+                          ),
+                        )
+                      ? `the not-judged legend line does not say that an owner test's observations changed and no law rejected them`
+                      : undefined
   if (leadProblem)
     return violation(`classified`, leadProblem, `stdout`, { actual: stdout })
   // The full report leads with the same baseline, before its gaps.
@@ -3191,6 +3209,20 @@ const calibrations = [
       )
       if (totals <= 0) return undefined
       return [...lines.slice(totals), ...lines.slice(0, totals)].join(`\n`)
+    }),
+  },
+  {
+    name: `the not-judged legend line leaves out what happened`,
+    law: `stdout`,
+    corrupt: corruptStdout((stdout) => {
+      const line = stdout
+        .split(`\n`)
+        .find((l) => l.startsWith(`oracle-gaps: legend not-judged: `))
+      if (line === undefined) return undefined
+      return stdout.replace(
+        line,
+        line.replace(/^(oracle-gaps: legend not-judged: )[^.]*\. /, `$1`),
+      )
     }),
   },
   {
