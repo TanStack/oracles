@@ -284,7 +284,15 @@ function appendClosingRow(row) {
 // input (check.mjs, fileHashes), so the run is stored under the text it
 // read and not under an edit that lands later in the run (review of #55,
 // F1).
+//
+// An authored mutant's patch of a file reaches the copy's reads of it here
+// too (`state.serve`, the patched text by the file's key): a sync, promise,
+// or callback read of the file gets the patched text, decoded as the read
+// asks, so a data file or a declaration file that a test reads is mutated
+// for this copy alone. A check of whether it exists or what it is sees the
+// file as it is, and so does a child process.
 globalThis.__oracleGapsReads = new Map()
+globalThis.__oracleGapsServed = state.serve ?? null
 if (!globalThis.__oracleGapsReading) {
   globalThis.__oracleGapsReading = true
   // A read's key follows the gap CLI's path rule (paths.mjs, copied beside
@@ -319,7 +327,30 @@ if (!globalThis.__oracleGapsReading) {
       !reads.has(key)
     )
       reads.set(key, hashNow(path))
+    return key
   }
+  // The patched text as a read returns it: a string in the encoding it
+  // names, or else a buffer.
+  const decoded = (text, options) => {
+    const encoding = typeof options === `string` ? options : options?.encoding
+    const bytes = Buffer.from(text)
+    return encoding ? bytes.toString(encoding) : bytes
+  }
+  // How each read returns the patched text, by its owner and name.
+  const serving = new Map([
+    [fs.readFileSync, (text, [options]) => decoded(text, options)],
+    [
+      fs.readFile,
+      (text, rest) => {
+        process.nextTick(
+          rest.at(-1),
+          null,
+          decoded(text, rest.length > 1 ? rest[0] : undefined),
+        )
+      },
+    ],
+    [fs.promises.readFile, async (text, [options]) => decoded(text, options)],
+  ])
   // A wrapper keeps the function's own properties (its name and length,
   // which code that dispatches on arity reads), so a test that passes alone
   // passes under the capture (law 3; review of #55).
@@ -329,8 +360,19 @@ if (!globalThis.__oracleGapsReading) {
   ])
     for (const name of names) {
       const original = owner[name]
+      const serve = serving.get(original)
       owner[name] = keepProperties(original, function (target, ...rest) {
-        record(target)
+        const key = record(target)
+        const text =
+          serve && key !== undefined
+            ? globalThis.__oracleGapsServed?.[key]
+            : undefined
+        // A callback read without its callback fails as it would.
+        if (
+          text !== undefined &&
+          (original !== fs.readFile || typeof rest.at(-1) === `function`)
+        )
+          return serve(text, rest)
         return original.call(this, target, ...rest)
       })
     }

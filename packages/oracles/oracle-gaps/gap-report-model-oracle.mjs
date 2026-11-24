@@ -1143,8 +1143,24 @@ const drawn = fc.record({
   // output it spins on instrumented code until its copy's call budget cuts
   // it. A test left out of judging still runs, and a count cut it causes is
   // a gap (the maintainer's decision "An excluded test still runs",
-  // 2026-11-23). Drawn last (the generator rule).
+  // 2026-11-23).
   failingLawSpins: fc.boolean(),
+  // How oracle file a reads a data file of the package (`READ_DATA`) that it
+  // owns and asserts on, and that an authored mutant edits: not at all, by a
+  // sync read with an encoding or to a buffer (as TypeScript's compiler host
+  // reads a declaration file), a promise, or a callback. The runner serves
+  // the mutant's patch to these reads in the copy's own process
+  // (feat/authored-mutant-any-file). Drawn last (the generator rule).
+  authoredRead: fc.constantFrom(
+    `none`,
+    `none`,
+    `none`,
+    `none`,
+    `sync`,
+    `buffer`,
+    `promise`,
+    `callback`,
+  ),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -3442,7 +3458,7 @@ function resolveHistory(history) {
     : []
   // A run that reaches its own check keeps an owner (see `reachesRun`).
   const ownerless = history.ownerless === true && !reachesRun(history)
-  return {
+  const plan = {
     functions: ownerless
       ? functions.map((fn) => ({ ...fn, owners: [] }))
       : functions,
@@ -3585,6 +3601,22 @@ function resolveHistory(history) {
       statements: file.statements,
       returnLine: file.returnLine,
     },
+  }
+  // How file a reads the data file that an authored mutant edits
+  // (`authoredRead`). A run with no owns entry or no oracle file refuses for
+  // that, and its data entry would change what it refuses for; under the
+  // `link` test root the test files live outside the package, so their
+  // relative path to it differs.
+  const read = history.authoredRead ?? `none`
+  return {
+    ...plan,
+    authoredRead:
+      read === `none` ||
+      ownsNothing(plan) ||
+      plan.declaration === `neither` ||
+      plan.testRoot === `link`
+        ? `none`
+        : read,
   }
 }
 
@@ -5051,6 +5083,7 @@ function frameworkTestsOf(plan) {
       route: `framework`,
     })
   if (plan.consoleOutput) add(`a`, `writes to the console streams`)
+  if (plan.authoredRead !== `none`) add(`a`, LIMIT_TEST)
   if (plan.midrun) add(plan.midrunBy, MIDRUN_EDITORS[plan.midrunTarget].test)
   if (plan.fault === `brokenOwner`) {
     add(`b`, `fixed seed 999 again`)
@@ -5073,7 +5106,8 @@ function baselineOf(plan) {
     const own =
       plan.tests.filter((t) => t.file === file).length +
       (plan.midrun && file === plan.midrunBy ? 1 : 0) +
-      (file === `a` && plan.consoleOutput ? 1 : 0)
+      (file === `a` && plan.consoleOutput ? 1 : 0) +
+      (file === `a` && plan.authoredRead !== `none` ? 1 : 0)
     const entry = failing.find((f) => f.file === file)
     const loads = entry === undefined || entry.laws !== undefined
     // The failing owner's suite holds two tests and a third of its name, and
@@ -5430,19 +5464,37 @@ function model(plan) {
         plan.ordinary && survivorKinds.has(kind) && ordinaryReaches(site),
     }
   })
+  // An owner file whose copy loads the source as a module, where the runner
+  // serves an authored mutant's patch: a file that loads, with a plan test
+  // (each calls the source through its import) or a failing law that calls
+  // production. Any other file's import of the source is unused, so it is
+  // elided, and its copy never loads the source.
+  const loadsSource = (file) =>
+    entryOf(file)?.loads === true &&
+    (plan.tests.some((t) => t.file === file) ||
+      (holdsFailingLaw(plan, file) && failingLawTarget(plan) !== undefined))
   // Each authored mutant is judged alone, against the original source with
   // only its own edit.
   const authoredAll = plan.authoredList.map((a) => ({
     id: a.id,
     key: `${SOURCE}#authored:${a.id}`,
     // An authored mutant is not instrumented, so a survivor is not-judged
-    // (a changed observation) or not-observed (the patch changed the code).
+    // (a changed observation) or not-observed (the patch changed the code),
+    // unless no owner's copy loaded the source: the patch never ran there,
+    // so it is unreached.
     kind: !a.applies
       ? `does-not-apply`
       : owners(a.fn).size === 0
         ? `unowned`
         : ((kind) =>
-            blockedOr(a.fn, kind === `survived` ? `not-observed` : kind))(
+            blockedOr(
+              a.fn,
+              kind !== `survived`
+                ? kind
+                : [...owners(a.fn)].some(loadsSource)
+                  ? `not-observed`
+                  : `unreached`,
+            ))(
             judge(
               plan,
               ownerTests(a.fn),
@@ -5453,6 +5505,16 @@ function model(plan) {
           ),
     line: a.applies ? a.line : undefined,
   }))
+  // The authored mutant of the data file that file a reads through fs and
+  // judges: the runner serves its patch to the read, and file a's law
+  // rejects the changed limit on a fixed seed.
+  if (plan.authoredRead !== `none`)
+    authoredAll.push({
+      id: `read`,
+      key: `${READ_DATA}#authored:read`,
+      kind: entryOf(`a`)?.loads === true ? `killed` : `blocked`,
+      line: 1,
+    })
   const authored = authoredAll[0]?.kind
   const isGap = (kind) =>
     kind !== undefined && ![`killed`, `unowned`].includes(kind)
@@ -5569,6 +5631,7 @@ function oracleTestFile(plan, file) {
     ...(plan.data ?? [])
       .filter((d) => d.owners.includes(file))
       .map((d) => `${spell(SOURCE, plan.ownsSpelling)}#${d.id}`),
+    ...(file === `a` && plan.authoredRead !== `none` ? [READ_DATA] : []),
     ...(file === `b` && plan.fault === `badEntry` ? [`${SOURCE}#nope`] : []),
     ...(file === `b` && plan.fault === `missingSource`
       ? [`src/missing.ts#f0`]
@@ -5661,6 +5724,9 @@ function oracleTestFile(plan, file) {
     `import * as sut from '../src/sut'`,
     ...(file === `b` ? [`import { strict } from './strict'`] : []),
     ...(file === `b` && plan.fsRead !== `none` ? dataReads[plan.fsRead] : []),
+    ...(file === `a` && plan.authoredRead !== `none`
+      ? limitReads[plan.authoredRead]
+      : []),
     ...stubs,
     // State that tests of this file share (the `w_shared` witness).
     `const shared = { value: 0 }`,
@@ -5917,9 +5983,24 @@ function oracleTestFile(plan, file) {
   if (
     !plan.tests.some((t) => t.file === file) &&
     !(plan.midrun && file === plan.midrunBy) &&
-    !(file === `a` && plan.consoleOutput)
+    !(file === `a` && plan.consoleOutput) &&
+    !(file === `a` && plan.authoredRead !== `none`)
   )
     out.push(`test.skip('no tests', () => {})`)
+  // File a reads the data file through fs and judges its limit on a fixed
+  // seed: a law that the authored mutant `read`, which changes the limit,
+  // violates once its patch reaches the read. It calls nothing of the
+  // source under test.
+  if (file === `a` && plan.authoredRead !== `none`)
+    out.push(
+      `test('${LIMIT_TEST}', async () => {`,
+      `  g.__oracleRoute?.('fixed seed')`,
+      `  if ((await readLimit()) !== 3) {`,
+      `    g.__oracleVerdict?.({ property: 'fixture-a', law: 'data limit', checkpoint: 'trace' })`,
+      `    throw new Error('violation')`,
+      `  }`,
+      `})`,
+    )
   // A test that writes to the process's own streams, as a test's debugging
   // output does: none of it may reach the CLI's streams (law 15; review of
   // #46, F2). It calls nothing of the source under test.
@@ -6093,6 +6174,32 @@ function edited(plan) {
 }
 
 const AUTHORED = `mutants/authored-mutant.json`
+// The data file that oracle file a reads through fs, owns, and asserts on,
+// and that the authored mutant `read` edits (`authoredRead`).
+const READ_DATA = `data/limit.json`
+// How file a reads the data file's limit, by each kind of fs read.
+const limitReads = {
+  sync: [
+    `import { readFileSync as readLimitSync } from 'node:fs'`,
+    `const readLimit = async () => JSON.parse(readLimitSync(new URL('../${READ_DATA}', import.meta.url), 'utf8')).limit`,
+  ],
+  // A read to a buffer, decoded after, as TypeScript's compiler host reads
+  // a declaration file.
+  buffer: [
+    `import { readFileSync as readLimitSync } from 'node:fs'`,
+    `const readLimit = async () => JSON.parse(readLimitSync(new URL('../${READ_DATA}', import.meta.url)).toString()).limit`,
+  ],
+  promise: [
+    `import { readFile as readLimitFile } from 'node:fs/promises'`,
+    `const readLimit = async () => JSON.parse(await readLimitFile(new URL('../${READ_DATA}', import.meta.url), 'utf8')).limit`,
+  ],
+  callback: [
+    `import { readFile as readLimitCallback } from 'node:fs'`,
+    `const readLimit = () => new Promise((resolve, reject) => readLimitCallback(new URL('../${READ_DATA}', import.meta.url), 'utf8', (error, text) => (error ? reject(error) : resolve(JSON.parse(text).limit))))`,
+  ],
+}
+// The test of file a that reads the data file and judges its limit.
+const LIMIT_TEST = `reads the data limit`
 
 /**
  * The test that lands a mid-run edit, by what it edits: its name, and the
@@ -6564,6 +6671,18 @@ function fixtureFiles(plan, state = initialState(plan)) {
         intent: `pushes a different label`,
         author: `gap-report oracle`,
       })
+  // The data file that file a reads, and the authored mutant that edits it.
+  if (plan.authoredRead !== `none`) {
+    files[READ_DATA] = `{ "limit": 3 }\n`
+    files[`mutants/authored-mutant-read.json`] = JSON.stringify({
+      id: `read`,
+      source: READ_DATA,
+      find: `"limit": 3`,
+      replace: `"limit": 4`,
+      intent: `raises the data limit`,
+      author: `gap-report oracle`,
+    })
+  }
   if (plan.testRoot !== `link`) return files
   // The `link` test root: the files of `tests` live in `linkedTests`, and
   // `tests` links to it.
@@ -7029,6 +7148,7 @@ export {
   edited,
   altConfigPath,
   AUTHORED,
+  READ_DATA,
   initialState,
   fixtureFiles,
   fixturePathOf,

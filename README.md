@@ -107,6 +107,16 @@ agent.
   constructed or fixed history isolates it. An authored mutant's copy is
   not instrumented, so a work bound does not judge it.
 
+  An authored mutant (`--mutants`) can edit any file of the package. It is
+  applied where an owner's copy loads the file as a module, through an
+  import, and to the copy's own reads of it through `fs` (`readFileSync`,
+  `readFile`, and `fs.promises.readFile`), such as a data file, or a
+  declaration file that a type oracle compiles against. A check of whether
+  the file exists or what it is (`existsSync`, `statSync`), and a child
+  process that reads it, see the original text. An authored mutant whose
+  file no owner's copy loaded or read never ran, so it is `unreached`, not a
+  survivor.
+
   Every line the CLI writes for a check, on stdout and stderr alike, starts
   with `oracle-gaps: ` and its kind, so an agent can act on the results as
   they stream with `grep '^oracle-gaps: '`, and filter one kind:
