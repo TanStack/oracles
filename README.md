@@ -658,3 +658,5 @@ No configuration exempts any other file.
 
 A non-array `settings.oracles.implementationModules` or `replayWitnessModules` is
 reported at line 1 as `malformedSetting`, and it is read as an empty list.
+
+Probe: a sentence only in the root README.
