@@ -81,6 +81,7 @@ import {
   baselineOf,
   blockedOr,
   blockersOf,
+  cutBlockersOf,
   judgeAuthored,
   judgeMutant,
   judgeOrdinary,
@@ -2670,6 +2671,7 @@ export default async (env) => {
               mutants,
             }),
             blockersOf(st.owners, first, st.targets, baseline, st.units),
+            cutBlockersOf(st.units, first.failing),
           ),
         }
         if (needsOrdinary(st.result, st.targets))
