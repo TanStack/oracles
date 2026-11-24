@@ -362,6 +362,24 @@ export function renderReport({
             .map(testName)
             .join(`; `)}`,
         )
+      // Every test whose property's work bound rejects the mutant, and each
+      // owner file's first test that infected it: an author who may edit
+      // only some oracle files picks one of theirs.
+      if (gap.class === `extra-work` && gap.workTests?.length)
+        lines.push(
+          `  - Work bounds that reject it: ${gap.workTests
+            .map(
+              (w) =>
+                `${codeSpan(`work: { ratio: ${w.bound} }`)} on ${codeSpan(escapeControls(w.test))}`,
+            )
+            .join(`; `)}`,
+        )
+      if (gap.class === `not-observed` && gap.infectedTests?.length)
+        lines.push(
+          `  - Infected in: ${gap.infectedTests
+            .map((k) => codeSpan(escapeControls(k)))
+            .join(`; `)}`,
+        )
       if (gap.laws?.length)
         lines.push(`  - Laws that rejected it: ${gap.laws.join(`, `)}`)
       if (gap.detail) lines.push(`  - Detail: ${gap.detail.slice(0, 200)}`)

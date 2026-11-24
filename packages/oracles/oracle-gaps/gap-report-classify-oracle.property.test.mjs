@@ -120,7 +120,16 @@
  *    test names the first that its class's condition holds for: the test
  *    whose value changed, the test that infected the mutant, or the test
  *    that its kill or crash names; an operand list and a list of
- *    nondeterministic tests follow the same order. So do the lists that name
+ *    nondeterministic tests follow the same order. A gap's data lines name
+ *    every test its class's condition holds for, so that an author who may
+ *    edit only some oracle files finds one of theirs: an `extra-work` gap's
+ *    `Work bounds that reject it` line names each test whose work judges
+ *    the mutant and rose, with the bound to declare on its property, and a
+ *    `not-observed` gap's `Infected in` line names the first test of each
+ *    owner file that infected the mutant, each by its file and test names,
+ *    in report order (a downstream finding of 2026-11-24: the one test a
+ *    message names may be in a file its author may not edit; proposed for
+ *    approval). So do the lists that name
  *    files: a gap's `Owners` line (the owner files that reached the mutant),
  *    and the files that failed with no mutant active (which the run's
  *    refusal names, or results.json's `excluded` and the summary list as
@@ -656,6 +665,9 @@ const shownName = (h, fi, ti) =>
     /[\u0000-\u001f\u007f\u2028\u2029]/g,
     (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, `0`)}`,
   )
+// A test as a gap's data lines name it: its file, and its names printed as
+// a message prints them.
+const shownKey = (h, fi, ti) => `${fileName(h, fi)} > ${shownName(h, fi, ti)}`
 // The framework's route vocabulary (oracle-route.ts in PR #1): three
 // reproducible routes, the random campaign, and one route for the property's
 // own checks. Any other name, the retired `constructed history`,
@@ -973,6 +985,15 @@ function judgedOutcome(h, mi, owners) {
         `\`${shownName(h, rose.fi, rose.ti)}\``,
         `rose from ${rose.t.work} to ${workUnder(rose.t, mi)} site evaluation${workUnder(rose.t, mi) === 1 ? `` : `s`}${rose.t.work > 0 ? ` (${(workUnder(rose.t, mi) / rose.t.work).toFixed(3)}× the unmodified run's)` : ``}.`,
       ],
+      // Every test whose work judges the mutant and rose, in report order,
+      // with the bound that rejects the mutant on its property: the author
+      // declares one of them (law 7).
+      workBounds: compared
+        .filter((x) => workJudges(h, mi, x) && workUnder(x.t, mi) > x.t.work)
+        .map((x) => [
+          `work: { ratio: ${boundBelow(x.t.work, workUnder(x.t, mi))} }`,
+          shownKey(h, x.fi, x.ti),
+        ]),
     })
   if (m.evidence === `dead code`)
     return sized(`dead-code`, { mention: [`line ${m.line + 1}.`] })
@@ -992,12 +1013,18 @@ function judgedOutcome(h, mi, owners) {
       return sized(`branch-never-taken`, {
         mention: [`the condition on line ${m.line + 1} is ${need},`],
       })
-    return sized(`not-observed`, { mention: [observedMention(h, mi, owners)] })
+    return sized(`not-observed`, {
+      mention: [observedMention(h, mi, owners)],
+      infectedTests: infectingPerFile(h, mi, owners),
+    })
   }
   if (isCompare(m)) {
     if (!infectedIn(h, mi, owners))
       return sized(`not-infected`, { operands: operandsSeen(h, mi, owners) })
-    return sized(`not-observed`, { mention: [observedMention(h, mi, owners)] })
+    return sized(`not-observed`, {
+      mention: [observedMention(h, mi, owners)],
+      infectedTests: infectingPerFile(h, mi, owners),
+    })
   }
   // The other operators' infection is not measured, so the directive says
   // what input distinguishes the mutant, built from its operator.
@@ -1153,6 +1180,17 @@ function infectedIn(h, mi, owners) {
 function infectingTest(h, mi, owners) {
   const hit = reachingTests(h, mi, owners).find(({ t }) => infects(h, mi, t))
   return hit ? shownName(h, hit.fi, hit.ti) : undefined
+}
+// Each owner file's first deterministic test that infected the mutant, in
+// report order, by file and test names: an author who may edit only some
+// oracle files finds a test of one of them (law 7).
+function infectingPerFile(h, mi, owners) {
+  return [...owners].sort(byPath(h)).flatMap((fi) => {
+    const hit = reachingTests(h, mi, new Set([fi])).find(({ t }) =>
+      infects(h, mi, t),
+    )
+    return hit ? [shownKey(h, fi, hit.ti)] : []
+  })
 }
 // The operand pairs the owners' tests reached, distinct as values, in order,
 // up to three.
@@ -1542,6 +1580,55 @@ function ownersLinesOf(summary) {
         owners[key] = lines[j].slice(`  - Owners: `.length).split(`, `)
   })
   return owners
+}
+
+// Each gap's data lines that name tests, by its key: `Work bounds that
+// reject it:` as pairs of a bound and a test, and `Infected in:` as tests,
+// each a code span, the entries joined by `; `. An entry that does not read
+// so is kept as null, so a malformed line never equals the owed list.
+function namedLinesOf(summary) {
+  const lines = summary.split(`\n`)
+  const named = {}
+  const spans = (text, joiner) => {
+    const out = []
+    let rest = text
+    for (;;) {
+      const first = readSpan(rest)
+      if (!first) return [...out, null]
+      rest = rest.slice(first.length)
+      if (joiner === undefined) out.push(first.content)
+      else {
+        if (!rest.startsWith(joiner)) return [...out, null]
+        rest = rest.slice(joiner.length)
+        const second = readSpan(rest)
+        if (!second) return [...out, null]
+        rest = rest.slice(second.length)
+        out.push([first.content, second.content])
+      }
+      if (rest === ``) return out
+      if (!rest.startsWith(`; `)) return [...out, null]
+      rest = rest.slice(2)
+    }
+  }
+  lines.forEach((line, i) => {
+    const key = line.startsWith(`  - Key: `)
+      ? line.slice(`  - Key: `.length).match(/^(`+) (.*) \1; rerun/)?.[2]
+      : undefined
+    if (key === undefined) return
+    named[key] = {}
+    for (let j = i + 1; lines[j]?.startsWith(`  - `); j += 1) {
+      if (lines[j].startsWith(`  - Work bounds that reject it: `))
+        named[key].workBounds = spans(
+          lines[j].slice(`  - Work bounds that reject it: `.length),
+          ` on `,
+        )
+      if (lines[j].startsWith(`  - Infected in: `))
+        named[key].infectedTests = spans(
+          lines[j].slice(`  - Infected in: `.length),
+        )
+    }
+  })
+  return named
 }
 
 // ## Production driver
@@ -2127,6 +2214,34 @@ async function driver(h, observe) {
       )
         states.add(`extra-work named past an unregistered rise`)
     }
+    // The gap's data lines name a test of more than one owner file.
+    if (
+      result.class === `not-observed` &&
+      infectingPerFile(h, mi, new Set(targets.oracleTargets.map(fileIndex)))
+        .length > 1
+    )
+      states.add(`a not-observed gap infected in two owner files`)
+    if (
+      result.class === `not-observed` &&
+      targets.oracleTargets
+        .map(fileIndex)
+        .some(
+          (fi) =>
+            reachingTests(h, mi, new Set([fi])).filter(({ t }) =>
+              infects(h, mi, t),
+            ).length > 1,
+        )
+    )
+      states.add(`a not-observed gap infected in two tests of one file`)
+    if (
+      result.class === `extra-work` &&
+      new Set(
+        workTests
+          .filter((x) => workJudges(h, mi, x) && workUnder(x.t, mi) > x.t.work)
+          .map((x) => x.fi),
+      ).size > 1
+    )
+      states.add(`an extra-work gap with two bounds that reject it`)
     if (result.class !== undefined && result.class !== `extra-work`) {
       if (
         workTests.some(
@@ -2256,6 +2371,7 @@ async function driver(h, observe) {
     summary: readSummary(summary),
     messages: messagesOf(summary),
     owners: ownersLinesOf(summary),
+    named: namedLinesOf(summary),
     stdout: report.renderStdout?.({
       results,
       run: { id: `r`, inputs: `records` },
@@ -2466,6 +2582,24 @@ function check(h, observations, expected) {
         `report order`,
         { actual: got.owners?.[owed.key], expected: owed.ownerFiles },
       )
+    // An extra-work gap lists every test whose work bound rejects it, each
+    // with that bound, and a not-observed gap the first infecting test of
+    // each owner file, in report order (law 7); a gap with none, or of
+    // another class, has no such line.
+    for (const field of [`workBounds`, `infectedTests`]) {
+      const owedList =
+        owed[field] === undefined || owed[field].length === 0
+          ? undefined
+          : owed[field]
+      const gotList = got.named?.[owed.key]?.[field]
+      if (JSON.stringify(gotList) !== JSON.stringify(owedList))
+        return violation(
+          `classified`,
+          `gap ${owed.key} (${kind}) lists ${field === `workBounds` ? `the work bounds that reject it` : `the tests that infected it`} as ${JSON.stringify(gotList)}, owed ${JSON.stringify(owedList)}`,
+          `report order`,
+          { actual: gotList, expected: owedList },
+        )
+    }
     // A not-infected message names the operand pairs the model saw, in
     // order, and no printed text stands for two values the model tells
     // apart.
@@ -3381,6 +3515,9 @@ const required = [
   `a survivor whose work fell`,
   `extra-work named past an unregistered rise`,
   `a rise exactly at the declared bound`,
+  `a not-observed gap infected in two owner files`,
+  `a not-observed gap infected in two tests of one file`,
+  `an extra-work gap with two bounds that reject it`,
   `authored agreement-only-kill`,
 ]
 
@@ -3853,6 +3990,42 @@ const constructed = [
     [`not-judged`, `a locale order lists the owner files another way`],
     { fileStems: [`f_2`, `f-2`, `f0`], effect: { kind: `changed` } },
   ),
+  // Two owner files whose tests both infected the mutant, and observed
+  // nothing: the directive names the first file's test, and the gap's
+  // `Infected in` line names a test of each file, so an author who may edit
+  // only the second file finds its test.
+  twoOwners(
+    `an infected survivor in two owner files`,
+    [`not-observed`, `a not-observed gap infected in two owner files`],
+    { mutant: { operator: `if-false` } },
+  ),
+  // Two tests of one owner file infected the mutant: the `Infected in`
+  // line names the file's first, in report order.
+  single(
+    `an infected survivor in two tests of one owner file`,
+    [`not-observed`, `a not-observed gap infected in two tests of one file`],
+    { mutant: { operator: `if-false` }, more: [plainTest()] },
+  ),
+  // Two owner files whose tests both did more work: each property's bound
+  // rejects the mutant, and the gap lists both, each with its own bound.
+  twoOwners(
+    `a rise in two owner files`,
+    [`extra-work`, `an extra-work gap with two bounds that reject it`],
+    {
+      mutant: { operator: `if-false` },
+      effect: { work: 7 },
+      second: {
+        work: 25,
+        under: slots({
+          kind: `same`,
+          law: `L`,
+          firedAt: undefined,
+          work: 4,
+          ms: 0,
+        }),
+      },
+    },
+  ),
   // Both owner files kill, under different laws: the laws a kill names are
   // the first file's in report order.
   twoOwners(
@@ -4225,7 +4398,7 @@ const constructed = [
 oracleProperty({
   id: `oracle-gaps.report-classify`,
   law: {
-    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, extra-work, dead-code, outside-annotation, branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only; a test whose property declares a work bound, whose work judges the mutant, and whose work (site evaluations, never time) passes the bound's ratio of its unmutated work reports a verdict under law work bound on its route, and a survivor whose work rose in such a test, with no changed observation, is extra-work, whose directive names that test, both counts, and the bound to declare that rejects it. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed.`,
+    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, extra-work, dead-code, outside-annotation, branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only; a test whose property declares a work bound, whose work judges the mutant, and whose work (site evaluations, never time) passes the bound's ratio of its unmutated work reports a verdict under law work bound on its route, and a survivor whose work rose in such a test, with no changed observation, is extra-work, whose directive names that test, both counts, and the bound to declare that rejects it. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. An extra-work gap's data lines name every test whose work bound rejects it, with that bound, and a not-observed gap's the first infecting test of each owner file. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed.`,
     authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the oracle rubric's outcome kinds (ORC-006); the frozen design's oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); the maintainer's findings F22 and the leftovers of #12 (2026-11-10); for the work law, the maintainer's decision of 2026-11-12 that a speed shortcut reported as not-observed is a gap CLI bug, and the design decided with it: a cost law, never an exit, judged by a deterministic count; for report order, the gap CLI's determinism requirement (oracle-gaps.report's determinism test and law 9, and the runner's "listed alike in every run") and the maintainer's decision of 2026-11-11 that the tests a report names depend on neither --contexts, worker timing, nor how owners are declared; Vitest's runner (@vitest/runner 4.1: -t is a regular expression matched against getTaskFullName, the suites' names and the test's joined by a space); POSIX.1-2017 Shell Command Language 2.2 and 2.6 for the replay's quoting.`,
     limits: `That real runs produce these records is oracle-gaps.report's, and so is a real replay. The driver encodes operands as capture-setup.mjs \`shown\` does, by a copy of it; long strings are told apart by a 32-bit digest; no symbol operand is generated, and two symbols of one description print alike. Only the runner's single-file path records a test's names, and only it feeds the baseline. Test names hold no backtick and no \` > \`, and names within a file are distinct; the replay's file argument is judged as text, not as Vitest's substring filter over every file. Authored intents hold no word that the exit law forbids, and an author is not shortened. Report order within a file is the baseline's record order: that a file whose tests run concurrently writes its records in one order is not judged, and a failing test is ordered within its file as the reporter lists it, which a run cut off by a hang takes from the records. The "Changed observations in" list is the changed tests' first three, and only its first is compared. A test that only a mutant run records is not generated. A file that does not load keeps its records here, which the runner drops, and the driver leaves it out of every target, as the runner does; a failing law keeps its records and its reach, as the runner keeps them. The refusal text and the summary's left-out list are not judged, only the list of failing files they print. A failing law is generated only as a whole test of a file whose baseline is test: a describe's failing hook, a failing law's leftover state, and how the runner selects the tests of a file that has failing laws are oracle-gaps.report's. Work arrives as counts: that the capture counts site evaluations, and which work it does not count, is oracle-gaps.report's; a test that reaches a site but did no work is generated, which no real run records; an authored mutant's copy counts no work, so the work law does not judge it.`,
   },
