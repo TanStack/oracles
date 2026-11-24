@@ -9,6 +9,7 @@ import { basename, join } from 'node:path'
 import { packagePath } from './args.mjs'
 import { posix, relativeWithin } from './paths.mjs'
 import { Refusal } from './ending.mjs'
+import { applyAuthored } from './authored.mjs'
 import { ownership, readOwns, splitEntry } from './owners.mjs'
 import { instrument } from './schemata.mjs'
 
@@ -57,9 +58,12 @@ function hostFor(ts) {
  * declaration that names nothing, a list that is not a literal, or an entry
  * that names a missing file or function throws, because it would hide gaps.
  * A run with no oracle file, or in which no function of a selected source
- * has an owner through the call trees, throws too.
+ * has an owner through the call trees, throws too. `authored` are the run's
+ * authored mutants (authored.mjs), whose edits count as mutants of the
+ * entries that hold them; `unevidenced` lists each owns entry that holds no
+ * mutant at all.
  */
-export function analyze(ts, pkg, sources, testFiles) {
+export function analyze(ts, pkg, sources, testFiles, authored = []) {
   const relative = (file) => relativeWithin(pkg, file) ?? posix(file)
   // An oracle file is a test file that calls `oracleProperty`, or passes a
   // literal `owns` list to any call, such as a wrapper's (owners.mjs).
@@ -153,5 +157,42 @@ export function analyze(ts, pkg, sources, testFiles) {
   // owners are that unit's.
   for (const mutant of mutants)
     mutant.function = owned.at(mutant.source, mutant.position).name
-  return { instrumented, mutants, declarations, owned }
+  // An owns entry that holds none of the run's mutants, operator or
+  // authored, gets no evidence from the gap check: its file is not a
+  // --source, or nothing it owns has a mutation site, as in a declaration
+  // file. Probe code is not judged, so it is no evidence either. The report
+  // notes each such entry with its reason, so that its author knows the gap
+  // check left it untested (a downstream finding: an oracle that owned only
+  // a declaration file ran green with no word about it).
+  const sites = [
+    ...mutants.filter((mutant) => !mutant.probeGuard),
+    ...authored.flatMap((mutant) => {
+      const path = join(pkg, mutant.source)
+      const patched = existsSync(path)
+        ? applyAuthored(readFileSync(path, `utf8`), mutant)
+        : undefined
+      return patched ? [{ source: mutant.source, ...patched }] : []
+    }),
+  ]
+  const unevidenced = []
+  for (const [file, entries] of declarations)
+    for (const entry of new Set(entries)) {
+      if (
+        sites.some((site) =>
+          owned.holds(file, entry, site.source, site.position),
+        )
+      )
+        continue
+      const [source] = splitEntry(entry)
+      unevidenced.push({
+        file: relative(file),
+        entry,
+        reason: !sources.includes(source)
+          ? `${source} is not a --source`
+          : /\.d\.[cm]?ts$/.test(source)
+            ? `${source} is a declaration file, which has no mutation site`
+            : `nothing it owns has a mutation site`,
+      })
+    }
+  return { instrumented, mutants, declarations, owned, unevidenced }
 }
