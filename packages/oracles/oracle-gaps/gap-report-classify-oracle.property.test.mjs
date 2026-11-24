@@ -204,7 +204,9 @@
  *    holds three hangs: production looping in its own code, a driver
  *    awaiting a promise the mutant never settles, and a driver's loop over
  *    what production hands out that never ends; its directive bounds the
- *    driver's wait (`withinTurns`) and loop for the last two. The last stdout line is `oracle-gaps: done completed, <n>
+ *    driver's wait (`withinTurns`) and loop for the last two, and for the
+ *    first directs a rewrite of the loop to walk something fixed before it
+ *    starts, before the CLI shortfall. The last stdout line is `oracle-gaps: done completed, <n>
  *    gaps[ (provisional)], report <path>` (G6). A replay
  *    line is a command, which the exit law does not read.
  * 9. Before any mutant, each test file's baseline is printed, an ordinary
@@ -1437,7 +1439,7 @@ const directives = {
   'not-distinguished':
     /^Add an owner history (where one operand of `[&|]{2}` on line \d+ is falsy and the other is truthy, so `&&` and `\|\|` give different results|where the left operand of `\?\?` on line \d+ is truthy, so `\?\?` and `&&` give different results|that enters the loop on line \d+, so that forcing its condition to false changes an asserted result|where the call on line \d+ returns a value that changes an asserted result when it is `undefined`|that reads the property dropped on line \d+, so that its absence changes an asserted result|where the call on line \d+ changes an asserted result when it does not run|that uses the value returned on line \d+, so that `undefined` in its place changes an asserted result|where the object read with `\?\.` on line \d+ is `undefined`, so that a plain read throws), and assert on the result\.$/,
   timeout:
-    /^Where a driver awaits a promise from production, wait with `withinTurns\(promise, turns\)`, and record a promise still pending as an observation\. Where a driver loops over what production hands out, stop after one item more than the history can produce, and record that extra item as an observation\. Let a law reject both\. Where production itself loops forever, no driver change judges the mutant yet: report its key as a known CLI shortfall, and keep working\.$/,
+    /^Where a driver awaits a promise from production, wait with `withinTurns\(promise, turns\)`, and record a promise still pending as an observation\. Where a driver loops over what production hands out, stop after one item more than the history can produce, and record that extra item as an observation\. Let a law reject both\. Where production itself loops forever, and the loop's end rests on the arithmetic the mutant changed, rewrite the loop to walk something fixed before it starts, such as a list of what it will visit, so that no arithmetic in its body can keep it going: the run then ends, and a law can kill the mutant\. That rewrite is a production change, and the oracle judges it\. Where no such rewrite fits, no driver change judges the mutant yet: report its key as a known CLI shortfall, and keep working\.$/,
   'setup-error':
     /^Run an owner test that loads this module and asserts on its exports, so a failed load rejects the mutant\.$/,
   'does-not-apply':
