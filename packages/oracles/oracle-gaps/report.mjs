@@ -279,6 +279,7 @@ export function renderReport({
   excluded,
   baseline = [],
   config,
+  unevidenced = [],
 }) {
   const gaps = gapsOf(results)
   const guards = results.filter((r) => r.probeGuard)
@@ -368,6 +369,19 @@ export function renderReport({
     }
     lines.push(``)
   }
+  if (unevidenced.length > 0) {
+    lines.push(
+      `## Owns entries with no mutant (warnings)`,
+      ``,
+      `No mutant lands in what these entries own, so the gap check gives them no evidence. Only the oracle's own calibrations stand behind them.`,
+      ``,
+      ...unevidenced.map(
+        ({ file, entry, reason }) =>
+          `- ${codeSpan(entry)} of ${codeSpan(file)}: ${reason}`,
+      ),
+      ``,
+    )
+  }
   if (unowned.length > 0) {
     lines.push(
       `## Unowned (warnings)`,
@@ -403,6 +417,16 @@ export function renderReport({
 }
 
 /**
+ * The note for an owns entry that holds no mutant of the run (analysis.mjs):
+ * the gap check gives it no evidence, for the reason the analysis names.
+ */
+export const unevidencedLine = ({ file, entry, reason }) =>
+  streamLine(
+    `note`,
+    `no mutant for owns entry ${escapeControls(entry)} of ${escapeControls(posix(file))}: ${escapeControls(reason)}, so the gap check gives it no evidence`,
+  )
+
+/**
  * The stdout summary: the totals, one legend line per class present, every
  * gap once under its function (owners printed once per function), the
  * unowned warnings counted per function, and the paths of the full report
@@ -416,6 +440,7 @@ export function renderStdout({
   paths,
   baseline = [],
   config,
+  unevidenced = [],
 }) {
   const gaps = gapsOf(results)
   const unowned = results.filter(
@@ -463,6 +488,7 @@ export function renderStdout({
         `unowned ${group}: ${rows.length} ${rows.length === 1 ? `mutant` : `mutants`}`,
       ),
     )
+  for (const entry of unevidenced) lines.push(unevidencedLine(entry))
   if (excluded.length > 0)
     lines.push(
       streamLine(

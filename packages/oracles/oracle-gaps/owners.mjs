@@ -467,14 +467,20 @@ export function ownership(ts, program, pkg, oracles) {
   const owners = new Map()
   const add = (key, oracle) =>
     owners.set(key, new Set([...(owners.get(key) ?? []), oracle]))
+  // Each oracle file's entries, each with its tree: the units it owns, or,
+  // for a whole-file entry, its source.
+  const trees = new Map()
   for (const [oracle, entries] of oracles)
     for (const entry of entries) {
       const [source, entryFunction] = splitEntry(entry)
+      const seen = new Set()
+      if (!trees.has(oracle)) trees.set(oracle, new Map())
+      trees.get(oracle).set(entry, seen)
       if (entryFunction === undefined) {
         add(source, oracle)
+        seen.add(source)
         continue
       }
-      const seen = new Set()
       // Owning a function owns its whole text, every function defined in it
       // whether or not anything calls it (a gap there often marks dead
       // code), and what its text refers to outside it (maintainer
@@ -499,8 +505,32 @@ export function ownership(ts, program, pkg, oracles) {
       for (const fn of functionsOf(source))
         if (fn.name === entryFunction) walk(fn)
     }
+  // The innermost unit whose text holds a position, or none.
+  const innermost = (source, position) => {
+    let best
+    for (const fn of functionsOf(source))
+      if (
+        fn.start <= position &&
+        position < fn.end &&
+        (!best || fn.start > best.start)
+      )
+        best = fn
+    return best
+  }
   return {
     has: (source, name) => functionsOf(source).some((fn) => fn.name === name),
+    /**
+     * Whether an oracle file's owns entry holds a position: the entry names
+     * the position's whole source, or its tree holds the innermost unit
+     * there.
+     */
+    holds: (oracle, entry, source, position) => {
+      const tree = trees.get(oracle)?.get(entry)
+      return (
+        tree !== undefined &&
+        (tree.has(source) || tree.has(innermost(source, position)))
+      )
+    },
     /** Whether a function of the source, or the whole source, has an owner. */
     ownsAny: (source) =>
       owners.has(source) || functionsOf(source).some((fn) => owners.has(fn)),
@@ -510,14 +540,7 @@ export function ownership(ts, program, pkg, oracles) {
      * and its owners. A whole-file entry owns every unit in the file.
      */
     at: (source, position) => {
-      let best
-      for (const fn of functionsOf(source))
-        if (
-          fn.start <= position &&
-          position < fn.end &&
-          (!best || fn.start > best.start)
-        )
-          best = fn
+      const best = innermost(source, position)
       return {
         name: best?.name ?? `<module>`,
         owners: new Set([

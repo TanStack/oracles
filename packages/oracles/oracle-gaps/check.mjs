@@ -51,6 +51,7 @@ import {
   keyAndSelect,
   renderReport,
   renderStdout,
+  unevidencedLine,
 } from './report.mjs'
 import {
   baselineLines,
@@ -1670,11 +1671,12 @@ export default async (env) => {
 
     // 1. The static half (analysis.mjs): instrumented sources, mutants,
     // declarations, and ownership. A broken declaration refuses the run.
-    const { instrumented, mutants, declarations, owned } = analyze(
+    const { instrumented, mutants, declarations, owned, unevidenced } = analyze(
       ts,
       pkg,
       options.sources,
       [...contextSpecs.get(contexts[0]).keys()],
+      authored,
     )
     probeSites = mutants.filter((m) => m.probeGuard).map((m) => m.number)
     const previous = [...globalThis.__oracleGapsSchemata.keys()]
@@ -1687,6 +1689,9 @@ export default async (env) => {
       ]),
     )
     endPhase(`static analysis`, { mutants: mutants.length })
+    // Each owns entry that no mutant tests, named before the run spends its
+    // time, and again in the summary.
+    for (const entry of unevidenced) log(unevidencedLine(entry))
 
     // The global inputs of every unit.
     const lockfile = lockfileOf(pkg)
@@ -2746,6 +2751,7 @@ export default async (env) => {
         excluded: excluded.map(relative),
         baseline: baselineFiles,
         config: options.config,
+        unevidenced,
       }),
     )
     if (existsSync(testOutput) && statSync(testOutput).size > 0)
@@ -2762,6 +2768,7 @@ export default async (env) => {
       pkg,
       baseline: baselineFiles,
       config: options.config,
+      unevidenced,
       paths: {
         report: escapeControls(posix(join(options.out, `summary.md`))),
         results: join(options.out, `results.json`),

@@ -468,6 +468,23 @@ pLimit` is `index.js#pLimit`. `exports.name = fn` is named `name`.
     investigate it as step 8 says.
   - Several oracles may own the same function. A mutant counts as killed when
     any of its owners kills it.
+  - An entry that no mutant tests gets no evidence from the gap check, and
+    the report says so in a note that starts `no mutant for owns entry`. It
+    names the entry, its oracle file, and the reason: the entry's file is
+    not a `--source` (add it, if it has code), it is a declaration file, or
+    nothing the entry owns has a mutation site. An authored mutant whose
+    edit lands in the entry counts as a mutant.
+  - A type contract gets no evidence from the gap check. An entry names a
+    file, a function, or module data, never a type, and a
+    declaration file has no mutation site. An authored mutant on a
+    declaration file does not help either: its edit is served only to the
+    modules Vitest loads, so a compiler that reads the file from disk never
+    sees it, and the gap check reports it as `not-observed` whatever the
+    oracle does. For an oracle that checks types by compiling fixtures, the
+    calibrations are its only evidence. Give it one for each wrong contract
+    its laws must reject, and own the file it compiles against (such as the
+    built declarations), so the note names what the gap check leaves
+    untested.
 
 Keep the law, its authority, and its limits in `law`, and prose beside each
 part that says why it predicts the promised result (ORC-003).
