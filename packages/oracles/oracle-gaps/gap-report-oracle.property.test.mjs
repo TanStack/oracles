@@ -7020,6 +7020,9 @@ const separate = [
   `a failing describe hook made its laws fail`,
   `a failing law that spins under a mutant cut its copy`,
   `the failing owner's passing pair judged module data beside its failing law`,
+  // Entered only by its own constructed history, a failing owner file with
+  // a failing law, so "every outcome class" does not name it.
+  `results.json kept a file's several failing tests`,
   `a partial run of one function`,
   `a partial run beside a failing owner`,
   ...analyzedFaults.map((fault) => `analyzed ${fault}`),
