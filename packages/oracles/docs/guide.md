@@ -417,6 +417,50 @@ delivery may duplicate, ordering may tie, or the client may see only part of
 the source. A failure under a changed premise may call for more provider data
 or a law decision, not another algorithm.
 
+### Know what the work bound counts
+
+A `work: { ratio }` bound, and the `extra-work` gap that asks for one,
+compare a test's work: the number of site evaluations that its production
+code makes in the gap check's `--source` files. Each evaluation counts once:
+a call, a comparison, a logical operator, an `if`, and each pass of a loop's
+condition. A plain assignment, a pass of a `for...of` loop, the work inside a
+builtin call (the call itself counts once), probe-only code, code outside the
+`--source` files, and code that runs outside any test (a module's top level,
+or async work that outlives its test) count nothing. Neither time nor an
+event-loop turn counts. A loop that waits for two quiet turns and is changed
+to wait for three does more work only because each extra pass evaluates its
+condition and its calls again.
+
+A test's work judges a mutant only when the gap check could count it the same
+way on an idle machine. A test judges no work when:
+
+- it is not a fixed-seed, random-seed, fixed-history, or enumerated-case test
+  of an `oracleProperty`. Calibration, determinism, and reach tests judge no
+  work, and neither do plain tests.
+- it fails without a mutant, or its observations or its work differ
+  between the two runs without a mutant.
+- its count could follow the clock, in either run without a mutant or in the
+  mutant's run: it made a real timer or interval by any path (`setTimeout`,
+  `setInterval`, `node:timers`, `node:timers/promises`,
+  `AbortSignal.timeout`, `Atomics.wait` with a timeout), or its code,
+  production's, or a library's read the real clock (`Date.now()`,
+  `new Date()`, `performance.now()`, `process.hrtime()`, `process.uptime()`,
+  and the like). Vitest's, fast-check's, and the oracle framework's own
+  timers and clock reads do not count, and neither do fake timers. A wait of
+  one turn with `setImmediate` and a microtask are no clock.
+- it had I/O in flight when the gap check looked: a file read not yet done,
+  a listening server or an open socket, a child process. The gap check looks
+  every 50 ms, so I/O that starts and ends between two looks is not seen.
+  An open file handle with no request pending is not I/O in flight.
+
+A rise of work in a test that judges none leaves the mutant in the class it
+would have without the rise, such as `not-observed`. An authored mutant
+(`--mutants`) runs uninstrumented, so no work is counted for it: a work bound
+never kills it, and it is never an `extra-work` gap. To judge a cost that the
+work count cannot, such as polls of a deadline loop or reads of a file, count
+it in the driver, record the count as an observation, and state the law that
+bounds it.
+
 ### Simplify machinery without changing the question
 
 Before removing or combining oracles, name what will remain: the valid
