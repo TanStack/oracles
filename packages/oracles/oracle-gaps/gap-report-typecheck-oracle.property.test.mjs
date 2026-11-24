@@ -371,6 +371,30 @@ function check(plan, observations, expected) {
   const err = notesBreach(run.stderr, expected, `stderr`)
   if (err) return violation(`run`, err, `typecheck report`)
   const out = notesBreach(run.stdout, expected, `stdout`)
+  // The baseline is the first result line on each stream, so every typecheck
+  // note comes after it (P10: one decisive baseline line is the first result
+  // line; a note is not a result kind that precedes it).
+  const ordered = (lines) => {
+    const first = lines.findIndex((line) =>
+      line.startsWith(`oracle-gaps: baseline `),
+    )
+    const note = lines.findIndex((line) =>
+      line.startsWith(`oracle-gaps: note typecheck: `),
+    )
+    return note < 0 || (first >= 0 && first < note)
+  }
+  if (!ordered(run.stderr))
+    return violation(
+      `run`,
+      `a typecheck note precedes the baseline line on stderr`,
+      `typecheck order`,
+    )
+  if (!ordered(run.stdout))
+    return violation(
+      `run`,
+      `a typecheck note precedes the baseline line on stdout`,
+      `typecheck order`,
+    )
   if (out) return violation(`run`, out, `typecheck report`)
   if (!run.streamLogIsStderr)
     return violation(
@@ -468,6 +492,23 @@ const withRun = (corrupt) => (trace) => {
 }
 
 const calibrations = [
+  {
+    name: `a typecheck note printed before the baseline line`,
+    law: `typecheck order`,
+    history: { constructed: `type error in a covered oracle file` },
+    corrupt: withRun((run) => {
+      const notes = run.stderr.filter((line) =>
+        line.startsWith(`oracle-gaps: note typecheck: `),
+      )
+      const rest = run.stderr.filter(
+        (line) => !line.startsWith(`oracle-gaps: note typecheck: `),
+      )
+      const at = rest.findIndex((line) =>
+        line.startsWith(`oracle-gaps: baseline `),
+      )
+      run.stderr = [...rest.slice(0, at), ...notes, ...rest.slice(at)]
+    }),
+  },
   {
     name: `a covered type error is dropped from the stream`,
     law: `typecheck report`,
