@@ -170,7 +170,7 @@ function seen(trace: ReadonlyArray<Observation>, checkpoint: string) {
 ````
 
 Both files are in
-[`examples/quick-reference`](../examples/quick-reference), a private
+[`examples/quick-reference`](https://github.com/TanStack/oracles/tree/main/packages/oracles/examples/quick-reference), a private
 package of this repository. Its `vitest.config.ts` includes
 `tests/**/*oracle*.test.ts`. CI typechecks and lints it, runs it, runs the
 gap check on it and requires 0 gaps, and checks that the two code blocks
