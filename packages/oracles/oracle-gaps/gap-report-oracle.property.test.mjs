@@ -4132,6 +4132,22 @@ async function driver(plan, observe) {
         dataOf.owners.some((file) => !plan.tests.some((t) => t.file === file))
       )
         states.add(`a module data mutant whose owner file holds no plan test`)
+      // Per-law blocking with #204's census (#186): module data owned by
+      // file b, whose plan tests are all nondeterministic, beside the
+      // failing owner's law. The failing owner's two passing tests count and
+      // judge the load's reach, so the mutant is judged, not blocked.
+      if (
+        dataOf !== undefined &&
+        plan.fault === `brokenOwner` &&
+        dataOf.owners.includes(`b`) &&
+        m.outcome !== `blocked` &&
+        m.outcome !== `indeterminate` &&
+        plan.tests.some((t) => t.file === `b`) &&
+        plan.tests.every((t) => t.file !== `b` || t.flaky)
+      )
+        states.add(
+          `the failing owner's passing pair judged module data beside its failing law`,
+        )
       if (
         m.function === `w_memo` &&
         m.operator === `if-false` &&
@@ -6646,6 +6662,8 @@ const required = [
   `a failing describe hook made its laws fail`,
   // A failing law still runs ("An excluded test still runs", 2026-11-23).
   `a failing law that spins under a mutant cut its copy`,
+  // #204's census under per-law blocking (#186).
+  `the failing owner's passing pair judged module data beside its failing law`,
   `killed on both routes`,
   `killed under an unnamed law`,
   `second campaign's route attributed`,
@@ -6859,6 +6877,7 @@ const separate = [
   `a mutant that only a failing law reached was blocked by it`,
   `a failing describe hook made its laws fail`,
   `a failing law that spins under a mutant cut its copy`,
+  `the failing owner's passing pair judged module data beside its failing law`,
   `a partial run of one function`,
   `a partial run beside a failing owner`,
   ...analyzedFaults.map((fault) => `analyzed ${fault}`),
@@ -10498,6 +10517,32 @@ oracleProperty({
             failingLawCalls: `once`,
             failingLawSpins: true,
           }),
+      },
+      {
+        // #204's census under per-law blocking (#186): module data owned by
+        // file b, the failing owner, whose only plan test is nondeterministic,
+        // so the failing owner's two passing tests are the only deterministic
+        // judges of the load's reach. They count ("Load reach goes to every
+        // owner file", 2026-11-23), and the failing law beside them judges
+        // nothing, so the mutant is judged by them, not blocked by the law. A
+        // census that left the pair out would block it. Appended at the end of
+        // the list.
+        name: `module data that only the failing owner's passing pair judges`,
+        enters: [
+          `the failing owner's passing pair judged module data beside its failing law`,
+        ],
+        build: (generated) => ({
+          ...generated,
+          witness: false,
+          fault: `brokenOwner`,
+          consoleOutput: false,
+          spinData: false,
+          stopRuns: NO_STOPS,
+          steps: null,
+          laterSteps: NO_LATER_STEPS,
+          dataOwners: [`b`],
+          tests: [{ ...judging(`b`, `fixed seed`, 1), flaky: true, fn: 0 }],
+        }),
       },
     ]),
   },
