@@ -15,10 +15,46 @@ permissions:
   contents: read
 
 jobs:
+  # The docs-only gate (the maintainer's ruling of 2026-11-23, "Docs-only PRs:
+  # light CI, merge on light checks"). A pull request whose changed files are
+  # all docs skips the heavy jobs, which name this job in `needs` and skip on
+  # its output. Docs are docs/** and every *.md file. Any other file runs the
+  # full workflow, and so does every push to main, which keeps a preview for
+  # each commit.
+  changes:
+    name: Classify changes
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          # The diff needs the base commit, which a shallow checkout lacks.
+          fetch-depth: 0
+      - name: Classify changed files
+        id: classify
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          docs_only=false
+          if [ "$EVENT_NAME" = pull_request ]; then
+            # --no-renames lists a moved file's old path too, so a code file
+            # moved into docs is not taken for a doc.
+            changed="$(git diff --name-only --no-renames "$BASE_SHA" HEAD)"
+            outside="$(printf '%s\n' "$changed" | grep -vE '^docs/|\.md$' || true)"
+            if [ -n "$changed" ] && [ -z "$outside" ]; then docs_only=true; fi
+          fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
   # The test suites run as parallel jobs. The workflow's wall time is then
   # its slowest job, about 6 to 7 minutes, not the sum of every suite, about
   # 21 minutes when they ran as one job. Each job should stay well under the
   # 10-minute limit; pr-shards.mjs records how each suite is split.
+  #
+  # The jobs marked heavy below run only when the changes are not docs-only.
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -61,6 +97,9 @@ jobs:
       - run: pnpm --filter @tanstack/eslint-plugin-oracles run test
   test-oracle-framework:
     name: Framework self-oracle (${{ matrix.shard }}/9)
+    # Heavy: skipped on a docs-only pull request.
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -82,6 +121,9 @@ jobs:
           SHARD: ${{ matrix.shard }}
   test-oracle-gaps-fast:
     name: Gap report oracles (${{ matrix.shard }}/3)
+    # Heavy: skipped on a docs-only pull request.
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -109,6 +151,9 @@ jobs:
           SHARD: ${{ matrix.shard }}
   test-oracle-gaps-end-to-end:
     name: Gap report end-to-end oracle (fixed seed, ${{ matrix.shard }}/4)
+    # Heavy: skipped on a docs-only pull request.
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -130,6 +175,9 @@ jobs:
           SHARD: ${{ matrix.shard }}
   test-oracle-gaps-random:
     name: Gap report end-to-end oracle (random seed, ${{ matrix.shard }}/4)
+    # Heavy: skipped on a docs-only pull request.
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     # A high backstop only (the maintainer's decision of 2026-11-12, M-6):
     # each shard is packed to about 9 minutes and stays under 10 (P12).
@@ -162,6 +210,9 @@ jobs:
           GAP_E2E_SHRINKS: 0
   test-oracle-gaps-determinism:
     name: Gap report end-to-end oracle (determinism, ${{ matrix.shard }}/7)
+    # Heavy: skipped on a docs-only pull request.
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     # A high backstop only (M-6): each shard stays under 10 minutes (P12).
     timeout-minutes: 20
@@ -185,24 +236,10 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
   test-vitest-5:
-    name: Test on Vitest 5 (${{ matrix.suite }})
+    name: Test on Vitest 5 (test)
     # The package's vitest peer range includes 5; this job is the evidence.
-    # The unit tests and each self-oracle shard are their own jobs.
+    # The unit tests are light, and each self-oracle shard is its own heavy job.
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        suite:
-          - test
-          - oracle-framework 1
-          - oracle-framework 2
-          - oracle-framework 3
-          - oracle-framework 4
-          - oracle-framework 5
-          - oracle-framework 6
-          - oracle-framework 7
-          - oracle-framework 8
-          - oracle-framework 9
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -212,16 +249,40 @@ jobs:
         uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
       - run: pnpm --filter @tanstack/oracles add --save-dev vitest@^5.0.5
       - run: pnpm --filter @tanstack/oracles exec vitest --version
-      - run: |
-          if [ "$SUITE" = test ]; then pnpm run test; exit; fi
-          pnpm exec vitest --run --config vitest.oracle-framework.config.mjs -t "$(node scripts/pr-shards.mjs pattern $SUITE)"
+      - run: pnpm run test
+        working-directory: packages/oracles
+  # Heavy: skipped on a docs-only pull request.
+  test-vitest-5-oracle-framework:
+    name: Test on Vitest 5 (oracle-framework ${{ matrix.shard }})
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Setup Tools
+        uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
+      - run: pnpm --filter @tanstack/oracles add --save-dev vitest@^5.0.5
+      - run: pnpm --filter @tanstack/oracles exec vitest --version
+      - run: pnpm exec vitest --run --config vitest.oracle-framework.config.mjs -t "$(node scripts/pr-shards.mjs pattern oracle-framework "$SHARD")"
         working-directory: packages/oracles
         env:
-          SUITE: ${{ matrix.suite }}
+          SHARD: ${{ matrix.shard }}
   preview:
     name: Publish preview
     # Only a commit that passes every check gets an installable preview.
+    # `always()` keeps a skipped need from skipping this job. The condition
+    # then blocks the preview on any failed or cancelled need, and on a
+    # skipped need unless the changes are docs-only. So a docs-only run skips
+    # only the heavy jobs, and the preview still publishes.
     needs:
+      - changes
       - test
       - test-eslint-plugin
       - test-oracle-framework
@@ -230,12 +291,18 @@ jobs:
       - test-oracle-gaps-random
       - test-oracle-gaps-determinism
       - test-vitest-5
+      - test-vitest-5-oracle-framework
       # The blocking Windows jobs (the non-blocking end-to-end job is not a
       # dependency until it is green).
       - windows-unit
       - windows-gap-classify
       - windows-gap-oracles
       - windows-gap-cli
+    if: >-
+      always() &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled') &&
+      (needs.changes.outputs.docs_only == 'true' || !contains(needs.*.result, 'skipped'))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -285,6 +352,9 @@ jobs:
         run: pnpm --filter @tanstack/eslint-plugin-oracles run test
   windows-gap-oracles:
     name: Windows gap report static oracle (${{ matrix.shard }}/2)
+    # Heavy: skipped on a docs-only pull request.
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: windows-latest
     timeout-minutes: 20
     strategy:
@@ -308,6 +378,9 @@ jobs:
         run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-static -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-static-windows "$SHARD")"
   windows-gap-classify:
     name: Windows gap report classify, probe-form, and mutant-validity oracles
+    # Heavy: skipped on a docs-only pull request.
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -328,6 +401,9 @@ jobs:
     # https://github.com/TanStack/oracles/issues/72. Remove this line when they
     # are green.
     continue-on-error: true
+    # Heavy: skipped on a docs-only pull request.
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     timeout-minutes: 20
     strategy:
       fail-fast: false

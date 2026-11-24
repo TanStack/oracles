@@ -925,6 +925,7 @@ export const partitions = {
         'a load failure beside a hang',
         'a declaration fault: apiLessTypescript',
         'a declaration fault: setupThrows',
+        'a declaration fault: setupThrows, then the abort stop',
         'a .cjs config that calls require',
         'a package with no config',
         'a declaration fault: configThrows',
