@@ -35,9 +35,10 @@ Keep test bodies and assertions out of the design brief.
      exactly once in `source` at the pinned revision, and the result must
      parse. `source` is relative to the package.
    - Keep the mutants in the package's `authored-mutants/` directory, one
-     JSON file each or an array in one file, and pass that directory with
-     `--mutants`. A mutant stays there after a law kills it, so every later
-     gap check asks it again.
+     JSON file each or an array in one file. The gap check runs them
+     whenever no `--mutants` names another directory, and
+     `--no-authored-mutants` runs none. A mutant stays there after a law
+     kills it, so every later gap check asks it again.
    - Change one decision per mutant. A compound kill does not say which part
      the comparison rejected.
    - Run each candidate against an unchanged, pinned baseline, and restore

@@ -637,13 +637,13 @@ comes with one instruction. Do what it says, within the rules below.
     law's decisions (such as a return expression).
 
   Put each one in the package's `authored-mutants/` directory, beside its
-  `package.json`, and pass that directory with `--mutants` (a path from the
-  working directory, as `--package` is). Keep it there after a law kills it.
-  The directory holds every wrong version that anyone found, so every later
-  gap check asks each of them again. When an edit moves the text that its
-  `find` names, the gap check reports it as `does-not-apply`: update its
-  `find` and `replace` to the new code. Remove one only together with the
-  behavior it breaks.
+  `package.json`. The gap check runs that directory's mutants whenever no
+  `--mutants` names another directory, so do not pass `--mutants` for it.
+  Keep each one there after a law kills it. The directory holds every wrong
+  version that anyone found, so every later gap check asks each of them
+  again. When an edit moves the text that its `find` names, the gap check
+  reports it as `does-not-apply`: update its `find` and `replace` to the new
+  code. Remove one only together with the behavior it breaks.
 
 - **Three or more gaps in one function** fire the design grammar trigger
   (step 1). Stop, read the card, and write its parts list for that function

@@ -260,6 +260,7 @@ export const shards = {
     `random seed: every outcome class`,
     `random seed: generated`,
     `random seed: two authored mutants`,
+    `random seed: authored mutants in the package's own directory`,
     `determinism: constructed history: a declaration fault: brokenOwner`,
     `determinism: constructed history: a declaration fault: configThrows`,
     `determinism: constructed history: a declaration fault: nonLiteral`,
@@ -312,6 +313,7 @@ export const shards = {
     `determinism: constructed history: an ambiguous authored mutant`,
     `determinism: constructed history: every outcome class`,
     `determinism: constructed history: two authored mutants`,
+    `determinism: constructed history: authored mutants in the package's own directory`,
     // Added with the gap CLI's runtime fixes (not yet measured).
     `fixed seed 20261105: a second daemon check of the budget witness`,
     `calibration: a stopped run leaves a process it started running`,
@@ -392,6 +394,7 @@ export const shards = {
     `fixed seed 20261105: an edit sequence through the daemon`,
     `fixed seed 20261105: ordinary tests left out by default`,
     `fixed seed 20261105: two authored mutants`,
+    `fixed seed 20261105: authored mutants in the package's own directory`,
     `random seed: a declaration fault: brokenOwner`,
     `random seed: a declaration fault: brokenVitest`,
     `random seed: a declaration fault: missingSource`,

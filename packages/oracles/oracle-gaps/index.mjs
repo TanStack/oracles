@@ -82,8 +82,10 @@
 //     [--env-prefix <name>]   (the framework's variable prefix; default ORACLE)
 //     [--daemon]              (check through the package's daemon)
 //     [--ordinary]            (also run ordinary test files, for information)
-//     [--seed <n>] [--mutants <dir>] [--out <dir>] [--only <id,id>]
-//     [--diff-base <rev>]
+//     [--seed <n>] [--out <dir>] [--only <id,id>] [--diff-base <rev>]
+//     [--mutants <dir>]       (authored mutants; default the package's
+//                              authored-mutants directory, if it has one)
+//     [--no-authored-mutants] (run no authored mutants)
 //     [--first-limit <ms>]    (a copy's first budget; default 2000)
 //     [--hang-limit <ms>]     (the full limit a cut copy gets again; default 10000)
 //     [--mutant-limit <ms>]   (the floor of each mutant's budget, which the

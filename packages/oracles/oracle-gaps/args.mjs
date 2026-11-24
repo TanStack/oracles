@@ -9,7 +9,17 @@ import { stateDirOf } from './evidence.mjs'
 import { posix, realPathOf } from './paths.mjs'
 import { Refusal } from './ending.mjs'
 
-const flags = new Set([`daemon`, `stop-daemon`, `ordinary`, `help`])
+const flags = new Set([
+  `daemon`,
+  `stop-daemon`,
+  `ordinary`,
+  `no-authored-mutants`,
+  `help`,
+])
+// The directory of a package's authored mutants that a run reads when no
+// `--mutants` names another (docs/instruments/mutant-gap-search.md), so a
+// wrong version that someone once wrote down keeps being asked.
+export const AUTHORED_MUTANTS = `authored-mutants`
 // The options that take a positive whole number.
 const counts = [
   `contexts`,
@@ -36,8 +46,8 @@ const valued = new Set([
 ])
 // The usage text `--help` prints (index.mjs).
 export const usage = `Usage: oracle-gaps --package <dir> --source <src/x.ts,...>
-  [--env-prefix <name>] [--daemon] [--ordinary] [--seed <n>] [--mutants <dir>]
-  [--out <dir>] [--only <id,id>] [--diff-base <rev>] [--test-timeout <ms>]
+  [--env-prefix <name>] [--daemon] [--ordinary] [--seed <n>]
+  [--mutants <dir> | --no-authored-mutants] [--out <dir>] [--only <id,id>] [--diff-base <rev>] [--test-timeout <ms>]
   [--sample <n>] [--contexts <n>] [--pool threads|forks] [--config <file>]
   [--first-limit <ms>] [--hang-limit <ms>] [--mutant-limit <ms>]
   oracle-gaps --stop-daemon --package <dir>
@@ -46,7 +56,9 @@ export const usage = `Usage: oracle-gaps --package <dir> --source <src/x.ts,...>
 The paths in --source and --config are relative to --package. Without
 --config, the run loads the Vitest config that Vitest discovers for the
 package: in its directory, or else in the nearest parent directory that
-has one. Run the CLI from any directory.
+has one. Without --mutants, the run reads the authored mutants in the
+package's authored-mutants directory, if it has one; --no-authored-mutants
+reads none. Run the CLI from any directory.
 Every line the CLI writes for a check starts with \`oracle-gaps: \` and its
 kind (config, note, baseline, blocked, progress, gap, busy, done), on
 stdout and stderr alike, so \`grep '^oracle-gaps: '\` finds them. Before any
@@ -176,7 +188,19 @@ function optionsOf(args, cwd) {
       `--config ${args.config} is not a file of the package`,
       `Pass --config the package's Vitest config file, relative to --package.`,
     )
-  const mutants = args.mutants && resolve(cwd, args.mutants)
+  if (args.mutants !== undefined && args[`no-authored-mutants`])
+    throw new Refusal(
+      `--mutants and --no-authored-mutants contradict each other`,
+      `Pass --mutants <dir> to run the authored mutants of that directory, and --no-authored-mutants alone to run none.`,
+    )
+  // The directory --mutants names, or else the package's own, if it has one.
+  const ownMutants = join(pkg, AUTHORED_MUTANTS)
+  const mutants = args.mutants
+    ? resolve(cwd, args.mutants)
+    : !args[`no-authored-mutants`] &&
+        statSync(ownMutants, { throwIfNoEntry: false })?.isDirectory()
+      ? ownMutants
+      : undefined
   if (mutants && !statSync(mutants, { throwIfNoEntry: false })?.isDirectory())
     throw new Refusal(
       `--mutants ${args.mutants} is not a directory`,
@@ -237,7 +261,8 @@ function optionsOf(args, cwd) {
     // Vitest's worker pool. Threads start much faster than child processes;
     // a package with a native addon in its tree runs with `forks`.
     pool: args.pool ?? defaultPool(pkg),
-    // A directory of authored mutants (see loadAuthored).
+    // A directory of authored mutants (see loadAuthored): the one --mutants
+    // names, or the package's own authored-mutants directory.
     mutants,
     config,
   }
