@@ -63,6 +63,9 @@ mutant; it refuses --only, --sample, --mutants, and --diff-base, which
 choose or mark mutants. Its last line is
 \`oracle-gaps: done completed, baseline only, report <path>\`, and it
 exits 0 whether the baseline passed or failed.
+It goes on past an owns entry that names a missing function or file, and
+past a run in which nothing owns a selected source, with a note for each:
+a full check refuses them.
 Every line the CLI writes for a check starts with \`oracle-gaps: \` and its
 kind (config, note, baseline, blocked, progress, gap, busy, done), on
 stdout and stderr alike, so \`grep '^oracle-gaps: '\` finds them. Before any

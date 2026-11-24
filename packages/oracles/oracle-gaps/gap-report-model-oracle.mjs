@@ -4926,6 +4926,37 @@ function refusal(plan) {
   return undefined
 }
 
+/**
+ * Law 3 in a baseline-only run (`--baseline-only`): what the analysis lets
+ * pass, and what it still refuses. A baseline-only run judges no mutant, so
+ * a refusal that only guards judging would hide nothing there: an owns
+ * entry that names a missing file or a missing function, as an entry written
+ * before its function does (a law's red state, finding of a downstream
+ * project, 2026-11-24), and a run in which nothing owns a selected source.
+ * Each is a note that names it, and the run goes on. Every other refusal
+ * stands: the arguments, the stream log, Vitest and its config, an owns list
+ * that is not a literal, and a run with no oracle file. Returns the refusal
+ * that stands, or the causes the run's notes must name.
+ */
+function baselineOnlyAnalysis(plan) {
+  const refused = refusal(plan)
+  const passing = [
+    ...(plan.fault === `badEntry` ? [`${SOURCE}#nope`] : []),
+    ...(plan.fault === `missingSource` ? [`src/missing.ts`] : []),
+    ...(ownsNothing(plan) ? [`owns any selected source`] : []),
+  ]
+  if (refused !== undefined && !passing.includes(refused.cause))
+    return { refused, notes: [] }
+  // The baseline it leads with (law 14), which a full run that refuses
+  // never reaches.
+  return {
+    refused: undefined,
+    notes: passing,
+    baseline: baselineOf(plan),
+    blocking: blockingOf(plan).filter((f) => !f.ordinary),
+  }
+}
+
 // The law that fails with no mutant active (`failingLaw`), a test of its
 // own at the start or the end of its file (`failingLawAt`), and the error it
 // throws. Under a failing describe hook (`failingLawHook`) it sits in the
@@ -7034,6 +7065,7 @@ export {
   HEARTBEAT_MS,
   FULL_LIMIT_MS,
   refusal,
+  baselineOnlyAnalysis,
   ownsNothing,
   blockingOf,
   MODULE_DATA,

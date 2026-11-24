@@ -52,15 +52,28 @@ function hostFor(ts) {
 
 /**
  * The instrumented sources, the mutants (each with its function), the
- * oracle files' declarations, and the ownership. `testFiles` are the
- * absolute paths of every test file the package's config includes. A
- * declaration that names nothing, a list that is not a literal, or an entry
- * that names a missing file or function throws, because it would hide gaps.
- * A run with no oracle file, or in which no function of a selected source
- * has an owner through the call trees, throws too.
+ * oracle files' declarations, the ownership, and the notes of what a
+ * baseline-only run let pass. `testFiles` are the absolute paths of every
+ * test file the package's config includes. A declaration that names
+ * nothing, a list that is not a literal, or an entry that names a missing
+ * file or function throws, because it would hide gaps. A run with no
+ * oracle file, or in which no function of a selected source has an owner
+ * through the call trees, throws too. A baseline-only run (`baselineOnly`)
+ * judges no mutant, so nothing it lets pass can hide a gap: an entry that
+ * names a missing file or function, as an owns entry written before its
+ * function (a law's red state) does, is a note, and so is a run in which
+ * nothing owns a selected source. A list that is not a literal, and a run
+ * with no oracle file, still throw.
  */
-export function analyze(ts, pkg, sources, testFiles) {
+export function analyze(ts, pkg, sources, testFiles, { baselineOnly } = {}) {
   const relative = (file) => relativeWithin(pkg, file) ?? posix(file)
+  const notes = []
+  // A refusal that guards only the judging of mutants: a note in a
+  // baseline-only run, which judges none.
+  const refuseJudging = (cause, directive) => {
+    if (!baselineOnly) throw new Refusal(cause, directive)
+    notes.push(`${cause}; a baseline-only run judges no mutant, so it goes on`)
+  }
   // An oracle file is a test file that calls `oracleProperty`, or passes a
   // literal `owns` list to any call, such as a wrapper's (owners.mjs).
   const declarations = new Map()
@@ -73,7 +86,7 @@ export function analyze(ts, pkg, sources, testFiles) {
         `Write the owns list as a literal array of strings, such as owns: ['src/x.ts#run'].`,
       )
     // Each entry's file as the package names it, as `--source` is.
-    const entries = declared.entries.map((entry) => {
+    const entries = declared.entries.flatMap((entry) => {
       const [source, fn] = splitEntry(entry)
       let named
       try {
@@ -84,12 +97,14 @@ export function analyze(ts, pkg, sources, testFiles) {
           `Name a file inside the package in this owns entry.`,
         )
       }
-      if (!existsSync(join(pkg, named)))
-        throw new Refusal(
+      if (!existsSync(join(pkg, named))) {
+        refuseJudging(
           `${relative(file)}: owns entry ${entry} names a missing file, ${source}`,
           `Correct the file in this owns entry, relative to the package.`,
         )
-      return fn === undefined ? named : `${named}#${fn}`
+        return []
+      }
+      return [fn === undefined ? named : `${named}#${fn}`]
     })
     declarations.set(file, entries)
   }
@@ -136,7 +151,7 @@ export function analyze(ts, pkg, sources, testFiles) {
     for (const entry of entries) {
       const [source, fn] = splitEntry(entry)
       if (fn !== undefined && !owned.has(source, fn))
-        throw new Refusal(
+        refuseJudging(
           `${relative(file)}: owns entry ${entry} names no function in ${source}`,
           `Name a function or module-level variable that ${source} defines in this owns entry, such as ${source}#run, ${source}#Class.method, or ${source}#TABLE.`,
         )
@@ -144,7 +159,7 @@ export function analyze(ts, pkg, sources, testFiles) {
   // Owned through the call trees, which may reach a selected source from an
   // entry in another file.
   if (!sources.some((source) => owned.ownsAny(source)))
-    throw new Refusal(
+    refuseJudging(
       `no file owns any selected source: no function of a --source file has an owner`,
       `Add an owns entry for a function of a --source file to the oracle that judges it.`,
     )
@@ -153,5 +168,5 @@ export function analyze(ts, pkg, sources, testFiles) {
   // owners are that unit's.
   for (const mutant of mutants)
     mutant.function = owned.at(mutant.source, mutant.position).name
-  return { instrumented, mutants, declarations, owned }
+  return { instrumented, mutants, declarations, owned, notes }
 }

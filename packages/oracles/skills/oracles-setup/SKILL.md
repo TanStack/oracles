@@ -570,7 +570,9 @@ is not Vite's default name. The baseline prints which config it used.
   full check runs it, and judge no mutant: the red state before a change,
   with each failing law named. It ends with
   `oracle-gaps: done completed, baseline only, report <path>`. It refuses
-  `--only`, `--sample`, `--mutants`, and `--diff-base`.
+  `--only`, `--sample`, `--mutants`, and `--diff-base`. An `owns` entry
+  that names a function or file that does not exist yet does not refuse
+  it: the run prints a `note` naming the entry and goes on.
 - Read the exit code. **0:** the run completed; work from its report.
   **2:** refused. It prints `refused: <cause>` and one `fix: <directive>`.
   Do what the `fix:` line says, then run again. **3:** an internal error, "a

@@ -72,7 +72,13 @@ agent.
   before a change (the red state) across every oracle file. It refuses
   `--only`, `--sample`, `--mutants`, and `--diff-base`, which choose or mark
   mutants; `--daemon` and `--ordinary` are accepted (the baseline runs the
-  ordinary files either way). A `crashed` gap is not a kill: production threw where no law
+  ordinary files either way). A baseline-only run judges no mutant, so it
+  does not refuse an `owns` entry that names a missing function or file,
+  or a run in which nothing owns a selected source: it prints an
+  `oracle-gaps: note` that names each, lists them in `results.json`'s
+  `notes`, and goes on. A law written before its function exists then
+  shows its red state as a failing law in the baseline. A full check still
+  refuses them, since there they would hide gaps. A `crashed` gap is not a kill: production threw where no law
   judged it, and the error is on the gap's Detail line in `summary.md` and
   in its `detail` in `results.json`. Record the error in the driver, and
   state the law that decides that input's outcome.
