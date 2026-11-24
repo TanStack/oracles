@@ -1088,7 +1088,7 @@ function distinguishingDirective(m) {
 // overwrites before any read, which is dead code (a downstream project's
 // report, 2026-11-24).
 const observedText = (test) =>
-  `Observe the value this code changes in ${test === undefined ? `the owner tests` : `\`${test}\``}, and assert on it. Where the mutated code computes the same result as the original, add a history where it computes something different. Where every path overwrites the changed value before anything reads it, as an initializer written only for the type checker, the code is dead: remove it.`
+  `Observe the value this code changes in ${test === undefined ? `the owner tests` : `\`${test}\``}, and assert on it. Where the mutated code computes the same result as the original, add a history where it computes something different. Where every path overwrites the changed value before anything reads it, as an initializer written only for the type checker, the code is dead: remove the value, and keep any call it makes.`
 const observedMention = (h, mi, owners) =>
   observedText(infectingTest(h, mi, owners))
 
@@ -1416,7 +1416,7 @@ const directives = {
   'not-infected':
     /^Add a history whose operands are equal, where `[^`]+` and `[^`]+` disagree\. Operands seen: .+\.$/,
   'not-observed':
-    /^Observe the value this code changes in (`[^`]+`|the owner tests), and assert on it\. Where the mutated code computes the same result as the original, add a history where it computes something different\. Where every path overwrites the changed value before anything reads it, as an initializer written only for the type checker, the code is dead: remove it\.$/,
+    /^Observe the value this code changes in (`[^`]+`|the owner tests), and assert on it\. Where the mutated code computes the same result as the original, add a history where it computes something different\. Where every path overwrites the changed value before anything reads it, as an initializer written only for the type checker, the code is dead: remove the value, and keep any call it makes\.$/,
   'not-judged': /^Make a law in `[^`]+` reject the changed value\.$/,
   'extra-work':
     /^Declare `work: \{ ratio: \d+\.\d\d \}` on the `oracleProperty` that registers `[^`]+`, so that its work bound rejects this mutant: there it changed no observation, and its work rose from \d+ to \d+ site evaluations?( \(\d+\.\d{3}× the unmodified run's\))?\.$/,

@@ -114,7 +114,7 @@ const directive = {
   // forced branch that computed the same result as the original (F22), or
   // a value that every path overwrites before any read, which is dead.
   'not-observed': (g) =>
-    `Observe the value this code changes in ${g.infectedBy === undefined ? `the owner tests` : `\`${testName(g.infectedBy)}\``}, and assert on it. Where the mutated code computes the same result as the original, add a history where it computes something different. Where every path overwrites the changed value before anything reads it, as an initializer written only for the type checker, the code is dead: remove it.`,
+    `Observe the value this code changes in ${g.infectedBy === undefined ? `the owner tests` : `\`${testName(g.infectedBy)}\``}, and assert on it. Where the mutated code computes the same result as the original, add a history where it computes something different. Where every path overwrites the changed value before anything reads it, as an initializer written only for the type checker, the code is dead: remove the value, and keep any call it makes.`,
   'not-distinguished': (g) => distinguishingDirective(g),
   'not-judged': (g) =>
     `Make a law in \`${testName(g.changedTests?.[0])}\` reject the changed value.`,

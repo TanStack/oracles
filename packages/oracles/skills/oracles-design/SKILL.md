@@ -567,9 +567,11 @@ comes with one instruction. Do what it says, within the rules below.
   `not-observed` directive gives both steps, and a third: a value that
   every path overwrites before anything reads it is dead code, not a
   missing observation. `let held = false`, written only so the type checker
-  knows the type, survives `false → true`. Remove the initializer and
-  declare the type: `let held: boolean` where the compiler can follow every
-  assignment, and `let held: boolean | undefined` where it cannot.
+  knows the type, survives `false → true`. Remove the value, keep any call
+  it makes, and declare the type: `let held: boolean`, so the compiler
+  checks that every read follows an assignment. Where it cannot follow
+  them, restructure the code until it can, such as assigning in each
+  branch.
 - **Code whose removal no legal history can observe is dead.** The gap check
   alone cannot show this, because its histories are a sample. First rule out
   a missing history, observation, or law. Then remove the code in the same
