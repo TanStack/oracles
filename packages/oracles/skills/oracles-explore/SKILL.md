@@ -232,10 +232,11 @@ It is a starting point: skip build and config files, and read the commits
 that changed the public API.
 
 Check which Vitest the package runs: `pnpm exec vitest --version`, or
-`npx --no-install vitest --version` with npm (`--no-install` keeps npx from
-downloading one). The oracle needs 4.1 or later. If theirs is older, raise
-the upgrade with the spots you present, so the developer decides both at
-once and the build does not wait on a second question. [Problems you may hit](references/problems.md) has the rule for
+`npm ls vitest` with npm (not `npx vitest`, which can run a copy from npx's
+cache, or download one, when the package has none). The oracle needs 4.1 or
+later. If theirs is older, raise the upgrade with the spots you present, so
+the developer decides both at once and the build does not wait on a second
+question. [Problems you may hit](references/problems.md) has the rule for
 the upgrade, with or without a developer.
 
 Look for behavior that is easy to break, and whose right answer is simpler
