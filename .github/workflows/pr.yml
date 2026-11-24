@@ -212,7 +212,7 @@ jobs:
           SHARD: ${{ matrix.shard }}
           GAP_E2E_SHRINKS: 0
   test-oracle-gaps-determinism:
-    name: Gap report end-to-end oracle (determinism, ${{ matrix.shard }}/8)
+    name: Gap report end-to-end oracle (determinism, ${{ matrix.shard }}/9)
     # Heavy: skipped on a docs-only pull request.
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
@@ -222,7 +222,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -398,7 +398,7 @@ jobs:
         working-directory: packages/oracles
         run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-classify gap-report-probe-form gap-report-mutant-validity gap-report-path-spelling gap-report-static-oracle-dispatch
   windows-gap-end-to-end:
-    name: Windows gap report end-to-end oracle (fixed seed, ${{ matrix.shard }}/10)
+    name: Windows gap report end-to-end oracle (fixed seed, ${{ matrix.shard }}/11)
     runs-on: windows-latest
     # Not blocking yet: these suites fail on Windows, tracked by class in
     # https://github.com/TanStack/oracles/issues/72. Remove this line when they
@@ -411,7 +411,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
