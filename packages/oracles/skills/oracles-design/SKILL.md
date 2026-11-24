@@ -445,18 +445,20 @@ pLimit` is `index.js#pLimit`. `exports.name = fn` is named `name`.
     Methods and function properties defined inside an object literal
     (`const handlers = { a() {}, b: () => ... }`) are units of their own: a
     static property read (`handlers.a()`, `handlers['a']()`) owns only `a`
-    and leaves sibling functions unowned, and naming the variable directly in
-    `owns` (`src/index.ts#handlers`) owns only the variable's own non-function
-    sites. Indexing the object dynamically (`handlers[method]()`) or passing
-    it as a whole value (`dispatch(handlers)`, `Object.values(handlers)`)
-    brings every function defined inside its initializer into the caller's
-    tree, so owning the dispatch entry point (`src/index.ts#handleInputChunk`)
-    owns the whole dispatch table. Spreading it (`{ ...handlers }`) counts as
-    a whole-value use. This is the maintainer's ruling of 2026-11-23 (decisions
-    register, "Object-literal functions used dynamically are owned"), and the
-    static gap oracle's dispatch law (`gap-report-static-oracle-dispatch.property.test.mjs`)
-    judges it. A destructured declaration (`const { a, b } = ...`) is not a
-    unit: if a law depends on one, own the whole file.
+    and leaves the sibling methods unowned. Naming the variable directly in
+    `owns` (`src/index.ts#handlers`) owns the variable's own non-function
+    sites and no method. Indexing the object dynamically (`handlers[method]()`),
+    passing it as a whole value (`dispatch(handlers)`, `Object.values(handlers)`),
+    or spreading it (`{ ...handlers }`) brings every function defined inside
+    its initializer into the caller's tree, so owning the dispatch entry point
+    (`src/index.ts#handleInputChunk`) owns the whole dispatch table. Module
+    functions that the initializer names by shorthand (`{ helper }`) are owned
+    whenever the literal is reached, by a static read or an owns entry as well,
+    as `{ helper: helper }` is; the module-data rule in
+    `gap-report-oracle.property.test.mjs` (lines 70-75) is the reason. The
+    dispatch law is judged by `gap-report-static-oracle-dispatch.property.test.mjs`.
+    A destructured declaration (`const { a, b } = ...`) is not a unit: if a law
+    depends on one, own the whole file.
   - When an entry pulls in another contract (a batching API in the same
     file, or a helper in a default export's call tree that serves another
     promise), write that contract's own oracle, or report its gaps as

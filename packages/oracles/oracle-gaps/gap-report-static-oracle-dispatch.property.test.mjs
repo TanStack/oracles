@@ -6,13 +6,16 @@
  * module-level object literal is owned when the literal is used dynamically
  * (`table[key]()`) or as a whole value (passed to a function, spread, or read
  * with `Object.values`). A static property read (`table.a()`) owns that one
- * member and leaves its siblings unowned. A function that the literal's
- * initializer names by shorthand (`{ helper }`) belongs to the literal's tree,
- * because the initializer refers to it (F10). An owns entry that names the
- * literal reaches the literal and its shorthand targets, but no member. A
- * property name in the literal declares a property; it never refers to a
- * binding of the same name, so a called function of that name is owned on its
- * own account and the property is owned only through the rule above.
+ * member and leaves its sibling members unowned. An owns entry that names the
+ * literal owns no member either. Whenever the literal is reached, by a read or
+ * by an owns entry, it also owns the module functions its initializer names by
+ * shorthand (`{ helper }`), as it already owns them when written `{ helper:
+ * helper }`: the module-data law, under which what a declaration's initializer
+ * refers to is in the declaration's tree (gap-report-oracle.property.test.mjs
+ * lines 70-75; owners.mjs lines 56-60). A property name in the literal declares
+ * a property; it never refers to a binding of the same name, so a called
+ * function of that name is owned on its own account, and the property is owned
+ * only through the rules above.
  *
  * The rule is an application of the ownership law of owners.mjs (P6, R6, I10):
  * ownership is the static call tree of each `owns` entry, unioned over the
@@ -315,7 +318,7 @@ function model(raw) {
   link(`run`, ...history.calls)
   for (const m of members)
     if (m.calls !== undefined) link(memberUnit(m), m.calls)
-  // The literal's initializer refers to its shorthand targets (F10).
+  // The literal's initializer refers to its shorthand targets (module-data law).
   link(`D`, ...shorthand)
   if (
     history.use === `dynamic` ||
@@ -401,9 +404,9 @@ const check = (history, trace, expected) => {
 oracleProperty({
   id: `oracle-gaps.report-static-dispatch`,
   law: {
-    statement: `A function defined in a module-level object literal is owned when the literal is used dynamically or as a whole value (passed, spread, or read with Object.values), and only its own member when it is read statically; a shorthand name in the literal is owned through the literal's initializer; an owns entry naming the literal owns no member; a property name in the literal refers to no binding.`,
-    authority: `The maintainer's ruling of 2026-11-23 (decisions register, "Object-literal functions used dynamically are owned"), applied through the ownership law of owners.mjs (P6, R6, I10: the static call tree of owns, unioned over oracle files), the module-data law (F10: what an initializer refers to is in the declaration's tree), and the class precedent ("a class passed as a value brings all its methods").`,
-    limits: `One literal per module, members that are arrows, methods, or shorthand names of module functions, one level of member calls, and one use per run. Not generated: literals inside functions, computed or numeric names, wrappers such as Object.freeze, keyof typeof, imported literals, and nested literals. The observation is each unit's ownership, not the gap report's mutant outcomes.`,
+    statement: `A function defined in a module-level object literal is owned when the literal is used dynamically or as a whole value (passed, spread, or read with Object.values). A static property read owns only its own member, and an owns entry that names the literal owns no member. Whenever the literal is reached, by a read or by an owns entry, the module functions its initializer names by shorthand are owned too, as they are when written with a colon. A property name in the literal refers to no binding.`,
+    authority: `The maintainer's ruling of 2026-11-23 (decisions register, "Object-literal functions used dynamically are owned") for dynamic and whole-value use; the module-data law of gap-report-oracle.property.test.mjs (lines 70-75) and owners.mjs (lines 56-60), under which what a module declaration's initializer refers to is in the declaration's tree, for the shorthand targets; the ownership law of owners.mjs (P6, R6, I10: the static call tree of owns, unioned over oracle files); and the class precedent ("a class passed as a value brings all its methods").`,
+    limits: `One literal per module, members that are arrows, methods, or shorthand names of module functions, one level of member calls, and one use per run. Not generated: literals inside functions, computed or numeric names, wrappers such as Object.freeze, keyof typeof, imported literals, and nested literals. Not generated, and pinned in tests/oracle-gaps-owns-through-calls.test.ts: the uses Object.keys(D), for...in, an alias const E = D, a string-literal static read D['a'](), and keyof typeof D; and a member that names a module function under another key ({ x: fb }), which the same module-data rule covers but no generator draws. The observation is each unit's ownership, not the gap report's mutant outcomes.`,
   },
   histories: {
     arbitrary: historyArbitrary,
