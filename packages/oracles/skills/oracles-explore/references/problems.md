@@ -100,7 +100,8 @@ Every probe in a scratch directory needs these two from the start.
 scratch directory cannot import the repository's packages by name:
 `import fc from 'fast-check'` fails with `ERR_MODULE_NOT_FOUND`. Load them
 from the package whose `package.json` lists them, and import the code under
-test by its absolute path. In a workspace, anchor at that package, not at
+test by its absolute path. `<pkg>` is an absolute path: `createRequire`
+rejects a relative one (`ERR_INVALID_ARG_VALUE`). In a workspace, anchor at that package, not at
 the root: `createRequire('<root>/package.json')` cannot find a dependency
 that only a workspace package lists (`MODULE_NOT_FOUND`).
 
@@ -123,7 +124,8 @@ probe `probe.mts`: a `.ts` probe in a scratch directory with no
 fails to compile. Then, in this order:
 
 1. The repository's own `tsx`, when it is installed:
-   `<pkg>/node_modules/.bin/tsx probe.mts`. It runs any TypeScript, and
+   `<pkg>/node_modules/.bin/tsx probe.mts`, or, in a workspace that
+   installs it at the root, `<root>/node_modules/.bin/tsx probe.mts`. It runs any TypeScript, and
    resolves `./b` and `./b.js` to `b.ts`. Run from the scratch directory,
    it does not read the repository's `tsconfig.json`: when the source
    imports through `paths` aliases (`@/clamp`), add
