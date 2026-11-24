@@ -30,10 +30,12 @@ refuses a `--source` outside its `--package`). The rule:
 
 Install `vitest@^4.1` in the same command as `@tanstack/oracles`: npm
 refuses to install the oracle package next to the old Vitest (`ERESOLVE`).
-If the lockfile holds a Vite older than 6 (`pnpm why vite`; under Vitest 1
-and 2 it always does), add `vite@^7` to that command. pnpm keeps the old
-Vite otherwise, and Vitest 4 stops at startup with `Package subpath
-'./module-runner' is not defined`.
+When `package.json` does not list `vite` and the lockfile holds a Vite older
+than 6 (`pnpm why vite`; under Vitest 1 and 2 it always does), add
+`vite@^7` to that command. pnpm keeps the old Vite otherwise, and Vitest 4
+stops at startup with `Package subpath './module-runner' is not defined`.
+When `package.json` lists a Vite older than 6, upgrading it is part of the
+same decision: say so with the question.
 
 **npm installed `fast-check` and `vitest` already.** npm installs the peers
 of `@tanstack/oracles` without listing them. Check `package.json`, not

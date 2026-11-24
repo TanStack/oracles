@@ -64,9 +64,11 @@ pnpm add -D \
   fast-check@^4 vitest@^4.1
 ```
 
-Add `fast-check` and `vitest` beside them. The framework and the gap check
-need Vitest 4.1 or later, installed in the package itself: nothing beside
-an older Vitest works. If the repository already runs an older one,
+Add `fast-check` and `vitest` beside them, but keep a Vitest 4.1 or later
+that the package already runs: drop `vitest@^4.1` from the command, or it
+replaces a Vitest 5 with 4.1. The framework and the gap check need Vitest
+4.1 or later, installed in the package itself: nothing beside an older
+Vitest works. If the repository already runs an older one,
 upgrading it changes the runner for their own suite too. The rule:
 
 - With a developer present, offer the upgrade with your first decision
@@ -79,11 +81,15 @@ upgrading it changes the runner for their own suite too. The rule:
   and say so.
 
 Install `vitest@^4.1` in the same command as the two packages: npm refuses
-to install `@tanstack/oracles` next to the old Vitest (`ERESOLVE`). If the
-lockfile holds a Vite older than 6 (`pnpm why vite`; under Vitest 1 and 2 it
-always does), add `vite@^7` to that command. pnpm keeps the old Vite
-otherwise, and Vitest 4 stops at startup with `Package subpath
-'./module-runner' is not defined`. For lint, also add `eslint@^9`
+to install `@tanstack/oracles` next to the old Vitest (`ERESOLVE`).
+When `package.json` does not list `vite` and the lockfile holds a Vite older
+than 6 (`pnpm why vite`; under Vitest 1 and 2 it always does), add
+`vite@^7` to that command. pnpm keeps the old Vite otherwise, and Vitest 4
+stops at startup with `Package subpath './module-runner' is not defined`.
+When `package.json` lists a Vite older than 6, upgrading it is part of the
+same decision: say so with the question.
+
+For lint, also add `eslint@^9`
 if the repository has no ESLint, and `@typescript-eslint/parser@^8` if
 nothing parses TypeScript yet. Name those majors: a package manager can pick
 a prerelease otherwise. If the repository's ESLint is older than 9 (xo
