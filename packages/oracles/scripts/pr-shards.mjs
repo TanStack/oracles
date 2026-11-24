@@ -294,6 +294,17 @@ export const partitions = {
       2: rest,
     },
   },
+  // The gap report's TypeScript oracle (gap-report-typecheck-oracle.property.test.mjs):
+  // each history runs the CLI on a small package, about 2 to 5 s a history, in
+  // one job of its own. One shard, so every test runs in the job.
+  'oracle-gaps-typecheck': {
+    args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-typecheck`],
+    suite: `oracle-gaps.report-typecheck`,
+    select: ``,
+    shards: {
+      1: rest,
+    },
+  },
   // The end-to-end gap oracle's fixed-seed units, which a pull request runs
   // (`-t "fixed seed"`): 87 units, packed longest first into four shards of
   // 401 s of weight: about 7 minutes a job. Three shards would reach 533 s

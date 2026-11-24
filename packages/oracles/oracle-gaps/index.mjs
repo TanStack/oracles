@@ -82,6 +82,8 @@
 //     [--env-prefix <name>]   (the framework's variable prefix; default ORACLE)
 //     [--daemon]              (check through the package's daemon)
 //     [--ordinary]            (also run ordinary test files, for information)
+//     [--tsconfig <file>]     (the TypeScript config, relative to <dir>;
+//                              default tsconfig.json when present)
 //     [--seed <n>] [--mutants <dir>] [--out <dir>] [--only <id,id>]
 //     [--diff-base <rev>]
 //     [--first-limit <ms>]    (a copy's first budget; default 2000)
