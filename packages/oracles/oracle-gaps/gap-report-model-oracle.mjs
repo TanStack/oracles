@@ -5174,7 +5174,7 @@ function judge(plan, tests, sites, active, { budgeted = true, detail } = {}) {
     return `killed`
   }
   if (gapCause) {
-    if (detail) detail.cause = gapCause
+    if (detail) Object.assign(detail, { cause: gapCause, cut: hung })
     return `timeout`
   }
   // No wall-clock budget decides here (maintainer decision, deterministic
@@ -5488,11 +5488,16 @@ function model(plan) {
     // A spin whose count only an excluded or clocked test made (no reaching
     // test that is deterministic and unclocked) judges nothing: indeterminate,
     // not a timeout, which is the backstop only (M-24; "An excluded test still
-    // runs", M 2026-11-23). Classify's rule, in the e2e model.
+    // runs", M 2026-11-23). Classify's rule, in the e2e model. A copy that the
+    // count cut records nothing (judge's `cut`), so a deterministic test in it
+    // did not reach the mutant as the run observed it: classify compares only
+    // the rows that the copies recorded (classify.mjs judgeMutant, `compared`).
     if (
       kind === `timeout` &&
       judged.cause === `spin` &&
-      !reaching.some((t) => !t.flaky && !readsClock(t))
+      !reaching.some(
+        (t) => !t.flaky && !readsClock(t) && !judged.cut.has(t.file),
+      )
     )
       return `indeterminate`
     if (kind !== `survived`) return kind
