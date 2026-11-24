@@ -490,9 +490,10 @@ one line for each (`oracle-gaps: baseline pass <file>: …`, or `baseline
 fail <file>`, followed by indented lines with the failing law, its
 counterexample, and a replay command), then one decisive line: `baseline all
 <n> oracle files pass`, or `baseline <k> of <n> oracle files failed
-(provisional)`. A failing oracle file blocks only the mutants it owns (a
-`blocked` line says so); the rest are judged, and the report is marked
-provisional. Then each gap prints as one line as soon as it is judged
+(provisional)`. A failing law (a test that fails with no mutant active)
+judges nothing, and its file's passing tests still judge; only a mutant
+that no passing owner test reached is blocked (one `blocked` line names each
+failing law), and the report is marked provisional. Then each gap prints as one line as soon as it is judged
 (`oracle-gaps: gap <class> L<line> <id> <change>`), with `progress` lines,
 and a `busy` line while a slow test runs. Exactly one line ends the run:
 `oracle-gaps: done completed, <n> gaps, report <path>/summary.md` (exit 0),

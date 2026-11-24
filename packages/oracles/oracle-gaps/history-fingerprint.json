@@ -80,7 +80,12 @@
     ["slowStart", "ed6866229ecc4969"],
     ["shortWait", "ed6866229ecc4969"],
     ["absentObjects", "b9e3dd12df07d597"],
-    ["optionalChains", "92f0ef0b4dde6c60"]
+    ["optionalChains", "92f0ef0b4dde6c60"],
+    ["failingLaw", "08ec3fe6ce509633"],
+    ["failingLawAt", "659b59760c27ad0f"],
+    ["failingLawCalls", "3f853c3b6c6b89b5"],
+    ["failingLawHook", "4417bd05ca78a981"],
+    ["failingLawSpins", "a52fc926e1e1704b"]
   ],
   "histories": [
     ["functions", "66c0e9c56951c377"],
@@ -163,6 +168,11 @@
     ["slowStart", "ed6866229ecc4969"],
     ["shortWait", "ed6866229ecc4969"],
     ["absentObjects", "b9e3dd12df07d597"],
-    ["optionalChains", "92f0ef0b4dde6c60"]
+    ["optionalChains", "92f0ef0b4dde6c60"],
+    ["failingLaw", "08ec3fe6ce509633"],
+    ["failingLawAt", "659b59760c27ad0f"],
+    ["failingLawCalls", "3f853c3b6c6b89b5"],
+    ["failingLawHook", "4417bd05ca78a981"],
+    ["failingLawSpins", "a52fc926e1e1704b"]
   ]
 }

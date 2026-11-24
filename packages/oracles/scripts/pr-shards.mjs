@@ -418,8 +418,12 @@ export const partitions = {
     shards: {
       // 560 s of weight.
       1: anyOf([
-        `every outcome class`,
+        // Block per law (#176): file b's passing laws now judge the mutants
+        // it owns, so this unit runs them: 238 s in shard 1 at fd69ea2e
+        // (10m26s), then 182 s in shard 2 at a81892cc beside a 187 s
+        // apiLessTypescript base (9m13s). Shard 1 took 4m40s there.
         `a declaration fault: brokenOwner`,
+        `every outcome class`,
         `an edit sequence over the witness module, the first half`,
         `a check abandoned while a context warms in place of a cut one`,
         `a lazy module loaded before a hang in the same batch`,
@@ -523,6 +527,8 @@ export const partitions = {
     shards: {
       // 471 s of weight.
       1: anyOf([
+        // Out of the rest shard, which reached 10m4s at a81892cc (26 s there).
+        `fixed history: a module boolean flip judged past a console test`,
         `generated 2`,
         `constructed history: an unchanged check through the daemon under a config's pre plugin`,
         `constructed history: an ambiguous authored mutant`,
@@ -565,6 +571,10 @@ export const partitions = {
       ]),
       // 471 s of weight.
       4: anyOf([
+        // Block per law (#176): about 140 s in CI. Beside "generated 2"
+        // shard 1 reached 10m26s at 331b3f34, and shard 6 9m31s at
+        // 76a1a6ec; this shard took 5m27s there.
+        `constructed history: a declaration fault: brokenOwner`,
         `constructed history: a check through the daemon that works past the bound`,
         `constructed history: a check abandoned while a context warms in place of a cut one`,
         `constructed history: a daemon start slower than the bound`,
@@ -599,6 +609,8 @@ export const partitions = {
       ]),
       // 471 s of weight.
       6: anyOf([
+        // Out of the rest shard, which reached 10m4s at a81892cc (97 s there).
+        `fixed history: a module array mutant judged past nondeterministic plan tests under a daemon pause`,
         `constructed history: a declaration fault: noTypescript`,
         `constructed history: a second daemon check of the budget witness`,
         `constructed history: a lazy module loaded before a hang in the same batch`,
@@ -872,6 +884,12 @@ export const partitions = {
         'a declaration fault: nonLiteral',
         'a stop as the CLI starts',
         'a start refuses an unreadable claim',
+        "a failing law beside its file's passing laws",
+        'a heavy failing law at the start of its file, beside a passing law',
+        'a failing beforeAll around a law',
+        'a failing afterAll around a law that calls production',
+        'a failing law that spins under a mutant before a passing law',
+        "module data that only the failing owner's passing pair judges",
       ]),
       8: anyOf([
         'a declaration fault: brokenVitest',
