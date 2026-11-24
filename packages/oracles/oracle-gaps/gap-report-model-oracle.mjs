@@ -5142,13 +5142,15 @@ function judge(
   // earlier verdicts. A kill in another file still decides (a kill outranks
   // a timeout); failing that, the mutant is a timeout.
   // A failing law runs too, though it judges nothing (`lawSpins`, the files
-  // whose failing law spins under the mutant, and where it sits): at the
-  // start of its file its count cut ends the file's run before any test
-  // judges; at the end it does unless a test before it killed or hung. A
-  // count cut a failing law causes blocks the mutant by that law (register
-  // C 2026-11-23, "A count cut caused by a failing law is blocked by it"):
-  // a gap, never `timeout`, which is only the backstop's (M-24), and never a
-  // kill, though a kill in another file still decides.
+  // whose failing law spins under the mutant, its spin's work, and where it
+  // sits). Its spin cuts its file's copy only when that work passes the
+  // copy's call budget (G6). At the start of its file the cut ends the file's
+  // run before any test judges; at the end it does unless a test before it
+  // killed or hung. A count cut a failing law causes blocks the mutant by that
+  // law (register C 2026-11-23, "A count cut caused by a failing law is blocked
+  // by it"): a gap, never `timeout`, which is only the backstop's (M-24), and
+  // never a kill. The copies stop at the cut, so a kill in a later file does
+  // not decide it, while a kill in an earlier copy did (step 1 before step 3).
   const hung = new Set()
   const builtIns = []
   let wallCut = false

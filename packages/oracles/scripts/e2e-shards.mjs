@@ -532,6 +532,9 @@ export const shards = {
     `fixed seed 20261105: a failing law's spin beside a clocked spin in another file is blocked`,
     `random seed: a failing law's spin beside a clocked spin in another file is blocked`,
     `determinism: constructed history: a failing law's spin beside a clocked spin in another file is blocked`,
+    `fixed seed 20261105: a failing law's spin in one owner file blocks a passing kill in another`,
+    `random seed: a failing law's spin in one owner file blocks a passing kill in another`,
+    `determinism: constructed history: a failing law's spin in one owner file blocks a passing kill in another`,
   ],
 }
 
