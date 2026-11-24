@@ -363,8 +363,16 @@ function infectionOf(mutant, targets, baseline) {
       !baseline.leftOut.has(k) &&
       baseline.firstRows.get(k)?.infected?.includes(id),
   )
-  const test = infected.find((k) => !k.endsWith(` > (background)`))
-  return { infected: infected.length > 0, infectedBy: test }
+  const tests = infected.filter((k) => !k.endsWith(` > (background)`))
+  // Each owner file's first test that infected it, so an author who may
+  // edit only some oracle files finds a test of one of theirs.
+  const perFile = new Map()
+  for (const k of tests) if (!perFile.has(fileOf(k))) perFile.set(fileOf(k), k)
+  return {
+    infected: infected.length > 0,
+    infectedBy: tests[0],
+    infectedTests: [...perFile.values()],
+  }
 }
 
 /**
@@ -431,7 +439,8 @@ function reachingIn(rows, targets) {
  * no law rejected), `indeterminate` (only nondeterministic tests reached
  * it), `extra-work` (no observation changed, and a test did more work;
  * `work` names the first such test, its work before and after, and the
- * work bound that rejects the mutant), `dead-code` (no input distinguishes
+ * work bound that rejects the mutant, and `workTests` every such test),
+ * `dead-code` (no input distinguishes
  * it), `outside-annotation` (no
  * input of the annotations distinguishes it; `input` names the input class
  * outside them that does), `branch-never-taken` (an
@@ -439,7 +448,7 @@ function reachingIn(rows, targets) {
  * one), `not-infected` (a comparison whose operators agreed on every
  * operand the owners reached; `operands` names them), and `not-observed`
  * (infected, and no recorded observation changed; `infectedBy` names the
- * test that infected it).
+ * test that infected it, and `infectedTests` each owner file's first).
  */
 export function judgeMutant(mutant, { owners, targets, units, baseline }) {
   if (owners.size === 0) return { outcome: `unowned` }
@@ -477,30 +486,35 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
   const roseIn = inReportOrder(
     compared.filter((k) => rose(k)),
     baseline,
-  )[0]
+  )
   if (result.changedTests.length > 0) result.class = `not-judged`
   else if (compared.length === 0) {
     result.class = `indeterminate`
     result.nondeterministicBy = targets.oracleKeys.filter((k) =>
       baseline.nondeterministic.has(k),
     )
-  } else if (roseIn !== undefined) {
+  } else if (roseIn.length > 0) {
     // No observation changed, and the mutant's run did more work: it
     // deleted a shortcut that only a work bound sees (maintainer decision,
     // 2026-11-12). The bound to declare is the largest ratio in hundredths
     // below the measured one, and 1 when the test did no work before.
-    const before = baseline.work.get(roseIn)
-    const after = rows.get(roseIn).calls
+    // `work` is the first such test; `workTests` lists every one, since
+    // each one's property can carry the bound.
     result.class = `extra-work`
-    result.work = {
-      test: roseIn,
-      before,
-      after,
-      ratio: before > 0 ? (after / before).toFixed(3) : undefined,
-      bound: (
-        (before > 0 ? Math.floor((100 * after - 1) / before) : 100) / 100
-      ).toFixed(2),
-    }
+    result.workTests = roseIn.map((test) => {
+      const before = baseline.work.get(test)
+      const after = rows.get(test).calls
+      return {
+        test,
+        before,
+        after,
+        ratio: before > 0 ? (after / before).toFixed(3) : undefined,
+        bound: (
+          (before > 0 ? Math.floor((100 * after - 1) / before) : 100) / 100
+        ).toFixed(2),
+      }
+    })
+    result.work = result.workTests[0]
   } else if (mutant.evidence === `dead code`) result.class = `dead-code`
   else if (mutant.outside) {
     // No input of the annotations distinguishes it: the type analysis names
@@ -509,7 +523,11 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
     result.input = mutant.outside
   } else if (isUnmeasured(mutant)) result.class = `not-distinguished`
   else {
-    const { infected, infectedBy } = infectionOf(mutant, targets, baseline)
+    const { infected, infectedBy, infectedTests } = infectionOf(
+      mutant,
+      targets,
+      baseline,
+    )
     if (isIf(mutant) && !infected) {
       // The mutant changes its condition only where the condition took the
       // other outcome: an if-true where it was false, an if-false where true.
@@ -521,6 +539,7 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
     } else {
       result.class = `not-observed`
       result.infectedBy = infectedBy
+      result.infectedTests = infectedTests
     }
   }
   return result

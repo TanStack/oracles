@@ -92,7 +92,13 @@ agent.
   code's work there is killed under law `work bound`. `ratio` is a finite
   number of at least 1, read to the hundredth and compared exactly, and 1
   rejects any extra work. The bound is the property's, so it judges every
-  test the property registers, though the directive names one of them. A plain Vitest run has
+  test the property registers, though the directive names one of them. The
+  gap's `Work bounds that reject it` line in `summary.md` names every test
+  whose work rose, each with the bound that rejects the mutant on its
+  property (in `results.json`, its `workTests`), so an author who may edit
+  only some oracle files picks one of theirs. Likewise a `not-observed`
+  gap's `Infected in` line names the first test of each owner file that
+  infected the mutant (`infectedTests`). A plain Vitest run has
   no unmodified run to compare with, so there the bound judges nothing. The
   count does not see work without a site, such as a plain assignment, a
   `for...of` pass, or a builtin's own work, so a call to a builtin counts
