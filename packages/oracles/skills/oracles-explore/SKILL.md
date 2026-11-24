@@ -139,6 +139,8 @@ Stop and wait only when the developer must decide:
 - whether to approve a more complex design (see below)
 - whether to finish setting up the repository for oracles, when they want to
   keep the work (a commit, or a pull request)
+- whether to remove or replace production code that no confirmed bug
+  requires, beyond line-level dead code (`oracles-design` step 8)
 
 Between those points, keep working, and keep telling them what you are doing.
 

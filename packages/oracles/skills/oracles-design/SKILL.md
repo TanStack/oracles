@@ -538,8 +538,9 @@ it to simplify:
 - For a larger cleanup, draft two or three designs that pass the same oracle
   (a table instead of branches, one state field instead of three, a
   recompute instead of a cache). Give each one's trade-off, and let the developer
-  choose when the choice is theirs. Do not keep only the first design you
-  find.
+  choose when the choice is theirs. Removing or replacing a whole function,
+  algorithm, or module is always theirs (step 8). Do not keep only the first
+  design you find.
 - Rerun the oracle and the gap check after each cleanup.
 
 Techniques: [guide § Evidence](../../docs/guide.md#evidence).
@@ -553,6 +554,15 @@ comes with one instruction. Do what it says, within the rules below.
 
 - **There are no equivalent mutants.** A surviving mutant shows a missing
   history, observation, or law, or it shows dead code.
+- **Remove line-level dead code; propose anything larger.** Line-level dead
+  code is an impossible branch, a dead store, or an initializer that every
+  path overwrites: remove it in the change, as the dead-code rule below
+  says. Removing or replacing a whole function, algorithm, or module, or
+  rewriting its tests, is a design proposal, even when the gap check calls
+  the code dead and the oracle stays green without it. Show the evidence
+  (the gap counts, the oracle green on a prototype patch, and the patch
+  itself), and ask before you change production. With no developer
+  present, leave the patch in the report.
 - **An `extra-work` gap is a fast path.** The change gives the same results
   but does more work. Keep the shortcut and declare the bound that the
   directive names, `work: { ratio }` on the property, which kills it under
@@ -567,7 +577,8 @@ comes with one instruction. Do what it says, within the rules below.
   `not-observed` directive gives both steps.
 - **Code whose removal no legal history can observe is dead.** The gap check
   alone cannot show this, because its histories are a sample. First rule out
-  a missing history, observation, or law. Then remove the code in the same
+  a missing history, observation, or law. Then, when it is line-level dead
+  code (above), remove it in the same
   change, give the contract's reason in the evidence (it is a production
   change), and rerun the oracle and the gap check.
 - **A law that kills nothing** owns no mutated code, or its witness never

@@ -317,7 +317,9 @@ Anything that keeps every oracle passing is allowed, so a big refactor is
 fine when it makes the code better; the oracle is the review. Keep it in
 proportion to the task: improve the code the work touches, and when you see
 a larger win elsewhere, offer it instead of turning the task into a long
-optimization project.
+optimization project. Removing or replacing a whole function, algorithm, or
+module that no confirmed bug requires is such a win, even in the code the
+work touches: offer it with its evidence, and ask first.
 
 **How the work goes.**
 
@@ -586,7 +588,8 @@ are no equivalent mutants and no exits. A surviving mutant shows only that
 the current histories did not expose that code. If you believe the code is
 dead, first follow `oracles-design` step 8 to rule out a missing history,
 observation, or law. Removing it is a production change, so tell the developer,
-and rerun the oracle and the gap check. If a gap can be neither killed
+and rerun the oracle and the gap check. Beyond line-level dead code, ask
+before you remove or replace it (`oracles-design` step 8). If a gap can be neither killed
 nor removed, stop work on that gap and report its key and evidence to the
 developer.
 
