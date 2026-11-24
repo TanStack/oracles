@@ -402,31 +402,106 @@ export function checkOraclePropertyInference(): void {
     check: () => pass,
   })
 
+  // 6. Main-compatible callbacks. An annotated callback whose parameter is
+  //    not the history type still compiles, as it does on main: the
+  //    annotation is not checked against the history the driver receives.
+  //    (Unsound, and kept as main's behavior: see the PR's break notes.)
   oracleProperty({
-    id: `type.error.callbacks`,
+    id: `type.compat.callbacks`,
     law,
     histories: {
       arbitrary: variantArbitrary,
       runs: 10,
       fixedSeeds: [1],
     },
-    model: (plan) => plan.kind,
-    // @ts-expect-error mismatched driver parameter type without resolve
+    model: () => 1,
     driver: (_plan: { unrelated: string }) => {},
     check: () => pass,
     calibrations: [
       {
-        name: `bad-calibration-corrupt`,
-        law: `type.error.callbacks`,
-        // @ts-expect-error mismatched calibration plan parameter
+        name: `compat-calibration-corrupt`,
+        law: `type.compat.callbacks`,
         corrupt: (_trace, _plan: { unrelated: string }) => undefined,
       },
       {
-        name: `bad-calibration-driver`,
-        law: `type.error.callbacks`,
-        // @ts-expect-error mismatched calibration driver parameter
+        name: `compat-calibration-driver`,
+        law: `type.compat.callbacks`,
         driver: (_plan: { unrelated: string }) => {},
       },
     ],
+  })
+
+  // 7. Main-compatible annotated model narrower than the history, with no
+  //    `resolve`: compiles on main, and still compiles here.
+  oracleProperty({
+    id: `type.compat.annotated-model`,
+    law,
+    histories: { arbitrary: variantArbitrary, runs: 10, fixedSeeds: [1] },
+    model: (plan: Extract<VariantHistory, { kind: `a` }>) => plan.mode,
+    driver: () => {},
+    check: () => pass,
+  })
+
+  // 8. Zero-argument `constructed[].build` returning a literal, with no type
+  //    arguments. `const THistory` keeps the literal's type, so a flat literal
+  //    and a literal with tuples both compile (tuples are read-only in the
+  //    literal, and `build` accepts that view).
+  oracleProperty({
+    id: `type.zero-arg-literal`,
+    law,
+    histories: {
+      arbitrary: variantArbitrary,
+      runs: 10,
+      fixedSeeds: [1],
+      constructed: [
+        {
+          name: `zero-arg-tuple`,
+          enters: [],
+          build: () => ({ kind: `b`, count: 0, pair: [`right`, [0, 1]] }),
+        },
+      ],
+    },
+    model: (plan) => plan.kind,
+    driver: () => {},
+    check: () => pass,
+  })
+
+  // 9. The break (accepted by the maintainers, 2026-11-23). A history that a
+  //    literal in `enumerated` infers is read-only, so mutating it no longer
+  //    compiles. The migration copies the array before it mutates it.
+  oracleProperty({
+    id: `type.break.literal-mutated`,
+    law,
+    histories: {
+      enumerated: [
+        { kind: `a`, mode: `fast`, mask: [true, false], items: [1] },
+      ],
+      states: [],
+    },
+    model: (plan) => {
+      // @ts-expect-error a literal history is read-only: copy the array first
+      plan.items.push(2)
+      return plan.kind
+    },
+    driver: () => {},
+    check: () => pass,
+  })
+
+  oracleProperty({
+    id: `type.break.literal-migrated`,
+    law,
+    histories: {
+      enumerated: [
+        { kind: `a`, mode: `fast`, mask: [true, false], items: [1] },
+      ],
+      states: [],
+    },
+    model: (plan) => {
+      const items: Array<number> = [...plan.items]
+      items.push(2)
+      return plan.kind
+    },
+    driver: () => {},
+    check: () => pass,
   })
 }

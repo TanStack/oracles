@@ -572,10 +572,23 @@ export class OracleModelError extends Error {
  * A history built from a generated one so that it reaches the states the
  * laws need. The driver reports reached states with `observe("reach", state)`.
  */
+/**
+ * The same shape with every property read-only, so a literal that a
+ * `const` type parameter infers (readonly tuples included) is a valid
+ * result of `build`. The history itself is still a `THistory`.
+ */
+export type ReadonlyHistory<T> = T extends object
+  ? { readonly [K in keyof T]: ReadonlyHistory<T[K]> }
+  : T
+
 export interface ConstructedHistory<THistory> {
   name: string
   enters: ReadonlyArray<string>
-  build: (generated: THistory) => THistory
+  /**
+   * Returns the history, which may be written as a literal: under `const`
+   * inference, that literal is read-only (`ReadonlyHistory`).
+   */
+  build: (generated: THistory) => THistory | ReadonlyHistory<THistory>
   /**
    * This history's own number of bases drawn from the run's random seed,
    * which replaces the property's `drawnBases` for it: for a history whose
@@ -620,7 +633,7 @@ export interface GeneratedHistories<THistory> {
   runs: number
   /** One fixed-seed campaign per seed, beside the random campaign. */
   fixedSeeds: ReadonlyArray<number>
-  constructed?: NoInfer<ReadonlyArray<ConstructedHistory<THistory>>>
+  constructed?: ReadonlyArray<ConstructedHistory<THistory>>
   /**
    * How many bases each constructed history runs in each campaign: the first
    * `bases` draws of the arbitrary's sample at the campaign's seed plus the
@@ -701,26 +714,26 @@ export interface OraclePropertyOptions<THistory, TExpected, TPlan = THistory> {
     | EnumeratedHistories<THistory>
     | GeneratedHistories<THistory>
   /** A short, unique test name for an enumerated history. */
-  label?: (history: NoInfer<THistory>) => string
+  label?: (history: THistory) => string
   /** The plan of concrete actions; required when Plan is not History. */
-  resolve?: (history: NoInfer<THistory>) => TPlan
-  model: (plan: NoInfer<TPlan>, trace: ReadonlyArray<Observation>) => TExpected
+  resolve?: (history: THistory) => TPlan
+  model: (plan: TPlan, trace: ReadonlyArray<Observation>) => TExpected
   /** The states the history entered. Defaults to the trace's `reach` values. */
   reached?: (
-    plan: NoInfer<TPlan>,
+    plan: TPlan,
     trace: ReadonlyArray<Observation>,
-    expected: NoInfer<TExpected>,
+    expected: TExpected,
   ) => Iterable<string>
   driver: (
-    plan: NoInfer<TPlan>,
+    plan: TPlan,
     observe: (checkpoint: string, value: unknown) => void,
   ) => Promise<void> | void
   check: (
-    plan: NoInfer<TPlan>,
+    plan: TPlan,
     observations: ReadonlyArray<Observation>,
-    expected: NoInfer<TExpected>,
+    expected: TExpected,
   ) => Verdict
-  calibrations?: NoInfer<ReadonlyArray<Calibration<THistory, TPlan>>>
+  calibrations?: ReadonlyArray<Calibration<THistory, TPlan>>
   /**
    * Opt each probe-bound state into direct forced controls. Entirely unbound
    * states retain search with warnings during the consumer migration.
@@ -730,7 +743,7 @@ export interface OraclePropertyOptions<THistory, TExpected, TPlan = THistory> {
    * Whether the history enters each probe-bound state, from the plan alone:
    * a prediction never sees the trace, so it cannot follow production.
    */
-  predict?: (plan: NoInfer<TPlan>) => Readonly<Record<string, boolean>>
+  predict?: (plan: TPlan) => Readonly<Record<string, boolean>>
   /**
    * Each registered test's limit in milliseconds; 120 seconds by default, and
    * none at 0 or less. Each unit of a campaign stops shrinking at half of it.
@@ -848,7 +861,7 @@ interface PropertyTest {
   replays: ReadonlyArray<string>
 }
 
-export function oracleProperty<THistory, TExpected, TPlan = THistory>(
+export function oracleProperty<const THistory, TExpected, TPlan = THistory>(
   options: OraclePropertyOptions<THistory, TExpected, TPlan>,
 ): void {
   // Every source names a registered property, so its replay and manifest
@@ -1826,7 +1839,7 @@ function buildBases<THistory>(
   try {
     histories = fc
       .sample(arbitrary, { seed, numRuns: count })
-      .map((generated) => construction.build(generated))
+      .map((generated) => construction.build(generated) as THistory)
   } catch (error) {
     if (!registering) throw error
     throw new Error(
