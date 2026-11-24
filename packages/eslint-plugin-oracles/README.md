@@ -37,3 +37,5 @@ elsewhere, add `oracle/probe-form` with your own glob.
 The decided bans on snapshot matchers (B1), `fc.pre` (B3), production imports
 in a model (B4), and identical comparison operands (B7) are not rules yet.
 Reviews check them until they ship.
+
+Probe: a README line only in the eslint plugin's own set.
