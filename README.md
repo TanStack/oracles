@@ -278,6 +278,11 @@ runs cold` and runs the check in its own process, which reports what the
   and stay no input (maintainer decision, 2026-11-13, with `watchFile` in the
   family of `watch`).
 
+- `packages/oracles/examples/quick-reference` (private): the complete oracle
+  file of [the quick reference](packages/oracles/docs/quick-reference.md).
+  CI typechecks, lints, and runs it, gap-checks it for 0 gaps, and checks
+  that the page shows it as it is.
+
 - `packages/eslint-plugin-oracles` (`@tanstack/eslint-plugin-oracles`): the
   `oracle/*` lint rules. The rules recognize the framework by its package
   specifier and by a relative module with its file name. A project names its

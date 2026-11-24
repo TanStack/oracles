@@ -5,6 +5,9 @@ description: Explore an area of a codebase with @tanstack/oracles, or the whole 
 
 # Explore with oracles
 
+For the API, start with [docs/quick-reference.md](../../docs/quick-reference.md):
+one complete oracle file, every option, and the gap check.
+
 ## First session, or a later one
 
 The developer may name an area: in their message, or as this skill's
