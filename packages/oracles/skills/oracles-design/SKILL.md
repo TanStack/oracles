@@ -407,6 +407,16 @@ Techniques: [guide § Histories](../../docs/guide.md#histories).
     as `parse-model-oracle.ts`. An oracle file registers tests when it is
     imported.
   - It releases what it created.
+  - It starts every run from the same state. The tests of one oracle file
+    share one instance of production's modules, and a driver runs each
+    history several times there: in the history's own test, twice in its
+    determinism test, in each calibration bound to it, and again when
+    another unit draws the same history or shrinking tries it. State that
+    production keeps for the life of a module (a registry, a cache, a
+    counter keyed by name) must be keyed per run, by a name of the run's
+    own that the driver does not record, or reset by the driver. Otherwise
+    the second run sees the first's state, and the determinism test or the
+    calibration's clean run fails.
 - **The check** compares observations with the model at each checkpoint. It
   is the only place that reports a violation. For exact values, use
   `differs(...) ?? pass`. For an allowed set, accept any member.

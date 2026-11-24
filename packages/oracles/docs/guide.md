@@ -362,6 +362,22 @@ meaningfully different formulation have been named (ORC-011).
   count can hide wrong rows. Use each formulation for the faults it can
   separate.
 
+### Start every run from the same state
+
+An `oracleProperty` runs a history's driver more than once, and every run of
+one oracle file shares one instance of production's modules. A fixed history
+runs in its own test, twice in its determinism test, and once more in the
+clean run of each calibration bound to it. A generated unit can draw the same
+history again, and shrinking reruns smaller ones.
+
+Production state that lives as long as its module is still there on the next
+run. Suppose production keeps a registry of names and answers whether a name
+is new. The first run records `register "new"`, the second
+`register "already registered"`. The determinism test then reports two
+different traces, and a calibration's clean run fails before its wrong answer
+is judged. Key such state per run, with a name of the run's own that the
+driver does not record, or reset it in the driver before the run starts.
+
 ## Evidence
 
 ### Test the test
