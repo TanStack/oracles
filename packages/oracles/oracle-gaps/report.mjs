@@ -140,8 +140,11 @@ const directive = {
     `Production threw \`${errorText(g.detail)}\` in \`${first(g.by)}\`; record the error as an observation in the driver, and state the law that decides this input's outcome.`,
   timeout: () =>
     `Bound the run of the owner tests so that they end, and let a law reject a run that does not.`,
+  // A module whose evaluation threw fails each static importer before its
+  // tests run, and an `import()` of it rejects with the same error every
+  // time: only a driver's own `import()` can observe the failed load.
   'setup-error': () =>
-    `Run an owner test that loads this module and asserts on its exports, so a failed load rejects the mutant.`,
+    `Load this module inside an owner test's driver with a dynamic \`import()\`, record a rejected load as an observation, and let a law reject it: a static import fails the whole file before any test runs, and every later \`import()\` rejects with the same error. Import an owned module inside a Vitest setup file's hook, never at its top level: a setup file that fails to load fails every test file.`,
   'does-not-apply': () =>
     `Update the \`find\` text of this authored mutant so that it occurs exactly once in the source.`,
   // Its owners' failing laws, by file and test names, and the owner files
