@@ -5,6 +5,9 @@ description: Design, write, or change an oracle with @tanstack/oracles. Start fr
 
 # Design an oracle
 
+For the API, start with [docs/quick-reference.md](../../docs/quick-reference.md):
+one complete oracle file, every option, and the gap check.
+
 An oracle states a law, generates the histories where the law matters, and
 checks production against an independent model. Make the law clear enough
 that someone could predict an observation without reading production. The
@@ -477,9 +480,9 @@ Put `owns`, the law, the model, the histories, the driver, and the check on
 `oracleProperty`, or through a project helper that forwards a literal `owns`
 list to it.
 
-The options of `oracleProperty` are typed in
-`node_modules/@tanstack/oracles/src/oracle-property.ts`
-(`OraclePropertyOptions`). Read them there.
+The [quick reference](../../docs/quick-reference.md#options) lists the
+options of `oracleProperty`. Their types are `OraclePropertyOptions` in
+`node_modules/@tanstack/oracles/src/oracle-property.ts`.
 
 **Lint and typecheck as you go.** Run the repository's lint on each oracle
 file and each changed production file after you edit it, and again before

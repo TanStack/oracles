@@ -70,6 +70,16 @@ jobs:
       - run: pnpm run format:check
       - run: pnpm run typecheck
       - run: pnpm --filter @tanstack/oracles run test
+      # The example of packages/oracles/docs/quick-reference.md, which
+      # tests/quick-reference.test.ts holds equal to the page: its oracle
+      # passes, and the gap check leaves no gap in the code it owns.
+      - run: pnpm --filter @tanstack/oracles-example-quick-reference run test
+      - name: Gap check on the quick reference's example
+        shell: bash
+        working-directory: packages/oracles/examples/quick-reference
+        run: |
+          pnpm exec oracle-gaps --package . --source src/insert-sorted.ts --seed 42 | tee "$RUNNER_TEMP/quick-reference-gaps.txt"
+          grep -q '^oracle-gaps: done completed, 0 gaps,' "$RUNNER_TEMP/quick-reference-gaps.txt"
       # Checks the partition of the end-to-end gap oracle into CI shards
       # (packages/oracles/scripts/e2e-shards.mjs) ahead of the shard jobs,
       # which CI does not run yet: every test is in exactly one shard.

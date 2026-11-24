@@ -1,0 +1,17 @@
+{
+  "name": "@tanstack/oracles-example-quick-reference",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The complete oracle file of docs/quick-reference.md, compiled and run in CI",
+  "type": "module",
+  "scripts": {
+    "lint": "eslint . --fix",
+    "test": "vitest --run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@tanstack/oracles": "workspace:*",
+    "fast-check": "^4.10.2",
+    "vitest": "^4.1.12"
+  }
+}
