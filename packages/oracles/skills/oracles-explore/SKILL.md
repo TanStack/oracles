@@ -160,7 +160,9 @@ repository, change only these:
 Findings, potential oracles, and potential laws stay in the chat. Keep
 probes in a temporary directory outside the repository (`mktemp -d`). The
 gap check writes its report to the OS temp directory on its own. Neither
-needs cleaning up. If you delete or replace any file, name it, and say why.
+needs cleaning up. While the gap check runs, it keeps a session directory,
+`.oracle-gaps-<pid>/`, in the package directory, and removes it when the run
+ends: do not stage it. If you delete or replace any file, name it, and say why.
 
 ## A feedback log, while this is a preview
 

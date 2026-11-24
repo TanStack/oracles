@@ -291,6 +291,19 @@ The gap check reports TypeScript errors in oracle files in its output. It
 never blocks a run on them, so a run can finish with type errors in its
 report. Fix each one the report names.
 
+**Ignore the gap check's session directory.** Add this line to the
+repository's `.gitignore`:
+
+```gitignore
+.oracle-gaps-*/
+```
+
+While the gap check runs, it keeps its harness files (such as its capture
+setup and one Vitest config per context) in `.oracle-gaps-<pid>/` in the package
+directory, so that they resolve the package's modules, and removes the
+directory when the run ends. Without the line, a `git add -A` during a run
+stages that directory.
+
 ## 4. Write the agent instructions
 
 Add this block to whichever instruction file the repository uses:
@@ -550,7 +563,9 @@ is not Vite's default name. The baseline prints which config it used.
   owns appears as unowned warnings.
 - Pass `--seed`, so the baseline and every mutant run the same histories.
   The report goes to a directory in the OS temp directory, and its path is
-  printed at the end. Nothing is written into the repository.
+  printed at the end. While it runs, it also keeps a session directory,
+  `.oracle-gaps-<pid>/`, in the package directory. The run removes it when
+  it ends, and step 3 ignores it.
 - Pass `--daemon` when iterating on gaps in the same package: it keeps a
   per-package daemon running with warm Vitest workers and a disk evidence
   store, so repeated checks reuse unchanged unit evidence. The goal is that
