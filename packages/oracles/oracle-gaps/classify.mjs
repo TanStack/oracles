@@ -66,17 +66,11 @@ export function outcomeOf(
     test.state === `failed` && /Test timed out/.test(test.message)
   // The timeout's detail is the cause of the first gap cut in report order:
   // the backstop, or a spin whose count could follow the clock (`spin`).
-  // A failing law's spin is not built-in work: its verdicts are left out
-  // (`nondeterministic` here is the left-out set, leftOut), so the copy is a
-  // cut that blocks by that law (step 1, C 2026-11-23, "Count-cut label
-  // precedence"), never a kill (step 3).
-  const builtInOf = (unit) =>
-    (unit.builtIn ?? []).filter((v) => !nondeterministic.has(v.key))
   const cut = [...units]
     .sort((a, b) => byPath(a.file, b.file))
     .find(
       (unit) =>
-        (unit.timedOut && !(BUILT_IN[unit.cause] && builtInOf(unit).length)) ||
+        (unit.timedOut && !(BUILT_IN[unit.cause] && unit.builtIn?.length)) ||
         (unit.tests ?? []).some(timedOutTest),
     )
   const timeout = cut
@@ -91,7 +85,7 @@ export function outcomeOf(
     // test the cut names fails the built-in law on its route. A spin whose
     // count could follow the clock names none, and is a timeout (a gap).
     if (unit.timedOut) {
-      for (const v of BUILT_IN[unit.cause] ? builtInOf(unit) : []) {
+      for (const v of BUILT_IN[unit.cause] ? (unit.builtIn ?? []) : []) {
         const route = routeOf(v.route)
         failures.push({
           test: v.test ?? `(unnamed test)`,
