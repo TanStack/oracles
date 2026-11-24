@@ -372,7 +372,13 @@
  *    provisional (a RED baseline gives a provisional report). With `--only`, the baseline
  *    runs only the selected mutants' owners (and the ordinary files with
  *    `--ordinary`), and each selected mutant is judged as the full run
- *    judges it. The last stdout line is the run's done line (law 15),
+ *    judges it. A `--only` that selects nothing to judge refuses before
+ *    any test runs (law 12's ending; proposed by the fix for a run that
+ *    selected nothing and read as a pass, awaiting the maintainer's
+ *    approval): an id that is no mutant's id in the run, whose cause names
+ *    no mutant and names each such id and no other, and a selection whose
+ *    every mutant no oracle file owns, whose cause says that no oracle
+ *    file owns them and names each selected id. The last stdout line is the run's done line (law 15),
  *    `oracle-gaps: done completed, <n> gaps, report <path>` (G6): exit 0
  *    means the check ran to its end, not that it found no gaps.
  * 15. **The stream's lines are greppable** (the maintainer's request of
@@ -3660,6 +3666,57 @@ async function driver(plan, observe) {
       if (partial.exit === 0) states.add(`a partial run of one function`)
       if (partial.exit === 0 && plan.fault === `brokenOwner`)
         states.add(`a partial run beside a failing owner`)
+      // Law 14: a partial run that selects nothing to judge refuses. Its
+      // `unknown` selection is the chosen function's first mutant beside the
+      // id one past the source's last mutant, which names none (a stale or
+      // mistyped id); its `unowned` selection is the mutants of a function
+      // that the full run reported unowned.
+      const prefix = SOURCE.replace(/^src\//, ``)
+      const numbers = cli.mutants
+        .filter((m) => m.id.startsWith(`${prefix}:M`))
+        .map((m) => Number(m.id.slice(prefix.length + 2)))
+      const lone = cli.mutants.find(
+        (m) => !m.authored && m.outcome === `unowned`,
+      )
+      const selections = [
+        [`unknown`, [ids[0], `${prefix}:M${Math.max(0, ...numbers) + 1}`]],
+        ...(lone
+          ? [
+              [
+                `unowned`,
+                cli.mutants
+                  .filter(
+                    (m) =>
+                      !m.authored &&
+                      m.source === lone.source &&
+                      m.function === lone.function,
+                  )
+                  .map((m) => m.id),
+              ],
+            ]
+          : []),
+      ]
+      for (const [selection, only] of selections) {
+        const refused = runCli(dir, files, {
+          ...how,
+          only,
+          outName: `out-only-${selection}`,
+        })
+        observe(`partial refused`, {
+          selection,
+          only,
+          exit: refused.exit,
+          ending: refused.ending,
+          outDir: refused.outDir,
+          baselineFiles: refused.baselineFiles,
+        })
+        if (refused.exit === 2)
+          states.add(
+            selection === `unknown`
+              ? `a partial run of an id that names no mutant refused`
+              : `a partial run of unowned mutants refused`,
+          )
+      }
     }
     // Law 13: each stop run, once the CLI has judged the stop witness.
     const stopIds = cli.mutants
@@ -5591,7 +5648,9 @@ function endsBreach(run, { checked = true } = {}) {
  * blocked. Its last line says the check completed, with its gap count. A
  * failing owner's replay runs exactly its failing test. A partial run
  * (`--only`) runs the baseline of the selected mutants' owners alone, and
- * judges each selected mutant as the full run does.
+ * judges each selected mutant as the full run does; one that selects
+ * nothing to judge (an id that names no mutant, or only mutants no oracle
+ * file owns) refuses before any test runs, naming which.
  */
 function leadBreach(plan, cli, observations, expected) {
   const span = (text) => `\` ${text} \``
@@ -5748,6 +5807,78 @@ function leadBreach(plan, cli, observations, expected) {
         `baseline lead`,
       )
   }
+  // A partial run that selects nothing to judge refuses before any test
+  // runs, naming what it selected: an id that is no mutant's id in the full
+  // run, beside ids that are, and a selection whose every mutant the model
+  // says no oracle file owns. A selection with an owned mutant runs.
+  const keyOf = new Map(cli.mutants.map((m) => [m.id, m.key]))
+  // Whether the model gives a mutant's function an owner, probe code too.
+  const ownerless = new Map(
+    expected.mutants.map((m) => [m.key, ownersOf(plan)(m.fnId).size === 0]),
+  )
+  for (const refused of observations
+    .filter((o) => o.checkpoint === `partial refused`)
+    .map((o) => o.value)) {
+    const named = refused.only.filter((id) => !keyOf.has(id))
+    const owed =
+      named.length > 0 ||
+      refused.only.every((id) => ownerless.get(keyOf.get(id)) === true)
+    const what = `the partial run of ${refused.only.join(`, `)}`
+    if (!owed) {
+      if (refused.exit !== 0)
+        return violation(
+          `partial`,
+          `${what}, which selects an owned mutant, exited ${refused.exit}`,
+          `selection refusal`,
+        )
+      continue
+    }
+    if (refused.exit !== 2 || refused.ending === undefined)
+      return violation(
+        `partial`,
+        `${what} exited ${refused.exit}, owed a refusal: it selects ${named.length > 0 ? `${named.join(`, `)}, which names no mutant` : `no mutant that an oracle file owns`}`,
+        `selection refusal`,
+      )
+    // Each cause says which it is: an id that names no mutant, or a
+    // selection that no oracle file owns.
+    const breach = refusalBreach(refused.ending, {
+      cause: named.length > 0 ? `names no mutant` : `oracle file owns`,
+      outKnown: true,
+      logNote: logNoteOf(refused),
+    })
+    if (breach)
+      return violation(`partial`, `${what}: ${breach}`, `selection refusal`)
+    // The cause names each id that names no mutant and no other id, or, when
+    // every id names one, each selected id: two causes the author can tell
+    // apart. An id is named as a whole word (`M1` is not named by `M12`).
+    const names = (id) =>
+      new RegExp(
+        `(?:^|[\\s,])${id.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)}(?=$|[\\s,])`,
+      ).test(refused.ending.cause)
+    const owedNames = named.length > 0 ? named : refused.only
+    const unnamed = owedNames.find((id) => !names(id))
+    if (unnamed !== undefined)
+      return violation(
+        `partial`,
+        `${what} refused without naming ${unnamed}: ${refused.ending.cause}`,
+        `selection refusal`,
+      )
+    const extra = refused.only.find(
+      (id) => !owedNames.includes(id) && names(id),
+    )
+    if (extra !== undefined)
+      return violation(
+        `partial`,
+        `${what} refused naming ${extra}, which names a mutant: ${refused.ending.cause}`,
+        `selection refusal`,
+      )
+    if (refused.baselineFiles.length > 0)
+      return violation(
+        `partial`,
+        `${what} refused after the baseline of ${refused.baselineFiles.join(`, `)} ran`,
+        `selection refusal`,
+      )
+  }
   return undefined
 }
 
@@ -5888,6 +6019,66 @@ const calibrations = [
     },
   },
 ]
+
+// A partial run that selects nothing to judge (law 14's selection refusal),
+// as a CLI that does not refuse it, or refuses it for the other cause, would
+// end. The constructed history runs both selections.
+const corruptRefusedPartial = (selection, change) => (trace) => {
+  const index = trace.findIndex(
+    (o) =>
+      o.checkpoint === `partial refused` &&
+      o.value.selection === selection &&
+      o.value.exit === 2,
+  )
+  if (index < 0) return undefined
+  const value = structuredClone(trace[index].value)
+  change(value)
+  return trace.map((o, i) => (i === index ? { ...o, value } : o))
+}
+// A refusal's cause, on stderr and in the results.json it wrote alike, so
+// only the law on what the cause says can reject it.
+const recause = (value, cause) => {
+  value.ending.cause = cause
+  if (value.ending.written) value.ending.written.cause = cause
+}
+const refusedPartialHistory = {
+  constructed: `a failing owner under a config that --config names`,
+}
+calibrations.push(
+  {
+    name: `a partial run of an id that names no mutant completes`,
+    law: `selection refusal`,
+    history: refusedPartialHistory,
+    // What main did: the baseline of no file, and a completed run with no
+    // gap.
+    corrupt: corruptRefusedPartial(`unknown`, (value) => {
+      value.exit = 0
+      value.ending = undefined
+    }),
+  },
+  {
+    name: `a partial run of unowned mutants is refused as naming no mutant`,
+    law: `selection refusal`,
+    history: refusedPartialHistory,
+    corrupt: corruptRefusedPartial(`unowned`, (value) => {
+      recause(
+        value,
+        `--only names no mutant of this run: ${value.only.join(`, `)}`,
+      )
+    }),
+  },
+  {
+    name: `a partial run's refusal names an id that names a mutant`,
+    law: `selection refusal`,
+    history: refusedPartialHistory,
+    corrupt: corruptRefusedPartial(`unknown`, (value) => {
+      recause(
+        value,
+        `--only names no mutant of this run: ${value.only.join(`, `)}`,
+      )
+    }),
+  },
+)
 
 calibrations.push({
   name: `the daemon reports another outcome than the cold run`,
@@ -6762,6 +6953,8 @@ const required = [
   `blocked by setupThrows`,
   `a partial run of one function`,
   `a partial run beside a failing owner`,
+  `a partial run of an id that names no mutant refused`,
+  `a partial run of unowned mutants refused`,
   `edit fixSession changed the cold result`,
   `a check after the session's failure was fixed`,
   `two checks at once on a session that cannot open`,
@@ -6880,6 +7073,8 @@ const separate = [
   `the failing owner's passing pair judged module data beside its failing law`,
   `a partial run of one function`,
   `a partial run beside a failing owner`,
+  `a partial run of an id that names no mutant refused`,
+  `a partial run of unowned mutants refused`,
   ...analyzedFaults.map((fault) => `analyzed ${fault}`),
   `edit fixSession changed the cold result`,
   `a check after the session's failure was fixed`,
@@ -8315,21 +8510,25 @@ oracleProperty({
           `a failing owner replayed under a config that --config names`,
           `a partial run of one function`,
           `a partial run beside a failing owner`,
+          `a partial run of an id that names no mutant refused`,
+          `a partial run of unowned mutants refused`,
         ],
         // The failing owner, file b, owns the second function and nothing
         // else that the generated base could leave out. Its suite's two
         // passing tests judge that function's mutants (Block per law,
         // 2026-11-18), so none is blocked; its partial run is of file a's
-        // function.
+        // function. The third function has no owner, so its mutants are a
+        // selection that no oracle file owns.
         build: (generated) => ({
           ...generated,
           functions: [
             [{ kind: `push`, quote: `'` }],
             [{ kind: `push`, quote: `'` }],
+            [{ kind: `push`, quote: `'` }],
           ],
           containers: [],
           overloads: [],
-          owners: [`a`, `b`],
+          owners: [`a`, `b`, `none`],
           wholeFile: `none`,
           witness: false,
           tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
