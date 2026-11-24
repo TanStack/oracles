@@ -461,15 +461,11 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
     ),
     seconds: units.reduce((sum, u) => sum + u.seconds, 0),
   }
-  // A count cut by an excluded or clocked test, with no deterministic test
-  // reaching the mutant, judges nothing: it is indeterminate, not a timeout,
-  // because `timeout` is the backstop gap only (M-24, G11; "An excluded test
-  // still runs", M 2026-11-23).
-  if (
-    result.outcome === `timeout` &&
-    result.detail === `spin` &&
-    compared.every((k) => rows.get(k).clocked)
-  ) {
+  // A count cut whose copy the clock can reach is indeterminate, whichever
+  // sibling tests ran before it: the label uses the cut's clocked status alone
+  // (C 2026-11-23, "A count cut's label never depends on timing"; `timeout` is
+  // the backstop only, M-24, and an excluded test still runs, M 2026-11-23).
+  if (result.outcome === `timeout` && result.detail === `spin`) {
     const open = { ...result, outcome: `survived`, class: `indeterminate` }
     delete open.detail
     open.nondeterministicBy = targets.oracleKeys.filter((k) =>
@@ -565,6 +561,13 @@ export function judgeAuthored(units, baseline) {
   const result = {
     ...outcomeOf(units, baseline.nondeterministic),
     seconds: units.reduce((sum, u) => sum + u.seconds, 0),
+  }
+  // A count cut whose copy the clock can reach is indeterminate, as in
+  // judgeMutant (C 2026-11-23, "A count cut's label never depends on timing").
+  if (result.outcome === `timeout` && result.detail === `spin`) {
+    const open = { ...result, outcome: `survived`, class: `indeterminate` }
+    delete open.detail
+    return open
   }
   if (result.outcome !== `survived`) return result
   const rows = new Map(units.flatMap((u) => u.rows ?? []))

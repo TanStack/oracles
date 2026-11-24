@@ -909,13 +909,11 @@ function judgedOutcome(h, mi, owners) {
   const compared = ran.filter(
     (x) => (x.t.reaches[mi] || h.files[x.fi].background[mi]) && !x.t.flaky,
   )
-  // A spin gap (a count cut by a clocked or excluded test) is a timeout only
-  // when a deterministic, unclocked test reaches the mutant; otherwise the
-  // mutant is indeterminate (M-24: `timeout` is the backstop only).
-  const spinOpen =
-    failure?.outcome === `timeout` &&
-    failure.detail === `spin` &&
-    !compared.some((x) => x.t.clocked === `none`)
+  // A count cut whose copy the clock can reach (a spin gap) is indeterminate,
+  // whichever sibling tests ran before it: the label uses the cut's clocked
+  // status alone (C 2026-11-23, "A count cut's label never depends on timing";
+  // `timeout` is the backstop only, M-24).
+  const spinOpen = failure?.outcome === `timeout` && failure.detail === `spin`
   if (failure && !spinOpen) return { ...failure, ownerFiles }
   const changed = compared.find((x) =>
     [`changed`, `observedChanged`].includes(x.t.under[mi].kind),
@@ -1025,6 +1023,10 @@ function judgedAuthored(h, ai, owners) {
     h.files[fi].tests.map((t, ti) => ({ t, fi, ti })),
   )
   const { failure, ran } = failureOf(h, slot, tests)
+  // A count cut whose copy the clock can reach is indeterminate (C 2026-11-23,
+  // "A count cut's label never depends on timing"), as for an operator.
+  if (failure?.outcome === `timeout` && failure.detail === `spin`)
+    return { outcome: `survived`, class: `indeterminate` }
   if (failure) return failure
   const changed = ran.find(
     (x) =>
@@ -4216,6 +4218,7 @@ oracleProperty({
     measured: [
       ...[
         `timeout`,
+        `indeterminate`,
         `unregistered-kill`,
         `crashed`,
         `framework-error`,
