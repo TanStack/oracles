@@ -28,7 +28,9 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
-const anyOf = (names) => `(?:${names.map(escape).join(`|`)})`
+// Each name matched as written, or a regular expression as it is.
+const anyOf = (names) =>
+  `(?:${names.map((name) => (name instanceof RegExp ? name.source : escape(name))).join(`|`)})`
 const rest = Symbol(`rest`)
 
 // The self-oracle's test names, split by the start of the name after its
@@ -827,6 +829,10 @@ export const partitions = {
           'random seed: bad arguments: seed',
           'random seed: no oracle file refuses the run',
         ],
+        // The histories of the package's authored-mutants directory, at every
+        // seed, by how their names end: cmd.exe limits this shard's command
+        // line, which their nine names passed.
+        /.*(?:default directory|no-authored-mutants)/,
       ]),
     },
   },
@@ -917,6 +923,7 @@ export const partitions = {
         'a lazy module loaded before a hang in the same batch',
         'an edit during a check through the daemon',
         'an ambiguous authored mutant',
+        "authored mutants in the package's own directory",
         'an edit to data a test reads through fs (sync)',
         "a failing owner under its parent's config",
         'a config that --config names',

@@ -21,7 +21,10 @@ agent.
   `configureOracles`. `--config <file>`, relative to `--package`, selects the
   Vitest config; without it, the run loads the config that Vitest discovers,
   in the package's directory or else the nearest parent directory that has
-  one, and the baseline output names the config it loaded. Each run writes its report to
+  one, and the baseline output names the config it loaded. Without
+  `--mutants <dir>`, the run also judges the authored mutants (wrong
+  versions written by hand) in the package's `authored-mutants/` directory,
+  if it has one; `--no-authored-mutants` runs none. Each run writes its report to
   a directory of its own in the OS temp directory (or to `--out`), and
   prints its path. The daemon's state and the one-file bundles of workspace
   dependencies are in the OS temp directory too, keyed by the package, which

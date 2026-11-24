@@ -216,7 +216,10 @@
  *    is judged by law 4 against the owners of the function it edits, without
  *    the branch-never-taken class, and is reported at the line of its edit; one
  *    whose text occurs zero or several times is `does-not-apply`. Its key is
- *    its id, whatever its file is called.
+ *    its id, whatever its file is called. A run with no `--mutants` reads
+ *    the authored mutants of the package's own `authored-mutants`
+ *    directory, and judges them as it judges a directory that `--mutants`
+ *    names.
  * 6. **Keys.** Each mutant's key is its anchor:
  *    `file#function:operator:statement`, where `statement` is the text of the
  *    innermost statement that holds the site, as tokens joined by single
@@ -4040,6 +4043,8 @@ async function driver(plan, observe) {
           )
         )
           states.add(`two authored mutants judged apart`)
+        if (plan.authoredPlace === `default`)
+          states.add(`authored mutants read from the package's own directory`)
         states.add(
           m.outcome !== `does-not-apply`
             ? `authored mutant`
@@ -6687,6 +6692,7 @@ const required = [
   `ordinary tests run when asked`,
   `ordinary tests left out by default`,
   `two authored mutants judged apart`,
+  `authored mutants read from the package's own directory`,
   `timeout`,
   `a kill after a nondeterministic verdict in its file`,
   `a kill in one owner after a gap in another`,
@@ -6855,6 +6861,7 @@ const separate = [
   loadOnlyAbsent,
   `ordinary tests left out by default`,
   `two authored mutants judged apart`,
+  `authored mutants read from the package's own directory`,
   `a package with a prebuilt addon deep in its tree ran in child processes`,
   `a setup error`,
   `a setup error beside a timeout under one budget`,
@@ -7341,6 +7348,7 @@ oracleProperty({
           failingLawCalls: `none`,
           failingLawHook: `none`,
           failingLawSpins: false,
+          authoredPlace: `flag`,
           stopRuns: NO_STOPS,
           laterSteps: NO_LATER_STEPS,
         },
@@ -7550,6 +7558,7 @@ oracleProperty({
           failingLawCalls: 'none',
           failingLawHook: 'none',
           failingLawSpins: false,
+          authoredPlace: 'flag',
         },
       },
       {
@@ -7715,6 +7724,7 @@ oracleProperty({
           failingLawCalls: 'none',
           failingLawHook: 'none',
           failingLawSpins: false,
+          authoredPlace: 'flag',
         },
       },
       {
@@ -7907,6 +7917,7 @@ oracleProperty({
           failingLawCalls: 'none',
           failingLawHook: 'none',
           failingLawSpins: false,
+          authoredPlace: 'flag',
         },
       },
     ],
@@ -10542,6 +10553,31 @@ oracleProperty({
           laterSteps: NO_LATER_STEPS,
           dataOwners: [`b`],
           tests: [{ ...judging(`b`, `fixed seed`, 1), flaky: true, fn: 0 }],
+        }),
+      },
+      {
+        // An authored mutant in the package's own authored-mutants
+        // directory, and no --mutants: the run reads that directory, and
+        // judges the mutant as it would under --mutants.
+        name: `authored mutants in the package's own directory`,
+        enters: [`authored mutants read from the package's own directory`],
+        build: (generated) => ({
+          ...generated,
+          functions: [[{ kind: `push`, quote: `'` }]],
+          containers: [],
+          overloads: [],
+          owners: [`a`],
+          wholeFile: `none`,
+          witness: false,
+          tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
+          authored: { stmt: 0, kind: `apply` },
+          secondAuthored: false,
+          fault: `none`,
+          onlyRun: false,
+          stability: `none`,
+          steps: null,
+          laterSteps: NO_LATER_STEPS,
+          authoredPlace: `default`,
         }),
       },
     ]),

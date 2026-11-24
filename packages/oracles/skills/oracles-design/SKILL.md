@@ -624,11 +624,27 @@ comes with one instruction. Do what it says, within the rules below.
   production: the guard protects untyped callers. Every other mutant on that
   line must still be killed.
 
-- **Few mutants are weak evidence.** If the gap check generates few mutants
-  for an owned function, or none on a law's decisions (such as a return
-  expression), write authored mutants for the laws it misses. Put them in a
-  directory and pass it with `--mutants <dir>`. The form is in the
-  [mutant gap search](../../docs/instruments/mutant-gap-search.md) card.
+- **Write an authored mutant for each wrong version the operators cannot
+  make.** An authored mutant is a wrong version written by hand, in the form
+  that the [mutant gap search](../../docs/instruments/mutant-gap-search.md)
+  card gives. Write one when:
+  - a review names a wrong version that passes, or you confirm one while you
+    evaluate a review;
+  - the wrong version needs more than one small edit, which no generated
+    operator makes: a cache that keeps a stale entry, a copy in place of a
+    reference, a changed order;
+  - the gap check generates few mutants for an owned function, or none on a
+    law's decisions (such as a return expression).
+
+  Put each one in the package's `authored-mutants/` directory, beside its
+  `package.json`. The gap check runs that directory's mutants whenever no
+  `--mutants` names another directory, so do not pass `--mutants` for it.
+  Keep each one there after a law kills it. The directory holds every wrong
+  version that anyone found, so every later gap check asks each of them
+  again. When an edit moves the text that its `find` names, the gap check
+  reports it as `does-not-apply`: update its `find` and `replace` to the new
+  code. Remove one only together with the behavior it breaks.
+
 - **Three or more gaps in one function** fire the design grammar trigger
   (step 1). Stop, read the card, and write its parts list for that function
   before you add a history. Adding histories first is the shortcut "Skipped

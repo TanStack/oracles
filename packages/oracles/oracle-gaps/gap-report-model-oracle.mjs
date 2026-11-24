@@ -1145,6 +1145,11 @@ const drawn = fc.record({
   // a gap (the maintainer's decision "An excluded test still runs",
   // 2026-11-23). Drawn last (the generator rule).
   failingLawSpins: fc.boolean(),
+  // Where the authored mutants lie: in a directory that `--mutants` names,
+  // or in the package's own `authored-mutants` directory, which a run with
+  // no `--mutants` reads (feat/authored-mutants-default-dir). Either way
+  // the run judges the same mutants. Drawn last (the generator rule).
+  authoredPlace: fc.constantFrom(`flag`, `flag`, `default`),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -3495,6 +3500,9 @@ function resolveHistory(history) {
     failingLawCalls: history.failingLawCalls ?? `none`,
     failingLawHook: history.failingLawHook ?? `none`,
     failingLawSpins: history.failingLawSpins === true,
+    // Where the authored mutants lie (`authoredPlace` above). A history
+    // filed before the field existed names them with --mutants.
+    authoredPlace: history.authoredPlace ?? `flag`,
     ordinary: history.ordinary === true,
     // The batch whose run rejects (a test-only fault; 0 is none).
     rejectBatch: history.rejectBatch ?? 0,
@@ -6554,16 +6562,21 @@ function fixtureFiles(plan, state = initialState(plan)) {
       `d`,
     )
   }
+  // The package's own directory of authored mutants, which a run with no
+  // `--mutants` reads (args.mjs), or another that `--mutants` names.
+  const authoredDir =
+    plan.authoredPlace === `default` ? `authored-mutants` : `mutants`
   for (const a of plan.authoredList)
-    files[a.id === `a1` ? AUTHORED : `mutants/authored-mutant-${a.id}.json`] =
-      JSON.stringify({
-        id: a.id,
-        source: SOURCE,
-        find: a.find,
-        replace: a.replace,
-        intent: `pushes a different label`,
-        author: `gap-report oracle`,
-      })
+    files[
+      `${authoredDir}/authored-mutant${a.id === `a1` ? `` : `-${a.id}`}.json`
+    ] = JSON.stringify({
+      id: a.id,
+      source: SOURCE,
+      find: a.find,
+      replace: a.replace,
+      intent: `pushes a different label`,
+      author: `gap-report oracle`,
+    })
   if (plan.testRoot !== `link`) return files
   // The `link` test root: the files of `tests` live in `linkedTests`, and
   // `tests` links to it.
