@@ -254,4 +254,32 @@ describe(`gap report ownership through the call trees`, () => {
       rmSync(pkg, { recursive: true, force: true })
     }
   })
+
+  // An unnamed arrow called in place is no unit: its code is the
+  // initializer's own, so what it calls is in the declaration's tree (the
+  // module-data rule). Before, every function-like node in an initializer
+  // was skipped as if it were a unit of its own.
+  test(`module data owns what an unnamed function called in its initializer calls`, () => {
+    const pkg = makePackage({
+      'src/a.ts': [
+        `function helper(): number {`,
+        `  return 1 + 1`,
+        `}`,
+        `const D = (() => helper())()`,
+        `export function run(): number {`,
+        `  return D`,
+        `}`,
+        ``,
+      ].join(`\n`),
+      'tests/a.test.ts': `oracleProperty({ owns: ['src/a.ts#run'] })\n`,
+    })
+    try {
+      const testFile = join(pkg, `tests`, `a.test.ts`)
+      expect(
+        ownersAt(pkg, [`src/a.ts`], testFile, `src/a.ts`, `1 + 1`),
+      ).toEqual(new Set([testFile]))
+    } finally {
+      rmSync(pkg, { recursive: true, force: true })
+    }
+  })
 })

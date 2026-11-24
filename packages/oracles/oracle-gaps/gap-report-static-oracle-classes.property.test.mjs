@@ -39,7 +39,8 @@
  * helper that takes a class as a value, an optional base class `Base` (a
  * field and a method) that the class `C` extends, and the class `C` with
  * any of: an instance field whose initializer calls `fa`, a static field
- * whose initializer calls `fb`, a static block that calls `fc`, a
+ * whose initializer calls `fb`, a static block that calls `fc`, a field
+ * whose initializer calls an unnamed arrow that calls `fg`, a
  * constructor that calls `fd`, a method `m` that calls `fe`, a getter `g`,
  * and a field arrow `h`. A statement after the class calls `ff` and sets a
  * property of C's prototype. The entry is `#C`, `#C.constructor`, `#C.m`,
@@ -90,12 +91,15 @@ const ts = createRequire(join(here, `../package.json`))(
 )
 
 const LAW = `a class is a unit that an owns entry may name`
-const FUNCTIONS = [`fa`, `fb`, `fc`, `fd`, `fe`, `ff`]
+const FUNCTIONS = [`fa`, `fb`, `fc`, `fd`, `fe`, `ff`, `fg`]
 // The module function each piece of the class calls.
 const CALLS = {
   field: `fa`,
   staticField: `fb`,
   staticBlock: `fc`,
+  // A field whose initializer calls an unnamed arrow, which is no unit:
+  // the arrow's code is the class's, and so is what it calls.
+  iife: `fg`,
   ctor: `fd`,
   method: `fe`,
 }
@@ -105,6 +109,7 @@ const historyArbitrary = fc.record({
   field: fc.boolean(),
   staticField: fc.boolean(),
   staticBlock: fc.boolean(),
+  iife: fc.boolean(),
   ctor: fc.boolean(),
   method: fc.boolean(),
   getter: fc.boolean(),
@@ -145,6 +150,7 @@ function markersOf(raw) {
     ...(h.field ? { 'C:field': `C` } : {}),
     ...(h.staticField ? { 'C:static': `C` } : {}),
     ...(h.staticBlock ? { 'C:block': `C` } : {}),
+    ...(h.iife ? { 'C:iife': `C` } : {}),
     ...Object.fromEntries(membersOf(h).map((unit) => [unit, unit])),
     statement: `<module>`,
   }
@@ -183,6 +189,7 @@ function sourceOf(raw) {
     lines.push(`  static s = /*@C:static*/ ${CALLS.staticField}()`)
   if (h.staticBlock)
     lines.push(`  static {`, `    /*@C:block*/ ${CALLS.staticBlock}()`, `  }`)
+  if (h.iife) lines.push(`  t = (() => /*@C:iife*/ ${CALLS.iife}())()`)
   if (h.ctor)
     lines.push(
       `  constructor() {`,
@@ -224,6 +231,7 @@ function model(raw) {
   if (h.field) link(`C`, CALLS.field)
   if (h.staticField) link(`C`, CALLS.staticField)
   if (h.staticBlock) link(`C`, CALLS.staticBlock)
+  if (h.iife) link(`C`, CALLS.iife)
   // `extends Base` uses Base as a value: the whole class.
   if (h.base) {
     link(`C`, `Base`)
@@ -253,9 +261,10 @@ function model(raw) {
 /** The states a history enters, for the reach counts. */
 function statesOf(raw) {
   const h = effective(raw)
-  const own = h.field || h.staticField || h.staticBlock
+  const own = h.field || h.staticField || h.staticBlock || h.iife
   const states = []
   if (h.entry === `class` && (h.field || h.staticField)) states.push(STATES[0])
+  if (h.entry === `class` && h.iife) states.push(STATES[10])
   if (h.entry === `class` && h.staticBlock) states.push(STATES[1])
   if (h.entry === `class` && membersOf(h).length > 0) states.push(STATES[2])
   if (h.entry === `class` && h.base) states.push(STATES[3])
@@ -279,24 +288,26 @@ const STATES = [
   `a class passed as a value brings the whole class`,
   `an unused class stays unowned`,
   `a statement after the class is the module's`,
+  `a class entry owns what an unnamed function in its field calls`,
 ]
 
 const full = {
   field: true,
   staticField: true,
   staticBlock: true,
+  iife: true,
   getter: true,
   arrow: true,
 }
 const constructed = [
   {
     name: `class entry`,
-    enters: [STATES[0], STATES[1], STATES[2], STATES[9]],
+    enters: [STATES[0], STATES[1], STATES[2], STATES[9], STATES[10]],
     build: (g) => ({ ...g, ...full, ctor: true, method: true, entry: `class` }),
   },
   {
     name: `class entry with a base`,
-    enters: [STATES[0], STATES[1], STATES[2], STATES[3], STATES[9]],
+    enters: [STATES[0], STATES[1], STATES[2], STATES[3], STATES[9], STATES[10]],
     build: (g) => ({ ...g, ...full, base: true, ctor: true, entry: `class` }),
   },
   {

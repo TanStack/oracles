@@ -65,7 +65,9 @@
 // tree, with what its initializer refers to outside the functions it holds,
 // and an owns entry may name it. A function its initializer holds, such as an
 // object literal's method or function property, is a unit of its own, owned
-// where something refers to it, not because the declaration's text holds it:
+// where something refers to it, not because the declaration's text holds it
+// (an unnamed function called in place is no unit, so what it refers to is
+// the declaration's):
 // a static property read (`obj.a` or `obj['a']`) brings only that property
 // and leaves sibling functions unowned, and naming the declaration in an
 // `owns` entry (`src/x.ts#TABLE`) leaves its functions to their callers.
@@ -465,13 +467,22 @@ export function ownership(ts, program, pkg, oracles) {
           symbol = checker.getAliasedSymbol(symbol)
         found.push(...resolveUsage(symbol, referenceExpression(child)))
       }
-      // A function in module data's initializer, or a class's member, is a
-      // unit of its own, reached only when something refers to it.
-      if (!(data && ts.isFunctionLike(child))) ts.forEachChild(child, visit)
+      // A unit in module data's initializer or in a class's own text, such
+      // as a member, is reached only when something refers to it. A
+      // function that is no unit, such as an unnamed arrow called in place,
+      // is that text's own code, so what it refers to is followed.
+      if (child === node || !units?.has(child)) ts.forEachChild(child, visit)
     }
     // A function's body, module data's initializer, or a class's own text
-    // (its members aside).
+    // (its units aside).
     const data = node.body === undefined
+    const units = data
+      ? new Set(
+          functionsOf(posix(relative(pkg, node.getSourceFile().fileName))).map(
+            (fn) => fn.node,
+          ),
+        )
+      : undefined
     const text = ts.isClassDeclaration(node)
       ? node
       : (node.body ?? node.initializer)
