@@ -7029,7 +7029,7 @@ oracleProperty({
       },
       {
         // The #184 counterexample (seed -1120189360, D_ARR "a daemon pause that cannot engage") in its neutral main form (its PR-only fields dropped). Replayed as a fixed history.
-        name: 'replay by history: #184 (h2, neutral main form)',
+        name: 'a module array mutant judged past nondeterministic plan tests under a daemon pause',
         history: {
           functions: [
             [{ kind: 'flag', value: false }],
@@ -7231,7 +7231,7 @@ oracleProperty({
       },
       {
         // The #116 counterexample (random seed: an ambiguous authored mutant, seed 333199054), from the history in its thread. Fields the grammar gained after it was filed hold h2's values.
-        name: 'replay by history: #116 (D_OBJ field-drop, seed 333199054)',
+        name: 'a module object field-drop judged past a console test',
         history: {
           functions: [[{ kind: 'readData', shape: 'object' }]],
           containers: [],
@@ -7391,7 +7391,7 @@ oracleProperty({
       },
       {
         // The #203 counterexample (random seed: a stale authored mutant and a reformat, seed 1606566214), from the history captured on main.
-        name: 'replay by history: #203 (D_PRIM bool-flip, seed 1606566214)',
+        name: 'a module boolean flip judged past a console test',
         history: {
           functions: [
             [
