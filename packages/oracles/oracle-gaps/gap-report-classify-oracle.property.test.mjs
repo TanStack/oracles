@@ -915,9 +915,13 @@ function judgedOutcome(h, mi, owners) {
   // `timeout` is the backstop only, M-24).
   const spinOpen = failure?.outcome === `timeout` && failure.detail === `spin`
   if (failure && !spinOpen) return { ...failure, ownerFiles }
-  const changed = compared.find((x) =>
-    [`changed`, `observedChanged`].includes(x.t.under[mi].kind),
-  )
+  // A clocked count cut is indeterminate whatever the recorded rows show, a
+  // changed observation included (the ruling of C 2026-11-23, as above).
+  const changed = spinOpen
+    ? undefined
+    : compared.find((x) =>
+        [`changed`, `observedChanged`].includes(x.t.under[mi].kind),
+      )
   const sized = (cls, extra = {}) =>
     withOrdinary({
       outcome: `survived`,
