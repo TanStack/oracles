@@ -647,6 +647,34 @@ line or the report's `rerun: --only <id>`): it runs only those mutants and
 their owners' baseline, and marks the run as partial, so finish with a full
 check without `--only`.
 
+### Validating a fast-path removal
+
+An `extra-work` gap says that without the mutated code the output is the
+same and the work is more. Keep the code and declare the bound, as above,
+unless you propose to remove it. Then measure whether the extra work costs
+time, and send the measurement with the proposal: removing the code is the
+developer's decision. Never loosen a `work` bound to let a removal pass.
+
+- **With no benchmark,** the evidence is the work count that the gap check
+  measured: the gap's site evaluations before and after, and their ratio. A
+  wall-clock benchmark is then a proposal too.
+- **With the repository's benchmarks,** run them on the base commit and on
+  the branch, on the same machine, alternating, several times each, and
+  report the range across runs. One run's `rme` understates that range ten
+  times or more, and `--compare` against an earlier run of the same code
+  showed it 1.22x faster.
+- **Run bench files one at a time.** `vitest bench` does so by default in
+  Vitest 4.1 and 5. Vitest 4.1 runs them in parallel under
+  `fileParallelism: true` in the config or `--file-parallelism`, and then
+  the spread across runs grew 1.5 to 3 times: pass `--no-file-parallelism`.
+- **Check the installed Vitest** (`npx vitest --version`). In Vitest 4,
+  `bench` is imported from `vitest`, and `--outputJson <file>` and
+  `--compare <file>` save and compare runs. In Vitest 5, `bench` is a test
+  context fixture (`test('…', async ({ bench }) => …)`) and both flags are
+  gone: `bench(name, { writeResult: '<file>' }, fn)` saves a result, and
+  `bench.from(name, '<file>')` compares with it. Under an agent, Vitest 5
+  prints no result table unless you pass `--reporter=default`.
+
 ## 9. Report the evidence
 
 The evidence counts only as a set. One item alone proves little. Give the
