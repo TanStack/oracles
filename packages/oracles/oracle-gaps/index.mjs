@@ -66,6 +66,7 @@
 // A run that does not complete never ends with a bare stack trace
 // (ending.mjs; maintainer decision, 2026-11-10). A problem the author can
 // fix (bad arguments, a broken owns declaration, no oracle file or owner,
+// an --only that selects nothing to judge,
 // `test.projects`, a Vitest that does not load) refuses the run: exit 2, `refused: <cause>` and `fix:
 // <directive>` on stderr, and results.json and summary.md in the output
 // directory once the arguments name one. Any other error is a bug in the

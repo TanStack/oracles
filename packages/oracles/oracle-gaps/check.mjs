@@ -49,6 +49,7 @@ import {
   authoredKey,
   gapsOf,
   keyAndSelect,
+  ownersOfOnly,
   renderReport,
   renderStdout,
 } from './report.mjs'
@@ -2129,21 +2130,29 @@ export default async (env) => {
     // Keys are numbered over every mutant before the selection (report.mjs).
     let queue = keyAndSelect(mutants, options)
     // With --only, the baseline runs only the owners of the selected mutants
-    // (maintainer disposition G5, 2026-11-11), operator and authored.
-    const selectedOwners =
+    // (maintainer disposition G5, 2026-11-11), operator and authored; a
+    // selection that judges nothing refuses (ownersOfOnly).
+    const onlyOwners =
       options.only &&
-      new Set([
-        ...queue.flatMap((mutant) => [...ownersOf(mutant)]),
-        ...authored
-          .filter((mutant) => options.only.has(`authored:${mutant.id}`))
-          .flatMap((mutant) => {
+      ownersOfOnly(options.only, [
+        ...mutants.map((mutant) => [mutant.id, () => ownersOf(mutant)]),
+        ...authored.map((mutant) => [
+          `authored:${mutant.id}`,
+          () => {
             const path = realpathSync(join(pkg, mutant.source))
             const patched = applyAuthored(readFileSync(path, `utf8`), mutant)
-            return patched
-              ? [...owned.at(mutant.source, patched.position).owners]
-              : []
-          }),
+            return patched && owned.at(mutant.source, patched.position).owners
+          },
+        ]),
       ])
+    const selectedOwners =
+      onlyOwners &&
+      new Set(
+        [
+          ...queue.map((mutant) => mutant.id),
+          ...authored.map((mutant) => `authored:${mutant.id}`),
+        ].flatMap((id) => [...(onlyOwners.get(id) ?? [])]),
+      )
     // The first pass runs every test file, ordinary ones too, so the report
     // leads with each file's result (the v20 freeze's one loop: test results
     // and gaps together); with --only, the selected mutants' owners, and the
