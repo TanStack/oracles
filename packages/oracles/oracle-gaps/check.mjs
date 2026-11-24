@@ -2132,26 +2132,29 @@ export default async (env) => {
     // With --only, the baseline runs only the owners of the selected mutants
     // (maintainer disposition G5, 2026-11-11), operator and authored; a
     // selection that judges nothing refuses (ownersOfOnly).
-    const onlyOwners =
-      options.only &&
-      ownersOfOnly(options.only, [
-        ...mutants.map((mutant) => [mutant.id, () => ownersOf(mutant)]),
-        ...authored.map((mutant) => [
-          `authored:${mutant.id}`,
-          () => {
-            const path = realpathSync(join(pkg, mutant.source))
-            const patched = applyAuthored(readFileSync(path, `utf8`), mutant)
-            return patched && owned.at(mutant.source, patched.position).owners
-          },
-        ]),
-      ])
+    // The selection's ids that the run judges: the operator mutants that
+    // `--sample` keeps, and every selected authored mutant.
     const selectedOwners =
-      onlyOwners &&
-      new Set(
+      options.only &&
+      ownersOfOnly(
+        options.only,
+        [
+          ...mutants.map((mutant) => [mutant.id, () => ownersOf(mutant)]),
+          ...authored.map((mutant) => [
+            `authored:${mutant.id}`,
+            () => {
+              const path = realpathSync(join(pkg, mutant.source))
+              const patched = applyAuthored(readFileSync(path, `utf8`), mutant)
+              return patched && owned.at(mutant.source, patched.position).owners
+            },
+          ]),
+        ],
         [
           ...queue.map((mutant) => mutant.id),
-          ...authored.map((mutant) => `authored:${mutant.id}`),
-        ].flatMap((id) => [...(onlyOwners.get(id) ?? [])]),
+          ...authored
+            .map((mutant) => `authored:${mutant.id}`)
+            .filter((id) => options.only.has(id)),
+        ],
       )
     // The first pass runs every test file, ordinary ones too, so the report
     // leads with each file's result (the v20 freeze's one loop: test results
