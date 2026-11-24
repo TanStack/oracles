@@ -560,6 +560,16 @@ comes with one instruction. Do what it says, within the rules below.
   counts as one site, make that cost an explicit driver observation instead
   of tightening the bound. A test whose work follows the clock judges no
   work.
+- **A `setup-error` gap on module-level code** is a mutant that makes the
+  module throw while it loads. Every file that imports the module
+  statically then fails before any of its tests runs, so no law judges it.
+  A Vitest setup file that imports it statically fails every test file the
+  same way. A dynamic `import()` of the module rejects with the same error
+  on every call. So one owner file loads the module inside its driver with
+  `await import(…)`, records a rejected load as an observation, and lets a
+  law reject it. That file imports neither the module nor anything that
+  imports it at its top level. A setup file imports an owned module inside
+  its hook, never at its top level.
 - **An effect that no check sees** is one that the driver does not record,
   or one that no history makes different. A changed condition can still lead
   to the same result when both branches agree on every generated input. Then
