@@ -442,6 +442,21 @@ pLimit` is `index.js#pLimit`. `exports.name = fn` is named `name`.
   - Module-level data (`const UNIT_MS = {...}`) is its own unit, named by its
     variable. An owned function that reads it owns it, and what its
     initializer refers to. An entry can also name it: `src/index.ts#UNIT_MS`.
+    Methods and function properties defined inside an object literal
+    (`const handlers = { a() {}, b: () => ... }`) are units of their own: a
+    static property read (`handlers.a()`, `handlers['a']()`) owns only `a`
+    and leaves the sibling methods unowned. Naming the variable directly in
+    `owns` (`src/index.ts#handlers`) owns the variable's own non-function
+    sites and no method. Indexing the object dynamically (`handlers[method]()`),
+    passing it as a whole value (`dispatch(handlers)`, `Object.values(handlers)`),
+    or spreading it (`{ ...handlers }`) brings every function defined inside
+    its initializer into the caller's tree, so owning the dispatch entry point
+    (`src/index.ts#handleInputChunk`) owns the whole dispatch table. Module
+    functions that the initializer names by shorthand (`{ helper }`) are owned
+    whenever the literal is reached, by a static read or an owns entry as well,
+    as `{ helper: helper }` is; the module-data rule in
+    `gap-report-oracle.property.test.mjs` (lines 70-75) is the reason. The
+    dispatch law is judged by `gap-report-static-oracle-dispatch.property.test.mjs`.
     A destructured declaration (`const { a, b } = ...`) is not a unit: if a law
     depends on one, own the whole file.
   - When an entry pulls in another contract (a batching API in the same
