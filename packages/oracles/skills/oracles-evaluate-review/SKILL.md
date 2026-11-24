@@ -129,6 +129,10 @@ For each confirmed bug:
    histories.
 3. Show GREEN: the same oracle and its neighbors pass.
 4. Show that a mutant, such as the original defect, fails the oracle.
+   Write a wrong version that the review found, and that the operators
+   cannot make, as an authored mutant in the package's `authored-mutants/`
+   directory (`oracles-design` step 8), so every later gap check asks it
+   again.
 5. Run the gap check on the owned code, and close every gap
    (`oracles-design` step 8).
 
