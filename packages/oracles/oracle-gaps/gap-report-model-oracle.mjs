@@ -5033,11 +5033,9 @@ function blockingOf(plan) {
  * module, and production reports its mutants unreached). So a file's framework
  * tests count only where the file has a plan test.
  *
- * The failing owner's pair is listed for completeness only. Main blocks a whole
- * file when any of its tests fails (`blockingOf` and `blocking` in `model`), and
- * a blocked file judges nothing, so `ownerTests` leaves the pair out. Per-law
- * blocking ("Block per law", M 2026-11-18, PR #176) would let the pair judge;
- * that PR changes this census when it merges.
+ * The failing owner's pair judges: under per-law blocking ("Block per law",
+ * M 2026-11-18, #176) its file's failing law judges nothing and its passing
+ * tests still judge, so `ownerTests` keeps the pair (#186).
  */
 function frameworkTestsOf(plan) {
   const tests = []
@@ -5270,8 +5268,10 @@ function model(plan) {
   // of an owner file that loads (main's rule for code run at load). A
   // failing law judges nothing.
   const judgedAt = (site) => {
-    // The plan's tests only, as before #204's census (main's rule).
-    const tests = ownerTests(site.fnId).filter((t) => !t.flaky && !t.framework)
+    // Every test of an owner file counts (#204's census): under per-law
+    // blocking the failing owner's passing pair judges too, as each of
+    // the fixture's deterministic tests of a file that loads the module.
+    const tests = ownerTests(site.fnId).filter((t) => !t.flaky)
     return ranAtLoad(site)
       ? tests.length > 0
       : tests.some((t) =>
