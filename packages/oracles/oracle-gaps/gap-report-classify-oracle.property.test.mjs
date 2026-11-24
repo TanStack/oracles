@@ -3211,7 +3211,7 @@ const calibrations = [
       return stdout.replace(
         line,
         line.replace(
-          /^(oracle-gaps: legend extra-work: )[^.]*\. [^.]*\. /,
+          /^(oracle-gaps: legend extra-work: [^.]*\. )[^.]*\. /,
           `$1`,
         ),
       )
