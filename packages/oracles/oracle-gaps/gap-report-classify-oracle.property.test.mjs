@@ -200,7 +200,11 @@
  *    the same lines, before its gaps (the freeze's one loop, 2026-11-10).
  *    The legend line for `crashed` says first that a crash is a gap, not a
  *    kill, and that its error is on the gap's Detail line (G3; the freeze,
- *    P3 and C1). The last stdout line is `oracle-gaps: done completed, <n>
+ *    P3 and C1). The legend line for `timeout` says first that the class
+ *    holds three hangs: production looping in its own code, a driver
+ *    awaiting a promise the mutant never settles, and a driver's loop over
+ *    what production hands out that never ends; its directive bounds the
+ *    driver's wait (`withinTurns`) and loop for the last two. The last stdout line is `oracle-gaps: done completed, <n>
  *    gaps[ (provisional)], report <path>` (G6). A replay
  *    line is a command, which the exit law does not read.
  * 9. Before any mutant, each test file's baseline is printed, an ordinary
@@ -1433,7 +1437,7 @@ const directives = {
   'not-distinguished':
     /^Add an owner history (where one operand of `[&|]{2}` on line \d+ is falsy and the other is truthy, so `&&` and `\|\|` give different results|where the left operand of `\?\?` on line \d+ is truthy, so `\?\?` and `&&` give different results|that enters the loop on line \d+, so that forcing its condition to false changes an asserted result|where the call on line \d+ returns a value that changes an asserted result when it is `undefined`|that reads the property dropped on line \d+, so that its absence changes an asserted result|where the call on line \d+ changes an asserted result when it does not run|that uses the value returned on line \d+, so that `undefined` in its place changes an asserted result|where the object read with `\?\.` on line \d+ is `undefined`, so that a plain read throws), and assert on the result\.$/,
   timeout:
-    /^Bound the run of the owner tests so that they end, and let a law reject a run that does not\.$/,
+    /^Where a driver awaits a promise from production, wait with `withinTurns\(promise, turns\)`, and record a promise still pending as an observation\. Where a driver loops over what production hands out, stop after one item more than the history can produce, and record that extra item as an observation\. Let a law reject both\. Where production itself loops forever, no driver change judges the mutant yet: report its key as a known CLI shortfall, and keep working\.$/,
   'setup-error':
     /^Run an owner test that loads this module and asserts on its exports, so a failed load rejects the mutant\.$/,
   'does-not-apply':
@@ -1447,11 +1451,15 @@ const directives = {
 // in the gap's Detail line. The extra-work line says first that a builtin
 // counts as one site, so a shortcut whose cost is in one is owed an
 // observation of that cost, not a very tight bound (maintainer, 2026-11-12).
+// The timeout line names the three hangs the class holds, since only one of
+// them is the CLI's to judge (a downstream project's report, 2026-11-24).
 const meanings = {
   crashed:
     /^Production threw where no law judged it: a gap, not a kill\. Its error is on the gap's Detail line in summary\.md, and in its `detail` in results\.json\. /,
   'extra-work':
     /^A call to a builtin counts as one site evaluation, whatever it costs \(`Object\.defineProperty`\): where a shortcut's cost is in one, make that cost an observation of the driver, such as a count of those calls, and let a law judge it, in place of a very tight bound\. /,
+  timeout:
+    /^An owner test's run did not end, for one of three causes: production loops forever in its own code; a driver awaits a promise that the mutant never settles; a driver's loop over what production hands out \(a generator, an iterator, a stream\) never ends\. /,
 }
 // A count of things, as the report words it.
 const counted = (n, thing) => `${n} ${thing}${n === 1 ? `` : `s`}`
@@ -2580,6 +2588,20 @@ function check(h, observations, expected) {
     return violation(`classified`, stdoutProblem, `stdout`, {
       actual: stdout,
     })
+  // Each class present has its own legend line, named by the class: the
+  // count alone accepts a line under another name.
+  const unnamed = [...kinds].find(
+    (kind) =>
+      legend.filter((line) => line.startsWith(`oracle-gaps: legend ${kind}: `))
+        .length !== 1,
+  )
+  if (unnamed !== undefined)
+    return violation(
+      `classified`,
+      `the class ${unnamed} has no legend line of its own`,
+      `stdout`,
+      { actual: stdout },
+    )
   // One loop (the v20 freeze, 2026-11-10: test results and gaps together):
   // the stdout leads with the baseline, then names each oracle file that
   // fails with no mutant active and its failing test, with the step that
@@ -2629,6 +2651,9 @@ function check(h, observations, expected) {
   const workLegend = legend.find((line) =>
     line.startsWith(`oracle-gaps: legend extra-work: `),
   )
+  const timeoutLegend = legend.find((line) =>
+    line.startsWith(`oracle-gaps: legend timeout: `),
+  )
   const leadProblem =
     stdoutLines.slice(0, baselineGot.length).join(`\n`) !==
     baselineGot.join(`\n`)
@@ -2673,7 +2698,14 @@ function check(h, observations, expected) {
                         ),
                       )
                     ? `the extra-work legend line does not say that a builtin counts as one site, and what is owed for its cost`
-                    : undefined
+                    : timeoutLegend !== undefined &&
+                        !meanings.timeout.test(
+                          timeoutLegend.slice(
+                            `oracle-gaps: legend timeout: `.length,
+                          ),
+                        )
+                      ? `the timeout legend line does not name the three hangs it holds`
+                      : undefined
   if (leadProblem)
     return violation(`classified`, leadProblem, `stdout`, { actual: stdout })
   // The full report leads with the same baseline, before its gaps.
@@ -3191,6 +3223,30 @@ const calibrations = [
       )
       if (totals <= 0) return undefined
       return [...lines.slice(totals), ...lines.slice(0, totals)].join(`\n`)
+    }),
+  },
+  {
+    name: `a legend line names a class the report does not have`,
+    law: `stdout`,
+    // The count of legend lines stays; the line no longer names its class.
+    corrupt: corruptStdout((stdout) =>
+      /^oracle-gaps: legend [a-z-]+: /m.test(stdout)
+        ? stdout.replace(/^(oracle-gaps: legend [a-z-]+)(: )/m, `$1-renamed$2`)
+        : undefined,
+    ),
+  },
+  {
+    name: `the timeout legend line leaves out the three hangs`,
+    law: `stdout`,
+    corrupt: corruptStdout((stdout) => {
+      const line = stdout
+        .split(`\n`)
+        .find((l) => l.startsWith(`oracle-gaps: legend timeout: `))
+      if (line === undefined) return undefined
+      return stdout.replace(
+        line,
+        line.replace(/^(oracle-gaps: legend timeout: )[^.]*\. /, `$1`),
+      )
     }),
   },
   {

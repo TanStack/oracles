@@ -138,8 +138,10 @@ const directive = {
     `The framework check \`${first(g.by)}\` failed with \`${errorText(g.detail)}\`, and a calibration judges no behavior: state the oracle law that decides this input's outcome, and let it reject the change.`,
   crashed: (g) =>
     `Production threw \`${errorText(g.detail)}\` in \`${first(g.by)}\`; record the error as an observation in the driver, and state the law that decides this input's outcome.`,
+  // Three hangs share this class; the driver can end two of them, and the
+  // third is the CLI's to judge (the design skill, step 8).
   timeout: () =>
-    `Bound the run of the owner tests so that they end, and let a law reject a run that does not.`,
+    `Where a driver awaits a promise from production, wait with \`withinTurns(promise, turns)\`, and record a promise still pending as an observation. Where a driver loops over what production hands out, stop after one item more than the history can produce, and record that extra item as an observation. Let a law reject both. Where production itself loops forever, no driver change judges the mutant yet: report its key as a known CLI shortfall, and keep working.`,
   'setup-error': () =>
     `Run an owner test that loads this module and asserts on its exports, so a failed load rejects the mutant.`,
   'does-not-apply': () =>
@@ -158,6 +160,9 @@ const meanings = {
   // A builtin counts as one site, so a tight bound is a poor witness of its
   // cost (maintainer, 2026-11-12).
   'extra-work': `A call to a builtin counts as one site evaluation, whatever it costs (\`Object.defineProperty\`): where a shortcut's cost is in one, make that cost an observation of the driver, such as a count of those calls, and let a law judge it, in place of a very tight bound. `,
+  // A hang in production's own loop is the CLI's to judge; a driver that
+  // waits on a promise, or loops over what production hands out, ends it.
+  timeout: `An owner test's run did not end, for one of three causes: production loops forever in its own code; a driver awaits a promise that the mutant never settles; a driver's loop over what production hands out (a generator, an iterator, a stream) never ends. `,
 }
 
 // The directive for an operator whose infection is not measured: the input
