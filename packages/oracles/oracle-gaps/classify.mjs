@@ -295,20 +295,28 @@ export function baselineOf(firstRows, secondRows, failing = []) {
       reachedBy.set(id, [...(reachedBy.get(id) ?? []), key])
   const rank = new Map([...firstRows.keys()].map((key, i) => [key, i]))
   // Each deterministic test's work, the site evaluations its production
-  // code made (capture-setup.mjs `calls`), where the two runs agree and
-  // neither run's count could follow the clock (`clocked`): only such a
-  // test's work judges a mutant, so a kill replays on an idle machine.
+  // code made (capture-setup.mjs `calls`), where the two runs agree: in
+  // `work` when neither run's count could follow the clock (`clocked`),
+  // and in `clockedWork` otherwise. Only a test in `work` judges a mutant,
+  // so a kill replays on an idle machine; a rise in one of `clockedWork`
+  // names a survivor's class (`clocked-work`), and kills nothing.
   const work = new Map()
-  for (const [key, row] of firstRows)
-    if (
-      !row.background &&
-      !leftOut.has(key) &&
-      !row.clocked &&
-      !secondRows.get(key)?.clocked &&
-      secondRows.get(key)?.calls === row.calls
-    )
-      work.set(key, row.calls)
-  return { firstRows, nondeterministic, leftOut, reachedBy, rank, work }
+  const clockedWork = new Map()
+  for (const [key, row] of firstRows) {
+    const again = secondRows.get(key)
+    if (row.background || leftOut.has(key) || again?.calls !== row.calls)
+      continue
+    ;(row.clocked || again?.clocked ? clockedWork : work).set(key, row.calls)
+  }
+  return {
+    firstRows,
+    nondeterministic,
+    leftOut,
+    reachedBy,
+    rank,
+    work,
+    clockedWork,
+  }
 }
 
 /**
@@ -437,9 +445,12 @@ function reachingIn(rows, targets) {
  * outside them that does), `branch-never-taken` (an
  * `if` one of whose outcomes never occurred; `wanted` names the missing
  * one), `not-infected` (a comparison whose operators agreed on every
- * operand the owners reached; `operands` names them), and `not-observed`
+ * operand the owners reached; `operands` names them), `not-observed`
  * (infected, and no recorded observation changed; `infectedBy` names the
- * test that infected it).
+ * test that infected it), and `clocked-work` (one that would be
+ * `not-observed` or `not-distinguished`, and a test whose count could
+ * follow the clock did more work; `work` names the first such test and its
+ * work before and after).
  */
 export function judgeMutant(mutant, { owners, targets, units, baseline }) {
   if (owners.size === 0) return { outcome: `unowned` }
@@ -453,12 +464,23 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
   // one that oracleProperty registers for production, which can carry a
   // work bound; it rose when the mutant's run did more.
   const compares = new Set(compared)
+  const production = (row) =>
+    [`reproducible`, `random`].includes(routeOf(row.route))
   const rose = (k, row = rows.get(k)) =>
     compares.has(k) &&
     baseline.work.has(k) &&
-    [`reproducible`, `random`].includes(routeOf(row.route)) &&
+    production(row) &&
     !row.clocked &&
     row.calls > baseline.work.get(k)
+  // A rise in a compared test whose two unmutated runs agree on its work,
+  // on a route that can carry a bound, where some run's count could follow
+  // the clock: no bound judges it, so it kills nothing, but it shows what
+  // the mutant did, where no observation changed.
+  const roseClocked = (k, row = rows.get(k)) =>
+    compares.has(k) &&
+    production(row) &&
+    (baseline.clockedWork.has(k) || (baseline.work.has(k) && row.clocked)) &&
+    row.calls > (baseline.clockedWork.get(k) ?? baseline.work.get(k))
   const result = {
     ...outcomeOf(
       units,
@@ -474,10 +496,23 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
   }
   if (result.outcome !== `survived`) return result
   result.changedTests = changedIn(rows, compared, baseline)
-  const roseIn = inReportOrder(
-    compared.filter((k) => rose(k)),
-    baseline,
-  )[0]
+  const firstOf = (holds) =>
+    inReportOrder(
+      compared.filter((k) => holds(k)),
+      baseline,
+    )[0]
+  const roseIn = firstOf(rose)
+  // A test's work before and after the mutant, and their ratio.
+  const workOf = (k) => {
+    const before = baseline.work.get(k) ?? baseline.clockedWork.get(k)
+    const after = rows.get(k).calls
+    return {
+      test: k,
+      before,
+      after,
+      ratio: before > 0 ? (after / before).toFixed(3) : undefined,
+    }
+  }
   if (result.changedTests.length > 0) result.class = `not-judged`
   else if (compared.length === 0) {
     result.class = `indeterminate`
@@ -489,16 +524,14 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
     // deleted a shortcut that only a work bound sees (maintainer decision,
     // 2026-11-12). The bound to declare is the largest ratio in hundredths
     // below the measured one, and 1 when the test did no work before.
-    const before = baseline.work.get(roseIn)
-    const after = rows.get(roseIn).calls
+    const work = workOf(roseIn)
     result.class = `extra-work`
     result.work = {
-      test: roseIn,
-      before,
-      after,
-      ratio: before > 0 ? (after / before).toFixed(3) : undefined,
+      ...work,
       bound: (
-        (before > 0 ? Math.floor((100 * after - 1) / before) : 100) / 100
+        (work.before > 0
+          ? Math.floor((100 * work.after - 1) / work.before)
+          : 100) / 100
       ).toFixed(2),
     }
   } else if (mutant.evidence === `dead code`) result.class = `dead-code`
@@ -522,6 +555,21 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
       result.class = `not-observed`
       result.infectedBy = infectedBy
     }
+  }
+  // A mutant that changed a value, or whose infection is not measured, and
+  // that did more work only in a test whose count could follow the clock,
+  // deleted a shortcut that no work bound can judge: its cost is owed an
+  // observation of the driver. Where it infected nothing, or no input
+  // distinguishes it, it computes what the original does, so such a rise
+  // is the clock's, and the class stays.
+  const clockedIn = firstOf(roseClocked)
+  if (
+    clockedIn !== undefined &&
+    [`not-observed`, `not-distinguished`].includes(result.class)
+  ) {
+    delete result.infectedBy
+    result.class = `clocked-work`
+    result.work = workOf(clockedIn)
   }
   return result
 }

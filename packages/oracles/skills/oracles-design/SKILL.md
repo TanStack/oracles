@@ -560,6 +560,10 @@ comes with one instruction. Do what it says, within the rules below.
   counts as one site, make that cost an explicit driver observation instead
   of tightening the bound. A test whose work follows the clock judges no
   work.
+- **A `clocked-work` gap is a fast path in a test that reads the clock,
+  makes a timer, or holds I/O open.** No work bound judges such a test, so
+  count the cost the shortcut saves in the driver (the calls, reads, or
+  requests it makes), and let a law judge the count.
 - **An effect that no check sees** is one that the driver does not record,
   or one that no history makes different. A changed condition can still lead
   to the same result when both branches agree on every generated input. Then

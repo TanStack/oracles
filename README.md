@@ -107,6 +107,18 @@ agent.
   constructed or fixed history isolates it. An authored mutant's copy is
   not instrumented, so a work bound does not judge it.
 
+  A survivor that would be `not-observed` or `not-distinguished`, and whose
+  work rose only in a test whose count could follow the clock, is
+  `clocked-work`: the mutant deleted a shortcut, but no work bound judges
+  that test. The test must be on a route that `oracleProperty` registers
+  for production, and its two unmodified runs must agree on its work. The
+  directive names the first such test and its work before and after. Make
+  the work the shortcut saves an observation of the driver, such as a
+  count of the calls or reads it makes, and let a law judge it. A mutant
+  that changed no value (`branch-never-taken`, `not-infected`), or that no
+  input distinguishes (`dead-code`, `outside-annotation`), keeps its class,
+  since a rise there is the clock's.
+
   Every line the CLI writes for a check, on stdout and stderr alike, starts
   with `oracle-gaps: ` and its kind, so an agent can act on the results as
   they stream with `grep '^oracle-gaps: '`, and filter one kind:
