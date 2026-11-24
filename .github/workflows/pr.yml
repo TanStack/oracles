@@ -153,7 +153,7 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
   test-oracle-gaps-end-to-end:
-    name: Gap report end-to-end oracle (fixed seed, ${{ matrix.shard }}/4)
+    name: Gap report end-to-end oracle (fixed seed, ${{ matrix.shard }}/5)
     # Heavy: skipped on a docs-only pull request.
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
@@ -161,7 +161,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -169,7 +169,7 @@ jobs:
           persist-credentials: false
       - name: Setup Tools
         uses: tanstack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
-      # The end-to-end oracle's fixed-seed units, in four shards. Its random
+      # The end-to-end oracle's fixed-seed units, in five shards. Its random
       # units and determinism units run in their own jobs, and its
       # calibrations run locally.
       - run: pnpm exec vitest --run --config oracle-gaps/vitest.config.mjs gap-report-oracle -t "$(node scripts/pr-shards.mjs pattern oracle-gaps-fixed-seed "$SHARD")"
@@ -177,7 +177,7 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
   test-oracle-gaps-random:
-    name: Gap report end-to-end oracle (random seed, ${{ matrix.shard }}/4)
+    name: Gap report end-to-end oracle (random seed, ${{ matrix.shard }}/5)
     # Heavy: skipped on a docs-only pull request.
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
@@ -188,7 +188,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -212,7 +212,7 @@ jobs:
           SHARD: ${{ matrix.shard }}
           GAP_E2E_SHRINKS: 0
   test-oracle-gaps-determinism:
-    name: Gap report end-to-end oracle (determinism, ${{ matrix.shard }}/7)
+    name: Gap report end-to-end oracle (determinism, ${{ matrix.shard }}/8)
     # Heavy: skipped on a docs-only pull request.
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
@@ -222,7 +222,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
