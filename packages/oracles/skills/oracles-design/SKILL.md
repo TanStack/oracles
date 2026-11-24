@@ -564,7 +564,12 @@ comes with one instruction. Do what it says, within the rules below.
   or one that no history makes different. A changed condition can still lead
   to the same result when both branches agree on every generated input. Then
   add a history where they diverge. Otherwise, record the effect. The
-  `not-observed` directive gives both steps.
+  `not-observed` directive gives both steps, and a third: a value that
+  every path overwrites before anything reads it is dead code, not a
+  missing observation. `let held = false`, written only so the type checker
+  knows the type, survives `false → true`. Remove the initializer and
+  declare the type: `let held: boolean` where the compiler can follow every
+  assignment, and `let held: boolean | undefined` where it cannot.
 - **Code whose removal no legal history can observe is dead.** The gap check
   alone cannot show this, because its histories are a sample. First rule out
   a missing history, observation, or law. Then remove the code in the same
