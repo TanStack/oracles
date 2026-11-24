@@ -12417,6 +12417,27 @@ oracleProperty({
           heavy: 0,
         }),
       },
+      // Precedence, step 1 beside step 2 (C 2026-11-23, "Count-cut label
+      // precedence"): file a's failing law spins under the mutant, and file b's
+      // deterministic test spins on a clock. The failing law's spin blocks the
+      // mutant, and the clocked spin of file b never labels it timeout, so the
+      // mutant is blocked by that law whichever file runs first.
+      {
+        name: `a failing law's spin beside a clocked spin in another file is blocked`,
+        enters: [`a failing law that spins under a mutant cut its copy`],
+        build: (generated) => ({
+          ...soloKill(generated, [
+            { ...judging(`a`, `fixed seed`, 7), fn: 0 },
+            { ...judging(`b`, `fixed seed`, 1), fn: 0, timed: `clock` },
+          ]),
+          functions: [[{ kind: `until`, quote: `'` }]],
+          owners: [`both`],
+          failingLaw: `a`,
+          failingLawAt: `start`,
+          failingLawCalls: `once`,
+          failingLawSpins: true,
+        }),
+      },
     ]),
   },
   resolve: resolveHistory,

@@ -529,6 +529,9 @@ export const shards = {
     `determinism: fixed history: a module object field-drop judged past a console test`,
     `fixed history: a module boolean flip judged past a console test`,
     `determinism: fixed history: a module boolean flip judged past a console test`,
+    `fixed seed 20261105: a failing law's spin beside a clocked spin in another file is blocked`,
+    `random seed: a failing law's spin beside a clocked spin in another file is blocked`,
+    `determinism: constructed history: a failing law's spin beside a clocked spin in another file is blocked`,
   ],
 }
 

@@ -122,6 +122,7 @@
     "a property test's later run spins into bounded work",
     "a property test's count cut lands in its first part after a run with no positive n",
     "a slow kill after a 22 s wait, past the old backstop",
-    "a later owner's kill joined before an earlier owner's hang under four contexts"
+    "a later owner's kill joined before an earlier owner's hang under four contexts",
+    "a failing law's spin beside a clocked spin in another file is blocked"
   ]
 }
