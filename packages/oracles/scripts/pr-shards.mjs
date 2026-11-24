@@ -28,7 +28,9 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)
-const anyOf = (names) => `(?:${names.map(escape).join(`|`)})`
+// Each name matched as written, or a regular expression as it is.
+const anyOf = (names) =>
+  `(?:${names.map((name) => (name instanceof RegExp ? name.source : escape(name))).join(`|`)})`
 const rest = Symbol(`rest`)
 
 // The self-oracle's test names, split by the start of the name after its
@@ -827,17 +829,10 @@ export const partitions = {
           'random seed: bad arguments: seed',
           'random seed: no oracle file refuses the run',
         ],
-        ...[
-          'fixed seed 20261105: a bad authored mutant in the default directory',
-          'fixed seed 20261105: --no-authored-mutants beside a bad default directory',
-          'fixed seed 20261105: --mutants beside --no-authored-mutants',
-          'random seed: a bad authored mutant in the default directory',
-          'random seed: --no-authored-mutants beside a bad default directory',
-          'random seed: --mutants beside --no-authored-mutants',
-          'determinism: constructed history: a bad authored mutant in the default directory',
-          'determinism: constructed history: --no-authored-mutants beside a bad default directory',
-          'determinism: constructed history: --mutants beside --no-authored-mutants',
-        ],
+        // The histories of the package's authored-mutants directory, at every
+        // seed, by how their names end: cmd.exe limits this shard's command
+        // line, which their nine names passed.
+        /.*(?:default directory|no-authored-mutants)/,
       ]),
     },
   },
