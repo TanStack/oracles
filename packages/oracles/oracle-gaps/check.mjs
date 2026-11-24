@@ -1639,11 +1639,11 @@ export default async (env) => {
 
     // TypeScript coverage and semantic check for TypeScript oracle files
     // (typecheck.mjs). Its findings are reported as notes, the summary, and
-    // results.json; they never refuse or fail the run.
+    // results.json; they never refuse or fail the run. Its notes are logged
+    // after the baseline lines (below), so the baseline is the first result line.
     const typecheck = typecheckOracleFiles(ts, pkg, [...declarations.keys()], {
       config: options.tsconfig,
     })
-    for (const line of typecheck.notes) log(line)
     endPhase(`typecheck`, {
       checked: typecheck.checked.length,
       uncovered: typecheck.uncovered.length,
@@ -2141,6 +2141,7 @@ export default async (env) => {
       ...blockedLines(baselineFiles),
     ])
       log(line)
+    for (const line of typecheck.notes) log(line)
     // An oracle file that fails with no mutant active judges nothing, so it
     // blocks the mutants it owns, and the rest are judged; the report is
     // provisional (maintainer disposition G5; the v20 freeze's decision 2,
