@@ -136,6 +136,9 @@ const caseless = existsSync(fileURLToPath(import.meta.url).toUpperCase())
 const FULL_LIMIT_MS = 60000
 // How long a slow test waits, in real milliseconds, where its output differs.
 const SLOW_MS = 3000
+// The mutant budget for the runs that confirm cut-off copies (`--mutant-limit`,
+// G1, 2026-11-11), as the CLI's floor.
+const MUTANT_LIMIT_MS = 15000
 // The slow waits a drawn test holds: SLOW_MS and the 16 s wait.
 const SLOW_WAITS = [SLOW_MS, 16_000]
 // The per-history backstop's floor (B2, M 2026-11-23): a copy's start and its
@@ -5112,6 +5115,12 @@ const BUILT_IN = [`bounded work`, `no progress`]
  * alone, with no budget. `detail` receives a timeout's cause and, for a kill,
  * the built-in law that decided it (`builtIn`, null for a behavioral law).
  */
+// The route a count cut names: the route of the part in which the copy's
+// cumulative work first passes its call budget (capture-setup.mjs `spin`,
+// which names the route active at the cut). A cut that ends at the last part
+// names it too.
+const cutRouteOf = (r, budget) =>
+  (r.marks.find((m) => m.work > budget) ?? r.marks.at(-1)).route
 function judge(
   plan,
   tests,
