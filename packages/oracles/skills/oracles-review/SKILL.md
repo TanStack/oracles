@@ -105,6 +105,12 @@ search is your main job.
   Require a history step that simulates the contradictory signal.
   Expect production to fail at the boundary, before it releases established
   state or publishes success.
+- **Unchecked TypeScript in oracle files.** Vitest strips types without
+  checking them, so a passing gap check does not prove that oracle `.ts`
+  files typecheck. When the repository uses TypeScript 5 or newer, check
+  that its `tsconfig.json` (or test/oracle tsconfig) covers the oracle files
+  and that `tsc --noEmit` passes without `@ts-ignore` or `@ts-expect-error`
+  hiding type errors.
 
 ## 4. Choose challenges for the real uncertainty
 
