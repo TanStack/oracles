@@ -696,6 +696,7 @@ function cliArgs(
     config,
     contexts = 4,
     only,
+    sample,
     pool,
   } = {},
 ) {
@@ -736,6 +737,7 @@ function cliArgs(
   ]
   if (out !== undefined) args.push(`--out`, path(out))
   if (only !== undefined) args.push(`--only`, only.join(`,`))
+  if (sample !== undefined) args.push(`--sample`, String(sample))
   if (pool !== undefined) args.push(`--pool`, pool)
   if (ordinary) args.push(`--ordinary`)
   // A config under a name Vitest does not discover, relative to --package.
@@ -3670,14 +3672,25 @@ async function driver(plan, observe) {
       // `unknown` selection is the chosen function's first mutant beside the
       // id one past the source's last mutant, which names none (a stale or
       // mistyped id); its `unowned` selection is the mutants of a function
-      // that the full run reported unowned.
+      // that the full run reported unowned; its `sampled` selection is an
+      // unowned mutant of the source and an owned one numbered after it,
+      // under `--sample 1`, which keeps one of the two.
       const prefix = SOURCE.replace(/^src\//, ``)
-      const numbers = cli.mutants
-        .filter((m) => m.id.startsWith(`${prefix}:M`))
-        .map((m) => Number(m.id.slice(prefix.length + 2)))
+      const numberOf = (m) => Number(m.id.slice(prefix.length + 2))
+      // The source's own mutants, in the order the CLI numbers them.
+      const ofSource = cli.mutants
+        .filter((m) => !m.authored && m.id.startsWith(`${prefix}:M`))
+        .sort((a, b) => numberOf(a) - numberOf(b))
+      const numbers = ofSource.map(numberOf)
       const lone = cli.mutants.find(
         (m) => !m.authored && m.outcome === `unowned`,
       )
+      const pair = ofSource.flatMap((u, i) => {
+        const o = ofSource
+          .slice(i + 1)
+          .find((m) => !m.probe && m.outcome !== `unowned`)
+        return u.outcome === `unowned` && o ? [[u.id, o.id]] : []
+      })[0]
       const selections = [
         [`unknown`, [ids[0], `${prefix}:M${Math.max(0, ...numbers) + 1}`]],
         ...(lone
@@ -3695,26 +3708,32 @@ async function driver(plan, observe) {
               ],
             ]
           : []),
+        ...(pair ? [[`sampled`, pair, 1]] : []),
       ]
-      for (const [selection, only] of selections) {
+      for (const [selection, only, sample] of selections) {
         const refused = runCli(dir, files, {
           ...how,
           only,
+          sample,
           outName: `out-only-${selection}`,
         })
         observe(`partial refused`, {
           selection,
           only,
+          sample,
           exit: refused.exit,
           ending: refused.ending,
           outDir: refused.outDir,
           baselineFiles: refused.baselineFiles,
+          judged: refused.mutants.map((m) => m.key),
         })
         if (refused.exit === 2)
           states.add(
-            selection === `unknown`
-              ? `a partial run of an id that names no mutant refused`
-              : `a partial run of unowned mutants refused`,
+            {
+              unknown: `a partial run of an id that names no mutant refused`,
+              unowned: `a partial run of unowned mutants refused`,
+              sampled: `a sampled partial run that kept only unowned mutants refused`,
+            }[selection],
           )
       }
     }
@@ -5819,11 +5838,49 @@ function leadBreach(plan, cli, observations, expected) {
   for (const refused of observations
     .filter((o) => o.checkpoint === `partial refused`)
     .map((o) => o.value)) {
+    const what = `the partial run of ${refused.only.join(`, `)}`
+    // Under `--sample`, the run judges what the sample keeps, which the law
+    // does not predict: a run that completes judges an owned mutant and
+    // runs its owner's baseline, and one that refuses says that no oracle
+    // file owns what it kept, naming selected ids.
+    if (refused.sample !== undefined) {
+      if (refused.exit === 0) {
+        if (
+          !refused.judged.some((key) => ownerless.get(key) === false) ||
+          refused.baselineFiles.length === 0
+        )
+          return violation(
+            `partial`,
+            `${what} under --sample ${refused.sample} completed and judged no owned mutant: ${JSON.stringify(refused.judged)}, the baseline of ${JSON.stringify(refused.baselineFiles)}`,
+            `selection refusal`,
+          )
+        continue
+      }
+      if (refused.exit !== 2 || refused.ending === undefined)
+        return violation(
+          `partial`,
+          `${what} under --sample ${refused.sample} exited ${refused.exit}`,
+          `selection refusal`,
+        )
+      const breach = refusalBreach(refused.ending, {
+        cause: `oracle file owns`,
+        outKnown: true,
+        logNote: logNoteOf(refused),
+      })
+      if (breach)
+        return violation(`partial`, `${what}: ${breach}`, `selection refusal`)
+      if (!refused.only.some((id) => refused.ending.cause.includes(id)))
+        return violation(
+          `partial`,
+          `${what} refused naming none of its ids: ${refused.ending.cause}`,
+          `selection refusal`,
+        )
+      continue
+    }
     const named = refused.only.filter((id) => !keyOf.has(id))
     const owed =
       named.length > 0 ||
       refused.only.every((id) => ownerless.get(keyOf.get(id)) === true)
-    const what = `the partial run of ${refused.only.join(`, `)}`
     if (!owed) {
       if (refused.exit !== 0)
         return violation(
@@ -6065,6 +6122,19 @@ calibrations.push(
         value,
         `--only names no mutant of this run: ${value.only.join(`, `)}`,
       )
+    }),
+  },
+  {
+    name: `a sampled partial run that kept only unowned mutants completes`,
+    law: `selection refusal`,
+    history: refusedPartialHistory,
+    // What a check of the selection before the sample did: the sample kept
+    // the unowned mutant, so the run judged nothing, with the baseline of no
+    // file.
+    corrupt: corruptRefusedPartial(`sampled`, (value) => {
+      value.exit = 0
+      value.ending = undefined
+      value.judged = []
     }),
   },
   {
@@ -6955,6 +7025,7 @@ const required = [
   `a partial run beside a failing owner`,
   `a partial run of an id that names no mutant refused`,
   `a partial run of unowned mutants refused`,
+  `a sampled partial run that kept only unowned mutants refused`,
   `edit fixSession changed the cold result`,
   `a check after the session's failure was fixed`,
   `two checks at once on a session that cannot open`,
@@ -7075,6 +7146,7 @@ const separate = [
   `a partial run beside a failing owner`,
   `a partial run of an id that names no mutant refused`,
   `a partial run of unowned mutants refused`,
+  `a sampled partial run that kept only unowned mutants refused`,
   ...analyzedFaults.map((fault) => `analyzed ${fault}`),
   `edit fixSession changed the cold result`,
   `a check after the session's failure was fixed`,
@@ -8512,13 +8584,16 @@ oracleProperty({
           `a partial run beside a failing owner`,
           `a partial run of an id that names no mutant refused`,
           `a partial run of unowned mutants refused`,
+          `a sampled partial run that kept only unowned mutants refused`,
         ],
-        // The failing owner, file b, owns the second function and nothing
+        // The failing owner, file b, owns the third function and nothing
         // else that the generated base could leave out. Its suite's two
         // passing tests judge that function's mutants (Block per law,
         // 2026-11-18), so none is blocked; its partial run is of file a's
-        // function. The third function has no owner, so its mutants are a
-        // selection that no oracle file owns.
+        // function. The second function has no owner, so its mutants are a
+        // selection that no oracle file owns, and one of them, numbered
+        // before the third function's, is what `--sample 1` keeps of the
+        // two.
         build: (generated) => ({
           ...generated,
           functions: [
@@ -8528,7 +8603,7 @@ oracleProperty({
           ],
           containers: [],
           overloads: [],
-          owners: [`a`, `b`, `none`],
+          owners: [`a`, `none`, `b`],
           wholeFile: `none`,
           witness: false,
           tests: [{ ...judging(`a`, `fixed seed`, 1), fn: 0 }],
