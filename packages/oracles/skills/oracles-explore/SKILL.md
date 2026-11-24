@@ -634,11 +634,11 @@ approved, and run the oracle again on the unchanged code:
   is redundant. That is not a gap-check bug. Simplify the production code,
   as an optimizing compiler for the oracle would (`x > 0`), rerun, and
   name the lines you removed.
-- An `extra-work` gap is a change that gave the same results in every
-  history tried, but did more work. First look for a history where the
-  change behaves differently (a second registration of the same key, for
-  example), since no history may have reached the difference yet. If none
-  exists, the code it changes is a fast path. Keep the fast path, and
+- An `extra-work` gap is a change that changed no observation, but made a
+  test do more work. First look for a history that reads the state the
+  change altered (the first registration's state after a second
+  registration of the same key, for example), since no history may read it
+  yet. If none exists, the code it changes is a fast path. Keep the fast path, and
   add the bound the gap's directive names to the property
   (`work: { ratio }`), so the oracle rejects losing it.
 - If the gap looks like a bug in the gap check itself, show the developer
