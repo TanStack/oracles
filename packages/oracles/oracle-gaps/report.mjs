@@ -138,10 +138,13 @@ const directive = {
     `The framework check \`${first(g.by)}\` failed with \`${errorText(g.detail)}\`, and a calibration judges no behavior: state the oracle law that decides this input's outcome, and let it reject the change.`,
   crashed: (g) =>
     `Production threw \`${errorText(g.detail)}\` in \`${first(g.by)}\`; record the error as an observation in the driver, and state the law that decides this input's outcome.`,
-  // Three hangs share this class; the driver can end two of them, and the
-  // third is the CLI's to judge (the design skill, step 8).
+  // Three hangs share this class; the driver can end two of them. The third,
+  // production's own loop, a rewrite of production often ends: a loop that
+  // walks a list fixed before it starts cannot spin on mutated arithmetic (a
+  // downstream project's frame reader, 2026-11-24). What no rewrite ends is
+  // the CLI's to judge (the design skill, step 8).
   timeout: () =>
-    `Where a driver awaits a promise from production, wait with \`withinTurns(promise, turns)\`, and record a promise still pending as an observation. Where a driver loops over what production hands out, stop after one item more than the history can produce, and record that extra item as an observation. Let a law reject both. Where production itself loops forever, no driver change judges the mutant yet: report its key as a known CLI shortfall, and keep working.`,
+    `Where a driver awaits a promise from production, wait with \`withinTurns(promise, turns)\`, and record a promise still pending as an observation. Where a driver loops over what production hands out, stop after one item more than the history can produce, and record that extra item as an observation. Let a law reject both. Where production itself loops forever, and the loop's end rests on the arithmetic the mutant changed, rewrite the loop to walk something fixed before it starts, such as a list of what it will visit, so that no arithmetic in its body can keep it going: the run then ends, and a law can kill the mutant. That rewrite is a production change, and the oracle judges it. Where no such rewrite fits, no driver change judges the mutant yet: report its key as a known CLI shortfall, and keep working.`,
   'setup-error': () =>
     `Run an owner test that loads this module and asserts on its exports, so a failed load rejects the mutant.`,
   'does-not-apply': () =>

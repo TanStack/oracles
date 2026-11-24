@@ -629,8 +629,17 @@ comes with one instruction. Do what it says, within the rules below.
     driver's loop is unbounded. Take at most one item more than the history
     can produce, record the extra item as an observation, and let a law
     reject it. This is an oracle gap.
-  - **Temporary, a CLI limitation:** the mutant makes production loop
-    forever in its own code. The framework's breakage laws will judge it,
+  - The mutant makes production loop forever in its own code. No history
+    turns that into an observation, because the driver never gets control
+    back. When the loop's end depends on the arithmetic the mutant changed
+    (a `for (;;)` or a `while` that stops when an offset or a count reaches
+    a value), the loop can often be rewritten to walk something finite: a
+    list computed first (every header end found with `matchAll`, then that
+    list walked), or a bound fixed before the loop. No arithmetic in the
+    body can then keep it going, and the mutant becomes an ordinary kill.
+    That is a refactor of production: show the evidence step 7 asks of one,
+    and let the oracle judge it. **Temporary, a CLI limitation:** when no
+    such rewrite fits, the framework's breakage laws will judge the mutant,
     and they are not built yet. Report it as a known CLI limitation, not an
     oracle gap. Do not add driver timeouts for it, and keep working.
 - **Temporary, a known CLI bug:** a gap on a guard that is constant under
