@@ -5167,7 +5167,11 @@ function judge(
   // outcome rule"; G44), the order production takes by path, whatever order the
   // history lists its tests in. A failing law's file runs too (`lawSpins`).
   // A file whose failing law cuts its copy at the start is cut before any test.
-  const cut = new Set()
+  // A failing law's spin cuts its file's copy only when its calls pass the
+  // copy's call budget, as any test's do (`callBudget` below). Under a mutant
+  // that changes its output the law repeats its call SPIN_BOUND times, so a
+  // budget above that work does not cut it (the copy's work counts toward
+  // nothing but the budget, and its verdict is left out).
   const slowed = new Map()
   const files = [
     ...new Set([...runs.map((r) => r.t.file), ...lawSpins.keys()]),
@@ -5175,14 +5179,21 @@ function judge(
   // A file's most-working unmutated test, in site evaluations.
   const mostBefore = (file) =>
     Math.max(0, ...runs.filter((r) => r.t.file === file).map((r) => r.before))
+  const callBudgetOf = (file) => Math.max(CALL_FLOOR, 100 * mostBefore(file))
+  const lawCuts = (file) =>
+    lawSpins.has(file) && lawSpins.get(file).work > callBudgetOf(file)
   const unmutated = files.reduce((sum, file) => sum + mostBefore(file), 0)
   const workBudget = Math.max(WORK_FLOOR, 10 * unmutated)
   const counted = new Set()
+  // A count cut that a failing law's spin caused ends the mutant's copies at
+  // that file, as production does: a mutant it cuts is blocked, and no later
+  // copy runs (C 2026-11-23, "Count-cut label precedence", step 1).
+  let lawCut = false
   let spent = 0
   for (const file of files) {
-    if (lawSpins.get(file) === `start`) {
-      cut.add(file)
-      continue
+    if (lawCuts(file) && lawSpins.get(file).at === `start`) {
+      lawCut = true
+      break
     }
     let ended = false
     let work = 0
@@ -5217,7 +5228,10 @@ function judge(
         break
       }
     }
-    if (!ended && lawSpins.get(file) === `end`) cut.add(file)
+    if (!ended && lawCuts(file) && lawSpins.get(file).at === `end`) {
+      lawCut = true
+      break
+    }
     if (wallCut) {
       gapCause ??= `backstop`
       break
@@ -5242,9 +5256,7 @@ function judge(
     counted.add(file)
   }
   const live = [
-    ...runs.filter(
-      (r) => counted.has(r.t.file) && !hung.has(r.t.file) && !cut.has(r.t.file),
-    ),
+    ...runs.filter((r) => counted.has(r.t.file) && !hung.has(r.t.file)),
     ...builtIns.map((v) => ({ route: v.route, verdicts: [v], changed: true })),
   ]
   const verdicts = (route) =>
@@ -5260,8 +5272,8 @@ function judge(
   }
   // A count cut that a failing law caused blocks the mutant by that law: a
   // gap, never `timeout` (M-24), and never a kill (C 2026-11-23, "Count-cut
-  // label precedence", step 1).
-  if (cut.size > 0) return `blocked`
+  // label precedence", step 1). A kill in a copy before the cut decided first.
+  if (lawCut) return `blocked`
   if (gapCause) {
     if (detail) detail.cause = gapCause
     return `timeout`
@@ -5715,11 +5727,12 @@ function model(plan) {
         plan.failingLawCalls === `once` &&
         !mutated.threw &&
         mutated.trace.join() !== base.trace.join())
+    const work = mutated.spun ? Infinity : SPIN_BOUND * mutated.work
     return new Map(
       spins
         ? [...owners(site.fnId)]
             .filter((file) => holdsFailingLaw(plan, file) && runsTests(file))
-            .map((file) => [file, plan.failingLawAt])
+            .map((file) => [file, { at: plan.failingLawAt, work }])
         : [],
     )
   }

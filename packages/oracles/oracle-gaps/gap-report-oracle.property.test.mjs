@@ -11082,7 +11082,32 @@ oracleProperty({
             failingLawAt: `start`,
             failingLawCalls: `once`,
             failingLawSpins: true,
+            // The spin cuts the copy only if its work passes the call budget,
+            // which a drawn `heavy` raises (the constructed histories whose
+            // work budget decides their state set it to 0).
+            heavy: 0,
           }),
+      },
+      // Count-cut precedence, step 1 before step 3 (C 2026-11-23, "Count-cut
+      // label precedence"): file a's failing law spins under the mutant and
+      // cuts its copy, and file b's passing law kills it when its copy runs
+      // after. The count cut is caused by a failing law, so the mutant is
+      // blocked by that law, and no kill in a later copy decides it.
+      {
+        name: `a failing law's spin in one owner file blocks a passing kill in another`,
+        enters: [`a failing law that spins under a mutant cut its copy`],
+        build: (generated) => ({
+          ...soloKill(generated, [
+            { ...judging(`a`, `fixed seed`, 7), fn: 0 },
+            { ...judging(`b`, `fixed seed`, 7), fn: 0 },
+          ]),
+          owners: [`both`],
+          failingLaw: `a`,
+          failingLawAt: `start`,
+          failingLawCalls: `once`,
+          failingLawSpins: true,
+          heavy: 0,
+        }),
       },
       // Timers by ownership (C, 2026-11-16, under both idle M entries): a copy
       // whose test waits on a ref'd timer due long past its horizon, while the
