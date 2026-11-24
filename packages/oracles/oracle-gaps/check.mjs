@@ -540,11 +540,22 @@ export default async (env) => {
     load(id) {
       // Vite's own asset and worker queries ('?raw', '?url', '?worker&url', ...)
       // are loaded as written, so their module is not instrumented (a stated
-      // limit: a worker's code is not mutated). Any other query is the module
-      // itself, served instrumented under its plain id.
+      // limit: a worker's code is not mutated). A '?raw' import of a file
+      // that this context's authored patch edits reads the patched text, as
+      // the copy's module loads and its reads through fs do. Any other query
+      // is the module itself, served instrumented under its plain id.
       const at = id.indexOf('?')
-      if (at >= 0 && [...new URLSearchParams(id.slice(at + 1)).keys()].every((key) => ['raw', 'url', 'worker', 'sharedworker', 'inline'].includes(key))) return undefined
       const path = at < 0 ? id : id.slice(0, at)
+      if (at >= 0) {
+        const keys = [...new URLSearchParams(id.slice(at + 1)).keys()]
+        if (keys.every((key) => ['raw', 'url', 'worker', 'sharedworker', 'inline'].includes(key))) {
+          if (keys.length !== 1 || keys[0] !== 'raw') return undefined
+          try {
+            const patched = globalThis.__oracleGapsServe?.[${index}]?.get(realpathSync(path))
+            return patched === undefined ? undefined : \`export default \${JSON.stringify(patched)}\`
+          } catch { return undefined }
+        }
+      }
       // A copy of a test file (runBatch) exists only in memory, so this
       // plugin, which loads before the config's own, answers for it.
       const copy = globalThis.__oracleGapsCopies?.get(posix(path))
@@ -908,6 +919,7 @@ export default async (env) => {
       stopOnKill = false,
       ignore = [],
       callBudget = null,
+      serve = null,
       label = `baseline`,
     } = {},
   ) {
@@ -925,6 +937,7 @@ export default async (env) => {
       stopOnKill,
       ignore,
       callBudget,
+      serve,
     }
     // Vitest 3 and 4 both expose the root project's `provide`; the state file
     // remains for setups that cannot `inject`.
@@ -1194,6 +1207,9 @@ export default async (env) => {
           ignore: inCopy(copy, items[i].file, items[i].ignore ?? []),
           idleMs: items[i].idleMs ?? null,
           callBudget: items[i].callBudget ?? null,
+          // An authored patch of a file that the copy reads through fs, by
+          // the file's path (capture-setup.mjs serves it to the read).
+          serve: items[i].serve ?? null,
           idleHorizonMs: items[i].idleHorizonMs ?? null,
         },
       ]),
@@ -1959,6 +1975,7 @@ export default async (env) => {
         ignore: r.ignore,
         limitMs: r.limitMs,
         callBudget: r.callBudget,
+        serve: r.serve,
       })
       if (u.spin) evidence.spin += 1
       if (u.timedOut) await replace(slot)
@@ -2603,7 +2620,8 @@ export default async (env) => {
     endPhase(`operator mutants`, { mutants: results.length })
 
     // 6. Authored mutants, spread across the contexts. Each serves a patched
-    // copy of its source only to the context that runs it. The copy is not
+    // copy of its source only to the context that runs it: to its module
+    // loads, and to its copies' reads through fs. The copy is not
     // instrumented, so an authored mutant runs against every owner of the
     // function its edit lands in, whole files, still stopping at its first
     // kill.
@@ -2676,6 +2694,10 @@ export default async (env) => {
             limitMs: limitFor(file),
             stopOnKill: true,
             ignore: ignoredIn(file),
+            // The patch also reaches the copy's reads of the file through
+            // fs, in its own process: a data file, or a declaration file
+            // that a type oracle compiles against.
+            serve: { [posix(job.path)]: job.patched.text },
           },
         ])
         // In the order the contexts finish: the classification lists

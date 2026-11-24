@@ -216,11 +216,14 @@
  *    is judged by law 4 against the owners of the function it edits, without
  *    the branch-never-taken class, and is reported at the line of its edit; one
  *    whose text occurs zero or several times is `does-not-apply`. Its patch
- *    reaches only a copy that loads its source as a module, so a survivor
- *    that no owner's copy loaded never ran the patch and is `unreached`, not
- *    a survivor: an owner file that calls nothing of the source does not
- *    load it (its unused import is elided). Its key is its id, whatever its
- *    file is called.
+ *    reaches a copy that loads its source as a module, and the copy's own
+ *    reads of the file through fs (a sync read, to a string or a buffer, a
+ *    promise, or a callback), so an authored mutant of a data file that an
+ *    owner test reads and judges is killed; a survivor that no owner's copy
+ *    loaded or read never ran the patch and is `unreached`, not a survivor:
+ *    an owner file that calls nothing of the source does not load it (its
+ *    unused import is elided). Its key is its source and its id, whatever
+ *    its file is called.
  * 6. **Keys.** Each mutant's key is its anchor:
  *    `file#function:operator:statement`, where `statement` is the text of the
  *    innermost statement that holds the site, as tokens joined by single
@@ -608,6 +611,7 @@ import {
   model,
   edited,
   AUTHORED,
+  READ_DATA,
   altConfigPath,
   initialState,
   fixtureFiles,
@@ -738,7 +742,7 @@ function cliArgs(
   if (ordinary) args.push(`--ordinary`)
   // A config under a name Vitest does not discover, relative to --package.
   if (config !== undefined) args.push(`--config`, config)
-  if (files[AUTHORED] !== undefined)
+  if (Object.keys(files).some((file) => file.startsWith(`mutants/`)))
     args.push(`--mutants`, path(join(dir, `mutants`)))
   return { args, out }
 }
@@ -4046,6 +4050,8 @@ async function driver(plan, observe) {
           states.add(`two authored mutants judged apart`)
         if (m.outcome === `unreached`)
           states.add(`an authored mutant that no owner loaded`)
+        if (m.key === `${READ_DATA}#authored:read` && m.outcome === `killed`)
+          states.add(readStates[plan.authoredRead])
         states.add(
           m.outcome !== `does-not-apply`
             ? `authored mutant`
@@ -6584,6 +6590,15 @@ const posixStarts =
       ]
 // The states of the constructed history `a value change at a ?. read and at
 // a return` (see there), which `every outcome class` does not name.
+// The authored mutant of a data file that oracle file a reads through fs
+// (`authoredRead`), killed by file a's law once the patch reaches the read:
+// one state for each kind of read.
+const readStates = {
+  sync: `an authored mutant of a file a test reads through fs (sync) killed`,
+  buffer: `an authored mutant of a file a test reads through fs (buffer) killed`,
+  promise: `an authored mutant of a file a test reads through fs (promise) killed`,
+  callback: `an authored mutant of a file a test reads through fs (callback) killed`,
+}
 const changedValues = [
   `a plain read in place of ?. on an undefined object crashed`,
   `a plain read in place of ?. on a null object crashed`,
@@ -6694,6 +6709,7 @@ const required = [
   `ordinary tests left out by default`,
   `two authored mutants judged apart`,
   `an authored mutant that no owner loaded`,
+  ...Object.values(readStates),
   `timeout`,
   `a kill after a nondeterministic verdict in its file`,
   `a kill in one owner after a gap in another`,
@@ -6863,6 +6879,7 @@ const separate = [
   `ordinary tests left out by default`,
   `two authored mutants judged apart`,
   `an authored mutant that no owner loaded`,
+  ...Object.values(readStates),
   `a package with a prebuilt addon deep in its tree ran in child processes`,
   `a setup error`,
   `a setup error beside a timeout under one budget`,
@@ -7349,6 +7366,7 @@ oracleProperty({
           failingLawCalls: `none`,
           failingLawHook: `none`,
           failingLawSpins: false,
+          authoredRead: `none`,
           stopRuns: NO_STOPS,
           laterSteps: NO_LATER_STEPS,
         },
@@ -7558,6 +7576,7 @@ oracleProperty({
           failingLawCalls: 'none',
           failingLawHook: 'none',
           failingLawSpins: false,
+          authoredRead: 'none',
         },
       },
       {
@@ -7723,6 +7742,7 @@ oracleProperty({
           failingLawCalls: 'none',
           failingLawHook: 'none',
           failingLawSpins: false,
+          authoredRead: 'none',
         },
       },
       {
@@ -7915,6 +7935,7 @@ oracleProperty({
           failingLawCalls: 'none',
           failingLawHook: 'none',
           failingLawSpins: false,
+          authoredRead: 'none',
         },
       },
     ],
@@ -10585,6 +10606,20 @@ oracleProperty({
           laterSteps: NO_LATER_STEPS,
         }),
       },
+      // Oracle file a owns a data file, reads it through fs, and judges its
+      // limit; an authored mutant changes the limit. The runner serves the
+      // patch to the read, so file a's law kills the mutant. One history for
+      // each kind of read.
+      ...Object.keys(readStates).map((read) => ({
+        name: `an authored mutant of a file a test reads through fs (${read})`,
+        enters: [readStates[read]],
+        build: (generated) =>
+          oneOwnerHistory(generated, {
+            authoredRead: read,
+            onlyRun: false,
+            laterSteps: NO_LATER_STEPS,
+          }),
+      })),
     ]),
   },
   resolve: resolveHistory,

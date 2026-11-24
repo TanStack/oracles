@@ -229,9 +229,10 @@
  * authored.mjs) follow laws 1 to 4 over every test of their owner files,
  * because their copy is not instrumented and records no reach: no owner is
  * `unowned`, and a `find` that does not apply is `does-not-apply`. The
- * runner applies the patch only where an owner's copy loads the mutant's
- * source as a module, so a survivor that no owner's copy loaded never ran
- * the patch, and is `unreached`, with the unreached directive on its line.
+ * runner applies the patch where an owner's copy loads the mutant's source
+ * as a module, and where it reads the source through fs in its own process,
+ * so a survivor that no owner's copy loaded or read never ran the patch, and
+ * is `unreached`, with the unreached directive on its line.
  * Any other survivor is `not-judged` when a deterministic owner test's
  * observation changed, and `not-observed` otherwise.
  *
@@ -619,6 +620,14 @@ const records = fc.record({
   // through fs, or imports nothing of it. Drawn last, so the fixed seed's
   // earlier draws stay as they were.
   unloaded: fc.array(fc.array(fc.nat({ max: 2 }), { maxLength: 2 }), {
+    minLength: AUTHORED,
+    maxLength: AUTHORED,
+  }),
+  // For each authored mutant, the owner files among those whose copy did
+  // not load its source that read it through fs instead, where the runner
+  // serves the patch too. Drawn last, so the fixed seed's earlier draws stay
+  // as they were.
+  readThroughFs: fc.array(fc.array(fc.nat({ max: 2 }), { maxLength: 2 }), {
     minLength: AUTHORED,
     maxLength: AUTHORED,
   }),
@@ -1022,8 +1031,8 @@ function judgedOutcome(h, mi, owners) {
 // An authored mutant's outcome: laws 1 to 4 over every test of its owner
 // files (its copy records no reach), and a survivor is not-judged when a
 // deterministic owner test's observation changed, not-observed otherwise. A
-// survivor that no owner's copy loaded the source in is unreached: the patch
-// never ran.
+// survivor that no owner's copy loaded the source in, or read it through fs
+// in, is unreached: the patch never ran.
 function modelAuthored(h, ai) {
   const a = h.authored[ai]
   if (!a.applies) return { outcome: `does-not-apply` }
@@ -1038,7 +1047,10 @@ function modelAuthored(h, ai) {
   return modelBlocked(
     h,
     result.outcome === `survived` &&
-      judged.every((fi) => h.unloaded[ai].includes(fi))
+      judged.every(
+        (fi) =>
+          h.unloaded[ai].includes(fi) && !h.readThroughFs[ai].includes(fi),
+      )
       ? { outcome: `unreached`, mention: [`line ${a.line + 1}`] }
       : result,
     authoredBlockers(h, owners),
@@ -1730,12 +1742,15 @@ function unitOf(h, fi, slot) {
     timedOut: false,
     seconds: 1,
     // The modules the copy loaded, as the runner gathers them: its own file,
-    // and the source unless an authored mutant's owner did not load it.
+    // and the source unless an authored mutant's owner did not load it, and
+    // then the source's read through fs (`fs:<path>`) where it read it.
     inputs: [
       fileName(h, fi),
-      ...(slot >= MUTANTS && h.unloaded[slot - MUTANTS].includes(fi)
-        ? []
-        : [SOURCE_PATH]),
+      ...(slot < MUTANTS || !h.unloaded[slot - MUTANTS].includes(fi)
+        ? [SOURCE_PATH]
+        : h.readThroughFs[slot - MUTANTS].includes(fi)
+          ? [`fs:${SOURCE_PATH}`]
+          : []),
     ],
     setupErrors: loadFailed ? [`Error: cannot load the file`] : [],
     unhandled: tests.some((t) => under(t).kind === `unhandled`)
@@ -3467,6 +3482,7 @@ const single = (
     baseline = `pass`,
     authored = [],
     unloaded = [[], []],
+    readThroughFs = [[], []],
   } = {},
 ) => ({
   name,
@@ -3519,6 +3535,7 @@ const single = (
     baselineOrder: [0, 0, 0],
     fileStems: [`f0`, `f1`, `f2`],
     unloaded,
+    readThroughFs,
   }),
 })
 // Law 7: two owner files whose tests have one effect, named apart so that a
@@ -4046,12 +4063,24 @@ const constructed = [
   single(`an authored mutant with no owner`, [`authored unowned`], {
     authored: [{ owners: [] }],
   }),
-  // Its owner's copy read the source through fs, or imported nothing of
-  // it, so the patch never ran there.
+  // Its owner's copy imported nothing of the source and did not read it,
+  // so the patch never ran there.
   single(
     `an authored mutant whose owner did not load its source`,
     [`authored unreached`],
     { authored: [{}], unloaded: [[0], []] },
+  ),
+  // Its owner's copy read the source through fs, where the runner serves
+  // the patch too, and the changed value shows.
+  single(
+    `an authored mutant whose owner read its source through fs`,
+    [`authored not-judged`],
+    {
+      effect: { kind: `changed` },
+      authored: [{}],
+      unloaded: [[0], []],
+      readThroughFs: [[0], []],
+    },
   ),
   // Law 8: code past the cut and across lines, and an intent past it.
   single(

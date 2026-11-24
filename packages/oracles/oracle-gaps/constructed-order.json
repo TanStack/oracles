@@ -99,6 +99,10 @@
     "a failing afterAll around a law that calls production",
     "a failing law that spins under a mutant before a passing law",
     "module data that only the failing owner's passing pair judges",
-    "an authored mutant that no owner loads"
+    "an authored mutant that no owner loads",
+    "an authored mutant of a file a test reads through fs (sync)",
+    "an authored mutant of a file a test reads through fs (buffer)",
+    "an authored mutant of a file a test reads through fs (promise)",
+    "an authored mutant of a file a test reads through fs (callback)"
   ]
 }
