@@ -94,6 +94,41 @@ repository's `tsc --noEmit` (or a test tsconfig that extends `tsconfig.json`).
 
 ## Probes
 
+Every probe in a scratch directory needs these two from the start.
+
+**Load the repository's packages with `createRequire`.** A probe in the
+scratch directory cannot import the repository's packages by name:
+`import fc from 'fast-check'` fails with `ERR_MODULE_NOT_FOUND`. Load them
+from the repository, and import the code under test by its absolute path:
+
+```js
+import { createRequire } from 'node:module'
+const require = createRequire('<repo>/package.json')
+const fc = require('fast-check')
+const { clamp } = await import('<repo>/src/clamp.ts')
+```
+
+**Run TypeScript with the repository's `tsx`, or with Node.** In this order:
+
+1. The repository's own `tsx`, when it is installed:
+   `<repo>/node_modules/.bin/tsx probe.ts`. It runs any TypeScript, and
+   resolves imports the way the repository's tools do (`./b`, `./b.js`).
+2. Node's own type stripping. Plain `node probe.ts` strips types on Node
+   22.18 and later 22 releases, and on 23.6 and later.
+   `node --experimental-strip-types probe.ts` does it on Node 22.6 to 22.17,
+   and on 23 before 23.6. Node 20 has neither: it rejects `.ts` as an
+   unknown file extension, and the flag as a `bad option`. It has two
+   limits:
+   - It runs only TypeScript whose types can be erased. An enum or a
+     parameter property (`constructor(private n: number)`) fails with
+     "is not supported in strip-only mode". `--experimental-transform-types`
+     runs them on Node 22.7 to 25. Node 26 no longer has that flag.
+   - It resolves only imports that name the `.ts` file. Source that
+     imports `./b` or `./b.js` fails with `ERR_MODULE_NOT_FOUND`.
+3. Otherwise `npx -y tsx probe.ts`. It downloads tsx from the registry into
+   npx's cache, outside the repository's lockfile. Tell the developer in a
+   line when you use it.
+
 **The tests import a build that is not built yet.** Import the source that
 the build comes from.
 
@@ -105,11 +140,3 @@ repository's `package.json`, the warning is harmless: run the probe with
 **Node cannot load the source as it is** (for example, an extensionless ES
 module). Copy it unchanged into the scratch directory, under a name that
 Node can load, such as `index.mjs`, and tell the developer that you did.
-
-**The code is TypeScript.** Run the probe with `npx tsx`.
-
-**A probe needs `fast-check` or another package from the repository.** A
-probe in the scratch directory cannot import the repository's packages by
-name. Load them from the repository with `createRequire`:
-`const require = createRequire('<repo>/package.json')`, then
-`require('fast-check')`.
