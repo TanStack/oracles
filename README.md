@@ -62,7 +62,9 @@ agent.
   broken file by its path), `results.json` lists each failing file's
   `laws`, and the report says it is provisional. With
   `--only <id,...>`, the baseline runs only the owners of the selected
-  mutants. A `crashed` gap is not a kill: production threw where no law
+  mutants, and a selection that judges nothing refuses before any test
+  runs: an id that names no mutant of the run, or mutants that no oracle
+  file owns (with `--sample`, the ones it keeps). A `crashed` gap is not a kill: production threw where no law
   judged it, and the error is on the gap's Detail line in `summary.md` and
   in its `detail` in `results.json`. Record the error in the driver, and
   state the law that decides that input's outcome.

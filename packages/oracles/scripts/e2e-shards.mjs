@@ -432,6 +432,13 @@ export const shards = {
     `calibration: the stdout has a gap line for a mutant that is not a gap`,
     `calibration: a check through the daemon drops a gap line`,
     `calibration: a check through the daemon names another check's report`,
+    // Law 14's selection refusal, bound to the failing owner's constructed
+    // history: 8 to 14 s each locally (one worker, light load).
+    `calibration: a partial run of an id that names no mutant completes`,
+    `calibration: a partial run of unowned mutants is refused as naming no mutant`,
+    `calibration: a sampled partial run that kept only unowned mutants completes`,
+    `calibration: a sampled partial run refuses after its baseline ran`,
+    `calibration: a partial run's refusal names an id that names a mutant`,
     // The witness module's edit sequence (option M): about 97 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
     `random seed: an edit sequence over the witness module, the first half`,

@@ -31,6 +31,7 @@ import {
   verdictLine,
 } from './stream.mjs'
 import { posix, relativeWithin } from './paths.mjs'
+import { Refusal } from './ending.mjs'
 
 /** Outcomes that are gaps. Only a law verdict on a reproducible route kills. */
 export const gapOutcomes = new Set([
@@ -85,6 +86,37 @@ export function keyAndSelect(mutants, { only, sample, sources }) {
     }
     return own.slice(0, sample)
   })
+}
+
+/**
+ * The owner files of the mutants a run with `--only` judges. `candidates`
+ * holds every mutant of the run, an operator mutant by its id and an
+ * authored one as `authored:<id>`, each with a function that returns its
+ * owner files, or null for an authored mutant whose `find` does not apply (a
+ * gap of its own, `does-not-apply`); `kept` lists the selected ids that a
+ * `--sample` keeps (all of them without one). A selection that judges
+ * nothing would end as a completed run with no gap, so it is refused before
+ * any test runs: an id that names no mutant of the run (an id of another
+ * source, one past a source's last mutant, or a typo), and a kept selection
+ * of mutants that no oracle file owns, as a run that owns nothing is
+ * (analysis.mjs).
+ */
+export function ownersOfOnly(only, candidates, kept) {
+  const known = new Map(candidates)
+  const shown = (ids) => ids.map((id) => escapeControls(id)).join(`, `)
+  const unknown = [...only].filter((id) => !known.has(id))
+  if (unknown.length > 0)
+    throw new Refusal(
+      `--only names no mutant of this run: ${shown(unknown)}`,
+      `Copy each id from a gap line or a report's \`rerun: --only <id>\` of a run over the same --source files and --mutants.`,
+    )
+  const owners = [...kept].map((id) => known.get(id)())
+  if (owners.every((files) => files?.size === 0))
+    throw new Refusal(
+      `--only selects no mutant that an oracle file owns: ${shown([...kept])}${kept.length < only.size ? ` (what --sample kept of it)` : ``}`,
+      `Add an owns entry for the function of each selected mutant to the oracle that judges it.`,
+    )
+  return new Set(owners.flatMap((files) => [...(files ?? [])]))
 }
 
 // The evidence tag a mutant may carry (schemata.mjs), and the sentence it adds.
