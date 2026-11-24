@@ -467,8 +467,8 @@ in a provisional report. Follow `oracles-design` step 7's defect path for
 the fix, then run the gap check again for a full report.
 
 Put the oracle's `owns` list on its `oracleProperty` call. An entry is a file
-(`src/index.ts`) or one function in it (`src/index.ts#parse`, or
-`src/x.ts#Class.method`). A function entry owns that function and its static
+(`src/index.ts`) or one function or class in it (`src/index.ts#parse`,
+`src/x.ts#Class`, or `src/x.ts#Class.method`). A function entry owns that function and its static
 call tree, including the module-level data it reads. An unnamed default
 export is `src/index.ts#default`; a named one keeps its name
 (`src/index.ts#pLimit`). For a first oracle, own only the function it covers.

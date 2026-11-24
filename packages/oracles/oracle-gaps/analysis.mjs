@@ -138,7 +138,7 @@ export function analyze(ts, pkg, sources, testFiles) {
       if (fn !== undefined && !owned.has(source, fn))
         throw new Refusal(
           `${relative(file)}: owns entry ${entry} names no function in ${source}`,
-          `Name a function or module-level variable that ${source} defines in this owns entry, such as ${source}#run, ${source}#Class.method, or ${source}#TABLE.`,
+          `Name a function, class, or module-level variable that ${source} defines in this owns entry, such as ${source}#run, ${source}#Class, ${source}#Class.method, or ${source}#TABLE.`,
         )
     }
   // Owned through the call trees, which may reach a selected source from an
