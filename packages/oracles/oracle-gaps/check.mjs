@@ -2450,17 +2450,9 @@ export default async (env) => {
     // (`baseline.work`), and the copy had read none when it spun. A test that
     // reads the clock anywhere in its run, after its work too, has no such
     // count. Otherwise the spin names no test, and the mutant is a gap.
-    // A failing law's spin is never a built-in kill: its verdict is left out
-    // (`leftOut`), and the copy blocks the mutant by that law (C 2026-11-23,
-    // "Count-cut label precedence", step 1).
     const countOnly = (u) =>
       u?.cause === `spin` &&
-      !u.builtIn?.every(
-        (v) =>
-          !v.clocked &&
-          baseline.work.has(v.key) &&
-          !baseline.leftOut.has(v.key),
-      )
+      !u.builtIn?.every((v) => !v.clocked && baseline.work.has(v.key))
         ? { ...u, builtIn: undefined }
         : u
     const changesNothing = (mutant, targets) =>
