@@ -200,7 +200,10 @@
  *    the same lines, before its gaps (the freeze's one loop, 2026-11-10).
  *    The legend line for `crashed` says first that a crash is a gap, not a
  *    kill, and that its error is on the gap's Detail line (G3; the freeze,
- *    P3 and C1). The last stdout line is `oracle-gaps: done completed, <n>
+ *    P3 and C1). The legend line for `extra-work` says first that every
+ *    history tried gave the same observations with more work, so that a
+ *    mutant whose different behavior no history reaches lands there too,
+ *    and a history that reaches the difference comes before a bound. The last stdout line is `oracle-gaps: done completed, <n>
  *    gaps[ (provisional)], report <path>` (G6). A replay
  *    line is a command, which the exit law does not read.
  * 9. Before any mutant, each test file's baseline is printed, an ordinary
@@ -1444,14 +1447,18 @@ const directives = {
 // What a legend line says a class is, before its directive, where the
 // class's name alone misleads (maintainer disposition G3, 2026-11-11): a
 // crash is a gap, not a kill (the v20 freeze, P3 and C1), and its error is
-// in the gap's Detail line. The extra-work line says first that a builtin
-// counts as one site, so a shortcut whose cost is in one is owed an
-// observation of that cost, not a very tight bound (maintainer, 2026-11-12).
+// in the gap's Detail line. The extra-work line says first that every
+// history tried gave the same observations with more work, so a mutant that
+// changes behavior only where no history reaches lands there too, and a
+// history that reaches the difference comes before a bound (a downstream
+// project's report, 2026-11-24); then that a builtin counts as one site, so
+// a shortcut whose cost is in one is owed an observation of that cost, not
+// a very tight bound (maintainer, 2026-11-12).
 const meanings = {
   crashed:
     /^Production threw where no law judged it: a gap, not a kill\. Its error is on the gap's Detail line in summary\.md, and in its `detail` in results\.json\. /,
   'extra-work':
-    /^A call to a builtin counts as one site evaluation, whatever it costs \(`Object\.defineProperty`\): where a shortcut's cost is in one, make that cost an observation of the driver, such as a count of those calls, and let a law judge it, in place of a very tight bound\. /,
+    /^Every history the owner tests ran gave the same observations under this mutant, with more work\. A mutant that changes behavior only in a state no history reaches lands here too: first look for a history that reaches the difference, such as a second registration of the same key, before you declare a bound\. A call to a builtin counts as one site evaluation, whatever it costs \(`Object\.defineProperty`\): where a shortcut's cost is in one, make that cost an observation of the driver, such as a count of those calls, and let a law judge it, in place of a very tight bound\. /,
 }
 // A count of things, as the report words it.
 const counted = (n, thing) => `${n} ${thing}${n === 1 ? `` : `s`}`
@@ -2672,7 +2679,7 @@ function check(h, observations, expected) {
                           `oracle-gaps: legend extra-work: `.length,
                         ),
                       )
-                    ? `the extra-work legend line does not say that a builtin counts as one site, and what is owed for its cost`
+                    ? `the extra-work legend line does not say that every history tried gave the same observations, which a difference no history reaches gives too, that a builtin counts as one site, and what is owed for its cost`
                     : undefined
   if (leadProblem)
     return violation(`classified`, leadProblem, `stdout`, { actual: stdout })
@@ -3191,6 +3198,23 @@ const calibrations = [
       )
       if (totals <= 0) return undefined
       return [...lines.slice(totals), ...lines.slice(0, totals)].join(`\n`)
+    }),
+  },
+  {
+    name: `the extra-work legend line leaves out that no history may reach the difference`,
+    law: `stdout`,
+    corrupt: corruptStdout((stdout) => {
+      const line = stdout
+        .split(`\n`)
+        .find((l) => l.startsWith(`oracle-gaps: legend extra-work: `))
+      if (line === undefined) return undefined
+      return stdout.replace(
+        line,
+        line.replace(
+          /^(oracle-gaps: legend extra-work: )[^.]*\. [^.]*\. /,
+          `$1`,
+        ),
+      )
     }),
   },
   {

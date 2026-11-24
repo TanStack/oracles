@@ -69,8 +69,10 @@ agent.
 
   A survivor that changed no observation but made a test do more work is
   `extra-work`: the mutant deleted a shortcut that exists only for speed,
-  such as an early return or an assignment in place of a slower call. A
-  test's work is the number of site evaluations that its instrumented
+  such as an early return or an assignment in place of a slower call, or
+  it changed behavior only in a state that no history reached, such as a
+  second registration of the same key. Look for such a history before
+  declaring a bound. A test's work is the number of site evaluations that its instrumented
   production code makes (calls, comparisons, `if`s, and each pass of a
   loop's condition), a deterministic count, never a time. Only a test on a
   route that `oracleProperty` registers for production (a fixed seed, a

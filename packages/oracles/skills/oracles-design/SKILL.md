@@ -553,8 +553,13 @@ comes with one instruction. Do what it says, within the rules below.
 
 - **There are no equivalent mutants.** A surviving mutant shows a missing
   history, observation, or law, or it shows dead code.
-- **An `extra-work` gap is a fast path.** The change gives the same results
-  but does more work. Keep the shortcut and declare the bound that the
+- **An `extra-work` gap is a fast path, once no history shows otherwise.**
+  The change gave the same observations in every history tried, with more
+  work. A change whose different behavior no history reaches lands here
+  too: an `if (!map.has(key)) map.set(key, fresh())` forced to always set
+  differs only when the same key comes twice. So first look for a history
+  that reaches a difference, and add it if one exists. Otherwise the code
+  is a fast path. Keep the shortcut and declare the bound that the
   directive names, `work: { ratio }` on the property, which kills it under
   the law `work bound`. When the saving lives inside a builtin call, which
   counts as one site, make that cost an explicit driver observation instead
