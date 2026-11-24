@@ -254,6 +254,15 @@ choose it later.
 - The model is pure. It takes the plan and returns expectations. It never
   reads production or driver values, never mutates its input, and keeps no
   hidden state.
+- The model is synchronous. It returns the expected value, never a promise:
+  the framework calls it after the driver, and on calibrations' corrupted
+  traces, and awaits nothing it returns. In a JavaScript oracle file a
+  promise reaches the check unnoticed. When the expected result needs
+  awaited work, such as the same code run without instrumentation, run that
+  reference in the driver, record it under its own checkpoint, and let the
+  check compare the two checkpoints. That reference is production's, not
+  the model's, so follow
+  [A reference that must be awaited](../../docs/model-styles.md#a-reference-that-must-be-awaited).
 - Reach is a predicate over the plan or trace, or a production probe. It is
   not a side effect inside the model.
 - Every model rule cites its authority.
