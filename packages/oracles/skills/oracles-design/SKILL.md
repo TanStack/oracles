@@ -548,7 +548,9 @@ Techniques: [guide § Evidence](../../docs/guide.md#evidence).
 
 Run the gap check on the owned code, then work from its report. Exit 2 is a
 refusal: do what its `fix:` line says. Exit 3 is a CLI bug: report it with
-`<out>/error.log`, and do not change the oracle. Every gap
+`<out>/error.log`, and do not change the oracle. A done line that says the
+run's process ended in a native crash or ran out of memory is not: rerun as
+it says. Every gap
 comes with one instruction. Do what it says, within the rules below.
 
 - **There are no equivalent mutants.** A surviving mutant shows a missing

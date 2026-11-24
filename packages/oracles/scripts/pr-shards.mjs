@@ -944,6 +944,7 @@ export const partitions = {
         'a declaration fault: apiLessTypescript',
         'a declaration fault: setupThrows',
         'a declaration fault: setupThrows, then the abort stop',
+        'a native crash under each pool',
         'a .cjs config that calls require',
         'a package with no config',
         'a declaration fault: configThrows',
