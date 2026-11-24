@@ -928,6 +928,8 @@ export const partitions = {
         'a run after a killed CLI',
       ]),
       10: anyOf([
+        'a module data mutant judged past nondeterministic plan tests',
+        'a module data mutant whose owner file holds no plan test',
         'an edit that changed the cold result after a hang replaced the only context',
         'a test edits the helper it read, during a check through the daemon',
         'an edit to data a test reads through fs (callback)',
@@ -935,6 +937,7 @@ export const partitions = {
         'a load failure beside a hang',
         'a declaration fault: apiLessTypescript',
         'a declaration fault: setupThrows',
+        'a declaration fault: setupThrows, then the abort stop',
         'a .cjs config that calls require',
         'a package with no config',
         'a declaration fault: configThrows',
