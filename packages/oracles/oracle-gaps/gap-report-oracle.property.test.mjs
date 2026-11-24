@@ -1983,9 +1983,10 @@ function namedOut(text, out) {
 
 /** What one run of the CLI reported, from its exit status and its files. */
 // A gap line the CLI streams to stderr as its mutant is judged (stream.mjs):
-// its class, its line, and its id, after the stream's prefix (law 15).
+// its class, its line and column, and its id, after the stream's prefix
+// (law 15).
 const streamedGap =
-  /^oracle-gaps: gap (?:not-judged|extra-work|indeterminate|dead-code|outside-annotation|branch-never-taken|not-infected|not-observed|not-distinguished|unreached|random-only-kill|agreement-only-kill|unregistered-kill|framework-error|timeout|setup-error|crashed|does-not-apply|blocked) L(?:\d+|\?) (\S+) /
+  /^oracle-gaps: gap (?:not-judged|extra-work|indeterminate|dead-code|outside-annotation|branch-never-taken|not-infected|not-observed|not-distinguished|unreached|random-only-kill|agreement-only-kill|unregistered-kill|framework-error|timeout|setup-error|crashed|does-not-apply|blocked) L(?:\d+:C\d+|\?) (\S+) /
 
 // The declared exempt lines that are not our own (v21.2 P10 and I3), each
 // told by its own shape, never by its indentation alone: a block starts at
@@ -2422,6 +2423,7 @@ function readRunIn(dir, out, status, stderr, cli, stdout, derived) {
       source: r.source,
       function: r.function,
       line: r.line,
+      column: r.column,
       operator: r.operator,
       // The code the operator replaces (a comparison's or a logical
       // operator's token, for a swap), which names the capture helper.
@@ -5103,10 +5105,13 @@ function check(plan, observations, expected) {
         `authored mutants`,
         { actual: kind, expected: owed.kind },
       )
-    if (owed.line !== undefined && got.line !== owed.line)
+    if (
+      owed.line !== undefined &&
+      (got.line !== owed.line || got.column !== owed.column)
+    )
       return violation(
         `cli`,
-        `the authored mutant ${owed.id} is reported at line ${got.line}, owed ${owed.line}`,
+        `the authored mutant ${owed.id} is reported at line ${got.line}, column ${got.column}, owed line ${owed.line}, column ${owed.column}`,
         `authored mutants`,
       )
   }
@@ -5382,9 +5387,10 @@ const logNoteOf = (run) => {
  * each gap it reports has exactly one gap line, which names its id, and
  * there is no other gap line. A result is a gap when it is neither a probe
  * guard nor `killed` or `unowned`, as the model counts gaps (every survivor
- * is a gap, P5). A line reads as `oracle-gaps: gap <kind> L<line> <id>
- * <change>`, and it shows the gap's kind (its class, or its outcome), its
- * line (`?` when the mutant never applied), and its change: two code spans
+ * is a gap, P5). A line reads as `oracle-gaps: gap <kind>
+ * L<line>:C<column> <id> <change>`, and it shows the gap's kind (its class,
+ * or its outcome), its line and column (`L?` when the mutant never
+ * applied), and its change: two code spans
  * around ` → `, the code and its replacement, or the intent's span and
  * ` (authored by <author>)`. A span shows its code on one line, with each
  * run of whitespace as one space, whole or cut and ended with `...`; the
@@ -5420,7 +5426,7 @@ function stdoutGapBreach(stdoutGaps, results) {
     lined.add(read.id)
     const owed = {
       kind: gap.class ?? gap.outcome,
-      line: gap.line === undefined ? `?` : String(gap.line),
+      line: gap.line === undefined ? `?` : `${gap.line}:C${gap.column ?? `?`}`,
     }
     const shows = gap.authored
       ? read.intent !== undefined &&
@@ -5431,7 +5437,7 @@ function stdoutGapBreach(stdoutGaps, results) {
         showsCode(read.replacement, gap.replacement)
     if (read.kind !== owed.kind || read.line !== owed.line || !shows)
       return {
-        difference: `the stdout's gap line for ${read.id} is ${JSON.stringify(line)}, and results.json reports it as ${owed.kind} at line ${owed.line}, changing ${JSON.stringify(gap.authored ? gap.intent : `${gap.original} → ${gap.replacement}`)}`,
+        difference: `the stdout's gap line for ${read.id} is ${JSON.stringify(line)}, and results.json reports it as ${owed.kind} at L${owed.line}, changing ${JSON.stringify(gap.authored ? gap.intent : `${gap.original} → ${gap.replacement}`)}`,
         extra: { actual: line, expected: { ...owed, id: read.id } },
       }
   }
@@ -5449,7 +5455,9 @@ function stdoutGapBreach(stdoutGaps, results) {
  * line, id, and change. Undefined when the line does not read so.
  */
 function readGapLine(line) {
-  const head = line.match(/^oracle-gaps: gap ([\w-]+) L(\d+|\?) (\S+) (.*)$/)
+  const head = line.match(
+    /^oracle-gaps: gap ([\w-]+) L(\d+:C\d+|\?) (\S+) (.*)$/,
+  )
   if (!head) return undefined
   const [, kind, at, id, change] = head
   const first = readCodeSpan(change)
@@ -6116,8 +6124,9 @@ calibrations.push(
       const [first, ...rest] = cli.stdoutGaps
       if (cli.exit !== 0 || first === undefined) return undefined
       const moved = first.replace(
-        /^(oracle-gaps: gap \S+ L)(\d+|\?) /,
-        (_, head, at) => `${head}${at === `?` ? 1 : Number(at) + 1} `,
+        /^(oracle-gaps: gap \S+ L)(\d+|\?)(:C\d+)? /,
+        (_, head, at, column = `:C1`) =>
+          `${head}${at === `?` ? 1 : Number(at) + 1}${column} `,
       )
       return { ...cli, stdoutGaps: [moved, ...rest] }
     }),
@@ -6170,7 +6179,10 @@ calibrations.push(
     corrupt: corruptCli((cli) => {
       const [first, ...rest] = cli.stdoutGaps
       if (cli.exit !== 0 || first === undefined) return undefined
-      const unread = first.replace(/ L(\d+|\?) (\S+) .*$/, ` L$1 $2 no change`)
+      const unread = first.replace(
+        / L(\d+:C\d+|\?) (\S+) .*$/,
+        ` L$1 $2 no change`,
+      )
       return { ...cli, stdoutGaps: [unread, ...rest] }
     }),
   },
@@ -6184,7 +6196,7 @@ calibrations.push(
       const [first, ...rest] = cli.stdoutGaps
       if (cli.exit !== 0 || !killed || first === undefined) return undefined
       const moved = first.replace(
-        / L(\d+|\?) (\S+) /,
+        / L(\d+:C\d+|\?) (\S+) /,
         (_, at) => ` L${at} ${killed.id} `,
       )
       return { ...cli, stdoutGaps: [moved, ...rest] }

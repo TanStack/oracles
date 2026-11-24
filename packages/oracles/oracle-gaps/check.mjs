@@ -2626,6 +2626,7 @@ export default async (env) => {
         original: mutant.find,
         replacement: mutant.replace,
         line: patched?.line,
+        column: patched?.column,
       }
       results.push(result)
       if (!patched) {

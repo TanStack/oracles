@@ -494,7 +494,7 @@ counterexample, and a replay command), then one decisive line: `baseline all
 judges nothing, and its file's passing tests still judge; only a mutant
 that no passing owner test reached is blocked (one `blocked` line names each
 failing law), and the report is marked provisional. Then each gap prints as one line as soon as it is judged
-(`oracle-gaps: gap <class> L<line> <id> <change>`), with `progress` lines,
+(`oracle-gaps: gap <class> L<line>:C<column> <id> <change>`), with `progress` lines,
 and a `busy` line while a slow test runs. Exactly one line ends the run:
 `oracle-gaps: done completed, <n> gaps, report <path>/summary.md` (exit 0),
 `done refused` (exit 2), `done error, …` (exit 3; a crash or an

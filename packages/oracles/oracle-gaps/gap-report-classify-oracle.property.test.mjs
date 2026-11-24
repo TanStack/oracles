@@ -172,8 +172,11 @@
  *    totals, one legend line per class present, and every gap once, one line
  *    each, grouped by function; it names the full report's path. The
  *    streamed gap lines (stream.mjs `gapLine`), printed in the order the
- *    mutants are judged, are the same lines, each once. A gap line is one
- *    line however long its code or intent is: each of the mutant's original
+ *    mutants are judged, are the same lines, each once. A gap line places
+ *    its mutant as `L<line>:C<column>`, the line and column its result
+ *    gives, or `L?` for an authored mutant that never applied (a
+ *    downstream report: two `?.` of one line printed alike). A gap line is
+ *    one line however long its code or intent is: each of the mutant's original
  *    and replacement code, and an authored mutant's intent, is shown with its
  *    whitespace collapsed to single spaces and, past 60 characters (code
  *    points, so an astral-plane character is never split), cut to its first
@@ -549,6 +552,8 @@ const records = fc.record({
     fc.record({
       owners: fc.array(fc.nat({ max: 2 }), { maxLength: 2 }),
       line: fc.nat({ max: 1 }),
+      // The column where its code starts on its line, counted from 1.
+      column: fc.integer({ min: 1, max: 80 }),
       // A `binary-swap` is a comparison (`>`, `>=`, `===`) or a logical
       // operator (`&&`); its evidence is a hint the framework may attach.
       operator: fc.constantFrom(
@@ -596,6 +601,7 @@ const records = fc.record({
     fc.record({
       owners: fc.array(fc.nat({ max: 2 }), { maxLength: 2 }),
       line: fc.nat({ max: 1 }),
+      column: fc.integer({ min: 1, max: 80 }),
       applies: fc.constantFrom(true, true, true, false),
       intent: fc.constantFrom(...intents),
       author: fc.constantFrom(`agent a`, `the reviewer`),
@@ -1320,6 +1326,8 @@ function model(h) {
     const m = h.mutants[mi]
     o.key = keyOf(m, mi)
     o.line = String(m.line + 1)
+    // Where the gap line places it: its line and column.
+    o.place = `${m.line + 1}:C${m.column}`
     o.id = `m${mi}`
     o.function = `f${m.line}`
     o.probe = m.probe
@@ -1334,6 +1342,7 @@ function model(h) {
     // A `find` that does not apply has no line: the gap line prints `?`, and
     // the full report the absent value.
     line: a.applies ? String(a.line + 1) : `?`,
+    place: a.applies ? `${a.line + 1}:C${a.column}` : `?`,
     entryLine: a.applies ? String(a.line + 1) : `undefined`,
     id: `authored:a${ai}`,
     probe: false,
@@ -1947,6 +1956,7 @@ async function driver(h, observe) {
     source: `src/x.ts`,
     function: `f${m.line}`,
     line: m.line + 1,
+    column: m.column,
     operator: m.operator,
     anchor: m.anchor,
     ...(m.operator === `binary-swap`
@@ -2201,6 +2211,7 @@ async function driver(h, observe) {
       original: `out.push('a')`,
       replacement: `out.push('b')`,
       line: a.applies ? a.line + 1 : undefined,
+      column: a.applies ? a.column : undefined,
     }
     results.push(result)
     const owners = [
@@ -2506,7 +2517,7 @@ function check(h, observations, expected) {
   const stdoutGaps = stdout
     .split(`\n`)
     .filter((line) =>
-      /^oracle-gaps: gap \S+ L(\d+|\?) (m\d+|authored:a\d+) /.test(line),
+      /^oracle-gaps: gap \S+ L(\d+:C\d+|\?) (m\d+|authored:a\d+) /.test(line),
     )
   const kinds = new Set(gapsOfModel.map((o) => o.class ?? o.outcome))
   // Gaps are grouped by function, and the authored ones in one group.
@@ -2559,11 +2570,11 @@ function check(h, observations, expected) {
                   (o) =>
                     stdoutGaps.filter((line) =>
                       line.startsWith(
-                        `oracle-gaps: gap ${o.class ?? o.outcome} L${o.line} ${o.id} `,
+                        `oracle-gaps: gap ${o.class ?? o.outcome} L${o.place} ${o.id} `,
                       ),
                     ).length !== 1,
                 )
-              ? `a gap is not printed once under its class, line, and id`
+              ? `a gap is not printed once under its class, line and column, and id`
               : // A gap with no line prints `L?` (stream.mjs), a placeholder,
                 // not a question; a replay line is a command, not prose.
                 exits.test(
@@ -2746,7 +2757,7 @@ function check(h, observations, expected) {
   // operator mutant's original and replacement as two code spans, an
   // authored mutant's intent as a code span and its author. The results keep the full text.
   for (const owed of gapsOfModel) {
-    const head = `oracle-gaps: gap ${owed.class ?? owed.outcome} L${owed.line} ${owed.id} `
+    const head = `oracle-gaps: gap ${owed.class ?? owed.outcome} L${owed.place} ${owed.id} `
     const line = streamed.find((l) => l.startsWith(head))
     const rest = line?.slice(head.length)
     let shown
@@ -3238,11 +3249,22 @@ const calibrations = [
       const value = structuredClone(trace[index].value)
       const line = value.stdout
         ?.split(`\n`)
-        .find((l) => /^oracle-gaps: gap \S+ L\d+ m\d+ /.test(l))
+        .find((l) => /^oracle-gaps: gap \S+ L\d+:C\d+ m\d+ /.test(l))
       if (line === undefined) return undefined
       value.stdout = value.stdout.replace(`${line}\n`, ``)
       return trace.map((o, i) => (i === index ? { ...o, value } : o))
     },
+  },
+  {
+    // The line alone, as before the column: two sites of one change on one
+    // line print alike.
+    name: `a gap line leaves out its column`,
+    law: `stdout`,
+    corrupt: corruptStdout((stdout) =>
+      /^oracle-gaps: gap \S+ L\d+:C\d+ /m.test(stdout)
+        ? stdout.replace(/^(oracle-gaps: gap \S+ L\d+):C\d+ /gm, `$1 `)
+        : undefined,
+    ),
   },
   {
     name: `the stream prints a gap twice`,
@@ -3461,6 +3483,7 @@ const single = (
       {
         owners: [0],
         line: 0,
+        column: 5,
         operator: `delete-call`,
         original: `>`,
         code: codes[1],
@@ -3474,6 +3497,7 @@ const single = (
     authored: authored.map((a) => ({
       owners: [0],
       line: 0,
+      column: 3,
       applies: true,
       intent: intents[0],
       author: `agent a`,
