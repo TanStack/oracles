@@ -84,8 +84,10 @@ Install `vitest@^4.1` in the same command as the two packages: npm refuses
 to install `@tanstack/oracles` next to the old Vitest (`ERESOLVE`).
 When `package.json` does not list `vite` and the lockfile holds a Vite older
 than 6 (`pnpm why vite`; under Vitest 1 and 2 it always does), add
-`vite@^7` to that command. pnpm keeps the old Vite otherwise, and Vitest 4
-stops at startup with `Package subpath './module-runner' is not defined`.
+`vite@^7` to that command, or `vite@^6` on a Node older than 20.19, or a 22
+older than 22.12, where Vite 7 does not run. pnpm keeps the old Vite
+otherwise, and Vitest 4 stops at startup with `Package subpath
+'./module-runner' is not defined`.
 When `package.json` lists a Vite older than 6, upgrading it is part of the
 same decision: say so with the question.
 
