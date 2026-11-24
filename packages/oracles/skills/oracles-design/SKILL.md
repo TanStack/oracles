@@ -27,7 +27,8 @@ failure goes away, and pinning one example. `oracles-review` §2 lists them all.
 in an explore session (`oracles-explore`): the laws that the authority decides.
 Open design questions may still be open: they are limits until the developer
 settles them. If no laws are approved yet, probe the behavior and propose
-them first, as `oracles-explore` does, and stop for approval. Exploration and
+them first, as `oracles-explore` does, and stop for approval (with no
+developer present, follow its "No developer in the loop"). Exploration and
 review stay in the conversation, never in the oracle file. The file is
 written with its law block and its code together.
 
@@ -50,6 +51,10 @@ written with its law block and its code together.
   (you found that a law is wrong) needs the delta and a stop.
 - **The task already approved these laws?** Do not ask again. An approved
   potential law is an adopted law.
+- **No developer present?** `oracles-explore`'s "No developer in the loop"
+  says which laws you may adopt, pending maintainer confirmation. Every
+  other new law and every law delta goes into its decision list, and no law
+  the maintainers adopted changes.
 
 **Production output is evidence, never authority.** A rule that exists only
 because production does it is model hacking. When the law and the code
@@ -520,7 +525,9 @@ refactor: treat the law change first (step 1).
    oracle.
 
 For a defect fix, do not change production before step 1. A later run does
-not make up for a skipped RED.
+not make up for a skipped RED. With no developer present, stop at RED: the
+fix waits for the maintainers' answer (`oracles-explore`, "No developer in
+the loop").
 
 **Clean up production once GREEN.** The oracle now protects the law, so use
 it to simplify:
