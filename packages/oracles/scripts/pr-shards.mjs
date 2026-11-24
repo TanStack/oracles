@@ -418,6 +418,11 @@ export const partitions = {
     shards: {
       // 560 s of weight.
       1: anyOf([
+        // Block per law (#176): file b's passing laws now judge the mutants
+        // it owns, so this unit runs them: 238 s in shard 1 at fd69ea2e
+        // (10m26s), then 182 s in shard 2 at a81892cc beside a 187 s
+        // apiLessTypescript base (9m13s). Shard 1 took 4m40s there.
+        `a declaration fault: brokenOwner`,
         `every outcome class`,
         `an edit sequence over the witness module, the first half`,
         `a check abandoned while a context warms in place of a cut one`,
@@ -443,10 +448,6 @@ export const partitions = {
       ]),
       // 560 s of weight.
       2: anyOf([
-        // Block per law (#176): file b's passing laws now judge the mutants
-        // it owns, so this unit runs them (238 s in CI run of fd69ea2e's
-        // shard 1, which reached 10m26s); it moved here from shard 1.
-        `a declaration fault: brokenOwner`,
         `a declaration fault: apiLessTypescript`,
         `a second daemon check of the budget witness`,
         `a declaration fault: brokenVitest`,
@@ -526,6 +527,8 @@ export const partitions = {
     shards: {
       // 471 s of weight.
       1: anyOf([
+        // Out of the rest shard, which reached 10m4s at a81892cc (26 s there).
+        `fixed history: a module boolean flip judged past a console test`,
         `generated 2`,
         `constructed history: an unchanged check through the daemon under a config's pre plugin`,
         `constructed history: an ambiguous authored mutant`,
@@ -606,6 +609,8 @@ export const partitions = {
       ]),
       // 471 s of weight.
       6: anyOf([
+        // Out of the rest shard, which reached 10m4s at a81892cc (97 s there).
+        `fixed history: a module array mutant judged past nondeterministic plan tests under a daemon pause`,
         `constructed history: a declaration fault: noTypescript`,
         `constructed history: a second daemon check of the budget witness`,
         `constructed history: a lazy module loaded before a hang in the same batch`,
