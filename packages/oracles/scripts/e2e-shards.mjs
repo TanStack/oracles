@@ -432,6 +432,14 @@ export const shards = {
     `calibration: the stdout has a gap line for a mutant that is not a gap`,
     `calibration: a check through the daemon drops a gap line`,
     `calibration: a check through the daemon names another check's report`,
+    // A config that only --config names, outside the package: about 4 s
+    // each locally (one worker, light load).
+    `fixed seed 20261105: a config that --config names outside the package`,
+    `fixed seed 20261105: a failing owner under a config that --config names outside the package`,
+    `random seed: a config that --config names outside the package`,
+    `random seed: a failing owner under a config that --config names outside the package`,
+    `determinism: constructed history: a config that --config names outside the package`,
+    `determinism: constructed history: a failing owner under a config that --config names outside the package`,
     // The witness module's edit sequence (option M): about 97 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
     `random seed: an edit sequence over the witness module, the first half`,
