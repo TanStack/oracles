@@ -194,10 +194,13 @@
  *    `node:timers/promises` included, no clock read, and no I/O held
  *    open; a wait of one turn, `setImmediate`, is no clock), did more work
  *    (a shortcut whose deletion only costs time); a test whose count could
- *    follow the clock, or that registered no route, judges no work, so its
- *    rise leaves the class as it was, and a bound never kills where an idle
- *    replay would not (the PR #48 reviews' F1 and F5; the maintainer's
- *    decision of 2026-11-12 under P3), a
+ *    follow the clock, or that registered no route, judges no work, so a
+ *    bound never kills where an idle replay would not (the PR #48 reviews'
+ *    F1 and F5; the maintainer's decision of 2026-11-12 under P3); a rise
+ *    in a test that registered no route leaves the class as it was, and a
+ *    rise in a test on a reproducible or random route whose count could
+ *    follow the clock makes a survivor that would be `not-observed` or
+ *    `not-distinguished` a `clocked-work` (proposed for approval), a
  *    `branch-never-taken` when an `if` on its line never took
  *    one of its outcomes in an owner test, a `not-infected` when a comparison's
  *    operators agreed on every operand an owner test reached, a
@@ -1985,7 +1988,7 @@ function namedOut(text, out) {
 // A gap line the CLI streams to stderr as its mutant is judged (stream.mjs):
 // its class, its line, and its id, after the stream's prefix (law 15).
 const streamedGap =
-  /^oracle-gaps: gap (?:not-judged|extra-work|indeterminate|dead-code|outside-annotation|branch-never-taken|not-infected|not-observed|not-distinguished|unreached|random-only-kill|agreement-only-kill|unregistered-kill|framework-error|timeout|setup-error|crashed|does-not-apply|blocked) L(?:\d+|\?) (\S+) /
+  /^oracle-gaps: gap (?:not-judged|extra-work|clocked-work|indeterminate|dead-code|outside-annotation|branch-never-taken|not-infected|not-observed|not-distinguished|unreached|random-only-kill|agreement-only-kill|unregistered-kill|framework-error|timeout|setup-error|crashed|does-not-apply|blocked) L(?:\d+|\?) (\S+) /
 
 // The declared exempt lines that are not our own (v21.2 P10 and I3), each
 // told by its own shape, never by its indentation alone: a block starts at
@@ -4375,10 +4378,11 @@ async function driver(plan, observe) {
         states.add(
           `a probe branch's work under a generated test's bound judged nothing`,
         )
-      // The early return whose extra work no test judges (law 4).
+      // The early return whose extra work no bound judges (law 4): a
+      // survivor classed by its rise, which kills nothing.
       if (
         m.operator === `if-false` &&
-        m.class === `not-observed` &&
+        m.class === `clocked-work` &&
         m.function === `w_fastclocked`
       )
         states.add(

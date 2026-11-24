@@ -1486,7 +1486,8 @@ const witness = [
   // `os.uptime()`, `AbortSignal.timeout`, `Atomics.wait` and
   // `Atomics.waitAsync` with a timeout, and `monitorEventLoopDelay`. One untimed test runs the
   // general path. A mutant is killed if any test still judges work, so its
-  // `if-false` mutant stays `not-observed` only while every path is seen.
+  // `if-false` mutant is `clocked-work`, a survivor whose work rose only
+  // where no bound judges it, only while every path is seen.
   // Tests that wait one turn (`setImmediate`, as `withinTurns` does) and
   // read no clock still judge work, so there it is killed; and tests that
   // register no route (below) can carry no bound.
@@ -4731,6 +4732,16 @@ function runsOf(plan, tests, sites, active) {
         changed: changedAny,
         slowed,
         rose: judgesWork && after > before,
+        // A rise that no bound judges, since the test's count could follow
+        // the clock, on a route that can carry a bound: it names the class
+        // of a survivor that changed a value no observation showed.
+        roseClocked:
+          found.length === 0 &&
+          active?.site !== undefined &&
+          [`reproducible`, `random`].includes(route) &&
+          Boolean(t.timed) &&
+          t.timed !== `turn` &&
+          after > before,
       }
     })
 }
@@ -5349,8 +5360,15 @@ function model(plan) {
     // A test that reached it did more work, though nothing it observed
     // changed: the mutant deleted a shortcut for speed (maintainer decision,
     // 2026-11-12), which only a work bound sees.
-    if (runsOf(plan, reaching, sites, { site: site.id }).some((r) => r.rose))
-      return `extra-work`
+    const runs = runsOf(plan, reaching, sites, { site: site.id })
+    if (runs.some((r) => r.rose)) return `extra-work`
+    // A survivor that changed a value no observation showed, or whose
+    // infection is not measured, and that did more work only in a test
+    // whose count could follow the clock, deleted a shortcut that no work
+    // bound judges (`clocked-work`). One that infected nothing computes
+    // what the original computes, so its class stays.
+    const unjudgedOr = (kind) =>
+      runs.some((r) => r.roseClocked) ? `clocked-work` : kind
     // The survivor classes (classify.mjs): an `if` whose line one outcome
     // never took, a comparison no owner test infected, and otherwise an
     // infected site that no observation shows.
@@ -5372,7 +5390,7 @@ function model(plan) {
       ].includes(site.operator) ||
       site.logical === true
     )
-      return `not-distinguished`
+      return unjudgedOr(`not-distinguished`)
     // Code that runs at load infects every test of its file, and a
     // nondeterministic test's infection judges nothing.
     const infectedIn =
@@ -5384,9 +5402,10 @@ function model(plan) {
           ),
       ) ||
       (tests.length > 0 && loadRuns.some((run) => run.infected.has(site.id)))
-    if (isIf) return infectedIn ? `not-observed` : `branch-never-taken`
+    if (isIf)
+      return infectedIn ? unjudgedOr(`not-observed`) : `branch-never-taken`
     if (comparison && !infectedIn) return `not-infected`
-    return `not-observed`
+    return unjudgedOr(`not-observed`)
   }
   // The ordinary tests' outcome is reported, for information, only when the
   // run asks for it, and only for a survivor or an unreached mutant that an
@@ -5403,6 +5422,7 @@ function model(plan) {
   const survivorKinds = new Set([
     `not-judged`,
     `extra-work`,
+    `clocked-work`,
     `branch-never-taken`,
     `not-infected`,
     `not-observed`,

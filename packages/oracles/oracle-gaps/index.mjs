@@ -32,8 +32,9 @@
 //    warm Vitest process, and classifies it (see `outcomeOf`): `killed` only
 //    by a law verdict on a reproducible route; otherwise a gap. A mutant in a
 //    function no oracle owns is `unowned`, a warning. Survivors are sorted
-//    into `not-judged`, `indeterminate`, `dead-code`, `outside-annotation`, `branch-never-taken`,
-//    `not-infected`, and `not-observed` (classify.mjs).
+//    into `not-judged`, `indeterminate`, `extra-work`, `dead-code`,
+//    `outside-annotation`, `branch-never-taken`, `not-infected`,
+//    `not-observed`, `not-distinguished`, and `clocked-work` (classify.mjs).
 // 5. With --ordinary, runs a survivor against the ordinary tests that reach
 //    it, for information only: an ordinary test never closes a gap. Without
 //    it, ordinary test files do not run at all.

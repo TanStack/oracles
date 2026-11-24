@@ -121,6 +121,11 @@ const directive = {
   // which only a cost law sees (maintainer decision, 2026-11-12).
   'extra-work': ({ work }) =>
     `Declare \`work: { ratio: ${work.bound} }\` on the \`oracleProperty\` that registers \`${testName(work.test)}\`, so that its work bound rejects this mutant: there it changed no observation, and its work rose from ${work.before} to ${counted(work.after, `site evaluation`)}${work.ratio === undefined ? `` : ` (${work.ratio}× the unmodified run's)`}.`,
+  // No observation changed, and a test whose count could follow the clock
+  // did more work: a shortcut that no work bound judges, so its cost is
+  // owed an observation of the driver and a law.
+  'clocked-work': ({ work }) =>
+    `Make the work this code saves an observation of the driver of \`${testName(work.test)}\`, such as a count of the calls it makes, and let a law judge it: there this mutant changed no observation, and its work rose from ${work.before} to ${counted(work.after, `site evaluation`)}${work.ratio === undefined ? `` : ` (${work.ratio}× the unmodified run's)`}.`,
   indeterminate: (g) =>
     g.nondeterministicBy?.length
       ? `Make \`${g.nondeterministicBy.map(testName).join(`, `)}\` deterministic: control its clock and its random seed, so its failures judge this code.`
@@ -158,6 +163,9 @@ const meanings = {
   // A builtin counts as one site, so a tight bound is a poor witness of its
   // cost (maintainer, 2026-11-12).
   'extra-work': `A call to a builtin counts as one site evaluation, whatever it costs (\`Object.defineProperty\`): where a shortcut's cost is in one, make that cost an observation of the driver, such as a count of those calls, and let a law judge it, in place of a very tight bound. `,
+  // A work bound judges no test whose count could follow the clock, so a
+  // kill replays on an idle machine (maintainer decision, 2026-11-12, P3).
+  'clocked-work': `A work bound judges no test whose count can follow the clock (a timer it made, a clock it read, I/O it held open), so that a kill replays on an idle machine: the work rose in such a test. `,
 }
 
 // The directive for an operator whose infection is not measured: the input

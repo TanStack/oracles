@@ -103,7 +103,20 @@
  *    infected and no recorded observation showed the change; and
  *    `not-distinguished` for any other operator, whose infection the
  *    capture does not measure, so its directive names the input that
- *    distinguishes it. This oracle's grammar has no operator that always
+ *    distinguishes it. A mutant that would be `not-observed` or
+ *    `not-distinguished` is `clocked-work` instead when a compared test
+ *    did more work under it, though no work bound judges that test because
+ *    its count could follow the clock (law 3), while it passed, its route
+ *    can carry a bound, and its two unmutated runs agreed on its work: the
+ *    mutant deleted a shortcut whose cost is owed an observation of the
+ *    driver and a law, so its directive names the first such test in
+ *    report order and its two work counts and their ratio. A mutant that
+ *    infected nothing (`branch-never-taken`, `not-infected`), or that no
+ *    input distinguishes, computes what the original computes, so such a
+ *    rise is the clock's, and its class stays. Authority: the maintainer's
+ *    decision of 2026-11-12 that a speed shortcut reported as
+ *    `not-observed` is a gap CLI bug, with law 3's rule that no bound
+ *    judges a count that could follow the clock (proposed for approval). This oracle's grammar has no operator that always
  *    changes a value when reached (`!`, booleans, arithmetic); production
  *    measures those and classes them `not-observed`, which the end-to-end
  *    oracle checks.
@@ -966,14 +979,41 @@ function judgedOutcome(h, mi, owners) {
   const rose = compared.find(
     (x) => workJudges(h, mi, x) && workUnder(x.t, mi) > x.t.work,
   )
+  const roseBy = (x) =>
+    `rose from ${x.t.work} to ${workUnder(x.t, mi)} site evaluation${workUnder(x.t, mi) === 1 ? `` : `s`}${x.t.work > 0 ? ` (${(workUnder(x.t, mi) / x.t.work).toFixed(3)}× the unmodified run's)` : ``}.`
   if (rose)
     return sized(`extra-work`, {
       mention: [
         `\`work: { ratio: ${boundBelow(rose.t.work, workUnder(rose.t, mi))} }\``,
         `\`${shownName(h, rose.fi, rose.ti)}\``,
-        `rose from ${rose.t.work} to ${workUnder(rose.t, mi)} site evaluation${workUnder(rose.t, mi) === 1 ? `` : `s`}${rose.t.work > 0 ? ` (${(workUnder(rose.t, mi) / rose.t.work).toFixed(3)}× the unmodified run's)` : ``}.`,
+        roseBy(rose),
       ],
     })
+  // A rise that no work bound judges, because the test's count could
+  // follow the clock, in a passing test on a route that can carry a bound
+  // whose two unmutated runs agreed on its work. It names the class of a
+  // mutant that changed a value no observation showed, or whose infection
+  // is not measured: the mutant deleted a shortcut whose cost is owed an
+  // observation of the driver (law 5). A mutant that infected nothing
+  // computes what the original computes, so its class stays. The message
+  // names the first such test in report order.
+  const clockedRise = compared.find(
+    (x) =>
+      passedKinds.has(x.t.under[mi].kind) &&
+      !x.t.workFlaky &&
+      x.t.clocked !== `none` &&
+      [`reproducible`, `random`].includes(kindOf(x.t.route)) &&
+      workUnder(x.t, mi) > x.t.work,
+  )
+  const unjudgedOr = (survivor) =>
+    clockedRise
+      ? sized(`clocked-work`, {
+          mention: [
+            `\`${shownName(h, clockedRise.fi, clockedRise.ti)}\``,
+            roseBy(clockedRise),
+          ],
+        })
+      : survivor
   if (m.evidence === `dead code`)
     return sized(`dead-code`, { mention: [`line ${m.line + 1}.`] })
   // The type analysis found no input of the declared types that
@@ -992,18 +1032,24 @@ function judgedOutcome(h, mi, owners) {
       return sized(`branch-never-taken`, {
         mention: [`the condition on line ${m.line + 1} is ${need},`],
       })
-    return sized(`not-observed`, { mention: [observedMention(h, mi, owners)] })
+    return unjudgedOr(
+      sized(`not-observed`, { mention: [observedMention(h, mi, owners)] }),
+    )
   }
   if (isCompare(m)) {
     if (!infectedIn(h, mi, owners))
       return sized(`not-infected`, { operands: operandsSeen(h, mi, owners) })
-    return sized(`not-observed`, { mention: [observedMention(h, mi, owners)] })
+    return unjudgedOr(
+      sized(`not-observed`, { mention: [observedMention(h, mi, owners)] }),
+    )
   }
   // The other operators' infection is not measured, so the directive says
   // what input distinguishes the mutant, built from its operator.
-  return sized(`not-distinguished`, {
-    mention: [distinguishingDirective(m)],
-  })
+  return unjudgedOr(
+    sized(`not-distinguished`, {
+      mention: [distinguishingDirective(m)],
+    }),
+  )
 }
 
 // An authored mutant's outcome: laws 1 to 4 over every test of its owner
@@ -1415,6 +1461,8 @@ const directives = {
   'not-judged': /^Make a law in `[^`]+` reject the changed value\.$/,
   'extra-work':
     /^Declare `work: \{ ratio: \d+\.\d\d \}` on the `oracleProperty` that registers `[^`]+`, so that its work bound rejects this mutant: there it changed no observation, and its work rose from \d+ to \d+ site evaluations?( \(\d+\.\d{3}× the unmodified run's\))?\.$/,
+  'clocked-work':
+    /^Make the work this code saves an observation of the driver of `[^`]+`, such as a count of the calls it makes, and let a law judge it: there this mutant changed no observation, and its work rose from \d+ to \d+ site evaluations?( \(\d+\.\d{3}× the unmodified run's\))?\.$/,
   indeterminate:
     /^(Make `[^`]+` deterministic: control its clock and its random seed, so its failures judge this code|Add an owner test that runs line \d+ and asserts on its result)\.$/,
   'dead-code': /^Remove the redundant code on line \d+\.$/,
@@ -1450,6 +1498,8 @@ const directives = {
 const meanings = {
   crashed:
     /^Production threw where no law judged it: a gap, not a kill\. Its error is on the gap's Detail line in summary\.md, and in its `detail` in results\.json\. /,
+  'clocked-work':
+    /^A work bound judges no test whose count can follow the clock \(a timer it made, a clock it read, I\/O it held open\), so that a kill replays on an idle machine: the work rose in such a test\. /,
   'extra-work':
     /^A call to a builtin counts as one site evaluation, whatever it costs \(`Object\.defineProperty`\): where a shortcut's cost is in one, make that cost an observation of the driver, such as a count of those calls, and let a law judge it, in place of a very tight bound\. /,
 }
@@ -2127,6 +2177,66 @@ async function driver(h, observe) {
       )
         states.add(`extra-work named past an unregistered rise`)
     }
+    // A rise that no bound judges: a passing test on a route that can carry
+    // a bound, whose unmutated runs agreed on its work, and whose count
+    // could follow the clock.
+    const clockedRise = workTests.find(
+      (x) =>
+        passedKinds.has(x.t.under[mi].kind) &&
+        !judgesNothing(h, x) &&
+        !x.t.workFlaky &&
+        x.t.clocked !== `none` &&
+        [`reproducible`, `random`].includes(kindOf(x.t.route)) &&
+        workUnder(x.t, mi) > x.t.work,
+    )
+    if (clockedRise) {
+      if (
+        result.class === `clocked-work` &&
+        !isIf(h.mutants[mi]) &&
+        !isCompare(h.mutants[mi])
+      )
+        states.add(`clocked-work in place of not-distinguished`)
+      if ([`branch-never-taken`, `not-infected`].includes(result.class))
+        states.add(`a rise no bound judges where nothing was infected`)
+      if (
+        result.class === `extra-work` &&
+        workTests.indexOf(clockedRise) < workTests.indexOf(judgedRise)
+      )
+        states.add(`extra-work named past a rise no bound judges`)
+    }
+    // A test whose count could follow the clock, beside a survivor that
+    // keeps its class: its rise is on a route that carries no bound, or its
+    // work varied between the unmutated runs, or its work held.
+    if ([`not-observed`, `not-distinguished`].includes(result.class)) {
+      const clockedPassing = workTests.filter(
+        (x) =>
+          passedKinds.has(x.t.under[mi].kind) &&
+          !judgesNothing(h, x) &&
+          x.t.clocked !== `none`,
+      )
+      const production = (x) =>
+        [`reproducible`, `random`].includes(kindOf(x.t.route))
+      if (
+        clockedPassing.some(
+          (x) => !production(x) && workUnder(x.t, mi) > x.t.work,
+        )
+      )
+        states.add(`a clocked rise on a route that carries no bound`)
+      if (
+        clockedPassing.some(
+          (x) =>
+            production(x) && x.t.workFlaky && workUnder(x.t, mi) > x.t.work,
+        )
+      )
+        states.add(`a clocked rise in a test whose work varied`)
+      if (
+        clockedPassing.some(
+          (x) =>
+            production(x) && !x.t.workFlaky && workUnder(x.t, mi) === x.t.work,
+        )
+      )
+        states.add(`a clocked test whose work held`)
+    }
     if (result.class !== undefined && result.class !== `extra-work`) {
       if (
         workTests.some(
@@ -2629,6 +2739,9 @@ function check(h, observations, expected) {
   const workLegend = legend.find((line) =>
     line.startsWith(`oracle-gaps: legend extra-work: `),
   )
+  const clockedLegend = legend.find((line) =>
+    line.startsWith(`oracle-gaps: legend clocked-work: `),
+  )
   const leadProblem =
     stdoutLines.slice(0, baselineGot.length).join(`\n`) !==
     baselineGot.join(`\n`)
@@ -2673,7 +2786,14 @@ function check(h, observations, expected) {
                         ),
                       )
                     ? `the extra-work legend line does not say that a builtin counts as one site, and what is owed for its cost`
-                    : undefined
+                    : clockedLegend !== undefined &&
+                        !meanings[`clocked-work`].test(
+                          clockedLegend.slice(
+                            `oracle-gaps: legend clocked-work: `.length,
+                          ),
+                        )
+                      ? `the clocked-work legend line does not say that a work bound judges no test whose count can follow the clock`
+                      : undefined
   if (leadProblem)
     return violation(`classified`, leadProblem, `stdout`, { actual: stdout })
   // The full report leads with the same baseline, before its gaps.
@@ -3378,6 +3498,13 @@ const required = [
   `a work bound kill beside a changed value`,
   `random-only-kill by a work bound`,
   `a work rise where work judges nothing`,
+  `clocked-work`,
+  `clocked-work in place of not-distinguished`,
+  `a rise no bound judges where nothing was infected`,
+  `extra-work named past a rise no bound judges`,
+  `a clocked rise on a route that carries no bound`,
+  `a clocked rise in a test whose work varied`,
+  `a clocked test whose work held`,
   `a survivor whose work fell`,
   `extra-work named past an unregistered rise`,
   `a rise exactly at the declared bound`,
@@ -3721,7 +3848,9 @@ const constructed = [
   // A test that made a timer by any path, read a clock, or held I/O open
   // can do work that follows the clock: a polling or a deadline loop. Its
   // rise judges nothing, so a bound cannot kill on it, which an idle replay
-  // would not reproduce, and the mutant is not extra-work.
+  // would not reproduce, and the mutant is not extra-work. An infected
+  // mutant that changed no observation is clocked-work there: it deleted
+  // a shortcut whose cost is owed an observation of the driver.
   ...[
     [`timer`, `made a timer`],
     [`timers/promises`, `slept through node:timers/promises`],
@@ -3735,15 +3864,76 @@ const constructed = [
     [`monitorEventLoopDelay`, `polled monitorEventLoopDelay`],
     [`io`, `held I/O open`],
   ].map(([clocked, did]) =>
-    single(
-      `a rise past the bound in a test that ${did}`,
-      [`a work rise where work judges nothing`],
-      {
-        mutant: { operator: `if-false` },
-        test: { clocked, bound: 100 },
-        effect: { work: 150 },
-      },
-    ),
+    single(`a rise past the bound in a test that ${did}`, [`clocked-work`], {
+      mutant: { operator: `if-false` },
+      test: { clocked, bound: 100 },
+      effect: { work: 150 },
+    }),
+  ),
+  // A rise in a test whose count could follow the clock, under an
+  // operator whose infection is not measured, is clocked-work too.
+  single(
+    `a skipped loop that only costs work in a clocked test`,
+    [`clocked-work`, `clocked-work in place of not-distinguished`],
+    {
+      mutant: { operator: `loop-false` },
+      test: { clocked: `io` },
+      effect: { work: 7 },
+    },
+  ),
+  // An `if` whose forced outcome it always took infects nothing: it
+  // computes what the original computes, so a rise there is the clock's,
+  // and the branch is still never taken.
+  single(
+    `a rise in a clocked test under an if that infected nothing`,
+    [`branch-never-taken`, `a rise no bound judges where nothing was infected`],
+    {
+      mutant: { operator: `if-false` },
+      test: { clocked: `clock read`, seen: four(`false`) },
+      effect: { work: 7 },
+    },
+  ),
+  // A test whose work judges the mutant rose too, after the clocked one in
+  // report order: the mutant is extra-work, and names it.
+  single(
+    `a rise in a clocked test before a judged rise`,
+    [`extra-work`, `extra-work named past a rise no bound judges`],
+    {
+      mutant: { operator: `if-false` },
+      test: { clocked: `timer` },
+      effect: { work: 7 },
+      more: [plainTest({ work: 150 })],
+    },
+  ),
+  // A clocked test's rise names no class where no bound could judge it
+  // even on an idle machine: on a route that carries no bound, or in a
+  // test whose work varied between the unmutated runs. A clocked test
+  // whose work held shows no rise.
+  single(
+    `a rise in a clocked test that registered no route`,
+    [`not-observed`, `a clocked rise on a route that carries no bound`],
+    {
+      mutant: { operator: `if-false` },
+      test: { clocked: `timer`, route: undefined },
+      effect: { work: 7 },
+    },
+  ),
+  single(
+    `a rise in a clocked test whose work varied`,
+    [`not-observed`, `a clocked rise in a test whose work varied`],
+    {
+      mutant: { operator: `if-false` },
+      test: { clocked: `io`, workFlaky: true },
+      effect: { work: 7 },
+    },
+  ),
+  single(
+    `an infected survivor in a clocked test whose work held`,
+    [`not-observed`, `a clocked test whose work held`],
+    {
+      mutant: { operator: `if-false` },
+      test: { clocked: `clock read` },
+    },
   ),
   single(`a forced branch that saves work`, [`a survivor whose work fell`], {
     mutant: { operator: `if-false` },
@@ -4225,7 +4415,7 @@ const constructed = [
 oracleProperty({
   id: `oracle-gaps.report-classify`,
   law: {
-    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, extra-work, dead-code, outside-annotation, branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only; a test whose property declares a work bound, whose work judges the mutant, and whose work (site evaluations, never time) passes the bound's ratio of its unmutated work reports a verdict under law work bound on its route, and a survivor whose work rose in such a test, with no changed observation, is extra-work, whose directive names that test, both counts, and the bound to declare that rejects it. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed.`,
+    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, extra-work, dead-code, outside-annotation, branch-never-taken, not-infected, not-observed, not-distinguished, and clocked-work, and ordinary tests for information only; a test whose property declares a work bound, whose work judges the mutant, and whose work (site evaluations, never time) passes the bound's ratio of its unmutated work reports a verdict under law work bound on its route, and a survivor whose work rose in such a test, with no changed observation, is extra-work, whose directive names that test, both counts, and the bound to declare that rejects it; a survivor that would be not-observed or not-distinguished, whose work rose only in a test whose count could follow the clock, is clocked-work, whose directive names that test and both counts. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed.`,
     authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the oracle rubric's outcome kinds (ORC-006); the frozen design's oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); the maintainer's findings F22 and the leftovers of #12 (2026-11-10); for the work law, the maintainer's decision of 2026-11-12 that a speed shortcut reported as not-observed is a gap CLI bug, and the design decided with it: a cost law, never an exit, judged by a deterministic count; for report order, the gap CLI's determinism requirement (oracle-gaps.report's determinism test and law 9, and the runner's "listed alike in every run") and the maintainer's decision of 2026-11-11 that the tests a report names depend on neither --contexts, worker timing, nor how owners are declared; Vitest's runner (@vitest/runner 4.1: -t is a regular expression matched against getTaskFullName, the suites' names and the test's joined by a space); POSIX.1-2017 Shell Command Language 2.2 and 2.6 for the replay's quoting.`,
     limits: `That real runs produce these records is oracle-gaps.report's, and so is a real replay. The driver encodes operands as capture-setup.mjs \`shown\` does, by a copy of it; long strings are told apart by a 32-bit digest; no symbol operand is generated, and two symbols of one description print alike. Only the runner's single-file path records a test's names, and only it feeds the baseline. Test names hold no backtick and no \` > \`, and names within a file are distinct; the replay's file argument is judged as text, not as Vitest's substring filter over every file. Authored intents hold no word that the exit law forbids, and an author is not shortened. Report order within a file is the baseline's record order: that a file whose tests run concurrently writes its records in one order is not judged, and a failing test is ordered within its file as the reporter lists it, which a run cut off by a hang takes from the records. The "Changed observations in" list is the changed tests' first three, and only its first is compared. A test that only a mutant run records is not generated. A file that does not load keeps its records here, which the runner drops, and the driver leaves it out of every target, as the runner does; a failing law keeps its records and its reach, as the runner keeps them. The refusal text and the summary's left-out list are not judged, only the list of failing files they print. A failing law is generated only as a whole test of a file whose baseline is test: a describe's failing hook, a failing law's leftover state, and how the runner selects the tests of a file that has failing laws are oracle-gaps.report's. Work arrives as counts: that the capture counts site evaluations, and which work it does not count, is oracle-gaps.report's; a test that reaches a site but did no work is generated, which no real run records; an authored mutant's copy counts no work, so the work law does not judge it.`,
   },
