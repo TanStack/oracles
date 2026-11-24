@@ -117,7 +117,8 @@
 // Vitest worker joins, and every process a test starts unless it starts it
 // detached (in a session of its own, as a browser driver can), and waits
 // for it. Help, --stop-daemon, and arguments that refuse start no process,
-// so they end in the CLI's own process, without a second Node start. Windows has no process groups, so there the run is not supervised.
+// so they end in the CLI's own process, without a second Node start. On win32,
+// which has no process groups, the supervisor ends the child's tree with taskkill.
 // SIGINT or SIGTERM is sent on to the whole group; a process that has not
 // ended 2 s later is killed, and so is any process left in the group when
 // the run ends. The run kills its group itself if the CLI dies first.
@@ -125,7 +126,7 @@
 // CLI's modules load (review of #57, P1): a signal during the loads is kept
 // and acted on once the stream log's note is written, so a stop as the CLI starts still
 // leaves the note and one done line. Only Node's own start is before them.
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import {
   appendFileSync,
   existsSync,
@@ -169,6 +170,12 @@ if (process.env.ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED !== undefined) {
       throw new Error(`the hold after the started marker saw no stop in 60 s`)
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
+  // win32 has no signal to send, so the stop file stands for it: the hold ended
+  // by it, so it is kept as a signal is (an early stop). Without this the
+  // supervisor's poll of the file starts only after its child has been spawned,
+  // and the stop lands in a running child.
+  if (early === undefined && stopFile !== undefined && existsSync(stopFile))
+    keepEarly(`SIGINT`)
 }
 
 const { parseArgs, usage } = await import(`./args.mjs`)
@@ -434,7 +441,7 @@ function superviseRun(out, pkg) {
   const finish = () => {
     if (finishing) return
     finishing = true
-    if (child) signalGroup(child.pid, `SIGKILL`)
+    if (child) signalTree(child.pid, `SIGKILL`)
     let decided = false
     const decide = () => {
       if (decided) return
@@ -472,11 +479,13 @@ function superviseRun(out, pkg) {
     if (stopped) return
     stopped = signal
     if (child === undefined) return finish()
-    signalGroup(child.pid, signal)
+    // On win32 a child that has written its ending is not stopped (taskkill
+    // would cut the ending short; on POSIX the child ignores the signal itself).
+    if (!ending || process.platform !== `win32`) signalTree(child.pid, signal)
     const deadline = Date.now() + STOP_GRACE_MS
     const poll = setInterval(() => {
       if (
-        (ended === undefined || signalGroup(child.pid, 0)) &&
+        (ended === undefined || signalTree(child.pid, 0)) &&
         Date.now() < deadline
       )
         return
@@ -503,7 +512,9 @@ function superviseRun(out, pkg) {
       out,
     ],
     {
-      detached: true,
+      // win32 has no process groups: the child is not detached there, and its
+      // tree is ended by signalTree.
+      detached: process.platform !== `win32`,
       stdio: [`inherit`, `inherit`, `pipe`, `ipc`],
       env: {
         ...process.env,
@@ -545,29 +556,42 @@ function superviseRun(out, pkg) {
   })
 }
 
-/** Signals every process of group `group`; false when none is left. */
-function signalGroup(group, signal) {
-  try {
-    process.kill(-group, signal)
-    return true
-  } catch {
-    return false
+/**
+ * Signals the process tree of `pid`: its process group on POSIX, where the
+ * run's workers are members. win32 has no groups and no signal a process can
+ * be sent to end its tree, so there taskkill ends it, and signal 0 asks
+ * whether the process runs. False when no process is left.
+ */
+function signalTree(pid, signal) {
+  if (process.platform !== `win32`) {
+    try {
+      process.kill(-pid, signal)
+      return true
+    } catch {
+      return false
+    }
   }
+  if (signal === 0) return alive(pid)
+  return (
+    spawnSync(`taskkill`, [`/T`, `/F`, `/PID`, String(pid)], {
+      stdio: `ignore`,
+    }).status === 0
+  )
 }
 
 /**
- * The run's side of the group: once the CLI that started it is gone, the run
- * kills its group, itself included.
+ * The run's side of the tree: once the CLI that started it is gone, the run
+ * kills its tree, itself included.
  */
 function watchSupervisor(supervisor) {
   // Only a process that leads its own group kills it: an inherited variable
   // (a test's child, say) must not name a group this process does not lead. A
   // group whose id is this process's pid exists only while this process leads
   // it, so a signal 0 to it tells, with no external command (no `ps`, which a
-  // slim container lacks; review of #57, A7).
-  if (!signalGroup(process.pid, 0)) return
+  // slim container lacks; review of #57, A7). win32 has no groups.
+  if (process.platform !== `win32` && !signalTree(process.pid, 0)) return
   setInterval(() => {
-    if (process.ppid !== supervisor) process.kill(-process.pid, `SIGKILL`)
+    if (!alive(supervisor)) signalTree(process.pid, `SIGKILL`)
   }, 1000).unref()
 }
 /**
@@ -601,6 +625,17 @@ async function checkCold(options) {
   const { openSession } = await import(`./check.mjs`)
   const { memoryStore } = await import(`./evidence.mjs`)
   const session = await openSession(options.pkg)
+  // A test-only abort (ORACLE_GAPS_TEST_ABORT_AT=check, inert unless set), after
+  // the session has begun, where a V8 out-of-memory abort would strike. The
+  // supervisor reports how the process ended. win32 has no signal that ends a
+  // process as an abort does, so process.abort() ends it; before it ends, Node
+  // writes its native backtrace to stderr, a block P10 exempts as Node's own
+  // (the oracle's exemptBlocks). POSIX sends itself a SIGABRT, which ends the
+  // process the same way and writes nothing.
+  if (process.env.ORACLE_GAPS_TEST_ABORT_AT === `check`) {
+    if (process.platform === `win32`) process.abort()
+    else process.kill(process.pid, `SIGABRT`)
+  }
   try {
     return await session.check(options, memoryStore(), (line) =>
       writeStream(`${line}\n`),
@@ -663,12 +698,9 @@ function endWith(error, out) {
 // compared with the URL of the path it was started as.
 const main =
   import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
-// Windows has no process groups: there the run is the CLI's own process.
-// A test-only hook (ORACLE_GAPS_TEST_UNSUPERVISED) runs a POSIX check unsupervised,
-// the path win32 takes, so the oracle reaches it on every platform.
-const supervised =
-  process.platform !== `win32` &&
-  process.env.ORACLE_GAPS_TEST_UNSUPERVISED === undefined
+// A test-only hook (ORACLE_GAPS_TEST_UNSUPERVISED) runs a check unsupervised, the
+// path that a run took on win32 before the supervisor covered it.
+const supervised = process.env.ORACLE_GAPS_TEST_UNSUPERVISED === undefined
 const supervisor = process.env.ORACLE_GAPS_INTERNAL_SUPERVISED
 
 // Set once the note is written (the unsupervised run has started).
