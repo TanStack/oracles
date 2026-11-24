@@ -5875,6 +5875,12 @@ function leadBreach(plan, cli, observations, expected) {
           `${what} refused naming none of its ids: ${refused.ending.cause}`,
           `selection refusal`,
         )
+      if (refused.baselineFiles.length > 0)
+        return violation(
+          `partial`,
+          `${what} refused after the baseline of ${refused.baselineFiles.join(`, `)} ran`,
+          `selection refusal`,
+        )
       continue
     }
     const named = refused.only.filter((id) => !keyOf.has(id))
@@ -6135,6 +6141,14 @@ calibrations.push(
       value.exit = 0
       value.ending = undefined
       value.judged = []
+    }),
+  },
+  {
+    name: `a sampled partial run refuses after its baseline ran`,
+    law: `selection refusal`,
+    history: refusedPartialHistory,
+    corrupt: corruptRefusedPartial(`sampled`, (value) => {
+      value.baselineFiles = [`tests/a.test.ts`]
     }),
   },
   {

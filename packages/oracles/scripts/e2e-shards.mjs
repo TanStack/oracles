@@ -437,6 +437,7 @@ export const shards = {
     `calibration: a partial run of an id that names no mutant completes`,
     `calibration: a partial run of unowned mutants is refused as naming no mutant`,
     `calibration: a sampled partial run that kept only unowned mutants completes`,
+    `calibration: a sampled partial run refuses after its baseline ran`,
     `calibration: a partial run's refusal names an id that names a mutant`,
     // The witness module's edit sequence (option M): about 97 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
