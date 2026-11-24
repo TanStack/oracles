@@ -322,6 +322,11 @@ in the model.
   cannot collide with a generated value (a fixed boundary shape). Otherwise
   derive it from the generated history (for example "the initial value plus
   one").
+- **Annotate `constructed[].build` when TypeScript widens literals.** Inside
+  an unannotated `oracleProperty(...)` call, TypeScript can widen union
+  string literals or fixed-length tuples returned by `constructed[].build`.
+  Give `build` an explicit return type (`build: (base): History => ({ ... })`)
+  or use `as const` on narrowed literals so the file typechecks cleanly.
 - **Every arbitrary must take its histories back.** Each `fixed` and
   constructed history goes back through the arbitrary, and one that cannot
   fails when the file loads, naming the history. Give each `.map` its inverse
@@ -437,6 +442,21 @@ pLimit` is `index.js#pLimit`. `exports.name = fn` is named `name`.
   - Module-level data (`const UNIT_MS = {...}`) is its own unit, named by its
     variable. An owned function that reads it owns it, and what its
     initializer refers to. An entry can also name it: `src/index.ts#UNIT_MS`.
+    Methods and function properties defined inside an object literal
+    (`const handlers = { a() {}, b: () => ... }`) are units of their own: a
+    static property read (`handlers.a()`, `handlers['a']()`) owns only `a`
+    and leaves the sibling methods unowned. Naming the variable directly in
+    `owns` (`src/index.ts#handlers`) owns the variable's own non-function
+    sites and no method. Indexing the object dynamically (`handlers[method]()`),
+    passing it as a whole value (`dispatch(handlers)`, `Object.values(handlers)`),
+    or spreading it (`{ ...handlers }`) brings every function defined inside
+    its initializer into the caller's tree, so owning the dispatch entry point
+    (`src/index.ts#handleInputChunk`) owns the whole dispatch table. Module
+    functions that the initializer names by shorthand (`{ helper }`) are owned
+    whenever the literal is reached, by a static read or an owns entry as well,
+    as `{ helper: helper }` is; the module-data rule in
+    `gap-report-oracle.property.test.mjs` (lines 70-75) is the reason. The
+    dispatch law is judged by `gap-report-static-oracle-dispatch.property.test.mjs`.
     A destructured declaration (`const { a, b } = ...`) is not a unit: if a law
     depends on one, own the whole file.
   - When an entry pulls in another contract (a batching API in the same
@@ -461,11 +481,15 @@ The options of `oracleProperty` are typed in
 `node_modules/@tanstack/oracles/src/oracle-property.ts`
 (`OraclePropertyOptions`). Read them there.
 
-**Lint as you go.** Run the repository's lint on each oracle file and each
-changed production file after you edit it, and again before you finish. Fix
-every report. Do not disable a rule.
+**Lint and typecheck as you go.** Run the repository's lint on each oracle
+file and each changed production file after you edit it, and again before
+you finish. Fix every report. Do not disable a rule.
 In a first session, the oracles lint plugin is not installed yet: run the
 repository's own lint, if it covers the oracle file, and go on.
+When the repository uses TypeScript 5 or newer, also run its typecheck
+(`tsc --noEmit`) on each oracle file after you edit it: Vitest strips types
+without checking them, so a passing run does not catch type errors. Do not
+hide errors with `@ts-ignore` or `@ts-expect-error`.
 
 Techniques: [guide § The driver and the check](../../docs/guide.md#the-driver-and-the-check).
 
@@ -611,6 +635,16 @@ comes with one instruction. Do what it says, within the rules below.
 
 Use the [mutant gap search](../../docs/instruments/mutant-gap-search.md) card for
 a survivor whose missing history is not obvious.
+
+For repeated gap-closing iterations on the same package, add `--daemon` so
+`oracle-gaps` keeps Vitest workers warm and reuses unchanged unit evidence
+across runs; stop it when done with
+`oracle-gaps --stop-daemon --package <dir>` (it also exits after 30 idle
+minutes). To verify a fix for one or a few specific mutants quickly before
+running the full check, pass `--only <id,id>` (from the `<id>` in a `gap`
+line or the report's `rerun: --only <id>`): it runs only those mutants and
+their owners' baseline, and marks the run as partial, so finish with a full
+check without `--only`.
 
 ## 9. Report the evidence
 

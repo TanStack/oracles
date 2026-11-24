@@ -828,14 +828,18 @@ const drawn = fc.record({
           // When the signal comes: while the stop witness spins (`run`),
           // once the run has printed its completed line, while its process
           // holds its exit (`after`, review of #46, F3), or while the run
-          // warms its config (`warm`, re-review N1). Or no signal: a test
-          // aborts the run's process (`abort`, as a V8 out-of-memory abort
-          // does; the coordinator's decision of 2026-11-12 on P10).
+          // warms its config (`warm`, re-review N1). Or no signal: the check's
+          // A drawn history never aborts a run's process. The abort is the
+          // CLI's own test hook (ORACLE_GAPS_TEST_ABORT_AT), and a drawn field
+          // switches no test-only hook on ("Randomness wins for new fields",
+          // M 2026-11-12; I16). Only a constructed history with hookStops
+          // draws that stop: `every outcome class, the abort stop`, and the
+          // setup-file history of issues #117 and #137.
           // `after` switches the test-only hold ORACLE_GAPS_TEST_HOLD_UNTIL,
           // so only a constructed history sets it (the maintainer's decision
           // "Randomness wins for new fields": a drawn field never switches a
           // test-only hook); the take-back reads it as `run` (plainStops).
-          when: fc.constantFrom(`run`, `run`, `warm`, `abort`),
+          when: fc.constantFrom(`run`, `run`, `warm`),
         }),
         { minLength: 1, maxLength: 5 },
       ),
@@ -1332,7 +1336,7 @@ const constructedNeutral = {
 // that gate their states take them. A stop after the completed line holds the
 // run's exit (ORACLE_GAPS_TEST_HOLD_UNTIL) and a stop while the config warms
 // waits at the warm probe (ORACLE_GAPS_TEST_WARM_PROBE), so a drawn history's
-// stops are stops while the witness spins and aborts (`warm` becomes `run`;
+// stops are stops while the witness spins (`warm` becomes `run`;
 // the grammar draws no `after`, and a constructed one is taken back as `run`).
 // On win32 every stop goes through the test stop file; the driver runs a
 // stop there only for a history that sets `hookStops`, so the histories are
@@ -1345,9 +1349,10 @@ const plainSteps = (steps) => {
   const kept = steps.filter((step) => !hookSteps.has(step))
   return kept.length > 0 ? kept : null
 }
-// The plain stops: a stop while the witness spins (`run`) and an abort; every
-// other stop (`warm`, and a constructed `after` or `note`) is read as `run`.
-const plainWhens = new Set([`run`, `abort`])
+// The plain stops: a stop while the witness spins (`run`); every other stop
+// (`warm`, a constructed `abort`, `after` or `note`) is read as `run`. An abort
+// needs the CLI's test hook, so a taken-back history is not one that aborts.
+const plainWhens = new Set([`run`])
 const plainStops = (stopRuns) =>
   stopRuns.some((stop) => !plainWhens.has(stop.when))
     ? stopRuns.map((stop) =>
@@ -3613,9 +3618,6 @@ function resolveHistory(history) {
     midrunBy: history.midrunBy ?? `a`,
     midrunTarget: midrunTargetOf(history),
     consoleOutput: history.consoleOutput === true,
-    // Whether a run aborts its process (a stop run `abort`): then file a has
-    // the test that aborts when the driver asks.
-    aborts: (history.stopRuns ?? []).some((stop) => stop.when === `abort`),
     ordinary: history.ordinary === true,
     // The batch whose run rejects (a test-only fault; 0 is none).
     rejectBatch: history.rejectBatch ?? 0,
@@ -3770,10 +3772,10 @@ const holds = (a, op, b) =>
             ? a === b
             : a !== b
 // A test's campaigns: its own route and input, then an optional second one.
-const partsOf = (t) => [
-  { route: t.route, input: t.input },
-  ...(t.then ? [t.then] : []),
-]
+const partsOf = (t) =>
+  t.framework
+    ? []
+    : [{ route: t.route, input: t.input }, ...(t.then ? [t.then] : [])]
 // A campaign's route kind; a test that registered nothing has none.
 const routeOf = (t, part = t) =>
   !t.registered
@@ -5294,6 +5296,51 @@ function blockingOf(plan) {
 }
 
 /**
+ * The tests the fixture writes into a file beyond the plan's (`oracleTestFile`),
+ * each deterministic and passing: the console-stream test and the abort test
+ * of file a, the mid-run edit test of the file that lands the edit, and the
+ * failing owner's two passing tests. None calls the source under test. The
+ * mid-run test is the baseline's passing test (law 14): its file reads the
+ * edited text only after the edit lands, so a later check may see it fail;
+ * the model follows the baseline here, as it does for the other baseline counts.
+ *
+ * Load reach goes to every test of an owner file that imports the module
+ * (M 2026-11-06). A file imports it only when a plan test calls a function of
+ * the module: the fixture's `import * as sut` is elided when no test uses it
+ * (a file with only framework tests, or only a placeholder, does not import the
+ * module, and production reports its mutants unreached). So a file's framework
+ * tests count only where the file has a plan test.
+ *
+ * The failing owner's pair is listed for completeness only. Main blocks a whole
+ * file when any of its tests fails (`blockingOf` and `blocking` in `model`), and
+ * a blocked file judges nothing, so `ownerTests` leaves the pair out. Per-law
+ * blocking ("Block per law", M 2026-11-18, PR #176) would let the pair judge;
+ * that PR changes this census when it merges.
+ */
+function frameworkTestsOf(plan) {
+  const tests = []
+  const importers = new Set(plan.tests.map((t) => t.file))
+  const add = (file, name) =>
+    importers.has(file) &&
+    tests.push({
+      file,
+      name,
+      framework: true,
+      flaky: false,
+      registered: true,
+      route: `framework`,
+    })
+  if (plan.consoleOutput) add(`a`, `writes to the console streams`)
+  if (plan.aborts) add(`a`, `aborts the process when asked`)
+  if (plan.midrun) add(plan.midrunBy, MIDRUN_EDITORS[plan.midrunTarget].test)
+  if (plan.fault === `brokenOwner`) {
+    add(`b`, `fixed seed 999 again`)
+    add(`b`, `fixed seed 999`)
+  }
+  return tests
+}
+
+/**
  * Each test file's baseline (law 14): its tests that ran and those skipped
  * (a file with no tests of the plan holds one skipped placeholder), how
  * many failed, and its failing test, or that it did not load.
@@ -5302,13 +5349,11 @@ function baselineOf(plan) {
   const failing = blockingOf(plan)
   return [...oracleFilesOf(plan), `c`].map((file) => {
     // File a's tests beyond the plan's run in every baseline too: the mid-run
-    // edit test, the one that writes to the console streams, and the one
-    // that aborts when the driver asks.
+    // edit test, and the one that writes to the console streams.
     const own =
       plan.tests.filter((t) => t.file === file).length +
       (plan.midrun && file === plan.midrunBy ? 1 : 0) +
-      (file === `a` && plan.consoleOutput ? 1 : 0) +
-      (file === `a` && plan.aborts ? 1 : 0)
+      (file === `a` && plan.consoleOutput ? 1 : 0)
     const broken = failing.find((f) => f.file === file)
     // The failing owner's suite holds two tests and a third of its name.
     const extra = broken?.test === undefined ? 0 : 3
@@ -5421,8 +5466,9 @@ function model(plan) {
       .filter((f) => !f.ordinary)
       .map((f) => f.file),
   )
+  const census = [...plan.tests, ...frameworkTestsOf(plan)]
   const ownerTests = (id) =>
-    plan.tests.filter(
+    census.filter(
       (t) =>
         oracleFilesOf(plan).includes(t.file) &&
         owners(id).has(t.file) &&
@@ -6180,21 +6226,11 @@ function oracleTestFile(plan, file) {
       `  writeEdit(marker, 'done\\n')`,
       `})`,
     )
-  // A test that ends the run's process by SIGABRT when the driver asks
-  // (`GAP_ABORT`), as a V8 out-of-memory abort does: in worker threads its
-  // process is the run's, and `process.abort()` is unavailable there. It
-  // runs and passes in every other run.
-  if (file === `a` && plan.aborts)
-    out.push(
-      `test('aborts the process when asked', () => {`,
-      `  if (process.env.GAP_ABORT === '1') process.kill(process.pid, 'SIGABRT')`,
-      `})`,
-    )
   // A file with no tests still loads, so the CLI can read what it owns.
   if (
     !plan.tests.some((t) => t.file === file) &&
     !(plan.midrun && file === plan.midrunBy) &&
-    !(file === `a` && (plan.consoleOutput || plan.aborts))
+    !(file === `a` && plan.consoleOutput)
   )
     out.push(`test.skip('no tests', () => {})`)
   // A test that writes to the process's own streams, as a test's debugging
