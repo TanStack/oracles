@@ -1145,6 +1145,11 @@ const drawn = fc.record({
   // a gap (the maintainer's decision "An excluded test still runs",
   // 2026-11-23). Drawn last (the generator rule).
   failingLawSpins: fc.boolean(),
+  // A second run with `--baseline-only`: every test file's baseline, as the
+  // full run's first pass runs it, and no mutant judged (law 14). It costs a
+  // run of its own, one unmutated pass, and switches no test-only hook, so
+  // it is drawn (randomness wins, 2026-11-16), last (the generator rule).
+  baselineOnlyRun: fc.constantFrom(false, false, false, false, false, true),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -3553,6 +3558,8 @@ function resolveHistory(history) {
     spawnOnStart: history.spawnOnStart === true,
     psMissing: history.psMissing === true,
     onlyRun: history.onlyRun === true,
+    // A history filed before the field existed runs no baseline-only run.
+    baselineOnlyRun: history.baselineOnlyRun === true,
     pragma: history.pragma === true,
     cliPath: history.cliPath ?? `plain`,
     concurrentStart: history.concurrentStart === true,
@@ -5160,6 +5167,14 @@ const verdictLine = (files, failing) =>
  */
 const doneLine = (gaps, provisional, out) =>
   `oracle-gaps: done completed, ${gaps} gap${gaps === 1 ? `` : `s`}${provisional ? ` (provisional)` : ``}, report ${out.replaceAll(`\\`, `/`)}/summary.md`
+
+/**
+ * The last line of a completed baseline-only run's stdout (`--baseline-only`):
+ * its status, that it ran the baseline only, and the path of its report in
+ * output directory `out`. It counts no gap: the run judged no mutant.
+ */
+const baselineOnlyDoneLine = (out) =>
+  `oracle-gaps: done completed, baseline only, report ${out.replaceAll(`\\`, `/`)}/summary.md`
 
 function model(plan) {
   const refused = refusal(plan)
@@ -6806,7 +6821,7 @@ function endingOf(exit, stderr, out, name = (text) => text, stdout = ``) {
 
 /**
  * The first way a run's ending breaks the refusal law, or undefined. The
- * cause must name `cause`; with `outKnown`, the run knew its output
+ * cause must name `cause` (each of them, for a list); with `outKnown`, the run knew its output
  * directory, so the block names it and the directory holds the refusal.
  * `logNote` is the line that names the run's stream log, owed first on
  * stdout when the run refused after it started a check, and undefined for
@@ -6819,8 +6834,10 @@ function refusalBreach(ending, { cause, outKnown, defaultOut, logNote }) {
   if (ending.stackFrames) return `the refusal printed a stack trace`
   if (ending.cause === undefined)
     return `the refusal printed no \`refused:\` line followed by a \`fix:\` line`
-  if (cause !== undefined && !ending.cause.includes(cause))
-    return `the refusal's cause does not name ${cause}: ${ending.cause}`
+  // A cause may be a list of what the refusal must name, each of them.
+  for (const named of cause === undefined ? [] : [cause].flat())
+    if (!ending.cause.includes(named))
+      return `the refusal's cause does not name ${named}: ${ending.cause}`
   if (!ending.fix?.trim()) return `the refusal's \`fix:\` line is empty`
   // A directive that offers a way around the fix lets the author leave the
   // problem in place.
@@ -6987,6 +7004,7 @@ export {
   baselineVerdict,
   verdictLine,
   doneLine,
+  baselineOnlyDoneLine,
   kill,
   push,
   judging,

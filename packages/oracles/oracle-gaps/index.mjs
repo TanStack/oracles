@@ -100,6 +100,10 @@
 //     [--pool threads|forks]  (Vitest's pool; default threads, or forks when
 //                              a native addon is anywhere in the package's
 //                              dependency tree)
+//     [--baseline-only]       (run every test file once with no mutant
+//                              active, print that baseline, and judge no
+//                              mutant; refuses --only, --sample, --mutants,
+//                              and --diff-base)
 //     [--config <file>]       (the Vitest config, relative to <dir>; default
 //                              the one Vitest discovers; the baseline names
 //                              the config it loaded, or says it found none)

@@ -375,6 +375,15 @@ export const shards = {
     `fixed seed 20261105: module data that only the failing owner's passing pair judges`,
     `random seed: module data that only the failing owner's passing pair judges`,
     `determinism: constructed history: module data that only the failing owner's passing pair judges`,
+    // A baseline-only run beside a failing law: two small functions and
+    // one more unmutated pass, with its calibrations.
+    `fixed seed 20261105: a baseline-only run beside a failing law`,
+    `random seed: a baseline-only run beside a failing law`,
+    `determinism: constructed history: a baseline-only run beside a failing law`,
+    `calibration: a baseline-only run reports a mutant`,
+    `calibration: a baseline-only run ends with a gap count`,
+    `calibration: a baseline-only run's summary.md drops its blocked line`,
+    `calibration: a baseline-only run leaves out the ordinary file`,
     // The filed history of a stale authored mutant's fourth base (about 12 s).
     `fixed history: a filed base whose owner reads an absent object through ?.`,
     `determinism: fixed history: a filed base whose owner reads an absent object through ?.`,
