@@ -817,4 +817,76 @@ export function checkOraclePropertyInference(): void {
     driver: () => {},
     check: () => pass,
   })
+
+  // 16. A shared `check` helper whose plan parameter is `unknown` does not
+  //     set the plan type: without `resolve`, the plan is the history, so
+  //     `model` and `driver` still see its fields.
+  oracleProperty({
+    id: `type.shared-check`,
+    law,
+    histories: { arbitrary: variantArbitrary, runs: 10, fixedSeeds: [1] },
+    model: (plan) => {
+      expectTypeOf(plan).toEqualTypeOf<VariantHistory>()
+      return plan.kind
+    },
+    driver: (plan, observe) => {
+      expectTypeOf(plan).toEqualTypeOf<VariantHistory>()
+      observe(`kind`, plan.kind)
+    },
+    check: sharedCheck,
+  })
+
+  // 17. The same for shared `reached` and `predict` helpers.
+  oracleProperty({
+    id: `type.shared-reached-predict`,
+    law,
+    histories: { arbitrary: variantArbitrary, runs: 10, fixedSeeds: [1] },
+    model: (plan) => {
+      expectTypeOf(plan).toEqualTypeOf<VariantHistory>()
+      return plan.kind
+    },
+    reached: sharedReached,
+    predict: sharedPredict,
+    driver: (plan) => {
+      expectTypeOf(plan).toEqualTypeOf<VariantHistory>()
+    },
+    check: () => pass,
+  })
+
+  // 18. A shared `check` helper whose plan parameter does not accept the
+  //     plan is reported at `check`, not inside `model` or `driver`.
+  oracleProperty({
+    id: `type.mismatched-check`,
+    law,
+    histories: { arbitrary: variantArbitrary, runs: 10, fixedSeeds: [1] },
+    model: (plan) => plan.kind,
+    driver: (plan, observe) => observe(`kind`, plan.kind),
+    // @ts-expect-error the helper does not accept the history as its plan
+    check: unrelatedCheck,
+  })
+}
+
+function sharedCheck(
+  _plan: unknown,
+  _observations: ReadonlyArray<Observation>,
+  _expected: unknown,
+) {
+  return pass
+}
+function sharedReached(
+  _plan: unknown,
+  _trace: ReadonlyArray<Observation>,
+  _expected: unknown,
+): Array<string> {
+  return []
+}
+function sharedPredict(_plan: unknown): Record<string, boolean> {
+  return {}
+}
+function unrelatedCheck(
+  _plan: { unrelated: string },
+  _observations: ReadonlyArray<Observation>,
+  _expected: unknown,
+) {
+  return pass
 }

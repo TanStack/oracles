@@ -724,7 +724,7 @@ export interface OraclePropertyOptions<THistory, TExpected, TPlan = THistory> {
   model: (plan: TPlan, trace: ReadonlyArray<Observation>) => TExpected
   /** The states the history entered. Defaults to the trace's `reach` values. */
   reached?: (
-    plan: TPlan,
+    plan: NoInfer<TPlan>,
     trace: ReadonlyArray<Observation>,
     expected: TExpected,
   ) => Iterable<string>
@@ -732,8 +732,14 @@ export interface OraclePropertyOptions<THistory, TExpected, TPlan = THistory> {
     plan: TPlan,
     observe: (checkpoint: string, value: unknown) => void,
   ) => Promise<void> | void
+  /**
+   * Judges the observations against the model's expectation. Its plan
+   * parameter, like those of `reached` and `predict`, never sets the plan
+   * type, so a shared helper typed `(plan: unknown, …)` leaves it to
+   * `resolve`, `model`, and `driver`.
+   */
   check: (
-    plan: TPlan,
+    plan: NoInfer<TPlan>,
     observations: ReadonlyArray<Observation>,
     expected: TExpected,
   ) => Verdict
@@ -747,7 +753,7 @@ export interface OraclePropertyOptions<THistory, TExpected, TPlan = THistory> {
    * Whether the history enters each probe-bound state, from the plan alone:
    * a prediction never sees the trace, so it cannot follow production.
    */
-  predict?: (plan: TPlan) => Readonly<Record<string, boolean>>
+  predict?: (plan: NoInfer<TPlan>) => Readonly<Record<string, boolean>>
   /**
    * Each registered test's limit in milliseconds; 120 seconds by default, and
    * none at 0 or less. Each unit of a campaign stops shrinking at half of it.
