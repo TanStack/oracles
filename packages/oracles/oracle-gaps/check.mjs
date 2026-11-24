@@ -1670,12 +1670,15 @@ export default async (env) => {
 
     // 1. The static half (analysis.mjs): instrumented sources, mutants,
     // declarations, and ownership. A broken declaration refuses the run.
-    const { instrumented, mutants, declarations, owned } = analyze(
+    const { instrumented, mutants, declarations, owned, notes } = analyze(
       ts,
       pkg,
       options.sources,
       [...contextSpecs.get(contexts[0]).keys()],
+      { baselineOnly: options.baselineOnly },
     )
+    // What a baseline-only run let pass, which a full run refuses.
+    for (const note of notes) log(streamLine(`note`, escapeControls(note)))
     probeSites = mutants.filter((m) => m.probeGuard).map((m) => m.number)
     const previous = [...globalThis.__oracleGapsSchemata.keys()]
     globalThis.__oracleGapsSchemata = instrumented
@@ -2208,6 +2211,7 @@ export default async (env) => {
         testOutput,
         checkStarted,
         log,
+        notes,
       })
     // A failing law judges nothing, so it is left out per test, as a
     // nondeterministic test is, and its file's passing tests still judge the
@@ -2801,6 +2805,7 @@ export default async (env) => {
     testOutput,
     checkStarted,
     log,
+    notes,
   }) {
     await store.flush?.()
     writeFileSync(
@@ -2821,6 +2826,8 @@ export default async (env) => {
             skipped: tests.filter((t) => t.state === `skipped`).length,
           })),
           evidence,
+          // What the run let pass that a full run refuses (analysis.mjs).
+          notes,
           results: [],
         },
         null,

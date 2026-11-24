@@ -648,7 +648,10 @@ their owners' baseline, and marks the run as partial, so finish with a full
 check without `--only`. To record the red state of a change (which laws
 fail on unchanged production) across every oracle file, pass
 `--baseline-only`: it runs every test file's baseline, as a full check
-does, prints it with each failing law, and judges no mutant.
+does, prints it with each failing law, and judges no mutant. It also runs
+when an `owns` entry names a function or file that does not exist yet
+(the red state of a law about a new function): it notes the entry and goes
+on, where a full check refuses it.
 
 ## 9. Report the evidence
 

@@ -384,6 +384,15 @@ export const shards = {
     `calibration: a baseline-only run ends with a gap count`,
     `calibration: a baseline-only run's summary.md drops its blocked line`,
     `calibration: a baseline-only run leaves out the ordinary file`,
+    // The red-first baseline-only runs: one small function each, and a
+    // refused full run.
+    `fixed seed 20261105: a red-first baseline-only run: badEntry`,
+    `random seed: a red-first baseline-only run: badEntry`,
+    `determinism: constructed history: a red-first baseline-only run: badEntry`,
+    `fixed seed 20261105: a red-first baseline-only run: missingSource`,
+    `random seed: a red-first baseline-only run: missingSource`,
+    `determinism: constructed history: a red-first baseline-only run: missingSource`,
+    `calibration: a baseline-only run drops its note of an owns entry`,
     // The filed history of a stale authored mutant's fourth base (about 12 s).
     `fixed history: a filed base whose owner reads an absent object through ?.`,
     `determinism: fixed history: a filed base whose owner reads an absent object through ?.`,

@@ -894,6 +894,8 @@ export const partitions = {
         'a failing law that spins under a mutant before a passing law',
         "module data that only the failing owner's passing pair judges",
         'a baseline-only run beside a failing law',
+        'a red-first baseline-only run: badEntry',
+        'a red-first baseline-only run: missingSource',
       ]),
       8: anyOf([
         'a declaration fault: brokenVitest',
