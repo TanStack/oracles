@@ -9,10 +9,11 @@
 // run exactly the tests that one job ran before: a test in no shard would
 // leave its law out of CI, and a test in two would run twice. A new test
 // lands in the `rest` shard, so the jobs' balance can drift, but no test is
-// left out. The listed files can hold other suites too; the check fails
-// unless each of those runs somewhere: a whole-file Vitest run in
-// .github/workflows/pr.yml (one with no `-t`) names its file. Otherwise a
-// suite added beside a partitioned one would run in no CI job.
+// left out. The listed files can hold other suites too. A partition's
+// `alongside` names suites that one of its shards runs whole; the check
+// fails unless every other suite runs somewhere else: a whole-file Vitest
+// run in .github/workflows/pr.yml (one with no `-t`) names its file.
+// Otherwise a suite added beside a partitioned one would run in no CI job.
 //
 //   node scripts/pr-shards.mjs check                       checks every
 //                                                          partition
@@ -292,6 +293,9 @@ export const partitions = {
     args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-static`],
     suite: `oracle-gaps.report-static`,
     select: ``,
+    // The same file's anchor-scope oracle (#196): 43 units, 6 s locally,
+    // none of which runs the CLI.
+    alongside: { shard: `2`, suites: [`oracle-gaps.report-anchor-scope`] },
     shards: {
       1: `(?:fixed seed 20261105: generated|random seed: generated|calibration: .*)`,
       2: rest,
@@ -637,6 +641,7 @@ export const partitions = {
     args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-static`],
     suite: `oracle-gaps.report-static`,
     select: ``,
+    alongside: { shard: `2`, suites: [`oracle-gaps.report-anchor-scope`] },
     // Windows runs on its own partition: the same tests, in six shards,
     // because each Linux shard takes 3 to 6 times as long on windows-latest.
     shards: {
@@ -963,6 +968,10 @@ export const partitions = {
   },
 }
 
+/** The suites that a partition's shard runs whole beside its own suite. */
+const alongsideOf = (partition, shard) =>
+  partition.alongside?.shard === shard ? partition.alongside.suites : []
+
 /** A shard's pattern over the name that follows the suite's. */
 function bodyOf(partition, shard) {
   const own = partition.shards[shard]
@@ -985,7 +994,10 @@ export function patternOf(name, shard) {
         )
         .join(`, `)}`,
     )
-  return `^${escape(partition.suite)}(?: > | (?!> ))(?:${bodyOf(partition, shard)})$`
+  const alongside = alongsideOf(partition, shard)
+  const whole =
+    alongside.length === 0 ? `` : `|${anyOf(alongside)}(?: > | (?!> )).*`
+  return `^(?:${escape(partition.suite)}(?: > | (?!> ))(?:${bodyOf(partition, shard)})${whole})$`
 }
 
 /**
@@ -1015,7 +1027,11 @@ export function partitionErrors(name, listed) {
       owners.length === 1 &&
       joined.every((text) => owners[0].pattern.test(text))
     const own = full.startsWith(prefix) ? full.slice(prefix.length) : undefined
-    const selected = own !== undefined && own.startsWith(partition.select)
+    const selected =
+      (own !== undefined && own.startsWith(partition.select)) ||
+      (partition.alongside?.suites ?? []).some((suite) =>
+        full.startsWith(`${suite} > `),
+      )
     if (selected && !whole)
       errors.push(
         `${JSON.stringify(full)} is in ${owners.length === 0 ? `no shard` : owners.length === 1 ? `shard ${owners[0].shard} under only one of Vitest's name joins` : `shards ${owners.map(({ shard }) => shard).join(`, `)}`}`,
@@ -1092,7 +1108,10 @@ export function wholeRuns(workflow) {
 export function unrunErrors(name, tests, runs) {
   const partition = partitions[name]
   const config = partition.args[partition.args.indexOf(`--config`) + 1]
-  const ours = (full) => full.startsWith(`${partition.suite} > `)
+  const ours = (full) =>
+    [partition.suite, ...(partition.alongside?.suites ?? [])].some((suite) =>
+      full.startsWith(`${suite} > `),
+    )
   const whole = (file) =>
     runs.some(
       (run) =>
@@ -1110,7 +1129,7 @@ export function unrunErrors(name, tests, runs) {
     }
   return [...unrun].map(
     ([suite, count]) =>
-      `suite ${JSON.stringify(suite)} (${count} tests) runs in no CI job: no shard of this partition takes it, and no whole-file run in .github/workflows/pr.yml names its file`,
+      `suite ${JSON.stringify(suite)} (${count} tests) runs in no CI job: it is not in the partition's \`alongside\`, and no whole-file run in .github/workflows/pr.yml names its file`,
   )
 }
 
