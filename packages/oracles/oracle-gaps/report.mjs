@@ -116,10 +116,10 @@ const directive = {
     `Observe the value this code changes in ${g.infectedBy === undefined ? `the owner tests` : `\`${testName(g.infectedBy)}\``}, and assert on it. Where the mutated code computes the same result as the original, add a history where it computes something different.`,
   'not-distinguished': (g) => distinguishingDirective(g),
   // A returned `false` made `undefined`: the callers that tell them apart,
-  // the observation an exported function owes, and the step where no
-  // caller tells them apart.
+  // the observation an exported function owes, and, last and only with its
+  // evidence, the step where no caller tells them apart, which is dead.
   'falsy-return': (g) =>
-    `Add an owner history whose caller tells the \`false\` returned on line ${g.line} from \`undefined\`, such as with \`=== false\`, \`typeof\`, \`??\`, and \`JSON.stringify\`, and assert on the result. Where the function is exported, callers outside the package can tell them apart: observe its result in the driver. Where no caller can, return nothing there, and declare the result type \`boolean | undefined\`.`,
+    `Add an owner history whose caller tells the \`false\` returned on line ${g.line} from \`undefined\`, such as with \`=== false\`, \`typeof\`, \`??\`, and \`JSON.stringify\`, and assert on the result. Where the function is exported, callers outside the package can tell them apart: observe its result in the driver. Last, where no caller can, the code is dead only with evidence: a law that decides the value exactly owns every public entry point that reaches this code, and the gap runs before and after its removal keep every kill, compared by mutant key (\`oracles-design\` step 7). With that evidence, return nothing there, and declare the result type \`boolean | undefined\`.`,
   'not-judged': (g) =>
     `Make a law in \`${testName(g.changedTests?.[0])}\` reject the changed value.`,
   // No observation changed, and a test did more work: a shortcut for speed,

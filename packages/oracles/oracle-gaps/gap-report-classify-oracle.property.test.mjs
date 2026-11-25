@@ -105,10 +105,14 @@
  *    that tests the result only for truthiness cannot tell apart, so its
  *    legend line says so and its directive names the callers that can
  *    (`=== false`, `typeof`, `??`, `JSON.stringify`), the driver
- *    observation that an exported function owes, and the step for a `false`
- *    that no caller tells apart (a downstream project's report, 2026-11-25:
- *    such mutants made up a large share of its `not-distinguished` gaps,
- *    each read by hand); and `not-distinguished` for any other operator,
+ *    observation that an exported function owes, and, last, the step for a
+ *    `false` that no caller tells apart, which is dead code only with its
+ *    evidence: a law that decides the value exactly owns every public entry
+ *    point that reaches the code, and the gap runs before and after the
+ *    removal keep every kill by mutant key (a downstream project's reports,
+ *    2026-11-25: such mutants made up a large share of its
+ *    `not-distinguished` gaps, each read by hand, and dead code offered as
+ *    one item on an equal menu was the cheapest choice); and `not-distinguished` for any other operator,
  *    whose infection the capture does not measure, so its directive names
  *    the input that distinguishes it. This oracle's grammar has no operator that always
  *    changes a value when reached (`!`, booleans, arithmetic); production
@@ -1093,10 +1097,11 @@ function distinguishingDirective(m) {
   return `Add an owner history where one operand of \`${m.original}\` on line ${line} is falsy and the other is truthy, so \`&&\` and \`||\` give different results, and assert on the result.`
 }
 // The directive for a returned `false` made `undefined` (law 5): the callers
-// that tell them apart, the observation an exported function owes, and the
-// step where no caller tells them apart.
+// that tell them apart, the observation an exported function owes, and,
+// last, the step where no caller tells them apart, which is dead code only
+// with its evidence (a downstream project's report, 2026-11-25).
 const falsyDirective = (m) =>
-  `Add an owner history whose caller tells the \`false\` returned on line ${m.line + 1} from \`undefined\`, such as with \`=== false\`, \`typeof\`, \`??\`, and \`JSON.stringify\`, and assert on the result. Where the function is exported, callers outside the package can tell them apart: observe its result in the driver. Where no caller can, return nothing there, and declare the result type \`boolean | undefined\`.`
+  `Add an owner history whose caller tells the \`false\` returned on line ${m.line + 1} from \`undefined\`, such as with \`=== false\`, \`typeof\`, \`??\`, and \`JSON.stringify\`, and assert on the result. Where the function is exported, callers outside the package can tell them apart: observe its result in the driver. Last, where no caller can, the code is dead only with evidence: a law that decides the value exactly owns every public entry point that reaches this code, and the gap runs before and after its removal keep every kill, compared by mutant key (\`oracles-design\` step 7). With that evidence, return nothing there, and declare the result type \`boolean | undefined\`.`
 // The observation a survivor with an infection names: its infecting test, or
 // the owner tests when only loaded code infected it (or the mutant is
 // authored). The second step covers a forced branch that computed the same
@@ -1438,7 +1443,7 @@ const directives = {
     /^(Make `[^`]+` deterministic: control its clock and its random seed, so its failures judge this code|Add an owner test that runs line \d+ and asserts on its result)\.$/,
   'dead-code': /^Remove the redundant code on line \d+\.$/,
   'falsy-return':
-    /^Add an owner history whose caller tells the `false` returned on line \d+ from `undefined`, such as with `=== false`, `typeof`, `\?\?`, and `JSON\.stringify`, and assert on the result\. Where the function is exported, callers outside the package can tell them apart: observe its result in the driver\. Where no caller can, return nothing there, and declare the result type `boolean \| undefined`\.$/,
+    /^Add an owner history whose caller tells the `false` returned on line \d+ from `undefined`, such as with `=== false`, `typeof`, `\?\?`, and `JSON\.stringify`, and assert on the result\. Where the function is exported, callers outside the package can tell them apart: observe its result in the driver\. Last, where no caller can, the code is dead only with evidence: a law that decides the value exactly owns every public entry point that reaches this code, and the gap runs before and after its removal keep every kill, compared by mutant key \(`oracles-design` step 7\)\. With that evidence, return nothing there, and declare the result type `boolean \| undefined`\.$/,
   'outside-annotation':
     /^Add an owner history that reaches line \d+ with .+, which the annotation excludes, so that it changes an asserted result, and assert on the result\.$/,
   'random-only-kill':
