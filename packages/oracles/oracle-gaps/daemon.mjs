@@ -68,12 +68,15 @@ const sent = (error) => ({
   fix: error?.fix,
   stack: error?.stack,
   out: error?.out,
+  code: error?.code,
+  path: error?.path,
+  dest: error?.dest,
 })
 /** The error that ended a check in the daemon, to end the CLI's run with. */
-export const received = ({ message, fix, stack, out }) =>
+export const received = ({ message, fix, stack, out, code, path, dest }) =>
   Object.assign(
     fix === undefined ? new Error(message) : new Refusal(message, fix),
-    { stack, out },
+    { stack, out, code, path, dest },
   )
 
 // A test mark is written whole or not at all: its file exists only once it

@@ -179,7 +179,7 @@ if (process.env.ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED !== undefined) {
 }
 
 const { parseArgs, usage } = await import(`./args.mjs`)
-const { endRun, Refusal } = await import(`./ending.mjs`)
+const { endRun, noRoomCodes, Refusal } = await import(`./ending.mjs`)
 // ending.mjs loads stream.mjs, so this import costs no load of its own.
 const { escapeControls, streamLine } = await import(`./stream.mjs`)
 
@@ -207,11 +207,15 @@ const writeStream = (text) => {
   process.stderr.write(text)
   if (streamLog) appendLog(streamLog, text)
 }
+// A write that found no room is no refusal: it ends the run out of disk
+// space (ending.mjs), as it does wherever it strikes.
 const cannotWrite = (path, error) =>
-  new Refusal(
-    `the stream log ${path} cannot be written (${error.code ?? error.message})`,
-    `Remove ${path}, or pass --out a directory whose stream.log can be written.`,
-  )
+  noRoomCodes.has(error?.code)
+    ? error
+    : new Refusal(
+        `the stream log ${path} cannot be written (${error.code ?? error.message})`,
+        `Remove ${path}, or pass --out a directory whose stream.log can be written.`,
+      )
 // The output directory this process claimed (its run.pid), released when the
 // process exits, on every exit but SIGKILL.
 let claimed
@@ -264,6 +268,7 @@ function claimOut(out) {
 }
 /** The refusal for a `run.pid` that cannot be written: the claim's own cause. */
 function claimCannotWrite(out, claim, error) {
+  if (noRoomCodes.has(error?.code)) return error
   return new Refusal(
     `run.pid in ${posix(out)} cannot be written (${error.code ?? error.message})`,
     `if no run uses ${posix(out)}, delete ${posix(claim)}, or pass --out a directory whose run.pid can be written`,
@@ -680,10 +685,10 @@ const holdStops = () => {
   writingEnding = true
   process.send?.(`ending`)
 }
-function endWith(error, out) {
+function endWith(error, options) {
   if (ended) return
   ended = true
-  const ending = endRun(error, out)
+  const ending = endRun(error, options?.out, options?.pkg)
   holdStops()
   try {
     writeStream(ending.stderr)
@@ -717,8 +722,8 @@ async function run() {
   // The run's options, once its arguments parse. The handlers come first, so an
   // error thrown by the supervisor ends the run through endWith too.
   let options
-  process.on(`uncaughtException`, (error) => endWith(error, options?.out))
-  process.on(`unhandledRejection`, (error) => endWith(error, options?.out))
+  process.on(`uncaughtException`, (error) => endWith(error, options))
+  process.on(`unhandledRejection`, (error) => endWith(error, options))
   // The supervisor: it claims the output directory, writes the note, and runs
   // the child. A refusal of the claim or the log ends it through endWith (the
   // single path for every refusal of a check).
@@ -729,7 +734,7 @@ async function run() {
       try {
         startLog(checking.out)
       } catch (error) {
-        return endWith(error, checking.out)
+        return endWith(error, checking)
       }
       return superviseRun(checking.out, checking.pkg)
     }
@@ -738,7 +743,7 @@ async function run() {
     try {
       watchSupervisor(Number(supervisor))
     } catch (error) {
-      return endWith(error, options?.out)
+      return endWith(error, options)
     }
     // A supervised child waits here, before it writes anything, so a test can
     // kill its supervisor while the child is silent (the watchdog's own case).
@@ -789,7 +794,7 @@ async function run() {
     }
     exitWhenFlushed(0)
   } catch (error) {
-    endWith(error, options?.out)
+    endWith(error, options)
   }
 }
 

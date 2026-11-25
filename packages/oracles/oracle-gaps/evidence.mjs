@@ -44,6 +44,8 @@ export const removeSocket = (socket) => {
  */
 export const stateDirOf = (pkg) =>
   join(temporaryDirectory(), `oracle-gaps-${keyOf(pkg)}`)
+/** Where a package's runs write by default, one directory each (args.mjs). */
+export const runsDirOf = (pkg) => join(stateDirOf(pkg), `out`)
 
 // A run keeps a few versions, newest first, each under the inputs it read,
 // as a build system keeps several verifying traces: an edit and its undo
