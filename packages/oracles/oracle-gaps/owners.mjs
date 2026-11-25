@@ -303,9 +303,10 @@ export function functionsIn(ts, file) {
 /**
  * Owners by source and function. `oracles` maps each oracle file to its
  * `owns` entries; `program` is a TypeScript program over the package's
- * sources and `pkg` the package's directory.
+ * sources, `pkg` the package's directory, and `sources` the `--source`
+ * files, whose exports are the public entry points (`reachedFrom`).
  */
-export function ownership(ts, program, pkg, oracles) {
+export function ownership(ts, program, pkg, oracles, sources) {
   const checker = program.getTypeChecker()
   const inPackage = (fileName) => {
     const path = relative(pkg, fileName)
@@ -499,6 +500,41 @@ export function ownership(ts, program, pkg, oracles) {
       for (const fn of functionsOf(source))
         if (fn.name === entryFunction) walk(fn)
     }
+  const sourceOf = (fn) =>
+    posix(relative(pkg, fn.node.getSourceFile().fileName))
+  // The public entry points: the package units that each --source file
+  // exports, through an alias or a re-export too, as an importer reaches
+  // them (a class brings its members, module data the functions it holds);
+  // and the callers of each unit in their trees, the walk's references above
+  // reversed. Read once, when a report first asks: a function's entry
+  // points are the exported units among its callers' closure.
+  let callers
+  const exported = new Set()
+  const readCallers = () => {
+    for (const source of sources) {
+      const file = program.getSourceFile(posix(resolve(pkg, source)))
+      const module = file && checker.getSymbolAtLocation(file)
+      for (let symbol of module ? checker.getExportsOfModule(module) : []) {
+        if (symbol.flags & ts.SymbolFlags.Alias)
+          symbol = checker.getAliasedSymbol(symbol)
+        for (const declaration of symbol.declarations ?? [])
+          for (const fn of targetsOf(declaration, false, true)) exported.add(fn)
+      }
+    }
+    callers = new Map()
+    const seen = new Set()
+    // A function defined inside another is among its references: the
+    // declaration's name refers to it.
+    const visit = (fn) => {
+      if (seen.has(fn)) return
+      seen.add(fn)
+      for (const callee of referencesOf(fn.node)) {
+        callers.set(callee, [...(callers.get(callee) ?? []), fn])
+        visit(callee)
+      }
+    }
+    for (const fn of exported) visit(fn)
+  }
   return {
     has: (source, name) => functionsOf(source).some((fn) => fn.name === name),
     /** Whether a function of the source, or the whole source, has an owner. */
@@ -509,6 +545,39 @@ export function ownership(ts, program, pkg, oracles) {
      * position (an offset in the source), by its name (`<module>` for none),
      * and its owners. A whole-file entry owns every unit in the file.
      */
+    /**
+     * The public entry points whose trees hold the functions of a name in a
+     * source: each exported unit by its owns name (`src/x.ts#name`), with
+     * the oracle files that own it. Two units of one name are one entry,
+     * owned by what owns either, as an owns entry of that name owns both.
+     */
+    reachedFrom: (source, name) => {
+      if (callers === undefined) readCallers()
+      const reaching = new Set()
+      const walk = (fn) => {
+        if (reaching.has(fn)) return
+        reaching.add(fn)
+        for (const caller of callers.get(fn) ?? []) walk(caller)
+      }
+      for (const fn of functionsOf(source)) if (fn.name === name) walk(fn)
+      const points = new Map()
+      for (const fn of reaching)
+        if (exported.has(fn)) {
+          const entry = `${sourceOf(fn)}#${fn.name}`
+          points.set(
+            entry,
+            new Set([
+              ...(points.get(entry) ?? []),
+              ...(owners.get(fn) ?? []),
+              ...(owners.get(sourceOf(fn)) ?? []),
+            ]),
+          )
+        }
+      return [...points].map(([entry, owners]) => ({
+        entry,
+        owners: [...owners],
+      }))
+    },
     at: (source, position) => {
       let best
       for (const fn of functionsOf(source))

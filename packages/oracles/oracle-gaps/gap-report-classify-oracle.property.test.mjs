@@ -205,11 +205,23 @@
  *    its mutants survived with no observation changed (every survivor class
  *    but `not-judged` and `indeterminate`), out of its operator mutants
  *    that the run judged (owned, outside probe code, and not blocked), the
- *    count of each such class by class name, and the question for the
- *    maintainer: "It may be performance machinery or redundant design: ask
- *    the maintainer whether this function is needed before adding histories
- *    for it or removing it; a model with no counterpart for it is evidence
- *    it may not be." A function's survivors cluster when there are at least
+ *    count of each such class by class name, the public entry points that
+ *    reach it, and the question for the maintainer: "It may be performance
+ *    machinery or redundant design: ask the maintainer whether this function
+ *    is needed before adding histories for it or removing it; a model with
+ *    no counterpart for it is evidence it may not be." The entry points are
+ *    the exports of the `--source` files whose static call trees hold the
+ *    function, as the analysis gives them: "Reached from: <entry> (owned by
+ *    <file>, …), …", the entries by owns name and each one's owner files by
+ *    path, both in code-unit order, `owned by nothing` for an entry no
+ *    oracle file owns, and "Reached from no export of a --source file." when
+ *    none does. When an entry is owned by nothing, the note ends with "No
+ *    law judges what an entry point owned by nothing returns, so these
+ *    survivors are no evidence that it does not need this function." (a
+ *    downstream project's report, 2026-11-25: survivors in a function that a
+ *    second, unowned export also read looked like code no law needs, and
+ *    their removal changed that export's result). A function's survivors
+ *    cluster when there are at least
  *    5 of them and they are at least half of the mutants counted (a
  *    downstream project's report, 2026-11-25: 73 survivors in one
  *    algorithm's functions, which the oracle's model did without, read only
@@ -459,6 +471,15 @@ const routes = [
 // beside its lower case in a locale, and `_` sorts after `-` and `.` by code
 // unit and before them in a locale. (`-` and `.` sort alike in both.)
 const fileStems = [`f0`, `f1`, `f2`, `F1`, `f-2`, `f.2`, `f_2`]
+// Entry points' owns names, in which code-unit order and a locale's order
+// disagree by case and by `_` (law 8).
+const entryNames = [
+  `src/x.ts#f0`,
+  `src/x.ts#F1`,
+  `src/x.ts#Api.get`,
+  `src/x.ts#_run`,
+  `src/b.ts#default`,
+]
 const effect = fc.record({
   kind: fc.constantFrom(
     `same`,
@@ -628,6 +649,20 @@ const records = fc.record({
     minLength: 3,
     maxLength: 3,
   }),
+  // The public entry points that reach `f0` and `f1`, as the static
+  // analysis gives them (owners.mjs `reachedFrom`): each by its owns name,
+  // with the files that own it, in an order the report must not keep. Drawn
+  // last, so the fixed seeds keep their histories.
+  entryPoints: fc.array(
+    fc.uniqueArray(
+      fc.record({
+        entry: fc.constantFrom(...entryNames),
+        owners: fc.array(fc.nat({ max: 2 }), { maxLength: 2 }),
+      }),
+      { selector: (point) => point.entry, maxLength: 3 },
+    ),
+    { minLength: 2, maxLength: 2 },
+  ),
 })
 
 // A file's path, and its path relative to the package.
@@ -1417,7 +1452,44 @@ function model(h) {
 // first mutant, whatever its outcome.
 const CLUSTER_LEAST = 5
 const clusterQuestion = `It may be performance machinery or redundant design: ask the maintainer whether this function is needed before adding histories for it or removing it; a model with no counterpart for it is evidence it may not be.`
-function clustersOf(outcomes) {
+const unjudgedEntry = `No law judges what an entry point owned by nothing returns, so these survivors are no evidence that it does not need this function.`
+// The public entry points that reach a function, as the analysis gives
+// them (the history's `entryPoints`): each with its owner files, the oracle
+// files the history names, in the order drawn.
+const entryPointsOf = (h, fn) =>
+  h.entryPoints[Number(fn.slice(1))].map((point) => ({
+    entry: point.entry,
+    owners: [
+      ...new Set(
+        point.owners.filter((fi) => fi < h.files.length && h.files[fi].oracle),
+      ),
+    ].map((fi) => relativeName(h, fi)),
+  }))
+// Code-unit order, as JavaScript's `<` compares strings.
+const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
+// What the note says of each entry point (law 8): its owns name and who owns
+// it, the entries by name and each one's owners by path, both in code-unit
+// order; `owned by nothing` for an entry no oracle owns, and then a sentence
+// that the survivors are no evidence for it; and a sentence of its own when
+// no export reaches the function.
+function reachOf(h, fn) {
+  const points = entryPointsOf(h, fn).sort((a, b) =>
+    byCodeUnit(a.entry, b.entry),
+  )
+  if (points.length === 0)
+    return [`Reached from no export of a --source file.`, ``]
+  const owned = (point) =>
+    point.owners.length === 0
+      ? `owned by nothing`
+      : `owned by ${[...point.owners].sort(byCodeUnit).join(`, `)}`
+  return [
+    `Reached from: ${points.map((point) => `${point.entry} (${owned(point)})`).join(`, `)}.`,
+    points.some((point) => point.owners.length === 0)
+      ? ` ${unjudgedEntry}`
+      : ``,
+  ]
+}
+function clustersOf(outcomes, h) {
   const notes = []
   for (const fn of [...new Set(outcomes.map((o) => o.function))]) {
     if (fn === undefined) continue
@@ -1436,10 +1508,11 @@ function clustersOf(outcomes) {
     if (unseen.length < CLUSTER_LEAST || 2 * unseen.length < judged.length)
       continue
     const classes = [...new Set(unseen.map((o) => o.class))].sort()
+    const [reach, unjudged] = reachOf(h, fn)
     notes.push(
       `fn ${fn} (src/x.ts): ${unseen.length} of ${judged.length} mutants survived with no observation changed (${classes
         .map((c) => `${c} ${unseen.filter((o) => o.class === c).length}`)
-        .join(`, `)}). ${clusterQuestion}`,
+        .join(`, `)}). ${reach} ${clusterQuestion}${unjudged}`,
     )
   }
   return notes
@@ -2294,11 +2367,17 @@ async function driver(h, observe) {
   const printer = await import(`./stream.mjs`).catch(() => undefined)
   // Both reports lead with the baseline the runner's first pass gave.
   const baselineGiven = baselineFiles(h, printer)
+  // The analysis's entry points (owners.mjs `reachedFrom`): those the
+  // history gives the function, in the order drawn, with package-relative
+  // owner paths, as check.mjs passes them.
+  const reachedFrom = (source, fn) =>
+    source === `src/x.ts` ? entryPointsOf(h, fn) : []
   const summary = report.renderReport({
     results,
     run: { id: `r`, inputs: `records` },
     excluded: [],
     baseline: baselineGiven,
+    reachedFrom,
   })
   observe(`classified`, {
     outcomes: results.map((r) => ({
@@ -2316,6 +2395,7 @@ async function driver(h, observe) {
       excluded: [],
       pkg: `/pkg`,
       baseline: baselineGiven,
+      reachedFrom,
       paths: {
         report: `out/summary.md`,
         results: `out/results.json`,
@@ -2404,7 +2484,42 @@ async function driver(h, observe) {
       states.add(`survivors cluster beside blocked mutants`)
     if (beside((r) => r.probeGuard))
       states.add(`survivors cluster beside probe mutants`)
+    // Where a cluster's function is reached from: no export, an entry no
+    // oracle owns, or only owned entries, one of them by two files.
+    if (unseen >= 5 && 2 * unseen >= judged.length) {
+      const points = entryPointsOf(h, fn)
+      if (points.length === 0) states.add(`a cluster reached from no export`)
+      if (points.some((point) => point.owners.length === 0))
+        states.add(`a cluster reached from an entry owned by nothing`)
+      if (
+        points.length >= 2 &&
+        points.every((point) => point.owners.length > 0) &&
+        points.some((point) => point.owners.length >= 2)
+      )
+        states.add(`a cluster reached from owned entries only`)
+    }
   }
+  // Two functions' clusters, each reached from other entry points.
+  const clusteredFns = [`f0`, `f1`].filter((fn) => {
+    const judged = results.filter(
+      (r) =>
+        r.function === fn &&
+        !r.probeGuard &&
+        ![`unowned`, `blocked`].includes(r.outcome),
+    )
+    const unseen = judged.filter(
+      (r) =>
+        r.outcome === `survived` &&
+        ![`not-judged`, `indeterminate`].includes(r.class),
+    ).length
+    return unseen >= 5 && 2 * unseen >= judged.length
+  })
+  if (
+    clusteredFns.length === 2 &&
+    JSON.stringify(entryPointsOf(h, `f0`)) !==
+      JSON.stringify(entryPointsOf(h, `f1`))
+  )
+    states.add(`two clusters reached from different entry points`)
   // The gap line's cut (law 8): a gap whose code or intent is longer than
   // 60 characters once collapsed, or spans lines.
   for (const r of report.gapsOf(results)) {
@@ -2621,10 +2736,35 @@ function check(h, observations, expected) {
   // The cluster notes the model owes (law 8): a question for the
   // maintainer, so the exit law reads every stdout line but these, each
   // exactly the model's text.
-  const owedClusters = clustersOf(expected.outcomes)
+  const owedClusters = clustersOf(expected.outcomes, h)
   const owedClusterLines = owedClusters.map(
     (note) => `oracle-gaps: note cluster ${note}`,
   )
+  // The cluster notes (law 8): one per function where survivors cluster, in
+  // function order, after every function's gap lines, and the same text as
+  // one bullet each under summary.md's section, after its gaps. Judged
+  // before the exit law, which reads every other line, so a note that is not
+  // the model's is reported as a wrong note.
+  const clusterLines = stdout
+    .split(`\n`)
+    .filter((line) => line.startsWith(`oracle-gaps: note cluster `))
+  const lastGapLine = stdout
+    .split(`\n`)
+    .findLastIndex(
+      (line) =>
+        line.startsWith(`oracle-gaps: gap `) ||
+        line.startsWith(`oracle-gaps: function `),
+    )
+  if (
+    JSON.stringify(clusterLines) !== JSON.stringify(owedClusterLines) ||
+    clusterLines.some((line) => stdout.split(`\n`).indexOf(line) < lastGapLine)
+  )
+    return violation(
+      `classified`,
+      `the stdout's cluster notes are ${JSON.stringify(clusterLines)}, owed ${JSON.stringify(owedClusterLines)} after every function's gap lines`,
+      `clusters`,
+      { actual: clusterLines, expected: owedClusterLines },
+    )
   // Gaps are grouped by function, and the authored ones in one group.
   const groupOf = (o) =>
     o.authored ? `authored mutants (src/x.ts)` : `fn ${o.function} (src/x.ts)`
@@ -2811,29 +2951,7 @@ function check(h, observations, expected) {
       `report`,
       { actual: text },
     )
-  // The cluster notes (law 8): one per function where survivors cluster, in
-  // function order, after every function's gap lines, and the same text as
-  // one bullet each under summary.md's section, after its gaps.
-  const clusterLines = stdout
-    .split(`\n`)
-    .filter((line) => line.startsWith(`oracle-gaps: note cluster `))
-  const lastGapLine = stdout
-    .split(`\n`)
-    .findLastIndex(
-      (line) =>
-        line.startsWith(`oracle-gaps: gap `) ||
-        line.startsWith(`oracle-gaps: function `),
-    )
-  if (
-    JSON.stringify(clusterLines) !== JSON.stringify(owedClusterLines) ||
-    clusterLines.some((line) => stdout.split(`\n`).indexOf(line) < lastGapLine)
-  )
-    return violation(
-      `classified`,
-      `the stdout's cluster notes are ${JSON.stringify(clusterLines)}, owed ${JSON.stringify(owedClusterLines)} after every function's gap lines`,
-      `clusters`,
-      { actual: clusterLines, expected: owedClusterLines },
-    )
+  // summary.md's cluster section (law 8), as the stdout's notes (above).
   const clusterHeading = `## Survivors clustered in one function`
   const clusterAt = text.indexOf(clusterHeading)
   const clusterBullets =
@@ -3408,6 +3526,26 @@ const calibrations = [
         : undefined,
     ),
   },
+  // A cluster note that leaves out an entry point owned by nothing, and one
+  // that leaves out the sentence for it (law 8).
+  {
+    name: `a cluster note leaves out an entry point owned by nothing`,
+    law: `clusters`,
+    corrupt: corruptStdout((stdout) =>
+      / [^ ]+ \(owned by nothing\),?/.test(stdout)
+        ? stdout.replace(/,? [^ ]+ \(owned by nothing\)/, ``)
+        : undefined,
+    ),
+  },
+  {
+    name: `a cluster note leaves out that an unowned entry point is no evidence`,
+    law: `clusters`,
+    corrupt: corruptStdout((stdout) =>
+      stdout.includes(unjudgedEntry)
+        ? stdout.replaceAll(` ${unjudgedEntry}`, ``)
+        : undefined,
+    ),
+  },
   {
     name: `summary.md leaves out its cluster section`,
     law: `clusters`,
@@ -3592,6 +3730,10 @@ const required = [
   `survivors cluster beside unowned mutants`,
   `survivors cluster beside blocked mutants`,
   `survivors cluster beside probe mutants`,
+  `a cluster reached from no export`,
+  `a cluster reached from an entry owned by nothing`,
+  `a cluster reached from owned entries only`,
+  `two clusters reached from different entry points`,
 ]
 
 // One constructed history per outcome class: one mutant judged by one
@@ -3753,6 +3895,37 @@ const clustered = (name, enters, effects) => ({
     }
   },
 })
+// Law 8: five survivors of `f0`, which the analysis says the given entry
+// points reach, beside a second oracle file (`f1`) whose one test judges no
+// mutant, so that an entry can be owned by two files.
+const reachedFromEntries = (name, enters, points) => {
+  const base = clustered(
+    name,
+    enters,
+    Array.from({ length: 5 }, () => ({})),
+  )
+  return {
+    ...base,
+    build: () => {
+      const built = base.build()
+      return {
+        ...built,
+        files: [
+          ...built.files,
+          {
+            oracle: true,
+            tests: [plainTest()],
+            background: four(false),
+            backgroundInfects: four(false),
+            baseline: `pass`,
+            failure: `error`,
+          },
+        ],
+        entryPoints: [points, []],
+      }
+    },
+  }
+}
 // Law 7: two owner files whose tests have one effect, named apart so that a
 // message shows which test it names. The mutants, operator and authored,
 // declare the owners in `owners`, and the baseline records the files in
@@ -4568,12 +4741,57 @@ const constructed = [
       ...Array.from({ length: 6 }, () => ({ probe: true })),
     ],
   ),
+  // Where a cluster's function is reached from (law 8). Five survivors with
+  // no entry point; then entry points given against code-unit order (`b` <
+  // `x`, and `F` < `f`), one owned by nothing; then entry points all owned,
+  // one by two files given against path order, beside a second oracle file
+  // that judges no mutant.
+  clustered(
+    `five survivors reached from no export`,
+    [`a cluster reached from no export`],
+    Array.from({ length: 5 }, () => ({})),
+  ),
+  reachedFromEntries(
+    `five survivors reached from an entry owned by nothing`,
+    [`a cluster reached from an entry owned by nothing`],
+    [
+      { entry: `src/x.ts#f0`, owners: [0] },
+      { entry: `src/x.ts#F1`, owners: [] },
+      { entry: `src/b.ts#default`, owners: [0] },
+    ],
+  ),
+  reachedFromEntries(
+    `five survivors reached from owned entries only`,
+    [`a cluster reached from owned entries only`],
+    [
+      { entry: `src/x.ts#_run`, owners: [1, 0] },
+      { entry: `src/x.ts#Api.get`, owners: [1] },
+    ],
+  ),
+  // Each function's note names its own entry points: `f1`'s, not `f0`'s.
+  (() => {
+    const base = clustered(
+      `two clusters, the second reached from an entry and the first from none`,
+      [`two clusters reached from different entry points`],
+      [
+        ...Array.from({ length: 5 }, () => ({ line: 1 })),
+        ...Array.from({ length: 5 }, () => ({})),
+      ],
+    )
+    return {
+      ...base,
+      build: () => ({
+        ...base.build(),
+        entryPoints: [[], [{ entry: `src/x.ts#F1`, owners: [0] }]],
+      }),
+    }
+  })(),
 ]
 
 oracleProperty({
   id: `oracle-gaps.report-classify`,
   law: {
-    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, extra-work, dead-code, outside-annotation, branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only; a test whose property declares a work bound, whose work judges the mutant, and whose work (site evaluations, never time) passes the bound's ratio of its unmutated work reports a verdict under law work bound on its route, and a survivor whose work rose in such a test, with no changed observation, is extra-work, whose directive names that test, both counts, and the bound to declare that rejects it. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each function with at least 5 survivors whose runs changed no observation (every survivor class but not-judged and indeterminate), which are at least half of its operator mutants that the run judged (owned, outside probe code, not blocked), gets one cluster note after every function's gap lines and one bullet in summary.md's cluster section after its gaps, each the model's text word for word: the function, the counts by class, and the question for the maintainer, which the exit law alone does not read. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed.`,
+    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, extra-work, dead-code, outside-annotation, branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only; a test whose property declares a work bound, whose work judges the mutant, and whose work (site evaluations, never time) passes the bound's ratio of its unmutated work reports a verdict under law work bound on its route, and a survivor whose work rose in such a test, with no changed observation, is extra-work, whose directive names that test, both counts, and the bound to declare that rejects it. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each function with at least 5 survivors whose runs changed no observation (every survivor class but not-judged and indeterminate), which are at least half of its operator mutants that the run judged (owned, outside probe code, not blocked), gets one cluster note after every function's gap lines and one bullet in summary.md's cluster section after its gaps, each the model's text word for word: the function, the counts by class, the exports of the --source files that statically reach it, by owns name in code-unit order, each with its owner files in path order or owned by nothing (and then the sentence that its survivors are no evidence for such an entry), and the question for the maintainer, which the exit law alone does not read. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed.`,
     authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the oracle rubric's outcome kinds (ORC-006); the frozen design's oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); the maintainer's findings F22 and the leftovers of #12 (2026-11-10); for the work law, the maintainer's decision of 2026-11-12 that a speed shortcut reported as not-observed is a gap CLI bug, and the design decided with it: a cost law, never an exit, judged by a deterministic count; for report order, the gap CLI's determinism requirement (oracle-gaps.report's determinism test and law 9, and the runner's "listed alike in every run") and the maintainer's decision of 2026-11-11 that the tests a report names depend on neither --contexts, worker timing, nor how owners are declared; Vitest's runner (@vitest/runner 4.1: -t is a regular expression matched against getTaskFullName, the suites' names and the test's joined by a space); POSIX.1-2017 Shell Command Language 2.2 and 2.6 for the replay's quoting.`,
     limits: `That real runs produce these records is oracle-gaps.report's, and so is a real replay. The driver encodes operands as capture-setup.mjs \`shown\` does, by a copy of it; long strings are told apart by a 32-bit digest; no symbol operand is generated, and two symbols of one description print alike. Only the runner's single-file path records a test's names, and only it feeds the baseline. Test names hold no backtick and no \` > \`, and names within a file are distinct; the replay's file argument is judged as text, not as Vitest's substring filter over every file. Authored intents hold no word that the exit law forbids, and an author is not shortened. Report order within a file is the baseline's record order: that a file whose tests run concurrently writes its records in one order is not judged, and a failing test is ordered within its file as the reporter lists it, which a run cut off by a hang takes from the records. The "Changed observations in" list is the changed tests' first three, and only its first is compared. A test that only a mutant run records is not generated. A file that does not load keeps its records here, which the runner drops, and the driver leaves it out of every target, as the runner does; a failing law keeps its records and its reach, as the runner keeps them. The refusal text and the summary's left-out list are not judged, only the list of failing files they print. A failing law is generated only as a whole test of a file whose baseline is test: a describe's failing hook, a failing law's leftover state, and how the runner selects the tests of a file that has failing laws are oracle-gaps.report's. Work arrives as counts: that the capture counts site evaluations, and which work it does not count, is oracle-gaps.report's; a test that reaches a site but did no work is generated, which no real run records; an authored mutant's copy counts no work, so the work law does not judge it.`,
   },
@@ -4592,7 +4810,14 @@ oracleProperty({
     ],
     runs: 300,
     fixedSeeds: [20261105],
-    constructed,
+    // A constructed history that names no entry points has none (law 8).
+    constructed: constructed.map((history) => ({
+      ...history,
+      build: (...args) => ({
+        entryPoints: [[], []],
+        ...history.build(...args),
+      }),
+    })),
   },
   resolve: (h) => h,
   model,

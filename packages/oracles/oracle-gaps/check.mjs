@@ -2738,6 +2738,12 @@ export default async (env) => {
       ),
     )
     span(`check`, checkStarted, { evidence })
+    // The entry points that reach a function, for its cluster note, with
+    // the owner files as the report names them.
+    const reachedFrom = (source, name) =>
+      owned
+        .reachedFrom(source, name)
+        .map(({ entry, owners }) => ({ entry, owners: owners.map(relative) }))
     writeFileSync(
       join(options.out, `summary.md`),
       renderReport({
@@ -2746,6 +2752,7 @@ export default async (env) => {
         excluded: excluded.map(relative),
         baseline: baselineFiles,
         config: options.config,
+        reachedFrom,
       }),
     )
     if (existsSync(testOutput) && statSync(testOutput).size > 0)
@@ -2762,6 +2769,7 @@ export default async (env) => {
       pkg,
       baseline: baselineFiles,
       config: options.config,
+      reachedFrom,
       paths: {
         report: escapeControls(posix(join(options.out, `summary.md`))),
         results: join(options.out, `results.json`),
