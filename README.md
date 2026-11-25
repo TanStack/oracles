@@ -107,6 +107,17 @@ agent.
   constructed or fixed history isolates it. An authored mutant's copy is
   not instrumented, so a work bound does not judge it.
 
+  When at least 5 of a function's mutants survive with no observation
+  changed (every survivor class but `not-judged` and `indeterminate`), and
+  they are at least half of its mutants that the run judged, the report
+  adds one cluster note for it,
+  `oracle-gaps: note cluster fn <name> (<source>): <n> of <m> mutants …`,
+  and the same text under `## Survivors clustered in one function` in
+  `summary.md`. Such a function may be performance machinery or redundant
+  design, so the note asks the maintainer whether it is needed before
+  histories are added for it or it is removed. The gaps keep their own
+  directives.
+
   Every line the CLI writes for a check, on stdout and stderr alike, starts
   with `oracle-gaps: ` and its kind, so an agent can act on the results as
   they stream with `grep '^oracle-gaps: '`, and filter one kind:
