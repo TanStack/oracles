@@ -442,9 +442,16 @@
  *    that survive: <ids>`, where `<k>` counts every key killed there and
  *    each list is the ids `--only` reruns, or `none`. Its summary.md lists
  *    each key no longer killed with its outcome, and each new key that
- *    survives, with its rerun. The refusal of a `--compare` that is no
- *    full run's results.json, or that comes with `--only` or `--sample`,
- *    is the static oracle's argument law.
+ *    survives, with its rerun. When owned code shrank, that is, when some
+ *    function (its source and name) has fewer owned operator mutants here
+ *    than there, with probe code, authored mutants, and unowned ones on
+ *    neither side, its stdout has one more note, `oracle-gaps: note owned
+ *    code shrank by <n> mutants in <functions>; run an independent review
+ *    (oracles-design step 10)`, where `<n>` sums the drops and the
+ *    functions are sorted, and its `compare` holds `shrank: { mutants,
+ *    functions }`; with nothing shrunk it has no such note. The refusal of
+ *    a `--compare` that is no full run's results.json, or that comes with
+ *    `--only` or `--sample`, is the static oracle's argument law.
  *
  * Authority: the maintainer's decisions in the gap-check design runs v11, v14,
  * and v19 (2026-11-04 and 2026-11-05; the design notes are kept by the project
@@ -639,6 +646,8 @@ import {
   COMPARED,
   comparedResults,
   owedComparison,
+  owedShrink,
+  shrinkNotes,
   compareNote,
   removePath,
   sourceArgument,
@@ -4552,6 +4561,8 @@ async function driver(plan, observe) {
           states.add(`a compared run with a new key that survives`)
         if (owed.gone.length > 0)
           states.add(`a compared run with a key that is gone`)
+        if (owedShrink(compared.results, movedRun.mutants).mutants > 0)
+          states.add(`a compared run whose owned code shrank`)
       }
     }
     if (plan.steps.length > 0)
@@ -4782,7 +4793,8 @@ function compareBreach(plan, cli, moved) {
       extra,
     )
   const got = moved.report?.compare
-  const expected = { against, ...owed }
+  const shrank = owedShrink(compared.results, moved.mutants)
+  const expected = { against, ...owed, shrank }
   for (const [field, value] of Object.entries(expected))
     if (JSON.stringify(got?.[field]) !== JSON.stringify(value))
       return breach(`wrote another ${field} in its results.json's compare`, {
@@ -4797,6 +4809,15 @@ function compareBreach(plan, cli, moved) {
     return breach(`printed ${JSON.stringify(notes)} on its stdout`, {
       actual: notes,
       expected: [line],
+    })
+  // The review reminder: one note when owned code shrank, else none.
+  const reminders = moved.lead.filter((line) =>
+    line.startsWith(`oracle-gaps: note owned code shrank `),
+  )
+  if (JSON.stringify(reminders) !== JSON.stringify(shrinkNotes(shrank)))
+    return breach(`printed ${JSON.stringify(reminders)} as its review note`, {
+      actual: reminders,
+      expected: shrinkNotes(shrank),
     })
   const outcomeOf = new Map(moved.mutants.map((m) => [m.key, m]))
   const listed = (label) =>
@@ -6720,6 +6741,7 @@ const comparedStates = [
   `a compared run with a key no longer killed`,
   `a compared run with a new key that survives`,
   `a compared run with a key that is gone`,
+  `a compared run whose owned code shrank`,
 ]
 const required = [
   // Reached only by its own constructed history (see there): no generated
@@ -7294,6 +7316,17 @@ calibrations.push(
           : line,
       ),
     })),
+  },
+  {
+    name: `a compared run leaves out its review note`,
+    law: `refactor evidence`,
+    history: comparedHistory,
+    corrupt: corruptCompared((run) => {
+      const lead = run.lead.filter(
+        (line) => !line.startsWith(`oracle-gaps: note owned code shrank `),
+      )
+      return lead.length === run.lead.length ? undefined : { ...run, lead }
+    }),
   },
   {
     name: `a compared run's summary.md drops a listed key`,

@@ -54,7 +54,10 @@ export const authoredKey = (source, id) => `${source}#authored:${id}`
  * The refactor evidence of `oracles-design` step 7 (`--compare`): this run's
  * `results` against an `earlier` run's, read from `against`, by key, with
  * probe code on neither side. Each key killed there is still killed, no
- * longer killed, or gone; each key new here that is a gap survives.
+ * longer killed, or gone; each key new here that is a gap survives. Owned
+ * code shrank where a function has fewer owned operator mutants here than
+ * there (`shrank`): a change that removes or replaces owned code is due an
+ * independent review (oracles-design step 10).
  */
 export function compareWith(against, earlier, results) {
   const there = new Map()
@@ -80,6 +83,24 @@ export function compareWith(against, earlier, results) {
   }
   for (const [key, outcome] of there)
     if (outcome === `killed` && !here.has(key)) evidence.gone.push(key)
+  const owned = (list) => {
+    const counts = new Map()
+    for (const r of list)
+      if (!r.probeGuard && !r.authored && r.outcome !== `unowned`) {
+        const at = `${r.source}#${r.function ?? `<module>`}`
+        counts.set(at, (counts.get(at) ?? 0) + 1)
+      }
+    return counts
+  }
+  const now = owned(results)
+  const lost = [...owned(earlier)]
+    .map(([at, count]) => [at, count - (now.get(at) ?? 0)])
+    .filter(([, count]) => count > 0)
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+  evidence.shrank = {
+    mutants: lost.reduce((sum, [, count]) => sum + count, 0),
+    functions: lost.map(([at]) => at),
+  }
   return evidence
 }
 
@@ -540,6 +561,14 @@ export function renderStdout({
         `compared with ${escapeControls(compare.against)}: ${compareCounts(compare)}; no longer killed: ${ids(compare.noLongerKilled)}; new keys that survive: ${ids(compare.newSurvivors)}`,
       ),
     )
+    const { mutants, functions } = compare.shrank
+    if (mutants > 0)
+      lines.push(
+        streamLine(
+          `note`,
+          `owned code shrank by ${counted(mutants, `mutant`)} in ${functions.map(escapeControls).join(`, `)}; run an independent review (oracles-design step 10)`,
+        ),
+      )
   }
   lines.push(
     streamLine(`note`, `results ${escapeControls(posix(paths.results))}`),
