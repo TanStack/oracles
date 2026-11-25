@@ -653,7 +653,13 @@ that code, and the gap is behavior in it that no law holds yet. For each
 group that no approved law covers, propose the law that would hold it,
 with its authority, as a design question, or say that it belongs to
 another spot, and name the spot. When the gaps under the approved laws are
-closed, present.
+closed, soak the oracle before you present it as ready: 10 runs of its file
+at a run multiplier of 10, as `oracles-design` step 7 says, outside the gap
+check. The gap check's random histories are the same on every run, so a law
+that fails only on rare random histories passes it every time. Treat a soak
+failure like a first red run (item 3 above): replay its printed `Replay:` line first,
+keep its history as a constructed history, fix what was wrong (the model, or
+production once the developer confirms a bug), and soak again.
 
 ## 6. Present
 
@@ -663,7 +669,7 @@ and present. Present the same way whenever the developer wants to stop:
 
 - what it found, first: each bug, with what it was, its fix, and the oracle
   run before and after
-- what you built
+- what you built, with the soak's budget and result
 - if they did not take it after the first fix, an offer of the
   walk-through (step 5), following one bug the oracle found
 - (first oracle) a suggestion for a second opinion: they can ask you to

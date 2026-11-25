@@ -542,10 +542,13 @@ it to simplify:
   find.
 - Rerun the oracle and the gap check after each cleanup.
 
-**Before you call a production change done, run the random campaign
-several times.** The gap check cannot do it: it makes ambient randomness
-repeat, so its random campaign runs the same histories on every run, with or
-without `--seed`. A gap check that killed every mutant has seen one sample.
+**Before you call a production change done, or an oracle ready, soak it: run
+the random campaign several times.** The gap check cannot do it: it makes
+ambient randomness repeat, so its random campaign runs the same histories on
+every run, with or without `--seed`. A gap check that killed every mutant
+has seen one sample. A new oracle needs the soak as much as a production
+change does: a model bug can fail a law on correct production in only one
+random run in many.
 
 - Run the oracle file with the project's test command several times. Each
   run draws a new random seed for each property. Or run it once with the run
@@ -558,12 +561,51 @@ without `--seed`. A gap check that killed every mutant has seen one sample.
   and 10 in a row about one time in nine (0.8^10 ≈ 0.11). It takes 14 green
   runs to bring that under one in twenty (0.8^14 ≈ 0.044), and 21 to bring it
   under one in a hundred (0.8^21 ≈ 0.009). Two green runs prove little.
+- Soak with 10 runs at a multiplier of 10 before you call a new or changed
+  oracle ready, and before CI runs it with a random seed. In a downstream
+  project, a model bug failed a law on correct production in about 1 of 27
+  default random runs, and in every run at a multiplier of 100. The fixed
+  seed, the gap check, and 40 random runs on another day never hit it (40 runs
+  miss a failure that rare about one time in five: (26/27)^40 ≈ 0.22). A
+  reviewer found it at a multiplier of 10. Ten runs at 10 draw as many random
+  histories as 100 default runs, and miss such a failure about one time in 40
+  ((26/27)^100 ≈ 0.023). A law that fails one default run in 100 still passes
+  that soak about one time in three (0.99^100 ≈ 0.37), so raise the budget
+  when a flaky CI job costs more than a longer soak. The multiplied campaign
+  is what takes time: in this repository, an oracle file that ran in 1.1 s
+  took 2.2 s at 10 and 14 s at 100.
+- Run the soak as a loop of the project's test command, with its logs in a
+  directory of their own:
+
+  ```sh
+  SOAK=$(mktemp -d)
+  for i in $(seq 1 10); do
+    ORACLE_RUNS_MULTIPLIER=10 npx vitest run <oracle file> \
+      > "$SOAK/run-$i.log" 2>&1 || echo "soak run $i failed"
+  done
+  grep -h '^Replay:' "$SOAK"/run-*.log
+  for f in "$SOAK"/run-*.log; do grep -o '(law: [^)]*)' "$f" | sort -u; done |
+    sort | uniq -c
+  ```
+
+  The first `grep` prints each failing unit's replay line, with its seed and
+  path. The second prints, for each law, the number of runs it failed in:
+  over the number of runs, that is the law's failure share, which the report
+  gives. Prefer several runs to one long one: a unit stops at its first
+  failure, so one run gives one counterexample and no share, and the
+  multiplier does not stretch a test's `timeout`, so a long campaign can end
+  in a timeout instead of a verdict. The multiplier lengthens the fixed-seed
+  campaigns too, so a fixed-seed unit can fail on a history past its usual
+  runs; its replay line reproduces it the same way.
+
 - A failure that does not come back on a rerun is not flaky: the rerun drew
   other histories. Run the failing unit's printed `Replay:` line first, as
   printed, with its seed and path. Only a replay that passes makes the
   failure flaky.
-- Turn each random counterexample into a constructed history in the same
-  change, so that the fixed seed and the gap check run it from then on.
+- Turn each random counterexample, from a soak or from CI, into a
+  constructed history in the same change, so that the fixed seed and the gap
+  check run it from then on. Then fix what was wrong, the model or
+  production, and soak again.
 
 Techniques: [guide § Evidence](../../docs/guide.md#evidence).
 
@@ -682,6 +724,9 @@ items that fit the kind of change (step 7).
   GREEN after the change. For a refactor, the same oracle passing on old and
   new production with the same seed. For a new oracle over correct code,
   production passing.
+- **Soak:** for a new or changed oracle, the soak's budget (runs and
+  multiplier) and each law that failed, with its share of the runs and its
+  replay line (step 7).
 - **Mutant:** a mutant, such as the original defect, and the law that
   rejected it, plus the calibrations that fail. For a refactor, the shared
   keys still killed, and each new key killed or acted on.

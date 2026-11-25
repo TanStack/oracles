@@ -593,6 +593,17 @@ developer.
 Now fill in the two placeholders in the instruction block: the oracle file
 glob and the gap check command you ran.
 
+**Soak before CI draws random seeds.** The gap check's random histories are
+the same on every run, but the project's test command draws a new random
+seed for every property on every run. Before CI runs an oracle file with the
+test command, soak that file as `oracles-design` step 7 says: 10 runs at a
+run multiplier of 10, with each failing law's share of the runs. A law that
+fails one default random run in 27, as a model bug did in a downstream
+project, would fail one CI job in 27 on correct code, and a rerun of the job
+would almost always pass. Wire the file into CI only once its soak passes. When a CI job
+fails on a random seed, replay its printed `Replay:` line, then keep the
+history as a constructed history, as the design skill says.
+
 ## 8. Report
 
 Tell the developer:
@@ -600,6 +611,8 @@ Tell the developer:
 - what was installed (both pinned URLs) and where configuration changed
 - which pointers were written, and where
 - the first oracle's law and its result
+- the soak's budget and result, for each oracle file that CI will run with
+  a random seed
 - the gap check's totals, and every gap left, grouped as:
   - open because the inputs that expose it lie outside the law's stated
     limits: name those inputs, and recommend widening the grammar and the
