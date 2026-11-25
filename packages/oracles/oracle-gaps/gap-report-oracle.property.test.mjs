@@ -3646,9 +3646,9 @@ async function driver(plan, observe) {
         (m) => !m.authored && m.function === chosen.function,
       )
       const ids = ofFunction.map((m) => m.id)
-      // Each mutant by its id or its key in turn, as results.json stores
+      // Each mutant by its key or its id in turn, as results.json stores
       // them: a key's statement may hold a comma.
-      const only = ofFunction.map((m, i) => (i % 2 === 0 ? m.id : m.key))
+      const only = ofFunction.map((m, i) => (i % 2 === 0 ? m.key : m.id))
       const partial = runCli(dir, files, {
         ...how,
         only,

@@ -232,8 +232,9 @@ function analyzeFixture(dir, files, plan, { picks = true } = {}) {
 // entries, the id and key of every mutant it chose from, and the keys it
 // selected or the refusal's cause. The picks: every other mutant, named by
 // its id and by its key in turn; a live id and key beside a stale id (one
-// past the main source's last mutant) and a stale key (the first mutant's
-// under a renamed function, the edit that gives a mutant a new key); and,
+// past the main source's last mutant) and a stale key (a mutant's under a
+// renamed function, the edit that gives a mutant a new key, from a key that
+// holds a comma where one does); and,
 // over the sources and a copy of the main source at the package root, whose
 // mutants have the main source's ids (an id drops `src/`), one such id beside
 // the key of the copy's mutant, and the two mutants' keys.
@@ -260,6 +261,9 @@ function picksOf(dir, plan, mutants, sources, tests) {
   }
   const first = mutants.find((m) => m.source === SOURCE)
   if (!first) return []
+  // A stale key whose statement holds a comma, where one does: the CLI must
+  // not split it.
+  const staled = mutants.find((m) => m.key.includes(`,`)) ?? first
   const prefix = SOURCE.replace(/^src\//, ``)
   const last = Math.max(
     ...mutants
@@ -279,7 +283,7 @@ function picksOf(dir, plan, mutants, sources, tests) {
         first.id,
         first.key,
         `${prefix}:M${last + 1}`,
-        first.key.replace(`#`, `#renamed_`),
+        staled.key.replace(`#`, `#renamed_`),
       ],
       mutants,
       sources,
@@ -1088,6 +1092,8 @@ async function driver(plan, observe) {
       if (byName?.selected && byName.entries.some((e) => /#.*,/.test(e)))
         states.add(`a key that holds a comma selected`)
       if (stale?.refusal) states.add(`a stale id and key refused`)
+      if (stale?.refusal && stale.entries.at(-1).includes(`,`))
+        states.add(`a stale key that holds a comma refused`)
       if (shared?.refusal) states.add(`an id that two sources share refused`)
       if (twins?.selected?.length === 2)
         states.add(`two mutants that share an id selected by their keys`)
@@ -1651,6 +1657,7 @@ const pickStates = [
   `a selection by id and key`,
   `a key that holds a comma selected`,
   `a stale id and key refused`,
+  `a stale key that holds a comma refused`,
   `an id that two sources share refused`,
   `two mutants that share an id selected by their keys`,
 ]
