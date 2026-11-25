@@ -1145,6 +1145,12 @@ const drawn = fc.record({
   // a gap (the maintainer's decision "An excluded test still runs",
   // 2026-11-23). Drawn last (the generator rule).
   failingLawSpins: fc.boolean(),
+  // Whether file a has a test that prints a reach line, as `oracleProperty`
+  // prints one for each passing unit (`<id> <unit> reach {...}`), which
+  // repeats in every run of its file: the run keeps these lines in its
+  // reach.log, apart from the tests' own output. Drawn last (the generator
+  // rule).
+  reachOutput: fc.boolean(),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -3495,6 +3501,7 @@ function resolveHistory(history) {
     failingLawCalls: history.failingLawCalls ?? `none`,
     failingLawHook: history.failingLawHook ?? `none`,
     failingLawSpins: history.failingLawSpins === true,
+    reachOutput: history.reachOutput === true,
     ordinary: history.ordinary === true,
     // The batch whose run rejects (a test-only fault; 0 is none).
     rejectBatch: history.rejectBatch ?? 0,
@@ -5051,6 +5058,7 @@ function frameworkTestsOf(plan) {
       route: `framework`,
     })
   if (plan.consoleOutput) add(`a`, `writes to the console streams`)
+  if (plan.reachOutput) add(`a`, REACH_TEST)
   if (plan.midrun) add(plan.midrunBy, MIDRUN_EDITORS[plan.midrunTarget].test)
   if (plan.fault === `brokenOwner`) {
     add(`b`, `fixed seed 999 again`)
@@ -5073,7 +5081,8 @@ function baselineOf(plan) {
     const own =
       plan.tests.filter((t) => t.file === file).length +
       (plan.midrun && file === plan.midrunBy ? 1 : 0) +
-      (file === `a` && plan.consoleOutput ? 1 : 0)
+      (file === `a` && plan.consoleOutput ? 1 : 0) +
+      (file === `a` && plan.reachOutput ? 1 : 0)
     const entry = failing.find((f) => f.file === file)
     const loads = entry === undefined || entry.laws !== undefined
     // The failing owner's suite holds two tests and a third of its name, and
@@ -5917,7 +5926,8 @@ function oracleTestFile(plan, file) {
   if (
     !plan.tests.some((t) => t.file === file) &&
     !(plan.midrun && file === plan.midrunBy) &&
-    !(file === `a` && plan.consoleOutput)
+    !(file === `a` && plan.consoleOutput) &&
+    !(file === `a` && plan.reachOutput)
   )
     out.push(`test.skip('no tests', () => {})`)
   // A test that writes to the process's own streams, as a test's debugging
@@ -5928,6 +5938,15 @@ function oracleTestFile(plan, file) {
       `test('writes to the console streams', () => {`,
       `  process.stdout.write('raw stdout from a test\\n')`,
       `  process.stderr.write('raw stderr from a test\\n')`,
+      `})`,
+    )
+  // A test that prints a reach line as `oracleProperty` does, in one write
+  // to stdout: it goes to the run's reach.log, and never to its
+  // test-output.log. It calls nothing of the source under test.
+  if (file === `a` && plan.reachOutput)
+    out.push(
+      `test('${REACH_TEST}', () => {`,
+      `  process.stdout.write(${JSON.stringify(`${REACH_LINE}\n`)})`,
       `})`,
     )
   if (plan.failingLawAt !== `start`) out.push(...failingLawLines(plan, file))
@@ -6093,6 +6112,12 @@ function edited(plan) {
 }
 
 const AUTHORED = `mutants/authored-mutant.json`
+
+// File a's test that prints a reach line (`reachOutput`), and the line, in
+// the form `oracleProperty` prints for a passing unit: its property, its
+// unit, and the counts of its declared states.
+const REACH_TEST = `prints reach counts`
+const REACH_LINE = `fixture fixed seed 0: generated reach {"entered":1,"missed":0}`
 
 /**
  * The test that lands a mid-run edit, by what it edits: its name, and the
@@ -7029,6 +7054,7 @@ export {
   edited,
   altConfigPath,
   AUTHORED,
+  REACH_LINE,
   initialState,
   fixtureFiles,
   fixturePathOf,

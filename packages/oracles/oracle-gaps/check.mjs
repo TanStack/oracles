@@ -1595,9 +1595,12 @@ export default async (env) => {
     // An earlier run's internal error; a completed check writes the other
     // files of an ending over the earlier ones (ending.mjs).
     rmSync(join(options.out, `error.log`), { force: true })
-    // The tests' own output to the process's streams (capture-setup.mjs).
+    // The tests' own output to the process's streams, and the reach lines
+    // among it (capture-setup.mjs).
     const testOutput = join(options.out, `test-output.log`)
+    const reachOutput = join(options.out, `reach.log`)
     rmSync(testOutput, { force: true })
+    rmSync(reachOutput, { force: true })
     profileFile = process.env.ORACLE_GAPS_PROFILE
       ? join(options.out, `profile.jsonl`)
       : undefined
@@ -2748,13 +2751,12 @@ export default async (env) => {
         config: options.config,
       }),
     )
-    if (existsSync(testOutput) && statSync(testOutput).size > 0)
-      log(
-        streamLine(
-          `note`,
-          `test output in ${escapeControls(posix(testOutput))}`,
-        ),
-      )
+    for (const [file, what] of [
+      [testOutput, `test output`],
+      [reachOutput, `reach counts`],
+    ])
+      if (existsSync(file) && statSync(file).size > 0)
+        log(streamLine(`note`, `${what} in ${escapeControls(posix(file))}`))
     return renderStdout({
       results,
       run: runIdentity,

@@ -329,6 +329,11 @@ export const shards = {
     `calibration: a refusal through the daemon drops the cold run's notes`,
     // Bound to its history (re-review N2), not yet measured.
     `calibration: a run names a test-output log it never captured`,
+    // The reach.log's calibrations, bound to two authored mutants: about
+    // 2 s each here.
+    `calibration: a reach line lands in the test-output log`,
+    `calibration: a run keeps its reach lines and names no reach.log`,
+    `calibration: a run drops the reach lines its tests printed`,
     `calibration: a completed run ends without its done line`,
     `determinism: constructed history: a second daemon check of the budget witness`,
     // The witness module's edit sequence (option M): 97 s here, measured
