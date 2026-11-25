@@ -350,10 +350,53 @@ in the model.
 - **ORC-004 controls.** For a claim about generated coverage, account for:
   - reconstruction: every known valid example can be generated, including
     each operation the library's main callers perform between calls
-    (`oracles-explore` step 4, "What its callers do between calls")
+    (`oracles-explore` step 4, "What its callers do between calls"), and
+    each shape that the package's real inputs have (next bullet)
   - ablation: what each axis or rule contributes
   - range: the bounded domains and marginal cases
   - exclusion: a nearby invalid history that the grammar rejects
+- **Count the shapes of real inputs.** A grammar drafted by hand can miss
+  shapes that the package's own inputs have. A transform whose law says
+  "every module", and whose grammar never writes JSX or a nested block,
+  passes the oracle and the gap check. When the package has real inputs
+  (a corpus, benchmark inputs, the inputs of its ordinary tests, or callers'
+  inputs), count their shapes in the reach line:
+  1. Write a function from an input to its shapes, in the domain's own
+     words: the node types of a parsed module, the keys of a config, the
+     kinds of a log's entries. It names shapes and judges nothing, so it
+     may use the parser that production uses.
+  2. When the file loads, label every real input, and declare each label as
+     a `measured` state.
+  3. In `reached`, label the history's input and keep the labels that a
+     real input has. `reached` replaces the driver's `reach` values, so keep
+     those too.
+
+  ```ts
+  const real = new Set(corpus.flatMap((input) => [...shapesOf(input)]))
+  const shape = (name: string) => `shape ${name}`
+
+  oracleProperty({
+    // ...
+    histories: {
+      arbitrary,
+      runs: 100,
+      fixedSeeds: [1],
+      measured: [...driverStates, ...[...real].sort().map(shape)],
+    },
+    reached: (plan, trace) => [
+      ...trace
+        .filter(({ checkpoint }) => checkpoint === `reach`)
+        .map(({ value }) => String(value)),
+      ...[...shapesOf(render(plan))].filter((s) => real.has(s)).map(shape),
+    ],
+  })
+  ```
+
+  A 0 in a `generated` unit's reach line is a shape of a real input that no
+  generated history had. Widen the grammar to write it, or state it in
+  `limits` with its reason. A shape that a law depends on goes in `states`
+  instead: the property then fails to load until a constructed history
+  enters it, and the arbitrary must be able to generate that history.
 
 **Choose the run budget.** Random runs explore around the critical states.
 They do not reach them.
