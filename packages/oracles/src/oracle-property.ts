@@ -938,7 +938,7 @@ function oldVitestRefusal(): string | undefined {
     !lowest.every((bound) => bound && isBefore(installed, bound))
   )
     return undefined
-  return `@tanstack/oracles needs a Vitest in its peer range, ${range}, and this test file imports Vitest ${version} (${dir}). Upgrade Vitest in the package to that range, as step 2 of the oracles-setup skill says, and run the package's existing tests before and after the upgrade.`
+  return `@tanstack/oracles needs a Vitest in its peer range, ${range}, and it runs with Vitest ${version} (${dir}). Upgrade Vitest in the package to that range, as step 2 of the oracles-setup skill says, and run the package's existing tests before and after the upgrade.`
 }
 
 export function oracleProperty<const THistory, TExpected, TPlan = THistory>(
