@@ -429,7 +429,10 @@ Techniques: [guide § Histories](../../docs/guide.md#histories).
   Give each such clause a comparison of its own, against what that clause
   alone predicts, with its own `difference`. Then give it a calibration
   that breaks that clause and names that `difference`, so that only the
-  clause's own comparison can reject it.
+  clause's own comparison can reject it. The wrong answer may break other
+  clauses too. A check chained with `??` reports the first comparison that
+  fails, so put the clause's comparison before the comparison with the
+  model.
   For example, a law says that pruning "removes exactly what the transform
   made unreferenced, keeps everything that was already unused, and with no
   transform changes nothing". For
