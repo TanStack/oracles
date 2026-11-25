@@ -43,6 +43,16 @@
  *   keys each selected mutant as the full run does: keys are numbered over
  *   the whole mutant list before any selection, so a partial run and a full
  *   run agree on every key they share.
+ * - **Selection by name** (proposed with `--only` keys, awaiting the
+ *   maintainer's approval). Each `--only` entry, through the CLI's own
+ *   parser, is a mutant's id or its key as results.json stores them, and
+ *   names each mutant whose id or key it is; a key's statement may hold a
+ *   comma, which does not split it. A selection whose every entry names one
+ *   mutant selects exactly those mutants. An entry that names no mutant (a
+ *   stale or mistyped id or key) refuses, and the cause names each such
+ *   entry and no other. An entry that names more than one mutant (an id that
+ *   two sources share, because an id drops `src/`) refuses, and the cause
+ *   names it and the key of each mutant it names.
  * - **Help.** `index.mjs --help` prints the usage text (args.mjs) for any
  *   package directory, with no `--package`, and exits 0. The usage text is
  *   plain, with no `oracle-gaps:` prefix and no done line: `--help` is an
@@ -158,7 +168,7 @@ const ts = createRequire(join(here, `../package.json`))(
 // refusal's message, or each mutant's site, probe mark, ownership, and key,
 // and the instrumented text of the Svelte module, if there is one. For a
 // stability history it rewrites the source and records the same again.
-function analyzeFixture(dir, files, plan) {
+function analyzeFixture(dir, files, plan, { picks = true } = {}) {
   writeFixture(dir, files)
   const tests = readdirSync(join(dir, `tests`))
     .filter((name) => name.endsWith(`.test.ts`) && !isRunnerCopy(name))
@@ -195,6 +205,7 @@ function analyzeFixture(dir, files, plan) {
         only: keyed(keyAndSelect(mutants, { only, sources })),
         sample: keyed(keyAndSelect(mutants, { sample: 1, sources })),
       },
+      picks: picks ? picksOf(dir, plan, mutants, sources, tests) : undefined,
       mutants: full,
       runes: plan.runesSource
         ? instrumented.get(realpathSync(join(dir, RUNES)))
@@ -211,6 +222,90 @@ function analyzeFixture(dir, files, plan) {
   } catch (error) {
     return { help, refusal: String(error?.message ?? error) }
   }
+}
+
+// ## Selection by name (`--only`)
+//
+// Each `--only` entry is a mutant's id or its key, as results.json stores
+// them, joined by commas, through the CLI's own parser (`parseArgs`), and
+// `keyAndSelect` selects from the whole mutant list. Each pick records its
+// entries, the id and key of every mutant it chose from, and the keys it
+// selected or the refusal's cause. The picks: every other mutant, named by
+// its id and by its key in turn; a live id and key beside a stale id (one
+// past the main source's last mutant) and a stale key (a mutant's under a
+// renamed function, the edit that gives a mutant a new key, from a key that
+// holds a comma where one does); and,
+// over the sources and a copy of the main source at the package root, whose
+// mutants have the main source's ids (an id drops `src/`), one such id beside
+// the key of the copy's mutant, and the two mutants' keys.
+function picksOf(dir, plan, mutants, sources, tests) {
+  const pick = (entries, list, from) => {
+    const names = list.map((m) => [m.id, m.key])
+    try {
+      const { only } = parseArgs(
+        [
+          `--package`,
+          dir,
+          `--source`,
+          sourceArgument(plan, `${dir}.link`),
+          `--only`,
+          entries.join(`,`),
+        ],
+        dir,
+      )
+      const selected = keyAndSelect(list, { only, sources: from })
+      return { entries, names, selected: selected.map((m) => m.key) }
+    } catch (error) {
+      return { entries, names, refusal: String(error?.message ?? error) }
+    }
+  }
+  const first = mutants.find((m) => m.source === SOURCE)
+  if (!first) return []
+  // A stale key whose statement holds a comma, where one does: the CLI must
+  // not split it.
+  const staled = mutants.find((m) => m.key.includes(`,`)) ?? first
+  const prefix = SOURCE.replace(/^src\//, ``)
+  const last = Math.max(
+    ...mutants
+      .filter((m) => m.source === SOURCE)
+      .map((m) => Number(m.id.slice(prefix.length + 2))),
+  )
+  const picks = [
+    pick(
+      mutants.flatMap((m, i) =>
+        i % 2 === 1 ? [] : [i % 4 === 0 ? m.id : m.key],
+      ),
+      mutants,
+      sources,
+    ),
+    pick(
+      [
+        first.id,
+        first.key,
+        `${prefix}:M${last + 1}`,
+        staled.key.replace(`#`, `#renamed_`),
+      ],
+      mutants,
+      sources,
+    ),
+  ]
+  // The copy at the package root: its own analysis, so the first analysis
+  // and the stability edit never see it.
+  const copy = prefix
+  writeFileSync(join(dir, copy), readFileSync(join(dir, SOURCE), `utf8`))
+  try {
+    const both = analyze(ts, dir, [...sources, copy], tests).mutants
+    keyAndSelect(both, { sources: [...sources, copy] })
+    const twin = both.find((m) => m.source === copy && m.id === first.id)
+    if (twin)
+      picks.push(
+        pick([first.id, twin.key], both, [...sources, copy]),
+        pick([first.key, twin.key], both, [...sources, copy]),
+      )
+  } finally {
+    rmSync(join(dir, copy), { force: true })
+  }
+  return picks
 }
 
 // The default output of three runs, two of this package and one of another
@@ -991,11 +1086,24 @@ async function driver(plan, observe) {
       if (plan.dotGenSource) states.add(`a source under a ..-named directory`)
       if (plan.sourceSpelling === `cased`)
         states.add(`a source spelled in another letter case`)
+      const [byName, stale, shared, twins] = before.picks ?? []
+      if (byName?.selected && byName.entries.some((e) => e.includes(`#`)))
+        states.add(`a selection by id and key`)
+      if (byName?.selected && byName.entries.some((e) => /#.*,/.test(e)))
+        states.add(`a key that holds a comma selected`)
+      if (stale?.refusal) states.add(`a stale id and key refused`)
+      if (stale?.refusal && stale.entries.at(-1).includes(`,`))
+        states.add(`a stale key that holds a comma refused`)
+      if (shared?.refusal) states.add(`an id that two sources share refused`)
+      if (twins?.selected?.length === 2)
+        states.add(`two mutants that share an id selected by their keys`)
     }
     if (plan.stability !== `none` && !before.refusal) {
       observe(
         `stability`,
-        analyzeFixture(dir, { ...files, [SOURCE]: edited(plan) }, plan),
+        analyzeFixture(dir, { ...files, [SOURCE]: edited(plan) }, plan, {
+          picks: false,
+        }),
       )
       states.add(`stability rerun`)
     }
@@ -1228,6 +1336,10 @@ function check(plan, observations, expected) {
           `selection keys`,
         )
     }
+  for (const pick of got.picks ?? []) {
+    const breach = pickBreach(pick)
+    if (breach) return breach
+  }
   const moved = observations.find((o) => o.checkpoint === `stability`)?.value
   if (moved) {
     if (moved.refusal)
@@ -1252,6 +1364,68 @@ function check(plan, observations, expected) {
       )
   }
   return pass
+}
+
+// Selection by name: an entry names each mutant whose id or key it is. A
+// selection whose every entry names one mutant selects exactly those
+// mutants. One with an entry that names no mutant (a stale or mistyped id or
+// key) refuses, and its cause names each such entry and no other; one whose
+// entries each name a mutant but one names more than one (an id that two
+// sources share) refuses, and its cause names that entry and the key of each
+// mutant it names, so the author can pass the key they mean.
+function pickBreach(pick) {
+  const names = new Map()
+  for (const [id, key] of pick.names)
+    for (const name of [id, key])
+      names.set(name, new Set([...(names.get(name) ?? []), key]))
+  const unknown = pick.entries.filter((entry) => !names.has(entry))
+  const ambiguous = pick.entries.filter((entry) => names.get(entry)?.size > 1)
+  const what = `--only ${pick.entries.join(`,`)}`
+  if (unknown.length === 0 && ambiguous.length === 0) {
+    const owed = [...new Set(pick.entries.flatMap((e) => [...names.get(e)]))]
+    if (
+      pick.refusal !== undefined ||
+      JSON.stringify([...pick.selected].sort()) !== JSON.stringify(owed.sort())
+    )
+      return violation(
+        `static`,
+        `${what} ${pick.refusal ? `refused: ${pick.refusal}` : `selected ${JSON.stringify(pick.selected)}`}, owed ${JSON.stringify(owed)}`,
+        `selection by name`,
+        { actual: pick.selected ?? pick.refusal, expected: owed },
+      )
+    return undefined
+  }
+  if (pick.refusal === undefined)
+    return violation(
+      `static`,
+      `${what} selected ${JSON.stringify(pick.selected)}, owed a refusal: ${unknown.length > 0 ? `${unknown.join(`, `)} names no mutant` : `${ambiguous.join(`, `)} names more than one mutant`}`,
+      `selection by name`,
+    )
+  // A name is named as a whole: `M1` is not named by `M12`, nor a key by a
+  // longer one.
+  const named = (name) =>
+    new RegExp(
+      `(?:^|[\\s,(])${name.replace(/[.*+?^${}()|[\]\\]/g, `\\$&`)}(?=$|[\\s,)])`,
+    ).test(pick.refusal)
+  const [cause, owedNames] =
+    unknown.length > 0
+      ? [`names no mutant`, unknown]
+      : [
+          `more than one mutant`,
+          [...ambiguous, ...ambiguous.flatMap((e) => [...names.get(e)])],
+        ]
+  const missing = owedNames.find((name) => !named(name))
+  const extra =
+    unknown.length > 0
+      ? pick.entries.find((e) => !unknown.includes(e) && named(e))
+      : undefined
+  if (!pick.refusal.includes(cause) || missing !== undefined || extra)
+    return violation(
+      `static`,
+      `${what} refused with ${JSON.stringify(pick.refusal)}, owed a cause that says it ${cause} and names ${owedNames.join(`, `)}${unknown.length > 0 ? ` and no other entry` : ``}`,
+      `selection by name`,
+    )
+  return undefined
 }
 
 // ## Calibrations
@@ -1364,6 +1538,63 @@ const calibrations = [
       )
     }),
   },
+  // Selection by name, as a CLI that matches `--only` against ids alone
+  // would pick (the base before keys were accepted), or as one that drops
+  // the refusal of a name.
+  {
+    name: `a selection by key selects only the ids`,
+    law: `selection by name`,
+    corrupt: corrupt(`static`, (v) => {
+      const pick = v.picks?.[0]
+      if (!pick?.selected) return false
+      const ids = new Set(pick.entries)
+      pick.selected = pick.names
+        .filter(([id]) => ids.has(id))
+        .map(([, key]) => key)
+    }),
+  },
+  {
+    name: `a stale key is dropped and the rest run`,
+    law: `selection by name`,
+    corrupt: corrupt(`static`, (v) => {
+      const pick = v.picks?.[1]
+      if (!pick?.refusal) return false
+      pick.refusal = undefined
+      pick.selected = [pick.names[0][1]]
+    }),
+  },
+  {
+    name: `a stale-key refusal names the live key too`,
+    law: `selection by name`,
+    corrupt: corrupt(`static`, (v) => {
+      const pick = v.picks?.[1]
+      if (!pick?.refusal) return false
+      pick.refusal = `--only names no mutant of this run: ${pick.entries.join(`, `)}`
+    }),
+  },
+  {
+    name: `an id that two sources share selects both`,
+    law: `selection by name`,
+    corrupt: corrupt(`static`, (v) => {
+      const pick = v.picks?.[2]
+      if (!pick?.refusal) return false
+      pick.refusal = undefined
+      pick.selected = pick.names
+        .filter(
+          ([id, key]) => id === pick.entries[0] || key === pick.entries[1],
+        )
+        .map(([, key]) => key)
+    }),
+  },
+  {
+    name: `a shared-id refusal names only one of its mutants`,
+    law: `selection by name`,
+    corrupt: corrupt(`static`, (v) => {
+      const pick = v.picks?.[2]
+      if (!pick?.refusal) return false
+      pick.refusal = `--only names more than one mutant of this run: ${pick.entries[0]} (${pick.entries[1]})`
+    }),
+  },
   {
     name: `an edit moves a key`,
     law: `key stability`,
@@ -1421,6 +1652,15 @@ const withDeclaration = (constructed) =>
         owners: [`a`, ...generated.owners.slice(1)],
       }),
   }))
+// Selection by name (picksOf): each pick's state.
+const pickStates = [
+  `a selection by id and key`,
+  `a key that holds a comma selected`,
+  `a stale id and key refused`,
+  `a stale key that holds a comma refused`,
+  `an id that two sources share refused`,
+  `two mutants that share an id selected by their keys`,
+]
 const required = [
   ...dataReach,
   ...Object.values(exportStates),
@@ -1458,6 +1698,7 @@ const required = [
   `production beside a probe`,
   `production else judged`,
   `stability rerun`,
+  ...pickStates,
   ...faults.map((fault) => `refused ${fault}`),
   `owns read from oracleProperty`,
   `owns read from a wrapper call`,
@@ -1474,7 +1715,7 @@ const required = [
 oracleProperty({
   id: `oracle-gaps.report-static`,
   law: {
-    statement: `The gap report's static half keeps every Svelte rune where Svelte allows it, gives each run's default output a directory of its own under its package's state, so runs of one package and of two packages never collide, enumerates the promised operator mutants, marks exactly the probe-only code, refuses broken owns declarations, reads no owns from an assertion's arguments (an expect chain, Vitest's assert or chai, or expectTypeOf), gives each function the owners whose call trees contain it, anchors each mutant's key, keeps keys, probe marks, and ownership stable under unrelated edits, and keeps each derived class's \`super(...)\` call unconditional. In a derived constructor, no mutant site lies before the first statement that calls super or inside that statement (an arrow inherits super, so an arrow's call counts), and statements after it keep their sites. So no mutant, when active, prevents or delays the super call. With no mutant active the instrumented class behaves as its source does, and under every mutant the constructor completes with its base class's tag unless an early return ends it first. Bad arguments (a missing --package or --source, a --package that does not exist, a source outside the package, a bad --env-prefix, --seed, count, or limit, an unknown --pool, a --mutants directory that does not exist, an option with no value, an unknown option, one long past a pipe's buffer included, a --source that is missing or is a directory, a --config that is missing or is a directory, and a --mutants file that is not JSON, lacks a field, or repeats an id) refuse the real CLI, cold or with --daemon, with exit 2 and a refused: block that names the cause, then one fix: directive that offers no way around the fix, and no stack trace, and a last line oracle-gaps: done refused, which names the refusal's summary.md with --out; with --out, the refusal replaces an earlier run's results.json there and removes its error.log.`,
+    statement: `The gap report's static half keeps every Svelte rune where Svelte allows it, gives each run's default output a directory of its own under its package's state, so runs of one package and of two packages never collide, enumerates the promised operator mutants, marks exactly the probe-only code, refuses broken owns declarations, reads no owns from an assertion's arguments (an expect chain, Vitest's assert or chai, or expectTypeOf), gives each function the owners whose call trees contain it, anchors each mutant's key, selects with --only exactly the mutants whose id or key each entry is and refuses an entry that names no mutant or more than one, naming it, keeps keys, probe marks, and ownership stable under unrelated edits, and keeps each derived class's \`super(...)\` call unconditional. In a derived constructor, no mutant site lies before the first statement that calls super or inside that statement (an arrow inherits super, so an arrow's call counts), and statements after it keep their sites. So no mutant, when active, prevents or delays the super call. With no mutant active the instrumented class behaves as its source does, and under every mutant the constructor completes with its base class's tag unless an early return ends it first. Bad arguments (a missing --package or --source, a --package that does not exist, a source outside the package, a bad --env-prefix, --seed, count, or limit, an unknown --pool, a --mutants directory that does not exist, an option with no value, an unknown option, one long past a pipe's buffer included, a --source that is missing or is a directory, a --config that is missing or is a directory, and a --mutants file that is not JSON, lacks a field, or repeats an id) refuse the real CLI, cold or with --daemon, with exit 2 and a refused: block that names the cause, then one fix: directive that offers no way around the fix, and no stack trace, and a last line oracle-gaps: done refused, which names the refusal's summary.md with --out; with --out, the refusal replaces an earlier run's results.json there and removes its error.log.`,
     authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the frozen design's plan for an oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); for rune placement, Svelte 5's placement rule for runes (state_invalid_placement, effect_invalid_placement) and the maintainer's report of svelte-db's useLiveQuery.svelte.ts failing to compile under instrumentation (2026-11-08); for derived classes, the gap report's contract that instrumentation with no mutant active does not change behavior and that a mutant is a legal program variant (the operator contract in schemata.mjs), ECMAScript's rule that a derived constructor calls \`super\` before it reads \`this\` and before it returns, the maintainer's report of TanStack DB's subscription.ts failing with no mutant active (G11, 2026-11-09), and the maintainer's decision of 2026-11-09 on the derived constructor's site region (every shape of super, including an early return before it, is covered by the one rule); for the report-shaped ending, the maintainer's decision of 2026-11-10 ("we should never just crash -- the cli should also return something sensible") and the usage text in args.mjs, the CLI's documented interface; for the done line, the maintainer's request for a greppable stream (2026-11-12, relayed by the coordinator).`,
     limits: `The grammar and model of oracle-gaps.report, with its limits. Outcomes that need test runs, and the failing-owner refusal, belong to oracle-gaps.report. Same-named functions, accessors, and field arrows are judged for ownership only; runes only as $state, $state.raw, $derived, $derived.by, $effect, and $effect.pre in a .svelte.ts module, judged by a restatement of Svelte's placement rule rather than the compiler. A derived class is judged in this oracle's in-process run and in the end-to-end oracle's static half: the end-to-end oracle instruments its file and judges its sites as unowned, but no test imports or constructs the class, so no test runs it. The in-process run transpiles the file to CommonJS at ES2022; other downlevel targets and Vitest's own transform are not exercised. The mutant switch (switchFor) is a hand copy of the switch's contract in schemata.mjs, not the capture setup's runtime: the capture setup imports Vitest and installs timers and globals when it loads, so it cannot run in-process. The derived grammar has one derived class per history, with parameter properties, a field, statements before and after super, an early return before it, and the four forms of the super call (a statement, an arrow argument, and the right operand of \`&&\` or \`||\`). It has no super call in a method, a nested class, or a \`super.method()\` call, and no default parameter. Module-level data is four \`const\` declarations of the main source (an object literal, an array that holds \`devBuild\` as a value, a boolean, and an object of two methods), and a top-level loop of the \`..gen/\` file whose variable is no unit, each read in place by generated or witness functions or named by an owns entry; data imported from another file, \`let\` data, enums, and default exports are not generated. A destructured declaration (\`const { a } = obj\`) stays \`<module>\`, and a function made by a call (\`const h = memo(() => …)\`) now belongs to the unit \`h\`; neither is generated. Unnamed exports are seven files of a helper and one exported function each (an ES default function, a default arrow bare and in parentheses, CommonJS \`module.exports\` alone and chained through \`exports\`, \`exports.default\`, and \`exports.run\`), each calling its helper, owned through an owns entry that names them or through an importer that imports and calls each but \`exports.default\` (a default import of a CommonJS module resolves to the module, not its \`default\`, so a reference to \`exports.default\` through an import is not judged). TypeScript's \`export = <function>\` is named \`default\` by the same rule but is not generated, nor is \`export default class {}\` or \`module.exports = { ... }\` (whose methods are named by their properties). A mutant of these forms was keyed \`<module>\` before and is keyed \`default\` (or its export's name) now: a one-time change of saved keys. A method that module data holds references nothing, so whether a method's references stay out of the declaration's tree is not judged. The ending law is judged here only for argument refusals, one fault per history; refusals from the analysis and the runner, and the daemon's own path, are the end-to-end oracle's. No legal history reaches an internal error, so its shape (exit 3, the stack in error.log) is not judged; a calibration shows that the check rejects a stack trace on stderr. \`--help\` prints its usage text with no prefix and no done line, which the register's M entry "\`--help\` is exempt" (2026-11-16) adds to P10's exemptions, and this oracle owes exactly that text; \`--stop-daemon\`, read the same way as a command outside the run protocol (C, pending ratification), prints nothing and exits 0, which no oracle judges here (the end-to-end oracle runs it and does not observe its streams).`,
   },

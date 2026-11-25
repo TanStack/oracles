@@ -217,7 +217,9 @@ function optionsOf(args, cwd) {
     // two packages never collide (maintainer decision, 2026-11-10:
     // namespacing), and nothing is left in the repository (2026-11-11).
     out: resolve(cwd, args.out ?? join(stateDirOf(pkg), `out`, runName())),
-    only: args.only ? new Set(args.only.split(`,`)) : undefined,
+    // Its pieces in order: a key's statement may hold a comma, and the
+    // selection joins the pieces back into entries (report.mjs).
+    only: args.only ? args.only.split(`,`) : undefined,
     // A fixed-seed random sample of this many mutants per source file, for
     // surveys across many modules.
     sample: args.sample ? Number(args.sample) : undefined,

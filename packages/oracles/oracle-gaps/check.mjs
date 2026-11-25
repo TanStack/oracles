@@ -49,6 +49,7 @@ import {
   authoredKey,
   gapsOf,
   keyAndSelect,
+  onlySelection,
   ownersOfOnly,
   renderReport,
   renderStdout,
@@ -2128,32 +2129,35 @@ export default async (env) => {
     }
     const ownersOf = (mutant) => owned.at(mutant.source, mutant.position).owners
     // Keys are numbered over every mutant before the selection (report.mjs).
-    let queue = keyAndSelect(mutants, options)
+    // An entry of --only that names no mutant, or more than one, refuses.
+    let queue = keyAndSelect(mutants, options, authored)
+    // Each selected mutant's key, operator and authored, with its entry.
+    const chosen =
+      options.only && onlySelection(options.only, mutants, authored)
+    const keyOfAuthored = (mutant) => authoredKey(mutant.source, mutant.id)
     // With --only, the baseline runs only the owners of the selected mutants
     // (maintainer disposition G5, 2026-11-11), operator and authored; a
     // selection that judges nothing refuses (ownersOfOnly).
-    // The selection's ids that the run judges: the operator mutants that
+    // The selection's keys that the run judges: the operator mutants that
     // `--sample` keeps, and every selected authored mutant.
     const selectedOwners =
-      options.only &&
+      chosen &&
       ownersOfOnly(
-        options.only,
-        [
-          ...mutants.map((mutant) => [mutant.id, () => ownersOf(mutant)]),
+        chosen,
+        new Map([
+          ...mutants.map((mutant) => [mutant.key, () => ownersOf(mutant)]),
           ...authored.map((mutant) => [
-            `authored:${mutant.id}`,
+            keyOfAuthored(mutant),
             () => {
               const path = realpathSync(join(pkg, mutant.source))
               const patched = applyAuthored(readFileSync(path, `utf8`), mutant)
               return patched && owned.at(mutant.source, patched.position).owners
             },
           ]),
-        ],
+        ]),
         [
-          ...queue.map((mutant) => mutant.id),
-          ...authored
-            .map((mutant) => `authored:${mutant.id}`)
-            .filter((id) => options.only.has(id)),
+          ...queue.map((mutant) => mutant.key),
+          ...authored.map(keyOfAuthored).filter((key) => chosen.has(key)),
         ],
       )
     // The first pass runs every test file, ordinary ones too, so the report
@@ -2622,7 +2626,7 @@ export default async (env) => {
     const authoredJobs = []
     for (const mutant of authored) {
       const id = `authored:${mutant.id}`
-      if (options.only && !options.only.has(id)) continue
+      if (chosen && !chosen.has(keyOfAuthored(mutant))) continue
       const path = realpathSync(join(pkg, mutant.source))
       const patched = applyAuthored(readFileSync(path, `utf8`), mutant)
       const result = {

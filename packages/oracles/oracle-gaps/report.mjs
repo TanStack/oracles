@@ -66,14 +66,98 @@ export function assignKeys(mutants) {
   }
 }
 
+// How an entry of `--only` starts: a key (`<source>#`), or an id
+// (`<path>:M<n>`, `authored:<id>`).
+const KEY = /^[^\s#,]+#/
+const ENTRY = /^(?:[^\s#,]+#|authored:|[^\s#,]+:M\d+$)/
+
+/**
+ * The mutants that `--only` names. Each entry is a mutant's id
+ * (`<path without src/>:M<n>`, or `authored:<id>`) or its key, as
+ * results.json stores them. An id counts a source's mutants in order, so an
+ * edit that adds or removes a mutant before it renumbers it; a key names the
+ * function, operator, and statement, which an edit elsewhere leaves alone.
+ * The entries arrive split at every comma (args.mjs) and a key's statement
+ * may hold one, so consecutive pieces join into the longest entry that names
+ * a mutant, and a piece that starts no entry continues a key that names
+ * none. An entry that names no mutant is refused, and so is one that
+ * names more than one (two sources whose paths differ by `src/` share ids).
+ * Returns each named mutant's key with the entry that named it first.
+ */
+export function onlySelection(only, mutants, authored = []) {
+  const names = new Map()
+  const name = (entry, key) =>
+    (names.get(entry) ?? names.set(entry, new Set()).get(entry)).add(key)
+  for (const mutant of mutants) {
+    name(mutant.id, mutant.key)
+    name(mutant.key, mutant.key)
+  }
+  for (const mutant of authored) {
+    const key = authoredKey(mutant.source, mutant.id)
+    name(`authored:${mutant.id}`, key)
+    name(key, key)
+  }
+  let longest = 0
+  for (const entry of names.keys()) longest = Math.max(longest, entry.length)
+  const pieces = [...only]
+  const entries = []
+  for (let i = 0; i < pieces.length;) {
+    let end = i
+    for (let j = i, text = pieces[i]; ; text += `,${pieces[j]}`) {
+      if (names.has(text)) end = j + 1
+      if (++j === pieces.length || text.length >= longest) break
+    }
+    // A piece that starts no name continues a key that names nothing before
+    // it, so a stale key is refused whole. A key starts with its source and
+    // `#`, and a statement's comma is followed by a space.
+    const last = entries.at(-1)
+    if (end > i) entries.push(pieces.slice(i, end).join(`,`))
+    else if (
+      last &&
+      !names.has(last) &&
+      KEY.test(last) &&
+      !ENTRY.test(pieces[i])
+    )
+      entries[entries.length - 1] = `${last},${pieces[i]}`
+    else entries.push(pieces[i])
+    i = Math.max(end, i + 1)
+  }
+  const shown = (list) => list.map((entry) => escapeControls(entry)).join(`, `)
+  const unknown = entries.filter((entry) => !names.has(entry))
+  if (unknown.length > 0)
+    throw new Refusal(
+      `--only names no mutant of this run: ${shown(unknown)}`,
+      `Copy each id or key from a run over the same --source files and --mutants: a gap line, or the report's \`Key:\` or \`rerun: --only <id>\`. A key stays the same when an edit elsewhere renumbers the ids.`,
+    )
+  const ambiguous = entries.filter((entry) => names.get(entry).size > 1)
+  if (ambiguous.length > 0)
+    throw new Refusal(
+      `--only names more than one mutant of this run: ${ambiguous
+        .map(
+          (entry) =>
+            `${escapeControls(entry)} (${shown([...names.get(entry)])})`,
+        )
+        .join(`; `)}`,
+      `Pass the key of each mutant you mean.`,
+    )
+  const chosen = new Map()
+  for (const entry of entries) {
+    const [key] = names.get(entry)
+    if (!chosen.has(key)) chosen.set(key, entry)
+  }
+  return chosen
+}
+
 /**
  * The mutants a run selects, keyed over the whole list first: keys are the
- * same in a partial run (`only`, a set of ids, or `sample`, a fixed-seed
- * count per source) and in a full one.
+ * same in a partial run (`only`, the entries of `--only`, which
+ * `onlySelection` reads beside the `authored` mutants, or `sample`, a
+ * fixed-seed count per source) and in a full one.
  */
-export function keyAndSelect(mutants, { only, sample, sources }) {
+export function keyAndSelect(mutants, { only, sample, sources }, authored) {
   assignKeys(mutants)
-  const queue = mutants.filter((m) => !only || only.has(m.id))
+  const chosen = only && onlySelection(only, mutants, authored)
+  const queue = mutants.filter((m) => !chosen || chosen.has(m.key))
   if (sample === undefined) return queue
   // A fixed-seed shuffle, so a survey samples the same mutants every run.
   let seed = 20251102
@@ -89,34 +173,24 @@ export function keyAndSelect(mutants, { only, sample, sources }) {
 }
 
 /**
- * The owner files of the mutants a run with `--only` judges. `candidates`
- * holds every mutant of the run, an operator mutant by its id and an
- * authored one as `authored:<id>`, each with a function that returns its
- * owner files, or null for an authored mutant whose `find` does not apply (a
- * gap of its own, `does-not-apply`); `kept` lists the selected ids that a
+ * The owner files of the mutants a run with `--only` judges. `chosen` maps
+ * each selected mutant's key to the entry that named it (`onlySelection`);
+ * `owners` maps every mutant's key to a function that returns its owner
+ * files, or null for an authored mutant whose `find` does not apply (a gap
+ * of its own, `does-not-apply`); `kept` lists the selected keys that a
  * `--sample` keeps (all of them without one). A selection that judges
- * nothing would end as a completed run with no gap, so it is refused before
- * any test runs: an id that names no mutant of the run (an id of another
- * source, one past a source's last mutant, or a typo), and a kept selection
- * of mutants that no oracle file owns, as a run that owns nothing is
- * (analysis.mjs).
+ * nothing would end as a completed run with no gap, so a kept selection of
+ * mutants that no oracle file owns is refused before any test runs, as a run
+ * that owns nothing is (analysis.mjs).
  */
-export function ownersOfOnly(only, candidates, kept) {
-  const known = new Map(candidates)
-  const shown = (ids) => ids.map((id) => escapeControls(id)).join(`, `)
-  const unknown = [...only].filter((id) => !known.has(id))
-  if (unknown.length > 0)
+export function ownersOfOnly(chosen, owners, kept) {
+  const files = kept.map((key) => owners.get(key)())
+  if (files.every((owned) => owned?.size === 0))
     throw new Refusal(
-      `--only names no mutant of this run: ${shown(unknown)}`,
-      `Copy each id from a gap line or a report's \`rerun: --only <id>\` of a run over the same --source files and --mutants.`,
-    )
-  const owners = [...kept].map((id) => known.get(id)())
-  if (owners.every((files) => files?.size === 0))
-    throw new Refusal(
-      `--only selects no mutant that an oracle file owns: ${shown([...kept])}${kept.length < only.size ? ` (what --sample kept of it)` : ``}`,
+      `--only selects no mutant that an oracle file owns: ${kept.map((key) => escapeControls(chosen.get(key))).join(`, `)}${kept.length < chosen.size ? ` (what --sample kept of it)` : ``}`,
       `Add an owns entry for the function of each selected mutant to the oracle that judges it.`,
     )
-  return new Set(owners.flatMap((files) => [...(files ?? [])]))
+  return new Set(files.flatMap((owned) => [...(owned ?? [])]))
 }
 
 // The evidence tag a mutant may carry (schemata.mjs), and the sentence it adds.
@@ -371,7 +445,7 @@ export function renderReport({
     `3. Re-plan the oracle around that law: its grammar or domain, model, observations, or comparison. Do not patch the line, except dead code, whose gap says to remove the code.`,
     `4. Run the check again.`,
     ``,
-    `Rerun one mutant with \`--only <id>\`.`,
+    `Rerun one mutant with \`--only <id>\`, or with its key, which an edit elsewhere in the source does not renumber.`,
     ``,
     `## Gaps`,
     ``,

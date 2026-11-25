@@ -439,6 +439,7 @@ export const shards = {
     `calibration: a sampled partial run that kept only unowned mutants completes`,
     `calibration: a sampled partial run refuses after its baseline ran`,
     `calibration: a partial run's refusal names an id that names a mutant`,
+    `calibration: a partial run drops a mutant it names by key`,
     // The witness module's edit sequence (option M): about 97 s here, measured
     // with the daemon fix of fix/daemon-current-inputs.
     `random seed: an edit sequence over the witness module, the first half`,

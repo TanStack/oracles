@@ -643,10 +643,12 @@ across runs; stop it when done with
 `oracle-gaps --stop-daemon --package <dir>` (it also exits after 30 idle
 minutes). To verify a fix for one or a few specific mutants quickly before
 running the full check, pass `--only <id,id>` (from the `<id>` in a `gap`
-line or the report's `rerun: --only <id>`): it runs only those mutants and
-their owners' baseline, and marks the run as partial, so finish with a full
-check without `--only`. An id that names no mutant of the run, or a
-selection that no oracle file owns, refuses the run (exit 2).
+line or the report's `rerun: --only <id>`), or the mutants' keys (the
+report's `Key:`, in shell quotes), which an edit elsewhere in the source does
+not renumber: it runs only those mutants and their owners' baseline, and
+marks the run as partial, so finish with a full check without `--only`. An
+id or key that names no mutant of the run, or more than one, or a selection
+that no oracle file owns, refuses the run (exit 2).
 
 ## 9. Report the evidence
 

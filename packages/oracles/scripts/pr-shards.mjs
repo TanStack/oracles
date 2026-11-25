@@ -674,6 +674,8 @@ export const partitions = {
         ],
         ...[
           'calibration: a key drops its statement',
+          'calibration: a selection by key selects only the ids',
+          'calibration: a stale key is dropped and the rest run',
           'calibration: a refusal prints a stack trace, as a crash does',
           'calibration: the instrumented derived class differs with no mutant active',
           'determinism: constructed history: a derived class calling super after &&',
@@ -770,6 +772,9 @@ export const partitions = {
         ...[
           'calibration: a refusal exits 1, as a crash does',
           'calibration: an edit moves a key',
+          'calibration: a stale-key refusal names the live key too',
+          'calibration: an id that two sources share selects both',
+          'calibration: a shared-id refusal names only one of its mutants',
           'determinism: constructed history: a declaration fault: missingSource',
           'determinism: constructed history: a literal owns in an assertion makes no oracle file',
           'determinism: constructed history: an owns that is not a literal in a chai assertion refuses nothing',
