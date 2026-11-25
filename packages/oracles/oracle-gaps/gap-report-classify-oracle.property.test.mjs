@@ -168,6 +168,20 @@
  *    JSON, past 40 code points its first 37, `...`, `#`, and eight hex digits
  *    of its SHA-1; a bigint with `n`; `-0`; another primitive as JavaScript
  *    prints it; a non-primitive as `(object)` or `(function)`.
+ *    An operator mutant's gap that no blocker holds says how often the
+ *    random budget reached its code: when the tests of its owner files
+ *    that judge (all but the nondeterministic tests and the failing laws,
+ *    in the owner files that loaded) ran fast-check histories with no
+ *    mutant active, its `Reach` line reads `ran in <r> of <n> histories of
+ *    its owner tests`, where n counts those histories (each outermost run
+ *    of a property) and r those in which the mutated code ran; for an `if`
+ *    or a comparison it adds `, and the mutant changes its value in <c> of
+ *    them`, the histories in which the mutant would have changed its
+ *    expression's value. A gap whose owner tests ran no history, a blocked
+ *    gap, and an authored one have no such line (a downstream finding of
+ *    2026-11-25: gaps rose when a grammar widened and each variant's share
+ *    of the random budget shrank, and nothing showed that; proposed for
+ *    approval).
  * 8. The compressed stdout summary (report.mjs `renderStdout`) lists the
  *    totals, one legend line per class present, and every gap once, one line
  *    each, grouped by function; it names the full report's path. The
@@ -519,6 +533,22 @@ const testRecord = fc.record({
     },
   ),
   ms: fc.nat({ max: 40 }),
+  // The fast-check histories the test ran with no mutant active (its
+  // properties' outermost runs; none for a test that runs no property), and
+  // for each mutant it reached, in how many of them its site ran: in all,
+  // in one, or in none (the test ran it outside its runs). Of those, the
+  // mutant would have changed a value in all or in one, where the test
+  // infected it; an `if` that took one outcome only infects every run that
+  // reached it. Drawn last, so the earlier fields keep their draws.
+  histories: fc.constantFrom(0, 0, 1, 3, 100),
+  inHistories: fc.array(fc.constantFrom(`all`, `one`, `none`), {
+    minLength: MUTANTS,
+    maxLength: MUTANTS,
+  }),
+  changedIn: fc.array(fc.constantFrom(`all`, `one`), {
+    minLength: MUTANTS,
+    maxLength: MUTANTS,
+  }),
 })
 const records = fc.record({
   files: fc.array(
@@ -867,11 +897,15 @@ function modelOutcome(h, mi) {
   )
   if (owners.size === 0) return { outcome: `unowned` }
   const loaded = new Set([...owners].filter((fi) => loads(h, fi)))
-  return modelBlocked(
+  const outcome = modelBlocked(
     h,
     judgedOutcome(h, mi, loaded),
     operatorBlockers(h, mi, owners),
   )
+  // A blocked mutant waits for its blockers: it has no reach line.
+  return outcome.outcome === `blocked`
+    ? outcome
+    : { ...outcome, reach: reachLine(h, mi, loaded) }
 }
 
 // A mutant's outcome by the owner files that passed with no mutant active.
@@ -1164,6 +1198,46 @@ function operandsSeen(h, mi, owners) {
       pairs.push([a, b])
   }
   return pairs.slice(0, 3)
+}
+// The histories of test t in which mutant mi's site ran, and of those, the
+// ones in which the mutant would have changed a value (law 7's reach line).
+function ranIn(h, mi, t) {
+  if (!t.reaches[mi]) return 0
+  const share = t.inHistories[mi]
+  return share === `all`
+    ? t.histories
+    : share === `one`
+      ? Math.min(1, t.histories)
+      : 0
+}
+function changedIn(h, mi, t) {
+  if (!infects(h, mi, t)) return 0
+  const every =
+    t.changedIn[mi] === `all` || (isIf(h.mutants[mi]) && t.seen[mi] !== `both`)
+  return every ? ranIn(h, mi, t) : Math.min(1, ranIn(h, mi, t))
+}
+// The owner tests whose histories a reach line counts: every test of the
+// owner files that loaded, except those that judge nothing (a
+// nondeterministic test and a failing law).
+const historyTests = (h, owners) =>
+  [...owners].flatMap((fi) =>
+    h.files[fi].tests.flatMap((t, ti) =>
+      judgesNothing(h, { t, fi, ti }) ? [] : [{ t, fi, ti }],
+    ),
+  )
+// A gap's reach line (law 7), when its owner tests ran a history: in how
+// many of their histories the mutated code ran, and, for an `if` or a
+// comparison, in how many of those the mutant changes its value.
+function reachLine(h, mi, owners) {
+  const tests = historyTests(h, owners)
+  const sum = (count) => tests.reduce((n, { t }) => n + count(t), 0)
+  const histories = sum((t) => t.histories)
+  if (histories === 0) return undefined
+  const m = h.mutants[mi]
+  const ran = `ran in ${sum((t) => ranIn(h, mi, t))} of ${histories} ${histories === 1 ? `history` : `histories`} of its owner tests`
+  return isIf(m) || isCompare(m)
+    ? `${ran}, and the mutant changes its value in ${sum((t) => changedIn(h, mi, t))} of them`
+    : ran
 }
 
 // The ordinary tests' outcome: their assertion failures count on their
@@ -1544,6 +1618,26 @@ function ownersLinesOf(summary) {
   return owners
 }
 
+// Each gap's `Reach` line, by its key: its text after the label. A gap with
+// two reads as two, which no owed line is.
+function reachLinesOf(summary) {
+  const lines = summary.split(`\n`)
+  const reach = {}
+  lines.forEach((line, i) => {
+    const key = line.startsWith(`  - Key: `)
+      ? line.slice(`  - Key: `.length).match(/^(`+) (.*) \1; rerun/)?.[2]
+      : undefined
+    if (key === undefined) return
+    for (let j = i + 1; lines[j]?.startsWith(`  - `); j += 1)
+      if (lines[j].startsWith(`  - Reach: `))
+        reach[key] =
+          reach[key] === undefined
+            ? lines[j].slice(`  - Reach: `.length)
+            : `(two reach lines)`
+  })
+  return reach
+}
+
 // ## Production driver
 //
 // A runner with no blocking step (`blockedOr`) judges a mutant by its
@@ -1669,6 +1763,21 @@ function baselineUnitsOf(h, pass) {
         ...(t.clocked === `none` ? {} : { clocked: true }),
         ...(t.clocked === `io` ? { io: true } : {}),
         ms: t.ms + pass,
+        // The fast-check histories the test ran, and for each site the
+        // histories it ran in and those its mutant would have changed a
+        // value in (capture-setup.mjs `histories`, `siteHistories` and
+        // `siteInfected`), alike in both passes.
+        histories: t.histories,
+        siteHistories: t.reaches.flatMap((r, mi) =>
+          mi < h.mutants.length && ranIn(h, mi, t) > 0
+            ? [[mi, ranIn(h, mi, t)]]
+            : [],
+        ),
+        siteInfected: t.reaches.flatMap((r, mi) =>
+          mi < h.mutants.length && changedIn(h, mi, t) > 0
+            ? [[mi, changedIn(h, mi, t)]]
+            : [],
+        ),
       })
     })
     rows.set(`${fileName(h, fi)} > (background)`, {
@@ -2176,6 +2285,44 @@ async function driver(h, observe) {
         `nondeterministic test`,
         reachingPlaces(h, mi, owners).filter((p) => p.t.flaky),
       )
+    // The reach line's states (law 7): a gap whose code ran in some of its
+    // owner tests' histories, in none of them, with the histories its
+    // mutant changes a value in, past a test that judges nothing, and over
+    // two owner files.
+    const ownerIndices = new Set(
+      [...owners].map(fileIndex).filter((fi) => loads(h, fi)),
+    )
+    const runners = historyTests(h, ownerIndices).filter(
+      ({ t }) => t.histories > 0,
+    )
+    const histories = runners.reduce((n, { t }) => n + t.histories, 0)
+    const ran = runners.reduce((n, { t }) => n + ranIn(h, mi, t), 0)
+    const changes = runners.reduce((n, { t }) => n + changedIn(h, mi, t), 0)
+    if (
+      histories > 0 &&
+      result.outcome !== `blocked` &&
+      report.gapsOf([result]).length > 0
+    ) {
+      if (ran > 0 && ran < histories)
+        states.add(`a reach line where the code ran in some histories`)
+      if (ran === 0) states.add(`a reach line where the code ran in no history`)
+      if (
+        (isIf(h.mutants[mi]) || isCompare(h.mutants[mi])) &&
+        changes > 0 &&
+        changes < ran
+      )
+        states.add(`a reach line with the histories its mutant changes`)
+      if (
+        [...ownerIndices].some((fi) =>
+          h.files[fi].tests.some(
+            (t, ti) => t.histories > 0 && judgesNothing(h, { t, fi, ti }),
+          ),
+        )
+      )
+        states.add(`a reach line past a test that judges nothing`)
+      if (new Set(runners.map(({ fi }) => fi)).size > 1)
+        states.add(`a reach line over two owner files`)
+    }
     if (needsOrdinary(result, targets))
       result.testOutcome = judgeOrdinary(
         targets.testTargets.map((file) => unitOf(h, fileIndex(file), mi)),
@@ -2256,6 +2403,7 @@ async function driver(h, observe) {
     summary: readSummary(summary),
     messages: messagesOf(summary),
     owners: ownersLinesOf(summary),
+    reachLines: reachLinesOf(summary),
     stdout: report.renderStdout?.({
       results,
       run: { id: `r`, inputs: `records` },
@@ -2465,6 +2613,18 @@ function check(h, observations, expected) {
         `gap ${owed.key} lists the owners ${JSON.stringify(got.owners?.[owed.key])}, owed ${JSON.stringify(owed.ownerFiles)}`,
         `report order`,
         { actual: got.owners?.[owed.key], expected: owed.ownerFiles },
+      )
+    // An operator mutant's gap that no blocker holds says in how many of
+    // its owner tests' histories the mutated code ran, and for an `if` or
+    // a comparison in how many of those the mutant changes its value; a gap
+    // whose owner tests ran no history, a blocked one, and an authored one
+    // have no reach line (law 7).
+    if (got.reachLines?.[owed.key] !== owed.reach)
+      return violation(
+        `classified`,
+        `gap ${owed.key} (${kind}) has the reach line ${JSON.stringify(got.reachLines?.[owed.key])}, owed ${JSON.stringify(owed.reach)}`,
+        `history reach`,
+        { actual: got.reachLines?.[owed.key], expected: owed.reach },
       )
     // A not-infected message names the operand pairs the model saw, in
     // order, and no printed text stands for two values the model tells
@@ -3160,6 +3320,27 @@ const corruptStdout = (change) => (trace) => {
 }
 const calibrations = [
   {
+    name: `a reach line miscounts the histories the code ran in`,
+    law: `history reach`,
+    corrupt: corrupt((v) => {
+      const key = Object.keys(v.reachLines ?? {})[0]
+      if (key === undefined) return false
+      v.reachLines[key] = v.reachLines[key].replace(
+        /^ran in (\d+)/,
+        (_, n) => `ran in ${Number(n) + 1}`,
+      )
+    }),
+  },
+  {
+    name: `a gap's reach line is left out`,
+    law: `history reach`,
+    corrupt: corrupt((v) => {
+      const key = Object.keys(v.reachLines ?? {})[0]
+      if (key === undefined) return false
+      delete v.reachLines[key]
+    }),
+  },
+  {
     name: `the stdout ends without its completion line`,
     law: `stdout`,
     corrupt: corruptStdout((stdout) =>
@@ -3382,6 +3563,11 @@ const required = [
   `extra-work named past an unregistered rise`,
   `a rise exactly at the declared bound`,
   `authored agreement-only-kill`,
+  `a reach line where the code ran in some histories`,
+  `a reach line where the code ran in no history`,
+  `a reach line with the histories its mutant changes`,
+  `a reach line past a test that judges nothing`,
+  `a reach line over two owner files`,
 ]
 
 // One constructed history per outcome class: one mutant judged by one
@@ -3415,6 +3601,9 @@ const plainTest = (effect = {}, test = {}) => ({
   bound: undefined,
   clocked: `none`,
   ms: 0,
+  histories: 0,
+  inHistories: four(`all`),
+  changedIn: four(`all`),
   ...test,
 })
 const single = (
@@ -4220,14 +4409,53 @@ const constructed = [
       }
     },
   },
+  // The reach line (law 7). A forced `if` that took both outcomes ran in
+  // every one of a property's 100 histories and would change its condition
+  // in one, beside a test whose 3 histories never ran it.
+  single(
+    `an infected survivor that one history of a hundred changes`,
+    [
+      `not-observed`,
+      `a reach line where the code ran in some histories`,
+      `a reach line with the histories its mutant changes`,
+    ],
+    {
+      mutant: { operator: `if-false` },
+      test: { histories: 100, changedIn: four(`one`) },
+      more: [plainTest({}, { histories: 3, inHistories: four(`none`) })],
+    },
+  ),
+  // A skipped call that its owner test ran outside its property's runs.
+  single(
+    `a survivor that no history ran`,
+    [`not-distinguished`, `a reach line where the code ran in no history`],
+    { test: { histories: 3, inHistories: four(`none`) } },
+  ),
+  // A nondeterministic test's hundred histories judge nothing, so the line
+  // counts the deterministic test's three alone.
+  single(
+    `a reach line beside a nondeterministic property`,
+    [`not-distinguished`, `a reach line past a test that judges nothing`],
+    {
+      test: { histories: 3 },
+      more: [plainTest({}, { flaky: true, histories: 100 })],
+    },
+  ),
+  // Two owner files whose tests each ran three histories: the line counts
+  // all six.
+  twoOwners(
+    `a reach line over two owner files`,
+    [`not-distinguished`, `a reach line over two owner files`],
+    { test: { histories: 3 } },
+  ),
 ]
 
 oracleProperty({
   id: `oracle-gaps.report-classify`,
   law: {
-    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, extra-work, dead-code, outside-annotation, branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only; a test whose property declares a work bound, whose work judges the mutant, and whose work (site evaluations, never time) passes the bound's ratio of its unmutated work reports a verdict under law work bound on its route, and a survivor whose work rose in such a test, with no changed observation, is extra-work, whose directive names that test, both counts, and the bound to declare that rejects it. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed.`,
+    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, extra-work, dead-code, outside-annotation, branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only; a test whose property declares a work bound, whose work judges the mutant, and whose work (site evaluations, never time) passes the bound's ratio of its unmutated work reports a verdict under law work bound on its route, and a survivor whose work rose in such a test, with no changed observation, is extra-work, whose directive names that test, both counts, and the bound to declare that rejects it. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. An operator mutant's gap that no blocker holds, whose owner tests that judge ran fast-check histories, has a Reach line with how many of those histories ran the mutated code and, for an if or a comparison, in how many of them the mutant changes its value. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed.`,
     authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the oracle rubric's outcome kinds (ORC-006); the frozen design's oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); the maintainer's findings F22 and the leftovers of #12 (2026-11-10); for the work law, the maintainer's decision of 2026-11-12 that a speed shortcut reported as not-observed is a gap CLI bug, and the design decided with it: a cost law, never an exit, judged by a deterministic count; for report order, the gap CLI's determinism requirement (oracle-gaps.report's determinism test and law 9, and the runner's "listed alike in every run") and the maintainer's decision of 2026-11-11 that the tests a report names depend on neither --contexts, worker timing, nor how owners are declared; Vitest's runner (@vitest/runner 4.1: -t is a regular expression matched against getTaskFullName, the suites' names and the test's joined by a space); POSIX.1-2017 Shell Command Language 2.2 and 2.6 for the replay's quoting.`,
-    limits: `That real runs produce these records is oracle-gaps.report's, and so is a real replay. The driver encodes operands as capture-setup.mjs \`shown\` does, by a copy of it; long strings are told apart by a 32-bit digest; no symbol operand is generated, and two symbols of one description print alike. Only the runner's single-file path records a test's names, and only it feeds the baseline. Test names hold no backtick and no \` > \`, and names within a file are distinct; the replay's file argument is judged as text, not as Vitest's substring filter over every file. Authored intents hold no word that the exit law forbids, and an author is not shortened. Report order within a file is the baseline's record order: that a file whose tests run concurrently writes its records in one order is not judged, and a failing test is ordered within its file as the reporter lists it, which a run cut off by a hang takes from the records. The "Changed observations in" list is the changed tests' first three, and only its first is compared. A test that only a mutant run records is not generated. A file that does not load keeps its records here, which the runner drops, and the driver leaves it out of every target, as the runner does; a failing law keeps its records and its reach, as the runner keeps them. The refusal text and the summary's left-out list are not judged, only the list of failing files they print. A failing law is generated only as a whole test of a file whose baseline is test: a describe's failing hook, a failing law's leftover state, and how the runner selects the tests of a file that has failing laws are oracle-gaps.report's. Work arrives as counts: that the capture counts site evaluations, and which work it does not count, is oracle-gaps.report's; a test that reaches a site but did no work is generated, which no real run records; an authored mutant's copy counts no work, so the work law does not judge it.`,
+    limits: `That real runs produce these records is oracle-gaps.report's, and so is a real replay. The driver encodes operands as capture-setup.mjs \`shown\` does, by a copy of it; long strings are told apart by a 32-bit digest; no symbol operand is generated, and two symbols of one description print alike. Only the runner's single-file path records a test's names, and only it feeds the baseline. Test names hold no backtick and no \` > \`, and names within a file are distinct; the replay's file argument is judged as text, not as Vitest's substring filter over every file. Authored intents hold no word that the exit law forbids, and an author is not shortened. Report order within a file is the baseline's record order: that a file whose tests run concurrently writes its records in one order is not judged, and a failing test is ordered within its file as the reporter lists it, which a run cut off by a hang takes from the records. The "Changed observations in" list is the changed tests' first three, and only its first is compared. A test that only a mutant run records is not generated. A file that does not load keeps its records here, which the runner drops, and the driver leaves it out of every target, as the runner does; a failing law keeps its records and its reach, as the runner keeps them. The refusal text and the summary's left-out list are not judged, only the list of failing files they print. A failing law is generated only as a whole test of a file whose baseline is test: a describe's failing hook, a failing law's leftover state, and how the runner selects the tests of a file that has failing laws are oracle-gaps.report's. Work arrives as counts: that the capture counts site evaluations, and which work it does not count, is oracle-gaps.report's; a test that reaches a site but did no work is generated, which no real run records; an authored mutant's copy counts no work, so the work law does not judge it. Histories arrive as counts: that the capture counts each outermost run of a property, and that its per-site counts are right, is oracle-gaps.report's; a test's history counts are drawn independently of its other records, within the bounds that its reach and infection set.`,
   },
   histories: {
     arbitrary: records,

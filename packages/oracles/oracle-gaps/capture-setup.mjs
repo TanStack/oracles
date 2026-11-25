@@ -508,7 +508,10 @@ const backgroundInfected = new Set()
 // load: code that runs when a file loads the module reaches every test of
 // that file (maintainer decision, 2026-11-06), so these count as taken there.
 const backgroundOutcomes = new Map()
-const infect = (id) => (inTest ? infected : backgroundInfected).add(id)
+const infect = (id) => {
+  ;(inTest ? infected : backgroundInfected).add(id)
+  historyInfected?.add(id)
+}
 const primitive = (value) =>
   value === null || (typeof value !== `object` && typeof value !== `function`)
 // An operand as its kind and its text, which classify.mjs prints
@@ -531,27 +534,45 @@ const shown = (value) => {
   ]
 }
 
-// Temporary profiling (ORACLE_GAPS_PROFILE): how many fast-check histories
-// each test ran, and in how many of them each site was hit, to measure what
-// replaying only the reaching histories would save.
+// The fast-check histories each test ran with no mutant active, and in how
+// many of them each site ran and each mutant would have changed a value
+// (`infect`): a gap's reach line in the report (classify.mjs `reachOf`)
+// shows how often the random budget reached its code. A history is one
+// outermost run of a property's predicate (each generated or example run,
+// and each shrink); a property run inside another counts in the outer run.
+// Only an unmutated copy counts, so a mutant run pays one property read per
+// run.
 let histories = 0
 let siteHistories = new Map()
+let siteInfected = new Map()
 let historyHits = null
+let historyInfected = null
+const tally = (counts, ids) => {
+  for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1)
+}
 // fast-check also outlives a batch's copies, so its wrapper calls the
 // copy now running.
-globalThis.__oracleGapsHistory = {
-  get: () => historyHits,
-  set: (value) => {
-    historyHits = value
-  },
-  done: () => {
-    if (!inTest || !historyHits) return
-    histories += 1
-    for (const id of historyHits)
-      siteHistories.set(id, (siteHistories.get(id) ?? 0) + 1)
-  },
-}
-if (fc && process.env.ORACLE_GAPS_PROFILE) {
+globalThis.__oracleGapsHistory =
+  active === null
+    ? {
+        // Whether a run starts a history: inside a test, and outside
+        // another history.
+        start: () => {
+          if (!inTest || historyHits) return false
+          historyHits = new Set()
+          historyInfected = new Set()
+          return true
+        },
+        end: () => {
+          histories += 1
+          tally(siteHistories, historyHits)
+          tally(siteInfected, historyInfected)
+          historyHits = null
+          historyInfected = null
+        },
+      }
+    : undefined
+if (fc) {
   const samples = [
     () => fc.property(fc.constant(0), () => true),
     () => fc.asyncProperty(fc.constant(0), async () => true),
@@ -562,21 +583,17 @@ if (fc && process.env.ORACLE_GAPS_PROFILE) {
     if (typeof run !== `function` || run.counted) continue
     const counted = function (...args) {
       const history = globalThis.__oracleGapsHistory
-      const outer = history.get()
-      history.set(new Set())
-      const done = () => {
-        history.done()
-        history.set(outer)
-      }
+      if (!history?.start()) return run.apply(this, args)
       let result
       try {
         result = run.apply(this, args)
       } catch (error) {
-        done()
+        history.end()
         throw error
       }
-      if (typeof result?.then === `function`) return result.finally(done)
-      done()
+      if (typeof result?.then === `function`)
+        return result.finally(() => history.end())
+      history.end()
       return result
     }
     counted.counted = true
@@ -1006,6 +1023,7 @@ beforeEach((context) => {
   testStarted = performance.now()
   histories = 0
   siteHistories = new Map()
+  siteInfected = new Map()
   route = undefined
   workBound = undefined
   clocked = false
@@ -1062,8 +1080,14 @@ function finishTest(context) {
         )
         .join(`\n`)
         .slice(0, 2000),
-      ...(process.env.ORACLE_GAPS_PROFILE
-        ? { histories, siteHistories: [...siteHistories] }
+      // The test's histories, and each site's (`__oracleGapsHistory`),
+      // which only an unmutated copy counts.
+      ...(active === null
+        ? {
+            histories,
+            siteHistories: [...siteHistories],
+            siteInfected: [...siteInfected],
+          }
         : {}),
     })}\n`,
   )

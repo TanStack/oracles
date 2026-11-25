@@ -565,6 +565,13 @@ comes with one instruction. Do what it says, within the rules below.
   to the same result when both branches agree on every generated input. Then
   add a history where they diverge. Otherwise, record the effect. The
   `not-observed` directive gives both steps.
+- **Read a gap's `Reach` line before you add runs.** In `summary.md` it says
+  in how many of its owner tests' fast-check histories the mutated code ran,
+  and for an `if` or a comparison in how many of them the mutant changes its
+  value (`reach` in `results.json`). A low count means the random budget
+  rarely reaches this line: add a constructed history for it. Gaps that
+  appear when you widen a grammar, with no change to production, are often
+  this: each variant now gets a smaller share of the same runs.
 - **Code whose removal no legal history can observe is dead.** The gap check
   alone cannot show this, because its histories are a sample. First rule out
   a missing history, observation, or law. Then remove the code in the same
