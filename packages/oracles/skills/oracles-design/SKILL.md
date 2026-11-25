@@ -667,10 +667,30 @@ items that fit the kind of change (step 7).
   cover.
 
 Put the evidence block in the pull request description. When a change claims
-that an oracle is new, repaired, or fully audited (ORC-012), also keep the
-evidence in a versioned record tied to the reviewed commit.
+that an oracle is new, repaired, or fully audited, ORC-012 also asks for a
+review record: the outcome of each checklist requirement that applies, each
+one that does not with its reason, and the review's findings with their
+dispositions, committed in the repository with the commit it reviewed. A
+pull request description alone does not count. Keep it in
+`reviews/<oracle file name>.md`, unless the repository already keeps its
+review records somewhere else.
 
-When review findings arrive, load `oracles-evaluate-review`.
+## 10. Get an independent review
+
+Get one after a new or changed oracle, after a refactor of owned production
+code, and before a pull request that touches an oracle or owned code, not
+only at the end of a session:
+
+1. Start a few subagents, each told to load `oracles-review` and review the
+   work on its own. Give each the oracle file, the production change, the
+   evidence, and the law's sources, but not your verdict.
+2. Do not act on what they report directly: load `oracles-evaluate-review`,
+   and evaluate their findings with it first.
+3. Show the developer what it confirmed, and what it rejected and why.
+
+With a developer present, offer it in a line each time it is due. With no
+developer present, run it yourself and report the findings. Findings from
+any other review go through `oracles-evaluate-review` too.
 
 ## Instruments
 
