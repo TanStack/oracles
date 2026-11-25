@@ -503,6 +503,12 @@ The evidence depends on the kind of work:
 | **Refactor without changing behavior**                  | The oracle files are unchanged, or only strengthened, and pass on old and new production with the same seed. Every mutant key present in both gap runs that was killed on the old code is still killed. Every new key in a changed function is killed, or its survivor directive is acted on. Keys that disappear need nothing. No RED is expected. |
 | **Add or strengthen an oracle over correct production** | Production passes. A calibration (a wrong answer or a corrupted trace) and a mutant fail the intended law. No RED is expected.                                                                                                                                                                                                                      |
 
+For a refactor, keep the old code's gap run, and pass its `results.json`
+to the new run with `--compare <results.json>`: the report lists the keys
+killed on the old code that are no longer killed, and the new keys that
+survive. Act on every one. An edit to a statement, or a renamed function,
+gives its mutants new keys, so they are judged as new keys.
+
 A refactor that needs a changed law, check, or history is not a pure
 refactor: treat the law change first (step 1).
 

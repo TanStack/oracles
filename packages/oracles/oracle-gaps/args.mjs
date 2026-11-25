@@ -31,13 +31,15 @@ const valued = new Set([
   `out`,
   `only`,
   `diff-base`,
+  `compare`,
   `pool`,
   `config`,
 ])
 // The usage text `--help` prints (index.mjs).
 export const usage = `Usage: oracle-gaps --package <dir> --source <src/x.ts,...>
   [--env-prefix <name>] [--daemon] [--ordinary] [--seed <n>] [--mutants <dir>]
-  [--out <dir>] [--only <id,id>] [--diff-base <rev>] [--test-timeout <ms>]
+  [--out <dir>] [--only <id,id>] [--diff-base <rev>] [--compare <results.json>]
+  [--test-timeout <ms>]
   [--sample <n>] [--contexts <n>] [--pool threads|forks] [--config <file>]
   [--first-limit <ms>] [--hang-limit <ms>] [--mutant-limit <ms>]
   oracle-gaps --stop-daemon --package <dir>
@@ -185,6 +187,19 @@ function optionsOf(args, cwd) {
   // Authored mutants are the author's files: one that cannot be read
   // refuses the run before any work.
   if (mutants) loadAuthored(mutants)
+  // The earlier run whose results the report compares with this one's, by
+  // key: the refactor evidence of oracles-design step 7. Both runs judge
+  // every mutant, or a key left out of one would read as new or gone.
+  const compare = args.compare && resolve(cwd, args.compare)
+  if (compare) {
+    const partial = [`only`, `sample`].find((name) => args[name] !== undefined)
+    if (partial)
+      throw new Refusal(
+        `--compare needs a full run, not one with --${partial}`,
+        `Run without --${partial}: the refactor evidence compares every mutant.`,
+      )
+    comparedResults(compare, args.compare)
+  }
   // Each source as the package names it (packagePath), a file of the
   // package.
   const sources = args.source.split(`,`).map((source) => {
@@ -239,8 +254,39 @@ function optionsOf(args, cwd) {
     pool: args.pool ?? defaultPool(pkg),
     // A directory of authored mutants (see loadAuthored).
     mutants,
+    compare,
     config,
   }
+}
+
+/**
+ * The results of the earlier run that `--compare` names (`path`, as the
+ * author wrote it: `named`): the results.json of a completed full run.
+ * Anything else refuses the run.
+ */
+export function comparedResults(path, named = path) {
+  if (!statSync(path, { throwIfNoEntry: false })?.isFile())
+    throw new Refusal(
+      `--compare ${named} is not a file`,
+      `Pass --compare the results.json of an earlier completed run.`,
+    )
+  let report
+  try {
+    report = JSON.parse(readFileSync(path, `utf8`))
+  } catch {
+    // Not JSON: refused below.
+  }
+  if (!Array.isArray(report?.results))
+    throw new Refusal(
+      `--compare ${named} is not the results.json of a completed run`,
+      `Pass --compare the results.json that a completed run wrote in its output directory.`,
+    )
+  if (report.options?.only || report.options?.sample)
+    throw new Refusal(
+      `--compare ${named} is the results.json of a partial run (--only or --sample)`,
+      `Pass --compare the results.json of a full run, one without --only and --sample.`,
+    )
+  return report.results
 }
 
 /**

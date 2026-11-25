@@ -45,8 +45,10 @@ import {
 } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { applyAuthored, loadAuthored } from './authored.mjs'
+import { comparedResults } from './args.mjs'
 import {
   authoredKey,
+  compareWith,
   gapsOf,
   keyAndSelect,
   renderReport,
@@ -2708,6 +2710,14 @@ export default async (env) => {
       ),
     )
     await store.flush?.()
+    // The refactor evidence against the run `--compare` names.
+    const compare =
+      options.compare &&
+      compareWith(
+        posix(options.compare),
+        comparedResults(options.compare),
+        results,
+      )
     writeFileSync(
       join(options.out, `results.json`),
       JSON.stringify(
@@ -2732,6 +2742,7 @@ export default async (env) => {
           // limit, and items rerun after a cut-off batch.
           evidence,
           results,
+          compare,
         },
         null,
         1,
@@ -2746,6 +2757,7 @@ export default async (env) => {
         excluded: excluded.map(relative),
         baseline: baselineFiles,
         config: options.config,
+        compare,
       }),
     )
     if (existsSync(testOutput) && statSync(testOutput).size > 0)
@@ -2762,6 +2774,7 @@ export default async (env) => {
       pkg,
       baseline: baselineFiles,
       config: options.config,
+      compare,
       paths: {
         report: escapeControls(posix(join(options.out, `summary.md`))),
         results: join(options.out, `results.json`),
@@ -2804,7 +2817,9 @@ function identityOf(options, authored, testFiles, oracleCount) {
     if (existsSync(file))
       hash.update(`${name(file)}\0${readFileSync(file, `utf8`)}\0`)
   hash.update(JSON.stringify(authored))
-  const { out, daemon, pkg, mutants, ...decisive } = options
+  // The compared run's results decide the comparison; where they are does not.
+  if (options.compare) hash.update(readFileSync(options.compare, `utf8`))
+  const { out, daemon, pkg, mutants, compare, ...decisive } = options
   hash.update(JSON.stringify({ ...decisive, only: [...(options.only ?? [])] }))
   return {
     id: hash.digest(`hex`).slice(0, 12),
