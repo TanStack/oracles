@@ -422,12 +422,14 @@ Techniques: [guide § Histories](../../docs/guide.md#histories).
   through the property's `probeHistories`.
   Give each clause of a law statement its own check. A statement that
   joins promises with "and" makes one promise per clause. The comparison
-  with the model can serve one of them. Each other clause gets a
-  comparison of its own, against what that clause alone predicts, with its
-  own `difference`, and a calibration that breaks only that clause and
-  names that `difference`. A clause that holds only through the model is
+  with the model checks the clause that the model's rule states. A clause
+  that the model only implies holds only through the model, and is
   unchecked: when the model shares a mistake with production, the model
   comparison passes, and so does any calibration that names only the law.
+  Give each such clause a comparison of its own, against what that clause
+  alone predicts, with its own `difference`. Then give it a calibration
+  that breaks that clause and names that `difference`, so that only the
+  clause's own comparison can reject it.
   For example, a law says that pruning "removes exactly what the transform
   made unreferenced, keeps everything that was already unused, and with no
   transform changes nothing". For
