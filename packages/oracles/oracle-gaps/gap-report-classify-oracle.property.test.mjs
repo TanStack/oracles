@@ -156,7 +156,13 @@
  *    directive names both next steps: observe the value, and add a history
  *    where the mutated code computes something different (maintainer
  *    finding F22, 2026-11-10). Both are steps, so the message offers no
- *    choice.
+ *    choice. Nor can the records tell a value that every path overwrites
+ *    before any read (an initializer kept for the type checker), so the
+ *    directive's third and last step says that such code is dead, to be
+ *    removed, and only with its evidence: a law that decides the value
+ *    exactly owns every public entry point that reaches the code, and the
+ *    gap runs before and after the removal keep every kill by mutant key
+ *    (a downstream project's reports, 2026-11-24 and 2026-11-25).
  *    Each operand a `not-infected` message names is printed as a code span
  *    of a typed text: two operands that the model treats as different
  *    values never print the same (maintainer finding, 2026-11-10). The
@@ -1081,9 +1087,11 @@ function distinguishingDirective(m) {
 // The observation a survivor with an infection names: its infecting test, or
 // the owner tests when only loaded code infected it (or the mutant is
 // authored). The second step covers a forced branch that computed the same
-// result as the original (F22).
+// result as the original (F22), and the third, last, a value that every
+// path overwrites before any read, which is dead code only with its
+// evidence (a downstream project's reports, 2026-11-24 and 2026-11-25).
 const observedText = (test) =>
-  `Observe the value this code changes in ${test === undefined ? `the owner tests` : `\`${test}\``}, and assert on it. Where the mutated code computes the same result as the original, add a history where it computes something different.`
+  `Observe the value this code changes in ${test === undefined ? `the owner tests` : `\`${test}\``}, and assert on it. Where the mutated code computes the same result as the original, add a history where it computes something different. Last, where every path overwrites the changed value before anything reads it, as an initializer written only for the type checker, the code is dead only with evidence: a law that decides the value exactly owns every public entry point that reaches this code, and the gap runs before and after its removal keep every kill, compared by mutant key (\`oracles-design\` step 7). With that evidence, remove the value, and keep any effect it has.`
 const observedMention = (h, mi, owners) =>
   observedText(infectingTest(h, mi, owners))
 
@@ -1411,7 +1419,7 @@ const directives = {
   'not-infected':
     /^Add a history whose operands are equal, where `[^`]+` and `[^`]+` disagree\. Operands seen: .+\.$/,
   'not-observed':
-    /^Observe the value this code changes in (`[^`]+`|the owner tests), and assert on it\. Where the mutated code computes the same result as the original, add a history where it computes something different\.$/,
+    /^Observe the value this code changes in (`[^`]+`|the owner tests), and assert on it\. Where the mutated code computes the same result as the original, add a history where it computes something different\. Last, where every path overwrites the changed value before anything reads it, as an initializer written only for the type checker, the code is dead only with evidence: a law that decides the value exactly owns every public entry point that reaches this code, and the gap runs before and after its removal keep every kill, compared by mutant key \(`oracles-design` step 7\)\. With that evidence, remove the value, and keep any effect it has\.$/,
   'not-judged': /^Make a law in `[^`]+` reject the changed value\.$/,
   'extra-work':
     /^Declare `work: \{ ratio: \d+\.\d\d \}` on the `oracleProperty` that registers `[^`]+`, so that its work bound rejects this mutant: there it changed no observation, and its work rose from \d+ to \d+ site evaluations?( \(\d+\.\d{3}× the unmodified run's\))?\.$/,
