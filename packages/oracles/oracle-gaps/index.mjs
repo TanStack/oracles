@@ -179,7 +179,7 @@ if (process.env.ORACLE_GAPS_TEST_PAUSE_AFTER_STARTED !== undefined) {
 }
 
 const { parseArgs, usage } = await import(`./args.mjs`)
-const { endRun, Refusal } = await import(`./ending.mjs`)
+const { endRun, partialEnding, Refusal } = await import(`./ending.mjs`)
 // ending.mjs loads stream.mjs, so this import costs no load of its own.
 const { escapeControls, streamLine } = await import(`./stream.mjs`)
 
@@ -479,9 +479,16 @@ function superviseRun(out, pkg, pool) {
           ended?.code ?? 128 + constants.signals[ended?.signal ?? stopped],
         )
       const how = ended?.signal ?? (ended ? `code ${ended.code}` : `no exit`)
+      const cause = `the run's process exited with ${how}`
+      // A run whose process died in its mutant phase leaves the mutants it
+      // judged as a partial report, which its done line names.
+      const report =
+        stopped || child === undefined
+          ? undefined
+          : partialEnding(out, child.pid, cause)
       const line = stopped
         ? `oracle-gaps: done stopped (${stopped})\n`
-        : `oracle-gaps: done error, the run's process exited with ${how}${remedyOf(how)}\n`
+        : `oracle-gaps: done error, ${cause}${remedyOf(how)}${report === undefined ? `` : `; partial report ${escapeControls(posix(report))}`}\n`
       process.stdout.write(line, () => {
         // The log was opened before the run started (startLog). A log that
         // cannot take the line does not change the ending: both streams still

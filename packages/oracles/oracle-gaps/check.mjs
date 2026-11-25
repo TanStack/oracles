@@ -2385,9 +2385,58 @@ export default async (env) => {
     )
     const results = []
     const started = Date.now()
-    // Results are appended as they finish, so a stopped survey keeps them.
+    // What results.json says of the run besides its results, and what the
+    // summary renders them under.
+    const reportFields = {
+      run: runIdentity,
+      options: { ...options, only: options.only && [...options.only] },
+      // A report with a failing oracle file is provisional: its failing
+      // laws judge nothing (Block per law). Each test file's baseline, as
+      // the report leads with it.
+      provisional,
+      baseline: baselineFiles.map(({ tests, ...file }) => ({
+        ...file,
+        passed: tests.filter((t) => t.state === `passed`).length,
+        failed: tests.filter((t) => t.state === `failed`).length,
+        skipped: tests.filter((t) => t.state === `skipped`).length,
+      })),
+      excluded,
+      nondeterministic: [...nondeterministic],
+    }
+    const renderFields = {
+      run: runIdentity,
+      excluded: excluded.map(relative),
+      baseline: baselineFiles,
+      config: options.config,
+    }
+    // Results are appended as they finish, so a stopped survey keeps them,
+    // after a first line that holds what a partial report of them needs
+    // (ending.mjs, partialEnding): this process, the ids of every mutant the
+    // run judges in the order its report lists them, and the report's other
+    // fields. The CLI writes that report when this process dies before its
+    // own ending.
     const partial = join(options.out, `results.jsonl`)
-    rmSync(partial, { force: true })
+    const order = (a, b) =>
+      a.number - b.number || a.source.localeCompare(b.source)
+    writeFileSync(
+      partial,
+      `${JSON.stringify({
+        partialOf: {
+          pid: process.pid,
+          ids: [
+            ...[...queue].sort(order).map((mutant) => mutant.id),
+            ...authored
+              .filter(
+                (mutant) =>
+                  !options.only || options.only.has(`authored:${mutant.id}`),
+              )
+              .map((mutant) => `authored:${mutant.id}`),
+          ],
+          report: reportFields,
+          render: renderFields,
+        },
+      })}\n`,
+    )
     // A selection no plan foresaw (the ordinary tier's) is checked when a
     // mutant first asks for it, once even when several contexts ask at once.
     const selectionFor = async (slot, file, keys) => {
@@ -2597,9 +2646,7 @@ export default async (env) => {
       )
         await evaluateGroup(group, slot)
     })
-    results.sort(
-      (a, b) => a.number - b.number || a.source.localeCompare(b.source),
-    )
+    results.sort(order)
     endPhase(`operator mutants`, { mutants: results.length })
 
     // 6. Authored mutants, spread across the contexts. Each serves a patched
@@ -2712,20 +2759,7 @@ export default async (env) => {
       join(options.out, `results.json`),
       JSON.stringify(
         {
-          run: runIdentity,
-          options: { ...options, only: options.only && [...options.only] },
-          // A report with a failing oracle file is provisional: its failing
-          // laws judge nothing (Block per law). Each test file's baseline, as
-          // the report leads with it.
-          provisional,
-          baseline: baselineFiles.map(({ tests, ...file }) => ({
-            ...file,
-            passed: tests.filter((t) => t.state === `passed`).length,
-            failed: tests.filter((t) => t.state === `failed`).length,
-            skipped: tests.filter((t) => t.state === `skipped`).length,
-          })),
-          excluded,
-          nondeterministic: [...nondeterministic],
+          ...reportFields,
           mutantSeconds,
           // How the result was produced: units reused from the evidence
           // store and units run in this check, runs cut off at their time
@@ -2740,13 +2774,7 @@ export default async (env) => {
     span(`check`, checkStarted, { evidence })
     writeFileSync(
       join(options.out, `summary.md`),
-      renderReport({
-        results,
-        run: runIdentity,
-        excluded: excluded.map(relative),
-        baseline: baselineFiles,
-        config: options.config,
-      }),
+      renderReport({ ...renderFields, results }),
     )
     if (existsSync(testOutput) && statSync(testOutput).size > 0)
       log(

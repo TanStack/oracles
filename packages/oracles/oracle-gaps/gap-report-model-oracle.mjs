@@ -5189,16 +5189,34 @@ const NATIVE_CRASHES = [
  * thread in it, so the step is the forks pool, where a crash ends only its own
  * worker (whose mutants the run reports), or another Node version; under
  * forks, the crash was the run's own process, so the step is another Node
- * version.
+ * version. A run whose process ended once its baseline was done wrote a
+ * partial report of the mutants it had judged (`partialOwed`), and the line
+ * ends by naming its summary, `report`.
  */
-const crashLine = (signal, pool) =>
+const crashLine = (signal, pool, report) =>
   `oracle-gaps: done error, the run's process exited with ${signal}${
     !NATIVE_CRASHES.includes(signal)
       ? ``
       : pool === `threads`
         ? `: a native crash, a fault in Node, V8 or a native addon, which ends every worker thread with it; rerun with --pool forks, where it ends only its worker, or with another Node version`
         : `: a native crash, a fault in Node, V8 or a native addon; rerun with another Node version`
-  }`
+  }${report === undefined ? `` : `; partial report ${report}`}`
+/**
+ * Whether a run whose process ended by itself (`when`) owes a partial report:
+ * when its process ended after the baseline, with mutants still to judge. A
+ * crash comes from the stop witness's test where its mutant changes its
+ * output, which no baseline run does, so it always ends a run in its mutant
+ * phase; the CLI's abort strikes as its session opens, before any baseline,
+ * so nothing was judged and no report is owed.
+ */
+const partialOwed = (when) => when === `crash`
+/**
+ * The line a partial report's summary.md holds under its inputs: what ended
+ * the run, how many of its `all` mutants it judged, and the ids of those it
+ * did not, in the order a completed report lists them.
+ */
+const partialNote = (cause, judged, all, unjudged) =>
+  `**Partial report**: ${cause} after ${judged} of ${all} mutants were judged. Not judged: ${unjudged.join(`, `)}.`
 
 function model(plan) {
   const refused = refusal(plan)
@@ -7031,6 +7049,8 @@ export {
   verdictLine,
   doneLine,
   crashLine,
+  partialOwed,
+  partialNote,
   kill,
   push,
   judging,

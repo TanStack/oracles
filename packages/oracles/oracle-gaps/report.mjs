@@ -273,12 +273,20 @@ const groupOf = (gap) =>
     ? `authored mutants (${gap.source})`
     : `fn ${gap.function} (${gap.source})`
 
+/**
+ * The summary.md of a run's `results`. A `partial` report (ending.mjs) is of
+ * a run whose process ended before its own ending: it says so under the
+ * inputs, with what ended it (`cause`), how many of its `all` mutants it
+ * judged, and the ids of the `unjudged` rest, and its counts are of the
+ * judged.
+ */
 export function renderReport({
   results,
   run,
   excluded,
   baseline = [],
   config,
+  partial,
 }) {
   const gaps = gapsOf(results)
   const guards = results.filter((r) => r.probeGuard)
@@ -294,6 +302,12 @@ export function renderReport({
     ``,
     `Run ${run.id}. Inputs: ${run.inputs}.`,
     ``,
+    ...(partial
+      ? [
+          `**Partial report**: ${partial.cause} after ${results.length} of ${partial.all} mutants were judged. Not judged: ${partial.unjudged.join(`, `)}.`,
+          ``,
+        ]
+      : []),
     `${results.length} mutants (${results.filter((r) => r.authored).length} authored). ` +
       `${killed.length} killed by a law on a reproducible route, ` +
       `${crashed.length} crashed production, ` +

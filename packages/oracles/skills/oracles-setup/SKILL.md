@@ -498,7 +498,9 @@ failing law), and the report is marked provisional. Then each gap prints as one 
 and a `busy` line while a slow test runs. Exactly one line ends the run:
 `oracle-gaps: done completed, <n> gaps, report <path>/summary.md` (exit 0),
 `done refused` (exit 2), `done error, …` (exit 3; a crash or an
-out-of-memory run, with the remedy), or `done stopped`. Use it instead of
+out-of-memory run, with the remedy, and after a crash in the mutant phase
+`; partial report <path>/summary.md`, the mutants judged before it), or
+`done stopped`. Use it instead of
 running Vitest on its own, so that every run gives you the test results
 and the gaps together.
 
