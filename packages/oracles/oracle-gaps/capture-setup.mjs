@@ -440,6 +440,10 @@ let count = 0
 // gap: the driver records an output that the check does not compare.
 let observed = createHash(`sha1`)
 let observations = 0
+// The running test's observations, each its checkpoint and its rendering,
+// kept only for a copy that `--refactor-base` compares (check.mjs
+// `traceDiff`): the hash above is all any other copy needs.
+let trace = []
 
 // Site hits and `if` outcomes for the running test. Code that runs outside
 // any test (module setup, or async work that outlives its test) records into
@@ -961,8 +965,10 @@ globalThis.__oracleGapsClock = () => {
 }
 
 globalThis.__oracleObserve = (checkpoint, value) => {
-  observed.update(`${checkpoint}(${render(value)})\n`)
+  const text = render(value)
+  observed.update(`${checkpoint}(${text})\n`)
   observations += 1
+  if (state.traces) trace.push([checkpoint, text])
 }
 
 // Whether this `beforeEach` call continues the test already running: a
@@ -981,6 +987,7 @@ beforeEach((context) => {
   currentTask = context.task
   observed = createHash(`sha1`)
   observations = 0
+  trace = []
   if (stopped || (selected && !selected.has(testKey(context.task))))
     context.skip()
   // A copy is named for its batch, so a test's ambient randomness is
@@ -1040,6 +1047,7 @@ function finishTest(context) {
       hash: digest.digest(`hex`),
       count,
       observed: observations > 0 ? observed.digest(`hex`) : undefined,
+      ...(state.traces ? { trace } : {}),
       hits: [...hits],
       calls,
       infected: [...infected],

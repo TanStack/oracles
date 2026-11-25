@@ -375,6 +375,20 @@ export const shards = {
     `fixed seed 20261105: module data that only the failing owner's passing pair judges`,
     `random seed: module data that only the failing owner's passing pair judges`,
     `determinism: constructed history: module data that only the failing owner's passing pair judges`,
+    // Law 16's refactor trace diff: a reformat's rerun against a commit
+    // with the authored edit, one history that lists tests and one that
+    // lists none, with their calibrations.
+    `fixed seed 20261105: a refactor whose traces differ`,
+    `random seed: a refactor whose traces differ`,
+    `determinism: constructed history: a refactor whose traces differ`,
+    `fixed seed 20261105: a refactor that no trace sees`,
+    `random seed: a refactor that no trace sees`,
+    `determinism: constructed history: a refactor that no trace sees`,
+    `calibration: a refactor run leaves out a listed test`,
+    `calibration: a refactor run reads a changed observation as unchanged`,
+    `calibration: a refactor run's verdict claims evidence beside a difference`,
+    `calibration: a refactor run's summary.md drops a listed test`,
+    `calibration: a refactor run with nothing to list lists a test`,
     // The filed history of a stale authored mutant's fourth base (about 12 s).
     `fixed history: a filed base whose owner reads an absent object through ?.`,
     `determinism: fixed history: a filed base whose owner reads an absent object through ?.`,

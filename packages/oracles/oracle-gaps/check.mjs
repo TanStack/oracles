@@ -1195,6 +1195,8 @@ export default async (env) => {
           idleMs: items[i].idleMs ?? null,
           callBudget: items[i].callBudget ?? null,
           idleHorizonMs: items[i].idleHorizonMs ?? null,
+          // Whether the copy keeps each test's observations (traceDiff).
+          traces: items[i].traces ?? false,
         },
       ]),
     )
@@ -2707,6 +2709,127 @@ export default async (env) => {
         `mutant phase: ${results.length} mutants in ${mutantSeconds.toFixed(1)}s`,
       ),
     )
+    /**
+     * A refactor's trace diff (`--refactor-base`): every oracle file that ran
+     * runs whole twice more, with the same seeds, once on each source as the
+     * base commit holds it and once as it is now, both served as written, so
+     * the two runs differ only in the sources. A source the commit does not
+     * hold keeps its text. Each deterministic test whose observations or
+     * result differ is listed, with its first differing observation: a
+     * difference that every law accepts is the law question the comparison
+     * of verdicts cannot show.
+     */
+    async function traceDiff(oracleRuns, nondeterministic) {
+      const { rev, commit } = options.refactorBase
+      const now = new Map()
+      const then = new Map()
+      const absent = []
+      const changed = []
+      for (const source of options.sources) {
+        const path = realpathSync(join(pkg, source))
+        const text = readFileSync(path, `utf8`)
+        const shown = spawnSync(`git`, [`show`, `${commit}:./${source}`], {
+          cwd: pkg,
+          encoding: `utf8`,
+          maxBuffer: 1 << 30,
+        })
+        if (shown.status !== 0) absent.push(source)
+        const old = shown.status === 0 ? shown.stdout : text
+        if (old !== text) changed.push(source)
+        now.set(path, text)
+        then.set(path, old)
+      }
+      const items = oracleRuns.flatMap((file) => [
+        { file, side: `old`, texts: then },
+        { file, side: `new`, texts: now },
+      ])
+      const runs = new Map()
+      await eachSlot(async (context, index) => {
+        const slot = { context, index }
+        const serve = globalThis.__oracleGapsServe
+        for (let item = items.shift(); item; item = items.shift()) {
+          const paths = [...item.texts.keys()]
+          serve[slot.index] = item.texts
+          invalidateChanged(paths, slot.context)
+          const [got] = await unitsBatch(slot, [
+            {
+              file: item.file,
+              spec: `refactor:${item.side}`,
+              mutant: -1,
+              select: null,
+              limitMs: limitFor(item.file),
+              stopOnKill: false,
+              traces: true,
+            },
+          ])
+          runs.set(`${item.side}\0${item.file}`, got)
+          serve[slot.index] = undefined
+          invalidateChanged(paths, slot.context)
+        }
+      })
+      const named = (key) =>
+        `${relative(fileOf(key))}${key.slice(fileOf(key).length)}`
+      const differences = []
+      const unfinished = []
+      let tests = 0
+      let left = 0
+      for (const file of oracleRuns) {
+        const [old, current] = [`old`, `new`].map((side) =>
+          runs.get(`${side}\0${file}`),
+        )
+        if (!old?.rows || !current?.rows) {
+          unfinished.push(relative(file))
+          continue
+        }
+        const oldRows = new Map(old.rows)
+        const newRows = new Map(current.rows)
+        const oldResults = new Map(old.tests.map((t) => [t.key, t.state]))
+        for (const { key, state } of current.tests) {
+          // A framework check (a calibration, the determinism test) runs
+          // the histories of the tests beside it, and judges no production.
+          if (state === `skipped` || newRows.get(key)?.route === `calibration`)
+            continue
+          if (nondeterministic.has(key)) {
+            left += 1
+            continue
+          }
+          tests += 1
+          const [a, b] = [oldRows, newRows].map(
+            (rows) => rows.get(key)?.trace ?? [],
+          )
+          const at = [...Array(Math.max(a.length, b.length)).keys()].find(
+            (i) => a[i]?.[0] !== b[i]?.[0] || a[i]?.[1] !== b[i]?.[1],
+          )
+          const was = oldResults.get(key) ?? `not run`
+          if (at === undefined && was === state) continue
+          differences.push({
+            test: named(key),
+            observation: at ?? null,
+            checkpoint: at === undefined ? null : (b[at] ?? a[at])[0],
+            old: at === undefined ? null : (a[at]?.[1] ?? null),
+            new: at === undefined ? null : (b[at]?.[1] ?? null),
+            result: was === state ? null : { old: was, new: state },
+          })
+        }
+      }
+      return {
+        base: rev,
+        commit,
+        changed,
+        absent,
+        tests,
+        nondeterministic: left,
+        unfinished,
+        differences,
+      }
+    }
+    // 7. The trace diff against `--refactor-base`, after every mutant.
+    const refactor =
+      options.refactorBase &&
+      (await traceDiff(
+        files.filter((file) => oracleFiles.has(file)),
+        nondeterministic,
+      ))
     await store.flush?.()
     writeFileSync(
       join(options.out, `results.json`),
@@ -2732,6 +2855,7 @@ export default async (env) => {
           // limit, and items rerun after a cut-off batch.
           evidence,
           results,
+          refactor,
         },
         null,
         1,
@@ -2746,6 +2870,7 @@ export default async (env) => {
         excluded: excluded.map(relative),
         baseline: baselineFiles,
         config: options.config,
+        refactor,
       }),
     )
     if (existsSync(testOutput) && statSync(testOutput).size > 0)
@@ -2762,6 +2887,7 @@ export default async (env) => {
       pkg,
       baseline: baselineFiles,
       config: options.config,
+      refactor,
       paths: {
         report: escapeControls(posix(join(options.out, `summary.md`))),
         results: join(options.out, `results.json`),

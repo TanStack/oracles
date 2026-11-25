@@ -33,7 +33,7 @@ export function codeSpan(text) {
 // line however long its code or intent is. Characters are code points, so a
 // cut never splits an astral-plane character. results.json keeps the full
 // text.
-const oneLine = (text) => {
+export const oneLine = (text) => {
   const flat = [...String(text).replace(/\s+/g, ` `)]
   return flat.length > 60 ? `${flat.slice(0, 57).join(``)}...` : flat.join(``)
 }

@@ -1,5 +1,6 @@
 // The CLI's arguments, shared by the CLI (index.mjs) and the daemon
 // (daemon.mjs), which parses each request's arguments the same way.
+import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { availableParallelism } from 'node:os'
@@ -31,14 +32,15 @@ const valued = new Set([
   `out`,
   `only`,
   `diff-base`,
+  `refactor-base`,
   `pool`,
   `config`,
 ])
 // The usage text `--help` prints (index.mjs).
 export const usage = `Usage: oracle-gaps --package <dir> --source <src/x.ts,...>
   [--env-prefix <name>] [--daemon] [--ordinary] [--seed <n>] [--mutants <dir>]
-  [--out <dir>] [--only <id,id>] [--diff-base <rev>] [--test-timeout <ms>]
-  [--sample <n>] [--contexts <n>] [--pool threads|forks] [--config <file>]
+  [--out <dir>] [--only <id,id>] [--diff-base <rev>] [--refactor-base <rev>]
+  [--test-timeout <ms>] [--sample <n>] [--contexts <n>] [--pool threads|forks] [--config <file>]
   [--first-limit <ms>] [--hang-limit <ms>] [--mutant-limit <ms>]
   oracle-gaps --stop-daemon --package <dir>
   oracle-gaps --help
@@ -185,6 +187,12 @@ function optionsOf(args, cwd) {
   // Authored mutants are the author's files: one that cannot be read
   // refuses the run before any work.
   if (mutants) loadAuthored(mutants)
+  // The commit whose sources a refactor's trace diff runs the oracles on
+  // (check.mjs traceDiff): one of the repository that holds the package.
+  const refactorBase =
+    args[`refactor-base`] === undefined
+      ? undefined
+      : commitOf(pkg, args[`refactor-base`])
   // Each source as the package names it (packagePath), a file of the
   // package.
   const sources = args.source.split(`,`).map((source) => {
@@ -212,6 +220,7 @@ function optionsOf(args, cwd) {
     sources,
     seed: args.seed,
     diffBase: args[`diff-base`],
+    refactorBase,
     // Each run's output is a directory of its own under the package's state
     // in the OS temp directory (`stateDirOf`), so runs of one package and of
     // two packages never collide (maintainer decision, 2026-11-10:
@@ -241,6 +250,21 @@ function optionsOf(args, cwd) {
     mutants,
     config,
   }
+}
+
+/** The commit `rev` names in the git repository that holds `pkg`. */
+function commitOf(pkg, rev) {
+  const parsed = spawnSync(
+    `git`,
+    [`rev-parse`, `--verify`, `--quiet`, `--end-of-options`, `${rev}^{commit}`],
+    { cwd: pkg, encoding: `utf8` },
+  )
+  if (parsed.status !== 0)
+    throw new Refusal(
+      `--refactor-base ${rev} names no commit of the git repository that holds the package`,
+      `Pass --refactor-base a commit, branch, or tag of the package's repository, such as HEAD~1 or main.`,
+    )
+  return { rev, commit: parsed.stdout.trim() }
 }
 
 /**

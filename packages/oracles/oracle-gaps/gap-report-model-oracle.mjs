@@ -1145,6 +1145,14 @@ const drawn = fc.record({
   // a gap (the maintainer's decision "An excluded test still runs",
   // 2026-11-23). Drawn last (the generator rule).
   failingLawSpins: fc.boolean(),
+  // Law 16's refactor run: the stability rerun (`stability` above, so
+  // nothing without one) also gets `--refactor-base` with a commit whose
+  // source carries the authored edit (`authored` above, so nothing without
+  // one that applies), and compares every oracle test's trace there with
+  // its trace now (refactorRunOf). It adds two runs of each oracle file and
+  // switches no test-only hook, so it is drawn (randomness wins,
+  // 2026-11-16), last (the generator rule).
+  refactorRun: fc.boolean(),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -3495,6 +3503,9 @@ function resolveHistory(history) {
     failingLawCalls: history.failingLawCalls ?? `none`,
     failingLawHook: history.failingLawHook ?? `none`,
     failingLawSpins: history.failingLawSpins === true,
+    // A history filed before the field existed makes no refactor run;
+    // refactorRunOf decides the rest from the resolved plan.
+    refactorRun: history.refactorRun === true,
     ordinary: history.ordinary === true,
     // The batch whose run rejects (a test-only fault; 0 is none).
     rejectBatch: history.rejectBatch ?? 0,
@@ -5160,6 +5171,173 @@ const verdictLine = (files, failing) =>
  */
 const doneLine = (gaps, provisional, out) =>
   `oracle-gaps: done completed, ${gaps} gap${gaps === 1 ? `` : `s`}${provisional ? ` (provisional)` : ``}, report ${out.replaceAll(`\\`, `/`)}/summary.md`
+
+// Law 16, a refactor's trace diff (`--refactor-base`). The base commit
+// holds the source with the authored edit applied (its label pushed as
+// `s<label>!`), and the run is the stability rerun, whose edit keeps every
+// output the same: so each oracle test's trace on the base is its trace
+// under the authored mutant, and its trace now is the unmutated one.
+/**
+ * Whether a resolved plan makes law 16's refactor run: one drawn, on a
+ * stability rerun, with an authored edit that applies. The run's tests are
+ * the oracle files' whole runs on the base source, where a test that sees
+ * the edit fails if it judges; the domain leaves out what would make such a
+ * run wait, hang, or read another test's state there (a hanging, slow,
+ * stopping, property, or shared-state test, a test that spins on its data
+ * read), the runs a fault, a failing law, the witness module, or a mid-run
+ * edit change, a PATH with no git (`psMissing`), and a draw that only the current run
+ * makes after a test with no trace stopped on the base (its value is the
+ * capture's seeded random, which no rule here predicts).
+ */
+const refactorRunOf = (plan) =>
+  plan.refactorRun &&
+  plan.stability !== `none` &&
+  plan.authored?.kind === `apply` &&
+  plan.authored.applies &&
+  (plan.fault ?? `none`) === `none` &&
+  plan.failingLaw === `none` &&
+  plan.history.witness === false &&
+  !plan.midrun &&
+  !plan.psMissing &&
+  plan.tests.every(
+    (t) =>
+      !(plan.spinData && fsGated(plan, t.file, t)) &&
+      !t.hangs &&
+      !t.slow &&
+      !t.ioWait &&
+      !t.stops &&
+      !t.asProp &&
+      !t.readsShared &&
+      !t.judgesShared &&
+      !(t.draws && t.then && t.channel === `expect`),
+  )
+/** The source as the refactor run's base commit holds it. */
+const refactorBaseSource = (plan) =>
+  plan.source.replace(plan.authored.find, () => plan.authored.replace)
+/**
+ * What a refactor run owes, from the plan alone. Every test of an oracle
+ * file that ran, in file and test order, is compared, except a framework
+ * check (a test whose last registered route is `calibration`) and a
+ * nondeterministic test, which is counted as left out. A test's trace is
+ * each part's draw (equal in both runs: the capture seeds it by the test)
+ * and its output, unless it only asserts on it; a test that judges fails
+ * where its output changed, and stops there unless its assertion is soft.
+ * A test whose observations and result agree is not listed; any other is,
+ * with its first differing observation (its index, its checkpoint, and each
+ * run's rendering, or null past that run's last observation) and its two
+ * results when they differ.
+ */
+function owedTraceDiff(plan) {
+  const sites = sitesOf(plan)
+  const active = { authored: plan.authored.label }
+  const sideOf = (t, mutant) => {
+    const observations = []
+    let failed = false
+    for (const part of partsOf(t)) {
+      const base = interpret(plan, t.fn, part.input, sites)
+      const run = mutant
+        ? interpret(plan, t.fn, part.input, sites, mutant)
+        : base
+      if (t.draws) observations.push([`draw`, `drawn`])
+      if (t.channel !== `expect`)
+        observations.push([`trace`, JSON.stringify(run.trace)])
+      if (t.judges && run.trace.join() !== base.trace.join()) {
+        failed = true
+        if (t.judgeBy !== `soft`) break
+      }
+    }
+    return { observations, result: failed ? `failed` : `passed` }
+  }
+  let tests = 0
+  let nondeterministic = 0
+  const differences = []
+  for (const entry of baselineOf(plan)) {
+    if (entry.ordinary || !entry.loads) continue
+    const file = entry.file.slice(`tests/`.length, -`.test.ts`.length)
+    // The fixture's own tests (the console test) observe nothing of the
+    // source and run alike on both.
+    tests += entry.ran - plan.tests.filter((t) => t.file === file).length
+    plan.tests.forEach((t, index) => {
+      if (t.file !== file) return
+      if (t.registered && partsOf(t).at(-1).route === `calibration`) return
+      if (t.flaky) {
+        nondeterministic += 1
+        return
+      }
+      tests += 1
+      const [a, b] = [sideOf(t, active), sideOf(t)]
+      const length = Math.max(a.observations.length, b.observations.length)
+      const at = [...Array(length).keys()].find(
+        (i) =>
+          JSON.stringify(a.observations[i]) !==
+          JSON.stringify(b.observations[i]),
+      )
+      if (at === undefined && a.result === b.result) return
+      differences.push({
+        test: `${entry.file} > t${index} > ${testName(t, index)}`,
+        observation: at ?? null,
+        checkpoint:
+          at === undefined
+            ? null
+            : (b.observations[at] ?? a.observations[at])[0],
+        old: at === undefined ? null : (a.observations[at]?.[1] ?? null),
+        new: at === undefined ? null : (b.observations[at]?.[1] ?? null),
+        result: a.result === b.result ? null : { old: a.result, new: b.result },
+      })
+    })
+  }
+  return {
+    changed: plan.sources.filter((path) => path === SOURCE),
+    absent: [],
+    tests,
+    nondeterministic,
+    unfinished: [],
+    differences,
+  }
+}
+// A value as the stream prints it: on one line, past 60 characters its
+// first 57 and `...`, in a code span (stream.mjs `change` prints code so).
+const shownValue = (text) => {
+  if (text === null) return `(none)`
+  const flat = [...text.replace(/\s+/g, ` `)]
+  const cut =
+    flat.length > 60 ? `${flat.slice(0, 57).join(``)}...` : flat.join(``)
+  const fence = `\``.repeat(
+    Math.max(0, ...(cut.match(/`+/g) ?? []).map((r) => r.length)) + 1,
+  )
+  return `${fence} ${cut} ${fence}`
+}
+/**
+ * The refactor run's one-line verdict, as its stdout note and its
+ * summary.md section print it: the count of tests that differ, of those
+ * compared, and what that is evidence of: no difference over compared,
+ * finished tests is evidence for a refactor; any difference is a law
+ * question; then the nondeterministic tests left out, if any.
+ */
+function traceVerdict(owed, base, commit) {
+  const { tests, differences } = owed
+  return [
+    `traces against ${base} (${commit.slice(0, 12)}): ${differences.length} of ${tests} ${tests === 1 ? `test differs` : `tests differ`}`,
+    differences.length > 0
+      ? `each difference is a law question to settle before merging`
+      : tests === 0
+        ? `no evidence, since no test was compared`
+        : `no observation changed, evidence for a refactor or perf change`,
+    ...(owed.nondeterministic > 0
+      ? [`${owed.nondeterministic} nondeterministic left out`]
+      : []),
+  ].join(`; `)
+}
+/** One listed test's difference, as its note and its summary line print it. */
+const traceDifferenceText = (d) =>
+  [
+    ...(d.observation === null
+      ? []
+      : [
+          `observation ${d.observation} (${d.checkpoint}) ${shownValue(d.old)} → ${shownValue(d.new)}`,
+        ]),
+    ...(d.result ? [`result ${d.result.old} → ${d.result.new}`] : []),
+  ].join(`; `)
 
 function model(plan) {
   const refused = refusal(plan)
@@ -6987,6 +7165,11 @@ export {
   baselineVerdict,
   verdictLine,
   doneLine,
+  refactorRunOf,
+  refactorBaseSource,
+  owedTraceDiff,
+  traceVerdict,
+  traceDifferenceText,
   kill,
   push,
   judging,
