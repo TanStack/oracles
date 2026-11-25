@@ -563,6 +563,11 @@ comes with one instruction. Do what it says, within the rules below.
   (the gap counts, the oracle green on a prototype patch, and the patch
   itself), and ask before you change production. With no developer
   present, leave the patch in the report.
+- **Remove on gap evidence only what owned laws decide.** Code may be removed
+  on gap evidence only when every public entry point that reaches it is owned
+  by a law that decides the affected value exactly. A cluster note's
+  `Reached from:` list names those entry points and their owners; one
+  `owned by nothing` means no law has judged what the code computes for it.
 - **An `extra-work` gap is a fast path.** The change gives the same results
   but does more work. Keep the shortcut and declare the bound that the
   directive names, `work: { ratio }` on the property, which kills it under
