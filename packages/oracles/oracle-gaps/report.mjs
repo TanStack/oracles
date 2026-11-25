@@ -115,6 +115,11 @@ const directive = {
   'not-observed': (g) =>
     `Observe the value this code changes in ${g.infectedBy === undefined ? `the owner tests` : `\`${testName(g.infectedBy)}\``}, and assert on it. Where the mutated code computes the same result as the original, add a history where it computes something different.`,
   'not-distinguished': (g) => distinguishingDirective(g),
+  // A returned `false` made `undefined`: the callers that tell them apart,
+  // the observation an exported function owes, and the step where no
+  // caller tells them apart.
+  'falsy-return': (g) =>
+    `Add an owner history whose caller tells the \`false\` returned on line ${g.line} from \`undefined\`, such as with \`=== false\`, \`typeof\`, \`??\`, and \`JSON.stringify\`, and assert on the result. Where the function is exported, callers outside the package can tell them apart: observe its result in the driver. Where no caller can, return nothing there, and declare the result type \`boolean | undefined\`.`,
   'not-judged': (g) =>
     `Make a law in \`${testName(g.changedTests?.[0])}\` reject the changed value.`,
   // No observation changed, and a test did more work: a shortcut for speed,
@@ -158,6 +163,7 @@ const meanings = {
   // A builtin counts as one site, so a tight bound is a poor witness of its
   // cost (maintainer, 2026-11-12).
   'extra-work': `A call to a builtin counts as one site evaluation, whatever it costs (\`Object.defineProperty\`): where a shortcut's cost is in one, make that cost an observation of the driver, such as a count of those calls, and let a law judge it, in place of a very tight bound. `,
+  'falsy-return': `The mutant returns \`undefined\` in place of \`false\`: a caller that tests the result only for truthiness, as an \`if\` does, sees no difference. `,
 }
 
 // The directive for an operator whose infection is not measured: the input
