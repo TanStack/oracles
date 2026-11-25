@@ -1145,6 +1145,26 @@ const drawn = fc.record({
   // a gap (the maintainer's decision "An excluded test still runs",
   // 2026-11-23). Drawn last (the generator rule).
   failingLawSpins: fc.boolean(),
+  // Law 16's compared run: the stability rerun (`stability` above, so
+  // nothing without one) also gets `--compare` with the first run's results
+  // (comparedResults), changed so that each part of the refactor evidence
+  // can show: mutants that were not killed read there as killed (`revive`),
+  // killed ones as survived (`bury`), some are absent there (`drop`), and
+  // one killed key is of a function no run has (`foreign`). It costs no run
+  // of its own and switches no test-only hook, so it is drawn (randomness
+  // wins, 2026-11-16), last (the generator rule).
+  compareRun: fc.oneof(
+    { weight: 1, arbitrary: fc.constant(null) },
+    {
+      weight: 1,
+      arbitrary: fc.record({
+        revive: fc.array(fc.nat({ max: 63 }), { maxLength: 3 }),
+        bury: fc.array(fc.nat({ max: 63 }), { maxLength: 3 }),
+        drop: fc.array(fc.nat({ max: 63 }), { maxLength: 3 }),
+        foreign: fc.boolean(),
+      }),
+    },
+  ),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -3495,6 +3515,8 @@ function resolveHistory(history) {
     failingLawCalls: history.failingLawCalls ?? `none`,
     failingLawHook: history.failingLawHook ?? `none`,
     failingLawSpins: history.failingLawSpins === true,
+    // A history filed before the field existed compares nothing.
+    compareRun: history.compareRun ?? null,
     ordinary: history.ordinary === true,
     // The batch whose run rejects (a test-only fault; 0 is none).
     rejectBatch: history.rejectBatch ?? 0,
@@ -5160,6 +5182,107 @@ const verdictLine = (files, failing) =>
  */
 const doneLine = (gaps, provisional, out) =>
   `oracle-gaps: done completed, ${gaps} gap${gaps === 1 ? `` : `s`}${provisional ? ` (provisional)` : ``}, report ${out.replaceAll(`\\`, `/`)}/summary.md`
+
+// Law 16, the refactor evidence of `oracles-design` step 7 (`--compare`).
+// The compared run's results.json, in the package, as the driver writes it.
+const COMPARED = `compared/results.json`
+// A killed key of a function that no run of the fixture has.
+const FOREIGN_KEY = `src/gone.ts#gone:if-true:if ( gone ) { }`
+// An outcome the report lists as a gap: any but killed and unowned.
+const isGapOutcome = (outcome) => ![`killed`, `unowned`].includes(outcome)
+/**
+ * The compared run's results for a plan's `compareRun`: the first run's
+ * `mutants` (as the driver records them), where each index of `revive` picks
+ * a mutant that was not killed and reads it as killed, each of `bury` a
+ * killed one and reads it as survived, and each of `drop` a gap or else a
+ * killed one (gaps first) and leaves it out; with `foreign`, one more
+ * killed key that no run of the fixture has. An index picks modulo its
+ * pool's length. Probe code stays as it was.
+ */
+function comparedResults(mutants, { revive, bury, drop, foreign }) {
+  const judged = mutants.filter((m) => !m.probe)
+  const killed = judged.filter((m) => m.outcome === `killed`)
+  const notKilled = judged.filter((m) => m.outcome !== `killed`)
+  const pick = (pool, at) =>
+    new Set(pool.length === 0 ? [] : at.map((i) => pool[i % pool.length].key))
+  const revived = pick(notKilled, revive)
+  const buried = pick(killed, bury)
+  const dropped = pick(
+    [...notKilled.filter((m) => isGapOutcome(m.outcome)), ...killed],
+    drop,
+  )
+  return {
+    results: [
+      ...mutants
+        .filter((m) => !dropped.has(m.key))
+        .map((m) => ({
+          id: m.id,
+          key: m.key,
+          outcome: revived.has(m.key)
+            ? `killed`
+            : buried.has(m.key)
+              ? `survived`
+              : m.outcome,
+          probeGuard: m.probe,
+        })),
+      ...(foreign
+        ? [
+            {
+              id: `src/gone.ts:M1`,
+              key: FOREIGN_KEY,
+              outcome: `killed`,
+              probeGuard: false,
+            },
+          ]
+        : []),
+    ],
+  }
+}
+/**
+ * What a run given `--compare` owes, from the compared run's `earlier`
+ * results and the run's own `mutants`, by key, with probe code on neither
+ * side: each key killed there is still killed here, no longer killed (any
+ * other outcome here), or gone (no mutant here has it); each key that is
+ * new here and a gap here survives. The lists keep the run's report order,
+ * and gone keys the compared file's.
+ */
+function owedComparison(earlier, mutants) {
+  const there = new Map(
+    earlier.filter((r) => !r.probeGuard).map((r) => [r.key, r.outcome]),
+  )
+  const here = mutants.filter((m) => !m.probe)
+  const killedThere = (m) => there.get(m.key) === `killed`
+  const present = new Set(mutants.map((m) => m.key))
+  const keys = (list) => list.map((m) => m.key)
+  return {
+    stillKilled: keys(
+      here.filter((m) => killedThere(m) && m.outcome === `killed`),
+    ),
+    noLongerKilled: keys(
+      here.filter((m) => killedThere(m) && m.outcome !== `killed`),
+    ),
+    newSurvivors: keys(
+      here.filter((m) => !there.has(m.key) && isGapOutcome(m.outcome)),
+    ),
+    gone: [...there]
+      .filter(([key, outcome]) => outcome === `killed` && !present.has(key))
+      .map(([key]) => key),
+  }
+}
+/**
+ * The stdout line of a run given `--compare` with the file at `against`:
+ * how many keys killed there are still killed, of all killed there, how
+ * many are gone, and the ids (in `mutants`) of the keys no longer killed and
+ * of the new keys that survive, each `--only` can rerun.
+ */
+function compareNote(owed, against, mutants) {
+  const idOf = new Map(mutants.map((m) => [m.key, m.id]))
+  const ids = (keys) =>
+    keys.length === 0 ? `none` : keys.map((key) => idOf.get(key)).join(`, `)
+  const there =
+    owed.stillKilled.length + owed.noLongerKilled.length + owed.gone.length
+  return `oracle-gaps: note compared with ${against}: ${owed.stillKilled.length} of ${there} keys killed there are still killed, ${owed.gone.length} are gone; no longer killed: ${ids(owed.noLongerKilled)}; new keys that survive: ${ids(owed.newSurvivors)}`
+}
 
 function model(plan) {
   const refused = refusal(plan)
@@ -6987,6 +7110,10 @@ export {
   baselineVerdict,
   verdictLine,
   doneLine,
+  COMPARED,
+  comparedResults,
+  owedComparison,
+  compareNote,
   kill,
   push,
   judging,

@@ -375,6 +375,15 @@ export const shards = {
     `fixed seed 20261105: module data that only the failing owner's passing pair judges`,
     `random seed: module data that only the failing owner's passing pair judges`,
     `determinism: constructed history: module data that only the failing owner's passing pair judges`,
+    // Law 16's refactor evidence: a reformat's rerun compared with the run
+    // before it, one function and two calls, with its calibrations.
+    `fixed seed 20261105: a reformat compared with the run before it`,
+    `random seed: a reformat compared with the run before it`,
+    `determinism: constructed history: a reformat compared with the run before it`,
+    `calibration: a compared run leaves out a key no longer killed`,
+    `calibration: a compared run counts a new survivor as still killed`,
+    `calibration: a compared run's note names none of its ids`,
+    `calibration: a compared run's summary.md drops a listed key`,
     // The filed history of a stale authored mutant's fourth base (about 12 s).
     `fixed history: a filed base whose owner reads an absent object through ?.`,
     `determinism: fixed history: a filed base whose owner reads an absent object through ?.`,

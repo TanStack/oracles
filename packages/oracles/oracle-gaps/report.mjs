@@ -51,6 +51,45 @@ export const gapOutcomes = new Set([
 export const authoredKey = (source, id) => `${source}#authored:${id}`
 
 /**
+ * The refactor evidence of `oracles-design` step 7 (`--compare`): this run's
+ * `results` against an `earlier` run's, read from `against`, by key, with
+ * probe code on neither side. Each key killed there is still killed, no
+ * longer killed, or gone; each key new here that is a gap survives.
+ */
+export function compareWith(against, earlier, results) {
+  const there = new Map()
+  for (const r of earlier) if (!r.probeGuard) there.set(r.key, r.outcome)
+  const evidence = {
+    against,
+    stillKilled: [],
+    noLongerKilled: [],
+    newSurvivors: [],
+    gone: [],
+  }
+  const here = new Set()
+  for (const r of results) {
+    here.add(r.key)
+    if (r.probeGuard) continue
+    if (!there.has(r.key)) {
+      if (gapOutcomes.has(r.outcome)) evidence.newSurvivors.push(r.key)
+    } else if (there.get(r.key) === `killed`)
+      (r.outcome === `killed`
+        ? evidence.stillKilled
+        : evidence.noLongerKilled
+      ).push(r.key)
+  }
+  for (const [key, outcome] of there)
+    if (outcome === `killed` && !here.has(key)) evidence.gone.push(key)
+  return evidence
+}
+
+// The comparison's counts as one sentence, and the mutants it lists.
+const compareCounts = ({ stillKilled, noLongerKilled, gone }) =>
+  `${stillKilled.length} of ${stillKilled.length + noLongerKilled.length + gone.length} keys killed there are still killed, ${gone.length} are gone`
+const comparedIn = (keys, results) =>
+  keys.map((key) => results.find((r) => r.key === key))
+
+/**
  * Numbers each operator mutant's key over the list it is given: a repeat of
  * one anchor in one function gets `~n`. Call it on the whole mutant list,
  * before any selection, so a key does not depend on what a run selects.
@@ -279,6 +318,7 @@ export function renderReport({
   excluded,
   baseline = [],
   config,
+  compare,
 }) {
   const gaps = gapsOf(results)
   const guards = results.filter((r) => r.probeGuard)
@@ -368,6 +408,22 @@ export function renderReport({
     }
     lines.push(``)
   }
+  if (compare)
+    lines.push(
+      `## Compared with an earlier run`,
+      ``,
+      `Against ${codeSpan(compare.against)}: ${compareCounts(compare)}.`,
+      ``,
+      ...comparedIn(compare.noLongerKilled, results).map(
+        (r) =>
+          `- No longer killed: ${codeSpan(r.key)} (${r.outcome}); rerun: \`--only ${r.id}\``,
+      ),
+      ...comparedIn(compare.newSurvivors, results).map(
+        (r) =>
+          `- New, surviving: ${codeSpan(r.key)}; rerun: \`--only ${r.id}\``,
+      ),
+      ``,
+    )
   if (unowned.length > 0) {
     lines.push(
       `## Unowned (warnings)`,
@@ -416,6 +472,7 @@ export function renderStdout({
   paths,
   baseline = [],
   config,
+  compare,
 }) {
   const gaps = gapsOf(results)
   const unowned = results.filter(
@@ -470,6 +527,20 @@ export function renderStdout({
         `left out, failing with no mutant active: ${excluded.join(`, `)}`,
       ),
     )
+  if (compare) {
+    const ids = (keys) =>
+      keys.length === 0
+        ? `none`
+        : comparedIn(keys, results)
+            .map((r) => r.id)
+            .join(`, `)
+    lines.push(
+      streamLine(
+        `note`,
+        `compared with ${escapeControls(compare.against)}: ${compareCounts(compare)}; no longer killed: ${ids(compare.noLongerKilled)}; new keys that survive: ${ids(compare.newSurvivors)}`,
+      ),
+    )
+  }
   lines.push(
     streamLine(`note`, `results ${escapeControls(posix(paths.results))}`),
   )

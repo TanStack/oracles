@@ -67,6 +67,17 @@ agent.
   in its `detail` in `results.json`. Record the error in the driver, and
   state the law that decides that input's outcome.
 
+  For a refactor, pass `--compare <results.json>` with the results of a
+  full run on the code before it. The report then compares the two runs by
+  mutant key: how many keys killed there are still killed, which are no
+  longer killed, how many are gone, and which new keys survive (a `note`
+  line on stdout, a section in `summary.md`, and `compare` in
+  `results.json`). A key is its function, operator, and statement text, so
+  a reformat or an edit elsewhere keeps it, and an edit to the statement,
+  or a renamed function or file, makes its mutants new keys. Both runs must
+  be full: `--compare` refuses a partial run's results, and `--only` or
+  `--sample` beside it.
+
   A survivor that changed no observation but made a test do more work is
   `extra-work`: the mutant deleted a shortcut that exists only for speed,
   such as an early return or an assignment in place of a slower call. A
