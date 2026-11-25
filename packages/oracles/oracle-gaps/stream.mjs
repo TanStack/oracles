@@ -82,28 +82,41 @@ const shellWord = (word) =>
 // PowerShell reads these as single quotes: the ASCII one and the typographic
 // ones (U+2018 to U+201B). Inside a single-quoted word each is doubled.
 const PS_SINGLE_QUOTES = /['\u2018\u2019\u201A\u201B]/g
+const powerShellQuoted = (word) =>
+  `'${word.replace(PS_SINGLE_QUOTES, (quote) => quote + quote)}'`
 const powerShellWord = (word) =>
-  /^[\w./-]+$/.test(word)
-    ? word
-    : `'${word.replace(PS_SINGLE_QUOTES, (quote) => quote + quote)}'`
+  /^[\w./-]+$/.test(word) ? word : powerShellQuoted(word)
 // cmd toggles its quoting on every double quote, expands `%`, and under
 // DelayedExpansion expands `!` (a conservative no-form set, a coordinator ruling), even inside
 // quotes; a name with either has no cmd form (undefined), so the line says so.
 // Inside double quotes cmd reads the other metacharacters literally.
 const cmdWord = (word) =>
   /["%!]/.test(word) ? undefined : /^[\w./-]+$/.test(word) ? word : `"${word}"`
-// The replay line of a command. A POSIX shell reads one line; on Windows
-// there are two, one for PowerShell and one for cmd, since the words differ.
-// A cmd line with a word that has no cmd form says so instead of printing a
+// The replay line of a command, run with the variables of `env` set (name,
+// value). A POSIX shell reads one line; on Windows there are two, one for
+// PowerShell and one for cmd, since the words differ. PowerShell always
+// quotes a value, which it would otherwise read as a command. A cmd line
+// with a word or a value that has no cmd form says so instead of printing a
 // line that would not replay (the PowerShell line still does).
-export const replayLines = (words, platform = process.platform) => {
+export const replayLines = (words, platform = process.platform, env = []) => {
   if (platform !== `win32`)
-    return [`  replay: ${words.map(shellWord).join(` `)}`]
+    return [
+      `  replay: ${[
+        ...env.map(([name, value]) => `${name}=${shellWord(value)}`),
+        ...words.map(shellWord),
+      ].join(` `)}`,
+    ]
   const cmd = words.map(cmdWord)
+  const cmdEnv = env.map(([name, value]) =>
+    /["%!]/.test(value) ? undefined : `set "${name}=${value}" &&`,
+  )
   return [
-    `  replay (PowerShell): ${words.map(powerShellWord).join(` `)}`,
-    cmd.every((word) => word !== undefined)
-      ? `  replay (cmd): ${cmd.join(` `)}`
+    `  replay (PowerShell): ${[
+      ...env.map(([name, value]) => `$env:${name}=${powerShellQuoted(value)};`),
+      ...words.map(powerShellWord),
+    ].join(` `)}`,
+    [...cmdEnv, ...cmd].every((word) => word !== undefined)
+      ? `  replay (cmd): ${[...cmdEnv, ...cmd].join(` `)}`
       : `  replay (cmd): use the PowerShell line for this name`,
   ]
 }
@@ -188,27 +201,86 @@ function violationOf(message) {
  * line, the law, checkpoint, difference, observed and owed values, and
  * counterexample of a law violation, each the framework's text as it is,
  * and the words of the command that replays that test alone (`config` as
- * for `baselineLines`). A test whose names the runner did not record
- * replays its whole file.
+ * for `baselineLines`). A random-seed campaign unit draws a new seed on
+ * every run, so it replays as the framework's own replay command says,
+ * which names that unit: under the environment that command sets (`env`,
+ * each variable's name and value in its order), with its `-t` pattern. A
+ * fixed-seed unit's command names the random unit of its name instead, and
+ * its own `-t` rerun draws the same histories. A test whose names the
+ * runner did not record replays its whole file.
  */
 export function failingTests({ file, tests }, config) {
   return tests
     .filter((t) => t.state === `failed`)
     .map((test) => {
       const message = test.message ?? ``
+      const replay = frameworkReplayOf(test.thrown ?? ``)
+      const own =
+        test.names !== undefined &&
+        replay?.env.some(
+          ([name, value]) =>
+            name.endsWith(`_UNIT`) && value === test.names.at(-1),
+        )
       return {
         test: test.names ?? [test.fullName],
         error: message.split(`\n`)[0],
         ...violationOf(message),
+        ...(own ? { env: Object.fromEntries(replay.env) } : {}),
         replay: [
           ...vitestRun(config),
           file,
           ...(test.names === undefined
             ? []
-            : [`-t`, replayPattern(test.names)]),
+            : [`-t`, own ? replay.pattern : replayPattern(test.names)]),
         ],
       }
     })
+}
+
+// The framework's own replay command of a failing campaign unit, from the
+// message its error was thrown with (oracle-property.ts `runUnit`): the last
+// `Replay:` line, which a POSIX worker prints, or `Replay (PowerShell):`,
+// which a Windows worker prints. It sets the replay variables, the run's
+// seed and the counterexample's path among them, then runs `vitest run -t`
+// with the pattern of the random unit it replays. A quoted value may hold a
+// line break, so the command is read on past the line's end. Its
+// environment, as [name, value] pairs in its order, and its pattern;
+// undefined for a message without one.
+function frameworkReplayOf(thrown) {
+  const lines = thrown.split(`\n`)
+  for (let at = lines.length - 1; at >= 0; at -= 1) {
+    const label = lines[at].match(/^Replay(?: \(PowerShell\))?: /)
+    if (label === null) continue
+    const form = label[0] === `Replay: ` ? COMMAND.posix : COMMAND.powerShell
+    let rest = lines.slice(at).join(`\n`).slice(label[0].length)
+    const env = []
+    for (let set = rest.match(form.set); set; set = rest.match(form.set)) {
+      env.push([set[1], form.text(set[2])])
+      rest = rest.slice(set[0].length)
+    }
+    const run = rest.match(form.run)
+    return run === null ? undefined : { env, pattern: form.text(run[1]) }
+  }
+  return undefined
+}
+
+// The framework's command forms (oracle-property.ts `commandOf`): how each
+// sets a variable before `vitest run -t` and its pattern, and the text of a
+// value or pattern. POSIX words read `NAME=value` or `NAME='text'`, where
+// `'\''` stands for a quote; PowerShell reads `$env:NAME='text';`, where a
+// quote character is doubled. A pattern is single-quoted text in both.
+const COMMAND = {
+  posix: {
+    set: /^(\w+)=('(?:[^']|'\\'')*'|[^\s']*) /,
+    run: /^vitest run -t ('(?:[^']|'\\'')*')/,
+    text: (word) =>
+      word.startsWith(`'`) ? word.slice(1, -1).replaceAll(`'\\''`, `'`) : word,
+  },
+  powerShell: {
+    set: /^\$env:(\w+)=('(?:[^'\u2018-\u201B]|(['\u2018-\u201B])\3)*'); /,
+    run: /^vitest run -t ('(?:[^'\u2018-\u201B]|(['\u2018-\u201B])\2)*')/,
+    text: (word) => word.slice(1, -1).replace(/(['\u2018-\u201B])\1/g, `$1`),
+  },
 }
 
 // The command that runs Vitest under the config the run loaded.
@@ -236,7 +308,14 @@ function failingLines(failing, platform) {
               ]),
           `  counterexample: ${shown(failing.counterexample)}`,
         ]),
-    ...replayLines(failing.replay.map(escapeControls), platform),
+    ...replayLines(
+      failing.replay.map(escapeControls),
+      platform,
+      Object.entries(failing.env ?? {}).map(([name, value]) => [
+        name,
+        escapeControls(value),
+      ]),
+    ),
   ]
 }
 
