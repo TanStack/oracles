@@ -345,6 +345,7 @@ const argumentKinds = [
   `badMutantJson`,
   `mutantLacksField`,
   `repeatedMutantIds`,
+  `mutantNotObject`,
 ]
 const argumentStates = [
   ...argumentKinds.map((kind) => `refused arguments: ${kind}`),
@@ -409,6 +410,40 @@ const authoredMutant = (id) => ({
   intent: `none`,
   author: `the static oracle`,
 })
+// A file whose entry is no authored mutant object: null, a number, a
+// string, a boolean, or an array, chosen by the history's `value`, which no
+// other mutant fault reads (authored.mjs reads a file as one mutant object
+// or an array of them). With `long`, which only the `unknown` fault reads
+// otherwise, the entry is the whole file; without it, the file is an array
+// whose first entry is a valid mutant and whose second is the bad one. An
+// array is the list form only at the top, so an array entry always sits in
+// the list. The refusal names the file and the entry's place.
+const notObjects = {
+  0: [null, `null`],
+  '-3': [1, `a number`],
+  1.5: [`x`, `a string`],
+  x: [true, `a boolean`],
+  '': [[], `an array`],
+}
+const notObjectAlone = (bad) =>
+  bad.long && !Array.isArray(notObjects[bad.value][0])
+const notObjectEntries = (bad) =>
+  notObjectAlone(bad)
+    ? notObjects[bad.value][0]
+    : [authoredMutant(`m-first`), notObjects[bad.value][0]]
+// Each kind of entry, refused in the list, and a whole file that is one.
+const notObjectState = (bad) =>
+  notObjectAlone(bad)
+    ? `refused a mutants file that is not an object`
+    : `refused a mutant entry that is ${notObjects[bad.value][1]}`
+const notObjectStates = [
+  ...Object.values(notObjects).map(
+    ([, kind]) => `refused a mutant entry that is ${kind}`,
+  ),
+  `refused a mutants file that is not an object`,
+]
+const notObjectCause = (bad) =>
+  `not-object.json: entry ${notObjectAlone(bad) ? 1 : 2} is not an object`
 // The model: each fault's arguments, built from the fixture's valid ones
 // (`--package <dir> --source <sources>`), the files a fault's `--mutants`
 // directory holds, and what its cause must name.
@@ -424,6 +459,9 @@ function argumentFault(bad, dir, sources) {
     repeatedMutantIds: {
       'one.json': JSON.stringify(authoredMutant(`m-twice`)),
       'two.json': JSON.stringify(authoredMutant(`m-twice`)),
+    },
+    mutantNotObject: {
+      'not-object.json': JSON.stringify(notObjectEntries(bad)),
     },
   }[bad.kind]
   const fault = {
@@ -461,6 +499,7 @@ function argumentFault(bad, dir, sources) {
       [...valid, `--mutants`, join(dir, `no-mutants`)],
       `--mutants`,
     ],
+    mutantNotObject: [withMutants, notObjectCause(bad)],
     absentSource: [
       [`--package`, dir, `--source`, `src/absent.ts`],
       `src/absent.ts`,
@@ -823,6 +862,7 @@ async function driver(plan, observe) {
       if (bad.daemon) states.add(`refused arguments through --daemon`)
       if (bad.kind === `unknown` && bad.long)
         states.add(`a refusal longer than a pipe's buffer`)
+      if (bad.kind === `mutantNotObject`) states.add(notObjectState(bad))
       if (bad.out) states.add(`a refusal written over an earlier run's output`)
     }
     if (before.refusal && faults.includes(plan.fault))
@@ -1469,12 +1509,13 @@ const required = [
   `refused without an owner`,
   `refused badEntry with no owner`,
   ...argumentStates,
+  ...notObjectStates,
 ]
 
 oracleProperty({
   id: `oracle-gaps.report-static`,
   law: {
-    statement: `The gap report's static half keeps every Svelte rune where Svelte allows it, gives each run's default output a directory of its own under its package's state, so runs of one package and of two packages never collide, enumerates the promised operator mutants, marks exactly the probe-only code, refuses broken owns declarations, reads no owns from an assertion's arguments (an expect chain, Vitest's assert or chai, or expectTypeOf), gives each function the owners whose call trees contain it, anchors each mutant's key, keeps keys, probe marks, and ownership stable under unrelated edits, and keeps each derived class's \`super(...)\` call unconditional. In a derived constructor, no mutant site lies before the first statement that calls super or inside that statement (an arrow inherits super, so an arrow's call counts), and statements after it keep their sites. So no mutant, when active, prevents or delays the super call. With no mutant active the instrumented class behaves as its source does, and under every mutant the constructor completes with its base class's tag unless an early return ends it first. Bad arguments (a missing --package or --source, a --package that does not exist, a source outside the package, a bad --env-prefix, --seed, count, or limit, an unknown --pool, a --mutants directory that does not exist, an option with no value, an unknown option, one long past a pipe's buffer included, a --source that is missing or is a directory, a --config that is missing or is a directory, and a --mutants file that is not JSON, lacks a field, or repeats an id) refuse the real CLI, cold or with --daemon, with exit 2 and a refused: block that names the cause, then one fix: directive that offers no way around the fix, and no stack trace, and a last line oracle-gaps: done refused, which names the refusal's summary.md with --out; with --out, the refusal replaces an earlier run's results.json there and removes its error.log.`,
+    statement: `The gap report's static half keeps every Svelte rune where Svelte allows it, gives each run's default output a directory of its own under its package's state, so runs of one package and of two packages never collide, enumerates the promised operator mutants, marks exactly the probe-only code, refuses broken owns declarations, reads no owns from an assertion's arguments (an expect chain, Vitest's assert or chai, or expectTypeOf), gives each function the owners whose call trees contain it, anchors each mutant's key, keeps keys, probe marks, and ownership stable under unrelated edits, and keeps each derived class's \`super(...)\` call unconditional. In a derived constructor, no mutant site lies before the first statement that calls super or inside that statement (an arrow inherits super, so an arrow's call counts), and statements after it keep their sites. So no mutant, when active, prevents or delays the super call. With no mutant active the instrumented class behaves as its source does, and under every mutant the constructor completes with its base class's tag unless an early return ends it first. Bad arguments (a missing --package or --source, a --package that does not exist, a source outside the package, a bad --env-prefix, --seed, count, or limit, an unknown --pool, a --mutants directory that does not exist, an option with no value, an unknown option, one long past a pipe's buffer included, a --source that is missing or is a directory, a --config that is missing or is a directory, and a --mutants file that is not JSON, lacks a field, repeats an id, or holds an entry that is not an object: null, a number, a string, a boolean, or an array inside the list) refuse the real CLI, cold or with --daemon, with exit 2 and a refused: block that names the cause, then one fix: directive that offers no way around the fix, and no stack trace, and a last line oracle-gaps: done refused, which names the refusal's summary.md with --out; with --out, the refusal replaces an earlier run's results.json there and removes its error.log.`,
     authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the frozen design's plan for an oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); for rune placement, Svelte 5's placement rule for runes (state_invalid_placement, effect_invalid_placement) and the maintainer's report of svelte-db's useLiveQuery.svelte.ts failing to compile under instrumentation (2026-11-08); for derived classes, the gap report's contract that instrumentation with no mutant active does not change behavior and that a mutant is a legal program variant (the operator contract in schemata.mjs), ECMAScript's rule that a derived constructor calls \`super\` before it reads \`this\` and before it returns, the maintainer's report of TanStack DB's subscription.ts failing with no mutant active (G11, 2026-11-09), and the maintainer's decision of 2026-11-09 on the derived constructor's site region (every shape of super, including an early return before it, is covered by the one rule); for the report-shaped ending, the maintainer's decision of 2026-11-10 ("we should never just crash -- the cli should also return something sensible") and the usage text in args.mjs, the CLI's documented interface; for the done line, the maintainer's request for a greppable stream (2026-11-12, relayed by the coordinator).`,
     limits: `The grammar and model of oracle-gaps.report, with its limits. Outcomes that need test runs, and the failing-owner refusal, belong to oracle-gaps.report. Same-named functions, accessors, and field arrows are judged for ownership only; runes only as $state, $state.raw, $derived, $derived.by, $effect, and $effect.pre in a .svelte.ts module, judged by a restatement of Svelte's placement rule rather than the compiler. A derived class is judged in this oracle's in-process run and in the end-to-end oracle's static half: the end-to-end oracle instruments its file and judges its sites as unowned, but no test imports or constructs the class, so no test runs it. The in-process run transpiles the file to CommonJS at ES2022; other downlevel targets and Vitest's own transform are not exercised. The mutant switch (switchFor) is a hand copy of the switch's contract in schemata.mjs, not the capture setup's runtime: the capture setup imports Vitest and installs timers and globals when it loads, so it cannot run in-process. The derived grammar has one derived class per history, with parameter properties, a field, statements before and after super, an early return before it, and the four forms of the super call (a statement, an arrow argument, and the right operand of \`&&\` or \`||\`). It has no super call in a method, a nested class, or a \`super.method()\` call, and no default parameter. Module-level data is four \`const\` declarations of the main source (an object literal, an array that holds \`devBuild\` as a value, a boolean, and an object of two methods), and a top-level loop of the \`..gen/\` file whose variable is no unit, each read in place by generated or witness functions or named by an owns entry; data imported from another file, \`let\` data, enums, and default exports are not generated. A destructured declaration (\`const { a } = obj\`) stays \`<module>\`, and a function made by a call (\`const h = memo(() => …)\`) now belongs to the unit \`h\`; neither is generated. Unnamed exports are seven files of a helper and one exported function each (an ES default function, a default arrow bare and in parentheses, CommonJS \`module.exports\` alone and chained through \`exports\`, \`exports.default\`, and \`exports.run\`), each calling its helper, owned through an owns entry that names them or through an importer that imports and calls each but \`exports.default\` (a default import of a CommonJS module resolves to the module, not its \`default\`, so a reference to \`exports.default\` through an import is not judged). TypeScript's \`export = <function>\` is named \`default\` by the same rule but is not generated, nor is \`export default class {}\` or \`module.exports = { ... }\` (whose methods are named by their properties). A mutant of these forms was keyed \`<module>\` before and is keyed \`default\` (or its export's name) now: a one-time change of saved keys. A method that module data holds references nothing, so whether a method's references stay out of the declaration's tree is not judged. The ending law is judged here only for argument refusals, one fault per history; refusals from the analysis and the runner, and the daemon's own path, are the end-to-end oracle's. No legal history reaches an internal error, so its shape (exit 3, the stack in error.log) is not judged; a calibration shows that the check rejects a stack trace on stderr. \`--help\` prints its usage text with no prefix and no done line, which the register's M entry "\`--help\` is exempt" (2026-11-16) adds to P10's exemptions, and this oracle owes exactly that text; \`--stop-daemon\`, read the same way as a command outside the run protocol (C, pending ratification), prints nothing and exits 0, which no oracle judges here (the end-to-end oracle runs it and does not observe its streams).`,
   },
@@ -1513,6 +1554,7 @@ oracleProperty({
               `refused without an owner`,
               `refused badEntry with no owner`,
               ...argumentStates,
+              ...notObjectStates,
               // The witness reads each shape of module data and owns it; the
               // other ways data is owned are the module-data history's.
               ...dataReach.slice(dataShapes.length),
@@ -1777,6 +1819,28 @@ oracleProperty({
           steps: null,
         }),
       },
+      // Each entry that is not an object, in a list after a valid mutant,
+      // and a whole file that is null.
+      ...[
+        ...Object.keys(notObjects).map((value) => ({ value, long: false })),
+        { value: `0`, long: true },
+      ].map(({ value, long }) => {
+        const bad = { kind: `mutantNotObject`, value, long }
+        return {
+          name: notObjectState(bad).replace(/^refused /, ``),
+          enters: [`refused arguments: mutantNotObject`, notObjectState(bad)],
+          build: (generated) => ({
+            ...generated,
+            badArguments: {
+              ...generated.badArguments,
+              ...bad,
+              daemon: false,
+              out: false,
+            },
+            steps: null,
+          }),
+        }
+      }),
       // Each argument fault, every other one through --daemon.
       ...argumentKinds.map((kind, i) => ({
         name: `bad arguments: ${kind}`,
