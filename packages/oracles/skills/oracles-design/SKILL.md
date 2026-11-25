@@ -571,10 +571,13 @@ comes with one instruction. Do what it says, within the rules below.
   change, give the contract's reason in the evidence (it is a production
   change), and rerun the oracle and the gap check. Code written only so that
   a type checks is often dead: a property on an object typed wider than what
-  is read, or `return {}` where the result is spread. Remove it, and declare
-  the type of what is read. The `not-distinguished` directive names this
-  step for a dropped property, an `undefined` call value, and an `undefined`
-  return.
+  is read, or `return {}` where the result is spread. Still show the
+  evidence first: a law that decides the value exactly owns every public
+  entry point that reaches the code, and the gap runs before and after its
+  removal keep every kill by mutant key (step 7). Then remove it, and
+  declare the type of what is read. The `not-distinguished` directive names
+  this step last for a dropped property, an `undefined` call value, and an
+  `undefined` return.
 - **A law that kills nothing** owns no mutated code, or its witness never
   varies in the histories. Check its witness and its constructed history. If
   the law still kills nothing, it may restate another law: compare the two.

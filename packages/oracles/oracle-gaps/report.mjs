@@ -163,10 +163,13 @@ const meanings = {
 // The directive for an operator whose infection is not measured: the input
 // that makes its value differ, built from the operator (classify.mjs). A
 // value made absent or `undefined` that no legal history tells from the
-// original is dead code, often an addition made only for the type checker:
+// original is dead code, last and only with its evidence (a law that
+// decides the value exactly on every public entry point that reaches it,
+// and every kill kept by key), often an addition made only for the type
+// checker:
 // `start: 0` on an object typed wider than what is read, or `return {}`
 // where the result is spread.
-const DEAD_VALUE = `Where no legal history tells the mutant from the original, the code is dead: remove it, and keep any effect it has. Where it was written only so that a type checks, declare the type of what is read instead.`
+const DEAD_VALUE = `Last, where no legal history tells the mutant from the original, the code is dead only with evidence: a law that decides the value exactly owns every public entry point that reaches this code, and the gap runs before and after its removal keep every kill, compared by mutant key (\`oracles-design\` step 7). With that evidence, remove the code, and keep any effect it has. Where it was written only so that a type checks, declare the type of what is read instead.`
 function distinguishingDirective(g) {
   const line = g.line
   if (g.operator === `loop-false`)

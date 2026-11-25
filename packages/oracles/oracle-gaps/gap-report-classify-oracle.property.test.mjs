@@ -151,10 +151,13 @@
  *    message. The summary's message is read as an author reads it.
  *    A `not-distinguished` survivor of a dropped property, an `undefined`
  *    call value, or an `undefined` return names, after the history to add,
- *    the step for code that no legal history tells from its mutant: it is
- *    dead, to be removed, keeping any effect it has, and where it was
- *    written only so that a type checks, the type of what is read is
- *    declared in its place (a downstream project's report, 2026-11-24:
+ *    last, the step for code that no legal history tells from its mutant:
+ *    it is dead only with its evidence (a law that decides the value
+ *    exactly owns every public entry point that reaches the code, and the
+ *    gap runs before and after the removal keep every kill by mutant key),
+ *    and then removed, keeping any effect it has, and where it was written
+ *    only so that a type checks, the type of what is read is declared in
+ *    its place (a downstream project's reports, 2026-11-24 and 2026-11-25:
  *    `start: 0` on an object typed wider than what is read, and `return {}`
  *    where the result is spread, came back as this class).
  *    A `not-observed` survivor was infected, and no recorded observation
@@ -1068,10 +1071,10 @@ function judgedAuthored(h, ai, owners) {
 
 // The directive for an operator whose infection is not measured: the input
 // that makes the mutant's value differ, built from the operator's semantics.
-// A value made absent or `undefined` also names the step for dead code, such
-// as an addition made only for the type checker (a downstream project's
-// report, 2026-11-24).
-const deadValue = `Where no legal history tells the mutant from the original, the code is dead: remove it, and keep any effect it has. Where it was written only so that a type checks, declare the type of what is read instead.`
+// A value made absent or `undefined` also names, last and only with its
+// evidence, the step for dead code, such as an addition made only for the
+// type checker (a downstream project's reports, 2026-11-24 and 2026-11-25).
+const deadValue = `Last, where no legal history tells the mutant from the original, the code is dead only with evidence: a law that decides the value exactly owns every public entry point that reaches this code, and the gap runs before and after its removal keep every kill, compared by mutant key (\`oracles-design\` step 7). With that evidence, remove the code, and keep any effect it has. Where it was written only so that a type checks, declare the type of what is read instead.`
 function distinguishingDirective(m) {
   const line = m.line + 1
   if (m.operator === `loop-false`)
@@ -1444,7 +1447,7 @@ const directives = {
     /^Production threw `[^`]*` in `[^`]+`; record the error as an observation in the driver, and state the law that decides this input's outcome\.$/,
   // A value made absent or `undefined` adds the step for dead code.
   'not-distinguished':
-    /^Add an owner history ((where one operand of `[&|]{2}` on line \d+ is falsy and the other is truthy, so `&&` and `\|\|` give different results|where the left operand of `\?\?` on line \d+ is truthy, so `\?\?` and `&&` give different results|that enters the loop on line \d+, so that forcing its condition to false changes an asserted result|where the call on line \d+ changes an asserted result when it does not run|where the object read with `\?\.` on line \d+ is `undefined`, so that a plain read throws), and assert on the result\.|(where the call on line \d+ returns a value that changes an asserted result when it is `undefined`|that reads the property dropped on line \d+, so that its absence changes an asserted result|that uses the value returned on line \d+, so that `undefined` in its place changes an asserted result), and assert on the result\. Where no legal history tells the mutant from the original, the code is dead: remove it, and keep any effect it has\. Where it was written only so that a type checks, declare the type of what is read instead\.)$/,
+    /^Add an owner history ((where one operand of `[&|]{2}` on line \d+ is falsy and the other is truthy, so `&&` and `\|\|` give different results|where the left operand of `\?\?` on line \d+ is truthy, so `\?\?` and `&&` give different results|that enters the loop on line \d+, so that forcing its condition to false changes an asserted result|where the call on line \d+ changes an asserted result when it does not run|where the object read with `\?\.` on line \d+ is `undefined`, so that a plain read throws), and assert on the result\.|(where the call on line \d+ returns a value that changes an asserted result when it is `undefined`|that reads the property dropped on line \d+, so that its absence changes an asserted result|that uses the value returned on line \d+, so that `undefined` in its place changes an asserted result), and assert on the result\. Last, where no legal history tells the mutant from the original, the code is dead only with evidence: a law that decides the value exactly owns every public entry point that reaches this code, and the gap runs before and after its removal keep every kill, compared by mutant key \(`oracles-design` step 7\)\. With that evidence, remove the code, and keep any effect it has\. Where it was written only so that a type checks, declare the type of what is read instead\.)$/,
   timeout:
     /^Bound the run of the owner tests so that they end, and let a law reject a run that does not\.$/,
   'setup-error':
