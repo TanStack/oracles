@@ -1145,6 +1145,21 @@ const drawn = fc.record({
   // a gap (the maintainer's decision "An excluded test still runs",
   // 2026-11-23). Drawn last (the generator rule).
   failingLawSpins: fc.boolean(),
+  // A run with `--diff-base` against a commit of the package's sources in
+  // which some lines differ (law 16, `diffBaseOf`): none, or every `stride`-th
+  // line that occurs once in its file, with the source under test also left
+  // out of the commit and of git's index when `untracked`. It costs a run of
+  // its own, so most histories take none. Drawn last (the generator rule).
+  diffBase: fc.oneof(
+    { weight: 7, arbitrary: fc.constant(`none`) },
+    {
+      weight: 1,
+      arbitrary: fc.record({
+        stride: fc.integer({ min: 1, max: 3 }),
+        untracked: fc.boolean(),
+      }),
+    },
+  ),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -3553,6 +3568,13 @@ function resolveHistory(history) {
     spawnOnStart: history.spawnOnStart === true,
     psMissing: history.psMissing === true,
     onlyRun: history.onlyRun === true,
+    // A run with `--diff-base` (law 16), in a history without the witness
+    // module, whose runs cost minutes: none in a history filed before the
+    // field existed.
+    diffBase:
+      history.witness === false && typeof history.diffBase === `object`
+        ? history.diffBase
+        : null,
     pragma: history.pragma === true,
     cliPath: history.cliPath ?? `plain`,
     concurrentStart: history.concurrentStart === true,
@@ -5481,6 +5503,15 @@ function model(plan) {
         ? `threads`
         : `forks`,
     mutants,
+    // Law 16: the keys of the operator mutants on lines changed since the
+    // commit that `--diff-base` names.
+    changedKeys:
+      plan.diffBase &&
+      ((changed) =>
+        mutants
+          .filter((m) => changed[m.source].includes(m.line))
+          .map((m) => m.key)
+          .sort())(diffBaseOf(plan, fixtureFiles(plan)).changed),
     authored,
     authoredAll,
     authoredLine: authoredAll[0]?.line,
@@ -6296,6 +6327,39 @@ const fixturePathOf = (plan, path) =>
     ? `${linkedTests}/${path.slice(`tests/`.length)}`
     : path
 
+/**
+ * Law 16's commit, and the lines of each source that differ from it. The
+ * commit holds each source as the fixture writes it (`files`), except that
+ * every `stride`-th line whose text occurs once in its file holds a comment
+ * of its own instead. Such a line matches no line of the other text, and
+ * every other line matches its counterpart, so the lines changed since the
+ * commit are exactly those, whatever diff finds them. With `untracked`, the
+ * commit and git's index lack the source under test, so every line of it is
+ * changed. `base` maps each committed source to its text there.
+ */
+function diffBaseOf(plan, files) {
+  const base = {}
+  const changed = {}
+  for (const source of plan.sources) {
+    const lines = files[source].split(`\n`)
+    if (plan.diffBase.untracked && source === SOURCE) {
+      changed[source] = lines.map((_, i) => i + 1)
+      continue
+    }
+    const once = lines.flatMap((line, i) =>
+      lines.indexOf(line) === lines.lastIndexOf(line) ? [i] : [],
+    )
+    const replaced = once.filter((_, k) => k % plan.diffBase.stride === 0)
+    base[source] = lines
+      .map((line, i) =>
+        replaced.includes(i) ? `// line ${i + 1} before the change` : line,
+      )
+      .join(`\n`)
+    changed[source] = replaced.map((i) => i + 1)
+  }
+  return { base, changed }
+}
+
 function fixtureFiles(plan, state = initialState(plan)) {
   const manifest = (fields) =>
     `${JSON.stringify({ private: true, type: `module`, ...fields })}\n`
@@ -7031,6 +7095,7 @@ export {
   AUTHORED,
   initialState,
   fixtureFiles,
+  diffBaseOf,
   fixturePathOf,
   written,
   writeFixture,

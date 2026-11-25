@@ -1,5 +1,6 @@
 // The CLI's arguments, shared by the CLI (index.mjs) and the daemon
 // (daemon.mjs), which parses each request's arguments the same way.
+import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { availableParallelism } from 'node:os'
@@ -185,6 +186,12 @@ function optionsOf(args, cwd) {
   // Authored mutants are the author's files: one that cannot be read
   // refuses the run before any work.
   if (mutants) loadAuthored(mutants)
+  // The commit `--diff-base` names, resolved once: the run marks lines
+  // changed since that commit, and a name git does not know would mark none.
+  const diffBase =
+    args[`diff-base`] === undefined
+      ? undefined
+      : commitOf(pkg, `diff-base`, args[`diff-base`])
   // Each source as the package names it (packagePath), a file of the
   // package.
   const sources = args.source.split(`,`).map((source) => {
@@ -211,7 +218,7 @@ function optionsOf(args, cwd) {
     ),
     sources,
     seed: args.seed,
-    diffBase: args[`diff-base`],
+    diffBase,
     // Each run's output is a directory of its own under the package's state
     // in the OS temp directory (`stateDirOf`), so runs of one package and of
     // two packages never collide (maintainer decision, 2026-11-10:
@@ -266,6 +273,26 @@ export function packagePath(pkg, path) {
       `Name a file inside the package, relative to --package.`,
     )
   return posix(named)
+}
+
+/**
+ * The commit that `rev`, the value of `--<option>`, names in the git
+ * repository that holds `pkg`, as `{ rev, commit }`. Anything else refuses
+ * the run: a name git does not know, a range, a blob, an option, an empty
+ * value, or a package in no repository.
+ */
+function commitOf(pkg, option, rev) {
+  const parsed = spawnSync(
+    `git`,
+    [`rev-parse`, `--verify`, `--quiet`, `--end-of-options`, `${rev}^{commit}`],
+    { cwd: pkg, encoding: `utf8` },
+  )
+  if (parsed.status !== 0)
+    throw new Refusal(
+      `--${option} ${JSON.stringify(rev)} names no commit of the git repository that holds the package`,
+      `Pass --${option} a commit, branch, or tag of the package's git repository, such as HEAD.`,
+    )
+  return { rev, commit: parsed.stdout.trim() }
 }
 
 /** A run's directory name: its start time, then random bytes, unique per run. */
