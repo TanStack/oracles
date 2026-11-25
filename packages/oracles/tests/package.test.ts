@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -7,13 +8,14 @@ import {
   readdirSync,
   readlinkSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { createRequire, isBuiltin } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import * as oracles from '../src/index'
 import * as route from '../src/route'
 import { commonJsForRouteOnly } from '../vite.config'
@@ -391,4 +393,113 @@ console.log(JSON.stringify({ failed, unreached }))`,
       rmSync(scratch, { recursive: true, force: true })
     }
   }, 180_000)
+})
+
+// Under a Vitest older than the peer range, `oracleProperty` refuses to
+// register, naming the Vitest it imports and the peer range, instead of
+// failing its tests with an error from inside the framework (under Vitest 1.6:
+// `Cannot read properties of undefined (reading 'aborted')`). The built
+// package runs in a scratch project beside a stand-in Vitest of each version,
+// whose test functions do nothing. The version check is `oracleProperty`'s
+// first step, so the probe passes only an id: under a Vitest in the range,
+// registration goes on past the check and stops on the missing options. This block
+// builds `dist` itself, after the other builds of this file, so no other
+// build writes it meanwhile.
+describe(`oracleProperty under an old Vitest`, () => {
+  const packageDirectory = dirname(dirname(fileURLToPath(import.meta.url)))
+  const local = createRequire(import.meta.url)
+  const range = (
+    JSON.parse(
+      readFileSync(join(packageDirectory, `package.json`), `utf8`),
+    ) as { peerDependencies: { vitest: string } }
+  ).peerDependencies.vitest
+  let scratch = ``
+
+  beforeAll(() => {
+    const build = spawnSync(
+      process.execPath,
+      [
+        join(dirname(local.resolve(`vite/package.json`)), `bin/vite.js`),
+        `build`,
+      ],
+      { cwd: packageDirectory, encoding: `utf8` },
+    )
+    expect(build.status, build.stderr).toBe(0)
+    scratch = mkdtempSync(join(tmpdir(), `oracles-old-vitest-`))
+    const installed = join(scratch, `node_modules/@tanstack/oracles`)
+    mkdirSync(installed, { recursive: true })
+    cpSync(
+      join(packageDirectory, `package.json`),
+      join(installed, `package.json`),
+    )
+    cpSync(join(packageDirectory, `dist`), join(installed, `dist`), {
+      recursive: true,
+    })
+    symlinkSync(
+      dirname(local.resolve(`fast-check/package.json`)),
+      join(scratch, `node_modules/fast-check`),
+      `dir`,
+    )
+    writeFileSync(
+      join(scratch, `probe.mjs`),
+      [
+        `import { oracleProperty } from '@tanstack/oracles'`,
+        `try {`,
+        `  oracleProperty({ id: 'probe' })`,
+        `  console.log('registered')`,
+        `} catch (error) {`,
+        `  console.log(error.message)`,
+        `}`,
+        ``,
+      ].join(`\n`),
+    )
+  }, 120_000)
+
+  afterAll(() => rmSync(scratch, { recursive: true, force: true }))
+
+  /** What `oracleProperty` says beside a stand-in Vitest of `version`. */
+  const registerUnder = (version: string) => {
+    const vitest = join(scratch, `node_modules/vitest`)
+    rmSync(vitest, { recursive: true, force: true })
+    mkdirSync(vitest, { recursive: true })
+    writeFileSync(
+      join(vitest, `package.json`),
+      JSON.stringify({
+        name: `vitest`,
+        version,
+        type: `module`,
+        exports: { '.': `./index.mjs` },
+      }),
+    )
+    writeFileSync(
+      join(vitest, `index.mjs`),
+      `export const describe = () => {}, it = () => {}, expect = () => {}, vi = {}\n`,
+    )
+    const run = spawnSync(process.execPath, [`probe.mjs`], {
+      cwd: scratch,
+      encoding: `utf8`,
+    })
+    expect(run.status, run.stderr).toBe(0)
+    return run.stdout.trim()
+  }
+
+  it.each([`1.6.1`, `3.2.4`, `4.0.18`, `4.1.0-beta.6`])(
+    `refuses Vitest %s, naming it, the peer range, and the upgrade`,
+    (version) => {
+      const said = registerUnder(version)
+      expect(said).toContain(`Vitest ${version} `)
+      expect(said).toContain(range)
+      expect(said).toContain(`step 2 of the oracles-setup skill`)
+      expect(said).toContain(`before and after`)
+    },
+  )
+
+  it.each([`4.1.0`, `4.1.12`, `5.1.1`])(
+    `goes on past the version check under Vitest %s`,
+    (version) => {
+      const said = registerUnder(version)
+      expect(said).not.toContain(range)
+      expect(said).not.toContain(`Vitest ${version}`)
+    },
+  )
 })

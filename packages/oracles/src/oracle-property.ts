@@ -293,7 +293,9 @@
  * through `oracleProperty` (maintainer decision, 2026-11-11).
  */
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
 import { inspect, isDeepStrictEqual, types } from 'node:util'
 import fc from 'fast-check'
 import { describe, expect, it, vi } from 'vitest'
@@ -865,9 +867,84 @@ interface PropertyTest {
   replays: ReadonlyArray<string>
 }
 
+// A version's place in semver's order, as far as a peer range needs it: its
+// release numbers, then 0 for a prerelease and 1 for the release, so that
+// `4.1.0-beta.6` comes before `4.1.0`. Undefined for a version it cannot read.
+const versionKey = (version: unknown) => {
+  const match = /^(\d+)\.(\d+)\.(\d+)(-)?/.exec(String(version))
+  return match
+    ? [...match.slice(1, 4).map(Number), match[4] ? 0 : 1]
+    : undefined
+}
+const isBefore = (a: Array<number>, b: Array<number>) => {
+  const at = a.findIndex((n, i) => n !== b[i])
+  return at >= 0 && a[at]! < b[at]!
+}
+
+let vitestChecked = false
+/**
+ * Refuses to register under a Vitest older than every version of this
+ * package's peer range for it. Such a Vitest fails the framework's tests from
+ * inside the framework (under Vitest 1.6, a test context has no `signal`), so
+ * the refusal names the Vitest that this package imports, from that copy's
+ * own manifest, and the upgrade. The package is the `@tanstack/oracles` that
+ * the working directory resolves, since this module cannot name its own path
+ * (its CommonJS declarations build refuses `import.meta`). A package, a Vitest,
+ * or a range it cannot read goes on. The gap check refuses the same Vitest
+ * before it runs a test (oracle-gaps check.mjs, `refuseOldVitest`).
+ */
+function assertVitestInPeerRange(): void {
+  if (vitestChecked) return
+  vitestChecked = true
+  let refusal: string | undefined
+  try {
+    refusal = oldVitestRefusal()
+  } catch {
+    return
+  }
+  if (refusal !== undefined) throw new Error(refusal)
+}
+
+function oldVitestRefusal(): string | undefined {
+  const read = (path: string) =>
+    JSON.parse(readFileSync(path, `utf8`)) as {
+      name?: string
+      version?: string
+      peerDependencies?: Record<string, string>
+    }
+  const nameAt = (dir: string) => {
+    try {
+      return read(join(dir, `package.json`)).name
+    } catch {
+      return undefined
+    }
+  }
+  const manifest = createRequire(join(process.cwd(), `package.json`)).resolve(
+    `@tanstack/oracles/package.json`,
+  )
+  const range = read(manifest).peerDependencies!.vitest!
+  let dir = dirname(createRequire(manifest).resolve(`vitest`))
+  while (nameAt(dir) !== `vitest`)
+    if (dirname(dir) === dir) return undefined
+    else dir = dirname(dir)
+  const { version } = read(join(dir, `package.json`))
+  const installed = versionKey(version)
+  // Each part's lowest version: `^4.1.0` holds nothing before 4.1.0.
+  const lowest = range
+    .split(`||`)
+    .map((part) => versionKey(part.trim().replace(/^\D+/, ``)))
+  if (
+    installed === undefined ||
+    !lowest.every((bound) => bound && isBefore(installed, bound))
+  )
+    return undefined
+  return `@tanstack/oracles needs a Vitest in its peer range, ${range}, and it runs with Vitest ${version} (${dir}). Upgrade Vitest in the package to that range, as step 2 of the oracles-setup skill says, and run the package's existing tests before and after the upgrade.`
+}
+
 export function oracleProperty<const THistory, TExpected, TPlan = THistory>(
   options: OraclePropertyOptions<THistory, TExpected, TPlan>,
 ): void {
+  assertVitestInPeerRange()
   // Every source names a registered property, so its replay and manifest
   // entries exist; an enumerated source has no random campaign to check it.
   assertRegisteredOracleProperty(options.id)
