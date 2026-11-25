@@ -384,6 +384,7 @@ export const shards = {
     `calibration: a compared run counts a new survivor as still killed`,
     `calibration: a compared run's note names none of its ids`,
     `calibration: a compared run's summary.md drops a listed key`,
+    `calibration: a compared run leaves out its review note`,
     // The filed history of a stale authored mutant's fourth base (about 12 s).
     `fixed history: a filed base whose owner reads an absent object through ?.`,
     `determinism: fixed history: a filed base whose owner reads an absent object through ?.`,

@@ -76,7 +76,12 @@ agent.
   a reformat or an edit elsewhere keeps it, and an edit to the statement,
   or a renamed function or file, makes its mutants new keys. Both runs must
   be full: `--compare` refuses a partial run's results, and `--only` or
-  `--sample` beside it.
+  `--sample` beside it. When a function has fewer owned operator mutants
+  than it had there (probe code, authored mutants, and unowned code left
+  out), owned code shrank, and one more note says so: `oracle-gaps: note
+owned code shrank by <n> mutants in <functions>; run an independent
+review (oracles-design step 10)`. `compare.shrank` in `results.json`
+  holds the same count and functions.
 
   A survivor that changed no observation but made a test do more work is
   `extra-work`: the mutant deleted a shortcut that exists only for speed,

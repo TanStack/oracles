@@ -5218,6 +5218,10 @@ function comparedResults(mutants, { revive, bury, drop, foreign }) {
         .map((m) => ({
           id: m.id,
           key: m.key,
+          // Where it is, which the review note groups by (owedShrink).
+          source: m.source,
+          function: m.function,
+          authored: m.authored,
           outcome: revived.has(m.key)
             ? `killed`
             : buried.has(m.key)
@@ -5230,6 +5234,9 @@ function comparedResults(mutants, { revive, bury, drop, foreign }) {
             {
               id: `src/gone.ts:M1`,
               key: FOREIGN_KEY,
+              source: `src/gone.ts`,
+              function: `gone`,
+              authored: false,
               outcome: `killed`,
               probeGuard: false,
             },
@@ -5275,6 +5282,42 @@ function owedComparison(earlier, mutants) {
  * many are gone, and the ids (in `mutants`) of the keys no longer killed and
  * of the new keys that survive, each `--only` can rerun.
  */
+/**
+ * How much owned code a run given `--compare` lost, from the compared run's
+ * `earlier` results and the run's own `mutants`: for each function (its
+ * source and name), its owned operator mutants there and here, with probe
+ * code, authored mutants, and unowned ones on neither side. A function with
+ * fewer here shrank, by the difference; one with none here shrank by all it
+ * had. The functions are sorted.
+ */
+function owedShrink(earlier, mutants) {
+  const counted = (list, probe) => {
+    const counts = new Map()
+    for (const m of list)
+      if (!m[probe] && !m.authored && m.outcome !== `unowned`) {
+        const at = `${m.source}#${m.function ?? `<module>`}`
+        counts.set(at, (counts.get(at) ?? 0) + 1)
+      }
+    return counts
+  }
+  const there = counted(earlier, `probeGuard`)
+  const here = counted(mutants, `probe`)
+  const shrank = [...there]
+    .filter(([at, n]) => n > (here.get(at) ?? 0))
+    .map(([at, n]) => [at, n - (here.get(at) ?? 0)])
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+  return {
+    mutants: shrank.reduce((sum, [, n]) => sum + n, 0),
+    functions: shrank.map(([at]) => at),
+  }
+}
+/** The one review note of a run whose owned code shrank, or none. */
+const shrinkNotes = ({ mutants, functions }) =>
+  mutants === 0
+    ? []
+    : [
+        `oracle-gaps: note owned code shrank by ${mutants} mutant${mutants === 1 ? `` : `s`} in ${functions.join(`, `)}; run an independent review (oracles-design step 10)`,
+      ]
 function compareNote(owed, against, mutants) {
   const idOf = new Map(mutants.map((m) => [m.key, m.id]))
   const ids = (keys) =>
@@ -7113,6 +7156,8 @@ export {
   COMPARED,
   comparedResults,
   owedComparison,
+  owedShrink,
+  shrinkNotes,
   compareNote,
   kill,
   push,
