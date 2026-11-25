@@ -126,6 +126,10 @@ const directive = {
       ? `Make \`${g.nondeterministicBy.map(testName).join(`, `)}\` deterministic: control its clock and its random seed, so its failures judge this code.`
       : `Add an owner test that runs line ${g.line} and asserts on its result.`,
   'dead-code': (g) => `Remove the redundant code on line ${g.line}.`,
+  // The generator's static evidence that no caller tells the mutant from
+  // the original: what confirms it, and what refutes it.
+  'suspected-invalid': (g) =>
+    `Check the generator's evidence on line ${g.line} (${g.invalid}), then list this mutant's key and that evidence in a framework bug report, as summary.md's suspected invalid mutants section does. A caller that tells the two apart refutes it: add the owner history that reaches that caller, assert on its result, and report the refuted evidence in that bug report.`,
   'outside-annotation': (g) =>
     `Add an owner history that reaches line ${g.line} with ${g.input}, which the annotation excludes, so that it changes an asserted result, and assert on the result.`,
   'random-only-kill': (g) =>
@@ -154,6 +158,7 @@ const directive = {
 // class's name alone misleads (maintainer disposition G3, 2026-11-11): a
 // crash is a gap, not a kill (the v20 freeze, P3 and C1).
 const meanings = {
+  'suspected-invalid': `The generator's static evidence says that no caller tells this mutant from the original, so the framework should not have made it. `,
   crashed: `Production threw where no law judged it: a gap, not a kill. Its error is on the gap's Detail line in summary.md, and in its \`detail\` in results.json. `,
   // A builtin counts as one site, so a tight bound is a poor witness of its
   // cost (maintainer, 2026-11-12).
@@ -205,6 +210,7 @@ const placeholders = {
   detail: `<error>`,
   operator: `<operator>`,
   input: `<input>`,
+  invalid: `<evidence>`,
   blockedBy: [`<file>`],
   work: {
     bound: `<ratio>`,
@@ -368,6 +374,20 @@ export function renderReport({
     }
     lines.push(``)
   }
+  // The suspected invalid mutants once more, as a framework bug report's
+  // body: each key and line with the generator's evidence.
+  const suspected = gaps.filter((gap) => kindOf(gap) === `suspected-invalid`)
+  if (suspected.length > 0)
+    lines.push(
+      `## Suspected invalid mutants`,
+      ``,
+      `The generator's static evidence says that no caller tells these mutants from the original. Check each one's evidence, then put this list in a framework bug report.`,
+      ``,
+      ...suspected.map(
+        (gap) => `- ${codeSpan(gap.key)}, line ${gap.line}: ${gap.invalid}`,
+      ),
+      ``,
+    )
   if (unowned.length > 0) {
     lines.push(
       `## Unowned (warnings)`,
