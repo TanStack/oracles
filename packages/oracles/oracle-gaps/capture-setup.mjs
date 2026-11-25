@@ -551,24 +551,26 @@ const tally = (counts, ids) => {
   for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1)
 }
 // fast-check also outlives a batch's copies, so its wrapper calls the
-// copy now running.
+// copy now running. A run starts a history inside a test and outside
+// another history, and gets back the history's end, which counts it only
+// while that history is the open one: each test starts with none open
+// (`beforeEach`), so a run that a timed-out test left pending neither
+// blocks a later test's histories nor counts in them.
 globalThis.__oracleGapsHistory =
   active === null
     ? {
-        // Whether a run starts a history: inside a test, and outside
-        // another history.
         start: () => {
-          if (!inTest || historyHits) return false
-          historyHits = new Set()
+          if (!inTest || historyHits) return undefined
+          const hits = (historyHits = new Set())
           historyInfected = new Set()
-          return true
-        },
-        end: () => {
-          histories += 1
-          tally(siteHistories, historyHits)
-          tally(siteInfected, historyInfected)
-          historyHits = null
-          historyInfected = null
+          return () => {
+            if (historyHits !== hits) return
+            histories += 1
+            tally(siteHistories, historyHits)
+            tally(siteInfected, historyInfected)
+            historyHits = null
+            historyInfected = null
+          }
         },
       }
     : undefined
@@ -582,18 +584,17 @@ if (fc) {
     const run = prototype.run
     if (typeof run !== `function` || run.counted) continue
     const counted = function (...args) {
-      const history = globalThis.__oracleGapsHistory
-      if (!history?.start()) return run.apply(this, args)
+      const end = globalThis.__oracleGapsHistory?.start()
+      if (!end) return run.apply(this, args)
       let result
       try {
         result = run.apply(this, args)
       } catch (error) {
-        history.end()
+        end()
         throw error
       }
-      if (typeof result?.then === `function`)
-        return result.finally(() => history.end())
-      history.end()
+      if (typeof result?.then === `function`) return result.finally(end)
+      end()
       return result
     }
     counted.counted = true
@@ -1024,6 +1025,8 @@ beforeEach((context) => {
   histories = 0
   siteHistories = new Map()
   siteInfected = new Map()
+  historyHits = null
+  historyInfected = null
   route = undefined
   workBound = undefined
   clocked = false
