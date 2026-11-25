@@ -56,7 +56,10 @@ because production does it is model hacking. When the law and the code
 disagree, the adopted law decides, not the code.
 
 When the promise is unclear, or two readings predict different behavior, use
-the [law discovery](../../docs/instruments/law-discovery.md) card.
+the [law discovery](../../docs/instruments/law-discovery.md) card. Ask the
+developer such a question with a caller scenario, the output under each
+reading, and what changes for that caller
+([Asking an open law question](../../docs/instruments/law-discovery.md#asking-an-open-law-question)).
 
 **Use the [design grammar](../../docs/instruments/design-grammar.md) card
 when any of these is true.** Do not judge whether the law is hard. Check the
