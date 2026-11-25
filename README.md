@@ -149,6 +149,20 @@ agent.
   `--help` is not a check, so its usage text has no prefix and no done
   line. `--stop-daemon` prints nothing.
 
+  A kill that only `generated` units made (the tests `oracleProperty`
+  names `fixed seed N: generated` and `random seed: generated`) rests on
+  what a seed draws from the grammar. A change to the grammar or its
+  weights moves those draws, and the mutant can then come back as a
+  survivor. `summary.md` lists each such kill under "Kills by generated
+  histories only", with "killed by generated histories only: pin it with
+  a constructed history" and the tests that killed it, and `results.json`
+  gives it `generatedOnly: true` (any other kill has `false`). It is not a
+  gap, and the gap count does not change. The mark reads the killing tests'
+  names. A run stops at a mutant's first kill, and a property's fixed
+  histories run after its campaign units, so a fixed history that would
+  also kill the mutant may not have run: then the mark says only that
+  none of the tests that ran pins the kill.
+
   For contributors: the `ORACLE_GAPS_TEST_` environment variables are test-only
   hooks for the CLI's own oracle, not settings for users. Each is inert unless
   set, and none changes an outcome by itself.
