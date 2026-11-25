@@ -73,7 +73,17 @@ search is your main job.
   claims, and name the mutant on it that would survive.
 - **A model that copies production.** The model mirrors production's
   branches, classifications, or helpers, so both agree on the same wrong
-  answer. Compare the model's structure with production, not only its
+  answer. Ask too whether any part of the model reuses another law's model,
+  or a helper that production also relies on. A shared derivation hides a
+  mistake the way an expectation taken from production does. A pruning
+  model that takes its candidates from the reference-collection law's
+  model inherits what that model counts as a reference. When that model and
+  production both count a declaration's read of itself, the pruning model
+  predicts production's wrong removal, and both laws pass. A calibration
+  that breaks only the clause the shared part decides, and names that
+  clause's own `difference`, exposes it: it fails while the clause holds
+  only through the model. Ask for one on each clause a shared part decides.
+  Compare the model's structure with production, not only its
   results.
 - **A grammar narrower than the law.** The law claims a value domain, action,
   or case that the grammar never generates. Examples:
