@@ -74,3 +74,31 @@ edge case as representative; or overstating what is owed at an intermediate cut.
 **Stop when:** the law is precise enough to enact independently, or a named
 missing authority or fact prevents choosing between predictions. Continue other
 authorized work while keeping that choice unresolved.
+
+## Asking an open law question
+
+When authority does not select a prediction, the developer decides. Ask once,
+with three things:
+
+1. one realistic caller scenario: what a caller does with the result;
+2. the actual output under each candidate rule, run on the code (the current
+   code for one rule, a small patch or variant for the other);
+3. what changes for that caller.
+
+A consumer that forwards a value uses it: check what the next call does with
+it.
+
+Example. A queue's `unfinished()` returns job ids, and nothing decides
+whether a cancelled job counts. Asked abstractly ("the restart code never
+inspects the ids"), the question looks harmless. The scenario: a worker
+restarts and forwards each id in `unfinished()` to `run(id)`. After
+`add('a')`, `add('b')`, `add('c')`, `finish('a')`, `cancel('b')`, the two
+rules print:
+
+```text
+A, cancelled counts (current code): unfinished() = ["b","c"], restart runs ["b","c"]
+B, only pending counts: unfinished() = ["c"], restart runs ["c"]
+```
+
+What changes for the caller: under rule A, the job the user cancelled runs
+again after a restart.

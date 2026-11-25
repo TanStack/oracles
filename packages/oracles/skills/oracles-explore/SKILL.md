@@ -418,7 +418,10 @@ own instead, and recommend one.
     symmetric. A parser and a serializer round-trip. A setter is idempotent
     when set to the same value.
 - The open design questions, each with its two readings, and what the probe
-  showed. Say that these can wait: the oracle's results will help decide
+  showed. Give each the caller scenario, the output under each reading, and
+  what changes for that caller, as the
+  [law discovery](../../docs/instruments/law-discovery.md#asking-an-open-law-question)
+  card says. Say that these can wait: the oracle's results will help decide
   them. List them apart from the potential laws, and do not number them as
   laws. Until the developer decides one, the oracle file states it as a
   limit.
