@@ -55,6 +55,7 @@ term for one concept. Do not rotate synonyms for style.
 | constructed history | A history built from a generated one so that it enters named declared states. Only constructed histories make reach required.                                    |
 | fixed history       | A named history, such as a regression. It is not reach.                                                                                                          |
 | state probe         | A production call, `probing && globalThis.__oracleProbe?.(name, condition)`, that reports where production decides to enter a state. Production builds strip it. |
+| counted probe       | A state probe named in a generated source's `counted`. It judges nothing: each passing unit prints its truthy calls per history as `<id> <unit> counts {...}`.   |
 | probe-only code     | The probe statements and their guard. The gap check does not mutate them.                                                                                        |
 
 ## Gaps

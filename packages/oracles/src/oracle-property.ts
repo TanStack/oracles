@@ -167,6 +167,15 @@
  *   determinism test compares the probe calls each run makes. A call that
  *   arrives after its history's driver settled throws where it happens: the
  *   driver must await the work it starts.
+ * - A **counted probe** is a probe that a generated source names in
+ *   `counted`, to measure how often production does something, such as the
+ *   passes of a loop, without a law. A history's count of it is the number
+ *   of its calls with a truthy condition. Each campaign unit that passes
+ *   prints `<id> <unit> counts {...}` after its reach line: for each counted
+ *   probe, in name order, the `min`, `median` (the lower middle), `max`, and
+ *   `total` of its counts over the histories the unit judged, and how many
+ *   `histories` it judged; with none, `min`, `median`, and `max` are null. A
+ *   counted probe judges nothing, and the model and the check never see it.
  * - A **constructed history** is built from a generated history so that it
  *   reaches states that the laws need, and it names those declared states.
  *   Every campaign runs every constructed history in its own unit, over a
@@ -633,6 +642,12 @@ export interface GeneratedHistories<THistory> {
    * `states` and `measured` fails, so a misspelled state cannot pass unseen.
    */
   measured?: ReadonlyArray<DeclaredState>
+  /**
+   * Probes (`package#name`) that are counted, never judged: each passing
+   * campaign unit prints how many of each history's calls of each one had
+   * a truthy condition, as `<id> <unit> counts {...}`.
+   */
+  counted?: ReadonlyArray<string>
   /** The base run budget of each campaign, scaled by the run multiplier. */
   runs: number
   /** One fixed-seed campaign per seed, beside the random campaign. */
@@ -799,15 +814,18 @@ declare global {
   var __oracleWorkBound: ((ratio: number) => void) | undefined
 }
 
-/** The probe calls one history made: which probes it reached and which it entered. */
+/**
+ * The probe calls one history made: which probes it reached, and which it
+ * entered, with how many of its calls had a truthy condition.
+ */
 interface ProbeRecord {
   reached: ReadonlySet<string>
-  entered: ReadonlySet<string>
+  entered: ReadonlyMap<string, number>
 }
 /** A history's probe record, open until its driver settles. */
 interface ProbeWindow {
   reached: Set<string>
-  entered: Set<string>
+  entered: Map<string, number>
   open: boolean
 }
 const probeWindows = new AsyncLocalStorage<ProbeWindow>()
@@ -825,7 +843,7 @@ globalThis.__oracleProbe = (name, condition) => {
       `probe ${name} was called after its history ended. The driver must await the work it starts, so every probe call belongs to one history.`,
     )
   window.reached.add(name)
-  if (condition) window.entered.add(name)
+  if (condition) window.entered.set(name, (window.entered.get(name) ?? 0) + 1)
 }
 
 /** A calibration's forced entry: the probe is reached, and its entry is forced to the stated value. */
@@ -999,6 +1017,32 @@ function assertDeclared(
         `${id}: a history entered "${state}", which the property does not declare.`,
       )
 }
+
+/**
+ * Each counted probe's counts over a unit's histories, as printed, in probe
+ * order: the least, the lower middle, the greatest, their sum, and how many.
+ */
+const talliesText = (tallies: ReadonlyMap<string, ReadonlyArray<number>>) =>
+  JSON.stringify(
+    Object.fromEntries(
+      [...tallies]
+        .sort(([a], [b]) => (a < b ? -1 : 1))
+        .map(([probe, tally]) => {
+          const sorted = [...tally].sort((a, b) => a - b)
+          const at = (index: number) => sorted[index] ?? null
+          return [
+            probe,
+            {
+              min: at(0),
+              median: at((sorted.length - 1) >> 1),
+              max: at(sorted.length - 1),
+              total: sorted.reduce((sum, count) => sum + count, 0),
+              histories: sorted.length,
+            },
+          ]
+        }),
+    ),
+  )
 
 /** Reach counts as printed, in state order. */
 const countsText = (counts: Map<string, number>) =>
@@ -1221,7 +1265,7 @@ async function repeatedRecord<TPlan>(
       text: encodeData(
         {
           reached: [...probes.reached].sort(),
-          entered: [...probes.entered].sort(),
+          entered: [...probes.entered.keys()].sort(),
         },
         `probes`,
         `observation`,
@@ -1596,6 +1640,13 @@ function determinismTest<THistory, TExpected, TPlan>(
   }
 }
 
+/** A judged history: its verdict, its reached states, and its probes' entries. */
+interface Judged {
+  verdict: Verdict
+  reached: Set<string>
+  entered: ReadonlyMap<string, number>
+}
+
 /** Runs one history: the driver records, the model predicts, the check judges. */
 async function runOne<THistory, TExpected, TPlan>(
   options: BoundOptions<THistory, TExpected, TPlan>,
@@ -1606,7 +1657,7 @@ async function runOne<THistory, TExpected, TPlan>(
     TPlan
   >[`driver`] = options.driver,
   forced?: ForcedProbe,
-): Promise<{ verdict: Verdict; reached: Set<string> }> {
+): Promise<Judged> {
   const plan = planOf(options, history)
   const { observations, driverError, probes, spin } = await recordGuarded(
     driver,
@@ -1634,7 +1685,7 @@ async function runOne<THistory, TExpected, TPlan>(
       driverError && decided.kind === `violation`
         ? { ...decided, cause: driverError.error }
         : decided
-    let judged: { verdict: Verdict; reached: Set<string> }
+    let judged: Judged
     try {
       judged = judge(
         options,
@@ -1647,13 +1698,17 @@ async function runOne<THistory, TExpected, TPlan>(
       )
     } catch (error) {
       if (error instanceof OracleModelError || !cutShort) throw error
-      return { verdict: kept(clock), reached: new Set() }
+      return {
+        verdict: kept(clock),
+        reached: new Set(),
+        entered: probes.entered,
+      }
     }
-    const { verdict, reached } = judged
+    const { verdict } = judged
     const recorded =
       verdict.kind === `violation` &&
       cut.some(({ checkpoint }) => checkpoint === verdict.checkpoint)
-    return { verdict: kept(recorded ? verdict : clock), reached }
+    return { ...judged, verdict: kept(recorded ? verdict : clock) }
   }
   return judge(options, plan, observations, driverError, probes)
 }
@@ -1680,7 +1735,7 @@ async function recordGuarded<TPlan>(
   let dataError: unknown
   const window: ProbeWindow = {
     reached: new Set(),
-    entered: new Set(),
+    entered: new Map(),
     open: true,
   }
   const close = (): ProbeRecord => {
@@ -1688,7 +1743,8 @@ async function recordGuarded<TPlan>(
     // A forced entry is a call with that condition, so the probe is reached.
     if (forced) {
       window.reached.add(forced.probe)
-      if (forced.entered) window.entered.add(forced.probe)
+      if (forced.entered)
+        window.entered.set(forced.probe, window.entered.get(forced.probe) ?? 1)
       else window.entered.delete(forced.probe)
     }
     return window
@@ -1746,12 +1802,12 @@ function judge<THistory, TExpected, TPlan>(
   plan: TPlan,
   observations: ReadonlyArray<Observation>,
   driverError?: { error: unknown },
-  probes: ProbeRecord = { reached: new Set(), entered: new Set() },
+  probes: ProbeRecord = { reached: new Set(), entered: new Map() },
   // What cut the trace short, when something other than a driver error did,
   // and a driver error that came after that cut, which a model error carries.
   cutBy?: string,
   later?: { error: unknown },
-): { verdict: Verdict; reached: Set<string> } {
+): Judged {
   let expected: TExpected
   let verdict: Verdict
   let predicted: Readonly<Record<string, boolean>> = {}
@@ -1812,7 +1868,7 @@ function judge<THistory, TExpected, TPlan>(
       agreementLaw,
     )
   }
-  return { verdict, reached }
+  return { verdict, reached, entered: probes.entered }
 }
 
 type Violation = Extract<Verdict, { kind: `violation` }>
@@ -2522,12 +2578,14 @@ function generatedTests<THistory, TExpected, TPlan>(
   // that shrinking must keep, a setup error, a constructed history that missed
   // its state, or one law. A
   // smaller history that fails some other way counts as passing. It counts
-  // the histories that entered each state. After the first failure, it runs
+  // the histories that entered each state, and records each history's count
+  // of each counted probe. After the first failure, it runs
   // no history once `shrinkUntil` (a `performance.now()` time, which a
   // controlled clock leaves real) has passed.
   const predicateFor = (
     constructionOf: Map<THistory, ConstructedHistory<THistory>>,
     counts: Map<string, number>,
+    tallies: ReadonlyMap<string, Array<number>>,
     shrinkUntil: number,
     // The rerun line a violation prints; a random unit's comes only once
     // fast-check reports its path.
@@ -2559,6 +2617,8 @@ function generatedTests<THistory, TExpected, TPlan>(
       assertDeclared(id, declared, reached)
       for (const state of reached)
         counts.set(state, (counts.get(state) ?? 0) + 1)
+      for (const [probe, tally] of tallies)
+        tally.push(outcome.entered.get(probe) ?? 0)
       // A law violation outranks a constructed history that missed its state.
       if (verdict.kind === `pass`) {
         const construction = constructionOf.get(history)
@@ -2665,6 +2725,9 @@ function generatedTests<THistory, TExpected, TPlan>(
     const counts = new Map<string, number>(
       [...(declared ?? [])].map((state) => [state, 0]),
     )
+    const tallies = new Map(
+      (source.counted ?? []).map((probe) => [probe, [] as Array<number>]),
+    )
     // A random unit's replay runs itself; a fixed-seed unit's replay runs the
     // random unit of its name with the fixed seed, which draws the same
     // stream.
@@ -2689,7 +2752,14 @@ function generatedTests<THistory, TExpected, TPlan>(
     const details = await fc.check(
       fc.asyncProperty(
         source.arbitrary,
-        predicateFor(constructionOf, counts, shrinkUntil, rerun, violations),
+        predicateFor(
+          constructionOf,
+          counts,
+          tallies,
+          shrinkUntil,
+          rerun,
+          violations,
+        ),
       ),
       run,
     )
@@ -2744,8 +2814,12 @@ function generatedTests<THistory, TExpected, TPlan>(
     // Vitest hides console output from a passing test; stdout reaches the log.
     // A unit that passes after its test timed out did not pass this run, so a
     // sum of the units' lines never counts it.
-    if (!signal.aborted)
-      process.stdout.write(`${id} ${task.name} reach ${countsText(counts)}\n`)
+    if (signal.aborted) return
+    process.stdout.write(`${id} ${task.name} reach ${countsText(counts)}\n`)
+    if (tallies.size > 0)
+      process.stdout.write(
+        `${id} ${task.name} counts ${talliesText(tallies)}\n`,
+      )
   }
   const fixedUnits = source.fixedSeeds.flatMap((seed) =>
     unitNames.map((unit): PropertyTest => ({
