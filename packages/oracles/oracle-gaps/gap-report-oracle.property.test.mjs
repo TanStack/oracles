@@ -211,7 +211,18 @@
  *    for it (`--ordinary`, maintainer decision of 2026-11-06): then a
  *    survivor or an unreached mutant that an ordinary test reached reports
  *    the ordinary tests' outcome, for information. Only `killed` closes an owned
- *    mutant; every other class is a gap.
+ *    mutant; every other class is a gap. A run stops at a mutant's first
+ *    kill, so a kill names the first killing test of the first owner file,
+ *    in path order, whose run did not end before it killed. A kill whose
+ *    killing test is a unit of generated histories, named as
+ *    `oracleProperty` names one (`fixed seed N: generated`), rests on
+ *    generated histories only, which a change to the grammar moves:
+ *    results.json marks it (`generatedOnly: true`; any other kill has
+ *    `false`, and no other outcome has the field), and summary.md lists it
+ *    once, by its key, as "killed by generated histories only: pin it with
+ *    a constructed history". A constructed history's unit, named
+ *    `fixed seed N: generated N`, pins its kill. The mark is no gap, and
+ *    the gap count and classes stay as above (feedback item 34).
  * 5. **Authored mutants.** An authored mutant whose text occurs exactly once
  *    is judged by law 4 against the owners of the function it edits, without
  *    the branch-never-taken class, and is reported at the line of its edit; one
@@ -2432,6 +2443,9 @@ function readRunIn(dir, out, status, stderr, cli, stdout, derived) {
       laws: r.laws,
       probe: r.probeGuard === true,
       ordinaryOutcome: r.testOutcome !== undefined,
+      generatedOnly: r.generatedOnly,
+      // The tests a kill or a gap names, for reach (law 4's mark).
+      by: r.by,
     })),
     ...readSummary(summary),
   }
@@ -4335,6 +4349,19 @@ async function driver(plan, observe) {
         timeout: `timeout`,
       }[m.outcome]
       if (named) states.add(named)
+      // Law 4's mark: a kill that only a unit of generated histories made,
+      // and one that a constructed history's unit, named past a generated
+      // unit's name, pinned.
+      if (m.outcome === `killed` && m.generatedOnly)
+        states.add(`a kill by generated histories only`)
+      if (
+        m.outcome === `killed` &&
+        !m.authored &&
+        / > fixed seed \d+: generated \d+$/.test(m.by?.[0] ?? ``)
+      )
+        states.add(
+          `a kill pinned by a constructed unit named past a generated one`,
+        )
       if (m.class === `not-judged`) states.add(`not judged`)
       if (m.class === `extra-work`) states.add(`extra work`)
       if (m.outcome === `killed` && m.laws?.includes(`work bound`))
@@ -5118,6 +5145,31 @@ function check(plan, observations, expected) {
         `keys`,
         { actual: got.key, expected: owed.key },
       )
+  // Law 4's mark: a kill that only a unit of generated histories made, in
+  // results.json and, by its key, in summary.md. An authored mutant's mark
+  // is the classify oracle's.
+  for (const [owed, got] of pairs)
+    if (!owed.probe && got.generatedOnly !== owed.generatedOnly)
+      return violation(
+        `cli`,
+        `${site(got)} (${owed.kind}): generatedOnly is ${JSON.stringify(got.generatedOnly)}, owed ${JSON.stringify(owed.generatedOnly)}`,
+        `generated-only kills`,
+        { actual: got, expected: owed },
+      )
+  const markedOwed = expected.mutants
+    .filter((m) => !m.probe && m.generatedOnly)
+    .map((m) => m.key)
+    .sort()
+  const markedListed = cli.generatedOnly.filter(
+    (key) => !key.includes(`#authored:`),
+  )
+  if (JSON.stringify(markedListed) !== JSON.stringify(markedOwed))
+    return violation(
+      `cli`,
+      `summary.md lists ${JSON.stringify(markedListed)} as killed by generated histories only, owed ${JSON.stringify(markedOwed)}`,
+      `generated-only kills`,
+      { actual: markedListed, expected: markedOwed },
+    )
   if (
     cli.gaps.join(`\n`) !== expected.gaps.join(`\n`) ||
     JSON.stringify(cli.entries) !== JSON.stringify(expected.entries) ||
@@ -5781,6 +5833,47 @@ const firstWhere = (predicate, change) =>
     return cli
   })
 const calibrations = [
+  // Law 4's mark: a kill that only a generated unit made goes unmarked, one
+  // that a constructed unit pinned is marked, and the summary leaves a
+  // marked kill out.
+  {
+    name: `a kill by generated histories only goes unmarked`,
+    law: `generated-only kills`,
+    history: {
+      constructed: `kills by a generated unit and by a constructed unit`,
+    },
+    corrupt: firstWhere(
+      (m) => m.generatedOnly === true,
+      (m) => {
+        m.generatedOnly = false
+      },
+    ),
+  },
+  {
+    name: `a kill that a constructed unit pins is marked`,
+    law: `generated-only kills`,
+    history: {
+      constructed: `kills by a generated unit and by a constructed unit`,
+    },
+    corrupt: firstWhere(
+      (m) => m.generatedOnly === false,
+      (m) => {
+        m.generatedOnly = true
+      },
+    ),
+  },
+  {
+    name: `the summary leaves a kill by generated histories only out`,
+    law: `generated-only kills`,
+    history: {
+      constructed: `kills by a generated unit and by a constructed unit`,
+    },
+    corrupt: corruptCli((cli) => {
+      if (cli.exit !== 0 || cli.generatedOnly.length === 0) return undefined
+      cli.generatedOnly = cli.generatedOnly.slice(1)
+      return cli
+    }),
+  },
   {
     name: `a refused run is reported as complete`,
     law: `ownership`,
@@ -6786,6 +6879,10 @@ const required = [
   `a check through the daemon worked past its CLI's bound`,
   `a slow daemon start was served by the daemon`,
   `a check abandoned while a context warmed in place of a cut one wrote nothing more`,
+  // Reached by its own constructed history; generated histories reach it
+  // when they draw `unitNames` (law 4's mark).
+  `a kill by generated histories only`,
+  `a kill pinned by a constructed unit named past a generated one`,
 ]
 // The faults the CLI analyzes anyway: a package's TypeScript is no input.
 const analyzedFaults = [`noTypescript`, `apiLessTypescript`]
@@ -6918,6 +7015,8 @@ const separate = [
   `a check through the daemon worked past its CLI's bound`,
   `a slow daemon start was served by the daemon`,
   `a check abandoned while a context warmed in place of a cut one wrote nothing more`,
+  `a kill by generated histories only`,
+  `a kill pinned by a constructed unit named past a generated one`,
 ]
 // A stop by SIGTERM exists only where Node can deliver it: on win32 kill is
 // TerminateProcess, so there the stop law is judged by SIGINT (the test stop
@@ -7044,6 +7143,7 @@ const withDeclaration = (constructed) =>
         failingLawCalls: `none`,
         failingLawHook: `none`,
         failingLawSpins: false,
+        unitNames: false,
         declaration: index % 2 === 0 ? `wrapper` : `oracleProperty`,
         ownerless: false,
         owners: [`a`, ...generated.owners.slice(1)],
@@ -7341,6 +7441,7 @@ oracleProperty({
           failingLawCalls: `none`,
           failingLawHook: `none`,
           failingLawSpins: false,
+          unitNames: false,
           stopRuns: NO_STOPS,
           laterSteps: NO_LATER_STEPS,
         },
@@ -7550,6 +7651,7 @@ oracleProperty({
           failingLawCalls: 'none',
           failingLawHook: 'none',
           failingLawSpins: false,
+          unitNames: false,
         },
       },
       {
@@ -7715,6 +7817,7 @@ oracleProperty({
           failingLawCalls: 'none',
           failingLawHook: 'none',
           failingLawSpins: false,
+          unitNames: false,
         },
       },
       {
@@ -7907,6 +8010,7 @@ oracleProperty({
           failingLawCalls: 'none',
           failingLawHook: 'none',
           failingLawSpins: false,
+          unitNames: false,
         },
       },
     ],
@@ -10543,6 +10647,32 @@ oracleProperty({
           dataOwners: [`b`],
           tests: [{ ...judging(`b`, `fixed seed`, 1), flaky: true, fn: 0 }],
         }),
+      },
+      {
+        // Law 4's mark. Two functions of file a, each judged by one
+        // fixed-seed test named as \`oracleProperty\` names its units: the
+        // first function's by \`fixed seed 1: generated\`, the unit of its
+        // seed's generated histories, whose kills rest on them only; the
+        // second's by \`fixed seed 2: generated 1\`, a constructed history's
+        // unit, whose name begins as a generated unit's does and whose kills
+        // it pins. Appended at the end of the list.
+        name: `kills by a generated unit and by a constructed unit`,
+        enters: [
+          `a kill by generated histories only`,
+          `a kill pinned by a constructed unit named past a generated one`,
+        ],
+        build: (generated) =>
+          oneOwnerHistory(generated, {
+            functions: [[kill], [kill]],
+            containers: [],
+            overloads: [],
+            owners: [`a`, `a`],
+            tests: [
+              { ...judging(`a`, `fixed seed`, 7), fn: 0 },
+              { ...judging(`a`, `fixed seed`, 7), fn: 1 },
+            ],
+            unitNames: true,
+          }),
       },
     ]),
   },

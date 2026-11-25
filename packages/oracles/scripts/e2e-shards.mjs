@@ -375,6 +375,13 @@ export const shards = {
     `fixed seed 20261105: module data that only the failing owner's passing pair judges`,
     `random seed: module data that only the failing owner's passing pair judges`,
     `determinism: constructed history: module data that only the failing owner's passing pair judges`,
+    // Law 4's mark: two small functions of file a, about 2 s each.
+    `fixed seed 20261105: kills by a generated unit and by a constructed unit`,
+    `random seed: kills by a generated unit and by a constructed unit`,
+    `determinism: constructed history: kills by a generated unit and by a constructed unit`,
+    `calibration: a kill by generated histories only goes unmarked`,
+    `calibration: a kill that a constructed unit pins is marked`,
+    `calibration: the summary leaves a kill by generated histories only out`,
     // The filed history of a stale authored mutant's fourth base (about 12 s).
     `fixed history: a filed base whose owner reads an absent object through ?.`,
     `determinism: fixed history: a filed base whose owner reads an absent object through ?.`,

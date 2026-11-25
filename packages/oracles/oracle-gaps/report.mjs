@@ -87,6 +87,10 @@ export function keyAndSelect(mutants, { only, sample, sources }) {
   })
 }
 
+// The mark of a kill that only generated histories made (classify.mjs
+// `generatedOnly`).
+const GENERATED_ONLY = `killed by generated histories only: pin it with a constructed history`
+
 // The evidence tag a mutant may carry (schemata.mjs), and the sentence it adds.
 const BOUNDARY = `boundary: -0`
 const BOUNDARY_SENTENCE = `Add a boundary history with -0 and 0.`
@@ -384,6 +388,21 @@ export function renderReport({
       )
     }
   }
+  // The kills that only generated histories made: a change to the grammar
+  // or its weights moves what a seed draws, and the mutant then survives.
+  const generatedOnly = killed.filter((r) => r.generatedOnly)
+  if (generatedOnly.length > 0)
+    lines.push(
+      `## Kills by generated histories only`,
+      ``,
+      `Only \`generated\` units killed these mutants, and what a seed generates moves with the grammar and its weights. A constructed history enters its state on every seed.`,
+      ``,
+      ...generatedOnly.map(
+        (r) =>
+          `- ${codeSpan(r.key)}: ${GENERATED_ONLY}. Killed by ${r.by.map((name) => `\`${escapeControls(name)}\``).join(`, `)}.`,
+      ),
+      ``,
+    )
   const byLaw = new Map()
   for (const result of killed)
     for (const law of result.laws ?? [])

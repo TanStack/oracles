@@ -25,6 +25,13 @@ export const reproducibleRoutes = new Set([
   `case`,
 ])
 const frameworkRoutes = new Set([`calibration`])
+// A unit of `oracleProperty` that runs a campaign's generated histories
+// (oracle-property.ts), by its own name, the last of a test's names: what
+// a fixed seed or the random seed draws from the grammar, which a change to
+// the grammar or its weights moves. A constructed or a fixed history enters
+// its states on every seed, so a kill that one of them makes stays.
+const generatedUnit = (name) =>
+  /(?:^| > )(?:fixed seed \d+|random seed): generated$/.test(name)
 function routeOf(registered) {
   if (registered === undefined) return `unknown`
   if (reproducibleRoutes.has(registered)) return `reproducible`
@@ -132,6 +139,8 @@ export function outcomeOf(
       by: killing.map((f) => f.test),
       laws: lawsOf(killing).filter(behavioral),
       randomAlso: random.length > 0,
+      // No constructed or fixed history among the tests that killed it.
+      generatedOnly: killing.every((f) => generatedUnit(f.test)),
     }
   if (timeout) return timeout
   if (reproducible.length > 0)

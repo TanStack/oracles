@@ -1145,6 +1145,14 @@ const drawn = fc.record({
   // a gap (the maintainer's decision "An excluded test still runs",
   // 2026-11-23). Drawn last (the generator rule).
   failingLawSpins: fc.boolean(),
+  // Whether the oracle files' tests are named as \`oracleProperty\` names its
+  // campaign units (oracle-property.ts): a fixed-seed test at an even index
+  // as the unit of its seed's generated histories, \`fixed seed N:
+  // generated\`, and one at an odd index as a constructed history's unit
+  // whose name a generated unit's begins, \`fixed seed N: generated N\`. A
+  // kill that only a generated unit made rests on generated histories
+  // only (law 4). Drawn last (the generator rule).
+  unitNames: fc.boolean(),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -3495,6 +3503,7 @@ function resolveHistory(history) {
     failingLawCalls: history.failingLawCalls ?? `none`,
     failingLawHook: history.failingLawHook ?? `none`,
     failingLawSpins: history.failingLawSpins === true,
+    unitNames: history.unitNames === true,
     ordinary: history.ordinary === true,
     // The batch whose run rejects (a test-only fault; 0 is none).
     rejectBatch: history.rejectBatch ?? 0,
@@ -4767,13 +4776,24 @@ function filesRun(runs) {
  * confirming runs share its budget (`budgeted`); an authored mutant's runs
  * are each final at the full limit, so it has no confirmations to budget.
  */
-function judge(
+function judge(plan, tests, sites, active, options) {
+  return judged(plan, tests, sites, active, options).kind
+}
+
+/**
+ * A mutant's kind, as `judge` gives it, and, for a kill, the run of the test
+ * that killed it: the runner runs the owner files in path order and stops at
+ * the first kill, so the test it names is the first killing test of the
+ * first file whose run neither hung nor was cut before it killed.
+ */
+function judged(
   plan,
   tests,
   sites,
   active,
   { budgeted = true, lawSpins = new Map() } = {},
 ) {
+  const kind = (k, killer) => ({ kind: k, killer })
   const runs = runsOf(plan, tests, sites, active)
   // A file's tests run in order, and a kill (a behavioral verdict on a
   // reproducible route) stops the file. A hang before that cuts the file's
@@ -4791,6 +4811,7 @@ function judge(
   const hung = new Set()
   const cut = new Set()
   const slowed = new Map()
+  const killers = new Map()
   for (const file of new Set([
     ...runs.map((r) => r.t.file),
     ...lawSpins.keys(),
@@ -4805,6 +4826,7 @@ function judge(
       if (r.hang) hung.add(file)
       if (r.hang || killsIn(r)) {
         ended = true
+        if (!r.hang) killers.set(file, r)
         break
       }
     }
@@ -4816,9 +4838,16 @@ function judge(
       r.verdicts.filter((v) => v.route === route).map((v) => v.law),
     )
   const reproducible = verdicts(`reproducible`)
-  if (reproducible.some((law) => law !== `reach agreement`)) return `killed`
-  if (cut.size > 0) return `blocked`
-  if (hung.size > 0) return `timeout`
+  if (reproducible.some((law) => law !== `reach agreement`))
+    return kind(
+      `killed`,
+      [...killers.keys()]
+        .sort()
+        .filter((file) => !hung.has(file) && !cut.has(file))
+        .map((file) => killers.get(file))[0],
+    )
+  if (cut.size > 0) return kind(`blocked`)
+  if (hung.size > 0) return kind(`timeout`)
   // The runs that confirm a mutant's cut-off copies share its budget
   // (`--mutant-limit`, MUTANT_LIMIT_MS here; maintainer disposition G1,
   // 2026-11-11). Under two budgets, a slow owner file is cut at its first
@@ -4832,14 +4861,14 @@ function judge(
     plan.budget === `two` &&
     [...slowed.values()].reduce((sum, ms) => sum + ms, 0) >= MUTANT_LIMIT_MS
   )
-    return `timeout`
-  if (reproducible.length > 0) return `agreement-only-kill`
-  if (verdicts(`random`).length > 0) return `random-only-kill`
-  if (verdicts(`unknown`).length > 0) return `unregistered-kill`
+    return kind(`timeout`)
+  if (reproducible.length > 0) return kind(`agreement-only-kill`)
+  if (verdicts(`random`).length > 0) return kind(`random-only-kill`)
+  if (verdicts(`unknown`).length > 0) return kind(`unregistered-kill`)
   const failing = live.filter((r) => r.crash || r.verdicts.length > 0)
-  if (failing.some((r) => r.route !== `framework`)) return `crashed`
-  if (failing.length > 0) return `framework-error`
-  return live.some((r) => r.changed) ? `not-judged` : `survived`
+  if (failing.some((r) => r.route !== `framework`)) return kind(`crashed`)
+  if (failing.length > 0) return kind(`framework-error`)
+  return kind(live.some((r) => r.changed) ? `not-judged` : `survived`)
 }
 
 /**
@@ -5302,6 +5331,8 @@ function model(plan) {
     )
     return holds ? `blocked` : kind
   }
+  // The test that killed each killed site's mutant (`judged`).
+  const killerAt = new Map()
   const kindOf = (site) => {
     if (owners(site.fnId).size === 0) return `unowned`
     const tests = ownerTests(site.fnId)
@@ -5336,7 +5367,7 @@ function model(plan) {
           ),
         )
     if (reaching.every((t) => t.flaky)) return `indeterminate`
-    const kind = judge(
+    const { kind, killer } = judged(
       plan,
       tests,
       sites,
@@ -5345,6 +5376,7 @@ function model(plan) {
         lawSpins: lawSpinsAt(site),
       },
     )
+    if (killer) killerAt.set(site.id, killer.t)
     if (kind !== `survived`) return kind
     // A test that reached it did more work, though nothing it observed
     // changed: the mutant deleted a shortcut for speed (maintainer decision,
@@ -5428,6 +5460,16 @@ function model(plan) {
       kind,
       ordinaryOutcome:
         plan.ordinary && survivorKinds.has(kind) && ordinaryReaches(site),
+      // A kill rests on generated histories only when the test that killed
+      // it is a unit of generated histories (law 4).
+      generatedOnly:
+        kind === `killed`
+          ? unitOf(
+              plan,
+              killerAt.get(site.id),
+              plan.tests.indexOf(killerAt.get(site.id)),
+            ) === `generated`
+          : undefined,
     }
   })
   // Each authored mutant is judged alone, against the original source with
@@ -5501,20 +5543,37 @@ function model(plan) {
   }
 }
 
-const testName = (t, index) =>
+// A test's campaign unit, when the plan names its tests as
+// \`oracleProperty\` names its units (\`unitNames\`): a fixed-seed test at an
+// even index runs its seed's generated histories, and one at an odd index
+// a constructed history.
+const unitOf = (plan, t, index) =>
+  plan?.unitNames &&
+  index >= 0 &&
+  t.name !== `plain` &&
+  t.route === `fixed seed`
+    ? index % 2 === 0
+      ? `generated`
+      : `constructed`
+    : undefined
+const testName = (t, index, plan) =>
   t.name === `plain`
     ? `check ${index}`
-    : t.route === `fixed seed`
-      ? `fixed seed ${index + 1}`
-      : t.route === `fixed history`
-        ? `fixed history: h${index}`
-        : t.route === `case`
-          ? `case ${index}`
-          : t.route === `calibration`
-            ? `calibration: c${index}`
-            : t.route === `probe calibration`
-              ? `probe p${index} always fires`
-              : t.route
+    : unitOf(plan, t, index) === `generated`
+      ? `fixed seed ${index + 1}: generated`
+      : unitOf(plan, t, index) === `constructed`
+        ? `fixed seed ${index + 1}: generated ${index}`
+        : t.route === `fixed seed`
+          ? `fixed seed ${index + 1}`
+          : t.route === `fixed history`
+            ? `fixed history: h${index}`
+            : t.route === `case`
+              ? `case ${index}`
+              : t.route === `calibration`
+                ? `calibration: c${index}`
+                : t.route === `probe calibration`
+                  ? `probe p${index} always fires`
+                  : t.route
 const callFor = (fn) =>
   fn.includes(`.`)
     ? `new sut.${fn.split(`.`)[0]}().${fn.split(`.`)[1]}`
@@ -5855,8 +5914,8 @@ function oracleTestFile(plan, file) {
           ]
         : []),
       t.asProp
-        ? `  fcTest.prop([fcv.integer({ min: 0, max: 10 })], { numRuns: 20, seed: 1 })('${testName(t, index)}', async (n) => {`
-        : `  test('${testName(t, index)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || t.timed || lazyGated(plan, file, t) || fsGated(plan, file, t) ? `async ` : ``}() => {`,
+        ? `  fcTest.prop([fcv.integer({ min: 0, max: 10 })], { numRuns: 20, seed: 1 })('${testName(t, index, plan)}', async (n) => {`
+        : `  test('${testName(t, index, plan)}', ${(t.hangs && !t.flaky) || t.slow || t.ioWait || t.timed || lazyGated(plan, file, t) || fsGated(plan, file, t) ? `async ` : ``}() => {`,
       ...partsOf(t).flatMap(campaign),
       `  })`,
       `})`,
@@ -6902,7 +6961,8 @@ function readCodeSpan(text) {
 
 /**
  * The summary's counts, gap keys, unowned keys, and each listed gap's kind
- * and line, read from its text as the author reads it.
+ * and line, and the kills it marks as resting on generated histories only,
+ * read from its text as the author reads it.
  */
 function readSummary(summary) {
   const header = summary.match(
@@ -6946,6 +7006,20 @@ function readSummary(summary) {
         })
         .sort((a, b) => (a.key < b.key ? -1 : 1))
     })(),
+    // The kills that rest on generated histories only: each listed by its
+    // key, then the mark's words.
+    generatedOnly: summary
+      .split(`\n`)
+      .flatMap((line) => {
+        const span = line.startsWith(`- `) && readCodeSpan(line.slice(2))
+        return span &&
+          span.after.startsWith(
+            `: killed by generated histories only: pin it with a constructed history.`,
+          )
+          ? [span.code]
+          : []
+      })
+      .sort(),
   }
 }
 

@@ -69,6 +69,24 @@
  *    and the design decided with it that day: a speed shortcut is owed a
  *    cost law, not an exit, so a regression that deletes it must be
  *    catchable, by a deterministic count and never by wall-clock time.
+ *    3a. A kill whose killing tests are all units of generated histories,
+ *    the ones the framework names `fixed seed N: generated` and `random
+ *    seed: generated` (oracle-property.ts), rests on generated histories
+ *    only: a change to the grammar or its weights moves what a seed draws,
+ *    and the mutant then survives with nothing that warned of it. Such a
+ *    kill is marked (`generatedOnly: true`; every other kill has `false`,
+ *    and no other outcome has the field), and the summary lists it once,
+ *    by its key, with "killed by generated histories only: pin it with a
+ *    constructed history". A kill that any other test also names, such as
+ *    a constructed history's unit (`fixed seed N: generated N`) or a fixed
+ *    history (`fixed history: random seed: generated`), is pinned and not
+ *    marked. The mark reads each killing test's own name, never its route:
+ *    under the gap check's `--seed` the random seed's generated unit runs
+ *    on a fixed seed's route and kills. The mark is no gap: the classes and
+ *    the gap count are those of laws 1 to 5. Authority: a downstream
+ *    project's finding that a kill a fixed seed's generated unit made came
+ *    back as a survivor after an unrelated change to the grammar, with no
+ *    hint in the report (feedback item 34).
  * 4. Failing that, if every failing test timed out, it is `timeout`; a
  *    failing test outside the framework's own checks makes it `crashed`; a
  *    failing framework check alone (the `calibration` route, which covers
@@ -519,6 +537,24 @@ const testRecord = fc.record({
     },
   ),
   ms: fc.nat({ max: 40 }),
+  // Whether the test is a unit of an \`oracleProperty\` campaign, named as
+  // the framework names it (oracle-property.ts) inside its property's
+  // describe: \`fixed seed N: generated\` or \`random seed: generated\`, the
+  // unit that runs the campaign's generated histories; a constructed
+  // history's unit, \`fixed seed N: generated N\`, whose name a generated
+  // unit's begins; or a fixed history named \`random seed: generated\`,
+  // \`fixed history: random seed: generated\`, whose name a generated
+  // unit's ends. None is a plain test. Drawn last (the generator rule).
+  unit: fc.constantFrom(
+    undefined,
+    undefined,
+    undefined,
+    `generated`,
+    `generated`,
+    `random`,
+    `constructed`,
+    `fixedNamed`,
+  ),
 })
 const records = fc.record({
   files: fc.array(
@@ -645,8 +681,23 @@ const hostileOf = (t, ti) => {
 // distinct. Its full name joins them with ` > `.
 const namesOf = (h, fi, ti) => {
   const t = h.files[fi].tests[ti]
+  if (t.unit !== undefined)
+    return [...t.suites, `p${ti}`, unitNames[t.unit](ti)]
   return [...t.suites, `${t.label}${hostileOf(t, ti)}t${ti}${t.tail}`]
 }
+// A campaign unit's own name (the grammar's \`unit\`), under a property's
+// describe \`p<index>\`, so the names within a file stay distinct.
+const unitNames = {
+  generated: (ti) => `fixed seed ${ti + 1}: generated`,
+  random: () => `random seed: generated`,
+  constructed: (ti) => `fixed seed ${ti + 1}: generated ${ti}`,
+  fixedNamed: () => `fixed history: random seed: generated`,
+}
+// Whether a test is a unit that runs a campaign's generated histories, a
+// fixed seed's or the random seed's: what a seed draws from the grammar,
+// which a change to the grammar or its weights moves. A constructed or a
+// fixed history enters its states on every seed.
+const generatedUnit = (t) => t.unit === `generated` || t.unit === `random`
 const nameOf = (h, fi, ti) => namesOf(h, fi, ti).join(` > `)
 const keyOf = (h, fi, ti) => `${fileName(h, fi)} > ${nameOf(h, fi, ti)}`
 // A test's name as a message prints it: one line, each control character,
@@ -774,11 +825,23 @@ function failureOf(h, slot, tests, work = false) {
       mention: [`\`${shownName(h, tests[0].fi, tests[0].ti)}\``],
       ...extra,
     })
+  // The tests that kill: a behavioral verdict on a reproducible route, a
+  // work bound's included. A kill rests on generated histories only when
+  // each of them is a unit of generated histories (law 3a).
+  const killers = ran.filter(
+    (x) =>
+      (failing.includes(x) &&
+        under(x) === `verdict` &&
+        x.t.under[slot].law !== `reach agreement` &&
+        kindOf(x.t.under[slot].firedAt ?? x.t.route) === `reproducible`) ||
+      (overBound(x) && kindOf(x.t.route) === `reproducible`),
+  )
   if (behavioral.length > 0)
     return decided({
       outcome: `killed`,
       laws: [...new Set(behavioral)].sort(),
       lawsMayBePart: true,
+      generatedOnly: killers.every((x) => generatedUnit(x.t)),
     })
   if (timedOut) return decided({ outcome: `timeout` })
   if (kills.length > 0)
@@ -921,7 +984,12 @@ function judgedOutcome(h, mi, owners) {
       tests.filter((x) => ranFiles.includes(x.fi)),
       true,
     ).failure
-    return { ...failure, laws: inRun.laws, ownerFiles }
+    return {
+      ...failure,
+      laws: inRun.laws,
+      generatedOnly: inRun.generatedOnly,
+      ownerFiles,
+    }
   }
   if (failure) return { ...failure, ownerFiles }
   // A survivor. Only reaching, deterministic owner tests judge it; code that
@@ -1366,6 +1434,11 @@ function model(h) {
           line: o.entryLine ?? o.line,
         }))
         .sort((a, b) => (a.key < b.key ? -1 : 1)),
+      // The kills that rest on generated histories only, each once (law 3a).
+      generatedOnly: outcomes
+        .filter((o) => !o.probe && o.outcome === `killed` && o.generatedOnly)
+        .map((o) => o.key)
+        .sort(),
     },
     baseline: baselineOf_(h),
     // The unmutated pass's lists (law 7), in report order: the files that
@@ -2252,6 +2325,7 @@ async function driver(h, observe) {
       class: r.class,
       laws: r.laws && [...r.laws].sort(),
       testOutcome: r.testOutcome,
+      generatedOnly: r.generatedOnly,
     })),
     summary: readSummary(summary),
     messages: messagesOf(summary),
@@ -2293,6 +2367,37 @@ async function driver(h, observe) {
     if (r.testOutcome === `killed`) states.add(`ordinary killed`)
     if (r.class === `not-infected` && r.evidence)
       states.add(`not-infected with a boundary hint`)
+    // Law 3a, by the killing tests the result names, from the grammar: all
+    // of them units of generated histories, the random seed's among them;
+    // or a generated unit beside a test that pins the kill.
+    if (r.outcome === `killed`) {
+      const killers = placesOfNames(
+        h,
+        r.by,
+        h.files.map((f, fi) => fi),
+      )
+      if (killers.length > 0 && killers.every((p) => generatedUnit(p.t))) {
+        states.add(`a kill by generated histories only`)
+        if (killers.some((p) => p.t.unit === `random`))
+          states.add(`a kill by the random seed's generated unit`)
+      }
+      if (
+        killers.some((p) => generatedUnit(p.t)) &&
+        killers.some((p) => !generatedUnit(p.t))
+      )
+        states.add(`a generated kill beside a pinning kill`)
+      // The only pinning test's name is a generated unit's with more after
+      // it, or with more before it.
+      const pins = killers.filter((p) => !generatedUnit(p.t))
+      if (pins.length > 0 && pins.every((p) => p.t.unit === `constructed`))
+        states.add(
+          `a kill pinned only by a constructed unit named past a generated one`,
+        )
+      if (pins.length > 0 && pins.every((p) => p.t.unit === `fixedNamed`))
+        states.add(
+          `a kill pinned only by a fixed history named after a generated unit`,
+        )
+    }
   }
   if (h.mutants.some((m) => m.anchor.includes(`\``) && !m.probe))
     states.add(`a key with backticks`)
@@ -2391,8 +2496,12 @@ function check(h, observations, expected) {
     return violation(`classified`, `nothing was classified`, `completion`)
   // A kill names a non-empty part of its behavioral laws (the runner may
   // stop at the first); an agreement-only kill names reach agreement.
+  // A kill says whether it rests on generated histories only (law 3a), and
+  // nothing else says it.
   const view = (o) =>
     JSON.stringify([o.outcome, o.class, o.testOutcome ?? null])
+  const markOf = (o) =>
+    o.outcome === `killed` ? o.generatedOnly === true : o.generatedOnly
   for (const [mi, owed] of expected.outcomes.entries()) {
     const actual = got.outcomes[mi]
     const lawsFit =
@@ -2406,6 +2515,13 @@ function check(h, observations, expected) {
         `classified`,
         `mutant m${mi}: ${view(actual)} laws ${JSON.stringify(actual.laws ?? [])}, owed ${view(owed)} laws ${JSON.stringify(owed.laws ?? [])}`,
         `classification`,
+        { actual, expected: owed },
+      )
+    if (actual.generatedOnly !== markOf(owed))
+      return violation(
+        `classified`,
+        `mutant m${mi} (${owed.outcome}) has generatedOnly ${JSON.stringify(actual.generatedOnly)}, owed ${JSON.stringify(markOf(owed))}`,
+        `generated-only kills`,
         { actual, expected: owed },
       )
   }
@@ -3296,6 +3412,40 @@ const calibrations = [
       o.outcome = `killed`
     }),
   },
+  // Law 3a: a kill that rests on generated histories only goes unmarked; a
+  // kill that a constructed or fixed history pins is marked; the summary
+  // leaves a marked kill out.
+  {
+    name: `a kill by generated histories only goes unmarked`,
+    law: `generated-only kills`,
+    history: { constructed: `a kill by a fixed seed's generated unit alone` },
+    corrupt: corrupt((v) => {
+      const o = v.outcomes.find((x) => x.generatedOnly === true)
+      if (!o) return false
+      o.generatedOnly = false
+    }),
+  },
+  {
+    name: `a kill that a constructed history pins is marked`,
+    law: `generated-only kills`,
+    history: {
+      constructed: `a generated unit's kill beside a constructed unit named past it`,
+    },
+    corrupt: corrupt((v) => {
+      const o = v.outcomes.find((x) => x.generatedOnly === false)
+      if (!o) return false
+      o.generatedOnly = true
+    }),
+  },
+  {
+    name: `the summary leaves a kill by generated histories only out`,
+    law: `report completeness`,
+    history: { constructed: `a kill by a fixed seed's generated unit alone` },
+    corrupt: corrupt((v) => {
+      if (v.summary.generatedOnly.length === 0) return false
+      v.summary.generatedOnly.shift()
+    }),
+  },
   {
     name: `the summary omits a gap`,
     law: `report completeness`,
@@ -3382,6 +3532,11 @@ const required = [
   `extra-work named past an unregistered rise`,
   `a rise exactly at the declared bound`,
   `authored agreement-only-kill`,
+  `a kill by generated histories only`,
+  `a kill by the random seed's generated unit`,
+  `a generated kill beside a pinning kill`,
+  `a kill pinned only by a constructed unit named past a generated one`,
+  `a kill pinned only by a fixed history named after a generated unit`,
 ]
 
 // One constructed history per outcome class: one mutant judged by one
@@ -3415,6 +3570,7 @@ const plainTest = (effect = {}, test = {}) => ({
   bound: undefined,
   clocked: `none`,
   ms: 0,
+  unit: undefined,
   ...test,
 })
 const single = (
@@ -4220,14 +4376,59 @@ const constructed = [
       }
     },
   },
+  // Law 3a. A fixed seed's generated unit kills alone: the kill rests on
+  // generated histories only. Appended at the end of the list.
+  single(
+    `a kill by a fixed seed's generated unit alone`,
+    [`killed`, `a kill by generated histories only`],
+    { test: { unit: `generated` }, effect: { kind: `verdict` } },
+  ),
+  // The random seed's generated unit on a fixed seed's route, as it runs
+  // under the gap check's \`--seed\`: its kill counts, and rests on
+  // generated histories only.
+  single(
+    `a kill by the random seed's generated unit on a fixed seed`,
+    [`killed`, `a kill by the random seed's generated unit`],
+    { test: { unit: `random` }, effect: { kind: `verdict` } },
+  ),
+  // A generated unit kills beside a constructed history's unit, whose name
+  // begins as the generated unit's does: it pins the kill, so the kill is
+  // not marked. And beside a fixed history whose name ends as a generated
+  // unit's does, which pins it too.
+  single(
+    `a generated unit's kill beside a constructed unit named past it`,
+    [
+      `killed`,
+      `a generated kill beside a pinning kill`,
+      `a kill pinned only by a constructed unit named past a generated one`,
+    ],
+    {
+      test: { unit: `generated` },
+      effect: { kind: `verdict` },
+      more: [plainTest({ kind: `verdict` }, { unit: `constructed` })],
+    },
+  ),
+  single(
+    `a generated unit's kill beside a fixed history named after one`,
+    [
+      `killed`,
+      `a generated kill beside a pinning kill`,
+      `a kill pinned only by a fixed history named after a generated unit`,
+    ],
+    {
+      test: { unit: `generated` },
+      effect: { kind: `verdict` },
+      more: [plainTest({ kind: `verdict` }, { unit: `fixedNamed` })],
+    },
+  ),
 ]
 
 oracleProperty({
   id: `oracle-gaps.report-classify`,
   law: {
-    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, extra-work, dead-code, outside-annotation, branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only; a test whose property declares a work bound, whose work judges the mutant, and whose work (site evaluations, never time) passes the bound's ratio of its unmutated work reports a verdict under law work bound on its route, and a survivor whose work rose in such a test, with no changed observation, is extra-work, whose directive names that test, both counts, and the bound to declare that rejects it. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed.`,
+    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, extra-work, dead-code, outside-annotation, branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only; a test whose property declares a work bound, whose work judges the mutant, and whose work (site evaluations, never time) passes the bound's ratio of its unmutated work reports a verdict under law work bound on its route, and a survivor whose work rose in such a test, with no changed observation, is extra-work, whose directive names that test, both counts, and the bound to declare that rejects it. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed. A kill whose killing tests are all units of generated histories (\`fixed seed N: generated\`, \`random seed: generated\`), by their names, is marked generatedOnly, and the summary lists it once as killed by generated histories only; any other kill is not marked, and the mark changes no class and no count.`,
     authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the oracle rubric's outcome kinds (ORC-006); the frozen design's oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); the maintainer's findings F22 and the leftovers of #12 (2026-11-10); for the work law, the maintainer's decision of 2026-11-12 that a speed shortcut reported as not-observed is a gap CLI bug, and the design decided with it: a cost law, never an exit, judged by a deterministic count; for report order, the gap CLI's determinism requirement (oracle-gaps.report's determinism test and law 9, and the runner's "listed alike in every run") and the maintainer's decision of 2026-11-11 that the tests a report names depend on neither --contexts, worker timing, nor how owners are declared; Vitest's runner (@vitest/runner 4.1: -t is a regular expression matched against getTaskFullName, the suites' names and the test's joined by a space); POSIX.1-2017 Shell Command Language 2.2 and 2.6 for the replay's quoting.`,
-    limits: `That real runs produce these records is oracle-gaps.report's, and so is a real replay. The driver encodes operands as capture-setup.mjs \`shown\` does, by a copy of it; long strings are told apart by a 32-bit digest; no symbol operand is generated, and two symbols of one description print alike. Only the runner's single-file path records a test's names, and only it feeds the baseline. Test names hold no backtick and no \` > \`, and names within a file are distinct; the replay's file argument is judged as text, not as Vitest's substring filter over every file. Authored intents hold no word that the exit law forbids, and an author is not shortened. Report order within a file is the baseline's record order: that a file whose tests run concurrently writes its records in one order is not judged, and a failing test is ordered within its file as the reporter lists it, which a run cut off by a hang takes from the records. The "Changed observations in" list is the changed tests' first three, and only its first is compared. A test that only a mutant run records is not generated. A file that does not load keeps its records here, which the runner drops, and the driver leaves it out of every target, as the runner does; a failing law keeps its records and its reach, as the runner keeps them. The refusal text and the summary's left-out list are not judged, only the list of failing files they print. A failing law is generated only as a whole test of a file whose baseline is test: a describe's failing hook, a failing law's leftover state, and how the runner selects the tests of a file that has failing laws are oracle-gaps.report's. Work arrives as counts: that the capture counts site evaluations, and which work it does not count, is oracle-gaps.report's; a test that reaches a site but did no work is generated, which no real run records; an authored mutant's copy counts no work, so the work law does not judge it.`,
+    limits: `That real runs produce these records is oracle-gaps.report's, and so is a real replay. The driver encodes operands as capture-setup.mjs \`shown\` does, by a copy of it; long strings are told apart by a 32-bit digest; no symbol operand is generated, and two symbols of one description print alike. Only the runner's single-file path records a test's names, and only it feeds the baseline. Test names hold no backtick and no \` > \`, and names within a file are distinct; the replay's file argument is judged as text, not as Vitest's substring filter over every file. Authored intents hold no word that the exit law forbids, and an author is not shortened. Report order within a file is the baseline's record order: that a file whose tests run concurrently writes its records in one order is not judged, and a failing test is ordered within its file as the reporter lists it, which a run cut off by a hang takes from the records. The "Changed observations in" list is the changed tests' first three, and only its first is compared. A test that only a mutant run records is not generated. A file that does not load keeps its records here, which the runner drops, and the driver leaves it out of every target, as the runner does; a failing law keeps its records and its reach, as the runner keeps them. The refusal text and the summary's left-out list are not judged, only the list of failing files they print. A failing law is generated only as a whole test of a file whose baseline is test: a describe's failing hook, a failing law's leftover state, and how the runner selects the tests of a file that has failing laws are oracle-gaps.report's. Work arrives as counts: that the capture counts site evaluations, and which work it does not count, is oracle-gaps.report's; a test that reaches a site but did no work is generated, which no real run records; an authored mutant's copy counts no work, so the work law does not judge it. The generated-only mark reads the killing tests' names; which tests a real run names (it stops at a first kill) is oracle-gaps.report's.`,
   },
   histories: {
     arbitrary: records,
