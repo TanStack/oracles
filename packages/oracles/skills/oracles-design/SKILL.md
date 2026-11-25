@@ -564,10 +564,13 @@ comes with one instruction. Do what it says, within the rules below.
   or one that no history makes different. A changed condition can still lead
   to the same result when both branches agree on every generated input. Then
   add a history where they diverge. Otherwise, record the effect. The
-  `not-observed` directive gives both steps, and a third: a value that
-  every path overwrites before anything reads it is dead code, not a
-  missing observation. `let held = false`, written only so the type checker
-  knows the type, survives `false → true`. Remove the value, keep any
+  `not-observed` directive gives both steps, and a third, last: a value
+  that every path overwrites before anything reads it is dead code, not a
+  missing observation, but only with evidence. A law that decides the value
+  exactly owns every public entry point that reaches the code, and the gap
+  runs before and after its removal keep every kill by mutant key (step 7).
+  `let held = false`, written only so the type checker knows the type,
+  survives `false → true`. With that evidence, remove the value, keep any
   effect it has (a call, an update), and declare the type:
   `let held: boolean`, so the compiler checks that every read follows an
   assignment. Where it cannot follow them, restructure the code until it
