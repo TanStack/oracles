@@ -70,7 +70,7 @@ term for one concept. Do not rotate synonyms for style.
 | exit              | Any reasoning that puts a gap out of reach: calling a mutant equivalent or unobservable, or accepting a gap. None is allowed.                                                                                                                                                             |
 | framework bug     | A gap that no kill or removal can close. The agent stops work on that gap and reports its key and evidence.                                                                                                                                                                               |
 | exclusion control | ORC-004's control: a nearby invalid history that the grammar rejects. It is required, and distinct from a quiet exclusion, which is a finding.                                                                                                                                            |
-| dead code         | Code whose removal no legal history can observe. Remove it.                                                                                                                                                                                                                               |
+| dead code         | Code whose removal no legal history can observe. A survivor alone does not show it: a `dead-code` gap does, or the evidence of `oracles-design` step 8. Then remove it.                                                                                                                   |
 | invalid mutant    | A mutant that no oracle could possibly detect. The framework must not generate one, so meeting one is a framework bug to report. The author never decides that a mutant is invalid, and the label does not close a gap.                                                                   |
 | failing law       | A test of an oracle file that fails with no mutant active, or a test of a `describe` whose `beforeAll` or `afterAll` fails. It judges nothing: the gap check leaves it out per test, as it leaves out a nondeterministic test, and keeps its reach. The file's passing tests still judge. |
 | broken owner file | An owner file that fails outside its tests: it does not load, or a file-level hook fails. It judges nothing, and another owner file's passing tests still judge the mutants they share.                                                                                                   |
@@ -80,7 +80,10 @@ term for one concept. Do not rotate synonyms for style.
 | GREEN             | The same oracle passing after the change.                                                                                                                                                                                                                                                 |
 
 There is no "equivalent mutant" and no "unobservable effect". A survivor
-shows a missing history, observation, or law, or dead code. An effect that
+shows a missing history, observation, or law. It shows dead code only last,
+with evidence: a `dead-code` gap, or a law that decides the value exactly on
+every public entry point that reaches the code, and the kills kept across
+the removal ([`oracles-design` step 8](../skills/oracles-design/SKILL.md#8-close-every-gap)). An effect that
 no check sees is an effect that the driver does not record.
 
 ## Model alignment rule

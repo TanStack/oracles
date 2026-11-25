@@ -50,7 +50,13 @@ Keep test bodies and assertions out of the design brief.
    - **A missing or loose law:** the change is observed, but no law rejects
      it. State the law and find its authority (use
      [law discovery](law-discovery.md)).
-   - **Dead code:** no legal history can observe the decision. Remove the code.
+   - **Dead code, last:** no legal history can observe the decision. Claim it
+     only after the cases above are ruled out, and only with evidence: every
+     public entry point that reaches the code is owned by a law that decides
+     the value exactly, and the kills of the gap runs before and after the
+     removal agree by mutant key
+     ([`oracles-design` step 8](../../skills/oracles-design/SKILL.md#8-close-every-gap)).
+     Then remove the code.
    - **An allowed alternative:** the observations differ, and the adopted law
      already allows both, as an allowed set with its clause. The mutant is a
      valid implementation, so do not strengthen the law or change production
@@ -106,6 +112,6 @@ branch was never reached. Recheck types after a tool rewrites code.
 - a negative witness that accepts any failure
 - a decision checked in one build mode while another mode can observe it
 
-**Stop when:** each selected mutant has an executed distinction, a removed
-piece of dead code, a law question with the developer, or a framework bug
-reported. Do not infer broad coverage from a kill count.
+**Stop when:** each selected mutant has an executed distinction, a law
+question with the developer, a framework bug reported, or, last, a removed
+piece of dead code with its evidence. Do not infer broad coverage from a kill count.
