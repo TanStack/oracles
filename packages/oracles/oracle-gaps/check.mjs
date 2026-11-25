@@ -415,6 +415,52 @@ function isModuleConfig(pkg, config) {
   )
 }
 
+// A version's place in semver's order, as far as a peer range needs it: its
+// release numbers, then 0 for a prerelease and 1 for the release, so that
+// `4.1.0-beta.6` comes before `4.1.0`. Undefined for a version it cannot read.
+const versionKey = (version) => {
+  const match = /^(\d+)\.(\d+)\.(\d+)(-)?/.exec(String(version))
+  return match && [...match.slice(1, 4).map(Number), match[4] ? 0 : 1]
+}
+const isBefore = (a, b) => {
+  const at = a.findIndex((n, i) => n !== b[i])
+  return at >= 0 && a[at] < b[at]
+}
+
+/**
+ * Refuses a Vitest older than every version of this package's peer range for
+ * it (`^4.1.0 || ^5.0.0`), before the session loads it. The version is the one
+ * in the manifest of the copy that `entry`, the package's `vitest/node`,
+ * belongs to: the copy the session would load, never the version the
+ * package's own manifest declares. A copy whose version it cannot read is
+ * loaded, and its load decides.
+ */
+function refuseOldVitest(pkg, entry) {
+  const read = (path) => {
+    try {
+      return JSON.parse(readFileSync(path, `utf8`))
+    } catch {
+      return undefined
+    }
+  }
+  let dir = dirname(entry)
+  while (read(join(dir, `package.json`))?.name !== `vitest`)
+    if (dirname(dir) === dir) return
+    else dir = dirname(dir)
+  const { version } = read(join(dir, `package.json`))
+  const range = read(join(here, `../package.json`)).peerDependencies.vitest
+  const installed = versionKey(version)
+  // Each part's lowest version: `^4.1.0` holds nothing before 4.1.0.
+  const lowest = range
+    .split(`||`)
+    .map((part) => versionKey(part.trim().replace(/^\D+/, ``)))
+  if (installed && lowest.every((bound) => bound && isBefore(installed, bound)))
+    throw new Refusal(
+      `the package's Vitest is ${version} (${posix(relativePath(pkg, dir)) || `.`}), older than every version of @tanstack/oracles's peer range for it, ${range}`,
+      `Upgrade Vitest in the package to that range, as step 2 of the oracles-setup skill says, and run the package's existing tests before and after the upgrade.`,
+    )
+}
+
 /**
  * A session over one package: the Vitest that the package resolves, and warm
  * Vitest contexts that later checks reuse. A cold run opens a session for one
@@ -435,16 +481,18 @@ export async function openSession(pkg, pause = async () => {}) {
       `Reinstall @tanstack/oracles, which depends on TypeScript 5.`,
     )
   const requireTarget = createRequire(join(pkg, `package.json`))
-  let createVitest
-  try {
-    ;({ createVitest } = await import(
-      pathToFileURL(requireTarget.resolve(`vitest/node`)).href
-    ))
-  } catch (error) {
-    throw new Refusal(
+  const failedToLoad = (error) =>
+    new Refusal(
       `the package's Vitest failed to load: ${error?.message ?? error}`,
       `Install a working Vitest in the package, so that vitest/node loads from it.`,
     )
+  let createVitest
+  try {
+    const entry = requireTarget.resolve(`vitest/node`)
+    refuseOldVitest(pkg, entry)
+    ;({ createVitest } = await import(pathToFileURL(entry).href))
+  } catch (error) {
+    throw error instanceof Refusal ? error : failedToLoad(error)
   }
   // Each process uses its own harness files, so a cold run beside the daemon
   // cannot remove the daemon's.
