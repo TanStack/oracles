@@ -21,6 +21,7 @@
     "changeset": "changeset",
     "test:publint": "pnpm --filter \"./packages/**\" exec publint --strict",
     "test:sherif": "sherif",
+    "test:ci-paths": "node scripts/classify-changes-check.mjs",
     "prepare": "husky"
   },
   "devDependencies": {
