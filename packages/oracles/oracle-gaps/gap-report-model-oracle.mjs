@@ -5400,6 +5400,24 @@ function model(plan) {
       interpret(plan, t.fn, t.input, sites).reached.has(site.id),
     )
   }
+  // An ordinary test fails under a mutant when the mutant changes the trace
+  // that the test asserts on for its input (file c's tests call their
+  // function and compare its whole trace, `ordinaryTestFile`), throws there,
+  // or never ends. Then it kills what the oracle misses (law 4).
+  const ordinaryFails = (site) =>
+    plan.tests
+      .filter((t) => t.file === `c`)
+      .some((t) => {
+        const base = interpret(plan, t.fn, t.input, sites)
+        const mutated = interpret(plan, t.fn, t.input, sites, {
+          site: site.id,
+        })
+        return (
+          mutated.spun ||
+          mutated.threw ||
+          mutated.trace.join() !== base.trace.join()
+        )
+      })
   const survivorKinds = new Set([
     `not-judged`,
     `extra-work`,
@@ -5416,6 +5434,8 @@ function model(plan) {
       : owners(site.fnId).size === 0
         ? `unowned`
         : blockedAt(site, kindOf(site))
+    const ordinaryOutcome =
+      plan.ordinary && survivorKinds.has(kind) && ordinaryReaches(site)
     return {
       key: site.key,
       source: site.file,
@@ -5426,8 +5446,8 @@ function model(plan) {
       ordinal: site.ordinal,
       probe: site.probe,
       kind,
-      ordinaryOutcome:
-        plan.ordinary && survivorKinds.has(kind) && ordinaryReaches(site),
+      ordinaryOutcome,
+      ordinaryKills: ordinaryOutcome && ordinaryFails(site),
     }
   })
   // Each authored mutant is judged alone, against the original source with

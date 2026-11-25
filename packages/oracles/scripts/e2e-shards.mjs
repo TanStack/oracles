@@ -154,6 +154,7 @@ export const shards = {
     `determinism: constructed history: a stale authored mutant and a reformat`,
     `determinism: constructed history: an awaiting config in a package with no module type`,
     `determinism: constructed history: ordinary tests left out by default`,
+    `determinism: constructed history: an ordinary test kills a gap`,
     `determinism: generated 0`,
     `determinism: generated 1`,
     // The daemon's law 9 histories cost 3 to 13 s each here (their replays).
@@ -391,6 +392,7 @@ export const shards = {
     `determinism: constructed history: two runs on one output directory`,
     `fixed seed 20261105: an edit sequence through the daemon`,
     `fixed seed 20261105: ordinary tests left out by default`,
+    `fixed seed 20261105: an ordinary test kills a gap`,
     `fixed seed 20261105: two authored mutants`,
     `random seed: a declaration fault: brokenOwner`,
     `random seed: a declaration fault: brokenVitest`,
@@ -403,6 +405,10 @@ export const shards = {
     `random seed: a run with eleven contexts`,
     `random seed: an ambiguous authored mutant`,
     `random seed: ordinary tests left out by default`,
+    `random seed: an ordinary test kills a gap`,
+    // Bound to its history: about 3 s each here.
+    `calibration: a gap an ordinary test kills is reported as an ordinary survivor`,
+    `calibration: a gap line leaves out that an ordinary test kills it`,
     `calibration: an owned mutant is reported as unowned`,
     `determinism: constructed history: a config fault in a run that owns nothing`,
     `determinism: constructed history: a declaration fault: apiLessTypescript`,

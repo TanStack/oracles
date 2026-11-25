@@ -594,11 +594,17 @@ export const needsOrdinary = (result, targets) =>
   targets.testKeys.length > 0
 
 /**
- * The ordinary tests' outcome. They have no verdicts, so their assertions
- * are reported; an ordinary test never closes a gap.
+ * The ordinary tests' outcome (`testOutcome`), and the tests it counts
+ * (`ordinaryBy`), when it counts any. They have no verdicts, so their
+ * assertions are reported; an ordinary test never closes a gap, though one
+ * that fails under a survivor shows the history its oracle lacks.
  */
-export const judgeOrdinary = (units) =>
-  outcomeOf(units, new Set(), true).outcome
+export const judgeOrdinary = (units) => {
+  const { outcome, by } = outcomeOf(units, new Set(), true)
+  return by?.length > 0
+    ? { testOutcome: outcome, ordinaryBy: by }
+    : { testOutcome: outcome }
+}
 
 /**
  * An authored mutant's outcome from its owners' units. Its copy is not

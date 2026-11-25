@@ -27,6 +27,8 @@ import {
   escapeControls,
   gapLine,
   kindOf,
+  ORDINARY_MARK,
+  ordinaryKills,
   streamLine,
   verdictLine,
 } from './stream.mjs'
@@ -217,6 +219,13 @@ const placeholders = {
 const legendOf = (kind) =>
   `${meanings[kind] ?? ``}${directive[kind]({ ...placeholders, outcome: kind })}`
 
+// A gap that an ordinary test kills (`--ordinary`): the test that its
+// ordinary outcome counts first, and the history that test builds, which
+// the oracle lacks.
+const ordinaryLine = (g) =>
+  `Ordinary tests: ${g.ordinaryBy ? `\`${first(g.ordinaryBy)}\` fails` : `its ordinary test file fails`} under this mutant, so the oracle lacks the history that the test builds: read it, and add a history like it to an owner oracle.`
+const ordinaryLegend = `An ordinary test fails under the mutant, so the oracle lacks the history that test builds: read the test that the gap's Ordinary tests line in summary.md names, and add a history like it to an owner oracle.`
+
 // A count of things, as the report words it.
 const counted = (n, thing) => `${n} ${thing}${n === 1 ? `` : `s`}`
 
@@ -365,6 +374,7 @@ export function renderReport({
       if (gap.laws?.length)
         lines.push(`  - Laws that rejected it: ${gap.laws.join(`, `)}`)
       if (gap.detail) lines.push(`  - Detail: ${gap.detail.slice(0, 200)}`)
+      if (ordinaryKills(gap)) lines.push(`  - ${ordinaryLine(gap)}`)
     }
     lines.push(``)
   }
@@ -444,6 +454,8 @@ export function renderStdout({
   ]
   for (const kind of new Set(gaps.map(kindOf)))
     lines.push(streamLine(`legend`, `${kind}: ${legendOf(kind)}`))
+  if (gaps.some(ordinaryKills))
+    lines.push(streamLine(`legend`, `${ORDINARY_MARK}: ${ordinaryLegend}`))
   for (const [group, rows] of groupBy(gaps, groupOf)) {
     const owners = [
       ...new Set(rows.flatMap((g) => g.oracleFiles ?? []).map(relative)),

@@ -551,6 +551,11 @@ is not Vite's default name. The baseline prints which config it used.
 - Pass `--seed`, so the baseline and every mutant run the same histories.
   The report goes to a directory in the OS temp directory, and its path is
   printed at the end. Nothing is written into the repository.
+- Pass `--ordinary` when the package has ordinary tests (test files that
+  are not oracle files). They then also run against each survivor they
+  reach, and a gap that one of them fails ends with
+  `(an ordinary test kills it)`. It costs one run of those files per such
+  survivor.
 - Pass `--daemon` when iterating on gaps in the same package: it keeps a
   per-package daemon running with warm Vitest workers and a disk evidence
   store, so repeated checks reuse unchanged unit evidence. The goal is that

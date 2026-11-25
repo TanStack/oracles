@@ -923,6 +923,7 @@ export const partitions = {
         'a capture row read while the worker wrote it',
         'a .ts config in a package with no module type that calls require',
         'ordinary tests left out by default',
+        'an ordinary test kills a gap',
         'a declaration fault: configNull',
         'two starts race for a stale claim',
         'a start refuses a stale claim',

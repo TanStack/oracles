@@ -553,6 +553,11 @@ comes with one instruction. Do what it says, within the rules below.
 
 - **There are no equivalent mutants.** A surviving mutant shows a missing
   history, observation, or law, or it shows dead code.
+- **A gap that an ordinary test kills is a missing history.** Its gap line
+  ends with `(an ordinary test kills it)` (with `--ordinary`), and its
+  `Ordinary tests:` line in `summary.md` names the test. Read that test, and
+  add a history like the one it builds to the owner oracle, as a
+  constructed history when it is a boundary.
 - **An `extra-work` gap is a fast path.** The change gives the same results
   but does more work. Keep the shortcut and declare the bound that the
   directive names, `work: { ratio }` on the property, which kills it under
