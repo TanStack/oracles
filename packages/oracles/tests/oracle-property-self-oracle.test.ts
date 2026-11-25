@@ -18,10 +18,11 @@
  *   oracle property, a required state has no constructed history, a constructed history names an
  *   undeclared state, a fixed or constructed history is one the arbitrary cannot take back (law
  *   `membership`), `owns` is not a non-empty literal list of strings (the gap report reads it
- *   statically), or a work bound's `ratio` is not a finite number of at least 1 (a smaller one would
- *   reject a mutant that does no more work than the unmodified code). When several of the named load
+ *   statically), a work bound's `ratio` is not a finite number of at least 1 (a smaller one would
+ *   reject a mutant that does no more work than the unmodified code), or its `count` names a
+ *   property that is not a method of its object. When several of the named load
  *   errors apply, the declaration's shape reports first, in this order: an unregistered id, then
- *   `owns`, then `work`, then `predict` on an enumerated source
+ *   `owns`, then `work.ratio`, then `work.count`, then `predict` on an enumerated source
  *   (only a generated source declares states), then a history that is not data (`data`). A load
  *   fails with its first error alone. This precedence is analyst-chosen (2026-11-10): no contract
  *   text or maintainer decision orders these errors. The source kind decides which checks reach the
@@ -257,6 +258,11 @@
  *   `calibration`; a property without one registers none. The gap report reads it to judge the
  *   test's work under a mutant; a plain run has no unmodified run to compare with, so there the
  *   bound judges nothing (maintainer decision, 2026-11-12: a speed shortcut is owed a cost law).
+ *   A bound whose `count` names a method (`work: { ratio, count: [[object, name]] }`) counts one
+ *   unit of work, through the function its registration returned, for each call of that method
+ *   made while a test that registered the bound runs, and none for a call made in any other test
+ *   or between tests, so the method is the object's own again once its test finished (proposed
+ *   for approval: a cost inside a dependency is work).
  * - `seed-log`: a property logs exactly one `ORACLE_SEED` line, in the first unit that uses the
  *   run's random seed, and no other test logs one; every random unit runs that seed (maintainer
  *   decision, 2026-11-11, Q2: one seed per property per process). That unit is the first random
@@ -536,6 +542,13 @@ type Draft = {
    * that is not a whole number of at least 0, which fails the load.
    */
   drawnBases: number | null
+  /**
+   * A `bound` work option's `count`: absent, the fixture's dependency method,
+   * which the driver calls once per item, or a name its object has no method
+   * of, which fails the load. Only a normal-timing spec counts, so no late
+   * history of a timed-out test calls the method while a later test counts.
+   */
+  workCount: `none` | `method` | `not a method`
 }
 // `seedless`: one more child run, without `ORACLE_SEED`, records the routes
 // of each random campaign as an ordinary run draws its seed.
@@ -1043,6 +1056,13 @@ const draft: fc.Arbitrary<Draft> = fc.record({
     { weight: 3, arbitrary: fc.constantFrom(1, 2) },
     { weight: 1, arbitrary: fc.constantFrom(-1, 0.5) },
   ),
+  // Most work bounds count no method; some count the dependency's, and a few
+  // name a property that is not a method.
+  workCount: fc.oneof(
+    { weight: 6, arbitrary: fc.constant(`none` as const) },
+    { weight: 3, arbitrary: fc.constant(`method` as const) },
+    { weight: 1, arbitrary: fc.constant(`not a method` as const) },
+  ),
 })
 const replayEnvironment: fc.Arbitrary<ReplayEnvironment> = fc.record({
   retired: fc.oneof(
@@ -1322,6 +1342,11 @@ function resolveSuite({
         ...(d.predictMode !== `match` ? { predictMode: d.predictMode } : {}),
         ...(d.ownsMode !== `none` ? { ownsMode: d.ownsMode } : {}),
         ...(d.workMode !== `none` ? { workMode: d.workMode } : {}),
+        ...(d.workMode === `bound` &&
+        d.workCount !== `none` &&
+        d.timing === `normal`
+          ? { workCount: d.workCount }
+          : {}),
         ...(d.timing === `slow` ? { slow: true, timeout: 100 } : {}),
         ...(d.timing === `slow shrink`
           ? { slowShrink: true, timeout: 5_000 }
@@ -1486,6 +1511,8 @@ type LogEntry = {
   route: string | null
   /** The work bound registered for the test when the history ran. */
   work: number | null
+  /** The units of work counted for the test, through its registration's function, once the history's driver made its calls. */
+  units: number
   origin?: string
   /** Raw diagnostic attribution; logical test ownership is `test`. */
   runnerTest?: string
@@ -2314,6 +2341,11 @@ function predictSpec(
       loads: false,
       loadError: `${spec.id}: \`work.ratio\` must be a finite number of at least 1`,
     }
+  if (spec.workCount === `not a method`)
+    return {
+      loads: false,
+      loadError: `${spec.id}: \`work.count\` must list [object, method name] pairs, each naming a method of its object`,
+    }
   if (!generated && spec.predictMode === `extra`)
     return {
       loads: false,
@@ -3057,6 +3089,7 @@ const frameworkStates = [
   `registration-error`,
   `work-bound-registered`,
   `work-bound-left-out-of-calibration`,
+  `work-count-counted`,
   `campaign-violation`,
   `campaign-setup-failure`,
   `slow-shrink-campaign-failure`,
@@ -3984,6 +4017,11 @@ function frameworkReach(
         reached.add(`work-bound-registered`)
       if (entries.some((entry) => entry.route === `calibration`))
         reached.add(`work-bound-left-out-of-calibration`)
+      if (
+        spec.workCount === `method` &&
+        entries.some((entry) => entry.work !== null && entry.units > 0)
+      )
+        reached.add(`work-count-counted`)
     }
   if (trace.some(({ checkpoint }) => checkpoint === `reach-alone`))
     reached.add(`enumerated-reach-alone`)
@@ -7906,6 +7944,25 @@ function checkSuite(
           { actual: entry.work, expected: owedWork },
         )
     }
+    // A counted method's calls in a test that registered the bound: one unit
+    // for each item of each history the test ran so far, and none elsewhere.
+    const calls = new Map<string, number>()
+    for (const entry of run.log.filter(({ id }) => id === spec.id)) {
+      const name = entry.test.slice(spec.id.length + 3)
+      const counts =
+        spec.workCount === `method` && owedRoute(name) !== `calibration`
+      const owedUnits = counts
+        ? (calls.get(entry.test) ?? 0) + entry.history.length
+        : 0
+      calls.set(entry.test, owedUnits)
+      if (entry.units !== owedUnits)
+        return violation(
+          `run`,
+          `${spec.id} "${name}" ran ${JSON.stringify(entry.history)} with ${entry.units} units of counted work, owed ${owedUnits}`,
+          `route`,
+          { actual: entry.units, expected: owedUnits },
+        )
+    }
   }
   for (const { checkpoint, probe } of probes) {
     const probed = probe.probed
@@ -8226,6 +8283,7 @@ const generatedDraft = (overrides: Partial<Draft>): Draft => ({
   predictMode: `match`,
   ownsMode: `none`,
   workMode: `none`,
+  workCount: `none`,
   clock: false,
   form: `plain`,
   zeroNoise: false,
@@ -11183,6 +11241,24 @@ oracleProperty({
         generatedDraft({ workMode: `bound`, calibrations: [cal(`right`)] }),
       ),
       fixedHistory(
+        `a work count that names no method fails to load`,
+        [`registration-error`],
+        generatedDraft({ workMode: `bound`, workCount: `not a method` }),
+      ),
+      fixedHistory(
+        `a counted method's calls are work in each test that registered the bound`,
+        [
+          `work-count-counted`,
+          `work-bound-registered`,
+          `work-bound-left-out-of-calibration`,
+        ],
+        generatedDraft({
+          workMode: `bound`,
+          workCount: `method`,
+          calibrations: [cal(`right`)],
+        }),
+      ),
+      fixedHistory(
         `predict needs a probe-bound state`,
         [`registration-error`],
         generatedDraft({ predictMode: `extra` }),
@@ -12435,6 +12511,23 @@ oracleProperty({
         }
         child.exit = 1
         child.unhandled.push(`unexpected registration rejection`)
+        return altered
+      },
+    },
+    {
+      name: `reject a counted call that adds no work`,
+      history: {
+        fixed: `a counted method's calls are work in each test that registered the bound`,
+      },
+      law: `route`,
+      corrupt: (trace) => {
+        // The ordinary run's log, the one the owed-units check reads.
+        const altered = structuredClone([...trace])
+        const run = altered.find(({ checkpoint }) => checkpoint === `run`)
+          ?.value as SuiteRun | undefined
+        const entry = run?.log.find((logged) => logged.units > 0)
+        if (!entry) return undefined
+        entry.units -= 1
         return altered
       },
     },

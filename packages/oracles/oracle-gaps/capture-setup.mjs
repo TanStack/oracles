@@ -465,8 +465,10 @@ const active = state.mutant
 // comparison, a logical operator, an `if`, and each pass of a loop's
 // condition count, and code with no site (a plain assignment, a `for...of`
 // pass, a builtin's own work, code outside the instrumented sources) counts
-// nothing. Probe code is never work (maintainer decision, 2026-11-16): a
-// probe-only site (check.mjs `probeSites`) counts nothing either.
+// nothing, except a call of a method the property's `work.count` names,
+// which counts one unit (`__oracleWorkBound`'s counter). Probe code is never
+// work (maintainer decision, 2026-11-16): a probe-only site (check.mjs
+// `probeSites`) counts nothing either.
 let calls = 0
 let spun = false
 const probeOnly = new Set(state.probeSites)
@@ -918,9 +920,19 @@ globalThis.__oracleRoute = (registered) => {
 }
 // The work bound the current test's property declares (oracle-property.ts
 // `work`): classify.mjs judges the test's work, its `calls`, against it.
+// The framework receives the function that counts one unit of the test's
+// work, which it calls for each call of a method its `work.count` names. It
+// counts for that test alone: a call in a later test, or between tests,
+// counts nothing (`testRun`, a new object for each test).
 let workBound
+let testRun
 globalThis.__oracleWorkBound = (ratio) => {
-  if (inTest) workBound = ratio
+  if (!inTest) return undefined
+  workBound = ratio
+  const run = testRun
+  return () => {
+    if (inTest && testRun === run) calls += 1
+  }
 }
 // Whether the current test's count could follow the clock (maintainer
 // decision, 2026-11-12, under P3: a kill must replay on an idle machine):
@@ -1008,6 +1020,7 @@ beforeEach((context) => {
   siteHistories = new Map()
   route = undefined
   workBound = undefined
+  testRun = {}
   clocked = false
   inTest = true
 })
