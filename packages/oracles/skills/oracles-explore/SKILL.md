@@ -502,6 +502,13 @@ Settle these privately too:
   referenced rewrites an initializer, which a README example that deletes a
   statement never does. Each operation becomes a history dimension or a
   stated limit (ORC-004 reconstruction).
+- **What shapes its real inputs have:** the package's corpus, benchmark
+  inputs, and the inputs of its ordinary tests are real inputs. Label them
+  with a function from an input to its shapes (the node types of a parsed
+  module, for example), and compare the labels with the shapes the drafted
+  grammar writes. Each shape the grammar misses becomes a history dimension
+  or a stated limit. The oracle keeps counting them in its reach line
+  (`oracles-design` step 5, "Count the shapes of real inputs").
 
 **Always build the strongest oracle the laws need.** Its model predicts every
 observation that the approved laws make a claim about. How the oracle is
