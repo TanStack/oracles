@@ -75,7 +75,11 @@
 // --seed sets `${envPrefix}_SEED` in every test run, where envPrefix is
 // --env-prefix (default ORACLE), so random campaigns run the same histories
 // every time and captured values stay comparable. The project's oracle
-// configuration must read that prefix.
+// configuration must read that prefix. The framework declares that seed
+// fixed, so a random unit's failure kills a mutant. Without --seed, the
+// capture seeds Math.random in each test from the test's name
+// (capture-setup.mjs), so each random unit runs at a seed fixed by its test
+// name, and its failure is a random-only-kill gap. No check draws a new seed.
 //
 // Usage:
 //   oracle-gaps --package <dir> --source <src/x.ts,...>   (relative to <dir>)

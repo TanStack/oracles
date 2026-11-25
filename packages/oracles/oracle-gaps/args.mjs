@@ -59,7 +59,13 @@ Exit codes: 0 the check completed, whatever its gaps: its last line is
 the fix on stderr and \`oracle-gaps: done refused\` last; 3 an internal
 error of oracle-gaps (\`oracle-gaps: done error, log <path>\`); 130 or 143
 stopped by SIGINT or SIGTERM (\`oracle-gaps: done stopped (<signal>)\`),
-once every process the run started has ended.`
+once every process the run started has ended.
+--seed <n> sets <prefix>_SEED to n in every test run, so each random unit
+(\`random seed: <name>\`) runs at seed n, and a mutant that only a random
+unit kills is reported as killed. Without --seed, each random unit runs at
+a seed fixed by its test name, and such a mutant is a random-only-kill gap.
+A check never draws a new seed: its random units run the same histories in
+every check.`
 const help = `as \`oracle-gaps --help\` shows`
 /**
  * The options in `argv`. Paths are resolved against `cwd`, the caller's

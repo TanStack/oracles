@@ -367,6 +367,14 @@ They do not reach them.
 - **Give at least one fixed seed** in `fixedSeeds`. The random campaign always
   runs beside it. A kill that only the random campaign finds is a gap until you
   keep its history as a fixed or constructed history.
+- **The gap check's random units are fixed.** A gap check never draws a new
+  random seed. Without `--seed`, each random unit (`random seed: <name>`)
+  runs at a seed fixed by its test name, the same in every check, and a
+  mutant that only it kills is a `random-only-kill` gap. With `--seed <n>`,
+  each random unit runs at seed n, and the framework declares that seed
+  fixed: a mutant that only a random unit kills is reported as `killed`.
+  Read the `by` of each kill in `results.json`. A kill whose only killers
+  are `random seed:` units is still the gap the bullet above names.
 - **Start `runs` at 100** for a fast, synchronous driver, and at 25 to 50
   for a driver that awaits timers or I/O.
 - **Keep it fast.** The gap check runs every owning oracle once for each
