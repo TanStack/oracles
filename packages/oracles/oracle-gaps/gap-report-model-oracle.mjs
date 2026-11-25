@@ -1268,11 +1268,13 @@ const histories = drawn.map(
       )
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
-    // A rejection that finds no room (`rejectNoRoom`) is constructed only,
-    // and no drawn field: it goes back with its rejection.
-    const { rejectNoRoom, ...fields } = history
+    // A rejection that finds no room (`rejectNoRoom`) and the kept runs'
+    // witness (`keptRuns`) are constructed only, and no drawn field: they go
+    // back with the history.
+    const { rejectNoRoom, keptRuns, ...fields } = history
     const reset =
       rejectNoRoom === undefined &&
+      keptRuns === undefined &&
       Object.entries(constructedNeutral).every(
         ([field, neutral]) => history[field] === neutral,
       )
@@ -3508,6 +3510,10 @@ function resolveHistory(history) {
     // (open, copyfile, or write), and how many earlier runs the package's
     // default run directories hold; undefined is a plain error.
     rejectNoRoom: history.rejectNoRoom,
+    // The kept runs' witness, constructed only: the driver plants KEPT_RUNS
+    // in the package's default run directories before the run, which passes
+    // `--keep-runs <keep>` when `keep` is set; undefined plants nothing.
+    keptRuns: history.keptRuns,
     // Whether two checks at once are held to overlap in the daemon.
     holdOverlap: history.holdOverlap === true,
     // An `owns` key in an assertion's arguments, in the ordinary file: its
@@ -5183,6 +5189,52 @@ const doneLine = (gaps, provisional, out) =>
  * (`done error, <cause>: <directive>`), as an out-of-memory end carries its
  * remedy, and results.json holds them under status `out-of-space`.
  */
+// The kept runs (law 12): a run that writes to its default output directory
+// keeps the newest `--keep-runs` (10 by default) of the package's default run
+// directories, its own among them, and removes the older ones; it never
+// removes a directory that a running process holds (its run.pid names one,
+// or cannot be read), nor an entry whose name is no run's. A run with --out
+// removes nothing. KEPT_RUNS is what the end-to-end driver plants there:
+// twelve run directories, oldest first, whose run.pid names the driver's own
+// process (`live`), a process that has ended (`ended`), nothing (`empty`), or
+// is a directory, which cannot be read (`unreadable`); and two entries with
+// other names, one a run's name with more after it. Beside a run's --out it
+// plants one more run directory, which no run removes either.
+const KEPT_RUNS = {
+  runs: Array.from(
+    { length: 12 },
+    (_, index) =>
+      `2001-01-01T00-00-00-${String(index).padStart(3, `0`)}Z-0e0e0e0e`,
+  ),
+  pids: { 0: `live`, 1: `ended`, 2: `empty`, 3: `unreadable` },
+  others: [`notes`, `2001-01-01T00-00-00-000Z-0e0e0e0e-mine`],
+  // A run's name beside a run's --out, in the directory that holds it.
+  beside: `2001-01-01T00-00-00-099Z-0e0e0e0e`,
+}
+const DEFAULT_KEPT_RUNS = 10
+/**
+ * What the package's default run directories hold after a run with output
+ * mode `outMode` and `--keep-runs` `keep` started beside KEPT_RUNS, its own
+ * left out, sorted, and for a run with --out the run directory beside it
+ * (`beside --out: <name>`): a run with --out keeps every entry; a run with the
+ * default directory keeps the held runs (`live`, `unreadable`), the other
+ * names, and the newest `keep - 1` of the rest.
+ */
+const keptAfter = (outMode, keep = DEFAULT_KEPT_RUNS) => {
+  const isHeld = (index) =>
+    [`live`, `unreadable`].includes(KEPT_RUNS.pids[index])
+  const older = KEPT_RUNS.runs.filter((_, index) => !isHeld(index))
+  return [
+    ...KEPT_RUNS.others,
+    ...(outMode === `default`
+      ? [
+          ...KEPT_RUNS.runs.filter((_, index) => isHeld(index)),
+          ...older.slice(Math.max(0, older.length - (keep - 1))),
+        ]
+      : [...KEPT_RUNS.runs, `beside --out: ${KEPT_RUNS.beside}`]),
+  ].sort()
+}
+
 // The earlier runs that the end-to-end driver plants beside a run that finds
 // no room: each is named as a run's directory is, with a stream log of `log`
 // bytes and a nested file of the rest, `bytes` (1.23 MB) in all.
@@ -5517,6 +5569,12 @@ function model(plan) {
     rejectedBatch: plan.rejectBatch > 0 ? plan.rejectBatch : undefined,
     // A rejection that found no room ends the run out of disk space, not in an internal error (law 12).
     noRoom: plan.rejectBatch > 0 ? plan.rejectNoRoom : undefined,
+    // The entries the package's default run directories hold once the run has
+    // started, apart from its own (law 12's kept runs).
+    keptRuns:
+      plan.keptRuns === undefined
+        ? undefined
+        : keptAfter(plan.outMode, plan.keptRuns.keep),
     baseline: baselineOf(plan),
     blocking: blockingOf(plan).filter((f) => !f.ordinary),
     replayed: blockingOf(plan).find((f) => f.replayed)?.replayed,
@@ -7037,6 +7095,7 @@ export {
   doneLine,
   noRoomEnding,
   EARLIER_RUN,
+  KEPT_RUNS,
   kill,
   push,
   judging,

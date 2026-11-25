@@ -2804,7 +2804,8 @@ function identityOf(options, authored, testFiles, oracleCount) {
     if (existsSync(file))
       hash.update(`${name(file)}\0${readFileSync(file, `utf8`)}\0`)
   hash.update(JSON.stringify(authored))
-  const { out, daemon, pkg, mutants, ...decisive } = options
+  // How many earlier runs a run keeps (keepRuns) changes no result.
+  const { out, daemon, pkg, mutants, keepRuns, ...decisive } = options
   hash.update(JSON.stringify({ ...decisive, only: [...(options.only ?? [])] }))
   return {
     id: hash.digest(`hex`).slice(0, 12),

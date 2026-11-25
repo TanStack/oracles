@@ -101,6 +101,9 @@
     "module data that only the failing owner's passing pair judges",
     "a batch whose run finds the disk full",
     "a batch whose run finds its disk quota used up",
-    "a batch whose run finds the disk full on a write that names no file"
+    "a batch whose run finds the disk full on a write that names no file",
+    "a run beside twelve earlier runs of its package",
+    "a run that keeps three runs beside twelve earlier ones",
+    "a run with --out beside twelve earlier runs of its package"
   ]
 }
