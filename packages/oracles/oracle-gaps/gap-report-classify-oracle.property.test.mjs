@@ -100,10 +100,21 @@
  *    test reached its `if` with one outcome only; `not-infected` when it is
  *    a comparison whose two operators agree on every operand pair the
  *    owners reached; `not-observed` when an `if` or comparison mutant was
- *    infected and no recorded observation showed the change; and
- *    `not-distinguished` for any other operator, whose infection the
- *    capture does not measure, so its directive names the input that
- *    distinguishes it. This oracle's grammar has no operator that always
+ *    infected and no recorded observation showed the change;
+ *    `falsy-return` for a returned `false` made `undefined`, which a caller
+ *    that tests the result only for truthiness cannot tell apart, so its
+ *    legend line says so and its directive names the callers that can
+ *    (`=== false`, `typeof`, `??`, `JSON.stringify`), the driver
+ *    observation that an exported function owes, and, last, the step for a
+ *    `false` that no caller tells apart, which is dead code only with its
+ *    evidence: a law that decides the value exactly owns every public entry
+ *    point that reaches the code, and the gap runs before and after the
+ *    removal keep every kill by mutant key (a downstream project's reports,
+ *    2026-11-25: such mutants made up a large share of its
+ *    `not-distinguished` gaps, each read by hand, and dead code offered as
+ *    one item on an equal menu was the cheapest choice); and `not-distinguished` for any other operator,
+ *    whose infection the capture does not measure, so its directive names
+ *    the input that distinguishes it. This oracle's grammar has no operator that always
  *    changes a value when reached (`!`, booleans, arithmetic); production
  *    measures those and classes them `not-observed`, which the end-to-end
  *    oracle checks.
@@ -347,6 +358,7 @@ const SLOTS = MUTANTS + AUTHORED
 // would split it. An intent holds words the exit law forbids, which the gap
 // line must keep inside its code span.
 const sixty = `value.total > limit.maximum && value.total !== limit.exact`
+const falseMadeUndefined = [`false`, `undefined`]
 const codes = [
   [`x > 4`, `true`],
   [`out.push('a')`, `;`],
@@ -358,6 +370,8 @@ const codes = [
   ],
   [`\`\${a}\` + b`, `\`\${a}\` - b`],
   [`${`a`.repeat(56)}😀😀 && b.rest()`, `false`],
+  // A returned `false`: made `undefined`, it is a falsy-return (law 5).
+  falseMadeUndefined,
 ]
 const intents = [
   `pushes a different label`,
@@ -999,6 +1013,10 @@ function judgedOutcome(h, mi, owners) {
       return sized(`not-infected`, { operands: operandsSeen(h, mi, owners) })
     return sized(`not-observed`, { mention: [observedMention(h, mi, owners)] })
   }
+  // A returned `false` made `undefined`: only a caller that tells the two
+  // falsy values apart distinguishes it (law 5).
+  if (m.operator === `return-undefined` && m.code[0] === `false`)
+    return sized(`falsy-return`, { mention: [falsyDirective(m)] })
   // The other operators' infection is not measured, so the directive says
   // what input distinguishes the mutant, built from its operator.
   return sized(`not-distinguished`, {
@@ -1078,6 +1096,12 @@ function distinguishingDirective(m) {
     return `Add an owner history where the left operand of \`??\` on line ${line} is truthy, so \`??\` and \`&&\` give different results, and assert on the result.`
   return `Add an owner history where one operand of \`${m.original}\` on line ${line} is falsy and the other is truthy, so \`&&\` and \`||\` give different results, and assert on the result.`
 }
+// The directive for a returned `false` made `undefined` (law 5): the callers
+// that tell them apart, the observation an exported function owes, and,
+// last, the step where no caller tells them apart, which is dead code only
+// with its evidence (a downstream project's report, 2026-11-25).
+const falsyDirective = (m) =>
+  `Add an owner history whose caller tells the \`false\` returned on line ${m.line + 1} from \`undefined\`, such as with \`=== false\`, \`typeof\`, \`??\`, and \`JSON.stringify\`, and assert on the result. Where the function is exported, callers outside the package can tell them apart: observe its result in the driver. Last, where no caller can, the code is dead only with evidence: a law that decides the value exactly owns every public entry point that reaches this code, and the gap runs before and after its removal keep every kill, compared by mutant key (\`oracles-design\` step 7). With that evidence, return nothing there, and declare the result type \`boolean | undefined\`.`
 // The observation a survivor with an infection names: its infecting test, or
 // the owner tests when only loaded code infected it (or the mutant is
 // authored). The second step covers a forced branch that computed the same
@@ -1418,6 +1442,8 @@ const directives = {
   indeterminate:
     /^(Make `[^`]+` deterministic: control its clock and its random seed, so its failures judge this code|Add an owner test that runs line \d+ and asserts on its result)\.$/,
   'dead-code': /^Remove the redundant code on line \d+\.$/,
+  'falsy-return':
+    /^Add an owner history whose caller tells the `false` returned on line \d+ from `undefined`, such as with `=== false`, `typeof`, `\?\?`, and `JSON\.stringify`, and assert on the result\. Where the function is exported, callers outside the package can tell them apart: observe its result in the driver\. Last, where no caller can, the code is dead only with evidence: a law that decides the value exactly owns every public entry point that reaches this code, and the gap runs before and after its removal keep every kill, compared by mutant key \(`oracles-design` step 7\)\. With that evidence, return nothing there, and declare the result type `boolean \| undefined`\.$/,
   'outside-annotation':
     /^Add an owner history that reaches line \d+ with .+, which the annotation excludes, so that it changes an asserted result, and assert on the result\.$/,
   'random-only-kill':
@@ -1452,6 +1478,10 @@ const meanings = {
     /^Production threw where no law judged it: a gap, not a kill\. Its error is on the gap's Detail line in summary\.md, and in its `detail` in results\.json\. /,
   'extra-work':
     /^A call to a builtin counts as one site evaluation, whatever it costs \(`Object\.defineProperty`\): where a shortcut's cost is in one, make that cost an observation of the driver, such as a count of those calls, and let a law judge it, in place of a very tight bound\. /,
+  // A falsy-return says first what the mutant did, and why a truthiness
+  // test does not see it (law 5).
+  'falsy-return':
+    /^The mutant returns `undefined` in place of `false`: a caller that tests the result only for truthiness, as an `if` does, sees no difference\. /,
 }
 // A count of things, as the report words it.
 const counted = (n, thing) => `${n} ${thing}${n === 1 ? `` : `s`}`
@@ -2629,6 +2659,9 @@ function check(h, observations, expected) {
   const workLegend = legend.find((line) =>
     line.startsWith(`oracle-gaps: legend extra-work: `),
   )
+  const falsyLegend = legend.find((line) =>
+    line.startsWith(`oracle-gaps: legend falsy-return: `),
+  )
   const leadProblem =
     stdoutLines.slice(0, baselineGot.length).join(`\n`) !==
     baselineGot.join(`\n`)
@@ -2673,7 +2706,14 @@ function check(h, observations, expected) {
                         ),
                       )
                     ? `the extra-work legend line does not say that a builtin counts as one site, and what is owed for its cost`
-                    : undefined
+                    : falsyLegend !== undefined &&
+                        !meanings[`falsy-return`].test(
+                          falsyLegend.slice(
+                            `oracle-gaps: legend falsy-return: `.length,
+                          ),
+                        )
+                      ? `the falsy-return legend line does not say that the mutant returns undefined in place of false, which a truthiness test does not see`
+                      : undefined
   if (leadProblem)
     return violation(`classified`, leadProblem, `stdout`, { actual: stdout })
   // The full report leads with the same baseline, before its gaps.
@@ -3220,6 +3260,30 @@ const calibrations = [
       return trace.map((o, i) => (i === index ? { ...o, value } : o))
     },
   },
+  // A returned `false` made `undefined`, classed as any other unmeasured
+  // operator (main before the falsy-return class), and its legend line
+  // without the sentence that says what the mutant did (law 5).
+  {
+    name: `a falsy-return is reported as not distinguished`,
+    law: `classification`,
+    corrupt: corrupt((v) => {
+      const o = v.outcomes.find((x) => x.class === `falsy-return`)
+      if (!o) return false
+      o.class = `not-distinguished`
+    }),
+  },
+  {
+    name: `the falsy-return legend line does not say what the mutant did`,
+    law: `stdout`,
+    corrupt: corruptStdout((stdout) =>
+      stdout.includes(`oracle-gaps: legend falsy-return: The mutant `)
+        ? stdout.replace(
+            /^(oracle-gaps: legend falsy-return: )The mutant [^.]*\. /m,
+            `$1`,
+          )
+        : undefined,
+    ),
+  },
   {
     name: `a not-infected comparison is reported as not observed`,
     law: `classification`,
@@ -3344,6 +3408,7 @@ const required = [
   `not-infected with a boundary hint`,
   `not-observed`,
   `not-distinguished`,
+  `falsy-return`,
   `dead-code`,
   `outside-annotation`,
   `ordinary killed`,
@@ -4220,12 +4285,28 @@ const constructed = [
       }
     },
   },
+  // A returned `false` made `undefined` is a falsy-return; another returned
+  // value, and a `false` that another operator replaces, are not (law 5).
+  // Appended at the end of the list.
+  single(`a returned false made undefined`, [`falsy-return`], {
+    mutant: { operator: `return-undefined`, code: falseMadeUndefined },
+  }),
+  single(
+    `a returned value other than false made undefined`,
+    [`not-distinguished`],
+    { mutant: { operator: `return-undefined`, code: codes[4] } },
+  ),
+  single(
+    `a call value false made undefined is not distinguished`,
+    [`not-distinguished`],
+    { mutant: { operator: `value-undefined`, code: falseMadeUndefined } },
+  ),
 ]
 
 oracleProperty({
   id: `oracle-gaps.report-classify`,
   law: {
-    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, extra-work, dead-code, outside-annotation, branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only; a test whose property declares a work bound, whose work judges the mutant, and whose work (site evaluations, never time) passes the bound's ratio of its unmutated work reports a verdict under law work bound on its route, and a survivor whose work rose in such a test, with no changed observation, is extra-work, whose directive names that test, both counts, and the bound to declare that rejects it. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed.`,
+    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, extra-work, dead-code, outside-annotation, branch-never-taken, not-infected, not-observed, falsy-return (a returned false made undefined, whose legend line says that a truthiness test does not see it), and not-distinguished, and ordinary tests for information only; a test whose property declares a work bound, whose work judges the mutant, and whose work (site evaluations, never time) passes the bound's ratio of its unmutated work reports a verdict under law work bound on its route, and a survivor whose work rose in such a test, with no changed observation, is extra-work, whose directive names that test, both counts, and the bound to declare that rejects it. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed.`,
     authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the oracle rubric's outcome kinds (ORC-006); the frozen design's oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); the maintainer's findings F22 and the leftovers of #12 (2026-11-10); for the work law, the maintainer's decision of 2026-11-12 that a speed shortcut reported as not-observed is a gap CLI bug, and the design decided with it: a cost law, never an exit, judged by a deterministic count; for report order, the gap CLI's determinism requirement (oracle-gaps.report's determinism test and law 9, and the runner's "listed alike in every run") and the maintainer's decision of 2026-11-11 that the tests a report names depend on neither --contexts, worker timing, nor how owners are declared; Vitest's runner (@vitest/runner 4.1: -t is a regular expression matched against getTaskFullName, the suites' names and the test's joined by a space); POSIX.1-2017 Shell Command Language 2.2 and 2.6 for the replay's quoting.`,
     limits: `That real runs produce these records is oracle-gaps.report's, and so is a real replay. The driver encodes operands as capture-setup.mjs \`shown\` does, by a copy of it; long strings are told apart by a 32-bit digest; no symbol operand is generated, and two symbols of one description print alike. Only the runner's single-file path records a test's names, and only it feeds the baseline. Test names hold no backtick and no \` > \`, and names within a file are distinct; the replay's file argument is judged as text, not as Vitest's substring filter over every file. Authored intents hold no word that the exit law forbids, and an author is not shortened. Report order within a file is the baseline's record order: that a file whose tests run concurrently writes its records in one order is not judged, and a failing test is ordered within its file as the reporter lists it, which a run cut off by a hang takes from the records. The "Changed observations in" list is the changed tests' first three, and only its first is compared. A test that only a mutant run records is not generated. A file that does not load keeps its records here, which the runner drops, and the driver leaves it out of every target, as the runner does; a failing law keeps its records and its reach, as the runner keeps them. The refusal text and the summary's left-out list are not judged, only the list of failing files they print. A failing law is generated only as a whole test of a file whose baseline is test: a describe's failing hook, a failing law's leftover state, and how the runner selects the tests of a file that has failing laws are oracle-gaps.report's. Work arrives as counts: that the capture counts site evaluations, and which work it does not count, is oracle-gaps.report's; a test that reaches a site but did no work is generated, which no real run records; an authored mutant's copy counts no work, so the work law does not judge it.`,
   },

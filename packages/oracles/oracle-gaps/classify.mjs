@@ -434,7 +434,9 @@ function reachingIn(rows, targets) {
  * work bound that rejects the mutant), `dead-code` (no input distinguishes
  * it), `outside-annotation` (no
  * input of the annotations distinguishes it; `input` names the input class
- * outside them that does), `branch-never-taken` (an
+ * outside them that does), `falsy-return` (a returned
+ * `false` made `undefined`), `not-distinguished` (any other operator
+ * whose infection the capture does not measure), `branch-never-taken` (an
  * `if` one of whose outcomes never occurred; `wanted` names the missing
  * one), `not-infected` (a comparison whose operators agreed on every
  * operand the owners reached; `operands` names them), and `not-observed`
@@ -507,7 +509,15 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
     // the input outside them that does (maintainer decision, 2026-11-11).
     result.class = `outside-annotation`
     result.input = mutant.outside
-  } else if (isUnmeasured(mutant)) result.class = `not-distinguished`
+  } else if (isUnmeasured(mutant))
+    // A returned `false` made `undefined`: a caller that tests the result
+    // only for truthiness cannot tell them apart, so it has its own class
+    // and directive (a downstream project's report, 2026-11-25). It is
+    // never skipped: a caller outside the module can tell them apart.
+    result.class =
+      mutant.operator === `return-undefined` && mutant.original === `false`
+        ? `falsy-return`
+        : `not-distinguished`
   else {
     const { infected, infectedBy } = infectionOf(mutant, targets, baseline)
     if (isIf(mutant) && !infected) {
