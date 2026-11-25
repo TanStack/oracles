@@ -9,7 +9,11 @@
 // run exactly the tests that one job ran before: a test in no shard would
 // leave its law out of CI, and a test in two would run twice. A new test
 // lands in the `rest` shard, so the jobs' balance can drift, but no test is
-// left out.
+// left out. The listed files can hold other suites too. A partition's
+// `alongside` names suites that one of its shards runs whole; the check
+// fails unless every other suite runs somewhere else: a whole-file Vitest
+// run in .github/workflows/pr.yml (one with no `-t`) names its file.
+// Otherwise a suite added beside a partitioned one would run in no CI job.
 //
 //   node scripts/pr-shards.mjs check                       checks every
 //                                                          partition
@@ -289,6 +293,9 @@ export const partitions = {
     args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-static`],
     suite: `oracle-gaps.report-static`,
     select: ``,
+    // The same file's anchor-scope oracle (#196): 43 units, 6 s locally,
+    // none of which runs the CLI.
+    alongside: { shard: `2`, suites: [`oracle-gaps.report-anchor-scope`] },
     shards: {
       1: `(?:fixed seed 20261105: generated|random seed: generated|calibration: .*)`,
       2: rest,
@@ -634,6 +641,7 @@ export const partitions = {
     args: [`--config`, `oracle-gaps/vitest.config.mjs`, `gap-report-static`],
     suite: `oracle-gaps.report-static`,
     select: ``,
+    alongside: { shard: `2`, suites: [`oracle-gaps.report-anchor-scope`] },
     // Windows runs on its own partition: the same tests, in six shards,
     // because each Linux shard takes 3 to 6 times as long on windows-latest.
     shards: {
@@ -960,6 +968,10 @@ export const partitions = {
   },
 }
 
+/** The suites that a partition's shard runs whole beside its own suite. */
+const alongsideOf = (partition, shard) =>
+  partition.alongside?.shard === shard ? partition.alongside.suites : []
+
 /** A shard's pattern over the name that follows the suite's. */
 function bodyOf(partition, shard) {
   const own = partition.shards[shard]
@@ -982,7 +994,10 @@ export function patternOf(name, shard) {
         )
         .join(`, `)}`,
     )
-  return `^${escape(partition.suite)}(?: > | (?!> ))(?:${bodyOf(partition, shard)})$`
+  const alongside = alongsideOf(partition, shard)
+  const whole =
+    alongside.length === 0 ? `` : `|${anyOf(alongside)}(?: > | (?!> )).*`
+  return `^(?:${escape(partition.suite)}(?: > | (?!> ))(?:${bodyOf(partition, shard)})${whole})$`
 }
 
 /**
@@ -1012,7 +1027,11 @@ export function partitionErrors(name, listed) {
       owners.length === 1 &&
       joined.every((text) => owners[0].pattern.test(text))
     const own = full.startsWith(prefix) ? full.slice(prefix.length) : undefined
-    const selected = own !== undefined && own.startsWith(partition.select)
+    const selected =
+      (own !== undefined && own.startsWith(partition.select)) ||
+      (partition.alongside?.suites ?? []).some((suite) =>
+        full.startsWith(`${suite} > `),
+      )
     if (selected && !whole)
       errors.push(
         `${JSON.stringify(full)} is in ${owners.length === 0 ? `no shard` : owners.length === 1 ? `shard ${owners[0].shard} under only one of Vitest's name joins` : `shards ${owners.map(({ shard }) => shard).join(`, `)}`}`,
@@ -1059,6 +1078,61 @@ export function partitionErrors(name, listed) {
   return errors
 }
 
+/**
+ * The whole-file Vitest runs of a workflow: each `vitest --run` command with
+ * no `-t`, as its `--config` and its file filters (none runs every file).
+ */
+export function wholeRuns(workflow) {
+  return [...workflow.matchAll(/\bvitest --run\b([^\n]*)/g)].flatMap(
+    ([, line]) => {
+      const words = line.trim().split(/\s+/).filter(Boolean)
+      if (words.includes(`-t`)) return []
+      const at = words.indexOf(`--config`)
+      return [
+        {
+          config: at === -1 ? undefined : words[at + 1],
+          filters: words.filter(
+            (word, i) => !word.startsWith(`-`) && (at === -1 || i !== at + 1),
+          ),
+        },
+      ]
+    },
+  )
+}
+
+/**
+ * A partition's listed tests that no CI job runs: a test outside the
+ * partition's suite whose file no whole-file run of the same config names.
+ * Vitest selects a file when its path contains a filter.
+ */
+export function unrunErrors(name, tests, runs) {
+  const partition = partitions[name]
+  const config = partition.args[partition.args.indexOf(`--config`) + 1]
+  const ours = (full) =>
+    [partition.suite, ...(partition.alongside?.suites ?? [])].some((suite) =>
+      full.startsWith(`${suite} > `),
+    )
+  const whole = (file) =>
+    runs.some(
+      (run) =>
+        run.config === config &&
+        (run.filters.length === 0 ||
+          run.filters.some((filter) =>
+            file.replaceAll(`\\`, `/`).includes(filter),
+          )),
+    )
+  const unrun = new Map()
+  for (const { name: full, file } of tests)
+    if (!ours(full) && !whole(file)) {
+      const suite = full.split(` > `)[0]
+      unrun.set(suite, (unrun.get(suite) ?? 0) + 1)
+    }
+  return [...unrun].map(
+    ([suite, count]) =>
+      `suite ${JSON.stringify(suite)} (${count} tests) runs in no CI job: it is not in the partition's \`alongside\`, and no whole-file run in .github/workflows/pr.yml names its file`,
+  )
+}
+
 // Vitest writes the listing to a file, so no package manager's own stdout line
 // (pnpm prints "Scope: ..." in some workspaces) can reach the JSON.
 function listed({ args }) {
@@ -1076,7 +1150,10 @@ function listed({ args }) {
     )
     if (run.status !== 0)
       throw new Error(`vitest list failed:\n${run.stderr}${run.stdout}`)
-    return JSON.parse(readFileSync(file, `utf8`)).map((test) => test.name)
+    return JSON.parse(readFileSync(file, `utf8`)).map(({ name, file }) => ({
+      name,
+      file,
+    }))
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -1086,14 +1163,28 @@ const [command, ...operands] = process.argv.slice(2)
 if (command === `pattern`)
   process.stdout.write(`${patternOf(operands[0], operands[1])}\n`)
 else if (command === `check`) {
-  const errors = Object.keys(partitions).flatMap((name) =>
-    partitionErrors(name, listed(partitions[name])).map(
-      (error) => `${name}: ${error}`,
+  const runs = wholeRuns(
+    readFileSync(
+      join(
+        dirname(fileURLToPath(import.meta.url)),
+        `../../../.github/workflows/pr.yml`,
+      ),
+      `utf8`,
     ),
   )
+  const errors = Object.keys(partitions).flatMap((name) => {
+    const tests = listed(partitions[name])
+    return [
+      ...partitionErrors(
+        name,
+        tests.map((test) => test.name),
+      ),
+      ...unrunErrors(name, tests, runs),
+    ].map((error) => `${name}: ${error}`)
+  })
   if (errors.length > 0) {
     process.stderr.write(
-      `The CI shards do not partition the tests:\n${errors.map((error) => `- ${error}`).join(`\n`)}\nEdit packages/oracles/scripts/pr-shards.mjs so each selected test is in exactly one shard.\n`,
+      `The CI shards do not partition the tests:\n${errors.map((error) => `- ${error}`).join(`\n`)}\nEdit packages/oracles/scripts/pr-shards.mjs so each selected test is in exactly one shard, and each other suite is in a shard or a whole-file run.\n`,
     )
     process.exit(1)
   }
