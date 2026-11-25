@@ -404,6 +404,15 @@
  *    "The internal-error line", 2026-11-16): a run that ends through its
  *    ending (`done error, log <log>`) writes exactly one, on stderr, naming
  *    that log with its line breaks escaped, and every other run writes none.
+ *    A test's own writes to the process's streams go to
+ *    `<out>/test-output.log`, which one note names once it holds anything
+ *    (review of #46, F2); a reach line that a test prints in one write,
+ *    `<id> <unit> reach {...}` as `oracleProperty` prints it on stdout for
+ *    each passing unit in every run of its file, goes to `<out>/reach.log`
+ *    instead, which one note, `oracle-gaps: note reach counts in
+ *    <out>/reach.log`, names once it holds one (a downstream report: with
+ *    constructed histories and calibrations the repeated reach lines buried
+ *    a test's own output).
  *    The law holds for every run, whatever its end: an internal error's
  *    lines are lines of the stream. The declared exempt lines (v21.2 P10,
  *    I3, R10; the register's M entries of 2026-11-16, "P10 exemptions
@@ -604,6 +613,7 @@ import {
   model,
   edited,
   AUTHORED,
+  REACH_LINE,
   altConfigPath,
   initialState,
   fixtureFiles,
@@ -860,6 +870,17 @@ const retentionLinesOf = (file) =>
 // The lines of the check that wrote to `out`. A default output directory is
 // known only from the run's note line, which spells it in forward slashes on
 // win32 (the Windows paths rule), so both spellings are compared that way.
+// A file's lines, none when it does not exist.
+const linesOf = (file) => {
+  try {
+    return readFileSync(file, `utf8`).split(`\n`).filter(Boolean)
+  } catch {
+    return []
+  }
+}
+// A reach line in the form `oracleProperty` prints for a passing unit,
+// `<id> <unit> reach {...}`, or for an enumerated source's reach test.
+const isReachLine = (line) => /^\S+ .+ reach \{.*\}$/.test(line)
 const linesOfRun = (lines, out) =>
   lines.filter(
     (line) =>
@@ -2373,6 +2394,19 @@ function readRunIn(dir, out, status, stderr, cli, stdout, derived) {
         return false
       }
     })(),
+    // Whether reach lines are among them, and the run's reach.log: whether
+    // it holds the line file a's reach test prints, and its other lines
+    // (law 15). How many times a file ran is not observed: batches and
+    // cut-offs decide it.
+    reachLog: {
+      inOutput: linesOf(join(out, `test-output.log`)).some(isReachLine),
+      kept: linesOf(join(out, `reach.log`)).includes(REACH_LINE),
+      other: [
+        ...new Set(
+          linesOf(join(out, `reach.log`)).filter((l) => l !== REACH_LINE),
+        ),
+      ],
+    },
     warnings: lines.filter((line) => /MaxListenersExceededWarning/.test(line)),
     // How a run that did not complete ended, read from the whole of its
     // stderr and its output directory (law 12).
@@ -3625,6 +3659,14 @@ async function driver(plan, observe) {
       states.add(`a capture row read while the worker wrote it`)
     if (cli.exit === 0 && !plan.consoleOutput)
       states.add(`a completed run whose tests wrote nothing`)
+    // File a's reach test printed its line, and the run kept it in its
+    // reach.log (law 15): beside the tests' own output, or alone.
+    if (cli.exit === 0 && plan.reachOutput && cli.reachLog.kept)
+      states.add(
+        plan.consoleOutput
+          ? `a completed run whose reach lines went to reach.log`
+          : `a completed run whose tests printed only reach lines`,
+      )
     // Law 14: a partial run of one owned function's mutants, whose baseline
     // runs only their owners.
     const chosen = cli.mutants.find(
@@ -5346,6 +5388,37 @@ function streamBreach(checkpoint, run, expected, plan) {
     return breach(
       `the run names its tests' console output in ${outputNotes.length} notes, owed ${owedNotes} (captured: ${run.captured}): ${JSON.stringify(run.stream.notes)}`,
     )
+  // A reach line that a test prints, as `oracleProperty` prints one for each
+  // passing unit in every run of its file, goes to the run's reach.log and
+  // never to its test-output.log, so the tests' own output stays readable
+  // (a downstream report: the reach lines flooded it). File a's reach test
+  // is the only test that prints one, so the reach.log holds its line and
+  // nothing else, and holds it exactly when file a loads; one note names the
+  // reach.log then, and none otherwise.
+  const prints =
+    plan.reachOutput &&
+    expected.baseline.find((b) => b.file === `tests/a.test.ts`)?.loads
+  const reach = run.reachLog
+  if (reach.inOutput)
+    return breach(
+      `the run's test-output.log holds reach lines, owed none: they belong in its reach.log`,
+    )
+  if (reach.other.length > 0)
+    return breach(
+      `the run's reach.log holds lines that no test printed as reach counts: ${JSON.stringify(reach.other.slice(0, 3))}`,
+    )
+  if (Boolean(prints) !== reach.kept)
+    return breach(
+      `the run's reach.log ${reach.kept ? `holds` : `does not hold`} file a's reach line, owed ${prints ? `its line` : `none`} (file a's test prints reach counts: ${Boolean(prints)})`,
+    )
+  const reachNotes = run.stream.notes.filter((note) =>
+    /^oracle-gaps: note reach counts in \S+reach\.log$/.test(note),
+  )
+  const owedReach = prints ? 1 : 0
+  if (reachNotes.length !== owedReach)
+    return breach(
+      `the run names its reach.log in ${reachNotes.length} notes, owed ${owedReach}: ${JSON.stringify(run.stream.notes)}`,
+    )
   const verdict = verdictLine(
     expected.baseline.filter((b) => !b.ordinary).length,
     expected.blocking.length,
@@ -6274,6 +6347,60 @@ calibrations.push(
     ),
   },
   {
+    // The reach lines go where the tests' own output goes, as they did
+    // before the reach.log: the log that names it is noted, so only the
+    // reach lines in it are wrong.
+    name: `a reach line lands in the test-output log`,
+    law: `greppable stream`,
+    history: { constructed: `two authored mutants` },
+    corrupt: corruptCli((cli) =>
+      cli.exit !== 0 || cli.captured || !cli.reachLog.kept
+        ? undefined
+        : {
+            ...cli,
+            captured: true,
+            reachLog: { ...cli.reachLog, inOutput: true },
+            stream: {
+              ...cli.stream,
+              notes: [
+                ...cli.stream.notes,
+                `oracle-gaps: note test output in <out>/test-output.log`,
+              ],
+            },
+          },
+    ),
+  },
+  {
+    // The reach lines are kept, and no note says where.
+    name: `a run keeps its reach lines and names no reach.log`,
+    law: `greppable stream`,
+    history: { constructed: `two authored mutants` },
+    corrupt: corruptCli((cli) =>
+      cli.exit !== 0 || !cli.reachLog.kept
+        ? undefined
+        : {
+            ...cli,
+            stream: {
+              ...cli.stream,
+              notes: cli.stream.notes.filter(
+                (note) => !note.startsWith(`oracle-gaps: note reach counts in`),
+              ),
+            },
+          },
+    ),
+  },
+  {
+    // A test printed reach counts, and the run kept none of them.
+    name: `a run drops the reach lines its tests printed`,
+    law: `greppable stream`,
+    history: { constructed: `two authored mutants` },
+    corrupt: corruptCli((cli) =>
+      cli.exit !== 0 || !cli.reachLog.kept
+        ? undefined
+        : { ...cli, reachLog: { ...cli.reachLog, kept: false } },
+    ),
+  },
+  {
     // A completed run that starts a check, so its log is judged (law 15).
     name: `the stream log misses a line`,
     law: `greppable stream`,
@@ -6718,6 +6845,8 @@ const required = [
   `a stop signal while the config warms`,
   `a config refusal through the daemon`,
   `a completed run whose tests wrote nothing`,
+  `a completed run whose reach lines went to reach.log`,
+  `a completed run whose tests printed only reach lines`,
   `a stopped run whose workers are child processes`,
   `a stopped run whose workers are threads`,
   `a run after a killed one that left its session`,
@@ -6862,6 +6991,7 @@ const separate = [
   `ambiguous authored mutant`,
   `a config refusal through the daemon`,
   `a completed run whose tests wrote nothing`,
+  `a completed run whose tests printed only reach lines`,
   ...faults
     .filter(
       (fault) =>
@@ -7341,6 +7471,7 @@ oracleProperty({
           failingLawCalls: `none`,
           failingLawHook: `none`,
           failingLawSpins: false,
+          reachOutput: false,
           stopRuns: NO_STOPS,
           laterSteps: NO_LATER_STEPS,
         },
@@ -7550,6 +7681,7 @@ oracleProperty({
           failingLawCalls: 'none',
           failingLawHook: 'none',
           failingLawSpins: false,
+          reachOutput: false,
         },
       },
       {
@@ -7715,6 +7847,7 @@ oracleProperty({
           failingLawCalls: 'none',
           failingLawHook: 'none',
           failingLawSpins: false,
+          reachOutput: false,
         },
       },
       {
@@ -7907,6 +8040,7 @@ oracleProperty({
           failingLawCalls: 'none',
           failingLawHook: 'none',
           failingLawSpins: false,
+          reachOutput: false,
         },
       },
     ],
@@ -7957,6 +8091,8 @@ oracleProperty({
           ],
           // File a writes to the console, so the run captures it.
           consoleOutput: true,
+          // File a prints a reach line too, which goes to the reach.log.
+          reachOutput: true,
           // An --out of its own, so its cold run names its stream log to the
           // slow kill's hold, and the run enters "a heartbeat named a busy
           // mutant" on every base (#84).
@@ -8172,6 +8308,7 @@ oracleProperty({
         enters: [
           `two authored mutants judged apart`,
           `a package with a prebuilt addon deep in its tree ran in child processes`,
+          `a completed run whose tests printed only reach lines`,
         ],
         build: (generated) => ({
           ...generated,
@@ -8195,6 +8332,10 @@ oracleProperty({
           steps: null,
           // A prebuilt addon two levels down: the run uses child processes.
           native: `deep`,
+          // File a prints a reach line and nothing else: the run has a
+          // reach.log and no test-output.log (law 15).
+          consoleOutput: false,
+          reachOutput: true,
         }),
       },
       {

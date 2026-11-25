@@ -341,19 +341,27 @@ if (!globalThis.__oracleGapsReading) {
 // A test's own writes to the process's stdout and stderr (a debugging
 // `process.stdout.write`) go to the run's test-output.log, beside its
 // capture, not to the CLI's streams, whose every line is a line of the
-// gap report's stream (review of #46, F2). The check names the log.
-if (state.capture)
-  globalThis.__oracleGapsOutput = join(
-    dirname(state.capture),
-    `test-output.log`,
-  )
+// gap report's stream (review of #46, F2). A write that is one reach line,
+// as `oracleProperty` prints one for each passing unit in every run of its
+// file, goes to reach.log instead, so the tests' own output stays readable.
+// The check names both logs.
+if (state.capture) globalThis.__oracleGapsOutputDir = dirname(state.capture)
+// `<id> <unit> reach {...}`, the form `oracleProperty` prints.
+const REACH_LINE = /^\S+ .+ reach \{.*\}\n$/
 if (!globalThis.__oracleGapsStreams) {
   globalThis.__oracleGapsStreams = true
   for (const stream of [process.stdout, process.stderr])
     stream.write = (chunk, encoding, callback) => {
       const done = typeof encoding === `function` ? encoding : callback
-      const output = globalThis.__oracleGapsOutput
-      if (output) appendFileSync(output, chunk)
+      const output = globalThis.__oracleGapsOutputDir
+      if (output)
+        appendFileSync(
+          join(
+            output,
+            REACH_LINE.test(chunk) ? `reach.log` : `test-output.log`,
+          ),
+          chunk,
+        )
       if (typeof done === `function`) done()
       return true
     }
