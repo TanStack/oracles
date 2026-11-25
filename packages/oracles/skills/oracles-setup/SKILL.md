@@ -360,7 +360,9 @@ optimization project.
 - Before you create or change an oracle, or change production code that an
   oracle owns, read `node_modules/@tanstack/oracles/skills/oracles-design/SKILL.md`
   in full and follow it.
-- Before you review oracle work, read
+- After a new or changed oracle or a refactor of owned code, and before a
+  pull request that touches either, get an independent review
+  (`oracles-design` step 10). Before you review oracle work, read
   `node_modules/@tanstack/oracles/skills/oracles-review/SKILL.md` in full.
 - Before you act on review findings, read
   `node_modules/@tanstack/oracles/skills/oracles-evaluate-review/SKILL.md` in

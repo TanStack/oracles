@@ -666,13 +666,9 @@ and present. Present the same way whenever the developer wants to stop:
 - what you built
 - if they did not take it after the first fix, an offer of the
   walk-through (step 5), following one bug the oracle found
-- (first oracle) a suggestion for a second opinion: they can ask you to
-  "run several subagents with oracles-review" on the new oracle. If they
-  do, start a few subagents, each told to load `oracles-review` and review
-  the oracle file on its own. Do not act on what they report directly:
-  load `oracles-evaluate-review`, and evaluate their findings with it
-  first. Show the developer what it confirmed, and what it rejected and
-  why.
+- if the oracle's latest change has had no independent review yet, the
+  offer of one: subagents with `oracles-review`, as `oracles-design` step
+  10 says. With no developer present, run it and report the findings.
 - an invitation to ask questions
 - if they agreed to the feedback log, its path, and a request to send it
   to Kyle Mathews (GitHub KyleAMathews) when they are done
