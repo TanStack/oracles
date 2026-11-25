@@ -4520,6 +4520,14 @@ async function driver(plan, observe) {
     removePath(`${dir}.link`)
     written.delete(dir)
     dropHook(dir)
+    // The CLI keeps the package's state in the OS temp directory
+    // (stateDirOf): its default output directories, and the daemon's lock,
+    // log and evidence. It goes with the scratch package.
+    try {
+      rmSync(stateDirOf(realPathOf(dir)), { recursive: true, force: true })
+    } catch {
+      // No package directory is left to name it.
+    }
     try {
       rmSync(scratch, { recursive: true, force: true })
     } catch {
