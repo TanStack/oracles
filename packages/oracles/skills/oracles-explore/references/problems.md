@@ -34,6 +34,13 @@ preview` check succeeded (or whose `pkg.pr.new` URL returns HTTP 200 with
 `curl -sI`), pin both packages to that commit, and tell the developer which
 commit you pinned.
 
+**A workspace package has no `node_modules`.** In a monorepo, a fresh git
+worktree has nothing installed, and `pnpm add -w` installs only the root's
+packages, so a probe that imports the package under test fails with
+`Cannot find package`. Install that package and its workspace dependencies:
+`pnpm install --filter <pkg>...`, with the name from its `package.json`.
+Without the trailing `...`, the packages it depends on stay uninstalled.
+
 **An install fails.** Show the error in a line or two, say what you think
 caused it, and ask before you try anything that changes more than the
 packages the oracle needs. Once the install works, go on from where you
