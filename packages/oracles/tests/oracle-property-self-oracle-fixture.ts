@@ -184,6 +184,9 @@ export const syntheticIds = [
   `self-oracle.synthetic-3`,
 ] as const
 
+/** The id of `siblingProperty`, which shares a file with a spec. */
+export const siblingId = `self-oracle.sibling`
+
 // Only a real receiving child controls its host RNG. Importing this fixture
 // in the outer owner preserves that process's Math.random and fresh campaign seed.
 // Marked children use mulberry32 so their ordinary-route traces repeat.
@@ -204,7 +207,7 @@ if (process.env.SELF_ORACLE_LOG !== undefined) {
 // malformed replay environment fails here, so every spec file fails to load.
 configureOracles({
   envPrefix: process.env.SELF_ORACLE_PREFIX ?? `ORACLE`,
-  registry: [...syntheticIds, `self-oracle.framework`],
+  registry: [...syntheticIds, siblingId, `self-oracle.framework`],
   retiredVariables: [`SELF_ORACLE_RETIRED`],
 })
 
@@ -1572,4 +1575,27 @@ export function syntheticProperty(spec: SyntheticSpec): void {
   }
   if (spec.nested) describe(outerSuite, register)
   else register()
+}
+
+/**
+ * A property that shares a file with a spec, registered after it: one
+ * enumerated history labelled `sibling`, whose driver observes it and whose
+ * check passes it, so alone it registers `sibling` and `determinism` and
+ * both pass. It writes no log, so the spec's own logs stay its own.
+ */
+export function siblingProperty(): void {
+  oracleProperty({
+    id: siblingId,
+    law: {
+      statement: `For the one history, the driver observes it.`,
+      authority: `the oracleProperty self-oracle's sibling`,
+      limits: `One history.`,
+    },
+    histories: [[0]] as ReadonlyArray<SyntheticHistory>,
+    label: () => `sibling`,
+    model: (history) => [...history],
+    driver: (history, observe) => observe(`items`, [...history]),
+    check: (_history, trace, expected) =>
+      differs(`items`, `sibling`, trace[0]?.value, expected) ?? pass,
+  })
 }
