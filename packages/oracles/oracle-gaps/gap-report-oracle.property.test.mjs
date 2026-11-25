@@ -372,11 +372,14 @@
  *    provisional (a RED baseline gives a provisional report). With `--only`, the baseline
  *    runs only the selected mutants' owners (and the ordinary files with
  *    `--ordinary`), and each selected mutant is judged as the full run
- *    judges it. A `--only` that selects nothing to judge refuses before
+ *    judges it. Each `--only` entry is a mutant's id or its key, as
+ *    results.json stores them, and the run judges exactly the mutants its
+ *    entries name (keys proposed with `--only` keys, awaiting the
+ *    maintainer's approval). A `--only` that selects nothing to judge refuses before
  *    any test runs (law 12's ending; proposed by the fix for a run that
  *    selected nothing and read as a pass, awaiting the maintainer's
- *    approval): an id that is no mutant's id in the run, whose cause names
- *    no mutant and names each such id and no other, and a selection whose
+ *    approval): an id or key that names no mutant of the run, whose cause names
+ *    no mutant and names each such entry and no other, and a selection whose
  *    every mutant no oracle file owns, whose cause says that no oracle
  *    file owns them and names each selected id. The last stdout line is the run's done line (law 15),
  *    `oracle-gaps: done completed, <n> gaps, report <path>` (G6): exit 0
@@ -3639,12 +3642,16 @@ async function driver(plan, observe) {
       (m) => !m.authored && !m.probe && m.outcome !== `unowned`,
     )
     if (cli.exit === 0 && plan.onlyRun && chosen) {
-      const ids = cli.mutants
-        .filter((m) => !m.authored && m.function === chosen.function)
-        .map((m) => m.id)
+      const ofFunction = cli.mutants.filter(
+        (m) => !m.authored && m.function === chosen.function,
+      )
+      const ids = ofFunction.map((m) => m.id)
+      // Each mutant by its id or its key in turn, as results.json stores
+      // them: a key's statement may hold a comma.
+      const only = ofFunction.map((m, i) => (i % 2 === 0 ? m.id : m.key))
       const partial = runCli(dir, files, {
         ...how,
-        only: ids,
+        only,
         outName: `out-only`,
       })
       observe(
@@ -3658,6 +3665,7 @@ async function driver(plan, observe) {
       observe(`partial`, {
         function: chosen.function,
         source: chosen.source,
+        only,
         exit: partial.exit,
         baselineFiles: partial.baselineFiles,
         mutants: partial.mutants.map((m) => ({
@@ -3666,6 +3674,8 @@ async function driver(plan, observe) {
         })),
       })
       if (partial.exit === 0) states.add(`a partial run of one function`)
+      if (partial.exit === 0 && only.some((entry) => entry.includes(`#`)))
+        states.add(`a partial run that names mutants by key`)
       if (partial.exit === 0 && plan.fault === `brokenOwner`)
         states.add(`a partial run beside a failing owner`)
       // Law 14: a partial run that selects nothing to judge refuses. Its
@@ -3691,8 +3701,17 @@ async function driver(plan, observe) {
           .find((m) => !m.probe && m.outcome !== `unowned`)
         return u.outcome === `unowned` && o ? [[u.id, o.id]] : []
       })[0]
+      // The stale key is the chosen mutant's under a renamed function: the
+      // edit that gives a mutant a new key.
       const selections = [
-        [`unknown`, [ids[0], `${prefix}:M${Math.max(0, ...numbers) + 1}`]],
+        [
+          `unknown`,
+          [
+            ids[0],
+            `${prefix}:M${Math.max(0, ...numbers) + 1}`,
+            chosen.key.replace(`#`, `#renamed_`),
+          ],
+        ],
         ...(lone
           ? [
               [
@@ -5817,6 +5836,23 @@ function leadBreach(plan, cli, observations, expected) {
         `baseline lead`,
         { actual: partial.baselineFiles, expected: files },
       )
+    // Each entry names the mutant whose id or key it is, and the run judges
+    // exactly the mutants its entries name.
+    const named = new Map(
+      cli.mutants.flatMap((m) => [
+        [m.id, m.key],
+        [m.key, m.key],
+      ]),
+    )
+    const owed = [...new Set(partial.only.map((entry) => named.get(entry)))]
+    const judged = partial.mutants.map((m) => m.key)
+    if (JSON.stringify(judged.sort()) !== JSON.stringify(owed.sort()))
+      return violation(
+        `partial`,
+        `the partial run of ${partial.only.join(`, `)} judged ${JSON.stringify(judged)}, owed the mutants it names ${JSON.stringify(owed)}`,
+        `baseline lead`,
+        { actual: judged, expected: owed },
+      )
     const full = new Map(cli.mutants.map((m) => [m.key, m.class ?? m.outcome]))
     const differs = partial.mutants.find((m) => full.get(m.key) !== m.kind)
     if (differs)
@@ -5830,7 +5866,13 @@ function leadBreach(plan, cli, observations, expected) {
   // runs, naming what it selected: an id that is no mutant's id in the full
   // run, beside ids that are, and a selection whose every mutant the model
   // says no oracle file owns. A selection with an owned mutant runs.
-  const keyOf = new Map(cli.mutants.map((m) => [m.id, m.key]))
+  // An entry names a mutant by its id or its key.
+  const keyOf = new Map(
+    cli.mutants.flatMap((m) => [
+      [m.id, m.key],
+      [m.key, m.key],
+    ]),
+  )
   // Whether the model gives a mutant's function an owner, probe code too.
   const ownerless = new Map(
     expected.mutants.map((m) => [m.key, ownersOf(plan)(m.fnId).size === 0]),
@@ -6163,6 +6205,29 @@ calibrations.push(
     }),
   },
 )
+
+calibrations.push({
+  name: `a partial run drops a mutant it names by key`,
+  law: `baseline lead`,
+  history: refusedPartialHistory,
+  // What a CLI that matches --only against ids alone would judge.
+  corrupt: (trace) => {
+    const index = trace.findIndex((o) => o.checkpoint === `partial`)
+    if (index < 0) return undefined
+    const value = structuredClone(trace[index].value)
+    const ids = new Set(value.only)
+    const before = value.mutants.length
+    value.mutants = value.mutants.filter((m) =>
+      trace.some(
+        (o) =>
+          o.checkpoint === `cli` &&
+          o.value.mutants?.some((c) => c.key === m.key && ids.has(c.id)),
+      ),
+    )
+    if (value.mutants.length === before) return undefined
+    return trace.map((o, i) => (i === index ? { ...o, value } : o))
+  },
+})
 
 calibrations.push({
   name: `the daemon reports another outcome than the cold run`,
@@ -7040,6 +7105,7 @@ const required = [
   `a partial run of an id that names no mutant refused`,
   `a partial run of unowned mutants refused`,
   `a sampled partial run that kept only unowned mutants refused`,
+  `a partial run that names mutants by key`,
   `edit fixSession changed the cold result`,
   `a check after the session's failure was fixed`,
   `two checks at once on a session that cannot open`,
@@ -7161,6 +7227,7 @@ const separate = [
   `a partial run of an id that names no mutant refused`,
   `a partial run of unowned mutants refused`,
   `a sampled partial run that kept only unowned mutants refused`,
+  `a partial run that names mutants by key`,
   ...analyzedFaults.map((fault) => `analyzed ${fault}`),
   `edit fixSession changed the cold result`,
   `a check after the session's failure was fixed`,
@@ -8599,6 +8666,7 @@ oracleProperty({
           `a partial run of an id that names no mutant refused`,
           `a partial run of unowned mutants refused`,
           `a sampled partial run that kept only unowned mutants refused`,
+          `a partial run that names mutants by key`,
         ],
         // The failing owner, file b, owns the third function and nothing
         // else that the generated base could leave out. Its suite's two
