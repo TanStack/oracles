@@ -14,27 +14,38 @@
  *   calibration; and, for a generated source, `determinism: fixed history: <name>`,
  *   `determinism: constructed history: <name>`, and `determinism: generated 0` to `2`. An
  *   enumerated source keeps one `determinism` test. An enumerated property without a `label` gives
- *   distinct histories distinct test names. A property fails to load when its id is not a registered
- *   oracle property, a required state has no constructed history, a constructed history names an
- *   undeclared state, `owns` is not a non-empty literal list of strings (the gap report reads it
- *   statically), or a work bound's `ratio` is not a finite number of at least 1 (a smaller one would
- *   reject a mutant that does no more work than the unmodified code). When several of the named load
- *   errors apply, the declaration's shape reports first, in this order: an unregistered id, then
- *   `owns`, then `work`, then `predict` on an enumerated source
- *   (only a generated source declares states), then a history that is not data (`data`). A load
- *   fails with its first error alone. This precedence is analyst-chosen (2026-11-10): no contract
- *   text or maintainer decision orders these errors. The source kind decides which checks reach the
- *   histories, so fixing the shape can remove a data error, and fixing the data error first can be
- *   wasted work. A generated source also fails to load when two of its tests would share a name: a
- *   constructed history named `generated`, two constructed histories of one name, or two fixed
- *   histories of one name (maintainer decision, 2026-11-11, option D). These come after its state
- *   checks and before law `membership`, in that order (analyst-chosen, 2026-11-11); a history that
- *   law `membership` rejects fails a test of the property instead of its load. A generated
- *   source whose `bases` is not a whole number of at least 1 fails to load, naming `bases`, after
- *   the pairing of `predict` with a probe-bound state and before its state checks, and then one
- *   whose `drawnBases` is not a whole number of at least 0, naming `drawnBases`, and then the first
- *   constructed history whose own `drawnBases` is not, naming it (analyst-chosen, 2026-11-16 and
- *   2026-11-17).
+ *   distinct histories distinct test names. A property whose id is not a registered oracle
+ *   property fails its file's load. Every other error in a declaration fails the property, not
+ *   its file (F4, 2026-11-25): the property registers one test alone, `registration: <option>`,
+ *   named by the option the error rejects (`owns`, `work`, `predict`, `histories`, `label`, or
+ *   `calibrations`, which also holds `probeHistories`), and that test fails with the error the
+ *   load failed with before (its message, and an `OracleDataError` for a history that is not
+ *   data) and runs no history, so the file's other properties register and run as they do
+ *   without it. It runs and stands aside where a membership test does (law `membership`). The
+ *   errors are: `owns` that is not a non-empty literal list of strings (the gap report reads it
+ *   statically), a work bound whose `ratio` is not a finite number of at least 1 (a smaller one
+ *   would reject a mutant that does no more work than the unmodified code), `predict` on an
+ *   enumerated source or without a probe-bound state, a probe-bound state without `predict`, an
+ *   enumerated source's shape, data, or reserved label (law `reach`, law `data`), a required
+ *   state that no constructed history enters, a constructed history that names an undeclared
+ *   state, a `bases` or `drawnBases` that law `units` rejects, two tests that would share a name,
+ *   and a calibration's selector or required difference (law `calibration`). An unregistered id
+ *   reports before all of them. When several apply, the first alone decides, and the
+ *   declaration's shape reports first, in this order: `owns`, then
+ *   `work`, then `predict` on an enumerated source (only a generated source declares states),
+ *   then a history that is not data (`data`). This precedence is analyst-chosen (2026-11-10): no
+ *   contract text or maintainer decision orders these errors. The source kind decides which
+ *   checks reach the histories, so fixing the shape can remove a data error, and fixing the data
+ *   error first can be wasted work. A generated source's two tests of one name are a constructed
+ *   history named `generated`, two constructed histories of one name, or two fixed histories of
+ *   one name (maintainer decision, 2026-11-11, option D). These come after its state checks and
+ *   before law `membership`, in that order (analyst-chosen, 2026-11-11). A generated source's
+ *   `bases` that is not a whole number of at least 1 reports after the pairing of `predict` with
+ *   a probe-bound state and before its state checks, and then a `drawnBases` that is not a whole
+ *   number of at least 0, and then the first constructed history whose own `drawnBases` is not,
+ *   naming it (analyst-chosen, 2026-11-16 and 2026-11-17). A calibration's errors come after
+ *   law `membership`. The replay errors of law `replay-config` still fail the file's load, and
+ *   come after every declaration error of the property.
  * - `units` (maintainer decision, 2026-11-11, option D): a campaign's units run exactly the
  *   histories that the campaign ran, each in its own test. The constructed unit of history k, for
  *   seed S, runs N histories: the construction built from each of the first N draws of the
@@ -103,8 +114,9 @@
  *   every load error of a generated source but its replay errors (analyst-chosen order, 2026-11-10). Registration
  *   builds the constructed histories when the file loads, so a `build` that throws there fails
  *   the membership test of that constructed history, with an error that names the property and the constructed history and carries the
- *   build's error as its cause; constructed histories are built and checked in order. Every
- *   other load error still fails the whole file.
+ *   build's error as its cause; constructed histories are built and checked in order. The
+ *   declaration errors of law `registration` come before it, except a calibration's, which come
+ *   after it, and each fails the property in the same way.
  * - `reach`: a fixed or constructed history that does not enter a state it names fails, and
  *   each passing unit reports how many of its histories entered each declared
  *   state, whether the property names reach itself or the driver records it. A unit that
@@ -118,7 +130,7 @@
  *   history whose test started and failed before a verdict (a driver, model, or data error, or
  *   a timeout) counts for nothing; a judgment that arrives after its test timed out is not
  *   recorded. A history the reach test runs that enters an undeclared state fails the reach
- *   test. An enumerated source fails to load when its object holds keys other than
+ *   test. An enumerated source fails its property (law `registration`) when its object holds keys other than
  *   `enumerated`, `states`, and `measured`, when it declares a state as anything but a name,
  *   or when a `label` names a history `reach` or `determinism`, the framework's own tests. A judged enumerated history that
  *   enters an undeclared state fails its test, before its law violation, as a campaign's
@@ -196,7 +208,7 @@
  *   property's own reach reports. The property registers two forced-entry
  *   calibrations, which pass exactly when a candidate whose clean trace passes
  *   disagrees with the forced entry. A probe-bound state without `predict`, or
- *   `predict` without one, fails to load. A call after its history ended is an
+ *   `predict` without one, fails its property (law `registration`). A call after its history ended is an
  *   unhandled error of the run, one for each such call, also after a driver
  *   that threw, and a driver whose probe records differ between
  *   two runs fails the determinism test.
@@ -240,7 +252,7 @@
  *   string keys, Maps, Sets, and Errors. A history whose driver observes
  *   anything else fails at once with an `OracleDataError` that names the
  *   value's path in the trace and its kind; an enumerated source holding
- *   such a history fails to load, naming the history's path.
+ *   such a history fails its property (law `registration`), naming the history's path.
  * - `names`: no test name holds this machine's paths, so names are the same
  *   on every machine (an Error in a history is named by its name and
  *   message, not its stack).
@@ -276,7 +288,9 @@
  * precedence, and determinism scope; the maintainer decision of 2026-11-06
  * that work which never goes quiet on a controlled clock fails its history; the maintainer
  * decision of 2026-11-10 (F20) that a fixed or constructed history the arbitrary cannot take back
- * fails at registration, naming the history and the fix; and the oracle rubric's replay
+ * fails at registration, naming the history and the fix; finding F4 of 2026-11-25 (law
+ * `registration`), that every declaration error but an unregistered id fails its
+ * property's own test and not its file; and the oracle rubric's replay
  * (ORC-007), calibration (ORC-006), and declared-reach (ORC-015) rules; the
  * maintainer decision of 2026-11-11 (F27) that a calibration can require its
  * violation's difference; the maintainer decision of 2026-11-11 (F31) that
@@ -536,12 +550,12 @@ type Draft = {
   /**
    * A generated source's `bases`: absent (the framework's default), a whole
    * number of bases, or a value that is not a whole number of at least 1,
-   * which fails the load.
+   * which fails the property.
    */
   bases: number | null
   /**
    * A generated source's `drawnBases`: absent (none), one or two, or a value
-   * that is not a whole number of at least 0, which fails the load.
+   * that is not a whole number of at least 0, which fails the property.
    */
   drawnBases: number | null
 }
@@ -713,7 +727,7 @@ const draft: fc.Arbitrary<Draft> = fc.record({
   // Up to three, so a list long enough for a design that mixes only "when
   // there are many" is drawn (review of #122, F5).
   // A history's own `drawnBases` is mostly absent (the property's), and
-  // sometimes 0, 1, or -1, which fails the load.
+  // sometimes 0, 1, or -1, which fails the property.
   constructed: fc.array(
     fc.record(
       {
@@ -830,7 +844,7 @@ const draft: fc.Arbitrary<Draft> = fc.record({
             freq: 4,
           }),
           difference: fc.oneof(
-            // Rare: an empty difference fails the whole property's load.
+            // Rare: an empty difference fails the property's registration test.
             { weight: 9, arbitrary: fc.constant(`none` as const) },
             {
               weight: 9,
@@ -1043,14 +1057,14 @@ const draft: fc.Arbitrary<Draft> = fc.record({
     { weight: 1, arbitrary: fc.constant(true) },
   ),
   // Most drafts keep the default number of bases; some declare one to three,
-  // and a few declare a value that fails the load.
+  // and a few declare a value that fails the property.
   bases: fc.oneof(
     { weight: 6, arbitrary: fc.constant(null) },
     { weight: 3, arbitrary: fc.constantFrom(1, 2, 3) },
     { weight: 1, arbitrary: fc.constantFrom(0, 1.5) },
   ),
   // Most drafts draw no base from the run's seed; some draw one or two, and
-  // a few declare a value that fails the load.
+  // a few declare a value that fails the property.
   drawnBases: fc.oneof(
     { weight: 6, arbitrary: fc.constant(null) },
     { weight: 3, arbitrary: fc.constantFrom(1, 2) },
@@ -2274,9 +2288,10 @@ type SpecExpectation =
       /** Which history failed law `membership`. */
       membership?: `fixed` | `constructed`
       /**
-       * Law `membership`: the file loads, the property registers only this
-       * test, and it fails with the load error's text (and its cause) without
-       * running a history, so the file's other properties still run.
+       * Laws `membership` and `registration`: the file loads, the property
+       * registers only this test, and it fails with the load error's text (and
+       * its cause) without running a history, so the file's other properties
+       * still run. Absent for an unregistered id, which fails its file's load.
        */
       failsTest?: string
       /** Whether that history is in the language, so only a `.map` without an unmapper failed it. */
@@ -2300,6 +2315,26 @@ type SpecExpectation =
       rerun?: string
     }
 
+type Rejected = Extract<SpecExpectation, { loads: false }>
+/**
+ * Law `registration`: a declaration error other than an unregistered id fails
+ * the property's one test, named by the option the error rejects, with the
+ * error that holds `loadError`; its file still loads.
+ */
+const failsRegistration = (
+  option: `owns` | `work` | `predict` | `histories` | `label` | `calibrations`,
+  loadError: string,
+  facts: Omit<Rejected, `loads` | `loadError` | `failsTest`> = {},
+): Rejected => ({
+  loads: false,
+  loadError,
+  failsTest: `registration: ${option}`,
+  ...facts,
+})
+/** The law whose test a rejected declaration fails. */
+const rejectingLaw = (owed: Rejected) =>
+  owed.membership || owed.buildError ? `membership` : `registration`
+
 function predictSpec(
   spec: SyntheticSpec,
   logged: ReadonlyArray<LogEntry>,
@@ -2318,8 +2353,13 @@ function predictSpec(
       .map((entry) => entry.history)
   const tests = new Map<string, Outcome>()
   const generated = spec.source.kind === `generated`
-  // Every source, enumerated or generated, must name a registered property.
-  if (spec.unregistered) return { loads: false }
+  // Every source, enumerated or generated, must name a registered property;
+  // an unregistered id fails its file's load.
+  if (spec.unregistered)
+    return {
+      loads: false,
+      loadError: `unknown oracle property: self-oracle.unregistered`,
+    }
   // Load errors report the declaration's shape first (law `registration`), in
   // the order oracleProperty checks it: `owns`, then a `predict` on an
   // enumerated source. `owns` must be a literal list of strings, which the gap
@@ -2329,57 +2369,59 @@ function predictSpec(
     spec.ownsMode === `string` ||
     spec.ownsMode === `bad entry`
   )
-    return {
-      loads: false,
-      loadError: `${spec.id}: \`owns\` must be a non-empty literal list of strings`,
-    }
+    return failsRegistration(
+      `owns`,
+      `${spec.id}: \`owns\` must be a non-empty literal list of strings`,
+    )
   if (
     spec.workMode === `below one` ||
     spec.workMode === `not finite` ||
     spec.workMode === `null`
   )
-    return {
-      loads: false,
-      loadError: `${spec.id}: \`work.ratio\` must be a finite number of at least 1`,
-    }
+    return failsRegistration(
+      `work`,
+      `${spec.id}: \`work.ratio\` must be a finite number of at least 1`,
+    )
   if (!generated && spec.predictMode === `extra`)
-    return {
-      loads: false,
-      loadError: `${spec.id}: \`predict\` needs probe-bound states, which only a generated source declares.`,
-    }
+    return failsRegistration(
+      `predict`,
+      `${spec.id}: \`predict\` needs probe-bound states, which only a generated source declares.`,
+    )
   // An enumerated declaration takes only its own keys, and states by name.
   if (spec.enumeratedStates?.enumeratedShape)
-    return {
-      loads: false,
-      loadError:
-        spec.enumeratedStates.enumeratedShape === `extra key`
-          ? `${spec.id}: an enumerated source takes \`enumerated\`, \`states\`, and \`measured\`; \`constructed\``
-          : `${spec.id}: an enumerated source declares its states by name`,
-      shapeError: true,
-    }
+    return failsRegistration(
+      `histories`,
+      spec.enumeratedStates.enumeratedShape === `extra key`
+        ? `${spec.id}: an enumerated source takes \`enumerated\`, \`states\`, and \`measured\`; \`constructed\``
+        : `${spec.id}: an enumerated source declares its states by name`,
+      { shapeError: true },
+    )
   const historyFailure =
     spec.source.kind === `enumerated` && spec.form
       ? historyFailures[spec.form]
       : undefined
   if (historyFailure)
-    return { loads: false, loadError: historyFailure, dataError: true }
+    return failsRegistration(`histories`, historyFailure, { dataError: true })
   // A label may not name a framework test: its rerun would select both.
   if (
     spec.labelStyle === `reserved-reach` ||
     spec.labelStyle === `reserved-determinism`
   )
-    return {
-      loads: false,
-      loadError: `${spec.id}: label "${spec.labelStyle.slice(`reserved-`.length)}" names a framework test`,
-      reservedLabel: true,
-    }
+    return failsRegistration(
+      `label`,
+      `${spec.id}: label "${spec.labelStyle.slice(`reserved-`.length)}" names a framework test`,
+      { reservedLabel: true },
+    )
   // `predict` and a probe-bound state come together, and only a generated
   // source declares states.
   if (
     (spec.probe && spec.predictMode === `missing`) ||
     (!spec.probe && spec.predictMode === `extra`)
   )
-    return { loads: false }
+    return failsRegistration(
+      `predict`,
+      `${spec.id}: a probe-bound state needs \`predict\`, and \`predict\` needs a probe-bound state.`,
+    )
   if (generated) {
     // A number of bases that is not a whole number of at least 1 would run a
     // constructed history no times, or a part of one.
@@ -2387,37 +2429,47 @@ function predictSpec(
       spec.bases !== undefined &&
       !(Number.isInteger(spec.bases) && spec.bases >= 1)
     )
-      return {
-        loads: false,
-        loadError: `${spec.id}: \`bases\` must be a whole number of at least 1`,
-      }
+      return failsRegistration(
+        `histories`,
+        `${spec.id}: \`bases\` must be a whole number of at least 1`,
+      )
     if (
       spec.drawnBases !== undefined &&
       !(Number.isInteger(spec.drawnBases) && spec.drawnBases >= 0)
     )
-      return {
-        loads: false,
-        loadError: `${spec.id}: \`drawnBases\` must be a whole number of at least 0`,
-      }
+      return failsRegistration(
+        `histories`,
+        `${spec.id}: \`drawnBases\` must be a whole number of at least 0`,
+      )
     const badDrawn = spec.constructed.find(
       ({ drawnBases }) =>
         drawnBases !== undefined &&
         !(Number.isInteger(drawnBases) && drawnBases >= 0),
     )
     if (badDrawn)
-      return {
-        loads: false,
-        loadError: `${spec.id}: constructed history "${badDrawn.name}": \`drawnBases\` must be a whole number of at least 0`,
-      }
+      return failsRegistration(
+        `histories`,
+        `${spec.id}: constructed history "${badDrawn.name}": \`drawnBases\` must be a whole number of at least 0`,
+      )
     const declared = new Set(spec.states)
     const entered = new Set(
       spec.constructed.flatMap((construction) => construction.enters),
     )
-    if (
-      spec.states.some((state) => !entered.has(state)) ||
-      [...entered].some((state) => !declared.has(state))
+    // A required state that no constructed history enters comes first, then
+    // the first constructed history that names an undeclared state.
+    if (spec.states.some((state) => !entered.has(state)))
+      return failsRegistration(
+        `histories`,
+        `${spec.id}: no constructed history enters `,
+      )
+    const undeclared = spec.constructed.find(({ enters }) =>
+      enters.some((state) => !declared.has(state)),
     )
-      return { loads: false }
+    if (undeclared)
+      return failsRegistration(
+        `histories`,
+        `${spec.id}: constructed history "${undeclared.name}" names undeclared states `,
+      )
     // Every unit and determinism test is named by its history, so two
     // histories of one name, or a constructed history named like the
     // generated unit, would give two tests one name.
@@ -2432,7 +2484,7 @@ function predictSpec(
           ? `${spec.id}: two fixed histories are named "${twice(spec.fixed.map(({ name }) => name))}"`
           : undefined
     if (nameError)
-      return { loads: false, loadError: nameError, nameError: true }
+      return failsRegistration(`histories`, nameError, { nameError: true })
     // A fixed or constructed history that the arbitrary cannot take back
     // fails the property (law `membership`), fixed histories first, naming
     // the property, the history, and the fix. Its file still loads: the
@@ -2486,16 +2538,19 @@ function predictSpec(
         spec.constructed.filter(({ enters }) => enters.includes(`saw-0`))
           .length !== 1))
   )
-    return { loads: false, loadError: `calibration history selector` }
+    return failsRegistration(
+      `calibrations`,
+      `${spec.id}: calibration history selector`,
+    )
   const empty = spec.calibrations.find(({ difference }) =>
     emptyDifference(difference),
   )
   if (empty)
-    return {
-      loads: false,
-      loadError: `${spec.id}: calibration "${empty.name}" requires difference`,
-      emptyDifference: true,
-    }
+    return failsRegistration(
+      `calibrations`,
+      `${spec.id}: calibration "${empty.name}" requires difference`,
+      { emptyDifference: true },
+    )
   // The synthetic namespace is deliberately small: names identify the fixed
   // or constructed index; enumerated names state their items. This model judges
   // selection independently of the framework's resolver.
@@ -2539,7 +2594,10 @@ function predictSpec(
           : `enumerated` in binding),
     )
   )
-    return { loads: false, loadError: `calibration history selector` }
+    return failsRegistration(
+      `calibrations`,
+      `${spec.id}: calibration history selector`,
+    )
   if (
     spec.probeBinding &&
     spec.probeBinding !== `empty` &&
@@ -2547,7 +2605,10 @@ function predictSpec(
       selectedControls(spec, true).length !== 1 ||
       selectedControls(spec, false).length !== 1)
   )
-    return { loads: false, loadError: `calibration history selector` }
+    return failsRegistration(
+      `calibrations`,
+      `${spec.id}: calibration history selector`,
+    )
   // Each campaign unit's histories in this run: a fixed seed's units at that
   // seed, and the random units at the child run's seed.
   const streams = new Map<string, Array<SyntheticHistory>>([
@@ -3192,6 +3253,12 @@ const frameworkStates = [
   // stands aside for another.
   `membership-in-own-replay`,
   `membership-stands-aside-in-replay`,
+  // The same for a declaration error of law registration, and an
+  // unregistered id, which fails its file's load, hides its sibling.
+  `registration-beside-sibling`,
+  `registration-in-own-replay`,
+  `registration-stands-aside-in-replay`,
+  `load-error-hides-sibling`,
 ] as const
 
 function frameworkReach(
@@ -3205,17 +3272,23 @@ function frameworkReach(
   for (const spec of plan.specs) {
     const owed = expected.get(spec.id)!
     const seen = shared?.[spec.id]
+    if (owed.loads || !seen) continue
     if (
-      !owed.loads &&
       owed.failsTest !== undefined &&
-      seen?.loaded &&
+      seen.loaded &&
       seen.tests.some(
         ({ name, state }) => name === owed.failsTest && state === `failed`,
       ) &&
       seen.sibling.length > 0 &&
       seen.sibling.every(({ state }) => state === `passed`)
     )
-      reached.add(`membership-beside-sibling`)
+      reached.add(`${rejectingLaw(owed)}-beside-sibling`)
+    if (
+      owed.failsTest === undefined &&
+      !seen.loaded &&
+      seen.sibling.length === 0
+    )
+      reached.add(`load-error-hides-sibling`)
   }
   const host = trace.find(({ checkpoint }) => checkpoint === `host-scope`)
     ?.value as HostScopeRun | undefined
@@ -3447,6 +3520,17 @@ function frameworkReach(
     )
       reached.add(`enumerated-reach-key-order-neighbor`)
     const file = run?.files[spec.id]
+    // A rejected declaration as owed: its file loaded and its own test failed
+    // (laws `membership` and `registration`), or, for an unregistered id, its
+    // file failed to load.
+    const rejected =
+      !owed.loads &&
+      (owed.failsTest === undefined
+        ? file?.loaded === false
+        : file?.loaded === true &&
+          file.tests.some(
+            ({ name, state }) => name === owed.failsTest && state === `failed`,
+          ))
     const ranCalibration = (name: string) =>
       file?.loaded &&
       file.tests.some(
@@ -3472,18 +3556,12 @@ function frameworkReach(
         )
       )
         reached.add(`bound-enumerated-label-selector`)
-      else if (!owed.loads && file.loaded === false)
-        reached.add(`bound-enumerated-label-rejected`)
+      else if (rejected) reached.add(`bound-enumerated-label-rejected`)
     }
+    if (!owed.loads && !rejected) continue
     // Law `membership`: the property's file loaded, and its membership test
     // failed in place of the load.
-    if (!owed.loads && owed.failsTest !== undefined) {
-      const failed =
-        file?.loaded === true &&
-        file.tests.some(
-          ({ name, state }) => name === owed.failsTest && state === `failed`,
-        )
-      if (!failed) continue
+    if (!owed.loads && rejectingLaw(owed) === `membership`) {
       if (owed.buildError) reached.add(`constructed-build-membership-failure`)
       if (owed.membership === `fixed`) reached.add(`fixed-membership-failure`)
       if (owed.membership === `constructed`)
@@ -3495,17 +3573,16 @@ function frameworkReach(
       }
       continue
     }
+    // Law `registration`: the declaration error failed the property's
+    // registration test, or an unregistered id its file's load.
     if (!owed.loads) {
       if (
-        file?.loaded === false &&
         owed.nameError &&
         (spec.probeBinding === `explicit` || spec.probeBinding === `inferred`)
       )
         reached.add(`bound-control-${spec.probeBinding}-name-gate`)
       if (
-        file?.loaded === false &&
-        !owed.nameError &&
-        owed.loadError === `calibration history selector` &&
+        owed.loadError === `${spec.id}: calibration history selector` &&
         spec.probeBinding === `inferred`
       ) {
         if (
@@ -3536,13 +3613,7 @@ function frameworkReach(
       if (owed.dataError) reached.add(`history-out-of-domain`)
       if (owed.emptyDifference)
         reached.add(`calibration-empty-difference-error`)
-      if (
-        owed.nameError &&
-        owed.loadError &&
-        file?.loaded === false &&
-        file.loadErrors.some((message) => message.includes(owed.loadError!))
-      )
-        reached.add(`unit-name-load-error`)
+      if (owed.nameError) reached.add(`unit-name-load-error`)
       continue
     }
     for (const declaration of spec.fixed) {
@@ -4128,17 +4199,16 @@ function frameworkReach(
       reached.add(`replay-unit-selected`)
     for (const [index, spec] of plan.specs.entries()) {
       const owed = expected.get(spec.id)!
-      const membership =
-        !owed.loads && owed.failsTest !== undefined
-          ? under.files[spec.id]?.tests.find(
-              ({ name }) => name === owed.failsTest,
-            )
-          : undefined
-      if (error || plan.environment.path !== `valid` || !membership) continue
-      if (index === 0 && membership.state === `failed`)
-        reached.add(`membership-in-own-replay`)
-      if (index > 0 && membership.state === `skipped`)
-        reached.add(`membership-stands-aside-in-replay`)
+      if (owed.loads || owed.failsTest === undefined) continue
+      const own = under.files[spec.id]?.tests.find(
+        ({ name }) => name === owed.failsTest,
+      )
+      if (error || plan.environment.path !== `valid` || !own) continue
+      const law = rejectingLaw(owed)
+      if (index === 0 && own.state === `failed`)
+        reached.add(`${law}-in-own-replay`)
+      if (index > 0 && own.state === `skipped`)
+        reached.add(`${law}-stands-aside-in-replay`)
     }
   }
   if (trace.some(({ checkpoint }) => checkpoint === `rerun`))
@@ -4205,9 +4275,16 @@ function frameworkReach(
   for (const spec of plan.specs) {
     const seen = run?.files[spec.id]
     if (spec.source.kind !== `generated` || spec.slow) continue
+    // Law `registration`: `bases` or `drawnBases` failed the property's
+    // registration test.
     if (
       !expected.get(spec.id)!.loads &&
-      seen?.loadErrors.some((message) => message.includes(`ases\` must be`))
+      seen?.tests.some(
+        ({ name, state, failure }) =>
+          name === `registration: histories` &&
+          state === `failed` &&
+          failure?.message?.includes(`ases\` must be`),
+      )
     )
       reached.add(`bases-load-error`)
     const [seed] = fixedSeedsOf(spec)
@@ -6652,23 +6729,45 @@ function environmentUnitOutcome(spec: SyntheticSpec, unit: string): Outcome {
 // context determines selection, never the reported state. Full registration
 // remains owed when a filter or path replay makes most tests stand aside.
 /**
- * Law `membership` on one property's report: its file loaded, it registered
- * only its membership test, and that test failed with the owed error text,
- * its fix, and its cause. Returns the violation, if any.
+ * Whether a failure, as a receiving child reports its facts, is the one a
+ * rejected declaration owes its own test: law `membership`'s, or, for law
+ * `registration`, an `OracleDataError` for a history that is not data and an
+ * error of no other kind for the rest, with the owed cause.
  */
-function membershipFailure(
-  owed: Extract<SpecExpectation, { loads: false }>,
+const failsAsOwed = (owed: Rejected, failure: Failure | undefined) =>
+  failure !== undefined &&
+  failure.kind ===
+    (rejectingLaw(owed) === `membership`
+      ? `membership`
+      : owed.dataError
+        ? `data`
+        : `other`) &&
+  (owed.loadCause === undefined || failure.causeMessage === owed.loadCause)
+/** The same on a full report, which also holds the owed text and its fix. */
+const reportsAsOwed = (owed: Rejected, failure: Failure | undefined) =>
+  failsAsOwed(owed, failure) &&
+  [owed.loadError, owed.loadFix].every(
+    (text) => text === undefined || (failure!.message ?? ``).includes(text),
+  )
+
+/**
+ * Laws `membership` and `registration` on one property's report: its file
+ * loaded, it registered only its own test, and that test failed with the
+ * owed error. Returns the violation, if any.
+ */
+function ownTestFailure(
+  owed: Rejected,
   seen: {
     loaded: boolean
     loadErrors: Array<string>
     tests: Array<{ name: string; state: string; failure?: Failure }>
   },
 ): ReturnType<typeof violation> | undefined {
-  const law = `membership`
+  const law = rejectingLaw(owed)
   if (!seen.loaded)
     return violation(
       `run`,
-      `a property whose history fails law membership failed its file's load with ${JSON.stringify(seen.loadErrors)}, owed its test ${JSON.stringify(owed.failsTest)}`,
+      `a property whose declaration fails law ${law} failed its file's load with ${JSON.stringify(seen.loadErrors)}, owed its test ${JSON.stringify(owed.failsTest)}`,
       law,
       { actual: seen.loadErrors, expected: owed.failsTest },
     )
@@ -6676,21 +6775,15 @@ function membershipFailure(
   if (JSON.stringify(names) !== JSON.stringify([owed.failsTest]))
     return violation(
       `run`,
-      `a property whose history fails law membership registered ${JSON.stringify(names)}, owed only ${JSON.stringify(owed.failsTest)}`,
+      `a property whose declaration fails law ${law} registered ${JSON.stringify(names)}, owed only ${JSON.stringify(owed.failsTest)}`,
       law,
       { actual: names, expected: [owed.failsTest] },
     )
   const [test] = seen.tests
-  const message = test!.failure?.message ?? ``
   const owedText = [owed.loadError, owed.loadFix].filter(
     (text) => text !== undefined,
   )
-  if (
-    test!.state !== `failed` ||
-    !owedText.every((text) => message.includes(text)) ||
-    (owed.loadCause !== undefined &&
-      test!.failure?.causeMessage !== owed.loadCause)
-  )
+  if (test!.state !== `failed` || !reportsAsOwed(owed, test!.failure))
     return violation(
       `run`,
       `${JSON.stringify(owed.failsTest)} ${test!.state} with ${JSON.stringify(test!.failure ?? null)}, owed a failure holding ${JSON.stringify(owedText)}${owed.loadCause === undefined ? `` : ` caused by ${JSON.stringify(owed.loadCause)}`}`,
@@ -6700,11 +6793,11 @@ function membershipFailure(
   return undefined
 }
 
-// Law `membership` beside a sibling: a property registered after a spec in
-// the same file runs, and passes as it does alone, unless the spec fails the
-// file's load; a spec whose history fails law membership fails its
-// membership test and does not fail the file. The spec registers the same
-// tests as it does alone.
+// Laws `membership` and `registration` beside a sibling: a property
+// registered after a spec in the same file runs, and passes as it does alone,
+// unless the spec's id is unregistered, which fails the file's load; a spec
+// whose declaration another error rejects fails its own test and does not
+// fail the file. The spec registers the same tests as it does alone.
 function checkSibling(
   plan: Plan,
   trace: ReadonlyArray<{ checkpoint: string; value: unknown }>,
@@ -6719,7 +6812,7 @@ function checkSibling(
     const owed = expected.get(spec.id)!
     const seen = shared[spec.id]!
     const failsFile = !owed.loads && owed.failsTest === undefined
-    const law = owed.loads ? `registration` : `membership`
+    const law = owed.loads ? `registration` : rejectingLaw(owed)
     if (failsFile) {
       if (seen.loaded || seen.sibling.length > 0)
         return violation(
@@ -6742,11 +6835,11 @@ function checkSibling(
       return violation(
         `sibling`,
         `beside ${spec.id}, the sibling property ${seen.loaded ? `ran ${JSON.stringify(seen.sibling)}` : `failed to load with ${JSON.stringify(seen.loadErrors)}`}, owed ${JSON.stringify(owedSibling)} passing`,
-        owed.loads ? `registration` : `membership`,
+        law,
         { actual: seen.sibling, expected: owedSibling },
       )
     if (!owed.loads) {
-      const failure = membershipFailure(owed, seen)
+      const failure = ownTestFailure(owed, seen)
       if (failure) return failure
       continue
     }
@@ -6841,8 +6934,8 @@ function childExpectation(
       !prediction.loads ||
       environment?.error !== undefined ||
       environment?.replayError !== undefined
-    // Law `membership`: the file loads, and the property registers its
-    // membership test alone, before any replay error of the property.
+    // Laws `membership` and `registration`: the file loads, and the property
+    // registers its own test alone, before any replay error of the property.
     const failsTest =
       !prediction.loads && environment?.error === undefined
         ? prediction.failsTest
@@ -6890,19 +6983,17 @@ function childExpectation(
           runs
             ? test.state !== `failed` ||
               test.errors.length !== 1 ||
-              failure?.kind !== `membership` ||
-              (prediction.loadCause !== undefined &&
-                failure.causeMessage !== prediction.loadCause)
+              !failsAsOwed(prediction, failure)
             : test.state !== `skipped` || test.errors.length !== 0
         )
           return {
             failure: violation(
               `child`,
-              `${spec.id} ${context.kind} ${JSON.stringify(test.name)} ${test.state} as ${JSON.stringify(test.errors)}, owed ${runs ? `its membership failure` : `to stand aside`}`,
-              `membership`,
+              `${spec.id} ${context.kind} ${JSON.stringify(test.name)} ${test.state} as ${JSON.stringify(test.errors)}, owed ${runs ? `its ${rejectingLaw(prediction)} failure` : `to stand aside`}`,
+              rejectingLaw(prediction),
               {
                 actual: test.errors,
-                expected: runs ? `membership` : `skipped`,
+                expected: runs ? rejectingLaw(prediction) : `skipped`,
               },
             ),
           }
@@ -7196,9 +7287,9 @@ function checkSuite(
           spec && child.context.kind === `environment`
             ? environmentSelection(plan, spec)
             : undefined
-        // A history that fails law membership fails a test of the
-        // property, before any replay error of the property, and not its
-        // file's load.
+        // A declaration that law membership or law registration rejects
+        // fails a test of the property, before any replay error of the
+        // property, and not its file's load.
         const failsTest =
           declaration !== undefined &&
           !declaration.loads &&
@@ -7230,7 +7321,7 @@ function checkSuite(
           return violation(
             `child`,
             `unexpected child load/suite errors: ${JSON.stringify(file)}`,
-            failsTest ? `membership` : `registration`,
+            failsTest ? rejectingLaw(declaration) : `registration`,
           )
       }
     }
@@ -7347,33 +7438,28 @@ function checkSuite(
     const owed = expected.get(spec.id)!
     const seen = run.files[spec.id]!
     if (!owed.loads && owed.failsTest !== undefined) {
-      // Law `membership`: the file loads, and the property registers its
-      // membership test alone, which fails with the error and runs no history.
-      const failure = membershipFailure(owed, seen)
+      // Laws `membership` and `registration`: the file loads, and the
+      // property registers its own test alone, which fails with the error and
+      // runs no history; with an invalid calibration selector, no driver runs
+      // (law `calibration`).
+      const failure = ownTestFailure(owed, seen)
       if (failure) return failure
       if (ordinaryLog.some((entry) => entry.id === spec.id))
         return violation(
           `run`,
-          `${spec.id} ran a history although a history fails law membership`,
-          `membership`,
+          `${spec.id} ran a history although its declaration fails law ${rejectingLaw(owed)}`,
+          bindingsOf(spec).length ||
+            (spec.probeBinding && spec.probeBinding !== `empty`)
+            ? `calibration`
+            : rejectingLaw(owed),
         )
       continue
     }
     if (!owed.loads) {
-      if (
-        (bindingsOf(spec).length ||
-          (spec.probeBinding && spec.probeBinding !== `empty`)) &&
-        ordinaryLog.some((entry) => entry.id === spec.id)
-      )
-        return violation(
-          `run`,
-          `${spec.id} ran a driver despite an invalid calibration selector`,
-          `calibration`,
-        )
       if (seen.loaded)
         return violation(
           `run`,
-          `${spec.id} loaded, but its id is unregistered, a required state has no constructed history, a constructed history names an undeclared state, two of its tests would share a name, \`owns\` is not a non-empty literal list of strings, a work bound's ratio is not a finite number of at least 1, or a history is not data`,
+          `${spec.id} loaded, but its id is unregistered`,
           `registration`,
         )
       if (seen.loadErrors.length !== 1 || seen.loadCauses.length !== 1)
@@ -7398,7 +7484,7 @@ function checkSuite(
         return violation(
           `run`,
           `${spec.id} failed to load with ${JSON.stringify(seen.loadErrors)}, owed ${JSON.stringify(owedText)}`,
-          owed.nameError ? `registration` : `data`,
+          `registration`,
           { actual: seen.loadErrors, expected: owedText },
         )
       continue
@@ -8441,8 +8527,9 @@ function checkEnvironment(
           : unitNames(spec).map(randomUnit).includes(unit)
             ? undefined
             : `${spec.id}: ${name(`UNIT`)} names "${unit}"`
-    // A history that fails law membership fails the property's membership
-    // test, before any replay error, and leaves its file loading.
+    // A declaration that law membership or law registration rejects fails
+    // the property's own test, before any replay error, and leaves its file
+    // loading.
     const failsTest = owed.loads ? undefined : owed.failsTest
     const owedError =
       error ?? (owed.loads ? replayError : (owed.loadError ?? undefined))
@@ -8481,18 +8568,19 @@ function checkEnvironment(
       }
     }
     if (!seen.loaded || !replays) continue
-    // A path replay: only the selected unit runs, if any; a membership test
-    // runs in a replay of its own property, whatever unit it names.
+    // A path replay: only the selected unit runs, if any; a property's own
+    // membership or registration test runs in a replay of its property,
+    // whatever unit it names.
     const running = seen.tests.filter((test) => test.state !== `skipped`)
-    if (failsTest !== undefined) {
+    if (failsTest !== undefined && !owed.loads) {
       const owedNames = selected ? [failsTest] : []
       if (
         JSON.stringify(running.map((test) => test.name)) !==
           JSON.stringify(owedNames) ||
-        running.some((test) => test.failure?.kind !== `membership`)
+        running.some((test) => !reportsAsOwed(owed, test.failure))
       )
         return failed(
-          `${spec.id} ran ${JSON.stringify(running.map((test) => [test.name, test.failure?.kind]))} in a path replay, owed ${JSON.stringify(owedNames)} failing law membership`,
+          `${spec.id} ran ${JSON.stringify(running.map((test) => [test.name, test.failure?.kind]))} in a path replay, owed ${JSON.stringify(owedNames)} failing law ${rejectingLaw(owed)}`,
         )
       continue
     }
@@ -9410,6 +9498,7 @@ oracleProperty({
       `bound-constructed-driver`,
       ...appendedStates,
       `membership-beside-sibling`,
+      `registration-beside-sibling`,
     ],
     measured: frameworkStates.filter(
       (state) =>
@@ -9424,6 +9513,7 @@ oracleProperty({
         !round3FrameworkStates.some((required) => required === state) &&
         !state.startsWith(`bound-`) &&
         state !== `membership-beside-sibling` &&
+        state !== `registration-beside-sibling` &&
         state !== `unbound-prototype-probe` &&
         state !== `registration-warning-policy`,
     ),
@@ -10244,6 +10334,26 @@ oracleProperty({
           sibling: true,
         }),
       },
+      // Law `registration`: a declaration error fails its property's
+      // registration test, and the sibling property registered after it in
+      // the same file runs and passes.
+      {
+        name: `a registration failure beside a sibling property`,
+        enters: [`registration-beside-sibling`],
+        build: (generated: Suite): Suite => ({
+          drafts: [
+            generatedDraft(
+              generated.drafts[0]!.clock
+                ? { ownsMode: `empty` }
+                : { workMode: `below one` },
+            ),
+          ],
+          seedless: false,
+          prefix: `ORACLE`,
+          environment: null,
+          sibling: true,
+        }),
+      },
     ],
     fixed: [
       {
@@ -10269,9 +10379,10 @@ oracleProperty({
         history: timeoutRepresentationSuite(),
       },
       {
-        // The shrunk case of #59: a slow spec that fails to load never runs
-        // its driver, so the timeout obligation must not apply to it.
-        name: `timeout presentation of a slow spec that fails to load`,
+        // The shrunk case of #59: a slow spec whose declaration fails
+        // registration never runs its driver, so the timeout obligation must
+        // not apply to it.
+        name: `timeout presentation of a slow spec that fails registration`,
         enters: [`registration-error`, `timeout-presentation-load-failure`],
         history: {
           seedless: false,
@@ -11240,9 +11351,9 @@ oracleProperty({
         [`determinism-caught`],
         generatedDraft({ nondeterministic: true }),
       ),
-      fixedHistory(
+      siblingHistory(
         `a required state needs a constructed history`,
-        [`registration-error`],
+        [`registration-error`, `registration-beside-sibling`],
         generatedDraft({
           statesMode: `extra`,
           constructed: [{ prefix: [0], enters: [`saw-0`] }],
@@ -11250,9 +11361,9 @@ oracleProperty({
       ),
       // An enumerated source has no random campaign, which is where an id was
       // checked before; registration itself must check it.
-      fixedHistory(
+      siblingHistory(
         `an unregistered enumerated property fails to load`,
-        [`registration-error`],
+        [`registration-error`, `load-error-hides-sibling`],
         {
           ...generatedDraft({}),
           source: { kind: `enumerated`, histories: [[0], [1]] },
@@ -11338,9 +11449,13 @@ oracleProperty({
           ],
         }),
       ),
-      fixedHistory(
-        `a calibration that requires the empty text fails to load`,
-        [`registration-error`, `calibration-empty-difference-error`],
+      siblingHistory(
+        `a calibration that requires the empty text fails its registration test`,
+        [
+          `registration-error`,
+          `calibration-empty-difference-error`,
+          `registration-beside-sibling`,
+        ],
         generatedDraft({
           fixed: [at([0])],
           calibrations: [
@@ -11350,7 +11465,7 @@ oracleProperty({
         }),
       ),
       fixedHistory(
-        `a calibration that requires a pattern matching the empty string fails to load`,
+        `a calibration that requires a pattern matching the empty string fails its registration test`,
         [`registration-error`, `calibration-empty-difference-error`],
         {
           ...generatedDraft({ calibrations: [cal(`right`, `empty pattern`)] }),
@@ -11524,23 +11639,23 @@ oracleProperty({
           fixed: [{ history: [1], enters: [`saw-0`] }],
         }),
       ),
-      fixedHistory(
+      siblingHistory(
         `a probe-bound state needs predict`,
-        [`registration-error`],
+        [`registration-error`, `registration-beside-sibling`],
         generatedDraft({ probe: `agree`, predictMode: `missing` }),
       ),
-      fixedHistory(
-        `owns given as an empty list fails to load`,
-        [`registration-error`],
+      siblingHistory(
+        `owns given as an empty list fails its registration test`,
+        [`registration-error`, `registration-beside-sibling`],
         generatedDraft({ ownsMode: `empty` }),
       ),
       fixedHistory(
-        `owns given as a string fails to load`,
+        `owns given as a string fails its registration test`,
         [`registration-error`],
         generatedDraft({ ownsMode: `string` }),
       ),
       fixedHistory(
-        `owns with a non-string entry fails to load`,
+        `owns with a non-string entry fails its registration test`,
         [`registration-error`],
         generatedDraft({ ownsMode: `bad entry` }),
       ),
@@ -11549,18 +11664,18 @@ oracleProperty({
         [],
         generatedDraft({ ownsMode: `list` }),
       ),
-      fixedHistory(
-        `a work bound below 1 fails to load`,
-        [`registration-error`],
+      siblingHistory(
+        `a work bound below 1 fails its registration test`,
+        [`registration-error`, `registration-beside-sibling`],
         generatedDraft({ workMode: `below one` }),
       ),
       fixedHistory(
-        `a work bound that is not finite fails to load`,
+        `a work bound that is not finite fails its registration test`,
         [`registration-error`],
         generatedDraft({ workMode: `not finite` }),
       ),
       fixedHistory(
-        `a null work bound fails to load`,
+        `a null work bound fails its registration test`,
         [`registration-error`],
         generatedDraft({ workMode: `null` }),
       ),
@@ -11574,9 +11689,9 @@ oracleProperty({
         [`registration-error`],
         generatedDraft({ predictMode: `extra` }),
       ),
-      fixedHistory(
-        `predict on an enumerated source fails to load`,
-        [`registration-error`],
+      siblingHistory(
+        `predict on an enumerated source fails its registration test`,
+        [`registration-error`, `registration-beside-sibling`],
         {
           ...generatedDraft({ predictMode: `extra` }),
           source: { kind: `enumerated`, histories: [[0]] },
@@ -11700,9 +11815,13 @@ oracleProperty({
           source: { kind: `enumerated`, histories: [[0], [1], [2], [1, 1]] },
         },
       ),
-      fixedHistory(
-        `an enumerated source with a generated source's key fails to load`,
-        [`registration-error`, `enumerated-shape-error`],
+      siblingHistory(
+        `an enumerated source with a generated source's key fails its registration test`,
+        [
+          `registration-error`,
+          `enumerated-shape-error`,
+          `registration-beside-sibling`,
+        ],
         {
           ...generatedDraft({
             enumeratedStates: [`required`, `measured`, `measured`],
@@ -11712,7 +11831,7 @@ oracleProperty({
         },
       ),
       fixedHistory(
-        `an enumerated source with a probe-bound state fails to load`,
+        `an enumerated source with a probe-bound state fails its registration test`,
         [`registration-error`, `enumerated-shape-error`],
         {
           ...generatedDraft({
@@ -11722,9 +11841,13 @@ oracleProperty({
           source: { kind: `enumerated`, histories: [[0]] },
         },
       ),
-      fixedHistory(
-        `a label that names the reach test fails to load`,
-        [`registration-error`, `reserved-label-error`],
+      siblingHistory(
+        `a label that names the reach test fails its registration test`,
+        [
+          `registration-error`,
+          `reserved-label-error`,
+          `registration-beside-sibling`,
+        ],
         {
           ...generatedDraft({
             enumeratedStates: [`required`, `measured`, `measured`],
@@ -11734,7 +11857,7 @@ oracleProperty({
         },
       ),
       fixedHistory(
-        `a label that names the determinism test fails to load`,
+        `a label that names the determinism test fails its registration test`,
         [`registration-error`, `reserved-label-error`],
         {
           ...generatedDraft({ labelStyle: `reserved-determinism` }),
@@ -11798,9 +11921,13 @@ oracleProperty({
           source: { kind: `enumerated`, histories: [[0], [1], [2], [3]] },
         },
       ),
-      fixedHistory(
-        `an enumerated history holding a class instance fails to load, naming its path`,
-        [`registration-error`, `history-out-of-domain`],
+      siblingHistory(
+        `an enumerated history holding a class instance fails its registration test, naming its path`,
+        [
+          `registration-error`,
+          `history-out-of-domain`,
+          `registration-beside-sibling`,
+        ],
         {
           ...generatedDraft({ form: `boxed`, labelStyle: `default` }),
           source: { kind: `enumerated`, histories: [[0], [1]] },
@@ -11808,7 +11935,7 @@ oracleProperty({
       ),
       // A label names the test, but the history must still be data.
       fixedHistory(
-        `a labelled enumerated history holding a class instance fails to load`,
+        `a labelled enumerated history holding a class instance fails its registration test`,
         [`registration-error`, `history-out-of-domain`],
         {
           ...generatedDraft({ form: `boxed` }),
@@ -11816,7 +11943,7 @@ oracleProperty({
         },
       ),
       fixedHistory(
-        `an enumerated history holding an accessor fails to load, naming its path`,
+        `an enumerated history holding an accessor fails its registration test, naming its path`,
         [`registration-error`, `history-out-of-domain`],
         {
           ...generatedDraft({ form: `trap`, labelStyle: `default` }),
@@ -11991,7 +12118,7 @@ oracleProperty({
         generatedDraft({ source: { kind: `generated`, runs: 2, seed: 6 } }),
       ),
       fixedHistory(
-        `a constructed history named generated fails to load`,
+        `a constructed history named generated fails its registration test`,
         [`registration-error`, `unit-name-load-error`],
         generatedDraft({
           constructedNames: `generated`,
@@ -11999,7 +12126,7 @@ oracleProperty({
         }),
       ),
       fixedHistory(
-        `two constructed histories of one name fail to load`,
+        `two constructed histories of one name fail their registration test`,
         [`registration-error`, `unit-name-load-error`],
         generatedDraft({
           constructedNames: `duplicate`,
@@ -12009,9 +12136,13 @@ oracleProperty({
           ],
         }),
       ),
-      fixedHistory(
-        `two fixed histories of one name fail to load`,
-        [`registration-error`, `unit-name-load-error`],
+      siblingHistory(
+        `two fixed histories of one name fail their registration test`,
+        [
+          `registration-error`,
+          `unit-name-load-error`,
+          `registration-beside-sibling`,
+        ],
         generatedDraft({ fixedNames: `duplicate`, fixed: [at([0]), at([1])] }),
       ),
       // At seed 7, `c` fails and `c.1`, whose name extends it, passes.
@@ -12109,6 +12240,14 @@ oracleProperty({
       // Law `membership`: a path replay of a property whose history fails
       // the law runs its membership test, which would otherwise have no unit
       // to run, and a replay of another property leaves it out.
+      // Law `registration`: the same for a property's registration test.
+      suiteHistory(
+        `a path replay runs the registration test of its own property only`,
+        [`registration-in-own-replay`, `registration-stands-aside-in-replay`],
+        { environment: replayOf({ unit: `absent` }) },
+        generatedDraft({ ownsMode: `empty` }),
+        generatedDraft({ workMode: `below one` }),
+      ),
       suiteHistory(
         `a path replay runs the membership test of its own property only`,
         [`membership-in-own-replay`, `membership-stands-aside-in-replay`],
