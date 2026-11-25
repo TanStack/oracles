@@ -161,19 +161,27 @@ const meanings = {
 }
 
 // The directive for an operator whose infection is not measured: the input
-// that makes its value differ, built from the operator (classify.mjs).
+// that makes its value differ, built from the operator (classify.mjs). A
+// value made absent or `undefined` that no legal history tells from the
+// original is dead code, last and only with its evidence (a law that
+// decides the value exactly on every public entry point that reaches it,
+// and every kill kept by key), often an addition made only for the type
+// checker:
+// `start: 0` on an object typed wider than what is read, or `return {}`
+// where the result is spread.
+const DEAD_VALUE = `Last, where no legal history tells the mutant from the original, the code is dead only with evidence: a law that decides the value exactly owns every public entry point that reaches this code, and the gap runs before and after its removal keep every kill, compared by mutant key (\`oracles-design\` step 7). With that evidence, remove the code, and keep any effect it has. Where it was written only so that a type checks, declare the type of what is read instead.`
 function distinguishingDirective(g) {
   const line = g.line
   if (g.operator === `loop-false`)
     return `Add an owner history that enters the loop on line ${line}, so that forcing its condition to false changes an asserted result, and assert on the result.`
   if (g.operator === `value-undefined`)
-    return `Add an owner history where the call on line ${line} returns a value that changes an asserted result when it is \`undefined\`, and assert on the result.`
+    return `Add an owner history where the call on line ${line} returns a value that changes an asserted result when it is \`undefined\`, and assert on the result. ${DEAD_VALUE}`
   if (g.operator === `field-drop`)
-    return `Add an owner history that reads the property dropped on line ${line}, so that its absence changes an asserted result, and assert on the result.`
+    return `Add an owner history that reads the property dropped on line ${line}, so that its absence changes an asserted result, and assert on the result. ${DEAD_VALUE}`
   if (g.operator === `delete-call`)
     return `Add an owner history where the call on line ${line} changes an asserted result when it does not run, and assert on the result.`
   if (g.operator === `return-undefined`)
-    return `Add an owner history that uses the value returned on line ${line}, so that \`undefined\` in its place changes an asserted result, and assert on the result.`
+    return `Add an owner history that uses the value returned on line ${line}, so that \`undefined\` in its place changes an asserted result, and assert on the result. ${DEAD_VALUE}`
   if (g.operator === `optional-chain`)
     return `Add an owner history where the object read with \`?.\` on line ${line} is \`undefined\`, so that a plain read throws, and assert on the result.`
   if (g.original === `??`)
