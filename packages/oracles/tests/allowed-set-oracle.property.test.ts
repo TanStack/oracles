@@ -149,8 +149,9 @@ const setHistory: fc.Arbitrary<SetHistory> = fc.record({
   freedom: fc.constantFrom(``, ` `, `the order of notices`, `unstated`),
 })
 
-// A rejection's values, as the tokens whose values they are: each one must
-// be the argument itself, so a Date needs no encoding as data.
+// A rejection's values, as the tokens whose values they are: the list and
+// each value in it must be the argument itself, so a copy of the list is
+// another value, and a Date needs no encoding as data.
 type Values = { actual: string; expected: ReadonlyArray<string> }
 type SetOwed =
   | { accepted: true }
@@ -186,6 +187,8 @@ function judgedBy(
 ): unknown {
   const actualValue = actualOf(actual)
   const allowedValues = allowed.map(valueOf)
+  // What the list held before the call, so a change to it shows.
+  const passed = [...allowedValues]
   let verdict: Verdict | undefined
   try {
     verdict = notAllowed(
@@ -208,9 +211,9 @@ function judgedBy(
     ...rest,
     values: values && {
       actual: tokenOf(values.actual, actualValue, actual),
-      expected: Array.isArray(values.expected)
-        ? values.expected.map((value, i) =>
-            tokenOf(value, allowedValues[i], allowed[i]!),
+      expected: Object.is(values.expected, allowedValues)
+        ? allowedValues.map((value, i) =>
+            tokenOf(value, passed[i], allowed[i] ?? `another value`),
           )
         : `another value`,
     },
@@ -596,17 +599,108 @@ oracleProperty({
 })
 
 // ---------------------------------------------------------------------------
+// Law `allowed set`, in the property's other callbacks
+// ---------------------------------------------------------------------------
+
+// `model`, `predict`, `reached`, and the driver run outside the check, so
+// `notAllowed` reads no law in any of them: a freedom that these limits do
+// not state judges the set there as anywhere else. `predict` runs in `judge`
+// right after the check, so it is where the check's scope could leak. The
+// driver enters the probe-bound state by the classes alone, so the prediction
+// agrees with it only when `notAllowed` returned the plain verdict.
+const callbacksId = `self-oracle.allowed-set-callbacks`
+const unstatedFreedom = `a freedom that no limits of this property state`
+const acceptedProbe = `self-oracle#allowed-set-accepted`
+const acceptedOutside = `accepted outside the check`
+
+type CallbackHistory = Omit<SetHistory, `actual` | `freedom`> & {
+  actual: Token
+}
+const callbackHistory: fc.Arbitrary<CallbackHistory> = fc.record({
+  actual: fc.constantFrom(...tokenNames),
+  allowed: fc.array(fc.constantFrom(...tokenNames), { maxLength: 3 }),
+})
+const sameClass = ({ actual, allowed }: CallbackHistory) =>
+  allowed.some((member) => classOf(member) === classOf(actual))
+const acceptedBy = (history: CallbackHistory) =>
+  (judgedBy(history, unstatedFreedom) as { accepted?: boolean }).accepted ===
+  true
+
+oracleProperty({
+  id: callbacksId,
+  law: {
+    statement: `Outside a property's check (in its predict, reached, and driver) notAllowed reads no law, so a freedom that the property's limits do not state judges the allowed set as the allowed-set law says.`,
+    authority: `the notAllowed comment in packages/oracles/src/oracle-property.ts`,
+    limits: `Values from the token domain of the allowed-set property; up to three allowed members.`,
+  },
+  histories: {
+    arbitrary: callbackHistory,
+    runs: 100,
+    fixedSeeds: [20261125],
+    states: [{ name: acceptedOutside, probe: acceptedProbe }],
+    measured: [rejectedState],
+    constructed: [
+      {
+        name: `a member of the same data`,
+        enters: [acceptedOutside],
+        build: (generated): CallbackHistory => ({
+          ...generated,
+          actual: `ba`,
+          allowed: [`ab`],
+        }),
+      },
+      {
+        name: `no member`,
+        enters: [],
+        build: (generated): CallbackHistory => ({
+          ...generated,
+          actual: `negativeZero`,
+          allowed: [`zero`],
+        }),
+      },
+    ],
+  },
+  probeHistories: {
+    [acceptedOutside]: { notEntered: { constructed: `no member` } },
+  },
+  model: (history) => owedSetVerdict({ ...history, freedom: unstatedFreedom }),
+  predict: (history) => ({ [acceptedOutside]: acceptedBy(history) }),
+  reached: (history) => (acceptedBy(history) ? [] : [rejectedState]),
+  driver: (history, observe) => {
+    globalThis.__oracleProbe?.(acceptedProbe, sameClass(history))
+    observe(setCheckpoint, judgedBy(history, unstatedFreedom))
+  },
+  check: (history, trace, owed) =>
+    checkSet({ ...history, freedom: unstatedFreedom }, trace, owed),
+  owns: [`src/oracle-property.ts#notAllowed`],
+})
+
+// ---------------------------------------------------------------------------
 // Law `freedom in limits`, across a file
 // ---------------------------------------------------------------------------
 
 /** How the law's limits spell the freedom that the check names. */
 const forms = [`verbatim`, `other case`, `absent`, `empty`, `blank`] as const
 type Form = (typeof forms)[number]
+/**
+ * What a check throws in place of calling `notAllowed`, after a driver that
+ * throws: values whose class cannot be read (a revoked proxy, a proxy whose
+ * prototype trap throws), ordinary ones, and an `OracleFreedomError` itself.
+ */
+const checkThrows = [
+  `revoked proxy`,
+  `trapped proxy`,
+  `error`,
+  `string`,
+  `freedom error`,
+] as const
+type CheckThrow = (typeof checkThrows)[number]
 type Spec = {
   form: Form
   accepts: boolean
   members: 1 | 2
   throws: boolean
+  checkThrows?: CheckThrow
 }
 type Suite = { name: string; specs: ReadonlyArray<Spec> }
 
@@ -618,10 +712,24 @@ const allSpecs: Array<Spec> = forms.flatMap((form) =>
     ),
   ),
 )
-const suites: Array<Suite> = Array.from({ length: 2 }, (_, s) => ({
-  name: `suite ${s}`,
-  specs: allSpecs.filter((_spec, index) => (index >> 1) % 2 === s),
-}))
+const suites: Array<Suite> = [
+  ...Array.from({ length: 2 }, (_, s) => ({
+    name: `suite ${s}`,
+    specs: allSpecs.filter((_spec, index) => (index >> 1) % 2 === s),
+  })),
+  // A check that throws after a driver that threw: only an
+  // `OracleFreedomError` outranks the driver's error.
+  {
+    name: `suite 2`,
+    specs: checkThrows.map((thrown) => ({
+      form: `verbatim` as const,
+      accepts: true,
+      members: 1 as const,
+      throws: true,
+      checkThrows: thrown,
+    })),
+  },
+]
 
 const propertyId = (s: number, i: number) => `allowed.s${s}p${i}`
 const checkpointOf = (i: number) => `order ${i}`
@@ -638,6 +746,17 @@ const membersOf = (members: 1 | 2) => (members === 1 ? [`ab`] : [`ab`, `ba`])
 const seenOf = ({ accepts, members }: Spec) =>
   accepts ? membersOf(members).at(-1)! : `zz`
 const driverMessage = (i: number) => `driver ${i} failed`
+const directFreedom = `thrown by the check`
+const thrownBy = (thrown: CheckThrow, id: string, i: number): string =>
+  thrown === `revoked proxy`
+    ? `const { proxy, revoke } = Proxy.revocable({}, {}); revoke(); throw proxy`
+    : thrown === `trapped proxy`
+      ? `throw new Proxy({}, { getPrototypeOf() { throw new Error('trap') } })`
+      : thrown === `error`
+        ? `throw new Error('check failed')`
+        : thrown === `string`
+          ? `throw 'check failed'`
+          : `throw new OracleFreedomError(${JSON.stringify(`${id}: at checkpoint "${checkpointOf(i)}", the freedom "${directFreedom}"`)})`
 
 const here = dirname(fileURLToPath(import.meta.url))
 const packageDirectory = dirname(here)
@@ -659,8 +778,12 @@ function suiteSource(s: number, specs: ReadonlyArray<Spec>): string {
     observe(${text(checkpointOf(i))}, ${text(seenOf(spec))})
     ${spec.throws ? `throw new Error(${text(driverMessage(i))})` : ``}
   },
-  check: (_plan, trace, allowed) =>
-    notAllowed(${text(checkpointOf(i))}, 'order', trace[0]?.value, allowed, ${text(freedomOf(spec.form, i))}) ?? pass,
+  check: ${
+    spec.checkThrows === undefined
+      ? `(_plan, trace, allowed) =>
+    notAllowed(${text(checkpointOf(i))}, 'order', trace[0]?.value, allowed, ${text(freedomOf(spec.form, i))}) ?? pass`
+      : `() => { ${thrownBy(spec.checkThrows, propertyId(s, i), i)} }`
+  },
   calibrations: [
     {
       name: 'outside',
@@ -671,7 +794,7 @@ function suiteSource(s: number, specs: ReadonlyArray<Spec>): string {
   ],
 })`
   })
-  return `import { notAllowed, oracleProperty, pass } from '../src/index.js'\n\n${properties.join(`\n\n`)}\n`
+  return `import { OracleFreedomError, notAllowed, oracleProperty, pass } from '../src/index.js'\n\n${properties.join(`\n\n`)}\n`
 }
 
 type ReportedError = {
@@ -769,19 +892,27 @@ function owedSuite({ name, specs }: Suite): Record<string, TestOwed> {
       freedom: freedomOf(spec.form, i),
     }
     const driver = { kind: `driver` as const, message: driverMessage(i) }
-    owed[`${id} > run`] = !stated
-      ? { state: `failed`, error: freedom }
-      : spec.accepts
-        ? spec.throws
-          ? { state: `failed`, error: driver }
-          : { state: `passed` }
-        : {
+    owed[`${id} > run`] =
+      spec.checkThrows === `freedom error`
+        ? {
             state: `failed`,
-            error: {
-              kind: `violation`,
-              ...(spec.throws ? { cause: driverMessage(i) } : {}),
-            },
+            error: { ...freedom, freedom: directFreedom },
           }
+        : spec.checkThrows !== undefined
+          ? { state: `failed`, error: driver }
+          : !stated
+            ? { state: `failed`, error: freedom }
+            : spec.accepts
+              ? spec.throws
+                ? { state: `failed`, error: driver }
+                : { state: `passed` }
+              : {
+                  state: `failed`,
+                  error: {
+                    kind: `violation`,
+                    ...(spec.throws ? { cause: driverMessage(i) } : {}),
+                  },
+                }
     owed[`${id} > calibration: outside`] = !stated
       ? { state: `failed`, error: spec.throws ? { kind: `any` } : freedom }
       : spec.accepts && !spec.throws
@@ -848,13 +979,15 @@ function checkSuite(
   const run = trace.find(({ checkpoint }) => checkpoint === `suite`)?.value as
     SuiteRun | undefined
   if (run === undefined) return differs(`suite`, limitsLaw, run, owed)!
+  // Every reported row, duplicates kept: a second row of one name must not
+  // hide the first.
   const seen = new Map(run.tests.map((test) => [test.test, test]))
   return (
     differs(`suite`, `file loads`, run.loadErrors, 0) ??
     differs(
       `suite`,
       limitsLaw,
-      [...seen.keys()].sort(),
+      run.tests.map(({ test }) => test).sort(),
       Object.keys(owed).sort(),
     ) ??
     Object.entries(owed).reduce<Verdict | undefined>(
@@ -889,7 +1022,7 @@ oracleProperty({
   law: {
     statement: `A property whose check calls notAllowed with a blank freedom, or one its law's limits does not contain verbatim, fails each history test, and each calibration whose driver does not throw, with an OracleFreedomError that names the property, the checkpoint, and the freedom; with a stated freedom its tests judge the allowed set; its determinism test and the file's other properties keep their own outcomes, and the file loads.`,
     authority: `the notAllowed comment in packages/oracles/src/oracle-property.ts`,
-    limits: `Two suites of twenty enumerated properties of one history each, covering every spelling of the freedom (verbatim, another case, absent, empty, blank), a value inside or outside a set of one or two members, and a driver that throws after it observes or not; under the package's default Vitest config.`,
+    limits: `Two suites of twenty enumerated properties of one history each, covering every spelling of the freedom (verbatim, another case, absent, empty, blank), a value inside or outside a set of one or two members, and a driver that throws after it observes or not, and a third suite whose checks throw a revoked proxy, a proxy whose prototype trap throws, an Error, a string, or an OracleFreedomError after a driver that threw; under the package's default Vitest config.`,
   },
   histories: suites,
   label: ({ name }) => name,
@@ -931,6 +1064,31 @@ oracleProperty({
           state: `failed`,
           errors: [{ name: `OracleFreedomError`, message: `` }],
         })),
+    },
+    {
+      name: `a failing row hidden by a passing row of the same name`,
+      law: limitsLaw,
+      history: { enumerated: `suite 0` },
+      corrupt: (trace) =>
+        trace.map((entry) => {
+          const run = entry.value as SuiteRun
+          const test = `${propertyId(0, 2)} > run`
+          const passing = run.tests.find((seen) => seen.test === test)!
+          return {
+            ...entry,
+            value: {
+              ...run,
+              tests: [
+                {
+                  test,
+                  state: `failed`,
+                  errors: [{ name: `Error`, message: `hidden` }],
+                },
+                ...run.tests,
+              ].map((seen) => (seen === passing ? { ...passing } : seen)),
+            },
+          }
+        }),
     },
     {
       name: `a file that fails to load`,
