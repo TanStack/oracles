@@ -1,0 +1,5 @@
+---
+'@tanstack/oracles': patch
+---
+
+A fixed or constructed history that the arbitrary cannot take back (`canShrinkWithoutContext` is false), or a constructed history whose `build` throws when the property registers, now fails only its own property. Before, it failed the whole test file's load, so the file reported no tests and its other properties never ran. The property now registers a single test, `membership: fixed history: <name>` or `membership: constructed history: <name>`, which fails with the same error as before: it names the property and the history, it explains the fix, and a throwing `build`'s error is its `cause`. The rest of the file runs and reports. The check is as strict as before. The property runs none of its histories, campaigns, calibrations, or determinism tests until the history is fixed. The test runs in every run, and it also runs in a path replay of its own property. In `oracle-gaps`, that test is a failing law. It blocks only the mutants that no passing owner test reaches, so the file's other laws still judge.
