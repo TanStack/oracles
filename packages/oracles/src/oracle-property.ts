@@ -65,6 +65,16 @@
  * framework limit, never as data that is not data. A failure report prints a generated history even when it is
  * not data, through Node's inspection; names and comparisons never do.
  *
+ * A declaration error fails its property, not its test file (F4,
+ * 2026-11-25): the property registers one test alone, `registration:
+ * <option>`, named by the option the error rejects (`owns`, `work`,
+ * `predict`, `histories`, `label`, or `calibrations`, which holds
+ * `probeHistories` too). It fails with that error and runs no history, and
+ * the file's other properties register and run. Like a membership test (see
+ * fixed histories), it also runs in a path replay of its own property. An id
+ * outside the registry, and a replay environment that names no unit to run,
+ * still fail the file.
+ *
  * Each history is one test, named by `label`, or, without one, by the
  * history's data encoding, which is its JSON text for JSON data and the same
  * on every machine. A violation fails it with an `OracleViolation` that
@@ -101,7 +111,8 @@
  *   within its own timeout, and prints its own reach line, `<id> <unit> reach
  *   {...}`; a campaign's reach is the sum of its units' lines. A constructed
  *   history named `generated`, or two constructed or two fixed histories of one
- *   name, would give two tests one name, so the property fails to load.
+ *   name, would give two tests one name, so the property fails its
+ *   `registration: histories` test.
  * - **Unit replay** (maintainer decisions, 2026-11-11, Q3 and Q4). A path
  *   indexes one unit's stream, so a path replay names its unit in
  *   `${prefix}_UNIT`, such as `random seed: generated`, which requires
@@ -110,8 +121,8 @@
  *   of a generated source without `UNIT` fails when the property registers,
  *   with "`${prefix}_PATH` of a generated source requires `${prefix}_UNIT`",
  *   and so does a `UNIT` that names no random unit of the replayed property,
- *   an enumerated property's included; these come after every other load
- *   error of the property. A failing unit prints its replay command, `Replay:
+ *   an enumerated property's included; these fail the test file, and come
+ *   after every declaration error of the property. A failing unit prints its replay command, `Replay:
  *   ${prefix}_SEED=... ${prefix}_PATH=... ${prefix}_PROPERTY=... ${prefix}_UNIT=...
  *   vitest run -t '...'`, which names the random unit of its own name: a
  *   fixed-seed unit's replay runs that random unit with the fixed seed, which
@@ -873,63 +884,21 @@ export function oracleProperty<const THistory, TExpected, TPlan = THistory>(
 ): void {
   // Every source names a registered property, so its replay and manifest
   // entries exist; an enumerated source has no random campaign to check it.
+  // An unregistered id fails the file: no replay can select its tests.
   assertRegisteredOracleProperty(options.id)
-  const { id, histories, owns, work } = options
-  if (
-    owns !== undefined &&
-    !(
-      Array.isArray(owns) &&
-      owns.length > 0 &&
-      owns.every((entry) => typeof entry === `string`)
-    )
-  )
-    throw new Error(
-      `${id}: \`owns\` must be a non-empty literal list of strings, which the gap report reads statically.`,
-    )
-  // A ratio below 1 would reject a mutant that does no more work. Plain
-  // JavaScript can pass `null`, which has no ratio.
-  const ratio = (work as { ratio?: unknown } | null | undefined)?.ratio
-  if (
-    work !== undefined &&
-    !(typeof ratio === `number` && Number.isFinite(ratio) && ratio >= 1)
-  )
-    throw new Error(
-      `${id}: \`work.ratio\` must be a finite number of at least 1, the most work a mutant may do as a multiple of the unmodified code's.`,
-    )
-  const enumerated: EnumeratedHistories<THistory> | undefined = Array.isArray(
-    histories,
-  )
-    ? { enumerated: histories as ReadonlyArray<THistory> }
-    : `enumerated` in histories
-      ? histories
-      : undefined
-  if (enumerated && options.predict)
-    throw new Error(
-      `${id}: \`predict\` needs probe-bound states, which only a generated source declares.`,
-    )
-  // A union's excess keys type-check, and plain JavaScript can pass anything.
-  const foreign = Object.keys(enumerated ?? {}).filter(
-    (key) => ![`enumerated`, `states`, `measured`].includes(key),
-  )
-  if (foreign.length > 0)
-    throw new Error(
-      `${id}: an enumerated source takes \`enumerated\`, \`states\`, and \`measured\`; \`${foreign.join(`\`, \``)}\` belongs to a generated source.`,
-    )
-  if (
-    [...(enumerated?.states ?? []), ...(enumerated?.measured ?? [])].some(
-      (state) => typeof state !== `string`,
-    )
-  )
-    throw new Error(
-      `${id}: an enumerated source declares its states by name; a probe-bound state needs a generated source.`,
-    )
-  const generated = histories as GeneratedHistories<THistory>
-  recordRegistration(id, options.law, enumerated?.enumerated ?? generated)
-  // The tests are built as data first, so every one registers unconditionally
-  // (oracle/no-disabled).
-  const tests = enumerated
-    ? enumeratedTests(options, enumerated)
-    : generatedTests(options, generated)
+  const { id, work } = options
+  // A declaration error fails the property, not its file: the property
+  // registers only its `registration: <option>` test, which fails with it.
+  // Any other error, such as a replay error, still fails the file.
+  let tests: Array<PropertyTest>
+  try {
+    tests = propertyTests(options)
+  } catch (error) {
+    // A thrown value that is no object holds no option.
+    const option = rejectedOptions.get(error as object)
+    if (option === undefined) throw error
+    tests = [failingTest(id, `registration: ${option}`, error)]
+  }
   describe(id, () => {
     for (const test of tests)
       oracleReplayTest(it, ...test.replays)(
@@ -944,6 +913,89 @@ export function oracleProperty<const THistory, TExpected, TPlan = THistory>(
         timeoutOf(options),
       )
   })
+}
+
+/**
+ * The option each declaration error rejects, by the error: `owns`, `work`,
+ * `predict`, `histories`, `label`, or `calibrations`.
+ */
+const rejectedOptions = new WeakMap<object, string>()
+
+/** Marks `error` as one that rejects the declaration's `option`. */
+const rejecting = (option: string, error: Error) => {
+  rejectedOptions.set(error, option)
+  return error
+}
+
+/** An error that rejects the declaration's `option`. */
+const rejection = (option: string, message: string) =>
+  rejecting(option, new Error(message))
+
+/** Checks the declaration and builds its tests as data. */
+function propertyTests<THistory, TExpected, TPlan>(
+  options: OraclePropertyOptions<THistory, TExpected, TPlan>,
+): Array<PropertyTest> {
+  const { id, histories, owns, work } = options
+  if (
+    owns !== undefined &&
+    !(
+      Array.isArray(owns) &&
+      owns.length > 0 &&
+      owns.every((entry) => typeof entry === `string`)
+    )
+  )
+    throw rejection(
+      `owns`,
+      `${id}: \`owns\` must be a non-empty literal list of strings, which the gap report reads statically.`,
+    )
+  // A ratio below 1 would reject a mutant that does no more work. Plain
+  // JavaScript can pass `null`, which has no ratio.
+  const ratio = (work as { ratio?: unknown } | null | undefined)?.ratio
+  if (
+    work !== undefined &&
+    !(typeof ratio === `number` && Number.isFinite(ratio) && ratio >= 1)
+  )
+    throw rejection(
+      `work`,
+      `${id}: \`work.ratio\` must be a finite number of at least 1, the most work a mutant may do as a multiple of the unmodified code's.`,
+    )
+  const enumerated: EnumeratedHistories<THistory> | undefined = Array.isArray(
+    histories,
+  )
+    ? { enumerated: histories as ReadonlyArray<THistory> }
+    : `enumerated` in histories
+      ? histories
+      : undefined
+  if (enumerated && options.predict)
+    throw rejection(
+      `predict`,
+      `${id}: \`predict\` needs probe-bound states, which only a generated source declares.`,
+    )
+  // A union's excess keys type-check, and plain JavaScript can pass anything.
+  const foreign = Object.keys(enumerated ?? {}).filter(
+    (key) => ![`enumerated`, `states`, `measured`].includes(key),
+  )
+  if (foreign.length > 0)
+    throw rejection(
+      `histories`,
+      `${id}: an enumerated source takes \`enumerated\`, \`states\`, and \`measured\`; \`${foreign.join(`\`, \``)}\` belongs to a generated source.`,
+    )
+  if (
+    [...(enumerated?.states ?? []), ...(enumerated?.measured ?? [])].some(
+      (state) => typeof state !== `string`,
+    )
+  )
+    throw rejection(
+      `histories`,
+      `${id}: an enumerated source declares its states by name; a probe-bound state needs a generated source.`,
+    )
+  const generated = histories as GeneratedHistories<THistory>
+  recordRegistration(id, options.law, enumerated?.enumerated ?? generated)
+  // The tests are built as data first, so every one registers unconditionally
+  // (oracle/no-disabled).
+  return enumerated
+    ? enumeratedTests(options, enumerated)
+    : generatedTests(options, generated)
 }
 
 const timeoutOf = (options: { timeout?: number }) => options.timeout ?? 120_000
@@ -1022,7 +1074,13 @@ function enumeratedTests<THistory, TExpected, TPlan>(
   const entries = new Map<number, ReadonlySet<string>>()
   // Every enumerated history is data; one that is not fails registration.
   const named = histories.map((history, index) => {
-    const text = encodeData(history, `history ${index}`, `history`)
+    let text: string
+    try {
+      text = encodeData(history, `history ${index}`, `history`)
+    } catch (error) {
+      // Every error it throws is an Error.
+      throw rejecting(`histories`, error as Error)
+    }
     return { name: options.label?.(history) ?? text, history }
   })
   // A rerun's `-t` pattern would also select a framework test of that name.
@@ -1030,7 +1088,8 @@ function enumeratedTests<THistory, TExpected, TPlan>(
     ({ name }) => name === `reach` || name === `determinism`,
   )
   if (reserved)
-    throw new Error(
+    throw rejection(
+      `label`,
       `${id}: label "${reserved.name}" names a framework test of the property, so its rerun would select both; choose another label.`,
     )
   const historyTests = named.map(({ name, history }, index): PropertyTest => ({
@@ -1882,7 +1941,8 @@ function selectCalibrationHistory<THistory, TExpected, TPlan>(
 ): SelectedHistory<THistory> {
   const { id } = options
   const invalid = (reason: string): never => {
-    throw new Error(
+    throw rejection(
+      `calibrations`,
       `${id}: calibration history selector for "${calibration.name}": ${reason}.`,
     )
   }
@@ -2113,7 +2173,8 @@ function calibrationTests<THistory, TExpected, TPlan>(
   const { id } = options
   for (const state of Object.keys(options.probeHistories ?? {}))
     if (!options.probes?.has(state))
-      throw new Error(
+      throw rejection(
+        `calibrations`,
         `${id}: calibration history selector for probe state "${state}": the state is not probe-bound.`,
       )
   // Each probe-bound state also gets two forced-entry calibrations.
@@ -2131,14 +2192,16 @@ function calibrationTests<THistory, TExpected, TPlan>(
           typeof suppliedBinding !== `object` ||
           Array.isArray(suppliedBinding))
       )
-        throw new Error(
+        throw rejection(
+          `calibrations`,
           `${id}: calibration history selector for probe state "${state}": expected a probe history binding object.`,
         )
       const binding = suppliedBinding as ProbeHistories | undefined
       let enteredHistory = binding?.entered
       const notEntered: unknown = binding?.notEntered
       if (binding && notEntered === undefined)
-        throw new Error(
+        throw rejection(
+          `calibrations`,
           `${id}: calibration history selector for probe state "${state}": supply notEntered explicitly.`,
         )
       if (binding && enteredHistory === undefined) {
@@ -2148,7 +2211,8 @@ function calibrationTests<THistory, TExpected, TPlan>(
           enters.includes(state),
         )
         if (matching.length !== 1)
-          throw new Error(
+          throw rejection(
+            `calibrations`,
             `${id}: calibration history selector for probe state "${state}": expected one construction entering it (found ${matching.length}); add one or select entered explicitly.`,
           )
         enteredHistory = { constructed: matching[0]!.name }
@@ -2172,7 +2236,8 @@ function calibrationTests<THistory, TExpected, TPlan>(
         ? difference === ``
         : ``.search(difference) !== -1)
     )
-      throw new Error(
+      throw rejection(
+        `calibrations`,
         `${id}: calibration "${name}" requires difference ${typeof difference === `string` ? `""` : String(difference)}, which the empty difference holds, so it rejects any difference. Require text or a pattern that only the owed difference holds.`,
       )
   const calibrations = [...(options.calibrations ?? []), ...forcedCalibrations]
@@ -2436,17 +2501,17 @@ const untakeable = (id: string, history: string) =>
   )
 
 /**
- * The one test of a property whose fixed or constructed `history` the
- * registration rejected: it fails with that `error`. A check of the
- * declaration, not of production, so its route is `calibration`. It also runs
- * in a path replay of its own property, which has no unit left to run.
+ * The one test of a property whose declaration the registration rejected: it
+ * fails with that `error`. A check of the declaration, not of production, so
+ * its route is `calibration`. It also runs in a path replay of its own
+ * property, which has no unit left to run.
  */
-const membershipTest = (
+const failingTest = (
   id: string,
-  history: string,
+  name: string,
   error: unknown,
 ): PropertyTest => ({
-  name: `membership: ${history}`,
+  name,
   route: `calibration`,
   replays: [id],
   run: () => Promise.reject(error),
@@ -2464,7 +2529,8 @@ function generatedTests<THistory, TExpected, TPlan>(
     ),
   )
   if (probes.size > 0 !== (unbound.predict !== undefined))
-    throw new Error(
+    throw rejection(
+      `predict`,
       `${id}: a probe-bound state needs \`predict\`, and \`predict\` needs a probe-bound state. Declare the state as { name, probe }.`,
     )
   const options: BoundOptions<THistory, TExpected, TPlan> =
@@ -2473,7 +2539,8 @@ function generatedTests<THistory, TExpected, TPlan>(
   // M, 2026-11-16, "N bases per constructed history").
   const bases = source.bases ?? 5
   if (!(Number.isInteger(bases) && bases >= 1))
-    throw new Error(
+    throw rejection(
+      `histories`,
       `${id}: \`bases\` must be a whole number of at least 1, the number of bases each constructed history runs in a campaign; it is ${reportText(bases)}.`,
     )
   // A costly property's constructed histories also draw bases from the run's
@@ -2481,7 +2548,8 @@ function generatedTests<THistory, TExpected, TPlan>(
   // expensive oracles").
   const drawnBases = source.drawnBases ?? 0
   if (!(Number.isInteger(drawnBases) && drawnBases >= 0))
-    throw new Error(
+    throw rejection(
+      `histories`,
       `${id}: \`drawnBases\` must be a whole number of at least 0, the number of bases each constructed history draws from the run's random seed; it is ${reportText(drawnBases)}.`,
     )
   for (const construction of source.constructed ?? [])
@@ -2492,7 +2560,8 @@ function generatedTests<THistory, TExpected, TPlan>(
         construction.drawnBases >= 0
       )
     )
-      throw new Error(
+      throw rejection(
+        `histories`,
         `${id}: constructed history "${construction.name}": \`drawnBases\` must be a whole number of at least 0, the number of bases it draws from the run's random seed; it is ${reportText(construction.drawnBases)}.`,
       )
   // The bases a constructed history draws: its own number, or the property's.
@@ -2506,7 +2575,8 @@ function generatedTests<THistory, TExpected, TPlan>(
   )
   const unconstructed = required.filter((state) => !named.has(state))
   if (unconstructed.length > 0)
-    throw new Error(
+    throw rejection(
+      `histories`,
       `${id}: no constructed history enters ${unconstructed.join(`, `)}. A required state needs a constructed history; a state that is only counted belongs in \`measured\`.`,
     )
   for (const construction of constructions) {
@@ -2514,7 +2584,8 @@ function generatedTests<THistory, TExpected, TPlan>(
       (state) => declared !== undefined && !required.includes(state),
     )
     if (undeclared.length > 0)
-      throw new Error(
+      throw rejection(
+        `histories`,
         `${id}: constructed history "${construction.name}" names undeclared states ${undeclared.join(`, `)}.`,
       )
   }
@@ -2524,17 +2595,20 @@ function generatedTests<THistory, TExpected, TPlan>(
     names.find((name, at) => names.indexOf(name) !== at)
   const constructedNames = constructions.map(({ name }) => name)
   if (constructedNames.includes(`generated`))
-    throw new Error(
+    throw rejection(
+      `histories`,
       `${id}: constructed history "generated" has the name of a campaign's generated unit, so two tests would share a name. Rename the constructed history.`,
     )
   const constructedTwice = twice(constructedNames)
   if (constructedTwice !== undefined)
-    throw new Error(
+    throw rejection(
+      `histories`,
       `${id}: two constructed histories are named "${constructedTwice}", so two tests would share a name. Give each constructed history its own name.`,
     )
   const fixedTwice = twice((source.fixed ?? []).map(({ name }) => name))
   if (fixedTwice !== undefined)
-    throw new Error(
+    throw rejection(
+      `histories`,
       `${id}: two fixed histories are named "${fixedTwice}", so two tests would share a name. Give each fixed history its own name.`,
     )
 
@@ -2635,9 +2709,9 @@ function generatedTests<THistory, TExpected, TPlan>(
   if (untaken >= 0) {
     const { name } = source.fixed![untaken]!
     return [
-      membershipTest(
+      failingTest(
         id,
-        `fixed history: ${name}`,
+        `membership: fixed history: ${name}`,
         untakeable(id, `fixed history ${untaken} ("${name}") is`),
       ),
     ]
@@ -2646,7 +2720,9 @@ function generatedTests<THistory, TExpected, TPlan>(
     try {
       constructedAt(firstSeed, index, true)
     } catch (error) {
-      return [membershipTest(id, `constructed history: ${name}`, error)]
+      return [
+        failingTest(id, `membership: constructed history: ${name}`, error),
+      ]
     }
 
   // A campaign's units: one per constructed history, then `generated`.
