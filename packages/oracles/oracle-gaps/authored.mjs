@@ -15,19 +15,24 @@
 //     "id": "tombstone-retired-ids",
 //     "source": "src/executor/KeyScheduler.ts",   // relative to --package
 //     "find": "exact text that occurs once in the source",
-//     "replace": "the wrong implementation",
+//     "replace": "the wrong implementation, or \"\" to delete `find`",
 //     "intent": "remember removed IDs it never held",
 //     "author": "the session or agent that wrote it"
 //   }
 //
 // `find` must occur exactly once, so a mutant cannot silently apply to the
 // wrong place or stop applying after an edit; one that does not apply is
-// reported as `does-not-apply`.
+// reported as `does-not-apply`. Every field is a string, and every one but
+// `replace` is non-empty: an empty `replace` deletes `find` (the original
+// defect of a fix that added a call), while an empty `find` names no place.
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { Refusal } from './ending.mjs'
 
 const fields = [`id`, `source`, `find`, `replace`, `intent`, `author`]
+const lacks = (mutant, field) =>
+  typeof mutant[field] !== `string` ||
+  (mutant[field] === `` && field !== `replace`)
 
 export function loadAuthored(directory) {
   const mutants = []
@@ -43,13 +48,11 @@ export function loadAuthored(directory) {
       )
     }
     for (const mutant of Array.isArray(parsed) ? parsed : [parsed]) {
-      const missing = fields.filter(
-        (field) => typeof mutant[field] !== `string` || mutant[field] === ``,
-      )
+      const missing = fields.filter((field) => lacks(mutant, field))
       if (missing.length > 0)
         throw new Refusal(
-          `${name}: authored mutant ${mutant.id ?? `(no id)`} lacks ${missing.join(`, `)}`,
-          `Give the mutant a non-empty string for each of ${fields.join(`, `)}.`,
+          `${name}: authored mutant ${mutant.id || `(no id)`} lacks ${missing.join(`, `)}`,
+          `Give the mutant a non-empty string for each of ${fields.filter((field) => field !== `replace`).join(`, `)}, and a string for replace (empty to delete find).`,
         )
       mutants.push({ ...mutant, file: name })
     }

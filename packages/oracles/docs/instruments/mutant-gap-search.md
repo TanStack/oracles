@@ -22,7 +22,8 @@ Keep test bodies and assertions out of the design brief.
      lost operand, a wrong prior value, a premature clear, a duplicated event,
      a changed order, or a skipped callback.
    - Turn each open review question into a candidate.
-   - If code is called dead, try removing it.
+   - If code is called dead, try removing it. An authored mutant with an
+     empty `replace` deletes its `find`.
    - Spread candidates across the affected files and boundaries. Do not
      cluster them where edits are easy.
    - Hand-write candidates at boundaries a designer may miss, such as wrappers,
