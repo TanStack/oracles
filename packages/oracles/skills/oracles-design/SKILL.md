@@ -683,7 +683,9 @@ only at the end of a session:
 
 1. Start a few subagents, each told to load `oracles-review` and review the
    work on its own. Give each the oracle file, the production change, the
-   evidence, and the law's sources, but not your verdict.
+   evidence, and the law's sources, but not your verdict. Give each a
+   different lens from `oracles-review` ("With one lens"): enforcement, the
+   law, or the evidence.
 2. Do not act on what they report directly: load `oracles-evaluate-review`,
    and evaluate their findings with it first.
 3. Show the developer what it confirmed, and what it rejected and why.

@@ -22,6 +22,13 @@ review in a task-local scratch file. Do not commit it unless the developer asks.
 - Keep the original claim and the proposed fix. Do not merge overlapping
   items. Cross-reference them.
 - Record the file and line, the severity, and the commit you check against.
+- With several reviewers, keep one ledger. Prefix each item's ID with its
+  reviewer (`A3`, `B1`), and keep every raw item. When several reviewers
+  report the same claim, judge the first report, mark the others
+  `duplicate` with a link to it, and record on the first item which
+  reviewers reported it. That count confirms that several readers saw it,
+  and it can order the work. It is not evidence that the claim is true:
+  check the claim as §5 says.
 
 For every item, keep three judgments apart:
 
