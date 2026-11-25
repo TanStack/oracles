@@ -18,6 +18,10 @@ Show me what oracle testing with @tanstack/oracles can find in this repository.
 For the API on one page, with one complete oracle file, read
 [docs/quick-reference.md](docs/quick-reference.md).
 
+To explain the method to people who were not in the session (maintainers,
+reviewers, a talk audience), read [docs/by-example.md](docs/by-example.md).
+It walks one small function through every step and term.
+
 ## Test hooks
 
 `ORACLE_GAPS_TEST_RETENTION` (a file path, unset in normal use) makes the gap CLI append one JSON line per mutant batch it runs, however the batch ends: settled, cut off, or rejected. It only observes: it never changes an outcome. The e2e oracle reads it to check bounded retention. The hook's code is in `oracle-gaps/retention-hook.mjs`, which the CLI loads only when this variable or `ORACLE_GAPS_TEST_REJECT_BATCH` is set, so a normal run never loads it.

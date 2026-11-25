@@ -3,6 +3,8 @@
 These techniques support `oracles-design` and `oracles-review`. They add no
 requirements; the [checklist](oracle-checklist.md) holds them all, and this
 guide cites it by ID. Terms follow the [glossary](glossary.md).
+[Oracles by example](by-example.md) walks through the whole method on one
+small function, for a reader who is new to it.
 
 ## The model
 
