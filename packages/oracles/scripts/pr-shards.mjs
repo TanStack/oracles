@@ -855,6 +855,9 @@ export const partitions = {
       ]),
       6: anyOf([
         'a batch whose run rejects',
+        'a batch whose run finds the disk full',
+        'a batch whose run finds its disk quota used up',
+        'a batch whose run finds the disk full on a write that names no file',
         'a second daemon check of the budget witness',
         'a declaration fault: missingSource',
         'a config fault in a run that owns nothing',

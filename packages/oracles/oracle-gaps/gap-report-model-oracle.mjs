@@ -1268,11 +1268,16 @@ const histories = drawn.map(
       )
     if (!keepsSteps(history))
       throw new Error(`a history with the witness module takes no steps`)
-    const reset = Object.entries(constructedNeutral).every(
-      ([field, neutral]) => history[field] === neutral,
-    )
-      ? value
-      : { ...history, ...constructedNeutral }
+    // A rejection that finds no room (`rejectNoRoom`) is constructed only,
+    // and no drawn field: it goes back with its rejection.
+    const { rejectNoRoom, ...fields } = history
+    const reset =
+      rejectNoRoom === undefined &&
+      Object.entries(constructedNeutral).every(
+        ([field, neutral]) => history[field] === neutral,
+      )
+        ? value
+        : { ...fields, ...constructedNeutral }
     const stopRuns = plainStops(history.stopRuns ?? NO_STOPS)
     const steps = plainSteps(history.steps)
     // A constructed slow test (a wait where the output differs, seconds of
@@ -3498,6 +3503,11 @@ function resolveHistory(history) {
     ordinary: history.ordinary === true,
     // The batch whose run rejects (a test-only fault; 0 is none).
     rejectBatch: history.rejectBatch ?? 0,
+    // When the fault is a write that found no room, constructed only: the
+    // code its rejection carries (ENOSPC or EDQUOT), the call that got it
+    // (open, copyfile, or write), and how many earlier runs the package's
+    // default run directories hold; undefined is a plain error.
+    rejectNoRoom: history.rejectNoRoom,
     // Whether two checks at once are held to overlap in the daemon.
     holdOverlap: history.holdOverlap === true,
     // An `owns` key in an assertion's arguments, in the ordinary file: its
@@ -5161,6 +5171,40 @@ const verdictLine = (files, failing) =>
 const doneLine = (gaps, provisional, out) =>
   `oracle-gaps: done completed, ${gaps} gap${gaps === 1 ? `` : `s`}${provisional ? ` (provisional)` : ``}, report ${out.replaceAll(`\\`, `/`)}/summary.md`
 
+/**
+ * The ending of a run that a write found no room for (law 12's out of disk
+ * space): the disk is full (ENOSPC), or the user's quota on it is (EDQUOT).
+ * The cause names `dir`, the directory of the path the write failed on (a
+ * copy's target), unless the error names none, and `code`; the directive
+ * frees space there, or, when the package's default
+ * run directories (`<state dir>/out`) hold `earlier.count` runs other than
+ * this one, deletes them: where they are and what they hold in all, by
+ * their files' sizes, in MB to one decimal. The done line carries both
+ * (`done error, <cause>: <directive>`), as an out-of-memory end carries its
+ * remedy, and results.json holds them under status `out-of-space`.
+ */
+// The earlier runs that the end-to-end driver plants beside a run that finds
+// no room: each is named as a run's directory is, with a stream log of `log`
+// bytes and a nested file of the rest, `bytes` (1.23 MB) in all.
+const EARLIER_RUN = {
+  name: (index) => `2000-01-01T00-00-00-00${index}Z-0e0e0e0e`,
+  log: 1_000_000,
+  bytes: 1_230_000,
+}
+const noRoomEnding = (dir, code, earlier) => {
+  const cause = `out of disk space${dir === undefined ? `` : ` in ${dir}`} (${code})`
+  const directive = `free space ${dir === undefined ? `on the disk` : `there`}${
+    earlier === undefined
+      ? ``
+      : `, or delete the ${earlier.count} earlier run${earlier.count === 1 ? `` : `s`} in ${earlier.runs} (${(earlier.bytes / 1e6).toFixed(1)} MB)`
+  }`
+  return {
+    cause,
+    directive,
+    done: `oracle-gaps: done error, ${cause}: ${directive}`,
+  }
+}
+
 function model(plan) {
   const refused = refusal(plan)
   // The config the run names (F12) once its contexts have loaded it: the
@@ -5471,6 +5515,8 @@ function model(plan) {
     configLines,
     // The batch whose run the model predicts rejects (a constructed fault): the run ends as an internal error.
     rejectedBatch: plan.rejectBatch > 0 ? plan.rejectBatch : undefined,
+    // A rejection that found no room ends the run out of disk space, not in an internal error (law 12).
+    noRoom: plan.rejectBatch > 0 ? plan.rejectNoRoom : undefined,
     baseline: baselineOf(plan),
     blocking: blockingOf(plan).filter((f) => !f.ordinary),
     replayed: blockingOf(plan).find((f) => f.replayed)?.replayed,
@@ -6750,8 +6796,10 @@ function applyEdit(state, edit) {
 // end-to-end oracle's constructed rejected-batch history (a test-only
 // fault) reaches it, and that oracle judges its exit, its error line, its
 // error.log, the absence of stack frames on stderr, and the stream law (law
-// 15) on both streams. This check judges refusals only (see each oracle's
-// limits).
+// 15) on both streams. A write that finds no room on its disk is no internal
+// error: it ends out of disk space (noRoomEnding), which that oracle's
+// constructed out-of-disk-space histories judge. This check judges refusals
+// only (see each oracle's limits).
 
 /**
  * What a run that ended without completing printed and wrote, as the
@@ -6987,6 +7035,8 @@ export {
   baselineVerdict,
   verdictLine,
   doneLine,
+  noRoomEnding,
+  EARLIER_RUN,
   kill,
   push,
   judging,

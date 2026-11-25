@@ -69,6 +69,13 @@ the file as failing, with the error but no law. Fix the oracle file, and
 run the gap check again. This is the oracle's own setup, not a finding: say
 so in a line.
 
+**The gap check ends with `done error, out of disk space in <dir>`.** A
+write found no room on that disk (or under your quota there). Free space
+there, or delete the earlier runs the line names: each run of the gap check
+keeps its own directory, with the tests' output, under the OS temp
+directory. Then run it again. It is not a bug in the gap check or the
+oracle.
+
 **The gap check dies with "heap out of memory"** on a very large oracle
 suite (thousands of tests). Run it again with
 `NODE_OPTIONS=--max-old-space-size=8192`, or with `--contexts 2`. Keep
