@@ -225,6 +225,11 @@ docs (the README, the API docs, the JSDoc), the existing tests, and the git
 history of fixes. The files that fixes change most often tell you more than
 a search for "fix":
 `git log -i --grep fix --name-only --format= | sort | uniq -c | sort -rn | head`.
+In a monorepo, plans, docs and app entry points crowd that list, so scope
+it to the sources of one package directory:
+`git log -i --grep fix --name-only --format= -- '<dir>/src/*.ts' ':!*.test.ts' | sort | uniq -c | sort -rn | head`.
+In a git pathspec `*` crosses `/`, and `src/**/*.ts` would skip the files
+directly in `src`.
 It is a starting point: skip build and config files, and read the commits
 that changed the public API.
 
