@@ -542,6 +542,29 @@ it to simplify:
   find.
 - Rerun the oracle and the gap check after each cleanup.
 
+**Before you call a production change done, run the random campaign
+several times.** The gap check cannot do it: it makes ambient randomness
+repeat, so its random campaign runs the same histories on every run, with or
+without `--seed`. A gap check that killed every mutant has seen one sample.
+
+- Run the oracle file with the project's test command several times. Each
+  run draws a new random seed for each property. Or run it once with the run
+  multiplier, `<PREFIX>_RUNS_MULTIPLIER=<n>` (`ORACLE_RUNS_MULTIPLIER` under
+  the default prefix): it multiplies every campaign's `runs`, so one run
+  draws as many random histories as n runs.
+- Count the runs. In a downstream project, a regression that the fixed-seed
+  gap check had passed failed 8 of 40 full runs, one run in five. A failure
+  that often still passes 3 runs in a row about half the time (0.8^3 ≈ 0.51)
+  and 10 in a row about one time in nine (0.8^10 ≈ 0.11). It takes 14 green
+  runs to bring that under one in twenty (0.8^14 ≈ 0.044), and 21 to bring it
+  under one in a hundred (0.8^21 ≈ 0.009). Two green runs prove little.
+- A failure that does not come back on a rerun is not flaky: the rerun drew
+  other histories. Run the failing unit's printed `Replay:` line first, as
+  printed, with its seed and path. Only a replay that passes makes the
+  failure flaky.
+- Turn each random counterexample into a constructed history in the same
+  change, so that the fixed seed and the gap check run it from then on.
+
 Techniques: [guide § Evidence](../../docs/guide.md#evidence).
 
 ## 8. Close every gap
