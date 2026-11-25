@@ -348,7 +348,9 @@ in the model.
 - **Probes.** Where production decides to enter a state, bind the state to a
   production probe, and predict entry from the plan alone.
 - **ORC-004 controls.** For a claim about generated coverage, account for:
-  - reconstruction: every known valid example can be generated
+  - reconstruction: every known valid example can be generated, including
+    each operation the library's main callers perform between calls
+    (`oracles-explore` step 4, "What its callers do between calls")
   - ablation: what each axis or rule contributes
   - range: the bounded domains and marginal cases
   - exclusion: a nearby invalid history that the grammar rejects
