@@ -420,6 +420,30 @@ Techniques: [guide § Histories](../../docs/guide.md#histories).
   instead, and registration warns about it; that search goes away before
   the first release. A state's forced-probe controls bind the same way,
   through the property's `probeHistories`.
+  Give each clause of a law statement its own check. A statement that
+  joins promises with "and" makes one promise per clause. The comparison
+  with the model checks the clause that the model's rule states. A clause
+  that the model only implies holds only through the model, and is
+  unchecked: when the model shares a mistake with production, the model
+  comparison passes, and so does any calibration that names only the law.
+  Give each such clause a comparison of its own, against what that clause
+  alone predicts, with its own `difference`. Then give it a calibration
+  that breaks that clause and names that `difference`, so that only the
+  clause's own comparison can reject it. The wrong answer may break other
+  clauses too. A check chained with `??` reports the first comparison that
+  fails, so put the clause's comparison before the comparison with the
+  model.
+  For example, a law says that pruning "removes exactly what the transform
+  made unreferenced, keeps everything that was already unused, and with no
+  transform changes nothing". For
+  `const { handler = () => handler(), other } = config` and a no-op
+  transform, production removed `handler`, because its candidates counted
+  `handler`'s read of itself as a use. The model counted it too, predicted
+  the same removal, and the law passed. A calibration that drops a
+  declaration from a no-op history's output, with the difference "a no-op
+  transform changed the output", fails until the check compares a no-op
+  history's output with its input. With that comparison, the oracle fails
+  on production.
 - **Ownership.** Put the owned code on the property's `owns` list. An entry is
   a file (`src/x.ts`) or one function and its static call tree
   (`src/x.ts#run`, `src/x.ts#Class.method`). Own only what the laws cover. The
