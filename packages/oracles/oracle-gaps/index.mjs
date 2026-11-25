@@ -140,7 +140,7 @@ import {
 import { constants } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { alive, posix, removeSession } from './paths.mjs'
+import { alive, posix, pruneRuns, removeSession } from './paths.mjs'
 
 let early
 const keepEarly = (signal) => {
@@ -366,9 +366,10 @@ function sleepMs(ms) {
  * streams, which names the log. Throws a Refusal when the directory is in use
  * or the log cannot be written; nothing is written then.
  */
-function startLog(out) {
+function startLog({ out, keepRuns }) {
   const path = logPathOf(out)
   claimOut(out)
+  if (keepRuns !== undefined) pruneRuns(out, keepRuns)
   try {
     writeFileSync(path, ``)
   } catch (error) {
@@ -732,7 +733,7 @@ async function run() {
     if (checking !== undefined) {
       options = checking
       try {
-        startLog(checking.out)
+        startLog(checking)
       } catch (error) {
         return endWith(error, checking)
       }
@@ -780,7 +781,7 @@ async function run() {
     } else {
       // Windows has no supervisor: this process opens the log and runs the
       // check. A child of a supervisor writes its stderr alone.
-      if (supervisor === undefined) startLog(options.out)
+      if (supervisor === undefined) startLog(options)
       runStarted = true
       if (early !== undefined) return stopNow(early)
       const summary = await (options.daemon ? checkThroughDaemon : checkCold)(

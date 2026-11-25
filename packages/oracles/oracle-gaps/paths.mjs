@@ -6,8 +6,15 @@
 // real path, `realpathSync.native`, is taken on both sides of a comparison:
 // the JavaScript `realpathSync` keeps an 8.3 short name (RUNNER~1), which the
 // native call expands, so the two never agree on Windows.
-import { realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import {
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { dirname, join, relative } from 'node:path'
 
 /**
  * The forward-slash spelling of `path`, with a drive letter in capitals: a
@@ -92,6 +99,45 @@ export function removeSession(pkg, pid) {
     rmSync(sessionDirOf(pkg, pid), { recursive: true, force: true })
   } catch {
     // The next run removes it.
+  }
+}
+
+// The name args.mjs gives a run's default output directory: its start time,
+// then 8 hex digits.
+const RUN_NAME = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[0-9a-f]{8}$/
+
+/** Whether a running process holds run directory `dir`: its run.pid names one, or cannot be read. */
+const held = (dir) => {
+  try {
+    const pid = Number(readFileSync(join(dir, `run.pid`), `utf8`))
+    // A pid of 0 would name this process's own group.
+    return pid > 0 && alive(pid)
+  } catch (error) {
+    return error?.code !== `ENOENT`
+  }
+}
+
+/**
+ * Removes the oldest of the run directories beside `out`, a run's default
+ * output directory that this process has claimed, so that `keep` of them are
+ * left, `out` among them. It never removes a directory that a running process
+ * holds (`out` is one), or an entry whose name is no run's. A removal that
+ * fails leaves the directory for the next run.
+ */
+export function pruneRuns(out, keep) {
+  const runs = dirname(out)
+  try {
+    const older = readdirSync(runs)
+      .filter((name) => RUN_NAME.test(name) && !held(join(runs, name)))
+      .sort()
+    for (const name of older.slice(0, Math.max(0, older.length - keep + 1)))
+      try {
+        rmSync(join(runs, name), { recursive: true, force: true })
+      } catch {
+        // A file another process holds open on win32: the next run removes it.
+      }
+  } catch {
+    // No directory to read: nothing to remove.
   }
 }
 

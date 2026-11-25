@@ -550,7 +550,10 @@ is not Vite's default name. The baseline prints which config it used.
   owns appears as unowned warnings.
 - Pass `--seed`, so the baseline and every mutant run the same histories.
   The report goes to a directory in the OS temp directory, and its path is
-  printed at the end. Nothing is written into the repository.
+  printed at the end. Nothing is written into the repository. Each run keeps
+  the newest 10 of those directories, its own among them, and removes the
+  older ones (`--keep-runs <n>` keeps another number); a directory `--out`
+  names is never removed.
 - Pass `--daemon` when iterating on gaps in the same package: it keeps a
   per-package daemon running with warm Vitest workers and a disk evidence
   store, so repeated checks reuse unchanged unit evidence. The goal is that

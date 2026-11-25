@@ -18,6 +18,7 @@ const counts = [
   `hang-limit`,
   `first-limit`,
   `mutant-limit`,
+  `keep-runs`,
 ]
 // Every option that takes a value. Any other option refuses the run, so a
 // misspelled option is not silently ignored.
@@ -40,6 +41,7 @@ export const usage = `Usage: oracle-gaps --package <dir> --source <src/x.ts,...>
   [--out <dir>] [--only <id,id>] [--diff-base <rev>] [--test-timeout <ms>]
   [--sample <n>] [--contexts <n>] [--pool threads|forks] [--config <file>]
   [--first-limit <ms>] [--hang-limit <ms>] [--mutant-limit <ms>]
+  [--keep-runs <n>]
   oracle-gaps --stop-daemon --package <dir>
   oracle-gaps --help
 
@@ -47,6 +49,10 @@ The paths in --source and --config are relative to --package. Without
 --config, the run loads the Vitest config that Vitest discovers for the
 package: in its directory, or else in the nearest parent directory that
 has one. Run the CLI from any directory.
+Without --out, each run writes to a directory of its own under the OS temp
+directory, and removes the package's older ones there: it keeps the newest
+10 with its own (--keep-runs <n>), and every one a running check uses. A
+run with --out removes none.
 Every line the CLI writes for a check starts with \`oracle-gaps: \` and its
 kind (config, note, baseline, blocked, progress, gap, busy, done), on
 stdout and stderr alike, so \`grep '^oracle-gaps: '\` finds them. Before any
@@ -217,6 +223,11 @@ function optionsOf(args, cwd) {
     // two packages never collide (maintainer decision, 2026-11-10:
     // namespacing), and nothing is left in the repository (2026-11-11).
     out: resolve(cwd, args.out ?? join(stateDirOf(pkg), `out`, runName())),
+    // How many of the package's default run directories a run that writes
+    // to one keeps, its own among them (pruneRuns); a run with --out keeps
+    // them all. npm keeps its last 10 debug logs the same way (logs-max).
+    keepRuns:
+      args.out === undefined ? Number(args[`keep-runs`] ?? 10) : undefined,
     only: args.only ? new Set(args.only.split(`,`)) : undefined,
     // A fixed-seed random sample of this many mutants per source file, for
     // surveys across many modules.

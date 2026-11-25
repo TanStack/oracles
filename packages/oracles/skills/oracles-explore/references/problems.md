@@ -72,8 +72,9 @@ so in a line.
 **The gap check ends with `done error, out of disk space in <dir>`.** A
 write found no room on that disk (or under your quota there). Free space
 there, or delete the earlier runs the line names: each run of the gap check
-keeps its own directory, with the tests' output, under the OS temp
-directory. Then run it again. It is not a bug in the gap check or the
+writes a directory of its own, with the tests' output, under the OS temp
+directory, and keeps the newest 10 of them (`--keep-runs 2` keeps fewer).
+Then run it again. It is not a bug in the gap check or the
 oracle.
 
 **The gap check dies with "heap out of memory"** on a very large oracle
