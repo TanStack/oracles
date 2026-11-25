@@ -1145,6 +1145,18 @@ const drawn = fc.record({
   // a gap (the maintainer's decision "An excluded test still runs",
   // 2026-11-23). Drawn last (the generator rule).
   failingLawSpins: fc.boolean(),
+  // The oracle file that holds a law the framework runs only as a random
+  // campaign, which every history violates (`RANDOM_LAW`), at the end of
+  // the file: a real `oracleProperty` with no fixed seed, so its one
+  // campaign unit fails under the run's random seed, and a rerun by name
+  // alone draws another. A failing law judges nothing ("Block per law",
+  // 2026-11-18). It is no test-only hook, so it is drawn, rarely, since it
+  // loads the framework into the file's every copy (randomness wins,
+  // 2026-11-16). Drawn last (the generator rule).
+  randomLaw: fc.oneof(
+    { weight: 5, arbitrary: fc.constant(`none`) },
+    { weight: 1, arbitrary: fc.constantFrom(`a`, `b`) },
+  ),
 })
 
 // The edit sequence over the witness module, the one list of steps that a
@@ -3495,6 +3507,9 @@ function resolveHistory(history) {
     failingLawCalls: history.failingLawCalls ?? `none`,
     failingLawHook: history.failingLawHook ?? `none`,
     failingLawSpins: history.failingLawSpins === true,
+    // The oracle file that holds the random-seed law (`randomLaw` above). A
+    // history filed before the field existed holds none.
+    randomLaw: history.randomLaw ?? `none`,
     ordinary: history.ordinary === true,
     // The batch whose run rejects (a test-only fault; 0 is none).
     rejectBatch: history.rejectBatch ?? 0,
@@ -4945,6 +4960,22 @@ const failingLawName = (plan) =>
   plan.failingLawHook === `none`
     ? FAILING_LAW
     : `${HOOKED_SUITE} > ${FAILING_LAW}`
+// The law the framework runs only as a random campaign (`randomLaw`): a
+// real `oracleProperty` whose id is `RANDOM_LAW`, with no fixed seed, so it
+// registers one campaign unit, which fails, and the three generated
+// determinism tests of a generated source, which pass (oracle-property.ts,
+// "Determinism"). Its driver calls nothing of production and observes 0
+// under checkpoint `trace`; its model owes 1, so every history violates its
+// law `seeded`, and the counterexample is the run's first history, which
+// the seed decides: its arbitrary neither shrinks nor favors small values.
+export const RANDOM_LAW = `a law that fails under a random seed`
+const RANDOM_UNIT = `${RANDOM_LAW} > random seed: generated`
+const RANDOM_ERROR = `OracleViolation: ${RANDOM_LAW} violated at checkpoint "trace" (law: seeded).`
+const RANDOM_DETERMINISM = [0, 1, 2].map(
+  (k) => `${RANDOM_LAW} > determinism: generated ${k}`,
+)
+/** Whether oracle file `file` holds the random-seed law. */
+const holdsRandomLaw = (plan, file) => plan.randomLaw === file
 /** The function the failing law calls, if it calls one: the first generated. */
 const failingLawTarget = (plan) =>
   plan.failingLawCalls === `none` || plan.failingLawHook === `beforeAll`
@@ -4979,24 +5010,30 @@ function blockingOf(plan) {
   return [`a`, `b`].flatMap((file) => {
     const owner = brokenOwner && file === `b`
     const law = holdsFailingLaw(plan, file)
-    if (!owner && !law) return []
+    const random = holdsRandomLaw(plan, file)
+    if (!owner && !law && !random) return []
     const broken = owner ? [`${BROKEN_SUITE} > fixed seed 999`] : []
     const failing = law ? [failingLawName(plan)] : []
     // File b's failing owner follows the plan's tests; the failing law is
-    // the first test of its file or the last.
-    const laws =
-      plan.failingLawAt === `start`
+    // the first test of its file or the last; the random-seed law's unit
+    // comes after them all.
+    const laws = [
+      ...(plan.failingLawAt === `start`
         ? [...failing, ...broken]
-        : [...broken, ...failing]
+        : [...broken, ...failing]),
+      ...(random ? [RANDOM_UNIT] : []),
+    ]
     // Its failing tests, in file order, each with its error: the failing
     // law throws itself only with no hook around it.
     const lawFails = law && plan.failingLawHook === `none`
     const failingTests = laws.flatMap((name) =>
-      name !== failingLawName(plan)
-        ? [{ test: name, error: OWNER_ERROR }]
-        : lawFails
-          ? [{ test: name, error: FAILING_ERROR }]
-          : [],
+      name === RANDOM_UNIT
+        ? [{ test: name, error: RANDOM_ERROR }]
+        : name !== failingLawName(plan)
+          ? [{ test: name, error: OWNER_ERROR }]
+          : lawFails
+            ? [{ test: name, error: FAILING_ERROR }]
+            : [],
     )
     const first = failingTests[0]
     return [
@@ -5062,6 +5099,10 @@ function frameworkTestsOf(plan) {
     add(`b`, `fixed seed 999 again`)
     add(`b`, `fixed seed 999`)
   }
+  // The random-seed law's determinism tests pass, and call nothing.
+  for (const file of [`a`, `b`])
+    if (holdsRandomLaw(plan, file))
+      for (const name of RANDOM_DETERMINISM) add(file, name)
   return tests
 }
 
@@ -5088,7 +5129,9 @@ function baselineOf(plan) {
     const owner = plan.fault === `brokenOwner` && file === `b`
     const law = loads && holdsFailingLaw(plan, file)
     const skippedLaw = law && plan.failingLawHook === `beforeAll`
-    const ran = own + (owner ? 3 : 0) + (law && !skippedLaw ? 1 : 0)
+    // The random-seed law runs its unit and its three determinism tests.
+    const random = loads && holdsRandomLaw(plan, file) ? 4 : 0
+    const ran = own + (owner ? 3 : 0) + (law && !skippedLaw ? 1 : 0) + random
     return {
       file: `tests/${file}.test.ts`,
       ordinary: file === `c`,
@@ -5940,7 +5983,39 @@ function oracleTestFile(plan, file) {
       `})`,
     )
   if (plan.failingLawAt !== `start`) out.push(...failingLawLines(plan, file))
+  out.push(...randomLawLines(plan, file))
   return `${out.join(`\n`)}\n`
+}
+
+// This repository's framework, which the random-seed law imports by its
+// path, so a fixture outside the repository loads it too; Vite reads a
+// path with forward slashes on every platform.
+const FRAMEWORK = join(
+  dirname(fileURLToPath(import.meta.url)),
+  `..`,
+  `src`,
+  `index.ts`,
+).replaceAll(`\\`, `/`)
+
+/**
+ * The random-seed law of oracle file `file` (`randomLaw`), if it holds one,
+ * at the end of the file: the framework's own campaign, which the run's
+ * random seed decides, as `RANDOM_LAW` describes.
+ */
+function randomLawLines(plan, file) {
+  if (!holdsRandomLaw(plan, file)) return []
+  return [
+    `import fcRandom from 'fast-check'`,
+    `import { differs as randomDiffers, oracleProperty as randomCampaign, pass as randomPass } from ${JSON.stringify(FRAMEWORK)}`,
+    `randomCampaign({`,
+    `  id: ${JSON.stringify(RANDOM_LAW)},`,
+    `  law: { statement: 'For every history, the trace owes one.', authority: 'the fixture', limits: 'none' },`,
+    `  histories: { arbitrary: fcRandom.noShrink(fcRandom.noBias(fcRandom.integer({ min: 0, max: 2_000_000_000 }))), runs: 1, fixedSeeds: [] },`,
+    `  model: () => 1,`,
+    `  driver: (_history: number, observe: (checkpoint: string, value: unknown) => void) => observe('trace', 0),`,
+    `  check: (_plan: unknown, trace: ReadonlyArray<{ value: unknown }>, expected: number) => randomDiffers('trace', 'seeded', trace[0]?.value, expected) ?? randomPass,`,
+    `})`,
+  ]
 }
 
 /**

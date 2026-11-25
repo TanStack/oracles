@@ -383,6 +383,13 @@ export const shards = {
     `calibration: results.json keeps no failing tests`,
     `calibration: results.json keeps only a file's first failing test`,
     `calibration: results.json's replay runs every test of the failing owner file`,
+    // A random-seed law's replay (law 14): a failing random-seed law, and its
+    // calibrations.
+    `fixed seed 20261105: a failing random-seed law`,
+    `random seed: a failing random-seed law`,
+    `determinism: constructed history: a failing random-seed law`,
+    `calibration: results.json keeps a random-seed law's replay with no environment`,
+    `calibration: the random-seed law's replay fails with another counterexample`,
     // The filed history of a stale authored mutant's fourth base (about 12 s).
     `fixed history: a filed base whose owner reads an absent object through ?.`,
     `determinism: fixed history: a filed base whose owner reads an absent object through ?.`,

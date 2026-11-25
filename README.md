@@ -50,7 +50,11 @@ agent.
   failing file each of its failing tests, in file order: its error, the law,
   difference, and counterexample of a law violation, with the observed and
   owed values (`observed:` and `owed:`) of a violation that compares two
-  values, and a `replay:` command that runs that test alone. A test of an oracle file that
+  values, and a `replay:` command that runs that test alone. A failing
+  random-seed campaign unit draws a new seed on every run, so its `replay:`
+  sets the variables of the framework's own `Replay:` command first (the
+  run's seed, the counterexample's path, the property, and the unit), and
+  brings the same counterexample back. A test of an oracle file that
   fails with no mutant active (a failing law) judges nothing: it is left
   out, as a nondeterministic test is, and the passing tests of its file
   still judge the mutants the file owns; it keeps its reach and its work. A
@@ -65,7 +69,8 @@ agent.
   `laws` and, under `failing`, each of its failing tests with its names
   (`test`), its `error`, the `law`, `checkpoint`, `difference`, `observed`,
   `owed`, and `counterexample` of a law violation (uncut and unescaped),
-  and the `replay` command's words, and the report says it is provisional. With
+  and the `replay` command's words, with the variables it sets (`env`) for a
+  random-seed unit, and the report says it is provisional. With
   `--only <id,...>`, the baseline runs only the owners of the selected
   mutants. A `crashed` gap is not a kill: production threw where no law
   judged it, and the error is on the gap's Detail line in `summary.md` and

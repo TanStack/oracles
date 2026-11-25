@@ -219,14 +219,22 @@
  *    of the file, whether it matches the pattern against the names of the
  *    test's suites and its own joined by a space (Vitest 4) or by ` > `
  *    (Vitest 5). A file that failed with no failing test (it did not load)
- *    replays whole, with no `-t`. Every baseline line is one line, even when
- *    a test's name holds a newline or a tab. results.json's baseline keeps
+ *    replays whole, with no `-t`. A failing random-seed campaign unit
+ *    draws a new seed on every run, so its replay first sets the
+ *    environment of the framework's own replay command, which its thrown
+ *    error names (the run's seed, the counterexample's path, the property,
+ *    and the unit), in the framework's order, whatever the project's prefix
+ *    and whichever platform's command its worker printed; a fixed-seed
+ *    unit, whose `-t` rerun draws the same histories, and every other test
+ *    set none. Every baseline line is one line, even when
+ *    a test's name or an environment value holds a newline or a tab. results.json's baseline keeps
  *    the same failing tests of each file, in file order, each with its
  *    names, its error's first line, the law, checkpoint, difference,
  *    observed and owed values, and counterexample of a law violation as the
- *    framework wrote them (no cut, no escape), and its replay as the
+ *    framework wrote them (no cut, no escape), its replay as the
  *    command's words, which run exactly that test as the line's command
- *    does.
+ *    does, and for a random-seed unit the environment the replay sets, each
+ *    value as the framework wrote it.
  * 6. A survivor or an unreached mutant that ordinary tests reached gets
  *    their outcome for information, where an assertion failure counts on the
  *    test's route; it never changes the class.
@@ -487,6 +495,12 @@ const effect = fc.record({
 const severalFailing = `a baseline file with several failing tests`
 const valuesNamed = `a baseline violation that names its observed and owed values`
 const valueCutOrEscaped = `a baseline value cut at 400 code points or escaped`
+// Law 9's states of a failing campaign unit: a random-seed unit, whose
+// replay sets the framework's environment, from a POSIX worker's message and
+// from a Windows worker's, and a fixed-seed unit, whose rerun replays it.
+const randomReplayed = `a baseline random-seed unit replayed under its seed`
+const randomReplayedWin32 = `a baseline random-seed unit replayed from a Windows worker's command`
+const fixedReplayed = `a baseline fixed-seed unit replayed by its own rerun`
 const VALUES = [
   undefined,
   [`-0`, `0`],
@@ -1336,6 +1350,129 @@ const failureText = (f, t) =>
     ? violationText(VALUES[t.values ?? 0])
     : `Error: violation`
 
+// A failing campaign unit, a test on the `fixed seed` or `random seed`
+// route, as the framework throws it (oracle-property.ts `runUnit`): an
+// error whose cause is the test's own failure (`failureText`), and whose
+// message is fast-check's report, then for a fixed-seed unit its `-t`
+// rerun, which draws the same histories again, then the command that
+// replays the failing history: an environment that names the run's seed,
+// the counterexample's path, the property, and the random unit it runs, and
+// that unit's `-t` pattern. A random-seed unit's replay names itself; a
+// fixed-seed unit's names the random unit of its name. The variables carry
+// the project's prefix, here derived from the test, and the command is the
+// platform's of the worker that ran it (`commandOf`): one POSIX line, or a
+// PowerShell line and a cmd line. Derived, not drawn, as `hostileOf` is.
+const campaignOf = (h, fi, ti) => {
+  const t = h.files[fi].tests[ti]
+  if (t.route !== `fixed seed` && t.route !== `random seed`) return undefined
+  const names = namesOf(h, fi, ti)
+  const own = names.at(-1)
+  const prefix = t.runOrder === 1 ? `MY_APP` : `ORACLE`
+  const unit = t.route === `random seed` ? own : `random seed: ${own}`
+  return {
+    random: t.route === `random seed`,
+    names,
+    env: [
+      [
+        `${prefix}_SEED`,
+        String(((t.ms * 7919 + ti * 104729) % 2 ** 32) - 2 ** 31),
+        false,
+      ],
+      [`${prefix}_PATH`, `${ti}:${t.ms}:0`, false],
+      [
+        `${prefix}_PROPERTY`,
+        names.slice(0, -1).join(` `) || `fixture's id`,
+        true,
+      ],
+      [`${prefix}_UNIT`, unit, true],
+    ],
+    pattern: frameworkPattern([...names.slice(0, -1), unit]),
+    win32: ti % 2 === 1,
+  }
+}
+// The framework's `-t` pattern of a test (oracle-property.ts
+// `rerunPatternOf`): its names, regular-expression syntax escaped, the
+// characters no shell reads safely as `.`, a control character as its
+// `\uXXXX` escape, joined by either Vitest's join, anchored.
+const frameworkPattern = (names) =>
+  `^${names
+    .map((name) =>
+      [...name]
+        .map((c) =>
+          /[.*+?^${}()|[\]\\]/.test(c)
+            ? `\\${c}`
+            : /["%!\u2018\u2019\u201A\u201B]/.test(c)
+              ? `.`
+              : /[\u0000-\u001f\u007f\u2028\u2029]/.test(c)
+                ? `\\u${c.charCodeAt(0).toString(16).padStart(4, `0`)}`
+                : c,
+        )
+        .join(``),
+    )
+    .join(`(?: | > )`)}$`
+// A command's lines as the framework prints them under `label`
+// (oracle-property.ts `commandOf` and `commandLines`): POSIX words, or a
+// PowerShell line and a cmd line, which has no form for a value with a
+// double quote, `%`, or `!`.
+function frameworkCommandLines(label, env, pattern, win32) {
+  const posixQuoted = (text) => `'${text.replace(/'/g, `'\\''`)}'`
+  const psQuoted = (text) =>
+    `'${text.replace(/['\u2018\u2019\u201A\u201B]/g, (q) => q + q)}'`
+  if (!win32)
+    return [
+      `${label}: ${[
+        ...env.map(([n, v, quote]) => `${n}=${quote ? posixQuoted(v) : v}`),
+        ...(pattern.command ? [`vitest run`] : []),
+        `-t ${posixQuoted(pattern.text)}`,
+      ].join(` `)}`,
+    ]
+  return [
+    `${label} (PowerShell): ${[
+      ...env.map(([n, v]) => `$env:${n}=${psQuoted(v)};`),
+      ...(pattern.command ? [`vitest run`] : []),
+      `-t ${psQuoted(pattern.text)}`,
+    ].join(` `)}`,
+    env.some(([, v]) => /["%!]/.test(v))
+      ? `${label} (cmd): use the PowerShell line for this name`
+      : `${label} (cmd): ${[
+          ...env.map(([n, v]) => `set "${n}=${v}" &&`),
+          ...(pattern.command ? [`vitest run`] : []),
+          `-t "${pattern.text}"`,
+        ].join(` `)}`,
+  ]
+}
+// The message a failing test's thrown error carries (its cause's is
+// `failureText`): a campaign unit's report and commands, or, for any other
+// test, its own failure.
+function thrownText(h, fi, ti) {
+  const f = h.files[fi]
+  const campaign = campaignOf(h, fi, ti)
+  if (campaign === undefined) return failureText(f, f.tests[ti])
+  const { env, names, pattern, win32, random } = campaign
+  return [
+    `Property failed after 1 tests`,
+    `{ seed: ${env[0][1]}, path: "${env[1][1]}", endOnFailure: true }`,
+    `Counterexample: [${VIOLATION.history}]`,
+    `Shrunk 0 time(s)`,
+    ``,
+    `Hint: Enable verbose mode in order to have the list of all failing values encountered during the run`,
+    ...(random
+      ? []
+      : frameworkCommandLines(
+          `Rerun`,
+          [],
+          { text: frameworkPattern(names), command: false },
+          win32,
+        )),
+    ...frameworkCommandLines(
+      `Replay`,
+      env,
+      { text: pattern, command: true },
+      win32,
+    ),
+  ].join(`\n`)
+}
+
 function model(h) {
   const operatorOutcomes = h.mutants.map((m, mi) => modelOutcome(h, mi))
   const kindOfResult = (o) => o.class ?? o.outcome
@@ -1836,6 +1973,9 @@ function baselineFiles(h, printer) {
       fullName: nameOf(h, fi, ti),
       state: fails(t, ti) ? `failed` : `passed`,
       message: fails(t, ti) ? failureText(f, t) : ``,
+      // The thrown error's own message, which for a campaign unit holds the
+      // framework's replay command (check.mjs reads both).
+      ...(fails(t, ti) ? { thrown: thrownText(h, fi, ti) } : {}),
       names: printer?.testNamesOf?.(testCaseOf(h, fi, ti)),
     }))
     const first = tests.find((x) => x.state === `failed`)
@@ -2395,6 +2535,13 @@ async function driver(h, observe) {
       states.add(`a baseline law violation with its counterexample`)
     const failing = f.tests.filter((t, ti) => failsAlone(f, t, ti))
     if (failing.length > 1) states.add(severalFailing)
+    for (const ti of f.tests.keys()) {
+      if (!failsAlone(f, f.tests[ti], ti)) continue
+      const campaign = campaignOf(h, fi, ti)
+      if (campaign?.random) states.add(randomReplayed)
+      if (campaign?.random && campaign.win32) states.add(randomReplayedWin32)
+      if (campaign && !campaign.random) states.add(fixedReplayed)
+    }
     if (f.baseline === `test` && f.failure === `violation`) {
       if (failing.some((t) => (t.values ?? 0) > 0)) states.add(valuesNamed)
       if (failing.some((t) => t.values === 5 || t.values === 6))
@@ -2886,6 +3033,7 @@ function recordsBreach(h, observations, expected) {
     for (const [gi, ti] of laws.entries()) {
       const { replay, ...kept } = got[gi]
       const values = VALUES[h.files[owed.fi].tests[ti].values ?? 0]
+      const campaign = campaignOf(h, owed.fi, ti)
       const owedKept = {
         test: namesOf(h, owed.fi, ti),
         error: owed.violation
@@ -2899,6 +3047,11 @@ function recordsBreach(h, observations, expected) {
               ...(values ? { observed: values[0], owed: values[1] } : {}),
               counterexample: VIOLATION.history,
             }
+          : {}),
+        // A random-seed unit's replay sets the environment the framework's
+        // replay names, as the framework wrote it.
+        ...(campaign?.random
+          ? { env: Object.fromEntries(campaign.env.map(([n, v]) => [n, v])) }
           : {}),
       }
       if (!isDeepStrictEqual(kept, owedKept))
@@ -3047,26 +3200,45 @@ function replayBreach(h, owed, file, block, platform, ti) {
   const replays = replayLinesOf(block, platform)
   if (replays === undefined)
     return `${file}'s replay lines are not the platform's: ${JSON.stringify(block.filter((line) => line.startsWith(`  replay`)))}`
+  // A random-seed unit's replay sets the framework's environment first, each
+  // value on the line as the line prints any word: a control character as its
+  // escape. Every other replay sets none.
+  const campaign = ti === undefined ? undefined : campaignOf(h, owed.fi, ti)
+  const owedEnv = campaign?.random
+    ? campaign.env.map(([n, v]) => [n, escapeText(v)])
+    : []
   for (const { command, read } of replays) {
-    // cmd has no form for a word with a double quote, `%`, or `!`: its line says so,
-    // and only such a test may print that line.
-    // A CLI line has no environment values, so cmd always has its form: the
-    // `-t` argument carries no shell-hostile character (review option c). No
-    // fallback line may print for it.
+    // cmd has no form for a word or a value with a double quote, `%`, or `!`:
+    // its line says so, and only such a test may print that line. The `-t`
+    // argument carries no shell-hostile character (review option c).
     if (command === CMD_FALLBACK) {
       // The printer's cmd line has no form when a word has `"`, `%`, or `!`:
-      // the file path can carry one (the -t argument never does).
-      if (/["%!]/.test(relativeName(h, owed.fi))) continue
+      // the file path or an environment value can carry one.
+      if (
+        /["%!]/.test(relativeName(h, owed.fi)) ||
+        owedEnv.some(([, v]) => /["%!]/.test(v))
+      )
+        continue
       return `the replay of ${file} says cmd cannot replay it, but no word of it has a hostile character`
     }
-    const words = read(command)
-    if (!words)
+    const read_ = read(command)
+    if (!read_)
       return `the replay of ${file} is ${JSON.stringify(command)}, which the shell does not read as plain words`
-    const wrong = wordsBreach(h, owed, file, words, ti, command)
+    if (!isDeepStrictEqual(read_.env, owedEnv))
+      return `the replay of ${file}${ti === undefined ? `` : `'s failing test ${shownName(h, owed.fi, ti)}`} sets ${JSON.stringify(read_.env)}, owed ${JSON.stringify(owedEnv)}: ${command}`
+    const wrong = wordsBreach(h, owed, file, read_.words, ti, command)
     if (wrong) return wrong
   }
   return undefined
 }
+
+// A text as a baseline line prints it: each control character, and each
+// line or paragraph separator, as its `\uXXXX` escape.
+const escapeText = (text) =>
+  text.replace(
+    /[\u0000-\u001f\u007f\u2028\u2029]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, `0`)}`,
+  )
 
 // A replay's words (`command` as it was given): `vitest run <file>`, and for
 // a failing test (`ti`) one `-t` pattern, safe in every shell, that runs
@@ -3107,10 +3279,10 @@ function replayLinesOf(block, platform) {
   const forms =
     platform === `win32`
       ? [
-          [`  replay (PowerShell): `, powerShellWords],
-          [`  replay (cmd): `, cmdWords],
+          [`  replay (PowerShell): `, powerShellCommand],
+          [`  replay (cmd): `, cmdCommand],
         ]
-      : [[`  replay: `, shellWords]]
+      : [[`  replay: `, shellCommand]]
   const lines = block.filter((line) => /^  replay( \(\w+\))?: /.test(line))
   if (lines.length !== forms.length) return undefined
   const found = forms.map(([prefix, read]) => {
@@ -3260,6 +3432,93 @@ function shellWords(line) {
   return words
 }
 
+// A command line's environment and words, as each shell reads it: the
+// variables it sets before the command, in order, each a name and its
+// value, then the command's words. Undefined when the shell would not read
+// the line so.
+// POSIX: an assignment is a leading word whose name and `=` are plain
+// characters (Shell Command Language 2.9.1), its value the rest of the word.
+function shellCommand(line) {
+  const env = []
+  let rest = line
+  for (;;) {
+    const assignment = rest.match(/^([A-Za-z_][A-Za-z0-9_]*)=/)
+    if (assignment === null) break
+    // The value is the rest of the first word, as the shell splits it.
+    const end = wordEnd(rest)
+    if (end === undefined) return undefined
+    const value = shellWords(rest.slice(assignment[0].length, end))
+    if (value === undefined || value.length > 1) return undefined
+    env.push([assignment[1], value[0] ?? ``])
+    rest = rest.slice(end + 1)
+  }
+  const words = shellWords(rest)
+  return words && { env, words }
+}
+// Where the first word of a POSIX line ends: at the first space outside
+// quotes. Undefined when a quote does not close.
+function wordEnd(line) {
+  for (let i = 0; i < line.length; i += 1) {
+    if (line[i] === ` `) return i
+    if (line[i] === `\\`) i += 1
+    else if (line[i] === `'`) {
+      i = line.indexOf(`'`, i + 1)
+      if (i < 0) return undefined
+    } else if (line[i] === `"`) {
+      for (i += 1; i < line.length && line[i] !== `"`; i += 1)
+        if (line[i] === `\\`) i += 1
+      if (i >= line.length) return undefined
+    }
+  }
+  return undefined
+}
+// PowerShell: each `$env:NAME=<single-quoted value>;` before the command
+// sets one variable.
+function powerShellCommand(line) {
+  const env = []
+  let rest = line
+  for (;;) {
+    const assignment = rest.match(/^\$env:([A-Za-z_][A-Za-z0-9_]*)=/)
+    if (assignment === null) break
+    rest = rest.slice(assignment[0].length)
+    if (!PS_QUOTES.includes(rest[0])) return undefined
+    let value = ``
+    let j = 1
+    for (;;) {
+      if (j >= rest.length) return undefined
+      if (PS_QUOTES.includes(rest[j])) {
+        if (rest[j + 1] === rest[j]) {
+          value += rest[j]
+          j += 2
+          continue
+        }
+        break
+      }
+      value += rest[j]
+      j += 1
+    }
+    if (rest.slice(j + 1, j + 3) !== `; `) return undefined
+    env.push([assignment[1], value])
+    rest = rest.slice(j + 3)
+  }
+  const words = powerShellWords(rest)
+  return words && { env, words }
+}
+// cmd: each `set "NAME=value" &&` before the command sets one variable.
+function cmdCommand(line) {
+  const env = []
+  let rest = line
+  for (;;) {
+    const set = rest.match(/^set "([A-Za-z_][A-Za-z0-9_]*)=([^"]*)" && /)
+    if (set === null) break
+    if (/[%!]/.test(set[2])) return undefined
+    env.push([set[1], set[2]])
+    rest = rest.slice(set[0].length)
+  }
+  const words = cmdWords(rest)
+  return words && { env, words }
+}
+
 // A text as a code span whose fence outruns any backticks in it, as
 // Markdown reads one (CommonMark 6.1).
 function codeSpanOf(text) {
@@ -3388,6 +3647,52 @@ const calibrations = [
       const record = firstRecord(records, (r) => r.replay?.includes(`-t`))
       if (!record) return false
       record.replay.splice(record.replay.indexOf(`-t`))
+    }),
+  },
+  {
+    // #237's line: a random-seed unit's replay by its `-t` pattern alone,
+    // which runs under a seed of its own.
+    name: `the baseline replays a random-seed unit with no seed`,
+    law: `baseline`,
+    corrupt: corruptBaseline((lines) => {
+      const kept = lines.map((line) =>
+        /^ {2}replay/.test(line)
+          ? line
+              .replace(
+                /^( {2}replay: )(?:[A-Za-z_]\w*=(?:'[^']*'|\S)*\s)+/,
+                `$1`,
+              )
+              .replace(
+                /^( {2}replay \(PowerShell\): )(?:\$env:\S+=.*?'; )+/,
+                `$1`,
+              )
+              .replace(/^( {2}replay \(cmd\): )(?:set "[^"]*" && )+/, `$1`)
+          : line,
+      )
+      return kept.join(`\n`) === lines.join(`\n`) ? undefined : kept
+    }),
+  },
+  {
+    name: `results.json keeps a random-seed unit's replay with no environment`,
+    law: `baseline`,
+    corrupt: corruptRecords((records) => {
+      const record = firstRecord(records, (r) => r.env !== undefined)
+      if (!record) return false
+      delete record.env
+    }),
+  },
+  {
+    // A replay under the framework's environment for a test whose own rerun
+    // replays it, as a fixed-seed unit's does.
+    name: `results.json sets an environment for a test whose rerun replays it`,
+    law: `baseline`,
+    corrupt: corruptRecords((records) => {
+      const record = firstRecord(
+        records,
+        (r) => r.env === undefined && r.replay?.includes(`-t`),
+      )
+      if (!record) return false
+      record.env = { ORACLE_SEED: `1` }
     }),
   },
   {
@@ -3638,6 +3943,9 @@ const required = [
   severalFailing,
   valuesNamed,
   valueCutOrEscaped,
+  randomReplayed,
+  randomReplayedWin32,
+  fixedReplayed,
   `an ordinary file's failing baseline test`,
   `extra-work`,
   `extra-work under a declared bound`,
@@ -4520,14 +4828,43 @@ const constructed = [
       }
     },
   },
+  // Law 9: a file whose failing campaign units are a random-seed unit, whose
+  // worker printed its replay for a POSIX shell, one whose worker printed it
+  // for PowerShell and cmd, under a project's own prefix, and a fixed-seed
+  // unit. A printer that replayed a random-seed unit by its `-t` pattern
+  // alone, which draws a new seed, fails. Appended at the end of the list.
+  {
+    name: `failing campaign units replayed under their seeds`,
+    enters: [randomReplayed, randomReplayedWin32, fixedReplayed],
+    build: () => {
+      const base = single(`x`, [], {
+        baseline: `test`,
+        test: { fails: true, route: `random seed` },
+        more: [
+          plainTest(
+            {},
+            {
+              fails: true,
+              route: `random seed`,
+              runOrder: 1,
+              suites: [`it's`],
+              label: `q"t `,
+            },
+          ),
+          plainTest({}, { fails: true, route: `fixed seed` }),
+        ],
+      }).build()
+      return { ...base, files: [{ ...base.files[0], failure: `violation` }] }
+    },
+  },
 ]
 
 oracleProperty({
   id: `oracle-gaps.report-classify`,
   law: {
-    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, extra-work, dead-code, outside-annotation, branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only; a test whose property declares a work bound, whose work judges the mutant, and whose work (site evaluations, never time) passes the bound's ratio of its unmutated work reports a verdict under law work bound on its route, and a survivor whose work rose in such a test, with no changed observation, is extra-work, whose directive names that test, both counts, and the bound to declare that rejects it. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed. results.json's baseline keeps every failing test of each file in file order, with its names, its error, the law, checkpoint, difference, observed and owed values, and counterexample of a violation as the framework wrote them, and replay words that run exactly that test.`,
+    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, extra-work, dead-code, outside-annotation, branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only; a test whose property declares a work bound, whose work judges the mutant, and whose work (site evaluations, never time) passes the bound's ratio of its unmutated work reports a verdict under law work bound on its route, and a survivor whose work rose in such a test, with no changed observation, is extra-work, whose directive names that test, both counts, and the bound to declare that rejects it. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed. results.json's baseline keeps every failing test of each file in file order, with its names, its error, the law, checkpoint, difference, observed and owed values, and counterexample of a violation as the framework wrote them, and replay words that run exactly that test. A failing random-seed campaign unit's replay, printed and kept, sets the environment of the replay command the framework's error names, in its order and with its values, under any prefix and from either platform's command; a fixed-seed unit and every other test replay with no environment.`,
     authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the oracle rubric's outcome kinds (ORC-006); the frozen design's oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); the maintainer's findings F22 and the leftovers of #12 (2026-11-10); for the work law, the maintainer's decision of 2026-11-12 that a speed shortcut reported as not-observed is a gap CLI bug, and the design decided with it: a cost law, never an exit, judged by a deterministic count; for report order, the gap CLI's determinism requirement (oracle-gaps.report's determinism test and law 9, and the runner's "listed alike in every run") and the maintainer's decision of 2026-11-11 that the tests a report names depend on neither --contexts, worker timing, nor how owners are declared; Vitest's runner (@vitest/runner 4.1: -t is a regular expression matched against getTaskFullName, the suites' names and the test's joined by a space); POSIX.1-2017 Shell Command Language 2.2 and 2.6 for the replay's quoting.`,
-    limits: `That real runs produce these records is oracle-gaps.report's, and so is a real replay. The driver encodes operands as capture-setup.mjs \`shown\` does, by a copy of it; long strings are told apart by a 32-bit digest; no symbol operand is generated, and two symbols of one description print alike. Only the runner's single-file path records a test's names, and only it feeds the baseline. Test names hold no backtick and no \` > \`, and names within a file are distinct; the replay's file argument is judged as text, not as Vitest's substring filter over every file. Authored intents hold no word that the exit law forbids, and an author is not shortened. Report order within a file is the baseline's record order: that a file whose tests run concurrently writes its records in one order is not judged, and a failing test is ordered within its file as the reporter lists it, which a run cut off by a hang takes from the records. The "Changed observations in" list is the changed tests' first three, and only its first is compared. A test that only a mutant run records is not generated. A file that does not load keeps its records here, which the runner drops, and the driver leaves it out of every target, as the runner does; a failing law keeps its records and its reach, as the runner keeps them. The refusal text and the summary's left-out list are not judged, only the list of failing files they print. A failing law is generated only as a whole test of a file whose baseline is test: a describe's failing hook, a failing law's leftover state, and how the runner selects the tests of a file that has failing laws are oracle-gaps.report's. Work arrives as counts: that the capture counts site evaluations, and which work it does not count, is oracle-gaps.report's; a test that reaches a site but did no work is generated, which no real run records; an authored mutant's copy counts no work, so the work law does not judge it.`,
+    limits: `That real runs produce these records is oracle-gaps.report's, and so is a real replay. The driver encodes operands as capture-setup.mjs \`shown\` does, by a copy of it; long strings are told apart by a 32-bit digest; no symbol operand is generated, and two symbols of one description print alike. Only the runner's single-file path records a test's names, and only it feeds the baseline. A campaign unit is a test on the fixed-seed or random-seed route, whose error is the framework's, written here by a copy of its form; a random-seed unit's own name is the unit its replay names. An environment value that holds a control character prints as its escape, which no shell reads back as that character; results.json keeps it. Test names hold no backtick and no \` > \`, and names within a file are distinct; the replay's file argument is judged as text, not as Vitest's substring filter over every file. Authored intents hold no word that the exit law forbids, and an author is not shortened. Report order within a file is the baseline's record order: that a file whose tests run concurrently writes its records in one order is not judged, and a failing test is ordered within its file as the reporter lists it, which a run cut off by a hang takes from the records. The "Changed observations in" list is the changed tests' first three, and only its first is compared. A test that only a mutant run records is not generated. A file that does not load keeps its records here, which the runner drops, and the driver leaves it out of every target, as the runner does; a failing law keeps its records and its reach, as the runner keeps them. The refusal text and the summary's left-out list are not judged, only the list of failing files they print. A failing law is generated only as a whole test of a file whose baseline is test: a describe's failing hook, a failing law's leftover state, and how the runner selects the tests of a file that has failing laws are oracle-gaps.report's. Work arrives as counts: that the capture counts site evaluations, and which work it does not count, is oracle-gaps.report's; a test that reaches a site but did no work is generated, which no real run records; an authored mutant's copy counts no work, so the work law does not judge it.`,
   },
   histories: {
     arbitrary: records,

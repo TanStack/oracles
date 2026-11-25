@@ -1047,6 +1047,11 @@ export default async (env) => {
                 : `${error.name ?? ``}: ${error.message ?? ``}`
             })
             .join(`\n`),
+          // The thrown errors' own messages: a failing campaign unit's names
+          // the framework's replay command (stream.mjs `failingTests`).
+          thrown: (testResult.errors ?? [])
+            .map((error) => error.message ?? ``)
+            .join(`\n`),
         }
       }),
     )

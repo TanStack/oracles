@@ -891,6 +891,7 @@ export const partitions = {
         'a failing law that spins under a mutant before a passing law',
         "module data that only the failing owner's passing pair judges",
         'a failing owner file with a failing law',
+        'a failing random-seed law',
       ]),
       8: anyOf([
         'a declaration fault: brokenVitest',
