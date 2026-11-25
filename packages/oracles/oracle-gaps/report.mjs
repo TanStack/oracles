@@ -27,6 +27,7 @@ import {
   escapeControls,
   gapLine,
   kindOf,
+  oneLine,
   streamLine,
   verdictLine,
 } from './stream.mjs'
@@ -227,6 +228,47 @@ const counted = (n, thing) => `${n} ${thing}${n === 1 ? `` : `s`}`
  * its tests (G13), and, when one failed, the provisional status with how
  * many mutants are blocked (the freeze's decision 2; Block per law).
  */
+/**
+ * A refactor's trace diff (`--refactor-base`, check.mjs traceDiff) in one
+ * line: how many of the compared tests differ, and what that is evidence of.
+ * No difference over compared tests in files that all finished is evidence
+ * that the change kept every observation; any difference is a law
+ * question, even where every law accepts both values.
+ */
+function traceSummary(refactor) {
+  const { base, commit, tests, differences, unfinished, absent } = refactor
+  return [
+    `traces against ${base} (${commit.slice(0, 12)}): ${differences.length} of ${tests} ${tests === 1 ? `test differs` : `tests differ`}`,
+    differences.length > 0
+      ? `each difference is a law question to settle before merging`
+      : tests === 0
+        ? `no evidence, since no test was compared`
+        : unfinished.length > 0
+          ? `no evidence, since a file did not finish`
+          : `no observation changed, evidence for a refactor or perf change`,
+    ...(refactor.nondeterministic > 0
+      ? [`${refactor.nondeterministic} nondeterministic left out`]
+      : []),
+    ...(unfinished.length > 0
+      ? [`did not finish: ${unfinished.join(`, `)}`]
+      : []),
+    ...(absent.length > 0 ? [`not at ${base}: ${absent.join(`, `)}`] : []),
+  ].join(`; `)
+}
+
+/** One test's difference: its first differing observation, and its result. */
+function traceDifference(d) {
+  const value = (text) => (text === null ? `(none)` : codeSpan(oneLine(text)))
+  return [
+    ...(d.observation === null
+      ? []
+      : [
+          `observation ${d.observation} (${escapeControls(d.checkpoint)}) ${value(d.old)} → ${value(d.new)}`,
+        ]),
+    ...(d.result ? [`result ${d.result.old} → ${d.result.new}`] : []),
+  ].join(`; `)
+}
+
 function baselineSection(results, baseline, config) {
   const blocking = blockedLines(baseline)
   const blocked = gapsOf(results).filter((r) => r.outcome === `blocked`).length
@@ -279,6 +321,7 @@ export function renderReport({
   excluded,
   baseline = [],
   config,
+  refactor,
 }) {
   const gaps = gapsOf(results)
   const guards = results.filter((r) => r.probeGuard)
@@ -368,6 +411,17 @@ export function renderReport({
     }
     lines.push(``)
   }
+  if (refactor)
+    lines.push(
+      `## Traces against ${refactor.base}`,
+      ``,
+      `Every oracle file ran again on the sources as ${refactor.base} holds them and as they are now, with the same seeds: ${traceSummary(refactor)}.`,
+      ``,
+      ...refactor.differences.map(
+        (d) => `- ${codeSpan(escapeControls(d.test))}: ${traceDifference(d)}`,
+      ),
+      ...(refactor.differences.length > 0 ? [``] : []),
+    )
   if (unowned.length > 0) {
     lines.push(
       `## Unowned (warnings)`,
@@ -416,6 +470,7 @@ export function renderStdout({
   paths,
   baseline = [],
   config,
+  refactor,
 }) {
   const gaps = gapsOf(results)
   const unowned = results.filter(
@@ -468,6 +523,16 @@ export function renderStdout({
       streamLine(
         `note`,
         `left out, failing with no mutant active: ${excluded.join(`, `)}`,
+      ),
+    )
+  if (refactor)
+    lines.push(
+      streamLine(`note`, traceSummary(refactor)),
+      ...refactor.differences.map((d) =>
+        streamLine(
+          `note`,
+          `trace differs ${escapeControls(d.test)}: ${traceDifference(d)}`,
+        ),
       ),
     )
   lines.push(

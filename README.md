@@ -67,6 +67,26 @@ agent.
   in its `detail` in `results.json`. Record the error in the driver, and
   state the law that decides that input's outcome.
 
+  For a refactor or a perf change, pass `--refactor-base <rev>`, a commit
+  of the repository that holds the package. After the mutants, every
+  oracle file runs whole twice more with the same seeds: once on each
+  `--source` file as the commit holds it, and once as it is now (a source
+  the commit lacks keeps its text). Each test is compared by its recorded
+  observations and its result, except a calibration or determinism check
+  and a nondeterministic test, and every test where either differs is
+  listed with its first differing observation: its index, its checkpoint,
+  and both values as the gap check renders an observation, cut to one
+  line. A difference is listed even when every law accepts both values,
+  which a comparison of verdicts or mutant keys cannot show. The note
+  `oracle-gaps: note traces against <rev> (<commit>): <d> of <n> tests
+differ; …` says what that is evidence of: no difference is evidence
+  that the change kept every observation; any difference is a law
+  question to settle before merging. One `oracle-gaps: note trace differs
+<test>: …` line follows for each listed test, `summary.md` has a
+  "Traces against" section, and `results.json` has `refactor`. A test is
+  one history for a fixed or constructed history; a `generated` unit runs
+  many, and its observation index counts across them.
+
   A survivor that changed no observation but made a test do more work is
   `extra-work`: the mutant deleted a shortcut that exists only for speed,
   such as an early return or an assignment in place of a slower call. A

@@ -98,6 +98,8 @@
     "a failing beforeAll around a law",
     "a failing afterAll around a law that calls production",
     "a failing law that spins under a mutant before a passing law",
-    "module data that only the failing owner's passing pair judges"
+    "module data that only the failing owner's passing pair judges",
+    "a refactor whose traces differ",
+    "a refactor that no trace sees"
   ]
 }
