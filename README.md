@@ -149,6 +149,17 @@ agent.
   `--help` is not a check, so its usage text has no prefix and no done
   line. `--stop-daemon` prints nothing.
 
+  `--diff-base <rev>` marks each mutant in `results.json` (and
+  `results.jsonl`) with `inDiff`: `true` when its line is one that
+  `git diff <rev> -- <source>` shows as changed in the working tree, else
+  `false`. It does not shorten the run: every mutant still runs, and the
+  stream and `summary.md` are the same as without it. Use it to read the
+  gaps on the lines you changed first. A revision that git does not know
+  marks every mutant `false` and is not refused, and so does an untracked
+  file until `git add -N` adds it to the diff. It marks lines, so it
+  does not compare the old code's behavior with the new; open pull
+  requests #267 (`--compare`) and #283 (`--refactor-base`) propose that.
+
   For contributors: the `ORACLE_GAPS_TEST_` environment variables are test-only
   hooks for the CLI's own oracle, not settings for users. Each is inert unless
   set, and none changes an outcome by itself.
