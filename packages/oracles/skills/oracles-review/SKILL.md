@@ -83,9 +83,10 @@ search is your main job.
   that a shared part decides, ask for a calibration that breaks that clause
   and names the clause's own `difference`. It fails while the clause holds
   only through the model. Once the clause has a comparison of its own,
-  against what the clause alone predicts, the histories that reach the
-  shared mistake fail it. The calibration shows that the check exists, and
-  the histories still have to reach the mistake.
+  against what the clause alone predicts, a history in which the shared
+  mistake changes the result fails it: here, a declaration that only it
+  reads. The calibration shows that the check exists. Such a history still
+  has to be generated or constructed.
   Compare the model's structure with production, not only its
   results.
 - **A grammar narrower than the law.** The law claims a value domain, action,
