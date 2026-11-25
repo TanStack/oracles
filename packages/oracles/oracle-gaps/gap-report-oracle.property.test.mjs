@@ -179,7 +179,12 @@
  *    of any other operator that was reached. A test's work is the number of site
  *    evaluations that its instrumented production code made (the capture's
  *    call count, never a time): a call statement, a call whose value is
- *    used, a comparison, an `if`, each pass of a loop's condition. A
+ *    used, a comparison, an `if`, each pass of a loop's condition, and
+ *    one for each call of the function that the test's work bound
+ *    registration returned, made while that test runs (`oracleProperty`'s
+ *    `work.count` calls it for each call of a method it names; a call of
+ *    another test's counter, or between tests, counts nothing; proposed for
+ *    approval: a cost inside a dependency is work). A
  *    passing, deterministic owner test on a reproducible or random route,
  *    that made no timer and held no I/O open, and that registers a work bound beside
  *    its route (`__oracleWorkBound`, which `oracleProperty`'s `work`
@@ -4396,6 +4401,25 @@ async function driver(plan, observe) {
         m.function === `w_fastplain`
       )
         states.add(`a work rise on an unregistered route judged nothing`)
+      // The early return under a bound whose tests count units of work
+      // through the function its registration returned: the units keep one
+      // twin's rise within the bound and leave the other's over it, beside a
+      // call of an earlier test's counter.
+      if (
+        m.operator === `if-false` &&
+        m.class === `extra-work` &&
+        m.function === `w_fastcounted`
+      )
+        states.add(
+          `a work rise within a bound by counted units judged extra work`,
+        )
+      if (
+        m.operator === `if-false` &&
+        m.outcome === `killed` &&
+        m.laws?.includes(`work bound`) &&
+        m.function === `w_fastcountedkill`
+      )
+        states.add(`a work rise over a bound with counted units killed`)
       if (m.class === `branch-never-taken`) states.add(`branch never taken`)
       if (m.class === `not-infected`) states.add(`not infected`)
       if (m.class === `not-observed`) states.add(`not observed`)
@@ -6632,6 +6656,8 @@ const required = [
   `a work rise in tests that reach the clock by every path judged nothing`,
   `a work rise in a test that waited a turn killed`,
   `a work rise on an unregistered route judged nothing`,
+  `a work rise within a bound by counted units judged extra work`,
+  `a work rise over a bound with counted units killed`,
   `branch never taken`,
   `not infected`,
   `not observed`,

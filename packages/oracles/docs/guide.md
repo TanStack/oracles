@@ -309,6 +309,30 @@ Likewise:
 
 Normalize only what the comparison permits.
 
+### Count a dependency's work
+
+The gap check counts a test's work in the `--source` files only. When owned
+code saves its cost inside a dependency, such as a parser it asks to reparse
+only what changed, a mutant that makes the dependency do the work again adds
+one call site evaluation at most, and often none. Name the dependency's
+method on the property instead of patching it in the driver:
+
+```ts
+oracleProperty({
+  // ...
+  work: { ratio: 1, count: [[Parser.prototype, 'parse']] },
+})
+```
+
+Each call of `Parser.prototype.parse` made while one of the property's tests
+runs then counts one unit of work beside the test's site evaluations,
+whatever the call does inside. Name the method whose calls are the cost: a
+call is one unit, however much it does. Only the gap check replaces the
+method, for the length of each test it judges, and it puts the object's own
+property back when the test ends; a plain Vitest run leaves the object
+alone. A call in any other test, or between tests, counts nothing. An entry
+whose object has no method of that name fails the oracle file's load.
+
 ### Check incremental results and publication separately
 
 An incremental system emits changes, while a model often computes a whole

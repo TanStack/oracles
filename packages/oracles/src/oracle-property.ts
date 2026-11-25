@@ -777,9 +777,19 @@ export interface OraclePropertyOptions<THistory, TExpected, TPlan = THistory> {
    * test the property registers (each fixed seed's units and the random
    * campaign's), though the gap report's directive names one of them. A
    * test that made a timer or held I/O open, whose work can follow a clock,
-   * is not judged.
+   * is not judged. `count` names methods of objects outside the instrumented
+   * sources, such as a dependency's `[Parser.prototype, 'parse']`: each call
+   * of one, made while a test the bound judges runs, counts one unit of
+   * work beside its site evaluations, whatever the method does inside. The
+   * framework replaces each method for the length of such a test, only under
+   * the gap report, and puts the object's own property back when the test
+   * finishes. Each entry's object must have a method of that name when the
+   * property registers.
    */
-  work?: { ratio: number }
+  work?: {
+    ratio: number
+    count?: ReadonlyArray<readonly [target: object, method: string | symbol]>
+  }
 }
 
 declare global {
@@ -795,8 +805,10 @@ declare global {
     | ((verdict: { property: string; law: string; checkpoint: string }) => void)
     | undefined
   // Installed by the gap report's test setup, absent otherwise. Each test
-  // whose route judges production reports its property's work bound.
-  var __oracleWorkBound: ((ratio: number) => void) | undefined
+  // whose route judges production reports its property's work bound, and
+  // receives the function that counts one unit of the test's work.
+  var __oracleWorkBound:
+    ((ratio: number) => (() => void) | undefined) | undefined
 }
 
 /** The probe calls one history made: which probes it reached and which it entered. */
@@ -893,6 +905,22 @@ export function oracleProperty<const THistory, TExpected, TPlan = THistory>(
     throw new Error(
       `${id}: \`work.ratio\` must be a finite number of at least 1, the most work a mutant may do as a multiple of the unmodified code's.`,
     )
+  const counted = work?.count
+  if (
+    counted !== undefined &&
+    !(
+      Array.isArray(counted) &&
+      counted.every(
+        (entry) =>
+          Array.isArray(entry) &&
+          entry.length === 2 &&
+          typeof Object(entry[0])[entry[1]] === `function`,
+      )
+    )
+  )
+    throw new Error(
+      `${id}: \`work.count\` must list [object, method name] pairs, each naming a method of its object.`,
+    )
   const enumerated: EnumeratedHistories<THistory> | undefined = Array.isArray(
     histories,
   )
@@ -931,11 +959,13 @@ export function oracleProperty<const THistory, TExpected, TPlan = THistory>(
     for (const test of tests)
       oracleReplayTest(it, ...test.replays)(
         test.name,
-        ({ task, signal }) => {
+        ({ task, signal, onTestFinished }) => {
           oracleRoute(test.route)
           // The framework's own checks judge the oracle, not production.
-          if (work && test.route !== `calibration`)
-            globalThis.__oracleWorkBound?.(work.ratio)
+          if (work && test.route !== `calibration`) {
+            const unit = globalThis.__oracleWorkBound?.(work.ratio)
+            if (unit && counted) onTestFinished(countCalls(counted, unit))
+          }
           return test.run(task, signal)
         },
         timeoutOf(options),
@@ -944,6 +974,36 @@ export function oracleProperty<const THistory, TExpected, TPlan = THistory>(
 }
 
 const timeoutOf = (options: { timeout?: number }) => options.timeout ?? 120_000
+
+/**
+ * Replaces each named method with one that counts a unit of work and calls
+ * the method, and returns what puts each object's own property back.
+ */
+function countCalls(
+  methods: ReadonlyArray<readonly [object, string | symbol]>,
+  unit: () => void,
+): () => void {
+  const restores = methods.map(([target, method]) => {
+    const own = Object.getOwnPropertyDescriptor(target, method)
+    const original = Reflect.get(target, method) as (...args: never) => unknown
+    Object.defineProperty(target, method, {
+      configurable: true,
+      writable: true,
+      enumerable: own?.enumerable ?? false,
+      value: new Proxy(original, {
+        apply: (fn, self, args) => (unit(), Reflect.apply(fn, self, args)),
+      }),
+    })
+    return () =>
+      own
+        ? Object.defineProperty(target, method, own)
+        : Reflect.deleteProperty(target, method)
+  })
+  // The last wrapper first, so a method named twice ends as the original.
+  return () => {
+    for (const restore of restores.reverse()) restore()
+  }
+}
 
 /** Whether no path replay is selected, or the selected one names this unit. */
 const replaySelects = (unit: string) =>

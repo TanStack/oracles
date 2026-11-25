@@ -1529,6 +1529,36 @@ const witness = [
       judging(`a`, `fixed seed`, 1, { registered: false }),
     ],
   },
+  // The early return under a bound of 2 in tests that also count units of
+  // work through the function their bound's registration returned (the
+  // calls of a dependency's method that `work.count` names): each unit adds
+  // one to the test's work, with no mutant active and under the mutant.
+  // Input 7 does 4 site evaluations on the shortcut and 20 on the loop, so
+  // 12 units per campaign keep the loop within the bound (32 of 2 × 16),
+  // and the mutant is `extra-work`; 11 put it over (31 of 2 × 15), and the
+  // mutant is killed. In the killed twin, the test of input 1 keeps its
+  // counter, and the test of input 7 calls that one 4 times before it
+  // registers its own: a call in another test counts nothing. Only these
+  // witness tests carry `count` and `stale` (absent: none), so a history's
+  // tests, which `judging` also builds, stay the grammar's records.
+  {
+    id: `w_fastcounted`,
+    owners: [`a`],
+    body: [{ kind: `shortcut`, op: `>`, k: 2, not: false }],
+    tests: [
+      judging(`a`, `fixed seed`, 7, { work: 2, count: 12 }),
+      judging(`a`, `fixed seed`, 1, { work: 2, count: 12 }),
+    ],
+  },
+  {
+    id: `w_fastcountedkill`,
+    owners: [`a`],
+    body: [{ kind: `shortcut`, op: `>`, k: 2, not: false }],
+    tests: [
+      judging(`a`, `fixed seed`, 1, { work: 2, count: 1 }),
+      judging(`a`, `fixed seed`, 7, { work: 2, count: 11, stale: 4 }),
+    ],
+  },
   {
     id: `w_noobs`,
     owners: [`a`],
@@ -2272,6 +2302,8 @@ const captureWitness = new Set([
   `w_fastclocked`,
   `w_fastturn`,
   `w_fastplain`,
+  `w_fastcounted`,
+  `w_fastcountedkill`,
   `w_noobs`,
   `w_unreached`,
   `w_ordinary`,
@@ -2337,6 +2369,8 @@ const captureA = new Set([
   `w_fastclocked`,
   `w_fastturn`,
   `w_fastplain`,
+  `w_fastcounted`,
+  `w_fastcountedkill`,
   `w_flaky`,
   `w_flakykill`,
   `w_both`,
@@ -4671,6 +4705,13 @@ function runsOf(plan, tests, sites, active) {
           before += base.work
           after += mutated.work
         }
+        // A campaign that registers a work bound counts its units of work
+        // through the function the registration returned, one each, and a
+        // call of another test's counter counts nothing.
+        if (t.registered && t.work !== null && t.count > 0) {
+          before += t.count
+          after += t.count
+        }
         const route = routeOf(t, part)
         // A loop that never ends cuts the file's run off, as a hang does.
         if (mutated.spun)
@@ -5666,7 +5707,11 @@ function oracleTestFile(plan, file) {
     `const shared = { value: 0 }`,
     `const stored: { value: Array<string> } = { value: [] }`,
     ...owns,
-    `const g = globalThis as { __oracleRoute?: (route: string) => void; __oracleObserve?: (c: string, v: unknown) => void; __oracleVerdict?: (v: { property: string; law: string; checkpoint: string }) => void; __oracleWorkBound?: (ratio: number) => void }`,
+    `const g = globalThis as { __oracleRoute?: (route: string) => void; __oracleObserve?: (c: string, v: unknown) => void; __oracleVerdict?: (v: { property: string; law: string; checkpoint: string }) => void; __oracleWorkBound?: (ratio: number) => (() => void) | undefined }`,
+    // The counter that the file's last counting test received.
+    ...(plan.tests.some((t) => t.file === file && (t.count > 0 || t.stale > 0))
+      ? [`const units: { last?: () => void } = {}`]
+      : []),
     ...(plan.pragma && file === `a`
       ? [
           `if ((globalThis as { __gapEnvironment?: string }).__gapEnvironment !== 'marked') throw new Error('the file ran outside the environment its pragma names')`,
@@ -5697,9 +5742,22 @@ function oracleTestFile(plan, file) {
       const out = `out${i}`
       return [
         ...(t.registered ? [`    g.__oracleRoute?.('${part.route}')`] : []),
-        // The framework registers a work bound beside the route.
+        // A test that counts work calls the counter an earlier test of the
+        // file kept, which counts nothing here.
+        ...(t.stale > 0
+          ? [`    for (let u = 0; u < ${t.stale}; u += 1) units.last?.()`]
+          : []),
+        // The framework registers a work bound beside the route. A test that
+        // counts work calls the function the registration returned once
+        // per unit, as `work.count`'s wrappers do, and keeps it.
         ...(t.registered && t.work !== null
-          ? [`    g.__oracleWorkBound?.(${t.work})`]
+          ? t.count > 0
+            ? [
+                `    const unit${i} = g.__oracleWorkBound?.(${t.work})`,
+                `    for (let u = 0; u < ${t.count}; u += 1) unit${i}?.()`,
+                `    units.last = unit${i}`,
+              ]
+            : [`    g.__oracleWorkBound?.(${t.work})`]
           : []),
         // A test that waits on a timer before it runs production.
         ...(t.timed

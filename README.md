@@ -101,7 +101,16 @@ agent.
   nothing, so a mutant that only enters probe code does no extra work. Where a shortcut's cost is in such a builtin
   (`Object.defineProperty` and the like), make that cost an explicit
   observation of the driver, such as a count of those calls, and let a law
-  judge it, in place of a very tight work bound. Work is counted per test, not per history: a
+  judge it, in place of a very tight work bound. Where it is in a
+  dependency's method, outside the `--source` files, name the method in
+  `work.count`: `work: { ratio: 1, count: [[Parser.prototype, 'parse']] }`
+  counts one unit of work for each call of `Parser.prototype.parse` made
+  while one of the property's judged tests runs, beside its site
+  evaluations, whatever the call does inside. Under the gap report alone,
+  the framework replaces each named method for the length of such a test
+  and puts the object's own property back when the test ends, so a call in
+  any other test, or between tests, counts nothing. An entry whose object
+  has no method of that name fails the oracle file's load. Work is counted per test, not per history: a
   test that runs many histories, such as a `generated` unit, is judged by
   their sum, so a slowdown in a few of its histories is diluted, and a
   constructed or fixed history isolates it. An authored mutant's copy is

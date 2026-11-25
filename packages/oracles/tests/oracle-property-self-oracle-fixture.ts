@@ -376,6 +376,12 @@ export type SyntheticSpec = {
   ownsMode?: `list` | `empty` | `string` | `bad entry`
   /** The `work` option: a bound of `WORK_RATIO`, a ratio below 1, one that is not finite, or `null`, which plain JavaScript can pass. */
   workMode?: `bound` | `below one` | `not finite` | `null`
+  /**
+   * A `bound` spec's `work.count`: `method` names `ToyScope.prototype.crawl`,
+   * which the driver calls once per item of each history; `not a method`
+   * names a property the prototype does not have.
+   */
+  workCount?: `method` | `not a method`
   /** Runs every history on a controlled clock, where a 7 spins it. */
   clock?: boolean
   /** How the property holds a history's items; the array itself when absent. */
@@ -524,12 +530,29 @@ globalThis.__oracleRoute = (registered) => {
 }
 // The work bound registered for the running test, as the gap report reads it.
 let work: number | undefined
+// The units of work counted for the running test through the function the
+// work bound's registration returned, as the gap report counts them.
+let units = 0
+const countUnit = () => {
+  units += 1
+}
 globalThis.__oracleWorkBound = (ratio) => {
   work = ratio
+  return countUnit
+}
+/** A dependency's object outside the instrumented code, whose method a `workCount` spec counts. */
+export class ToyScope {
+  crawl() {
+    return this
+  }
 }
 beforeEach(() => {
   route = undefined
   work = undefined
+  units = 0
+  // A call between tests, which counts nothing unless an earlier test left
+  // its counting method in place.
+  new ToyScope().crawl()
 })
 // Every slow driver run this file started. A slow spec's histories time out
 // and their judgments arrive late; its reach test starts only after every
@@ -844,11 +867,13 @@ function syntheticDriver(
         throw new Error(`driver received a consumed plan`)
       consumed.add(formed as object)
     }
+    if (spec.workCount === `method`)
+      for (const _ of history) new ToyScope().crawl()
     const log = process.env.SELF_ORACLE_LOG
     if (log)
       appendFileSync(
         log,
-        `${JSON.stringify({ id: spec.id, test: owningTestName() ?? ``, ...(spec.slow ? { runnerTest: expect.getState().currentTestName ?? `` } : {}), history, origin: origins.get(formed as object), route: owningTest.getStore()?.route ?? route ?? null, work: work ?? null })}\n`,
+        `${JSON.stringify({ id: spec.id, test: owningTestName() ?? ``, ...(spec.slow ? { runnerTest: expect.getState().currentTestName ?? `` } : {}), history, origin: origins.get(formed as object), route: owningTest.getStore()?.route ?? route ?? null, work: work ?? null, units })}\n`,
       )
     if (spec.odd) observe(`odd`, { reason: oddValue(spec.odd) })
     if (spec.slow) await new Promise((resolve) => setTimeout(resolve, 300))
@@ -1157,6 +1182,16 @@ const workOf = (spec: SyntheticSpec) =>
                 : spec.workMode === `below one`
                   ? 0.5
                   : Number.POSITIVE_INFINITY,
+            ...(spec.workCount
+              ? {
+                  count: [
+                    [
+                      ToyScope.prototype,
+                      spec.workCount === `method` ? `crawl` : `crawls`,
+                    ] as const,
+                  ],
+                }
+              : {}),
           },
         }
 

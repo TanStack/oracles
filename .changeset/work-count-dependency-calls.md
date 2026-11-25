@@ -1,0 +1,5 @@
+---
+'@tanstack/oracles': minor
+---
+
+`oracleProperty`'s `work` option takes `count`, a list of `[object, method name]` pairs. Under the `oracle-gaps` report, each call of a named method made while one of the property's tests runs counts one unit of that test's work, beside its site evaluations, so a work bound can reject a mutant that makes a dependency do its work again: `work: { ratio: 1, count: [[Parser.prototype, 'parse']] }`. Before, work counted only site evaluations in the `--source` files, so such a mutant added no work, and the cost needed a hand-written law and a patched method in the driver. The framework replaces each method only for the length of a test the gap report judges, and puts the object's own property back when the test ends; a plain Vitest run leaves the object alone. A call in any other test, or between tests, counts nothing. An entry whose object has no method of that name fails the oracle file's load. The gap report's test setup now returns, from `__oracleWorkBound`, the function that counts one unit for the test that registered the bound.
