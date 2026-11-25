@@ -6764,7 +6764,7 @@ function ownTestFailure(
   },
 ): ReturnType<typeof violation> | undefined {
   const law = rejectingLaw(owed)
-  if (!seen.loaded)
+  if (!seen.loaded || seen.loadErrors.length > 0)
     return violation(
       `run`,
       `a property whose declaration fails law ${law} failed its file's load with ${JSON.stringify(seen.loadErrors)}, owed its test ${JSON.stringify(owed.failsTest)}`,
@@ -12928,9 +12928,13 @@ oracleProperty({
         const altered = structuredClone([...trace])
         const run = altered.find(({ checkpoint }) => checkpoint === `run`)!
           .value as SuiteRun
+        // The declaration fails its registration test, so its file loads
+        // with no load error; one more diagnostic must be rejected.
         const file = Object.values(run.files)[0]!
-        file.loadErrors.push(file.loadErrors[0]!)
-        file.loadCauses.push(file.loadCauses[0]!)
+        file.loadErrors.push(
+          file.loadErrors[0] ?? file.tests[0]!.failure!.message!,
+        )
+        file.loadCauses.push(file.loadCauses[0] ?? ``)
         return altered
       },
     },
