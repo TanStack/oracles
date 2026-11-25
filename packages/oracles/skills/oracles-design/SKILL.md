@@ -594,6 +594,29 @@ comes with one instruction. Do what it says, within the rules below.
   that behavior is truly not part of the contract, the code that the mutant
   changes is a production question for the owner. Either way, the developer
   decides.
+- **Tie a survivor past a stated range to that range.** A loop bound, a
+  capacity check or a length cut can matter only past the grammar's bound,
+  such as a fifth declaration where the grammar allows three by design. Its
+  survivors show up as `not-infected`, `branch-never-taken`, `unreached` or
+  `extra-work`. The gap check cannot tell them from a missing history,
+  because nothing in a survivor's record names the quantity its site
+  depends on. Make the tie yourself, and check it:
+  - Look for a history inside the range that reaches the site. If one does,
+    the survivor is an ordinary gap: add the history.
+  - The law's `limits` state the range in words, with its reason, and the
+    grammar's bound is the same number.
+  - A history just past the bound is the range's exclusion control
+    (ORC-004). Show that the grammar rejects it:
+    `arbitrary.canShrinkWithoutContext(past)` is `false`. An oracle file
+    registers only properties, so keep this in an ordinary test, or put a
+    probe's output in the evidence.
+  - Name the site's bounded quantity and the bound it is compared with. For a
+    `not-infected` comparison, the operands the gap line saw are evidence: a
+    count that stays below a constant.
+  - In the evidence record, list each tied survivor under "Outside the
+    stated range", apart from the gaps you are still closing. Give its key,
+    the limits' words, and the history just past the bound. It still counts
+    in the gap total, and the developer decides it as the bullet above says.
 - **A gap that existed before your change still counts** when it is in a
   function you changed. Report it with its law question. Do not take an exit.
 - **Never propose an exit.** If a gap can be neither killed nor removed, it is
@@ -662,7 +685,8 @@ items that fit the kind of change (step 7).
 - **Mutant:** a mutant, such as the original defect, and the law that
   rejected it, plus the calibrations that fail. For a refactor, the shared
   keys still killed, and each new key killed or acted on.
-- **Gaps:** the gap check's totals, and any gap reported as a framework bug.
+- **Gaps:** the gap check's totals, any gap reported as a framework bug, and
+  each survivor tied to a stated range (step 8).
 - **Limits:** the states, paths, and observations that the evidence does not
   cover.
 

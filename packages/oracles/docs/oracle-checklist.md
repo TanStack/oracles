@@ -112,7 +112,10 @@ No requirement here can be met by declaring something out of reach.
     be generated.
   - **Ablation:** each declared axis, rule, or overlap has a stated semantic
     contribution.
-  - **Range:** the bounded domains and marginal cases are stated.
+  - **Range:** the bounded domains and marginal cases are stated. A surviving
+    mutant that only a history past a stated bound can expose is tied to
+    that bound in the evidence: its key, the limits' words, and a history
+    just past the bound that the grammar rejects. It stays a gap.
   - **Exclusion:** a nearby invalid history or state is named, and the grammar
     rejects it.
 - **Contract changes:** A change that narrows the grammar, a filter, or a
