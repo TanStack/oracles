@@ -79,10 +79,13 @@ search is your main job.
   model that takes its candidates from the reference-collection law's
   model inherits what that model counts as a reference. When that model and
   production both count a declaration's read of itself, the pruning model
-  predicts production's wrong removal, and both laws pass. A calibration
-  that breaks only the clause the shared part decides, and names that
-  clause's own `difference`, exposes it: it fails while the clause holds
-  only through the model. Ask for one on each clause a shared part decides.
+  predicts production's wrong removal, and both laws pass. For each clause
+  that a shared part decides, ask for a calibration that breaks that clause
+  and names the clause's own `difference`. It fails while the clause holds
+  only through the model. Once the clause has a comparison of its own,
+  against what the clause alone predicts, the histories that reach the
+  shared mistake fail it. The calibration shows that the check exists, and
+  the histories still have to reach the mistake.
   Compare the model's structure with production, not only its
   results.
 - **A grammar narrower than the law.** The law claims a value domain, action,
