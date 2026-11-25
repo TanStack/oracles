@@ -4,6 +4,9 @@ This glossary owns the terms for oracle work with `@tanstack/oracles`. The
 project's own glossary or architecture documents own its domain terms. Use one
 term for one concept. Do not rotate synonyms for style.
 
+To see the terms at work on one small function, from the first probe to the
+gap classes, read [Oracles by example](by-example.md).
+
 ## Laws and evidence
 
 | Term                   | Meaning                                                                                                                                                                                                                                                                                                                                                          |
