@@ -683,7 +683,20 @@ only at the end of a session:
 
 1. Start a few subagents, each told to load `oracles-review` and review the
    work on its own. Give each the oracle file, the production change, the
-   evidence, and the law's sources, but not your verdict.
+   evidence, and the law's sources, but not your verdict. Give each a
+   different primary lens from `oracles-review`, so that their findings
+   overlap less:
+   - **Enforcement** (its §1 and §3): does the oracle enforce its law? Name
+     the mutants that should fail it, and check each law's calibration.
+   - **The law** (its §1 and §4): is it the right law? Follow each authority
+     to its source, and check what downstream callers rely on.
+   - **The evidence** (its §2): did each production change carry the
+     evidence of step 7? Replay the oracle on the commit before each change
+     for RED, and on the change for GREEN.
+
+   A lens is where a reviewer starts. Each one still reports anything else
+   it finds.
+
 2. Do not act on what they report directly: load `oracles-evaluate-review`,
    and evaluate their findings with it first.
 3. Show the developer what it confirmed, and what it rejected and why.
