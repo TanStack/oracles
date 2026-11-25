@@ -667,8 +667,8 @@ and present. Present the same way whenever the developer wants to stop:
 - if they did not take it after the first fix, an offer of the
   walk-through (step 5), following one bug the oracle found
 - if the oracle's latest change has had no independent review yet, the
-  offer of one: subagents with `oracles-review`, as `oracles-design` step
-  10 says. With no developer present, run it and report the findings.
+  offer of one: subagents with `oracles-review`, each with its own lens,
+  as `oracles-design` step 10 says. With no developer present, run it and report the findings.
 - an invitation to ask questions
 - if they agreed to the feedback log, its path, and a request to send it
   to Kyle Mathews (GitHub KyleAMathews) when they are done

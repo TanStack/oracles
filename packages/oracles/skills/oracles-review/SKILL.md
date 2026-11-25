@@ -18,6 +18,27 @@ that it read them does not give you their definitions.
 The repository may add its own review rules on top of this skill, in its
 `AGENTS.md` or its own review skill. Apply both.
 
+## With one lens
+
+When several reviewers review the same work, each is given one of three
+lenses (`oracles-design` step 10), so that their findings overlap less. A
+lens says where you start:
+
+- **Enforcement** (§1 and §3): does the oracle enforce its law? Write wrong
+  implementations of the owned code by hand, the ones a plausible bug would
+  produce and the gap check would not, and run the oracle on each: it must
+  fail. Check each law's calibration.
+- **The law** (§1 and §4): is it the right law? Follow each authority to its
+  source, and read the source of the real callers, to see what they rely on.
+  A promise they rely on that no law holds is a finding.
+- **The evidence** (§2): did each production change carry the evidence of
+  `oracles-design` step 7? Replay the oracle on the parent of every commit
+  that changes production, and on the commit itself: a fix is RED on the
+  parent and GREEN on the commit.
+
+Work through your lens's sections first, then the rest of this skill. Report
+anything else you find too, and name your lens at the top of the report.
+
 ## 1. Rebuild one observation yourself
 
 - Follow the law's authority to its source. Read the neighboring promises
