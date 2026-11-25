@@ -564,8 +564,12 @@ is not Vite's default name. The baseline prints which config it used.
 - Pass `--only <id,id>` (using the `<id>` from a `gap` line or the report's
   `rerun: --only <id>`) to verify a targeted mutant fix quickly: it runs
   only those mutants and runs the baseline only for their owning oracle
-  files. An id that names no mutant of the run, or a selection that no
-  oracle file owns, refuses the run (exit 2). A `--only` run is partial, so
+  files. An entry may also be the mutant's key (the report's `Key:`, or
+  `key` in `results.json`, in shell quotes): an id is renumbered by any edit
+  that adds or removes a mutant before it, and a key changes only when its
+  function, operator, or statement does. An id or key that names no mutant
+  of the run, or more than one, or a selection that no oracle file owns,
+  refuses the run (exit 2). A `--only` run is partial, so
   run the full check without `--only` before calling gaps closed.
 - Read the exit code. **0:** the run completed; work from its report.
   **2:** refused. It prints `refused: <cause>` and one `fix: <directive>`.
