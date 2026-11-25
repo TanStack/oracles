@@ -434,7 +434,9 @@ function reachingIn(rows, targets) {
  * work bound that rejects the mutant), `dead-code` (no input distinguishes
  * it), `outside-annotation` (no
  * input of the annotations distinguishes it; `input` names the input class
- * outside them that does), `branch-never-taken` (an
+ * outside them that does), `suspected-invalid` (the generator's static
+ * evidence, `invalid`, says that no caller tells it from the original),
+ * `branch-never-taken` (an
  * `if` one of whose outcomes never occurred; `wanted` names the missing
  * one), `not-infected` (a comparison whose operators agreed on every
  * operand the owners reached; `operands` names them), and `not-observed`
@@ -507,6 +509,11 @@ export function judgeMutant(mutant, { owners, targets, units, baseline }) {
     // the input outside them that does (maintainer decision, 2026-11-11).
     result.class = `outside-annotation`
     result.input = mutant.outside
+  } else if (mutant.invalid) {
+    // The generator's static evidence says that no caller tells it from
+    // the original: a suspected invalid mutant, listed with that evidence
+    // for a person to confirm in a framework bug report.
+    result.class = `suspected-invalid`
   } else if (isUnmeasured(mutant)) result.class = `not-distinguished`
   else {
     const { infected, infectedBy } = infectionOf(mutant, targets, baseline)

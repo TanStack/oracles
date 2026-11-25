@@ -5356,6 +5356,20 @@ function model(plan) {
     // infected site that no observation shows.
     const isIf = site.operator === `if-true` || site.operator === `if-false`
     const comparison = site.operator === `binary-swap` && site.role === `swap`
+    // The generator's static evidence that no caller tells it from the
+    // original (schemata.mjs, `invalid`): a field of the module's object
+    // data, an unexported `const` of literals, that no code reads, because
+    // no function reads that object.
+    if (
+      site.operator === `field-drop` &&
+      site.data === `object` &&
+      !plan.functions.some((fn) =>
+        fn.body.some(
+          (stmt) => stmt.kind === `readData` && stmt.shape === `object`,
+        ),
+      )
+    )
+      return `suspected-invalid`
     // A mutant that changes a value only on some inputs, with no capture to
     // show which: a loop's condition, an undefined call value, a dropped
     // field, a skipped call, and a logical operator (the `&&` of the old
@@ -5407,6 +5421,7 @@ function model(plan) {
     `not-infected`,
     `not-observed`,
     `not-distinguished`,
+    `suspected-invalid`,
     `indeterminate`,
     `unreached`,
   ])

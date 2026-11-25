@@ -96,6 +96,15 @@
  *    mutant (maintainer decision, 2026-11-11: types never skip a mutant or
  *    mark it dead, they label its survivor; an argument typed \`any\` is
  *    an input the types allow, so the class claims no more);
+ *    `suspected-invalid` when the mutant carries the generator's static
+ *    evidence (`invalid`, schemata.mjs) that no caller tells it from the
+ *    original: its directive names that evidence and its line, says that
+ *    a framework bug report with it confirms it and that a caller which
+ *    tells the two apart refutes it, and summary.md lists every such gap
+ *    once more, after the gaps, by key, line, and evidence, as that
+ *    report's body (a downstream project's report, 2026-11-25: with the
+ *    real gaps closed, such survivors were a large share, each written up
+ *    by hand; proposed for approval);
  *    `branch-never-taken` when it is an `if`-operator mutant and an owner
  *    test reached its `if` with one outcome only; `not-infected` when it is
  *    a comparison whose two operators agree on every operand pair the
@@ -198,6 +207,9 @@
  *    unblocks it (G13), then, when an oracle file failed,
  *    `Provisional:` with the count of blocked mutants; summary.md leads with
  *    the same lines, before its gaps (the freeze's one loop, 2026-11-10).
+ *    The legend line for `suspected-invalid` says first that the
+ *    generator's static evidence claims no caller tells the mutant from
+ *    the original, so the framework should not have made it.
  *    The legend line for `crashed` says first that a crash is a gap, not a
  *    kill, and that its error is on the gap's Detail line (G3; the freeze,
  *    P3 and C1). The last stdout line is `oracle-gaps: done completed, <n>
@@ -288,6 +300,11 @@ import { readSummary } from './gap-report-model-oracle.mjs'
 import * as report from './report.mjs'
 
 const MUTANTS = 4
+// Two of the generator's evidence texts (schemata.mjs), one with code spans.
+const INVALID = [
+  `an unexported function that only direct calls reach, and each call discards its value`,
+  `an unexported \`const\` object read only through its named properties, and each read of this one treats \`null\` as \`undefined\` (\`== null\`, \`?.\`, \`??\`, a condition)`,
+]
 const AUTHORED = 2
 // Each test's effect under each mutant: the operator mutants first, then
 // the authored ones.
@@ -589,6 +606,9 @@ const records = fc.record({
         `if ( value . total > limit . maximum && value . total !== limit . exact ) out . push ( 'over the limit' ) ;`,
       ),
       probe: fc.constantFrom(false, false, false, true),
+      // The generator's static evidence that no caller tells the mutant
+      // from the original (schemata.mjs): its survivor is suspected-invalid.
+      invalid: fc.constantFrom(undefined, undefined, undefined, ...INVALID),
     }),
     { minLength: 1, maxLength: MUTANTS },
   ),
@@ -981,6 +1001,14 @@ function judgedOutcome(h, mi, owners) {
   if (m.outside)
     return sized(`outside-annotation`, {
       mention: [`line ${m.line + 1} with ${m.outside},`],
+    })
+  // The generator's static evidence says that no caller tells it from the
+  // original: a suspected invalid mutant, which the message and summary.md's
+  // section list with that evidence for a person to confirm.
+  if (m.invalid)
+    return sized(`suspected-invalid`, {
+      mention: [`line ${m.line + 1} (${m.invalid}),`],
+      invalid: m.invalid,
     })
   // An `if` mutant forces its condition: an if-true mutant changes a value
   // only where the condition was false, an if-false mutant only where it was
@@ -1418,6 +1446,8 @@ const directives = {
   indeterminate:
     /^(Make `[^`]+` deterministic: control its clock and its random seed, so its failures judge this code|Add an owner test that runs line \d+ and asserts on its result)\.$/,
   'dead-code': /^Remove the redundant code on line \d+\.$/,
+  'suspected-invalid':
+    /^Check the generator's evidence on line \d+ \(.+\), then list this mutant's key and that evidence in a framework bug report, as summary\.md's suspected invalid mutants section does\. A caller that tells the two apart refutes it: add the owner history that reaches that caller, assert on its result, and report the refuted evidence in that bug report\.$/,
   'outside-annotation':
     /^Add an owner history that reaches line \d+ with .+, which the annotation excludes, so that it changes an asserted result, and assert on the result\.$/,
   'random-only-kill':
@@ -1448,6 +1478,8 @@ const directives = {
 // counts as one site, so a shortcut whose cost is in one is owed an
 // observation of that cost, not a very tight bound (maintainer, 2026-11-12).
 const meanings = {
+  'suspected-invalid':
+    /^The generator's static evidence says that no caller tells this mutant from the original, so the framework should not have made it\. /,
   crashed:
     /^Production threw where no law judged it: a gap, not a kill\. Its error is on the gap's Detail line in summary\.md, and in its `detail` in results\.json\. /,
   'extra-work':
@@ -1526,6 +1558,26 @@ function messagesOf(summary) {
     if (key !== undefined) messages[key] = lines[i + 1].replace(/^  - /, ``)
   })
   return messages
+}
+
+// summary.md's suspected invalid mutants section: each entry's key, line,
+// and evidence, in order, read as `- <key span>, line <n>: <evidence>`.
+// Undefined when an entry is not of that form; empty with no section.
+function suspectedSection(summary) {
+  const lines = summary.split(`\n`)
+  const at = lines.indexOf(`## Suspected invalid mutants`)
+  if (at < 0) return []
+  const entries = []
+  for (const line of lines.slice(at + 1)) {
+    if (line.startsWith(`## `)) break
+    if (!line.startsWith(`- `)) continue
+    const span = readSpan(line.slice(2))
+    const rest =
+      span && line.slice(2 + span.length).match(/^, line (\S+): (.+)$/)
+    if (!rest) return undefined
+    entries.push({ key: span.content, line: rest[1], invalid: rest[2] })
+  }
+  return entries
 }
 
 // Each gap's `Owners` line, by its key: the files it lists, in order.
@@ -1955,6 +2007,7 @@ async function driver(h, observe) {
     ...(m.evidence ? { evidence: m.evidence } : {}),
     ...(m.outside ? { outside: m.outside } : {}),
     ...(m.probe ? { probeGuard: true } : {}),
+    ...(m.invalid ? { invalid: m.invalid } : {}),
   }))
   const fileIndex = (file) => fileIndexOf(h, file)
   const states = new Set()
@@ -2691,6 +2744,36 @@ function check(h, observations, expected) {
       `report`,
       { actual: text },
     )
+  // The suspected invalid mutants: summary.md lists each such gap once,
+  // after the gaps, by its key and line with the generator's evidence, so
+  // that the list is a framework bug report's body; with none, there is no
+  // section. The legend line says first what the evidence claims.
+  const suspected = gapsOfModel
+    .filter((o) => o.class === `suspected-invalid`)
+    .map((o) => ({ key: o.key, line: o.line, invalid: o.invalid }))
+  const listed = suspectedSection(text)
+  if (JSON.stringify(listed) !== JSON.stringify(suspected))
+    return violation(
+      `classified`,
+      `summary.md's suspected invalid mutants section lists ${JSON.stringify(listed)}, owed ${JSON.stringify(suspected)}`,
+      `report`,
+      { actual: listed, expected: suspected },
+    )
+  const suspectedLegend = stdout
+    .split(`\n`)
+    .find((line) => line.startsWith(`oracle-gaps: legend suspected-invalid: `))
+  if (
+    suspectedLegend !== undefined &&
+    !meanings[`suspected-invalid`].test(
+      suspectedLegend.slice(`oracle-gaps: legend suspected-invalid: `.length),
+    )
+  )
+    return violation(
+      `classified`,
+      `the suspected-invalid legend line does not say what the generator's evidence claims`,
+      `stdout`,
+      { actual: suspectedLegend },
+    )
   // Unowned warnings: one line per function, with its count, so that they
   // do not bury the gaps.
   const unownedFns = new Map()
@@ -3304,6 +3387,63 @@ const calibrations = [
       v.summary.gaps.shift()
     }),
   },
+  // The base's answer: the generator's evidence is ignored.
+  {
+    name: `a suspected invalid mutant is reported as not-distinguished`,
+    law: `classification`,
+    corrupt: corrupt((v) => {
+      const o = v.outcomes.find((x) => x.class === `suspected-invalid`)
+      if (!o) return false
+      o.class = `not-distinguished`
+    }),
+  },
+  {
+    name: `a suspected-invalid message leaves out the evidence`,
+    law: `messages`,
+    corrupt: (trace) => {
+      const index = trace.findIndex((o) => o.checkpoint === `classified`)
+      if (index < 0) return undefined
+      const value = structuredClone(trace[index].value)
+      const key = Object.keys(value.messages ?? {}).find((k) =>
+        value.messages[k].startsWith(`Check the generator's evidence`),
+      )
+      if (key === undefined) return undefined
+      value.messages[key] = value.messages[key].replace(
+        / \(.+\), then/,
+        ` (), then`,
+      )
+      return trace.map((o, i) => (i === index ? { ...o, value } : o))
+    },
+  },
+  {
+    name: `the suspected invalid mutants section leaves one out`,
+    law: `report`,
+    corrupt: (trace) => {
+      const index = trace.findIndex((o) => o.checkpoint === `classified`)
+      if (index < 0) return undefined
+      const text = trace[index].value.summaryText ?? ``
+      const lines = text.split(`\n`)
+      const at = lines.indexOf(`## Suspected invalid mutants`)
+      const entry = lines.findIndex(
+        (line, i) => i > at && line.startsWith(`- `),
+      )
+      if (at < 0 || entry < 0) return undefined
+      const summaryText = lines.filter((_, i) => i !== entry).join(`\n`)
+      return trace.map((o, i) =>
+        i === index ? { ...o, value: { ...o.value, summaryText } } : o,
+      )
+    },
+  },
+  {
+    name: `the suspected-invalid legend line leaves out what the evidence claims`,
+    law: `stdout`,
+    corrupt: corruptStdout((stdout) => {
+      const marker = `oracle-gaps: legend suspected-invalid: The generator's static evidence says that no caller tells this mutant from the original, so the framework should not have made it. `
+      return stdout.includes(marker)
+        ? stdout.replace(marker, `oracle-gaps: legend suspected-invalid: `)
+        : undefined
+    }),
+  },
 ]
 
 const required = [
@@ -3382,6 +3522,7 @@ const required = [
   `extra-work named past an unregistered rise`,
   `a rise exactly at the declared bound`,
   `authored agreement-only-kill`,
+  `suspected-invalid`,
 ]
 
 // One constructed history per outcome class: one mutant judged by one
@@ -3468,6 +3609,7 @@ const single = (
         outside: undefined,
         anchor: `out . push ( 'a' ) ;`,
         probe: false,
+        invalid: undefined,
         ...mutant,
       },
     ],
@@ -4220,12 +4362,55 @@ const constructed = [
       }
     },
   },
+  // The generator's evidence on a survivor of each unmeasured operator it
+  // marks, beside one with no evidence, and a killed mutant with evidence.
+  {
+    name: `suspected invalid mutants beside a plain survivor`,
+    enters: [`suspected-invalid`, `not-distinguished`, `killed`],
+    build: () => {
+      const base = single(`x`, []).build()
+      const [file] = base.files
+      const test = file.tests[0]
+      return {
+        ...base,
+        files: [
+          {
+            ...file,
+            tests: [
+              {
+                ...test,
+                under: test.under.map((effect, slot) =>
+                  slot === 3 ? { ...effect, kind: `verdict` } : effect,
+                ),
+              },
+            ],
+          },
+        ],
+        mutants: [
+          {
+            ...base.mutants[0],
+            operator: `return-undefined`,
+            invalid: INVALID[0],
+          },
+          {
+            ...base.mutants[0],
+            operator: `field-drop`,
+            line: 1,
+            anchor: `x \`\` y`,
+            invalid: INVALID[1],
+          },
+          { ...base.mutants[0], operator: `return-undefined`, line: 1 },
+          { ...base.mutants[0], operator: `field-drop`, invalid: INVALID[1] },
+        ],
+      }
+    },
+  },
 ]
 
 oracleProperty({
   id: `oracle-gaps.report-classify`,
   law: {
-    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, extra-work, dead-code, outside-annotation, branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only; a test whose property declares a work bound, whose work judges the mutant, and whose work (site evaluations, never time) passes the bound's ratio of its unmutated work reports a verdict under law work bound on its route, and a survivor whose work rose in such a test, with no changed observation, is extra-work, whose directive names that test, both counts, and the bound to declare that rejects it. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed.`,
+    statement: `From the records of the runs that judged it, each mutant, operator or authored, gets the outcome the law assigns: kills only by law verdicts on reproducible routes, agreement-only, random-only, and unregistered kills, timeouts, crashes, framework and setup errors as gaps, survivors split into not-judged, indeterminate, extra-work, dead-code, outside-annotation, suspected-invalid (the generator's static evidence that no caller tells the mutant apart, which the message and a summary.md section list for a framework bug report), branch-never-taken, not-infected, not-observed, and not-distinguished, and ordinary tests for information only; a test whose property declares a work bound, whose work judges the mutant, and whose work (site evaluations, never time) passes the bound's ratio of its unmutated work reports a verdict under law work bound on its route, and a survivor whose work rose in such a test, with no changed observation, is extra-work, whose directive names that test, both counts, and the bound to declare that rejects it. Every gap has one directive message from its kind's fixed set, with no exit; a not-observed directive also directs a history where the mutated code computes something different, and a not-infected message never prints two different operand values alike. A message or list that names tests or files (a gap's Owners line, the files that failed with no mutant active, and the nondeterministic tests included) names them in report order, by test file path compared by code unit and within a file in the baseline's record order, whatever order the runner joined the baseline's files in, a mutant run wrote a file's records in, or the owners were declared in; an operator mutant's owner files run in that order, and a kill names laws of the first that kills. The summary lists every gap and unowned mutant once with consistent counts; the stdout summary and the streamed gap lines cover every gap once, each on one line with its code or intent cut at 60 characters, and the results keep the full text. Each failing oracle file's baseline replay command, read by a POSIX shell, runs exactly its first failing test under Vitest 4's and Vitest 5's name joins, and the whole file when no test failed.`,
     authority: `The maintainer's gap-check decisions in design runs v11, v14, and v19 (2026-11-04 and 2026-11-05), as for oracle-gaps.report; the oracle rubric's outcome kinds (ORC-006); the frozen design's oracle over the checker's pure core (v19 P10, F4); the maintainer's few-seconds budget for an incremental test run (2026-11-05); the maintainer's findings F22 and the leftovers of #12 (2026-11-10); for the work law, the maintainer's decision of 2026-11-12 that a speed shortcut reported as not-observed is a gap CLI bug, and the design decided with it: a cost law, never an exit, judged by a deterministic count; for report order, the gap CLI's determinism requirement (oracle-gaps.report's determinism test and law 9, and the runner's "listed alike in every run") and the maintainer's decision of 2026-11-11 that the tests a report names depend on neither --contexts, worker timing, nor how owners are declared; Vitest's runner (@vitest/runner 4.1: -t is a regular expression matched against getTaskFullName, the suites' names and the test's joined by a space); POSIX.1-2017 Shell Command Language 2.2 and 2.6 for the replay's quoting.`,
     limits: `That real runs produce these records is oracle-gaps.report's, and so is a real replay. The driver encodes operands as capture-setup.mjs \`shown\` does, by a copy of it; long strings are told apart by a 32-bit digest; no symbol operand is generated, and two symbols of one description print alike. Only the runner's single-file path records a test's names, and only it feeds the baseline. Test names hold no backtick and no \` > \`, and names within a file are distinct; the replay's file argument is judged as text, not as Vitest's substring filter over every file. Authored intents hold no word that the exit law forbids, and an author is not shortened. Report order within a file is the baseline's record order: that a file whose tests run concurrently writes its records in one order is not judged, and a failing test is ordered within its file as the reporter lists it, which a run cut off by a hang takes from the records. The "Changed observations in" list is the changed tests' first three, and only its first is compared. A test that only a mutant run records is not generated. A file that does not load keeps its records here, which the runner drops, and the driver leaves it out of every target, as the runner does; a failing law keeps its records and its reach, as the runner keeps them. The refusal text and the summary's left-out list are not judged, only the list of failing files they print. A failing law is generated only as a whole test of a file whose baseline is test: a describe's failing hook, a failing law's leftover state, and how the runner selects the tests of a file that has failing laws are oracle-gaps.report's. Work arrives as counts: that the capture counts site evaluations, and which work it does not count, is oracle-gaps.report's; a test that reaches a site but did no work is generated, which no real run records; an authored mutant's copy counts no work, so the work law does not judge it.`,
   },

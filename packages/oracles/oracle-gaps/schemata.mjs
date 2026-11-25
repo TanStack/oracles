@@ -36,6 +36,10 @@
 // - `optional-chain`: `a?.b` → `a.b` and `a?.[k]` → `a[k]`, which throw where
 //   `a` is nullish (an optional call `f?.()` is no site).
 //
+// A return-undefined or field-drop site may carry `invalid`, the generator's
+// static evidence that no caller tells its mutant from the original (see
+// `INVALID`), which the report lists as a suspected invalid mutant.
+//
 // No site lies in a derived constructor's super region (see `superGuarded`).
 // Types never skip a site or mark it dead (maintainer decision, 2026-11-11).
 // A site that no input of its parameters' annotations distinguishes carries
@@ -74,6 +78,20 @@ const ordering = new Set([`<`, `<=`, `>`, `>=`])
 // Evidence a mutant may carry for the report (never a reason to skip it).
 const DEAD_CODE = `dead code`
 const BOUNDARY_HINT = `boundary: -0`
+// The generator's static evidence that no caller can tell a mutant from the
+// original (`invalid`), by syntax and the binder alone. The report lists such
+// a survivor as a suspected invalid mutant, with this text, for a person to
+// confirm; it never changes whether a site is emitted (see `invalidReturn`
+// and `invalidField`).
+const INVALID = {
+  discarded: `an unexported function that only direct calls reach, and each call discards its value`,
+  falsy: `an unexported function that only direct calls reach, each call reads its value as a condition at most, and the returned value is a falsy literal`,
+  nullReads: `an unexported \`const\` object read only through its named properties, and each read of this one treats \`null\` as \`undefined\` (\`== null\`, \`?.\`, \`??\`, a condition)`,
+  unread: `an unexported \`const\` object read only through its named properties, and no code reads this one`,
+}
+// The properties every object literal inherits: a read of a dropped one
+// finds the inherited value.
+const inherited = new Set(Object.getOwnPropertyNames(Object.prototype))
 
 // A mutant's anchor is the innermost statement or declaration that holds its
 // site (parameters, class fields, enum members, decorators, heritage clauses,
@@ -210,7 +228,15 @@ export function instrument(ts, path, text, source, offset = 0) {
   // swap and the condition for an `if`, as the earlier runner reported them.
   // `evidence` is a hint for the report, and never changes whether a site is
   // emitted: see `evidenceOf`, and neither does `outside`.
-  const add = (at, operator, original, replacement, evidence, outside) => {
+  const add = (
+    at,
+    operator,
+    original,
+    replacement,
+    evidence,
+    outside,
+    invalid,
+  ) => {
     if (mentionsSuper && superGuarded(at)) return undefined
     const probeGuard = guarded
     const local = mutants.length + 1
@@ -230,6 +256,7 @@ export function instrument(ts, path, text, source, offset = 0) {
       ...(probeGuard ? { probeGuard: true } : {}),
       ...(evidence ? { evidence } : {}),
       ...(outside ? { outside } : {}),
+      ...(invalid ? { invalid } : {}),
     })
     return id
   }
@@ -1035,6 +1062,295 @@ export function instrument(ts, path, text, source, offset = 0) {
         ? swapOutside(node)
         : undefined
 
+  // The generator's evidence that no caller tells a mutant from the
+  // original (`INVALID`). Each rule reads one module: a file with an
+  // `import` or an `export` (so strict, with no `arguments.callee` and no
+  // `caller` to reach a function by), and with static scopes. A name's
+  // occurrences are every identifier of its text in the file: one that is
+  // not a declaration of the name's symbol and does not resolve to it (a
+  // shorthand property, an export list, a property name, a shadowing
+  // binding) makes the rule decline, since it may reach the value.
+  const isModule = ts.isExternalModule(file)
+  let byName
+  const occurrences = (name) => {
+    if (byName === undefined) {
+      byName = new Map()
+      const index = (node) => {
+        if (ts.isIdentifier(node)) {
+          if (!byName.has(node.text)) byName.set(node.text, [])
+          byName.get(node.text).push(node)
+        }
+        ts.forEachChild(node, index)
+      }
+      index(file)
+    }
+    return byName.get(name) ?? []
+  }
+  // The other occurrences of a declared name, when each resolves to its
+  // symbol, and otherwise undefined. A property name of the same text makes
+  // it undefined before any lookup: resolving one would read a type.
+  const usesOf = (name) => {
+    const symbol = symbolOf(name)
+    if (symbol === undefined) return undefined
+    const uses = occurrences(name.text).filter(
+      (id) => !symbol.declarations.some((d) => d.name === id),
+    )
+    return uses.every(
+      (id) =>
+        !(ts.isPropertyAccessExpression(id.parent) && id.parent.name === id) &&
+        symbolOf(id) === symbol,
+    )
+      ? uses
+      : undefined
+  }
+  const unexported = (node) =>
+    !node.modifiers?.some(
+      (m) =>
+        m.kind === ts.SyntaxKind.ExportKeyword ||
+        m.kind === ts.SyntaxKind.DefaultKeyword ||
+        m.kind === ts.SyntaxKind.DeclareKeyword,
+    )
+  const sync = (fn) =>
+    !fn.asteriskToken &&
+    !fn.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword)
+  // The `const` statement that declares a name, unexported, when the
+  // declaration is one.
+  const unexportedConst = (declaration) =>
+    ts.isVariableDeclaration(declaration) &&
+    ts.isIdentifier(declaration.name) &&
+    (declaration.parent.flags & ts.NodeFlags.Const) !== 0 &&
+    ts.isVariableStatement(declaration.parent.parent) &&
+    unexported(declaration.parent.parent)
+  // What an expression's value is used for: a statement or `void` discards
+  // it; an `if`, a loop's test, a ternary's test, `!`, and an `&&` or `||`
+  // operand whose own value is one of these read it as a condition (its
+  // truth alone); anything else reads the value.
+  const useOf = (expression) => {
+    let n = expression
+    while (ts.isParenthesizedExpression(n.parent)) n = n.parent
+    const p = n.parent
+    if (ts.isExpressionStatement(p) || ts.isVoidExpression(p)) return `discard`
+    if (
+      ((ts.isIfStatement(p) || ts.isWhileStatement(p) || ts.isDoStatement(p)) &&
+        p.expression === n) ||
+      (ts.isForStatement(p) && p.condition === n) ||
+      (ts.isConditionalExpression(p) && p.condition === n) ||
+      (ts.isPrefixUnaryExpression(p) &&
+        p.operator === ts.SyntaxKind.ExclamationToken)
+    )
+      return `condition`
+    if (
+      ts.isBinaryExpression(p) &&
+      (p.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+        p.operatorToken.kind === ts.SyntaxKind.BarBarToken)
+    )
+      return useOf(p) === `value` ? `value` : `condition`
+    return `value`
+  }
+  const falsyLiteral = (expression) => {
+    const e = bare(expression)
+    return (
+      e.kind === ts.SyntaxKind.FalseKeyword ||
+      e.kind === ts.SyntaxKind.NullKeyword ||
+      (ts.isNumericLiteral(e) && Number(e.text) === 0) ||
+      (ts.isBigIntLiteral(e) && Number(e.text.slice(0, -1)) === 0) ||
+      (ts.isStringLiteralLike(e) && e.text === ``)
+    )
+  }
+  // A returned value made `undefined`, in an unexported, synchronous,
+  // non-generator function (declared, a `const` arrow or anonymous function
+  // expression, or a private method) that only direct calls reach. When every call
+  // discards the value, no caller sees it; when every call reads it as a
+  // condition at most and it is a falsy literal, `undefined` is as falsy.
+  // Every other occurrence of a private method's name in its class.
+  const privateUses = (method) => {
+    const found = []
+    const visit = (node) => {
+      if (
+        ts.isPrivateIdentifier(node) &&
+        node !== method.name &&
+        node.text === method.name.text
+      )
+        found.push(node)
+      ts.forEachChild(node, visit)
+    }
+    visit(method.parent)
+    return found
+  }
+  const invalidReturn = (statement) => {
+    if (!isModule || !staticScopes()) return undefined
+    let fn = statement.parent
+    while (fn && !ts.isFunctionLike(fn)) fn = fn.parent
+    if (!fn?.body || !sync(fn) || !unexported(fn)) return undefined
+    let name
+    if (ts.isFunctionDeclaration(fn)) {
+      name = fn.name
+      if (
+        name &&
+        !symbolOf(name)?.declarations?.every(ts.isFunctionDeclaration)
+      )
+        return undefined
+    } else if (
+      (ts.isArrowFunction(fn) ||
+        (ts.isFunctionExpression(fn) && fn.name === undefined)) &&
+      unexportedConst(fn.parent) &&
+      fn.parent.initializer === fn
+    )
+      name = fn.parent.name
+    let uses
+    if (
+      ts.isMethodDeclaration(fn) &&
+      ts.isPrivateIdentifier(fn.name) &&
+      ts.isClassLike(fn.parent)
+    )
+      // A private method: only its class's code names it, through
+      // `<object>.#name`, which must be the callee of each call.
+      uses = privateUses(fn).map((id) =>
+        ts.isPropertyAccessExpression(id.parent) &&
+        id.parent.name === id &&
+        ts.isCallExpression(id.parent.parent) &&
+        id.parent.parent.expression === id.parent
+          ? useOf(id.parent.parent)
+          : undefined,
+      )
+    else if (name === undefined) return undefined
+    else
+      uses = usesOf(name)?.map((id) =>
+        ts.isCallExpression(id.parent) && id.parent.expression === id
+          ? useOf(id.parent)
+          : undefined,
+      )
+    if (uses === undefined || uses.includes(undefined)) return undefined
+    if (uses.every((use) => use === `discard`)) return INVALID.discarded
+    if (!uses.includes(`value`) && falsyLiteral(statement.expression))
+      return INVALID.falsy
+    return undefined
+  }
+  // Whether a property read is written, deleted, called, or a pattern's
+  // target: anything but a read of its value.
+  const notRead = (access) => {
+    let n = access
+    while (ts.isParenthesizedExpression(n.parent)) n = n.parent
+    const p = n.parent
+    return (
+      (ts.isBinaryExpression(p) &&
+        p.left === n &&
+        p.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+        p.operatorToken.kind <= ts.SyntaxKind.LastAssignment) ||
+      ((ts.isPrefixUnaryExpression(p) || ts.isPostfixUnaryExpression(p)) &&
+        (p.operator === ts.SyntaxKind.PlusPlusToken ||
+          p.operator === ts.SyntaxKind.MinusMinusToken)) ||
+      ts.isDeleteExpression(p) ||
+      ((ts.isCallExpression(p) || ts.isNewExpression(p)) &&
+        p.expression === n) ||
+      (ts.isTaggedTemplateExpression(p) && p.tag === n) ||
+      ((ts.isForOfStatement(p) || ts.isForInStatement(p)) &&
+        p.initializer === n) ||
+      ((ts.isArrayLiteralExpression(p) ||
+        ts.isSpreadElement(p) ||
+        ts.isShorthandPropertyAssignment(p) ||
+        ts.isPropertyAssignment(p) ||
+        ts.isSpreadAssignment(p)) &&
+        inPattern(ts.isArrayLiteralExpression(p) ? p : p.parent))
+    )
+  }
+  // A read that `null` and `undefined` give one result: `== null`, `!=
+  // undefined` (the global), the left of `??`, the object of `?.`, and a
+  // condition or a discarded value.
+  const nullSafe = (access) => {
+    let n = access
+    while (ts.isParenthesizedExpression(n.parent)) n = n.parent
+    const p = n.parent
+    const nullish = (e) =>
+      bare(e).kind === ts.SyntaxKind.NullKeyword ||
+      (ts.isIdentifier(bare(e)) &&
+        bare(e).text === `undefined` &&
+        global(bare(e)))
+    if (
+      ts.isBinaryExpression(p) &&
+      (p.operatorToken.kind === ts.SyntaxKind.EqualsEqualsToken ||
+        p.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsToken)
+    )
+      return nullish(p.left === n ? p.right : p.left)
+    if (
+      ts.isBinaryExpression(p) &&
+      p.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
+    )
+      return p.left === n
+    if (
+      (ts.isPropertyAccessExpression(p) || ts.isElementAccessExpression(p)) &&
+      p.expression === n
+    )
+      return p.questionDotToken !== undefined
+    return useOf(n) !== `value`
+  }
+  // A property left out of an object literal bound to an unexported
+  // `const`, whose members are plain properties with distinct, written
+  // names, and whose every other occurrence reads one named property. Its
+  // value is not evaluated when it is left out, so it is a literal or a
+  // local read, which calls nothing. With no read of the property, no caller
+  // sees it; with a `null` value and only reads that treat `null` as
+  // `undefined`, none does either. An inherited name is read through the
+  // prototype once dropped, so it has neither.
+  const invalidField = (property) => {
+    if (!isModule || !staticScopes()) return undefined
+    const literal = property.parent
+    const declaration = literal.parent
+    if (
+      !unexportedConst(declaration) ||
+      declaration.initializer !== literal ||
+      symbolOf(declaration.name)?.declarations?.length !== 1
+    )
+      return undefined
+    const names = literal.properties.map((member) =>
+      (ts.isPropertyAssignment(member) &&
+        (ts.isIdentifier(member.name) || ts.isStringLiteral(member.name))) ||
+      (ts.isShorthandPropertyAssignment(member) &&
+        member.objectAssignmentInitializer === undefined)
+        ? member.name.text
+        : undefined,
+    )
+    if (
+      names.includes(undefined) ||
+      names.includes(`__proto__`) ||
+      new Set(names).size !== names.length
+    )
+      return undefined
+    const name = property.name.text
+    if (inherited.has(name)) return undefined
+    const uses = usesOf(declaration.name)
+    if (
+      uses === undefined ||
+      !uses.every(
+        (id) =>
+          ts.isPropertyAccessExpression(id.parent) &&
+          id.parent.expression === id &&
+          !notRead(id.parent),
+      )
+    )
+      return undefined
+    const reads = uses
+      .map((id) => id.parent)
+      .filter((access) => access.name.text === name)
+    const value = ts.isPropertyAssignment(property)
+      ? bare(property.initializer)
+      : undefined
+    if (reads.length === 0)
+      return value !== undefined &&
+        (value.kind === ts.SyntaxKind.NullKeyword ||
+          value.kind === ts.SyntaxKind.TrueKeyword ||
+          value.kind === ts.SyntaxKind.FalseKeyword ||
+          ts.isNumericLiteral(value) ||
+          ts.isBigIntLiteral(value) ||
+          ts.isStringLiteralLike(value) ||
+          (ts.isIdentifier(value) && localBinding(value)))
+        ? INVALID.unread
+        : undefined
+    return value?.kind === ts.SyntaxKind.NullKeyword && reads.every(nullSafe)
+      ? INVALID.nullReads
+      : undefined
+  }
+
   // Emit `node` with its children's instrumented text spliced in, then wrap
   // the node itself if it is a mutation site. Sites are numbered before their
   // children, matching the order of the earlier per-file runner.
@@ -1094,7 +1410,15 @@ export function instrument(ts, path, text, source, offset = 0) {
       !inPattern(node.parent) &&
       node.name.getText(file).replace(/^['"`]|['"`]$/g, ``) !== `__proto__`
     )
-      ids.drop = add(node, `field-drop`, node.getText(file), ``)
+      ids.drop = add(
+        node,
+        `field-drop`,
+        node.getText(file),
+        ``,
+        undefined,
+        undefined,
+        invalidField(node),
+      )
     if (
       (node.kind === ts.SyntaxKind.TrueKeyword ||
         node.kind === ts.SyntaxKind.FalseKeyword) &&
@@ -1179,6 +1503,9 @@ export function instrument(ts, path, text, source, offset = 0) {
         `return-undefined`,
         node.expression.getText(file),
         `undefined`,
+        undefined,
+        undefined,
+        invalidReturn(node),
       )
     if (
       (ts.isPropertyAccessExpression(node) ||
