@@ -405,6 +405,37 @@ the original form when normalization would erase the disputed distinction.
 A challenge that shaped the design is a regression case afterwards, not a
 held-out test of that design.
 
+### Measure how often production does something
+
+To ask whether a second pass, a retry, or a slow path is ever needed, count
+it from production with a counted probe. It is a state probe in the same form,
+named in the generated source's `counted`, and it judges nothing: it needs
+no `predict`, no law, and no calibration. Each of a history's calls with a
+truthy condition counts once.
+
+```ts
+// production, inside the pass loop
+probing && globalThis.__oracleProbe?.('my-lib#extra-pass', pass > 0)
+probing && globalThis.__oracleProbe?.('my-lib#idle-pass', removed === 0)
+
+// the oracle
+histories: { arbitrary, runs: 100, fixedSeeds: [1], counted: ['my-lib#extra-pass', 'my-lib#idle-pass'] }
+```
+
+Each campaign unit that passes prints one line after its reach line:
+
+```
+my-lib.dedupe random seed: generated counts {"my-lib#extra-pass":{"min":0,"median":0,"max":3,"total":41,"histories":100},"my-lib#idle-pass":{"min":0,"median":0,"max":1,"total":37,"histories":100}}
+```
+
+`histories` is how many histories the unit judged; `min`, `median` (the
+lower middle), and `max` are over them, and null when it judged none. A
+history that never called the probe counts 0. To count the histories in
+which something happened at all, call a probe once per history, at the end.
+A count is evidence for a design question, such as removing the loop, which
+is the developer's decision; it is not a law. To bound a count, observe it in
+the driver and state the law that bounds it.
+
 ### Vary machinery and premises separately
 
 When comparing implementation candidates, hold the law, the legal histories,

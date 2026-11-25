@@ -374,6 +374,9 @@ They do not reach them.
   few seconds in a normal run. Lower `runs` before you remove a dimension.
 - **Read the reach counts.** If a measured state is rare, add a constructed
   history or change the generator's weights. Do not only add runs.
+- **To measure how often production does something** (passes of a loop,
+  retries), name a probe in `counted` instead of hand-instrumenting it:
+  [guide § Measure how often production does something](../../docs/guide.md#measure-how-often-production-does-something).
 - **Run longer sweeps with the run multiplier** (`<PREFIX>_RUNS_MULTIPLIER`),
   locally or on a schedule, not by raising `runs` in the file.
 - **Lowering `runs`, removing a fixed seed, or removing a constructed history
