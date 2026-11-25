@@ -52,7 +52,8 @@ Keep test bodies and assertions out of the design brief.
      [law discovery](law-discovery.md)).
    - **Dead code:** no legal history can observe the decision. Remove the code.
    - **An allowed alternative:** the observations differ, and the adopted law
-     already allows both, as an allowed set with its clause. The mutant is a
+     already allows both, as an allowed set with its clause and a freedom
+     that the law's limits state. The mutant is a
      valid implementation, so do not strengthen the law or change production
      to kill it. Report it with the mutant's key, the clause, and the history,
      separately from the kills. Until the gap check recognizes allowed sets,

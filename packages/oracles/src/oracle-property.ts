@@ -16,6 +16,8 @@
  * The parts keep their jobs separate (oracle rubric, ORC-003):
  *
  * - `law` states the promise, its authority, and its limits. A failure names it.
+ *   An allowed set that the check states with `notAllowed` (below) names a
+ *   freedom, and the limits must state that freedom in its words.
  * - `histories` is either an enumerated list, which runs in full (bounded
  *   exhaustiveness, glossary), the same list with declared states,
  *   `{ enumerated, states, measured }`, or a generated source: a fast-check
@@ -386,6 +388,66 @@ function sameData(actual: unknown, expected: unknown): boolean {
     return isDeepStrictEqual(actual, expected)
   }
 }
+
+/**
+ * An allowed set (docs/model-styles.md, section 6): where the contract
+ * leaves a choice open, the check accepts any member. `notAllowed(checkpoint,
+ * law, actual, allowed, freedom)` is a violation of `law` at `checkpoint`
+ * when `actual` is the same data as no member of `allowed` (as `differs`
+ * compares), with `{ actual, expected: allowed }` attached; otherwise
+ * undefined, so it chains as `differs` does. `freedom` names the choice that
+ * lets the set hold more than one member, in the words of the law's
+ * `limits`. In a property's check, a freedom that is empty, or that the
+ * law's `limits` does not contain verbatim, throws an `OracleFreedomError`
+ * that names the property, the checkpoint, and the freedom. A test of that
+ * property fails when its check reaches the call and lets the error escape;
+ * a history whose check never makes the call does not test that freedom,
+ * and the file's other properties are not affected. Only the freedom's text
+ * is checked: whether the members of `allowed` are what the freedom
+ * describes is the model's to get right. Outside a property's check, in its
+ * model, `predict`, `reached`, or driver, no law is read.
+ */
+export function notAllowed(
+  checkpoint: string,
+  law: string,
+  actual: unknown,
+  allowed: ReadonlyArray<unknown>,
+  freedom: string,
+): Verdict | undefined {
+  if (
+    judging !== undefined &&
+    !(freedom.trim() && judging.limits.includes(freedom))
+  )
+    throw new OracleFreedomError(
+      `${judging.id}: the allowed set at checkpoint ${JSON.stringify(checkpoint)} rests on the freedom ${JSON.stringify(freedom)}, which the law's limits do not state. State the freedom in \`law.limits\` in these words, for the maintainer to approve, or narrow the allowed set to the freedoms the limits state.`,
+    )
+  return allowed.some((member) => sameData(actual, member))
+    ? undefined
+    : violation(
+        checkpoint,
+        `the observed value is none of the ${allowed.length} allowed values (freedom: ${freedom})`,
+        law,
+        { actual, expected: allowed },
+      )
+}
+
+/** An allowed set that rests on a freedom the law's limits do not state. */
+export class OracleFreedomError extends Error {
+  override name = `OracleFreedomError`
+}
+
+// Whether a thrown value is an `OracleFreedomError`, without throwing: a
+// revoked proxy's prototype cannot be read.
+const isFreedomError = (error: unknown): boolean => {
+  try {
+    return error instanceof OracleFreedomError
+  } catch {
+    return false
+  }
+}
+
+// The property whose check is running, so `notAllowed` reads its limits.
+let judging: { id: string; limits: string } | undefined
 
 /**
  * History checking against allowed cuts.
@@ -1774,11 +1836,19 @@ function judge<THistory, TExpected, TPlan>(
     throw modelError
   }
   try {
-    verdict = options.check(plan, observations, expected)
+    // Only the check reads the law's limits (`notAllowed`).
+    const outer = judging
+    judging = { id: options.id, limits: options.law.limits }
+    try {
+      verdict = options.check(plan, observations, expected)
+    } finally {
+      judging = outer
+    }
     predicted = options.predict?.(plan) ?? {}
   } catch (error) {
-    // A partial trace the model or check cannot read is still a setup error.
-    throw driverError ? driverError.error : error
+    // A partial trace the model or check cannot read is still a setup
+    // error, unlike an allowed set that the law does not state.
+    throw driverError && !isFreedomError(error) ? driverError.error : error
   }
   if (driverError) {
     // Only a violation at a checkpoint the driver recorded before it threw

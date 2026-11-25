@@ -238,7 +238,9 @@ can state it:
    Each relation needs a calibration that shows it can fail.
 6. **The contract allows several outcomes.** Predict the **allowed set**, and
    cite the contract clause for each choice. Never pick one outcome that the
-   contract leaves open.
+   contract leaves open. Each choice the set leaves open is a freedom that
+   the law's `limits` state in words, and the set is never wider than them.
+   A freedom the limits do not state yet is a law change: propose it.
 
 Mixing styles is fine. [Model styles](../../docs/model-styles.md) shows a
 small example of each style.
@@ -409,7 +411,13 @@ Techniques: [guide § Histories](../../docs/guide.md#histories).
   - It releases what it created.
 - **The check** compares observations with the model at each checkpoint. It
   is the only place that reports a violation. For exact values, use
-  `differs(...) ?? pass`. For an allowed set, accept any member.
+  `differs(...) ?? pass`. For an allowed set, use
+  `notAllowed(checkpoint, law, actual, allowed, freedom) ?? pass`, which
+  accepts any member. Its `freedom` is the limits' own words for the choice,
+  and a check that reaches it with a freedom the limits do not contain
+  verbatim fails. Only the text is checked, so keep the set's members within
+  the stated limits, and give each freedom a calibration whose wrong answer
+  lies just outside it.
 - **Calibration.** Give at least one `calibration`: a wrong answer, as a
   corrupted trace or a mutant driver, and the law that must reject it
   (ORC-006). Bind each one to the history it corrupts, so that it runs only
@@ -582,11 +590,13 @@ comes with one instruction. Do what it says, within the rules below.
 - **The only exclusions are probe-only code and the `super()` region of a
   derived constructor.**
 - **A survivor that the adopted law allows is an allowed alternative.** If a
-  mutant only moves production to another member of an allowed set, report it
-  with its key, the clause, and the history, apart from the kills. Do not
-  strengthen the law or change production to kill it. It stays open until the
-  framework recognizes allowed sets. The developer decides whether that blocks the
-  work.
+  mutant only moves production to another member of an allowed set, and the
+  freedom it uses is one the law's limits state, report it with its key, the
+  clause, and the history, apart from the kills. A member that no stated
+  freedom allows is no alternative: the set is wider than the law, so narrow
+  it, or propose the freedom as a law change. Do not strengthen the law or
+  change production to kill it. It stays open until the framework recognizes
+  allowed sets. The developer decides whether that blocks the work.
 - **A stated limit does not close a gap.** If a survivor differs from the
   original only on inputs that the law's limits leave out (a null-prototype
   object, say), the gap is open. Report it with that reason, and recommend
