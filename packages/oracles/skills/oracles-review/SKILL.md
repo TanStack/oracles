@@ -97,7 +97,8 @@ search is your main job.
 - **A dismissed survivor.** A surviving mutant is called equivalent,
   unobservable, or out of scope, or is called invalid and treated as closed.
   That is an exit, and a finding. The survivor shows a missing history,
-  observation, or law, dead code, or a framework bug. Reporting a suspected
+  observation, or law, or a framework bug. It shows dead code only with
+  the evidence of `oracles-design` step 8's dead-code rule. Reporting a suspected
   invalid mutant as a framework bug, with its key and evidence, is correct and
   is not an exit.
 - **An invariant guard without a witness.** A throw for a contradictory

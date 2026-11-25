@@ -200,7 +200,16 @@
  *    the same lines, before its gaps (the freeze's one loop, 2026-11-10).
  *    The legend line for `crashed` says first that a crash is a gap, not a
  *    kill, and that its error is on the gap's Detail line (G3; the freeze,
- *    P3 and C1). The last stdout line is `oracle-gaps: done completed, <n>
+ *    P3 and C1). The legend line for `dead-code` says first that no input
+ *    tells its mutant from the original, so this class alone shows dead
+ *    code, and that a survivor of another class shows only that no law
+ *    depends on its code yet. summary.md's how-to calls code dead in its
+ *    last step before the rerun, after the steps that state, authorize, and
+ *    enforce the missing law, and no other step names dead code. That step
+ *    names the evidence: a `dead-code` gap, or a law that decides the value
+ *    exactly owning every public entry point that reaches the code, with the
+ *    gap runs before and after the removal keeping every kill by mutant key
+ *    (a downstream project's report, 2026-11-25). The last stdout line is `oracle-gaps: done completed, <n>
  *    gaps[ (provisional)], report <path>` (G6). A replay
  *    line is a command, which the exit law does not read.
  * 9. Before any mutant, each test file's baseline is printed, an ordinary
@@ -1452,6 +1461,35 @@ const meanings = {
     /^Production threw where no law judged it: a gap, not a kill\. Its error is on the gap's Detail line in summary\.md, and in its `detail` in results\.json\. /,
   'extra-work':
     /^A call to a builtin counts as one site evaluation, whatever it costs \(`Object\.defineProperty`\): where a shortcut's cost is in one, make that cost an observation of the driver, such as a count of those calls, and let a law judge it, in place of a very tight bound\. /,
+  // `dead-code` is the one class that shows dead code; every other survivor
+  // shows only that no law depends on its code yet (a downstream project's
+  // report, 2026-11-25).
+  'dead-code':
+    /^No input tells the mutant from the original, whatever code calls it: this class alone shows dead code\. A survivor of any other class shows only that no law depends on its code yet\. /,
+}
+// The full report's how-to (summary.md, `## How to use this report`): its
+// steps end with the step that calls code dead, after the steps that state,
+// authorize, and enforce the missing law, and before the rerun, and only
+// that step names dead code. It names its evidence: a `dead-code` gap, or,
+// for any other survivor, a law that decides the value exactly on every
+// public entry point that reaches the code, and the kills kept by key
+// across the removal (a downstream project's report, 2026-11-25).
+const howToSteps = [
+  /^1\. State the law it reveals: /,
+  /^2\. Name the law's authority: /,
+  /^3\. Re-plan the oracle around that law: its grammar or domain, model, observations, or comparison\. Do not patch the line\.$/,
+  /^4\. Call code dead last, and only with evidence\. A `dead-code` gap is that evidence: remove the code\. For any other survivor, first rule out a missing history, observation, or law; its code is dead only when a law that decides the value exactly owns every public entry point that reaches the code, and the gap runs before and after its removal keep every kill, compared by mutant key \(`oracles-design` step 7\)\.$/,
+  /^5\. Run the check again\.$/,
+]
+// The how-to's numbered steps, as summary.md prints them.
+const howToOf = (text) => {
+  const at = text.indexOf(`## How to use this report`)
+  const end = text.indexOf(`## Gaps`)
+  if (at < 0 || end < at) return []
+  return text
+    .slice(at, end)
+    .split(`\n`)
+    .filter((line) => /^\d+\. /.test(line))
 }
 // A count of things, as the report words it.
 const counted = (n, thing) => `${n} ${thing}${n === 1 ? `` : `s`}`
@@ -2629,6 +2667,9 @@ function check(h, observations, expected) {
   const workLegend = legend.find((line) =>
     line.startsWith(`oracle-gaps: legend extra-work: `),
   )
+  const deadLegend = legend.find((line) =>
+    line.startsWith(`oracle-gaps: legend dead-code: `),
+  )
   const leadProblem =
     stdoutLines.slice(0, baselineGot.length).join(`\n`) !==
     baselineGot.join(`\n`)
@@ -2673,7 +2714,14 @@ function check(h, observations, expected) {
                         ),
                       )
                     ? `the extra-work legend line does not say that a builtin counts as one site, and what is owed for its cost`
-                    : undefined
+                    : deadLegend !== undefined &&
+                        !meanings[`dead-code`].test(
+                          deadLegend.slice(
+                            `oracle-gaps: legend dead-code: `.length,
+                          ),
+                        )
+                      ? `the dead-code legend line does not say that this class alone shows dead code, and that another survivor shows only that no law depends on its code yet`
+                      : undefined
   if (leadProblem)
     return violation(`classified`, leadProblem, `stdout`, { actual: stdout })
   // The full report leads with the same baseline, before its gaps.
@@ -2690,6 +2738,19 @@ function check(h, observations, expected) {
       `summary.md does not lead with the baseline section, and its provisional status, before its gaps`,
       `report`,
       { actual: text },
+    )
+  // The how-to calls code dead last, and only with its evidence.
+  const howTo = howToOf(text)
+  if (
+    howTo.length !== howToSteps.length ||
+    howTo.some((line, i) => !howToSteps[i].test(line)) ||
+    howTo.filter((line) => /dead/i.test(line)).length !== 1
+  )
+    return violation(
+      `classified`,
+      `summary.md's how-to does not call code dead last, after the missing law's steps and only with its evidence`,
+      `report`,
+      { actual: howTo },
     )
   // Unowned warnings: one line per function, with its count, so that they
   // do not bury the gaps.
@@ -3303,6 +3364,49 @@ const calibrations = [
       if (v.summary.gaps.length === 0) return false
       v.summary.gaps.shift()
     }),
+  },
+  {
+    // The menu this law replaces: dead code beside the missing law, with
+    // no evidence named.
+    name: `the how-to offers dead code beside the missing law`,
+    law: `report`,
+    corrupt: corrupt((v) => {
+      const text = v.summaryText ?? ``
+      const step = howToOf(text).find((line) => line.startsWith(`3. `))
+      if (step === undefined) return false
+      v.summaryText = text.replace(
+        step,
+        `3. Re-plan the oracle around that law: its grammar or domain, model, observations, or comparison. Do not patch the line, except dead code, whose gap says to remove the code.`,
+      )
+    }),
+  },
+  {
+    name: `the how-to calls code dead with no public entry point named`,
+    law: `report`,
+    corrupt: corrupt((v) => {
+      const text = v.summaryText ?? ``
+      const step = howToOf(text).find((line) => line.startsWith(`4. `))
+      if (step === undefined) return false
+      v.summaryText = text.replace(
+        step,
+        step.replace(
+          `a law that decides the value exactly owns every public entry point that reaches the code, and `,
+          ``,
+        ),
+      )
+    }),
+  },
+  {
+    name: `the dead-code legend line calls every survivor dead code`,
+    law: `stdout`,
+    corrupt: corruptStdout((stdout) =>
+      stdout.includes(`oracle-gaps: legend dead-code: `)
+        ? stdout.replace(
+            /^oracle-gaps: legend dead-code: .*$/m,
+            `oracle-gaps: legend dead-code: Remove the redundant code on line N.`,
+          )
+        : undefined,
+    ),
   },
 ]
 

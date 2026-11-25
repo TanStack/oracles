@@ -464,8 +464,8 @@ pLimit` is `index.js#pLimit`. `exports.name = fn` is named `name`.
     promise), write that contract's own oracle, or report its gaps as
     outside this oracle's scope.
   - Owned code that serves another module's contract belongs to that module's
-    oracle. Owned code with no behavior anyone observes is possible dead code:
-    investigate it as step 8 says.
+    oracle. Owned code with no behavior anyone observes first shows a missing
+    law, and dead code only last: investigate it as step 8 says.
   - Several oracles may own the same function. A mutant counts as killed when
     any of its owners kills it.
 
@@ -527,12 +527,13 @@ it to simplify:
 
 - Refactor the code around the change. Do not insert a new branch beside an
   old one that does almost the same thing.
-- Remove states, flags, branches, and recovery paths that no law needs. A
-  surviving mutant shows only that the current histories did not expose the
-  code. Before you remove it, use the mutant gap search to rule out a missing
-  history, observation, or law, and give the contract's reason that no legal
-  history can observe it. A green rerun of the same oracle is not that
-  reason.
+- Remove states, flags, branches, and recovery paths that are dead. That no
+  law needs them yet is not enough: a surviving mutant shows only that the
+  current histories did not expose the code. Before you remove it, use the
+  mutant gap search to rule out a missing history, observation, or law, give
+  the contract's reason that no legal history can observe it, and show the
+  evidence of step 8's dead-code rule. A green rerun of the same oracle is
+  not that reason.
 - Prefer a change that shrinks the code, or leaves its size the same. If the
   repository sets a size rule, such as a net-negative diff, follow it.
 - For a larger cleanup, draft two or three designs that pass the same oracle
@@ -553,7 +554,10 @@ refusal: do what its `fix:` line says. Exit 3 is a CLI bug: report it with
 comes with one instruction. Do what it says, within the rules below.
 
 - **There are no equivalent mutants.** A surviving mutant shows a missing
-  history, observation, or law, or it shows dead code.
+  history, observation, or law: look for them first, in that order. It shows
+  dead code only last, with the evidence that the dead-code rule below
+  names. A survivor alone shows that no law depends on the code yet, never
+  that the code is dead.
 - **Remove line-level dead code; propose anything larger.** Line-level dead
   code is an impossible branch, a dead store, or an initializer that every
   path overwrites: remove it in the change, as the dead-code rule below
@@ -577,8 +581,17 @@ comes with one instruction. Do what it says, within the rules below.
   `not-observed` directive gives both steps.
 - **Code whose removal no legal history can observe is dead.** The gap check
   alone cannot show this, because its histories are a sample. First rule out
-  a missing history, observation, or law. Then, when it is line-level dead
-  code (above), remove it in the same
+  a missing history, observation, or law: a survivor shows only that no law
+  depends on the code yet, and only a `dead-code` gap shows more (no input
+  tells its mutant from the original). For any other survivor, show two
+  things before you call the code dead. Every public entry point that
+  reaches the code is owned by a law that decides the affected value
+  exactly: list them, because an export that no oracle owns, or an owner
+  whose model allows more than one value there, decides nothing, and the
+  code may be the only definition of that export's result. And the
+  refactor evidence of step 7 holds for the removal: every mutant key that
+  both gap runs have and that the old code killed is still killed. Then,
+  when it is line-level dead code (above), remove it in the same
   change, give the contract's reason in the evidence (it is a production
   change), and rerun the oracle and the gap check.
 - **A law that kills nothing** owns no mutated code, or its witness never

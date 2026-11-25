@@ -158,6 +158,10 @@ const meanings = {
   // A builtin counts as one site, so a tight bound is a poor witness of its
   // cost (maintainer, 2026-11-12).
   'extra-work': `A call to a builtin counts as one site evaluation, whatever it costs (\`Object.defineProperty\`): where a shortcut's cost is in one, make that cost an observation of the driver, such as a count of those calls, and let a law judge it, in place of a very tight bound. `,
+  // Only this class's evidence proves code dead (schemata.mjs); any other
+  // survivor shows that no law depends on its code yet, which is not the
+  // same (a downstream project's report, 2026-11-25).
+  'dead-code': `No input tells the mutant from the original, whatever code calls it: this class alone shows dead code. A survivor of any other class shows only that no law depends on its code yet. `,
 }
 
 // The directive for an operator whose infection is not measured: the input
@@ -336,8 +340,9 @@ export function renderReport({
     ``,
     `1. State the law it reveals: one that is missing, misstated, or not enforced. Several gaps often reveal one law.`,
     `2. Name the law's authority: a contract document and section, or a maintainer decision.`,
-    `3. Re-plan the oracle around that law: its grammar or domain, model, observations, or comparison. Do not patch the line, except dead code, whose gap says to remove the code.`,
-    `4. Run the check again.`,
+    `3. Re-plan the oracle around that law: its grammar or domain, model, observations, or comparison. Do not patch the line.`,
+    `4. Call code dead last, and only with evidence. A \`dead-code\` gap is that evidence: remove the code. For any other survivor, first rule out a missing history, observation, or law; its code is dead only when a law that decides the value exactly owns every public entry point that reaches the code, and the gap runs before and after its removal keep every kill, compared by mutant key (\`oracles-design\` step 7).`,
+    `5. Run the check again.`,
     ``,
     `Rerun one mutant with \`--only <id>\`.`,
     ``,

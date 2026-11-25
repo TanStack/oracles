@@ -585,9 +585,10 @@ Run it after the oracle passes on production. Each gap in the report comes
 with one instruction. Follow
 that instruction, and follow `oracles-design` for what a gap means. There
 are no equivalent mutants and no exits. A surviving mutant shows only that
-the current histories did not expose that code. If you believe the code is
-dead, first follow `oracles-design` step 8 to rule out a missing history,
-observation, or law. Removing it is a production change, so tell the developer,
+the current histories did not expose that code, never that it is dead. If
+you believe the code is dead, first follow `oracles-design` step 8 to rule
+out a missing history, observation, or law, and show the evidence its
+dead-code rule names. Removing it is a production change, so tell the developer,
 and rerun the oracle and the gap check. Beyond line-level dead code, ask
 before you remove or replace it (`oracles-design` step 8). If a gap can be neither killed
 nor removed, stop work on that gap and report its key and evidence to the

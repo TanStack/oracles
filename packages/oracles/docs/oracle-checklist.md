@@ -37,7 +37,8 @@ template, or helper.
 No requirement here can be met by declaring something out of reach.
 
 - There are no equivalent mutants. A surviving mutant shows a missing
-  history, observation, or law, or dead code.
+  history, observation, or law. It shows dead code only last, with the
+  evidence of `oracles-design` step 8's dead-code rule.
 - An effect that no check observes means that the driver does not record it.
   Record it, or remove the code that causes it.
 - The only exclusions are probe-only code and the `super()` region of a

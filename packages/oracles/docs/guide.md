@@ -410,7 +410,10 @@ held-out test of that design.
 When comparing implementation candidates, hold the law, the legal histories,
 and the checkpoints fixed. If removing an index or cache changes no public
 result, it is dead code, unless a law states the work it saves, such as a
-count of reads. State that law and measure it, or remove the code.
+count of reads. State that law and measure it, or remove the code. "No public
+result" means every public entry point that reaches the code, each owned by a
+law that decides its result exactly: an export with no oracle can depend on
+the code that no oracle needs.
 
 If a premise changes instead, derive which guarantees still follow. Examples:
 delivery may duplicate, ordering may tie, or the client may see only part of
