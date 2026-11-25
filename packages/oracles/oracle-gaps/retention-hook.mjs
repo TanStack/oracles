@@ -14,6 +14,7 @@
 //   leaves them reachable.
 import { appendFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { setFlagsFromString } from 'node:v8'
 import { runInNewContext } from 'node:vm'
 
@@ -24,8 +25,12 @@ import { runInNewContext } from 'node:vm'
  */
 export function retentionHook(session) {
   const file = process.env.ORACLE_GAPS_TEST_RETENTION
-  // The 1-based batch whose run rejects (unset: none).
+  // The 1-based batch whose run rejects (unset: none), and the code its
+  // error carries (ORACLE_GAPS_TEST_REJECT_CODE, unset: none) with the call
+  // that got it (ORACLE_GAPS_TEST_REJECT_SYSCALL: open, copyfile or write).
   const rejected = Number(process.env.ORACLE_GAPS_TEST_REJECT_BATCH ?? 0)
+  const code = process.env.ORACLE_GAPS_TEST_REJECT_CODE
+  const syscall = process.env.ORACLE_GAPS_TEST_REJECT_SYSCALL
   // A full collection, without --expose-gc on the command line: the flag is
   // set, and `gc` is read from a fresh context, which then exposes it.
   setFlagsFromString(`--expose-gc`)
@@ -158,8 +163,33 @@ export function retentionHook(session) {
     },
     // The rejected-batch fault: the batch's run completes, so its copies are
     // in Vitest's and Vite's state, and then rejects, as a crash in Vitest
-    // would. Any other batch's run is returned unchanged.
+    // would. With a code (ENOSPC, EDQUOT), it rejects as a write that found
+    // no room does, with the fields Node gives its error: opening the run's
+    // test-output.log names it as `path`; copying a file there, as the
+    // harness is copied, names it as `dest` and the source (this module) as
+    // `path`; a write to an open file names no path. Any other batch's run
+    // is returned unchanged.
     fault(batch, running) {
+      if (batch.index + 1 === rejected && code)
+        return running.then(() => {
+          const target = join(run, `test-output.log`)
+          const source = fileURLToPath(import.meta.url)
+          const { paths, ...fields } = {
+            open: { paths: `'${target}'`, path: target },
+            copyfile: {
+              paths: `'${source}' -> '${target}'`,
+              path: source,
+              dest: target,
+            },
+            write: { paths: `` },
+          }[syscall]
+          throw Object.assign(
+            new Error(
+              `${code}: no room left on device, ${syscall}${paths && ` ${paths}`}`,
+            ),
+            { code, syscall, ...fields },
+          )
+        })
       return batch.index + 1 === rejected
         ? running.then(() => {
             // Its message holds a line break and, after it, a line that
