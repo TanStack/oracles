@@ -605,8 +605,9 @@ Tell the developer:
     limits: name those inputs, and recommend widening the grammar and the
     law. The developer decides. Do not count these as closed.
   - allowed alternatives (`oracles-design` step 8), apart from the kills
-  - framework or CLI limitations (for example a timeout from a synchronous
-    infinite loop, or a guard that TypeScript narrowing makes constant)
+  - framework or CLI limitations (for example a guard that TypeScript
+    narrowing makes constant). A `timeout` gap belongs here only when
+    `oracles-design` step 8's `timeout` bullet leaves it to the CLI.
   - other contracts that a whole-file entry pulled in, listed as outside
     this oracle's scope
   - every other gap, with its instruction
