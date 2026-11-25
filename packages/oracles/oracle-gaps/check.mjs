@@ -2812,17 +2812,40 @@ function identityOf(options, authored, testFiles, oracleCount) {
   }
 }
 
-// Lines changed relative to the diff base, for diff-scoped summaries.
+/**
+ * The lines of `source` changed since the commit that `--diff-base` names
+ * (`diffBase.commit`, args.mjs): every line of a file that git does not
+ * track, since `git diff` leaves such a file out, and otherwise each line
+ * that `git diff` shows the working tree's file adding or changing. Paths
+ * are literal, so a name with `*` or `:` names one file.
+ */
 function diffLines(pkg, diffBase, source) {
   if (!diffBase) return undefined
-  const child = spawnSync(`git`, [`diff`, `-U0`, diffBase, `--`, source], {
-    cwd: pkg,
-    encoding: `utf8`,
-  })
+  const git = (...args) => {
+    const child = spawnSync(`git`, [`--literal-pathspecs`, ...args], {
+      cwd: pkg,
+      encoding: `utf8`,
+      maxBuffer: 64 * 1024 * 1024,
+    })
+    if (child.status !== 0)
+      throw new Error(`git ${args.join(` `)} failed: ${child.stderr}`)
+    return child.stdout
+  }
   const lines = new Set()
-  for (const match of child.stdout.matchAll(
-    /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm,
-  )) {
+  if (git(`ls-files`, `-z`, `--`, source) === ``) {
+    const count = readFileSync(join(pkg, source), `utf8`).split(`\n`).length
+    for (let line = 1; line <= count; line += 1) lines.add(line)
+    return lines
+  }
+  for (const match of git(
+    `diff`,
+    `--no-color`,
+    `--no-ext-diff`,
+    `-U0`,
+    diffBase.commit,
+    `--`,
+    source,
+  ).matchAll(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm)) {
     const start = Number(match[1])
     for (let line = start; line < start + Number(match[2] ?? 1); line += 1)
       lines.add(line)

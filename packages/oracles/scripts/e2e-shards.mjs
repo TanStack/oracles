@@ -375,6 +375,16 @@ export const shards = {
     `fixed seed 20261105: module data that only the failing owner's passing pair judges`,
     `random seed: module data that only the failing owner's passing pair judges`,
     `determinism: constructed history: module data that only the failing owner's passing pair judges`,
+    // Law 16's runs with --diff-base: changed and unchanged lines, and an
+    // untracked source under test.
+    `fixed seed 20261105: a check with --diff-base on changed and unchanged lines`,
+    `random seed: a check with --diff-base on changed and unchanged lines`,
+    `determinism: constructed history: a check with --diff-base on changed and unchanged lines`,
+    `fixed seed 20261105: a check with --diff-base and an untracked source`,
+    `random seed: a check with --diff-base and an untracked source`,
+    `determinism: constructed history: a check with --diff-base and an untracked source`,
+    `calibration: a run with --diff-base marks a mutant of an untracked source unchanged`,
+    `calibration: a run with --diff-base judges a mutant otherwise than the run without it`,
     // The filed history of a stale authored mutant's fourth base (about 12 s).
     `fixed history: a filed base whose owner reads an absent object through ?.`,
     `determinism: fixed history: a filed base whose owner reads an absent object through ?.`,
