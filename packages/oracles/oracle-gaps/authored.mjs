@@ -9,7 +9,8 @@
 // already kills. So the runner takes them from a directory, and each one
 // names its author, which the report shows.
 //
-// A mutant file is JSON, one object or an array of them:
+// A mutant file is JSON, one object or an array of them (any other entry,
+// such as null, a number, or a nested array, is refused):
 //
 //   {
 //     "id": "tombstone-retired-ids",
@@ -42,7 +43,19 @@ export function loadAuthored(directory) {
         `Write ${name} as one authored mutant object, or an array of them, in JSON.`,
       )
     }
-    for (const mutant of Array.isArray(parsed) ? parsed : [parsed]) {
+    const entries = Array.isArray(parsed) ? parsed : [parsed]
+    const at = entries.findIndex(
+      (entry) =>
+        typeof entry !== `object` || entry === null || Array.isArray(entry),
+    )
+    if (at >= 0) {
+      const entry = entries[at]
+      throw new Refusal(
+        `${name}: entry ${at + 1} is not an object (it is ${entry === null ? `null` : Array.isArray(entry) ? `an array` : `a ${typeof entry}`})`,
+        `Write each entry of ${name} as an authored mutant object, with a string for each of ${fields.join(`, `)}.`,
+      )
+    }
+    for (const mutant of entries) {
       const missing = fields.filter(
         (field) => typeof mutant[field] !== `string` || mutant[field] === ``,
       )
