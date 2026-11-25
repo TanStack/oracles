@@ -21,14 +21,39 @@
  * of their own to read them), and the coordinator's assignment of these
  * lines to the gap-report work (2026-11-24).
  *
+ * The second law is about where those lines land. A campaign unit fails
+ * through fast-check, whose error has a message of its own (`Property failed
+ * after 1 tests`, the seed and path, the counterexample) and holds the
+ * violation only as its `cause`, which Vitest's JSON reporter drops. So for
+ * every test that fails by a law violation, an enumerated or fixed history,
+ * or a fixed-seed or random campaign unit of a constructed or generated
+ * history, the message Vitest reports holds the lines of the violation of
+ * the counterexample it reports, one after another: `<id> violated at checkpoint "<checkpoint>"`, with
+ * ` (law: <law>)` when the violation names one, then `Law: <statement>`,
+ * `Difference: <difference>`, and the `Observed:` and `Owed:` lines when it
+ * carries values. Authority: the finding of a downstream project (a failing
+ * campaign unit's `failureMessages` held only fast-check's report and replay
+ * lines, so the author reproduced each counterexample by hand to see why it
+ * failed), and the coordinator's assignment of this fix (2026-11-25).
+ *
  * History: one child Vitest run of a fixture that registers one property per
  * pair, each failing its one case with the pair's values, or without values.
  * The model spells each value by the encoding's rules; the driver reads the
- * two lines from each failing case's message in Vitest's JSON report.
+ * two lines from each failing case's message in Vitest's JSON report. For
+ * the second law the fixture registers, per pair, an enumerated property and
+ * a generated one with a constructed and a fixed history, so one run fails
+ * on every route, and each campaign unit shrinks its first failure to a
+ * smaller history whose difference names it; the driver reads, from each
+ * failing test's message before its stack, the line that names the
+ * violation and the labeled lines after it.
  *
  * Limits: values that are not data (a function, a class instance) print by
  * Node's inspection and are not generated. Errors as values are not
  * generated. Only the first 2,000 characters of a long value are printed.
+ * The second law covers failures by a law violation: a driver, model, or
+ * data error, or a constructed history that missed its state, reaches a
+ * campaign unit's message only as its cause. A shrink changes only the
+ * difference here, never the checkpoint or the values.
  */
 import { spawnSync } from 'node:child_process'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -142,9 +167,18 @@ const vitest = join(
 )
 let runs = 0
 
-// One child Vitest run of a fixture with one property per pair, each failing
-// its one case; each case's message is read from Vitest's JSON report.
-function driver(history: History, observe: (c: string, v: unknown) => void) {
+type Reported = {
+  ancestorTitles: Array<string>
+  title: string
+  fullName: string
+  status: string
+  failureMessages: Array<string>
+}
+
+// One child Vitest run of a fixture whose properties are `properties`, each
+// a statement that registers one; every test's result is read from Vitest's
+// JSON report.
+function reportOf(properties: ReadonlyArray<string>): Array<Reported> {
   const directory = join(
     packageDirectory,
     `.violation-values-${process.pid}-${(runs += 1)}`,
@@ -152,23 +186,10 @@ function driver(history: History, observe: (c: string, v: unknown) => void) {
   mkdirSync(directory, { recursive: true })
   try {
     const index = JSON.stringify(join(packageDirectory, `src/index.ts`))
-    const properties = history.pairs.map((pair, at) =>
-      [
-        `oracleProperty({`,
-        `  id: 'values.${at}',`,
-        `  law: { statement: 'For every case, the values differ.', authority: 'this fixture', limits: 'none' },`,
-        `  histories: [0],`,
-        `  model: () => ${pair.valued ? sourceOf(pair.expected) : `0`},`,
-        `  driver: (_history, observe) => observe('v', ${pair.valued ? sourceOf(pair.actual) : `1`}),`,
-        pair.valued
-          ? `  check: (_history, trace, owed) => differs('v', 'values', trace[0]?.value, owed) ?? pass,`
-          : `  check: () => violation('v', 'a difference without values', 'values'),`,
-        `})`,
-      ].join(`\n`),
-    )
     writeFileSync(
       join(directory, `values.test.ts`),
       [
+        `import fc from 'fast-check'`,
         `import { differs, oracleProperty, pass, violation } from ${index}`,
         ...properties,
         ``,
@@ -201,38 +222,53 @@ function driver(history: History, observe: (c: string, v: unknown) => void) {
       },
     )
     if (run.error) throw run.error
-    const results = (
+    return (
       JSON.parse(readFileSync(report, `utf8`)) as {
-        testResults: Array<{
-          assertionResults: Array<{
-            fullName: string
-            status: string
-            failureMessages: Array<string>
-          }>
-        }>
+        testResults: Array<{ assertionResults: Array<Reported> }>
       }
     ).testResults.flatMap((file) => file.assertionResults)
-    history.pairs.forEach((_, at) => {
-      const failed = results.find(
-        (test) =>
-          test.status === `failed` &&
-          test.fullName.startsWith(`values.${at} `) &&
-          !/determinism/.test(test.fullName),
-      )
-      const lines = (failed?.failureMessages[0] ?? ``).split(`\n`)
-      const read = (label: string) =>
-        lines
-          .find((line) => line.startsWith(`${label}: `))
-          ?.slice(label.length + 2)
-      observe(`printed ${at}`, {
-        failed: failed !== undefined,
-        observed: read(`Observed`),
-        owed: read(`Owed`),
-      })
-    })
   } finally {
     rmSync(directory, { recursive: true, force: true })
   }
+}
+
+// One child Vitest run of a fixture with one property per pair, each failing
+// its one case; each case's message is read from Vitest's JSON report.
+function driver(history: History, observe: (c: string, v: unknown) => void) {
+  const results = reportOf(
+    history.pairs.map((pair, at) =>
+      [
+        `oracleProperty({`,
+        `  id: 'values.${at}',`,
+        `  law: { statement: 'For every case, the values differ.', authority: 'this fixture', limits: 'none' },`,
+        `  histories: [0],`,
+        `  model: () => ${pair.valued ? sourceOf(pair.expected) : `0`},`,
+        `  driver: (_history, observe) => observe('v', ${pair.valued ? sourceOf(pair.actual) : `1`}),`,
+        pair.valued
+          ? `  check: (_history, trace, owed) => differs('v', 'values', trace[0]?.value, owed) ?? pass,`
+          : `  check: () => violation('v', 'a difference without values', 'values'),`,
+        `})`,
+      ].join(`\n`),
+    ),
+  )
+  history.pairs.forEach((_, at) => {
+    const failed = results.find(
+      (test) =>
+        test.status === `failed` &&
+        test.fullName.startsWith(`values.${at} `) &&
+        !/determinism/.test(test.fullName),
+    )
+    const lines = (failed?.failureMessages[0] ?? ``).split(`\n`)
+    const read = (label: string) =>
+      lines
+        .find((line) => line.startsWith(`${label}: `))
+        ?.slice(label.length + 2)
+    observe(`printed ${at}`, {
+      failed: failed !== undefined,
+      observed: read(`Observed`),
+      owed: read(`Owed`),
+    })
+  })
 }
 
 // A wrong printing of the first pair it applies to, or undefined when it
@@ -368,6 +404,220 @@ oracleProperty({
         value.observed === undefined
           ? { ...value, observed: `undefined` }
           : undefined,
+      ),
+    },
+  ],
+})
+
+// The second law. The routes a test fails on, each by its test's name within
+// its property: the enumerated property's one case, then the generated
+// property's fixed history and its campaign units, constructed and
+// generated, at the fixed seed and at the run's random seed.
+const routes = [
+  `case`,
+  `fixed history: kept`,
+  `fixed seed 1: built`,
+  `fixed seed 1: generated`,
+  `random seed: built`,
+  `random seed: generated`,
+] as const
+type Route = (typeof routes)[number]
+
+// The property whose test a route is: the enumerated or the generated one.
+const propertyOf = (route: Route, at: number) =>
+  route === `case` ? `case.${at}` : `campaign.${at}`
+const statementOf = (at: number) => `For every case ${at}, the values differ.`
+// The history each route's message names. Each fixture history is a number,
+// and its violation's difference names it. The enumerated case runs 1 and
+// the fixed history 2. A campaign unit's first failure is not its
+// counterexample: the constructed history is 3, and the generated one a draw
+// of `fc.integer({ min: 0, max: 3 })`. Every history fails under the one law,
+// so fast-check's shrink of that integer ends at its smallest value, 0, and
+// the message's lines name the counterexample's violation.
+const historyOf = (route: Route) =>
+  route === `case` ? 1 : route === `fixed history: kept` ? 2 : 0
+
+// The model: on every route, in the order of `routes`, the violation's
+// lines as its message spells them: the property, the checkpoint, and the
+// law when the violation names one, then the law's statement, the
+// difference, and the values as the first law spells them. A violation
+// without values names no law.
+const linesOwed = (history: History) =>
+  history.pairs.map((pair, at) =>
+    routes.map((route) => [
+      `${propertyOf(route, at)} violated at checkpoint "v"${pair.valued ? ` (law: values)` : ``}.`,
+      `Law: ${statementOf(at)}`,
+      `Difference: at ${historyOf(route)}`,
+      ...(pair.valued
+        ? [
+            `Observed: ${spelled(pair.actual).slice(0, MOST)}`,
+            `Owed: ${spelled(pair.expected).slice(0, MOST)}`,
+          ]
+        : []),
+    ]),
+  )
+
+// The labels of the lines that follow the line naming the violation.
+const LABELS = [`Law: `, `Difference: `, `Observed: `, `Owed: `]
+
+// A test's violation lines, read from the message its JSON report holds,
+// which is its stack before the first frame: the line that names property
+// `id`'s violation, from the property's id on, then each line after it that
+// starts with one of the labels. None when no line names the violation.
+function violationLinesIn(stack: string, id: string): Array<string> {
+  const lines = stack.split(/\n {4}at /)[0]!.split(`\n`)
+  const head = `${id} violated at checkpoint `
+  const at = lines.findIndex((line) => line.includes(head))
+  if (at < 0) return []
+  const read = [lines[at]!.slice(lines[at]!.indexOf(head))]
+  for (const line of lines.slice(at + 1)) {
+    if (!LABELS.some((label) => line.startsWith(label))) break
+    read.push(line)
+  }
+  return read
+}
+
+// One child Vitest run of a fixture with two properties per pair, an
+// enumerated one and a generated one, each failing on every route with the
+// pair's values, or without values; each failing test's violation lines are
+// read from Vitest's JSON report, or null when the test did not fail.
+function messageDriver(
+  history: History,
+  observe: (c: string, v: unknown) => void,
+) {
+  const results = reportOf(
+    history.pairs.flatMap((pair, at) => {
+      const shared = [
+        `  law: { statement: ${JSON.stringify(statementOf(at))}, authority: 'this fixture', limits: 'none' },`,
+        `  model: () => ${pair.valued ? sourceOf(pair.expected) : `0`},`,
+        `  driver: (_history, observe) => observe('v', ${pair.valued ? sourceOf(pair.actual) : `1`}),`,
+        pair.valued
+          ? `  check: (history, trace, owed) => differs('v', 'values', trace[0]?.value, owed, 'at ' + history) ?? pass,`
+          : `  check: (history) => violation('v', 'at ' + history),`,
+      ]
+      return [
+        [
+          `oracleProperty({`,
+          `  id: 'case.${at}',`,
+          `  histories: [1],`,
+          ...shared,
+          `})`,
+        ].join(`\n`),
+        [
+          `oracleProperty({`,
+          `  id: 'campaign.${at}',`,
+          `  histories: { arbitrary: fc.integer({ min: 0, max: 3 }), runs: 1, fixedSeeds: [1], constructed: [{ name: 'built', enters: [], build: () => 3 }], fixed: [{ name: 'kept', history: 2 }] },`,
+          ...shared,
+          `})`,
+        ].join(`\n`),
+      ]
+    }),
+  )
+  history.pairs.forEach((_, at) => {
+    for (const route of routes) {
+      const id = propertyOf(route, at)
+      const failed = results.find(
+        (test) =>
+          test.status === `failed` &&
+          test.ancestorTitles[0] === id &&
+          (route === `case`
+            ? !test.title.startsWith(`determinism`)
+            : test.title === route),
+      )
+      observe(
+        `message ${at}: ${route}`,
+        failed ? violationLinesIn(failed.failureMessages[0] ?? ``, id) : null,
+      )
+    }
+  })
+}
+
+function messageCheck(
+  history: History,
+  trace: ReadonlyArray<Observation>,
+  owed: ReturnType<typeof linesOwed>,
+) {
+  for (const at of history.pairs.keys())
+    for (const [index, route] of routes.entries()) {
+      const checkpoint = `message ${at}: ${route}`
+      const verdict = differs(
+        checkpoint,
+        `the violation's lines`,
+        trace.find((o) => o.checkpoint === checkpoint)?.value,
+        owed[at]![index],
+      )
+      if (verdict) return verdict
+    }
+  return pass
+}
+
+// A wrong message on the first route it applies to, or undefined when it
+// applies to none.
+const corruptMessage =
+  (route: Route, change: (lines: Array<string>) => Array<string> | undefined) =>
+  (trace: ReadonlyArray<Observation>) => {
+    const at = trace.findIndex(
+      (o) =>
+        o.checkpoint.endsWith(`: ${route}`) &&
+        Array.isArray(o.value) &&
+        change(o.value as Array<string>) !== undefined,
+    )
+    if (at < 0) return undefined
+    return trace.map((o, i) =>
+      i === at ? { ...o, value: change(o.value as Array<string>) } : o,
+    )
+  }
+
+oracleProperty({
+  id: `self-oracle.failure-message`,
+  owns: [`src/oracle-property.ts#violationError`],
+  law: {
+    statement: `For every test of an oracleProperty that fails by a law violation, on every route (an enumerated or fixed history, or a fixed-seed or random campaign unit of a constructed or generated history), the message Vitest reports for it holds the lines of the violation of the counterexample it reports, one after another: the property and checkpoint, with the law when the violation names one, then Law: with the law's statement, Difference:, and the Observed: and Owed: lines when the violation carries values.`,
+    authority: `A downstream project's finding (a failing campaign unit's failureMessages in Vitest's JSON report held only fast-check's report and replay lines, so each counterexample had to be reproduced by hand), and the coordinator's assignment of this fix, 2026-11-25.`,
+    limits: `Failures by a law violation only: a driver, model, or data error, or a constructed history that missed its state, reaches a campaign unit's message only as its cause. A shrink changes only the difference, never the checkpoint or the values. Values outside the data domain and Errors are not generated. Each history is one child Vitest run.`,
+  },
+  histories,
+  label: (history) => history.name,
+  timeout: 240_000,
+  model: linesOwed,
+  driver: messageDriver,
+  check: messageCheck,
+  calibrations: [
+    {
+      name: `a campaign unit's message holds only fast-check's report`,
+      law: `the violation's lines`,
+      history: { enumerated: 0 },
+      corrupt: corruptMessage(`fixed seed 1: generated`, () => []),
+    },
+    {
+      name: `a random unit's message without the Observed and Owed lines`,
+      law: `the violation's lines`,
+      history: { enumerated: 0 },
+      corrupt: corruptMessage(`random seed: built`, (lines) =>
+        lines.some((line) => line.startsWith(`Observed: `))
+          ? lines.filter(
+              (line) =>
+                !line.startsWith(`Observed: `) && !line.startsWith(`Owed: `),
+            )
+          : undefined,
+      ),
+    },
+    {
+      name: `a campaign unit names its first failure, not its counterexample`,
+      law: `the violation's lines`,
+      history: { enumerated: 0 },
+      corrupt: corruptMessage(`fixed seed 1: built`, (lines) =>
+        lines.map((line) =>
+          line === `Difference: at 0` ? `Difference: at 3` : line,
+        ),
+      ),
+    },
+    {
+      name: `a campaign unit's message without the law's statement`,
+      law: `the violation's lines`,
+      history: { enumerated: 0 },
+      corrupt: corruptMessage(`fixed seed 1: built`, (lines) =>
+        lines.filter((line) => !line.startsWith(`Law: `)),
       ),
     },
   ],

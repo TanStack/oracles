@@ -45,7 +45,12 @@
  *   them, after its `Difference:` line, as `Observed: <value>` and
  *   `Owed: <value>`, each the value's data encoding on one line (at most
  *   2,000 characters), which tells apart what the diff may print alike:
- *   `-0` and `0`, or the string `"0"` and the number `0`.
+ *   `-0` and `0`, or the string `"0"` and the number `0`. A campaign unit
+ *   fails with fast-check's report, which holds the violation as its cause;
+ *   its own message also holds the lines of the violation its
+ *   counterexample shrank to, from the checkpoint line to `Owed:`, after
+ *   the report, so a reporter that prints no cause (Vitest's JSON reporter)
+ *   still shows why the unit failed.
  *
  * Observations and enumerated histories are data (maintainer decision,
  * 2026-11-08): primitives, with -0, NaN, the infinities, bigints, and
@@ -2284,6 +2289,31 @@ function failure<THistory>(
   return violationError(options, verdict, history, rerun)
 }
 
+/**
+ * What a violation broke: the property, checkpoint, and law, the law's
+ * statement, the difference, and the observed and owed values. A failing
+ * campaign unit's own message holds these lines too, since a reporter that
+ * prints only the message (Vitest's JSON reporter) drops its cause.
+ */
+function violationLines(
+  { id, law }: { id: string; law: OracleLaw },
+  verdict: Extract<Verdict, { kind: `violation` }>,
+): Array<string> {
+  return [
+    `${id} violated at checkpoint "${verdict.checkpoint}"${verdict.law ? ` (law: ${verdict.law})` : ``}.`,
+    `Law: ${law.statement}`,
+    `Difference: ${verdict.difference}`,
+    // The values as data, which Vitest's diff can print alike (a string
+    // without its quotes); a runner that reads only the message sees them.
+    ...(verdict.values
+      ? [
+          `Observed: ${reportText(verdict.values.actual)}`,
+          `Owed: ${reportText(verdict.values.expected)}`,
+        ]
+      : []),
+  ]
+}
+
 /** A violation's error, with a rerun line when there is a command to print. */
 function violationError<THistory>(
   options: { id: string; law: OracleLaw },
@@ -2291,20 +2321,10 @@ function violationError<THistory>(
   history: THistory,
   rerun: Command | undefined,
 ): OracleViolation {
-  const { id, law } = options
+  const { law } = options
   const error = new OracleViolation(
     [
-      `${id} violated at checkpoint "${verdict.checkpoint}"${verdict.law ? ` (law: ${verdict.law})` : ``}.`,
-      `Law: ${law.statement}`,
-      `Difference: ${verdict.difference}`,
-      // The values as data, which Vitest's diff can print alike (a string
-      // without its quotes); a runner that reads only the message sees them.
-      ...(verdict.values
-        ? [
-            `Observed: ${reportText(verdict.values.actual)}`,
-            `Owed: ${reportText(verdict.values.expected)}`,
-          ]
-        : []),
+      ...violationLines(options, verdict),
       `History: ${reportText(history)}`,
       `Authority: ${law.authority}`,
       `Known limits: ${law.limits}`,
@@ -2742,6 +2762,9 @@ function generatedTests<THistory, TExpected, TPlan>(
       throw new Error(
         [
           report,
+          // The violation the counterexample shrank to, which the message
+          // holds as well as the cause.
+          ...(thrown ? violationLines(options, thrown.verdict) : []),
           ...(drawn
             ? [
                 `Drawn base: example ${at} is base ${at} of constructed history "${unit}" drawn from the run's random seed ${drawnFrom} (its ORACLE_SEED line), not from seed ${seed}. The counterexample above is its full history, and the Replay line runs it with the run's seed; a rerun draws other bases, so it would hide this failure. Before you rerun, replay this history on the base commit: the Replay line, or the counterexample as a fixed history. If the base fails too, the failure is not this change's: file it with its full history, or find its issue, and do not block on it (R42; base replay is not automated).`,
