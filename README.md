@@ -32,6 +32,21 @@ agent.
   during a check finds none of them. A run that is killed before it cleans
   up leaves that directory, and the next run removes it.
 
+  A gap check never draws a new random seed. Its capture seeds
+  `Math.random`, `crypto.getRandomValues`, and `crypto.randomUUID` in each
+  test from the test's name, so the baseline and every mutant draw the same
+  values. An `oracleProperty` random unit (`random seed: <name>`) draws its
+  seed from `Math.random`. Without `--seed`, each random unit therefore runs
+  at a seed fixed by its test name, the same seed in every check, and a
+  mutant that only a random unit kills is a `random-only-kill` gap. With
+  `--seed <n>`, every random unit runs at seed n in every check. The
+  framework declares a seed from the environment fixed, so a mutant that
+  only a random unit kills is reported as `killed`, with that unit in its
+  `by`. Either way, the random histories do not change from one check to
+  the next, and a failure that only other random histories would find never
+  shows in a gap check's baseline. A run of the oracle file with the
+  project's test command draws a new seed each time.
+
   While one copy of a test file runs for 30 s or more, the CLI prints
   `oracle-gaps: busy <mutant id> in <test file> for <n>s` every 30 s. A run of many fast
   copies prints none, and a check through `--daemon` prints its heartbeats
