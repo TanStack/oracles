@@ -551,6 +551,10 @@ refusal: do what its `fix:` line says. Exit 3 is a CLI bug: report it with
 `<out>/error.log`, and do not change the oracle. Every gap
 comes with one instruction. Do what it says, within the rules below.
 
+Run it once with every source file of the package as `--source`, as
+`oracles-explore` step 3 says, before you call the package covered. Its
+unowned warnings name the functions that no oracle owns.
+
 - **There are no equivalent mutants.** A surviving mutant shows a missing
   history, observation, or law, or it shows dead code.
 - **An `extra-work` gap is a fast path.** The change gives the same results

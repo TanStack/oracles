@@ -584,6 +584,18 @@ them and stop.
    "A pass means every law held on every input the oracle tried. The gap
    check shows what it has not tried yet."
 
+   Before you say the oracle covers the package, run the gap check once
+   with every source file of the package as `--source`, not only the files
+   the oracle was written for. `--source` takes files relative to
+   `--package`, not a directory or a glob. From the package directory, with
+   `--package .`:
+   `--source "$(git ls-files 'src/*.ts' ':!:*.test.ts' | paste -sd, -)"`.
+   The report lists each unowned function that has mutants, as
+   `note unowned fn <name> (<file>): N mutants`. That is a warning, which
+   does not fail the run, and it names the public modules that have no law
+   yet. Give each one an oracle, or name it in your report as not covered.
+   The run is refused only when no selected file has an owner at all.
+
 4. **Fix each bug the developer confirms, right away, oracle first.** The
    oracle already fails on it. Make the smallest production fix, rerun the
    oracle until it passes, and show both runs: the failure before, the pass
