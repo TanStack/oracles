@@ -80,7 +80,9 @@ V8 `# Fatal error ... Check failed:` block. That is a fault in Node, V8 or
 a native addon, not in the oracle. Do what the done line says: under the
 default `--pool threads`, a crash in one worker thread ends the whole run,
 so run it again with `--pool forks`, where it ends only its worker; or run
-it under another Node version. Keep every test and history.
+it under another Node version. Keep every test and history. A crash after
+the baseline leaves a partial report, which the done line names: its
+mutants are judged, and the ones it lists as not judged need the rerun.
 
 **TypeScript reports untyped imports (`TS7016` / `TS7006`) on `.js` or `.mjs`
 production files.** Import through the package's typed entry where one

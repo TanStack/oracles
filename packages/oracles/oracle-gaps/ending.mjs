@@ -12,10 +12,17 @@
 // a line of the stream (stream.mjs) or of the refusal block. Each ending
 // replaces the files of another ending that an earlier run left in the
 // directory (check.mjs removes error.log when a check completes).
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { posix, realPathOf } from './paths.mjs'
+import { renderReport } from './report.mjs'
 import { escapeControls, streamLine } from './stream.mjs'
 
 // A path as a line of the stream shows it: in forward slashes, with a line
@@ -90,5 +97,58 @@ function write(out, results, summary, log) {
     return true
   } catch {
     return false
+  }
+}
+
+/**
+ * The partial report of a run whose process `pid` ended, by `cause`, before
+ * it wrote its own ending: when it ended in its mutant phase, its
+ * results.jsonl in `out` starts with what the report needs (check.mjs) and
+ * holds the mutants it judged. results.json then has status `partial`, the
+ * cause, the judged results in report order, and the ids of the mutants it
+ * did not judge, and summary.md renders the judged under a line that says the
+ * report is partial. Returns the summary's path, or undefined when the run
+ * ended before its mutant phase (no results.jsonl of this process) or the
+ * report cannot be written.
+ */
+export function partialEnding(out, pid, cause) {
+  try {
+    const at = join(out, `results.jsonl`)
+    if (!existsSync(at)) return undefined
+    const [head, ...rows] = readFileSync(at, `utf8`).split(`\n`)
+    const of = JSON.parse(head).partialOf
+    if (of?.pid !== pid) return undefined
+    // Each row ends with its line break, so only a complete row is judged.
+    const byId = new Map(
+      rows.slice(0, -1).map((row) => {
+        const result = JSON.parse(row)
+        return [result.id, result]
+      }),
+    )
+    const results = of.ids
+      .filter((id) => byId.has(id))
+      .map((id) => byId.get(id))
+    const unjudged = of.ids.filter((id) => !byId.has(id))
+    writeFileSync(
+      join(out, `results.json`),
+      JSON.stringify(
+        { status: `partial`, cause, ...of.report, results, unjudged },
+        null,
+        1,
+      ),
+    )
+    const summary = join(out, `summary.md`)
+    writeFileSync(
+      summary,
+      renderReport({
+        ...of.render,
+        results,
+        partial: { cause, all: of.ids.length, unjudged },
+      }),
+    )
+    rmSync(join(out, `error.log`), { force: true })
+    return summary
+  } catch {
+    return undefined
   }
 }
