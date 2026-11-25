@@ -463,6 +463,11 @@ pLimit` is `index.js#pLimit`. `exports.name = fn` is named `name`.
     file, or a helper in a default export's call tree that serves another
     promise), write that contract's own oracle, or report its gaps as
     outside this oracle's scope.
+  - Own the source of truth. When the code under test is vendored,
+    generated, or synced from another repository (a file that says "edit
+    upstream, never here"), the fix lands upstream (or in the generator's
+    input) first, and the oracle owns that source where it can. Otherwise,
+    say so in the report, and treat the vendored file as read-only.
   - Owned code that serves another module's contract belongs to that module's
     oracle. Owned code with no behavior anyone observes is possible dead code:
     investigate it as step 8 says.

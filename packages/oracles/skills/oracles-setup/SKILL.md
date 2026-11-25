@@ -474,6 +474,8 @@ export is `src/index.ts#default`; a named one keeps its name
 (`src/index.ts#pLimit`). For a first oracle, own only the function it covers.
 If the gap check refuses with "no oracle file", the oracle is not
 declared: that is a setup failure.
+Own the source of truth: for vendored, generated, or synced code, the fix
+lands upstream first, as `oracles-design`'s ownership bullet says.
 
 In an oracle file, only `oracleProperty` registers tests, directly or
 through a project helper that forwards a literal `owns` list to it. A plain Vitest test
