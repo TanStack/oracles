@@ -105,7 +105,7 @@ import {
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
-import { dirname, join, sep } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import fc from 'fast-check'
 import { oracleProperty, pass, violation } from '../src/oracle-property.ts'
@@ -139,7 +139,8 @@ import {
   written,
 } from './gap-report-model-oracle.mjs'
 import { parseArgs, usage } from './args.mjs'
-import { posix } from './paths.mjs'
+import { stateDirOf } from './evidence.mjs'
+import { posix, realPathOf } from './paths.mjs'
 import { keyAndSelect } from './report.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -514,6 +515,18 @@ function argumentsRunOf(dir, plan) {
     encoding: `utf8`,
     timeout: 120_000,
   })
+  // The CLI keeps the package's state in the OS temp directory, the default
+  // output directory a refusal is written to among it (stateDirOf): it goes
+  // with the scratch package once the run is read.
+  try {
+    return readRefusal(run, out, dir)
+  } finally {
+    removeStateOf(dir, argv)
+  }
+}
+
+/** What a refused run printed and wrote, its paths named (argumentsRunOf). */
+function readRefusal(run, out, dir) {
   return {
     ...endingOf(
       run.status,
@@ -538,6 +551,25 @@ function argumentsRunOf(dir, plan) {
     // its output directory; a default one lives in the OS temp directory.
     streamLog: out !== undefined && existsSync(join(out, `stream.log`)),
   }
+}
+
+/**
+ * Removes the state the CLI keeps in the OS temp directory for the package
+ * that `argv` names (`--package`, relative to `cwd`), if there is one.
+ */
+function removeStateOf(cwd, argv) {
+  const at = argv.findIndex((arg) => /^--package(?:=|$)/.test(arg))
+  const named =
+    at < 0
+      ? undefined
+      : argv[at].includes(`=`)
+        ? argv[at].slice(`--package=`.length)
+        : argv[at + 1]
+  if (named === undefined || !existsSync(resolve(cwd, named))) return
+  rmSync(stateDirOf(realPathOf(resolve(cwd, named))), {
+    recursive: true,
+    force: true,
+  })
 }
 
 // ## The derived class, run
