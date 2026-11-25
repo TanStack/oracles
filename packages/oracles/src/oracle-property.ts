@@ -130,7 +130,9 @@
  *   `vitest run`, it runs only that unit and reproduces the counterexample. A
  *   failing random unit's violation prints the same command as its rerun
  *   line, and a failing fixed-seed unit prints `Rerun: -t '...'`, which reruns
- *   it, shrinking included.
+ *   it, shrinking included. A failing random unit's message says, on the line
+ *   before its replay command, to replay that seed before rerunning, since a
+ *   rerun draws another seed.
  *
  * - **Reach** names the states a history entered. By default the driver
  *   reports them with `observe("reach", state)`. A state that only the model
@@ -2771,6 +2773,13 @@ function generatedTests<THistory, TExpected, TPlan>(
               ]
             : []),
           ...commandLines(`Rerun`, rerun),
+          // A rerun of a random unit draws another seed, so it says nothing
+          // about this failure; its replay runs this one again.
+          ...(random && replay
+            ? [
+                `A random-seed failure: replay this seed before rerunning; a passing rerun draws other histories and proves nothing.`,
+              ]
+            : []),
           ...commandLines(`Replay`, replay),
         ].join(`\n`),
         { cause },
