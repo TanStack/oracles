@@ -506,6 +506,10 @@ The evidence depends on the kind of work:
 A refactor that needs a changed law, check, or history is not a pure
 refactor: treat the law change first (step 1).
 
+A refactor that makes owned code match the model's algorithm, or its notion
+of the key concept, needs the evidence in `oracles-review` §3, "Production
+that now matches the model".
+
 **To fix a defect:**
 
 1. Run the extended oracle file on **unchanged** production. It must fail on

@@ -75,6 +75,15 @@ search is your main job.
   branches, classifications, or helpers, so both agree on the same wrong
   answer. Compare the model's structure with production, not only its
   results.
+- **Production that now matches the model.** A change makes owned code
+  compute a result the way the model does: the same algorithm, or the same
+  notion of the key concept (what counts as "referenced", "reachable", or
+  "equal"). On that point the oracle has lost its independent judgment: a
+  mistake in the shared notion now passes on both sides. Compare the changed
+  function with the model. When they match, ask for a second formulation of
+  the model (ORC-011), or for an old-versus-new differential: the driver's
+  recorded observations on the old and the new code over the same histories.
+  Every difference is a law question, even when the law accepts both.
 - **A grammar narrower than the law.** The law claims a value domain, action,
   or case that the grammar never generates. Examples:
   - a type that the generator never produces
