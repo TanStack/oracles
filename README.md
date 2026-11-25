@@ -155,7 +155,8 @@ agent.
   `false`. It does not shorten the run: every mutant still runs, and the
   stream and `summary.md` are the same as without it. Use it to read the
   gaps on the lines you changed first. A revision that git does not know
-  marks every mutant `false` and is not refused. It marks lines, so it
+  marks every mutant `false` and is not refused, and so does an untracked
+  file until `git add -N` adds it to the diff. It marks lines, so it
   does not compare the old code's behavior with the new; open pull
   requests #267 (`--compare`) and #283 (`--refactor-base`) propose that.
 

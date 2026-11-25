@@ -639,8 +639,9 @@ a survivor whose missing history is not obvious.
 
 After a production change, add `--diff-base <rev>` (the commit your change
 starts from) to see its gaps first: `jq '.results[] | select(.inDiff)'
-<out>/results.json` lists the mutants on lines changed since `<rev>`. It
-does not make the run faster, since every mutant still runs, and the gaps
+<out>/results.json` lists the mutants on lines changed since `<rev>`. Git
+leaves an untracked file out of the diff, so `git add -N` a new source
+file first. It does not make the run faster, since every mutant still runs, and the gaps
 on other lines still count. It does not compare old and new behavior
 either.
 
